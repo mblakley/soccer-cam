@@ -9,13 +9,13 @@ import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-cameraConfig = config['DEVICE']
+cameraConfig = config['CAMERA']
 DEVICE_IP = cameraConfig['ip_address']
 AUTH_USERNAME = cameraConfig['username']
 AUTH_PASSWORD = cameraConfig['password']
 
 appConfig = config['APP']
-CHECK_INTERVAL_SECONDS = appConfig.getint('check_interval')
+CHECK_INTERVAL_SECONDS = appConfig.getint('check_interval_seconds')
 STATUS_FILE_PATH = appConfig['status_file_path']
 VIDEO_STORAGE_PATH = appConfig['video_storage_path']
 TEAM_NAME = appConfig['team_name']
@@ -67,11 +67,11 @@ async def find_files_to_download(auth):
             print(f"Created file finder: {response.text}")
             object_id = response.text.split('=')[1].strip()
             current_date_time = datetime.now()
-            prev_recording_end_contents = "2024-07-21 12:00:00"
+            prev_recording_end_contents = "2024-09-30 00:00:00"
             date_format = "%Y-%m-%d %H:%M:%S"
             prev_recording_end = datetime.strptime(prev_recording_end_contents, date_format)
             start_time = prev_recording_end + timedelta(hours=2)
-            end_time = current_date_time - timedelta(minutes=200)
+            end_time = current_date_time - timedelta(minutes=20)
             start_time_formatted = datetime.strftime(start_time, date_format).replace("-0", "-").replace(" ", "%20")
             end_time_formatted = datetime.strftime(end_time, date_format).replace("-0", "-").replace(" ", "%20")
             findfile_url = f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_formatted}&condition.EndTime={end_time_formatted}&condition.VideoStream=Main"
