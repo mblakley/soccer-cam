@@ -36,11 +36,9 @@ def trim_file_to_offset(combined_filename: str, match_info: dict):
     result = subprocess.run(command, capture_output=True, check=True)
     print(f"Completed conversion to mp4: {output_file}.  Result: {result}")
 
-def process_all_files():
-    entries = os.listdir(VIDEO_STORAGE_PATH)
-
+def process_all_files(group_directories: list[str]):
     # Filter to include only directories
-    directories = [d for d in entries if os.path.isdir(os.path.join(VIDEO_STORAGE_PATH, d))]
+    directories = [d for d in group_directories if os.path.isdir(os.path.join(VIDEO_STORAGE_PATH, d))]
 
     # Sort directories by modification time (newest first)
     sorted_directories = sorted(
@@ -51,24 +49,6 @@ def process_all_files():
     for group_dir in sorted_directories:
         group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
         combined_filename = os.path.join(group_full_path, "combined.mp4")
-        process_complete_file = os.path.join(group_full_path, FINISHED_FILE)
-        if os.path.isfile(process_complete_file):
-            print(f"Processing already complete on {process_complete_file}")
-            continue
-        match_info_file = os.path.join(group_full_path, MATCH_INFO_FILE)
-        if os.path.isfile(match_info_file):
-            match_info_config = configparser.ConfigParser()
-            match_info_config.read(match_info_file)
-            match_info = match_info_config["MATCH"]
-            if match_info['start_time_offset'] and match_info['my_team_name'] and match_info['opponent_team_name'] and match_info['location']:
-                # We have all the info we need to trim and rename the file
-                trim_file_to_offset(combined_filename, match_info)
-                with open(process_complete_file, 'w') as f:
-                    f.write(f"Process completed - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                continue
-            else:
-                print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
-                continue
         for file in os.listdir(group_full_path):
             if file.endswith(".dav") and not os.path.exists(os.path.join(group_full_path, file).replace(".dav", ".mp4")):
                 # ffmpeg copy file to mp4
@@ -112,6 +92,7 @@ def process_all_files():
 
 async def find_files_to_download(auth):
     async with httpx.AsyncClient() as client:
+        updated_download_directories = []
         # There are more files to download, so download them
         response = await client.get(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
         print(f"Response: {response.status_code}")
@@ -183,6 +164,7 @@ async def find_files_to_download(auth):
                             if (os.path.exists(downloaded_file_path)):
                                 continue
                             download_directory = os.path.dirname(downloaded_file_path)
+                            updated_download_directories.append(download_directory)
                             print(f"Download path: {downloaded_file_path}")
                             # Check if the directory exists
                             if not os.path.exists(download_directory):
@@ -208,7 +190,7 @@ async def find_files_to_download(auth):
                                 #)
                                 print(f"File downloaded successfully as {downloaded_filename}")
                     # Process all files
-                    process_all_files()
+                    process_all_files(updated_download_directories)
         else:
             print(f"Unable to find device")
 
@@ -226,6 +208,32 @@ async def check_device_availability():
                     print(f"Received response from camera, but query was not successful.  Status Code: {response.status_code}")
             except Exception as e:
                 print(f"device was not found at {DEVICE_IP}: {e}")
+
+            # Look for videos that were previously downloaded and combined, and just need more processing
+            for group_dir in os.listdir(VIDEO_STORAGE_PATH):
+                group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
+                if not os.path.isdir(group_full_path):
+                    # Skip attempting to process anything that's not a directory
+                    continue
+                combined_filename = os.path.join(group_full_path, "combined.mp4")
+                process_complete_file = os.path.join(group_full_path, FINISHED_FILE)
+                if os.path.isfile(process_complete_file):
+                    print(f"Processing already complete on {process_complete_file}")
+                    continue
+                match_info_file = os.path.join(group_full_path, MATCH_INFO_FILE)
+                if os.path.isfile(match_info_file):
+                    match_info_config = configparser.ConfigParser()
+                    match_info_config.read(match_info_file)
+                    match_info = match_info_config["MATCH"]
+                    if match_info['start_time_offset'] and match_info['my_team_name'] and match_info['opponent_team_name'] and match_info['location']:
+                        # We have all the info we need to trim and rename the file
+                        trim_file_to_offset(combined_filename, match_info)
+                        with open(process_complete_file, 'w') as f:
+                            f.write(f"Process completed - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        continue
+                    else:
+                        print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
+                        continue
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
