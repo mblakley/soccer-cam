@@ -46,6 +46,31 @@ python .\video_grouper\video_grouper.py
 ```
 The application will start to run, and will poll for the presence of the camera at the configured IP address.  Once it finds a camera that can be queried and returns a success response, it will find any videos that have been recorded to the SD card and start to download them to the configured video storage location.  The recording files are grouped into directories by date and time, and once all recordings have been downloaded, all recordings in each directory are combined into a single video.
 
+## Running in Docker
+
+To start the application in Docker:
+
+```
+docker compose build
+docker compose up -d
+```
+
+The `-d` keeps it running in the background, so it will continue to look for new videos and process them
+
+## Adding team information and trimming to a start time
+
+After the videos have been downloaded and combined, it's possible to add more information to the video and trim the "warm up" time off the beginning of the video file by filling in the match_info.ini in the video directory.  You can find an example file in ./video_grouper/match_info.ini.dist
+
+The values to fill in are:
+`start_time_offset` - The time to trim off the start of the video in the format "<minutes>:<seconds>" (ex: "01:15").
+`my_team_name` - The name of your team.  Any spaces will be removed from this value when creating filenames and directories.
+`opponent_team_name` - The name of the opposing team.  Any spaces will be removed from this value when creating filenames and directories.
+`location` - normally "home" or "away", but could be a specific field or other identifier
+
+An unconfigured `match_info.ini` file will be created in the directory where it needs to be filled in.  All fields are required.  After you provide the required information, the next run of the device check will trim and rename the existing `combined.mp4` to something more specific, and copy it into a specifically named directory.
+
+Once the team info has been added, processing is complete, and a new `complete.txt` file will be created in the directory with information about when the processing actually finished.  This file will be used to determine whether to skip any additional processing.
+
 
 # (Optional) Notes on setting up the camera on a tripod
 It's possible to setup one (or more) security cameras on a tripod to record a 180 degree view of sporting events.  This setup costs < $600 (as of May 2024), uses easily replaceable/commercially available components, and you will own the footage for as long as you want to store it.  It does require some effort to initially setup the camera and this application, but it generally takes much less time than it takes to watch a soccer game!
