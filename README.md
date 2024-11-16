@@ -148,6 +148,8 @@ You can use any video editing tools you want to cut clips out of the full video.
 ffmpeg -ss 00:02:45.0 -i .\original.mp4 -c copy .\clipped.mp4
 ```
 
+If you follow the instructions above and create the `match_info.ini` file after the video has been created, the app will use the information provided to trim the video file for you.
+
 ### My video processing tool is complaining about the format of the video file
 The video that comes off the camera isn't always consistent with how the frames are written.  To repair the video, you can run this command, at a small (imperceptible) cost to image and audio quality.
 ```
