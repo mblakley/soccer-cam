@@ -1,5 +1,6 @@
 import os
 import subprocess
+import textwrap
 import httpx
 import asyncio
 from datetime import datetime, timedelta
@@ -19,16 +20,41 @@ CHECK_INTERVAL_SECONDS = appConfig.getint('check_interval_seconds')
 STATUS_FILE_PATH = appConfig['status_file_path']
 VIDEO_STORAGE_PATH = appConfig['video_storage_path']
 TEAM_NAME = appConfig['team_name']
+FINISHED_FILE = "finished.txt"
+MATCH_INFO_FILE = "match_info.txt"
 
-def process_all_files():
-    for group_dir in os.listdir(VIDEO_STORAGE_PATH):
+
+def trim_file_to_offset(combined_filename: str, match_info: dict):
+    input_file = combined_filename
+    directory_path = os.path.dirname(combined_filename)
+    dir_date = os.path.basename(directory_path).split('-')[0]
+    formatted_date = datetime.strptime(dir_date, "%Y.%m.%d").strftime("%m-%d-%Y")
+    output_dir = f"{dir_date} - vs {match_info['opponent_team_name']} ({match_info['location']})"
+    output_file = os.path.join(directory_path, output_dir, f"{match_info['my_team_name'].lower().replace(' ', '')}-{match_info['opponent_team_name'].lower().replace(' ', '')}-{match_info['location'].lower().replace(' ', '')}-{formatted_date}-raw")
+    command = ["ffmpeg", "-i", input_file, "-ss", match_info['start_time_offset'], "-c", "copy", "-threads", "0", "-async", "1", output_file]
+    print(f"input_file: {input_file} -> output_file: {output_file}.  Calling {command}")
+    result = subprocess.run(command, capture_output=True, check=True)
+    print(f"Completed conversion to mp4: {output_file}.  Result: {result}")
+
+def process_all_files(group_directories: list[str]):
+    # Filter to include only directories
+    directories = [d for d in group_directories if os.path.isdir(os.path.join(VIDEO_STORAGE_PATH, d))]
+
+    # Sort directories by modification time (newest first)
+    sorted_directories = sorted(
+        directories,
+        key=lambda d: os.path.getmtime(os.path.join(VIDEO_STORAGE_PATH, d)),
+        reverse=True
+    )
+    for group_dir in sorted_directories:
         group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
+        combined_filename = os.path.join(group_full_path, "combined.mp4")
         for file in os.listdir(group_full_path):
             if file.endswith(".dav") and not os.path.exists(os.path.join(group_full_path, file).replace(".dav", ".mp4")):
                 # ffmpeg copy file to mp4
                 input_file = os.path.join(group_full_path, file)
                 output_file = input_file.replace(".dav", ".mp4")
-                command = ["ffmpeg", "-i", input_file, "-vcodec", "copy", "-acodec", "alac", output_file]
+                command = ["ffmpeg", "-i", input_file, "-vcodec", "copy", "-acodec", "alac", "-threads", "0", "-async", "1", output_file]
                 print(f"input_file: {input_file} -> output_file: {output_file}.  Calling {command}")
                 result = subprocess.run(command, capture_output=True, check=True)
                 print(f"Completed conversion to mp4: {output_file}.  Result: {result}")
@@ -45,8 +71,6 @@ def process_all_files():
                     print(f"Writing file to group concat: {mp_file_path} -> {combine_list_file}")
                     f.write(f"file '{mp_file_path}'\n")
         # ffmpeg combine files grouped by time
-        # TODO: Grouping by required input for home and away teams
-        combined_filename = os.path.join(group_full_path, "combined.mp4")
         print(f"combined_filename: {combined_filename}")
         if (os.path.exists(combined_filename)):
             os.remove(combined_filename)
@@ -54,12 +78,21 @@ def process_all_files():
         print(f"Combining mp4 files.  Calling {command}")
         subprocess.run(command, capture_output=True, check=True)
         print(f"Completed combination of mp4 files: {combined_filename }")
-        # TODO: ffmpeg cut file to start close to kickoff time (based on scheduled start time?)
+        empty_match_info = '''[MATCH]
+        start_time_offset =
+        my_team_name =
+        opponent_team_name =
+        location =
+        '''
+        with open(match_info_file, 'w') as f:
+            f.write(textwrap.dedent(empty_match_info))
+        print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
         # TODO: Additional processing to find and follow the ball
         # TODO: Auto upload to youtube
 
 async def find_files_to_download(auth):
     async with httpx.AsyncClient() as client:
+        updated_download_directories = []
         # There are more files to download, so download them
         response = await client.get(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
         print(f"Response: {response.status_code}")
@@ -67,7 +100,16 @@ async def find_files_to_download(auth):
             print(f"Created file finder: {response.text}")
             object_id = response.text.split('=')[1].strip()
             current_date_time = datetime.now()
-            prev_recording_end_contents = "2024-09-30 00:00:00"
+            if not os.path.exists(STATUS_FILE_PATH):
+                # Create the datetime string for midnight today
+                midnight_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                prev_recording_end_contents = midnight_today.strftime("%Y-%m-%d %H:%M:%S")
+                # Write today at midnight datetime string to the new file
+                with open(STATUS_FILE_PATH, 'w') as file:
+                    file.write(prev_recording_end_contents)
+            else:
+                with open(STATUS_FILE_PATH, 'r') as file:
+                    prev_recording_end_contents = file.read()
             date_format = "%Y-%m-%d %H:%M:%S"
             prev_recording_end = datetime.strptime(prev_recording_end_contents, date_format)
             start_time = prev_recording_end + timedelta(hours=2)
@@ -92,6 +134,8 @@ async def find_files_to_download(auth):
                     for line in response.text.split("\n"):
                         if (".EndTime" in line):
                             recent_end_time = datetime.strptime(line.split("=")[1].strip(), date_format)
+                            with open(STATUS_FILE_PATH, 'w') as file:
+                                file.write(recent_end_time.strftime("%Y-%m-%d %H:%M:%S"))
                             print(f"findNextFile endtime: {recent_end_time}")
                         if (".Duration" in line):
                             if (clip_duration):
@@ -120,6 +164,7 @@ async def find_files_to_download(auth):
                             if (os.path.exists(downloaded_file_path)):
                                 continue
                             download_directory = os.path.dirname(downloaded_file_path)
+                            updated_download_directories.append(download_directory)
                             print(f"Download path: {downloaded_file_path}")
                             # Check if the directory exists
                             if not os.path.exists(download_directory):
@@ -145,7 +190,7 @@ async def find_files_to_download(auth):
                                 #)
                                 print(f"File downloaded successfully as {downloaded_filename}")
                     # Process all files
-                    process_all_files()
+                    process_all_files(updated_download_directories)
         else:
             print(f"Unable to find device")
 
@@ -163,6 +208,32 @@ async def check_device_availability():
                     print(f"Received response from camera, but query was not successful.  Status Code: {response.status_code}")
             except Exception as e:
                 print(f"device was not found at {DEVICE_IP}: {e}")
+
+            # Look for videos that were previously downloaded and combined, and just need more processing
+            for group_dir in os.listdir(VIDEO_STORAGE_PATH):
+                group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
+                if not os.path.isdir(group_full_path):
+                    # Skip attempting to process anything that's not a directory
+                    continue
+                combined_filename = os.path.join(group_full_path, "combined.mp4")
+                process_complete_file = os.path.join(group_full_path, FINISHED_FILE)
+                if os.path.isfile(process_complete_file):
+                    print(f"Processing already complete on {process_complete_file}")
+                    continue
+                match_info_file = os.path.join(group_full_path, MATCH_INFO_FILE)
+                if os.path.isfile(match_info_file):
+                    match_info_config = configparser.ConfigParser()
+                    match_info_config.read(match_info_file)
+                    match_info = match_info_config["MATCH"]
+                    if match_info['start_time_offset'] and match_info['my_team_name'] and match_info['opponent_team_name'] and match_info['location']:
+                        # We have all the info we need to trim and rename the file
+                        trim_file_to_offset(combined_filename, match_info)
+                        with open(process_complete_file, 'w') as f:
+                            f.write(f"Process completed - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        continue
+                    else:
+                        print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
+                        continue
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
