@@ -1,3 +1,2 @@
 httpx
 aiofiles
-pywin32

@@ -28,7 +28,7 @@ def process_all_files():
                 # ffmpeg copy file to mp4
                 input_file = os.path.join(group_full_path, file)
                 output_file = input_file.replace(".dav", ".mp4")
-                command = ["ffmpeg", "-i", input_file, "-vcodec", "copy", "-acodec", "alac", output_file]
+                command = ["ffmpeg", "-i", input_file, "-vcodec", "copy", "-acodec", "alac", "-threads", "0", "-async", "1", output_file]
                 print(f"input_file: {input_file} -> output_file: {output_file}.  Calling {command}")
                 result = subprocess.run(command, capture_output=True, check=True)
                 print(f"Completed conversion to mp4: {output_file}.  Result: {result}")
@@ -67,7 +67,16 @@ async def find_files_to_download(auth):
             print(f"Created file finder: {response.text}")
             object_id = response.text.split('=')[1].strip()
             current_date_time = datetime.now()
-            prev_recording_end_contents = "2024-09-30 00:00:00"
+            if not os.path.exists(STATUS_FILE_PATH):
+                # Create the datetime string for midnight today
+                midnight_today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                prev_recording_end_contents = midnight_today.strftime("%Y-%m-%d %H:%M:%S")
+                # Write today at midnight datetime string to the new file
+                with open(STATUS_FILE_PATH, 'w') as file:
+                    file.write(prev_recording_end_contents)
+            else:
+                with open(STATUS_FILE_PATH, 'r') as file:
+                    prev_recording_end_contents = file.read()
             date_format = "%Y-%m-%d %H:%M:%S"
             prev_recording_end = datetime.strptime(prev_recording_end_contents, date_format)
             start_time = prev_recording_end + timedelta(hours=2)
@@ -92,6 +101,8 @@ async def find_files_to_download(auth):
                     for line in response.text.split("\n"):
                         if (".EndTime" in line):
                             recent_end_time = datetime.strptime(line.split("=")[1].strip(), date_format)
+                            with open(STATUS_FILE_PATH, 'w') as file:
+                                file.write(recent_end_time.strftime("%Y-%m-%d %H:%M:%S"))
                             print(f"findNextFile endtime: {recent_end_time}")
                         if (".Duration" in line):
                             if (clip_duration):
