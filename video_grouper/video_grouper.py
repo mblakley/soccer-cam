@@ -19,10 +19,26 @@ CHECK_INTERVAL_SECONDS = appConfig.getint('check_interval_seconds')
 STATUS_FILE_PATH = appConfig['status_file_path']
 VIDEO_STORAGE_PATH = appConfig['video_storage_path']
 TEAM_NAME = appConfig['team_name']
+COMPLETED_FILE = "complete.txt"
 
 def process_all_files():
-    for group_dir in os.listdir(VIDEO_STORAGE_PATH):
+    entries = os.listdir(VIDEO_STORAGE_PATH)
+
+    # Filter to include only directories
+    directories = [d for d in entries if os.path.isdir(os.path.join(VIDEO_STORAGE_PATH, d))]
+
+    # Sort directories by modification time (newest first)
+    sorted_directories = sorted(
+        directories,
+        key=lambda d: os.path.getmtime(os.path.join(VIDEO_STORAGE_PATH, d)),
+        reverse=True
+    )
+    for group_dir in sorted_directories:
         group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
+        process_complete_file = os.path.join(group_full_path, COMPLETED_FILE)
+        if os.path.isfile(process_complete_file):
+            print(f"Processing already complete on {process_complete_file}")
+            continue
         for file in os.listdir(group_full_path):
             if file.endswith(".dav") and not os.path.exists(os.path.join(group_full_path, file).replace(".dav", ".mp4")):
                 # ffmpeg copy file to mp4
@@ -53,6 +69,8 @@ def process_all_files():
         command = ["ffmpeg", "-f" ,"concat" ,"-safe", "0", "-i", combine_list_file, "-c", "copy", combined_filename]
         print(f"Combining mp4 files.  Calling {command}")
         subprocess.run(command, capture_output=True, check=True)
+        with open(process_complete_file, 'w') as f:
+            f.write(f"Process completed - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}")
         print(f"Completed combination of mp4 files: {combined_filename }")
         # TODO: ffmpeg cut file to start close to kickoff time (based on scheduled start time?)
         # TODO: Additional processing to find and follow the ball
