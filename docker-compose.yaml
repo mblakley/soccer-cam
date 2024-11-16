@@ -1,0 +1,6 @@
+services:
+  video-grouper:
+    build:
+      context: ./video_grouper
+    volumes:
+      - ./shared_data:/shared_data
