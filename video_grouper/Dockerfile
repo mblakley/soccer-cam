@@ -13,7 +13,7 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
-COPY config.ini .
-COPY video_grouper.py .
 RUN pip install -r requirements.txt
+COPY video_grouper.py .
+COPY config.ini .
 CMD ["python", "./video_grouper.py"]

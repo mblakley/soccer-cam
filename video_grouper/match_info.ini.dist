@@ -1,0 +1,5 @@
+[MATCH]
+start_time_offset = "01:15"
+my_team_name = "Super Mega Cruisers"
+opponent_team_name = "Big Buddy Bashers"
+location = "home"

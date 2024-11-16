@@ -1,5 +1,6 @@
 import os
 import subprocess
+import textwrap
 import httpx
 import asyncio
 from datetime import datetime, timedelta
@@ -19,7 +20,21 @@ CHECK_INTERVAL_SECONDS = appConfig.getint('check_interval_seconds')
 STATUS_FILE_PATH = appConfig['status_file_path']
 VIDEO_STORAGE_PATH = appConfig['video_storage_path']
 TEAM_NAME = appConfig['team_name']
-COMPLETED_FILE = "complete.txt"
+FINISHED_FILE = "finished.txt"
+MATCH_INFO_FILE = "match_info.txt"
+
+
+def trim_file_to_offset(combined_filename: str, match_info: dict):
+    input_file = combined_filename
+    directory_path = os.path.dirname(combined_filename)
+    dir_date = os.path.basename(directory_path).split('-')[0]
+    formatted_date = datetime.strptime(dir_date, "%Y.%m.%d").strftime("%m-%d-%Y")
+    output_dir = f"{dir_date} - vs {match_info['opponent_team_name']} ({match_info['location']})"
+    output_file = os.path.join(directory_path, output_dir, f"{match_info['my_team_name'].lower().replace(' ', '')}-{match_info['opponent_team_name'].lower().replace(' ', '')}-{match_info['location'].lower().replace(' ', '')}-{formatted_date}-raw")
+    command = ["ffmpeg", "-i", input_file, "-ss", match_info['start_time_offset'], "-c", "copy", "-threads", "0", "-async", "1", output_file]
+    print(f"input_file: {input_file} -> output_file: {output_file}.  Calling {command}")
+    result = subprocess.run(command, capture_output=True, check=True)
+    print(f"Completed conversion to mp4: {output_file}.  Result: {result}")
 
 def process_all_files():
     entries = os.listdir(VIDEO_STORAGE_PATH)
@@ -35,10 +50,25 @@ def process_all_files():
     )
     for group_dir in sorted_directories:
         group_full_path = os.path.join(VIDEO_STORAGE_PATH, group_dir)
-        process_complete_file = os.path.join(group_full_path, COMPLETED_FILE)
+        combined_filename = os.path.join(group_full_path, "combined.mp4")
+        process_complete_file = os.path.join(group_full_path, FINISHED_FILE)
         if os.path.isfile(process_complete_file):
             print(f"Processing already complete on {process_complete_file}")
             continue
+        match_info_file = os.path.join(group_full_path, MATCH_INFO_FILE)
+        if os.path.isfile(match_info_file):
+            match_info_config = configparser.ConfigParser()
+            match_info_config.read(match_info_file)
+            match_info = match_info_config["MATCH"]
+            if match_info['start_time_offset'] and match_info['my_team_name'] and match_info['opponent_team_name'] and match_info['location']:
+                # We have all the info we need to trim and rename the file
+                trim_file_to_offset(combined_filename, match_info)
+                with open(process_complete_file, 'w') as f:
+                    f.write(f"Process completed - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                continue
+            else:
+                print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
+                continue
         for file in os.listdir(group_full_path):
             if file.endswith(".dav") and not os.path.exists(os.path.join(group_full_path, file).replace(".dav", ".mp4")):
                 # ffmpeg copy file to mp4
@@ -61,18 +91,22 @@ def process_all_files():
                     print(f"Writing file to group concat: {mp_file_path} -> {combine_list_file}")
                     f.write(f"file '{mp_file_path}'\n")
         # ffmpeg combine files grouped by time
-        # TODO: Grouping by required input for home and away teams
-        combined_filename = os.path.join(group_full_path, "combined.mp4")
         print(f"combined_filename: {combined_filename}")
         if (os.path.exists(combined_filename)):
             os.remove(combined_filename)
         command = ["ffmpeg", "-f" ,"concat" ,"-safe", "0", "-i", combine_list_file, "-c", "copy", combined_filename]
         print(f"Combining mp4 files.  Calling {command}")
         subprocess.run(command, capture_output=True, check=True)
-        with open(process_complete_file, 'w') as f:
-            f.write(f"Process completed - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}")
         print(f"Completed combination of mp4 files: {combined_filename }")
-        # TODO: ffmpeg cut file to start close to kickoff time (based on scheduled start time?)
+        empty_match_info = '''[MATCH]
+        start_time_offset =
+        my_team_name =
+        opponent_team_name =
+        location =
+        '''
+        with open(match_info_file, 'w') as f:
+            f.write(textwrap.dedent(empty_match_info))
+        print(f"Fill in the match_info.ini file in {group_full_path} to finish processing")
         # TODO: Additional processing to find and follow the ball
         # TODO: Auto upload to youtube
 
