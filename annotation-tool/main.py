@@ -13,7 +13,7 @@ class VideoAnnotationTool(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle('Soccer Ball Annotation Tool')
-        self.showMaximized()  # Open window maximized to the screen
+        self.showFullScreen()
 
         # QLabel to display the video frame
         self.label = QLabel(self)
@@ -78,6 +78,7 @@ class VideoAnnotationTool(QMainWindow):
 
         # Reset zoom region if none exists
         if self.current_zoom_region is None:
+            print(f"Setting zoom region to: 0, 0, {frame.shape[1]}, {frame.shape[0]}")
             self.current_zoom_region = (0, 0, frame.shape[1], frame.shape[0])
 
         self.apply_zoom()
@@ -121,9 +122,9 @@ class VideoAnnotationTool(QMainWindow):
         q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(q_img)
 
-        # Scale the image to fit the QLabel height
-        window_height = self.label.height()
-        scaled_pixmap = pixmap.scaledToHeight(window_height, Qt.SmoothTransformation)
+        # Scale the image to fit the QLabel width
+        window_width = self.label.width()
+        scaled_pixmap = pixmap.scaledToWidth(window_width, Qt.SmoothTransformation)
 
         # Draw annotations on the pixmap
         annotated_pixmap = self.draw_annotations(scaled_pixmap)
@@ -144,9 +145,9 @@ class VideoAnnotationTool(QMainWindow):
         zoom_width = zoom_x2 - zoom_x1
         zoom_height = zoom_y2 - zoom_y1
 
-        # Get the scaling factor for mapping full-size coordinates to the zoomed region
-        display_h = self.label.height()
-        scale_factor = display_h / zoom_height
+        # Calculate the scaling factor based on the displayed width
+        display_w = self.label.width()
+        scale_factor = display_w / zoom_width
 
         # Get annotations for the current frame
         frame_annotations = self.annotations[self.annotations['frame'] == self.current_frame]
@@ -170,53 +171,28 @@ class VideoAnnotationTool(QMainWindow):
         painter.end()
         return pixmap
 
+
     def wheelEvent(self, event):
         """Handle zoom in/out with the scroll wheel while holding Ctrl."""
         if QApplication.keyboardModifiers() == Qt.ControlModifier:
             delta = event.angleDelta().y() / 120  # Positive for scroll up, negative for scroll down
-            zoom_factor = 0.9 if delta > 0 else 1.1  # Inverted: scroll up zooms out, scroll down zooms in
+            zoom_factor = 0.9 if delta > 0 else 1.1  # Scroll up to zoom in, scroll down to zoom out
 
             x1, y1, x2, y2 = self.current_zoom_region
-            frame_h, frame_w, _ = self.original_frame.shape
 
-            # Calculate the new zoom region by scaling around the center
+            # Calculate the center of the current zoom region
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
             new_width = (x2 - x1) * zoom_factor
             new_height = (y2 - y1) * zoom_factor
 
-            # Enforce minimum and maximum zoom sizes
-            min_zoom_height = 20
-            aspect_ratio = self.label.width() / self.label.height()
-            min_zoom_width = int(min_zoom_height * aspect_ratio)
+            # Calculate the new zoom region
+            self.current_zoom_region = self.calculate_zoom_region(center_x, center_y, new_width, new_height)
 
-            new_width = max(min_zoom_width, min(new_width, frame_w))
-            new_height = max(min_zoom_height, min(new_height, frame_h))
-
-            # Adjust the zoom region to maintain aspect ratio
-            x1 = int(center_x - new_width / 2)
-            x2 = int(center_x + new_width / 2)
-            y1 = int(center_y - new_height / 2)
-            y2 = int(center_y + new_height / 2)
-
-            # Clamp the zoom region to frame boundaries
-            if x1 < 0:
-                x2 -= x1
-                x1 = 0
-            if y1 < 0:
-                y2 -= y1
-                y1 = 0
-            if x2 > frame_w:
-                x1 -= (x2 - frame_w)
-                x2 = frame_w
-            if y2 > frame_h:
-                y1 -= (y2 - frame_h)
-                y2 = frame_h
-
-            # Update and apply the new zoom region
-            self.current_zoom_region = (x1, y1, x2, y2)
+            # Apply and display the new zoom
             self.apply_zoom()
             self.display_frame()
+
 
     def mousePressEvent(self, event):
         """Start drawing the zoom box or annotation on mouse button press."""
@@ -273,39 +249,61 @@ class VideoAnnotationTool(QMainWindow):
             # Update the QLabel to display the dynamically drawn annotation
             self.label.setPixmap(pixmap)
 
+    def calculate_zoom_region(self, center_x, center_y, zoom_width, zoom_height):
+        """Calculate the zoom region while clamping to image boundaries and maintaining aspect ratio."""
+        frame_h, frame_w, _ = self.original_frame.shape
+
+        # Enforce minimum zoom width and height
+        aspect_ratio = frame_w / frame_h
+        min_zoom_height = 20
+        min_zoom_width = int(min_zoom_height * aspect_ratio)
+
+        zoom_width = max(min_zoom_width, min(zoom_width, frame_w))
+        zoom_height = max(min_zoom_height, min(zoom_height, frame_h))
+
+        # Calculate new zoom box
+        x1 = int(center_x - zoom_width / 2)
+        x2 = int(center_x + zoom_width / 2)
+        y1 = int(center_y - zoom_height / 2)
+        y2 = int(center_y + zoom_height / 2)
+
+        # Clamp to the image boundaries
+        if x1 < 0:
+            x2 -= x1
+            x1 = 0
+        if y1 < 0:
+            y2 -= y1
+            y1 = 0
+        if x2 > frame_w:
+            x1 -= (x2 - frame_w)
+            x2 = frame_w
+        if y2 > frame_h:
+            y1 -= (y2 - frame_h)
+            y2 = frame_h
+
+        return x1, y1, x2, y2
+
+
     def mouseReleaseEvent(self, event):
         """Finalize the zoom box or annotation on mouse button release."""
         if event.button() == Qt.RightButton and self.start_point and self.end_point:
-            # Finalize zoom
+            # Calculate display coordinates
             x1_disp = min(self.start_point.x(), self.end_point.x())
             y1_disp = min(self.start_point.y(), self.end_point.y())
             x2_disp = max(self.start_point.x(), self.end_point.x())
             y2_disp = max(self.start_point.y(), self.end_point.y())
 
-            # Map coordinates to the original frame
+            # Map display coordinates to original frame
             x1, y1, x2, y2 = self.map_to_original(x1_disp, y1_disp, x2_disp, y2_disp)
 
-            # Enforce minimum zoom region size with aspect ratio lock
-            frame_h, frame_w, _ = self.original_frame.shape
-            aspect_ratio = self.label.width() / self.label.height()
-            min_zoom_height = 20  # Minimum height for zoom
-            min_zoom_width = int(min_zoom_height * aspect_ratio)
+            # Calculate the new zoom region
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            zoom_width = x2 - x1
+            zoom_height = y2 - y1
+            self.current_zoom_region = self.calculate_zoom_region(center_x, center_y, zoom_width, zoom_height)
 
-            if (x2 - x1) < min_zoom_width or (y2 - y1) < min_zoom_height:
-                print("Zoom region too small; resizing to maintain minimum size with aspect ratio.")
-                x2 = x1 + max(min_zoom_width, x2 - x1)
-                y2 = y1 + max(min_zoom_height, y2 - y1)
-
-                # Clamp values to frame boundaries
-                if x2 > frame_w:
-                    x2 = frame_w
-                    y2 = y1 + int((x2 - x1) / aspect_ratio)
-                if y2 > frame_h:
-                    y2 = frame_h
-                    x2 = x1 + int((y2 - y1) * aspect_ratio)
-
-            # Update zoom region
-            self.current_zoom_region = (x1, y1, x2, y2)
+            # Apply and display the new zoom
             self.apply_zoom()
             self.display_frame()
 
@@ -315,6 +313,7 @@ class VideoAnnotationTool(QMainWindow):
         elif event.button() == Qt.LeftButton and self.start_point and self.end_point:
             # Finalize annotation
             self.finalize_annotation()
+
 
     def finalize_annotation(self):
         """Save the annotation in pixels relative to the original frame and reset points."""
@@ -358,15 +357,29 @@ class VideoAnnotationTool(QMainWindow):
         zoom_w = zoom_x2 - zoom_x1
         zoom_h = zoom_y2 - zoom_y1
 
-        # Calculate scaling factor from displayed image to original frame
-        display_h = self.label.pixmap().height()
-        scale_factor = zoom_h / display_h
+        # Calculate the scaling factor based on width
+        display_w = self.label.width()
+        scale_factor = zoom_w / display_w
+
+        # Calculate the displayed image's height
+        display_h = int(zoom_h / scale_factor)
+
+        # Calculate vertical offset if the image is centered vertically in the label
+        vertical_offset = (self.label.height() - display_h) // 2
+
+        # Adjust display coordinates to exclude the offset
+        y1_disp_adjusted = y1_disp - vertical_offset
+        y2_disp_adjusted = y2_disp - vertical_offset
+
+        # Clamp the adjusted display coordinates to the displayed image bounds
+        y1_disp_adjusted = max(0, min(display_h, y1_disp_adjusted))
+        y2_disp_adjusted = max(0, min(display_h, y2_disp_adjusted))
 
         # Map display coordinates to original frame coordinates
         x1 = int(zoom_x1 + x1_disp * scale_factor)
-        y1 = int(zoom_y1 + y1_disp * scale_factor)
+        y1 = int(zoom_y1 + y1_disp_adjusted * scale_factor)
         x2 = int(zoom_x1 + x2_disp * scale_factor)
-        y2 = int(zoom_y1 + y2_disp * scale_factor)
+        y2 = int(zoom_y1 + y2_disp_adjusted * scale_factor)
 
         return x1, y1, x2, y2
 
@@ -377,13 +390,23 @@ class VideoAnnotationTool(QMainWindow):
             painter = QPainter(pixmap)
             painter.setPen(QPen(Qt.red, 2, Qt.SolidLine))
 
+            # Calculate vertical offset for the displayed image
+            display_w = self.label.width()
+            display_h = int(self.original_frame.shape[0] * (display_w / self.original_frame.shape[1]))
+            vertical_offset = (self.label.height() - display_h) // 2
+
+            # Adjust the start and end points to exclude the vertical offset
+            start_point_adjusted = QPoint(self.start_point.x(), self.start_point.y() - vertical_offset)
+            end_point_adjusted = QPoint(self.end_point.x(), self.end_point.y() - vertical_offset)
+
             # Draw rectangle on the image
-            rect = QRect(self.start_point, self.end_point)
+            rect = QRect(start_point_adjusted, end_point_adjusted)
             painter.drawRect(rect)
             painter.end()
 
             # Update the label with the new pixmap
             self.label.setPixmap(pixmap)
+
 
     def keyPressEvent(self, event):
         """Handle keyboard input for navigation, zoom reset, and annotation reset."""
@@ -409,8 +432,10 @@ class VideoAnnotationTool(QMainWindow):
         elif event.key() == Qt.Key_R:
             self.current_zoom_region = None  # Reset zoom
             self.load_frame()
-        elif event.key() == Qt.Key_Escape:
+        elif event.key() == Qt.Key_A:
             self.reset_annotations()
+        elif event.key() == Qt.Key_Escape:
+            self.close()
 
 
     def reset_annotations(self):
