@@ -5,6 +5,4 @@ password = ""
 
 [APP]
 check_interval_seconds = 60
-status_file_path = "/shared_data/prev_recording_end.txt"
 video_storage_path = "C:\\Users\\myuser\\Downloads\\soccer"
-team_name = "Super Mega Cruisers"
