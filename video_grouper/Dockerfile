@@ -16,4 +16,5 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY video_grouper.py .
 COPY config.ini .
+COPY match_info.ini.dist .
 CMD ["python", "./video_grouper.py"]
