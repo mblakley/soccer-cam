@@ -125,15 +125,15 @@ def all_fields_filled(match_info):
 async def concatenate_videos(directory):
     output_file = os.path.join(directory, "combined.mp4")
     list_file = os.path.join(directory, "video_list.txt")
-
-    if not os.path.exists(list_file):
-        logger.error(f"Unable to combine videos: missing {list_file}")
-        raise ValueError(f"Missing {list_file}")
     
     with open(list_file, "w") as f:
         for file in sorted(os.listdir(directory)):
             if file.endswith(".mp4"):
                 f.write(f"file '{os.path.join(directory, file)}'\n")
+
+    if not os.path.exists(list_file):
+        logger.error(f"Unable to combine videos: missing {list_file}")
+        raise ValueError(f"Missing {list_file}")
 
     logger.info(f"Combining videos in {directory}")
     command = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", output_file]
