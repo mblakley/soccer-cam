@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, timedelta
 import aiofiles
 import configparser
+import json
+from typing import List, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +41,52 @@ STATES = ["downloading", "combining", "user_input", "post_processing", "finished
 # Locks to ensure only one download and one ffmpeg execution at a time
 download_lock = asyncio.Lock()
 ffmpeg_lock = asyncio.Lock()
+
+CAMERA_EVENTS_FILE = "camera_events.json"
+
+class CameraEvent:
+    def __init__(self, event_type: str, timestamp: datetime):
+        self.event_type = event_type  # "plug" or "unplug"
+        self.timestamp = timestamp
+
+    def to_dict(self):
+        return {
+            "event_type": self.event_type,
+            "timestamp": self.timestamp.strftime(default_date_format)
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CameraEvent":
+        return cls(
+            data["event_type"],
+            datetime.strptime(data["timestamp"], default_date_format)
+        )
+
+def load_camera_events() -> List[CameraEvent]:
+    if not os.path.exists(CAMERA_EVENTS_FILE):
+        return []
+    
+    try:
+        with open(CAMERA_EVENTS_FILE, 'r') as f:
+            events_data = json.load(f)
+            return [CameraEvent.from_dict(event) for event in events_data]
+    except Exception as e:
+        logger.error(f"Error loading camera events: {e}")
+        return []
+
+def save_camera_events(events: List[CameraEvent]):
+    try:
+        with open(CAMERA_EVENTS_FILE, 'w') as f:
+            json.dump([event.to_dict() for event in events], f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving camera events: {e}")
+
+def get_time_windows(events: List[CameraEvent]) -> List[Tuple[datetime, datetime]]:
+    windows = []
+    for i in range(len(events) - 1):
+        if events[i].event_type == "unplug" and events[i + 1].event_type == "plug":
+            windows.append((events[i].timestamp, events[i + 1].timestamp))
+    return windows
 
 class RecordingFile:
     def __init__(self, start_time: datetime, end_time: datetime, file_path: str):
@@ -242,13 +290,28 @@ async def check_device_availability(auth) -> bool:
         device_check_url = f"http://{DEVICE_IP}/cgi-bin/recordManager.cgi?action=getCaps"
         logger.info(f"Checking for camera devices available on network: {device_check_url}")
         response = await make_http_request(device_check_url, auth=auth)
+        
+        events = load_camera_events()
+        current_time = datetime.now()
+        
         if response.status_code == 200:
+            # Camera is plugged in
+            if not events or events[-1].event_type != "plug":
+                events.append(CameraEvent("plug", current_time))
+                logger.info(f"Camera plugged in at {current_time}")
+                save_camera_events(events)
             return True
         else:
             logger.info(f"Received response from camera, but query was not successful.  Status Code: {response.status_code}")
             return False
     except Exception as e:
         logger.info(f"Camera device was not found at {DEVICE_IP}: {e}")
+        # Camera is unplugged
+        events = load_camera_events()
+        if events and events[-1].event_type == "plug":
+            events.append(CameraEvent("unplug", datetime.now()))
+            logger.info(f"Camera unplugged at {events[-1].timestamp}")
+            save_camera_events(events)
         return False
 
 def get_subdirectory_time_ranges(storage_path):
@@ -297,97 +360,129 @@ def get_subdirectory_time_ranges(storage_path):
 
     return time_ranges
 
+async def stop_recording(auth) -> bool:
+    try:
+        stop_url = f"http://{DEVICE_IP}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
+        response = await make_http_request(stop_url, auth=auth)
+        if response.status_code == 200 and response.text.strip() == "OK":
+            logger.info("Successfully stopped recording")
+            return True
+        else:
+            logger.error(f"Failed to stop recording. Status code: {response.status_code}, Response: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error stopping recording: {e}")
+        return False
+
 async def find_and_download_files(auth):
     async with download_lock:
-        response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
-        if response.status_code != 200:
-            logger.info("Failed to create media file finder factory.")
+        events = load_camera_events()
+        if len(events) < 2:
+            logger.info("Skipping download - waiting for both unplug and plug events")
             return
 
-        object_id = response.text.split('=')[1].strip()
-        current_date_time = datetime.now()
-        latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
-
-        if os.path.exists(latest_file_path):
-            with open(latest_file_path, "r") as latest_file:
-                latest_video_timestamp = latest_file.read().strip()
-                start_time = datetime.strptime(latest_video_timestamp, default_date_format)
-        else:
-            start_time = current_date_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        end_time = current_date_time - timedelta(minutes=20)
-        start_time_formatted = start_time.strftime("%Y-%m-%d%%20%H:%M:%S")
-        end_time_formatted = end_time.strftime("%Y-%m-%d%%20%H:%M:%S")
-
-        findfile_url = f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_formatted}&condition.EndTime={end_time_formatted}&condition.VideoStream=Main"
-        response = await make_http_request(findfile_url, auth=auth)
-        if response.status_code != 200:
-            logger.info("Failed to find media files.")
+        # Get all time windows that need processing
+        time_windows = get_time_windows(events)
+        if not time_windows:
+            logger.info("No time windows to process")
             return
 
-        response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100", auth=auth)
-        if response.status_code != 200:
-            logger.info("Failed to retrieve media file list.")
-            return
+        # Process each time window
+        for start_time, end_time in time_windows:
+            response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
+            if response.status_code != 200:
+                logger.info("Failed to create media file finder factory.")
+                continue
 
-        files = RecordingFile.from_response(response.text)
+            object_id = response.text.split('=')[1].strip()
+            latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
 
-        storage_path = config["APP"]["video_storage_path"]
-
-        current_group_dir = None
-
-        for file in files:
-            filename = file.file_path.split("/")[-1]
-
-            # Get existing directories and their time ranges
-            existing_ranges = get_subdirectory_time_ranges(storage_path)
-
-            # Determine the appropriate directory for this file
-            assigned_directory = None
-            for start_time, end_time, dirname in existing_ranges:
-                # If the file's start time is within 60 seconds of an existing range, add it to that directory
-                if end_time and 0 <= (file.start_time - end_time).total_seconds() <= 60:
-                    assigned_directory = os.path.join(storage_path, dirname)
-                    logger.info(f"📂 Adding {filename} to existing directory: {dirname}")
-                    break
-
-            # If no suitable existing directory, create a new one
-            if assigned_directory is None:
-                has_dav_files = any(f.endswith(".dav") for f in os.listdir(current_group_dir))
-                if current_group_dir and has_dav_files:
-                    logger.info(f"Done downloading files to {current_group_dir}")
-                    update_status(current_group_dir, "combining")  # Mark previous dir as done
-
-                assigned_directory = os.path.join(storage_path, file.start_time.strftime("%Y.%m.%d-%H.%M.%S"))
-                create_directory(assigned_directory)
-                logger.info(f"📁 Creating new directory: {assigned_directory}")
-
-            current_group_dir = assigned_directory  # Update current directory for future files
-            
-            # Download file if it doesn't already exist
-            full_download_path = os.path.join(current_group_dir, filename)
-            if not os.path.exists(full_download_path):
-                update_status(current_group_dir, "downloading")
-                try:
-                    async with httpx.AsyncClient() as client:
-                        async with client.stream("GET", f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{file.file_path}", auth=auth, timeout=1200.0, follow_redirects=True) as file_response:
-                            if file_response.status_code == 200:
-                                async with aiofiles.open(full_download_path, "wb") as file_handle:
-                                    async for chunk in file_response.aiter_bytes():
-                                        await file_handle.write(chunk)
-                                logger.info(f"✅ Successfully downloaded {file.file_path} to {full_download_path}")
-                                with open(latest_file_path, "w") as latest_file:
-                                    latest_file.write(file.end_time.strftime(default_date_format))
-                            else:
-                                logger.info(f"❌ Download failed: {file.file_path} (HTTP {file_response.status_code})")
-                except httpx.HTTPStatusError as e:
-                    logger.error(f"❌ HTTP error downloading {file.file_path}: {e}")
-                except httpx.TimeoutException:
-                    logger.error(f"⚠️ Timeout while downloading {file.file_path}")
-                except Exception as e:
-                    logger.error(f"❌ Error downloading {file.file_path}: {e}")
+            if os.path.exists(latest_file_path):
+                with open(latest_file_path, "r") as latest_file:
+                    latest_video_timestamp = latest_file.read().strip()
+                    window_start = datetime.strptime(latest_video_timestamp, default_date_format)
             else:
-                logger.info(f"🟡 Skipping {file.file_path} (already exists)")
+                window_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            start_time_formatted = window_start.strftime("%Y-%m-%d%%20%H:%M:%S")
+            end_time_formatted = end_time.strftime("%Y-%m-%d%%20%H:%M:%S")
+
+            logger.info(f"Searching for files between {window_start} and {end_time}")
+
+            findfile_url = f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_formatted}&condition.EndTime={end_time_formatted}&condition.VideoStream=Main"
+            response = await make_http_request(findfile_url, auth=auth)
+            if response.status_code != 200:
+                logger.info("Failed to find media files.")
+                continue
+
+            response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100", auth=auth)
+            if response.status_code != 200:
+                logger.info("Failed to retrieve media file list.")
+                continue
+
+            files = RecordingFile.from_response(response.text)
+            if not files:
+                # If no files found in this window, we can clean up the events
+                events = [e for e in events if e.timestamp > end_time]
+                save_camera_events(events)
+                continue
+
+            # Process files as before...
+            storage_path = config["APP"]["video_storage_path"]
+            current_group_dir = None
+
+            for file in files:
+                filename = file.file_path.split("/")[-1]
+
+                # Get existing directories and their time ranges
+                existing_ranges = get_subdirectory_time_ranges(storage_path)
+
+                # Determine the appropriate directory for this file
+                assigned_directory = None
+                for start_time, end_time, dirname in existing_ranges:
+                    # If the file's start time is within 60 seconds of an existing range, add it to that directory
+                    if end_time and 0 <= (file.start_time - end_time).total_seconds() <= 60:
+                        assigned_directory = os.path.join(storage_path, dirname)
+                        logger.info(f"📂 Adding {filename} to existing directory: {dirname}")
+                        break
+
+                # If no suitable existing directory, create a new one
+                if assigned_directory is None:
+                    has_dav_files = any(f.endswith(".dav") for f in os.listdir(current_group_dir)) if current_group_dir else False
+                    if current_group_dir and has_dav_files:
+                        logger.info(f"Done downloading files to {current_group_dir}")
+                        update_status(current_group_dir, "combining")  # Mark previous dir as done
+
+                    assigned_directory = os.path.join(storage_path, file.start_time.strftime("%Y.%m.%d-%H.%M.%S"))
+                    create_directory(assigned_directory)
+                    logger.info(f"📁 Creating new directory: {assigned_directory}")
+
+                current_group_dir = assigned_directory  # Update current directory for future files
+                
+                # Download file if it doesn't already exist
+                full_download_path = os.path.join(current_group_dir, filename)
+                if not os.path.exists(full_download_path):
+                    update_status(current_group_dir, "downloading")
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            async with client.stream("GET", f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{file.file_path}", auth=auth, timeout=1200.0, follow_redirects=True) as file_response:
+                                if file_response.status_code == 200:
+                                    async with aiofiles.open(full_download_path, "wb") as file_handle:
+                                        async for chunk in file_response.aiter_bytes():
+                                            await file_handle.write(chunk)
+                                    logger.info(f"✅ Successfully downloaded {file.file_path} to {full_download_path}")
+                                    with open(latest_file_path, "w") as latest_file:
+                                        latest_file.write(file.end_time.strftime(default_date_format))
+                                else:
+                                    logger.info(f"❌ Download failed: {file.file_path} (HTTP {file_response.status_code})")
+                    except httpx.HTTPStatusError as e:
+                        logger.error(f"❌ HTTP error downloading {file.file_path}: {e}")
+                    except httpx.TimeoutException:
+                        logger.error(f"⚠️ Timeout while downloading {file.file_path}")
+                    except Exception as e:
+                        logger.error(f"❌ Error downloading {file.file_path}: {e}")
+                else:
+                    logger.info(f"🟡 Skipping {file.file_path} (already exists)")
 
 async def download_files():
     auth = httpx.DigestAuth(AUTH_USERNAME, AUTH_PASSWORD)
