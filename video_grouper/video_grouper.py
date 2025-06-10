@@ -172,6 +172,12 @@ async def concatenate_videos(directory):
                 logger.info(f"Found corrupted combined.mp4 file, removing it: {e}")
                 os.remove(output_file)
     
+    # Check for any unconverted DAV files
+    dav_files = [f for f in os.listdir(directory) if f.endswith('.dav')]
+    if dav_files:
+        logger.info(f"Found {len(dav_files)} unconverted DAV files in {directory}, waiting for conversion to complete")
+        return
+    
     # Get list of MP4 files and their sizes
     mp4_files = []
     total_size = 0
@@ -888,6 +894,32 @@ class DirectoryPlan:
         plan.status = data['status']
         return plan
 
+async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
+    """Verify that the MP4 file has roughly the same duration as the DAV file."""
+    try:
+        # Get DAV duration
+        dav_duration = await get_video_duration(dav_path)
+        if dav_duration <= 0:
+            logger.warning(f"Could not get duration for DAV file: {dav_path}")
+            return False
+            
+        # Get MP4 duration
+        mp4_duration = await get_video_duration(mp4_path)
+        if mp4_duration <= 0:
+            logger.warning(f"Could not get duration for MP4 file: {mp4_path}")
+            return False
+            
+        # Allow for 1 second difference to account for rounding
+        duration_diff = abs(dav_duration - mp4_duration)
+        if duration_diff > 1:
+            logger.warning(f"Duration mismatch: DAV={dav_duration:.1f}s, MP4={mp4_duration:.1f}s, diff={duration_diff:.1f}s")
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"Error verifying MP4 duration: {e}")
+        return False
+
 async def find_and_download_files(auth):
     async with download_lock:
         if not await check_device_availability(auth):
@@ -1033,8 +1065,19 @@ async def find_and_download_files(auth):
                 # Skip if MP4 already exists
                 mp4_path = full_download_path.replace('.dav', '.mp4')
                 if os.path.exists(mp4_path):
-                    logger.info(f"🟡 Skipping {filename} (MP4 already exists)")
-                    plan.mark_file_processed(filename)
+                    # Verify the MP4 duration matches the DAV file
+                    if await verify_mp4_duration(full_download_path, mp4_path):
+                        logger.info(f"🟡 Skipping {filename} (MP4 already exists and verified)")
+                        plan.mark_file_processed(filename)
+                    else:
+                        logger.info(f"🔄 MP4 exists but duration mismatch, will reprocess {filename}")
+                        try:
+                            os.remove(mp4_path)
+                            logger.info(f"Removed invalid MP4 file: {mp4_path}")
+                            # Add to ffmpeg queue for reprocessing
+                            asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
+                        except Exception as e:
+                            logger.error(f"Could not remove invalid MP4 file {mp4_path}: {e}")
                     continue
                 
                 # Download if needed
