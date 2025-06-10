@@ -1289,40 +1289,27 @@ class ProcessingState:
         # Check if MP4 exists
         mp4_path = file_path.replace('.dav', '.mp4')
         if os.path.exists(mp4_path):
-            # Verify the MP4 duration matches the DAV file
-            try:
-                # Get DAV duration
-                dav_duration = asyncio.run(get_video_duration(file_path))
-                if dav_duration <= 0:
-                    logger.warning(f"Could not get duration for DAV file: {file_path}")
-                    return False
-                    
-                # Get MP4 duration
-                mp4_duration = asyncio.run(get_video_duration(mp4_path))
-                if mp4_duration <= 0:
-                    logger.warning(f"Could not get duration for MP4 file: {mp4_path}")
-                    return False
-                    
-                # Allow for 1 second difference to account for rounding
-                duration_diff = abs(dav_duration - mp4_duration)
-                if duration_diff > 1:
-                    logger.warning(f"Duration mismatch: DAV={dav_duration:.1f}s, MP4={mp4_duration:.1f}s, diff={duration_diff:.1f}s")
-                    return False
-                
-                # If MP4 exists and is valid, add it to state
-                group_dir = os.path.dirname(mp4_path)
-                logger.info(f"Found valid MP4 at {mp4_path}, adding to state with group {group_dir}")
-                self.update_file_state(
-                    file_path,
-                    group_dir=group_dir,
-                    status="converted"
-                )
-                # Force a save of the state
-                self.save_state()
-                return True
-            except Exception as e:
-                logger.error(f"Error verifying MP4 duration: {e}")
+            # If DAV still exists, the conversion wasn't successful
+            if os.path.exists(file_path):
+                logger.warning(f"Found incomplete conversion: {file_path} still exists, will reprocess")
+                try:
+                    os.remove(mp4_path)
+                    logger.info(f"Removed incomplete MP4 file: {mp4_path}")
+                except Exception as e:
+                    logger.error(f"Could not remove incomplete MP4 file {mp4_path}: {e}")
                 return False
+            
+            # If MP4 exists and DAV is gone, add it to state
+            group_dir = os.path.dirname(mp4_path)
+            logger.info(f"Found valid MP4 at {mp4_path}, adding to state with group {group_dir}")
+            self.update_file_state(
+                file_path,
+                group_dir=group_dir,
+                status="converted"
+            )
+            # Force a save of the state
+            self.save_state()
+            return True
         
         return False
 
@@ -1396,7 +1383,7 @@ async def scan_for_unprocessed_files(storage_path: str, processing_state: Proces
                 file_path = os.path.join(root, file)
                 
                 # Skip if file is already processed
-                if processing_state.is_file_processed(file_path):
+                if await processing_state.is_file_processed(file_path):
                     logger.info(f"Skipping {file} (already processed)")
                     continue
                 
