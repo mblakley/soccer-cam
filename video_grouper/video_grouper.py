@@ -48,6 +48,7 @@ download_queue = asyncio.Queue()
 ffmpeg_queue = asyncio.Queue()
 queued_files = set()  # Track files in the ffmpeg queue
 ffmpeg_lock = asyncio.Lock()  # Lock to ensure only one ffmpeg operation runs at a time
+QUEUE_STATE_FILE = "ffmpeg_queue_state.json"
 
 class RecordingFile:
     def __init__(self, start_time: datetime, end_time: datetime, file_path: str):
@@ -80,15 +81,30 @@ class RecordingFile:
 
         return sorted(files, key=lambda x: x.start_time)
 
-def update_status(directory, state):
-    if state not in STATES:
-        raise ValueError("Invalid state")
-    status_file = os.path.join(directory, STATUS_FILE)
-    
-    with open(status_file, "w") as f:
-        f.write(state)
-
-    logger.info(f"Updated status to {state} in {status_file}")
+def update_status(root, status):
+    """Update the processing status of a directory."""
+    status_file = os.path.join(root, "processing_status.txt")
+    try:
+        with open(status_file, "w") as f:
+            f.write(status)
+        logger.info(f"Updated status to {status} for {root}")
+        
+        # Create match_info.ini when transitioning to user_input state
+        if status == "user_input":
+            match_info_path = os.path.join(root, "match_info.ini")
+            if not os.path.exists(match_info_path):
+                try:
+                    # Copy contents from match_info.ini.dist
+                    with open("match_info.ini.dist", "r") as dist_file:
+                        template_content = dist_file.read()
+                    
+                    with open(match_info_path, "w") as f:
+                        f.write(template_content)
+                    logger.info(f"Created match_info.ini in {root} from template")
+                except Exception as e:
+                    logger.error(f"Error creating match_info.ini: {e}")
+    except Exception as e:
+        logger.error(f"Error updating status: {e}")
 
 def get_status(directory):
     status_file = os.path.join(directory, STATUS_FILE)
@@ -299,6 +315,63 @@ async def concatenate_videos(directory):
         
         raise RuntimeError(f"FFmpeg combination failed: {error_msg}")
 
+def save_queue_state():
+    """Save the current state of the ffmpeg queue to a file."""
+    try:
+        # Convert queue items to a list of dictionaries
+        queue_items = []
+        for item in queued_files:
+            if isinstance(item, tuple):  # MP4 conversion task
+                file_path, latest_file_path, end_time = item
+                queue_items.append({
+                    'type': 'conversion',
+                    'file_path': file_path,
+                    'latest_file_path': latest_file_path,
+                    'end_time': end_time.isoformat() if end_time else None
+                })
+            else:  # Combining task
+                queue_items.append({
+                    'type': 'combining',
+                    'directory': item
+                })
+        
+        # Save to file
+        with open(QUEUE_STATE_FILE, 'w') as f:
+            json.dump(queue_items, f, indent=2)
+        logger.info(f"Saved queue state with {len(queue_items)} items")
+    except Exception as e:
+        logger.error(f"Error saving queue state: {e}")
+
+async def load_queue_state():
+    """Load the ffmpeg queue state from file."""
+    if not os.path.exists(QUEUE_STATE_FILE):
+        logger.info("No queue state file found")
+        return
+    
+    try:
+        with open(QUEUE_STATE_FILE, 'r') as f:
+            queue_items = json.load(f)
+        
+        # Clear existing queue
+        while not ffmpeg_queue.empty():
+            await ffmpeg_queue.get()
+            ffmpeg_queue.task_done()
+        queued_files.clear()
+        
+        # Add items back to queue
+        for item in queue_items:
+            if item['type'] == 'conversion':
+                end_time = datetime.fromisoformat(item['end_time']) if item['end_time'] else None
+                queued_files.add((item['file_path'], item['latest_file_path'], end_time))
+                await ffmpeg_queue.put((item['file_path'], item['latest_file_path'], end_time))
+            else:  # combining
+                queued_files.add(item['directory'])
+                await ffmpeg_queue.put(item['directory'])
+        
+        logger.info(f"Loaded queue state with {len(queue_items)} items")
+    except Exception as e:
+        logger.error(f"Error loading queue state: {e}")
+
 async def process_ffmpeg_queue():
     """Process ffmpeg conversion tasks in the background."""
     while True:
@@ -307,14 +380,17 @@ async def process_ffmpeg_queue():
             if isinstance(task, tuple):  # MP4 conversion task
                 file_path, latest_file_path, end_time = task
                 filename = os.path.basename(file_path)
-                queued_files.remove(file_path)  # Remove from tracking set
                 queue_size = ffmpeg_queue.qsize()
                 logger.info(f"🔄 Converting {filename} (queue size: {queue_size})")
                 if queue_size > 0:
                     logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
                 
+                # Save queue state before processing
+                save_queue_state()
+                
                 # Create a task for the conversion without waiting
                 asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
+                queued_files.remove(file_path)  # Remove from tracking set after logging
             else:  # Combining task
                 directory = task
                 dir_name = os.path.basename(directory)
@@ -323,8 +399,12 @@ async def process_ffmpeg_queue():
                 if queue_size > 0:
                     logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
                 
+                # Save queue state before processing
+                save_queue_state()
+                
                 # Create a task for combining without waiting
                 asyncio.create_task(async_combine_videos(directory))
+                queued_files.remove(directory)  # Remove from tracking set after logging
             
             ffmpeg_queue.task_done()
             
@@ -1006,8 +1086,11 @@ async def async_convert_file(file_path, latest_file_path, end_time, filename):
                     logger.info(f"🎉 All files in {directory} have been converted, marking for combining")
                     update_status(directory, "combining")
                     # Add combining task to queue
+                    queued_files.add(directory)
                     await ffmpeg_queue.put(directory)
                     logger.info(f"Added combining task for {directory} to ffmpeg queue")
+                    # Save updated queue state
+                    save_queue_state()
                     
             else:
                 # Collect error output
@@ -1721,6 +1804,9 @@ async def main():
         storage_path = config["APP"]["video_storage_path"]
         processing_state = ProcessingState(storage_path)
         
+        # Load queue state before starting background tasks
+        await load_queue_state()
+        
         # Start background tasks
         asyncio.create_task(process_ffmpeg_queue())
         asyncio.create_task(process_pending_files(processing_state, httpx.DigestAuth(AUTH_USERNAME, AUTH_PASSWORD)))
@@ -1735,9 +1821,13 @@ async def main():
         )
     except asyncio.CancelledError:
         logger.error("Shutting down gracefully...")
+        # Save queue state before shutting down
+        save_queue_state()
         await shutdown_handler()
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
+        # Save queue state before shutting down
+        save_queue_state()
         await shutdown_handler()
 
 if __name__ == "__main__":
