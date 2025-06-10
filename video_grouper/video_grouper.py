@@ -1383,7 +1383,7 @@ async def scan_for_unprocessed_files(storage_path: str, processing_state: Proces
                 file_path = os.path.join(root, file)
                 
                 # Skip if file is already processed
-                if await processing_state.is_file_processed(file_path):
+                if processing_state.is_file_processed(file_path):
                     logger.info(f"Skipping {file} (already processed)")
                     continue
                 
