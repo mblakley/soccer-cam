@@ -509,17 +509,147 @@ async def process_ffmpeg_queue():
 async def async_convert_file(file_path, latest_file_path, end_time, filename):
     """Convert a single file asynchronously."""
     try:
-        mp4_path = await convert_single_dav_to_mp4(file_path)
-        mp4_filename = os.path.basename(mp4_path)
-        directory = os.path.basename(os.path.dirname(mp4_path))
-        logger.info(f"✨ {mp4_filename} in {directory}")
+        # Start timing
+        start_time = time.time()
         
-        # Update latest_video.txt with the end time of the processed video
-        with open(latest_file_path, "w") as latest_file:
-            latest_file.write(end_time.strftime(default_date_format))
+        # Verify input file exists and is readable
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Input file not found: {file_path}")
+        
+        if not os.access(file_path, os.R_OK):
+            raise PermissionError(f"Cannot read input file: {file_path}")
             
+        mp4_path = file_path.replace('.dav', '.mp4')
+        
+        # Check if output directory is writable
+        output_dir = os.path.dirname(mp4_path)
+        if not os.access(output_dir, os.W_OK):
+            raise PermissionError(f"Cannot write to output directory: {output_dir}")
+        
+        # Run ffmpeg with progress monitoring
+        command = [
+            "ffmpeg", "-i", file_path,
+            "-vcodec", "copy", "-acodec", "alac",
+            "-threads", "0", "-async", "1",
+            "-progress", "pipe:1",  # Output progress to stdout
+            mp4_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Track last logged percentage
+        last_logged_percentage = 0
+        error_output = []
+        
+        # Monitor conversion progress
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+                
+            line = line.decode().strip()
+            if line.startswith('out_time_ms='):
+                # Extract time in microseconds
+                time_ms = int(line.split('=')[1])
+                # Convert to seconds
+                time_sec = time_ms / 1000000
+                
+                # Get the video duration using ffprobe
+                duration = await get_video_duration(file_path)
+                if duration > 0:
+                    progress = (time_sec / duration) * 100
+                    # Log only at 10% intervals
+                    current_percentage = int(progress / 10) * 10
+                    if current_percentage > last_logged_percentage:
+                        logger.info(f"Converting {filename}: {current_percentage}%")
+                        last_logged_percentage = current_percentage
+        
+        # Wait for the process to complete
+        await process.wait()
+        
+        if process.returncode == 0:
+            # Verify the output file exists and has content
+            if not os.path.exists(mp4_path):
+                raise FileNotFoundError(f"Conversion completed but output file not found: {mp4_path}")
+            
+            if os.path.getsize(mp4_path) == 0:
+                raise ValueError(f"Conversion completed but output file is empty: {mp4_path}")
+            
+            # Calculate and log total conversion time
+            conversion_end_time = time.time()
+            conversion_duration = conversion_end_time - start_time
+            minutes = int(conversion_duration // 60)
+            seconds = int(conversion_duration % 60)
+            
+            mp4_filename = os.path.basename(mp4_path)
+            directory = os.path.basename(os.path.dirname(mp4_path))
+            logger.info(f"✨ {mp4_filename} in {directory} (conversion took {minutes}m {seconds}s)")
+            
+            # Update latest_video.txt with the end time of the processed video
+            try:
+                timestamp = end_time.strftime(default_date_format)
+                if not timestamp:
+                    raise ValueError("Generated timestamp is empty")
+                    
+                # Create a temporary file first
+                temp_file = latest_file_path + ".tmp"
+                with open(temp_file, "w") as latest_file:
+                    latest_file.write(timestamp)
+                
+                # Verify the temp file has content
+                with open(temp_file, "r") as f:
+                    if not f.read().strip():
+                        raise ValueError("Temporary file is empty after write")
+                
+                # If everything is good, rename the temp file to the actual file
+                os.replace(temp_file, latest_file_path)
+                logger.info(f"Updated latest_video.txt with timestamp: {timestamp}")
+                
+            except Exception as e:
+                logger.error(f"Error updating latest_video.txt: {e}")
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                raise
+                
+            # Clean up the original DAV file only after successful conversion
+            try:
+                os.remove(file_path)
+                logger.info(f"Removed original file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Could not remove original file {file_path}: {e}")
+                
+        else:
+            # Collect error output
+            error = await process.stderr.read()
+            error_msg = error.decode()
+            logger.error(f"Error converting {filename}: {error_msg}")
+            
+            # Clean up partial output file if it exists
+            if os.path.exists(mp4_path):
+                try:
+                    os.remove(mp4_path)
+                    logger.info(f"Removed incomplete output file: {mp4_path}")
+                except Exception as e:
+                    logger.warning(f"Could not remove incomplete output file {mp4_path}: {e}")
+            
+            raise RuntimeError(f"FFmpeg conversion failed: {error_msg}")
+            
+    except FileNotFoundError as e:
+        logger.error(f"File error during conversion of {filename}: {e}")
+        raise
+    except PermissionError as e:
+        logger.error(f"Permission error during conversion of {filename}: {e}")
+        raise
+    except ValueError as e:
+        logger.error(f"Invalid data during conversion of {filename}: {e}")
+        raise
     except Exception as e:
-        logger.error(f"Error converting file {filename}: {e}")
+        logger.error(f"Unexpected error converting file {filename}: {e}")
+        raise
 
 class DirectoryPlan:
     def __init__(self, directory_path: str):
@@ -578,9 +708,15 @@ async def find_and_download_files(auth):
         # Get the latest processed video time
         latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
         if os.path.exists(latest_file_path):
-            with open(latest_file_path, "r") as latest_file:
-                latest_video_timestamp = latest_file.read().strip()
-                window_start = datetime.strptime(latest_video_timestamp, default_date_format)
+            try:
+                with open(latest_file_path, "r") as latest_file:
+                    latest_video_timestamp = latest_file.read().strip()
+                    if latest_video_timestamp:  # Only parse if we have content
+                        window_start = datetime.strptime(latest_video_timestamp, default_date_format)
+                    else:
+                        logger.info("latest_video.txt is empty, using start of day as window start")
+            except Exception as e:
+                logger.warning(f"Error reading latest_video.txt: {e}, using start of day as window start")
 
         # Query for all files since latest_video.txt
         start_time_formatted = window_start.strftime("%Y-%m-%d%%20%H:%M:%S")
