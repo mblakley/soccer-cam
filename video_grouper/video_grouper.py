@@ -36,6 +36,7 @@ LATEST_VIDEO_FILE = "latest_video.txt"
 STATUS_FILE = "processing_status.txt"
 MATCH_INFO_TEMPLATE = "match_info.ini.dist"
 MATCH_INFO_FILE = "match_info.ini"
+CAMERA_STATE_FILE = "camera_state.json"
 
 STATES = ["downloading", "combining", "user_input", "post_processing", "finished"]
 
@@ -266,13 +267,67 @@ async def trim_video(directory, match_info):
     cleanup_dav_files(directory)
     update_status(directory, "finished")
 
+def load_camera_state():
+    """Load the camera state from file."""
+    state_file = os.path.join(config["APP"]["video_storage_path"], CAMERA_STATE_FILE)
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                return {
+                    'connection_events': [(datetime.fromisoformat(event['time']), event['type']) 
+                                   for event in state.get('connection_events', [])],
+                    'is_connected': state.get('is_connected', False)
+                }
+        except Exception as e:
+            logger.error(f"Error loading camera state: {e}")
+    return {
+        'connection_events': [],
+        'is_connected': False
+    }
+
+def save_camera_state(state):
+    """Save the camera state to file."""
+    state_file = os.path.join(config["APP"]["video_storage_path"], CAMERA_STATE_FILE)
+    try:
+        with open(state_file, 'w') as f:
+            json.dump({
+                'connection_events': [{'time': time.isoformat(), 'type': event_type} 
+                               for time, event_type in state['connection_events']],
+                'is_connected': state.get('is_connected', False)
+            }, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving camera state: {e}")
+
 async def check_device_availability(auth) -> bool:
     try:
         device_check_url = f"http://{DEVICE_IP}/cgi-bin/recordManager.cgi?action=getCaps"
         logger.info(f"Checking for camera devices available on network: {device_check_url}")
         response = await make_http_request(device_check_url, auth=auth)
         
-        if response.status_code == 200:
+        current_state = load_camera_state()
+        is_available = response.status_code == 200
+        
+        # Handle state transitions
+        if is_available and not current_state['is_connected']:
+            # Camera just connected
+            # If we have a previous connected event without a disconnected event, remove it
+            if current_state['connection_events'] and current_state['connection_events'][-1][1] == 'connected':
+                current_state['connection_events'].pop()
+                logger.info("Removed orphaned connected event")
+            
+            current_state['connection_events'].append((datetime.now(), 'connected'))
+            current_state['is_connected'] = True
+            logger.info(f"Camera connected at {current_state['connection_events'][-1][0]}")
+            save_camera_state(current_state)
+        elif not is_available and current_state['is_connected']:
+            # Camera just disconnected
+            current_state['connection_events'].append((datetime.now(), 'disconnected'))
+            current_state['is_connected'] = False
+            logger.info(f"Camera disconnected at {current_state['connection_events'][-1][0]}")
+            save_camera_state(current_state)
+        
+        if is_available:
             logger.info("Camera is available")
             return True
         else:
@@ -281,6 +336,18 @@ async def check_device_availability(auth) -> bool:
     except Exception as e:
         logger.info(f"Camera device was not found at {DEVICE_IP}: {e}")
         return False
+
+async def shutdown_handler():
+    """Handle graceful shutdown by adding a disconnected event if the camera was connected."""
+    try:
+        current_state = load_camera_state()
+        if current_state['is_connected']:
+            current_state['connection_events'].append((datetime.now(), 'disconnected'))
+            current_state['is_connected'] = False
+            logger.info(f"Adding disconnected event during shutdown at {current_state['connection_events'][-1][0]}")
+            save_camera_state(current_state)
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
 
 def get_subdirectory_time_ranges(storage_path):
     time_ranges = []
@@ -504,9 +571,22 @@ async def find_and_download_files(auth):
         window_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
         window_end = current_time
 
-        # Get the camera's power-on time
-        camera_power_on_time = current_time - timedelta(minutes=5)
-        logger.info(f"Camera detected at {current_time}, assuming power-on time was {camera_power_on_time}")
+        # Get the camera's connection events
+        camera_state = load_camera_state()
+        connection_events = camera_state['connection_events']
+        
+        # Get the latest processed video time
+        latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
+        if os.path.exists(latest_file_path):
+            with open(latest_file_path, "r") as latest_file:
+                latest_video_timestamp = latest_file.read().strip()
+                window_start = datetime.strptime(latest_video_timestamp, default_date_format)
+
+        # Query for all files since latest_video.txt
+        start_time_formatted = window_start.strftime("%Y-%m-%d%%20%H:%M:%S")
+        end_time_formatted = window_end.strftime("%Y-%m-%d%%20%H:%M:%S")
+
+        logger.info(f"Searching for files between {window_start} and {window_end}")
 
         # Get all files from the API
         response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
@@ -515,17 +595,6 @@ async def find_and_download_files(auth):
             return
 
         object_id = response.text.split('=')[1].strip()
-        latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
-
-        if os.path.exists(latest_file_path):
-            with open(latest_file_path, "r") as latest_file:
-                latest_video_timestamp = latest_file.read().strip()
-                window_start = datetime.strptime(latest_video_timestamp, default_date_format)
-        
-        start_time_formatted = window_start.strftime("%Y-%m-%d%%20%H:%M:%S")
-        end_time_formatted = window_end.strftime("%Y-%m-%d%%20%H:%M:%S")
-
-        logger.info(f"Searching for files between {window_start} and {window_end}")
 
         findfile_url = f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_formatted}&condition.EndTime={end_time_formatted}&condition.VideoStream=Main"
         response = await make_http_request(findfile_url, auth=auth)
@@ -555,10 +624,31 @@ async def find_and_download_files(auth):
             logger.info("No new files found")
             return
 
-        # Filter out files from current camera session
-        files = [f for f in files if f.start_time < camera_power_on_time]
-        if not files:
-            logger.info("No files to process after filtering current session")
+        # Filter out files that were recorded during connection periods
+        filtered_files = []
+        for file in files:
+            # Check if file was recorded during any connection period
+            skip_file = False
+            for i in range(0, len(connection_events), 2):
+                if i + 1 >= len(connection_events):
+                    # Last connected event without a matching disconnected
+                    connected_time = connection_events[i][0]
+                    disconnected_time = current_time
+                else:
+                    connected_time = connection_events[i][0]
+                    disconnected_time = connection_events[i + 1][0]
+
+                # If file was recorded during this connection period, skip it
+                if connected_time <= file.start_time <= disconnected_time:
+                    logger.info(f"Skipping {file.file_path} (recorded during connection period {connected_time} to {disconnected_time})")
+                    skip_file = True
+                    break
+
+            if not skip_file:
+                filtered_files.append(file)
+
+        if not filtered_files:
+            logger.info("No files to process after filtering connection periods")
             return
 
         # Create directory plans
@@ -566,39 +656,7 @@ async def find_and_download_files(auth):
         directory_plans = {}  # directory_path -> DirectoryPlan
         current_plan = None
 
-        # First, scan existing directories for MP4 files
-        logger.info("Scanning existing directories for MP4 files...")
-        for root, _, files_in_dir in os.walk(storage_path):
-            if not os.path.isdir(root):
-                continue
-                
-            # Skip if this is not a date-formatted directory
-            dir_name = os.path.basename(root)
-            if not re.match(r"\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}", dir_name):
-                continue
-
-            # Skip directories that have already been combined or are in later stages
-            status = get_status(root)
-            if status in ["combining", "user_input", "post_processing", "finished"]:
-                logger.info(f"Skipping {root} (status: {status})")
-                continue
-                
-            # Create a plan for this directory if it doesn't exist
-            if root not in directory_plans:
-                directory_plans[root] = DirectoryPlan(root)
-                
-            # Add existing MP4 files to the plan
-            for file in files_in_dir:
-                if file.endswith('.mp4'):
-                    # Try to find the corresponding DAV file in the API response
-                    dav_file = next((f for f in files if os.path.basename(f.file_path).replace('.dav', '.mp4') == file), None)
-                    if dav_file:
-                        directory_plans[root].add_file(dav_file)
-                        directory_plans[root].mark_file_processed(file)
-                        logger.info(f"📝 Added existing MP4 {file} to plan for {root}")
-
-        # Now process new files from the API
-        for file in files:
+        for file in filtered_files:
             # Extract just the filename from the server path
             filename = os.path.basename(file.file_path)
             
@@ -644,7 +702,7 @@ async def find_and_download_files(auth):
                     logger.info(f"🟡 Skipping {filename} (MP4 already exists)")
                     plan.mark_file_processed(filename)
                     continue
-                    
+                
                 # Download if needed
                 if not os.path.exists(full_download_path) or not await verify_file_complete(full_download_path, next_file.file_path):
                     if os.path.exists(full_download_path):
@@ -657,9 +715,9 @@ async def find_and_download_files(auth):
                             if head_response.status_code != 200:
                                 logger.error(f"Failed to get file size: {next_file.file_path}")
                                 continue
-                            
+                                
                             total_size = int(head_response.headers.get('content-length', 0))
-                            logger.info(f"📥 {filename} ({await format_size(total_size)})")
+                            logger.info(f"Downloading {filename} ({await format_size(total_size)})")
                             
                             try:
                                 await download_with_progress(
@@ -1093,6 +1151,10 @@ async def main():
         )
     except asyncio.CancelledError:
         logger.error("Shutting down gracefully...")
+        await shutdown_handler()
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        await shutdown_handler()
 
 if __name__ == "__main__":
     logger.info("Starting video processing...")
