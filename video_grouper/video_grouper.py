@@ -156,6 +156,22 @@ async def concatenate_videos(directory):
     output_file = os.path.join(directory, "combined.mp4")
     list_file = os.path.join(directory, "video_list.txt")
     
+    # Check for existing combined file and remove if invalid
+    if os.path.exists(output_file):
+        if os.path.getsize(output_file) == 0:
+            logger.info(f"Found empty combined.mp4 file, removing it")
+            os.remove(output_file)
+        else:
+            # Try to get duration to verify file is valid
+            try:
+                duration = await get_video_duration(output_file)
+                if duration <= 0:
+                    logger.info(f"Found invalid combined.mp4 file, removing it")
+                    os.remove(output_file)
+            except Exception as e:
+                logger.info(f"Found corrupted combined.mp4 file, removing it: {e}")
+                os.remove(output_file)
+    
     # Get list of MP4 files and their sizes
     mp4_files = []
     total_size = 0
@@ -239,6 +255,18 @@ async def concatenate_videos(directory):
         
         if os.path.getsize(output_file) == 0:
             raise ValueError(f"Combination completed but output file is empty: {output_file}")
+            
+        # Verify the combined file is valid by checking its duration
+        try:
+            duration = await get_video_duration(output_file)
+            if duration <= 0:
+                logger.error("Combined file is invalid (zero duration)")
+                os.remove(output_file)
+                raise ValueError("Combined file is invalid (zero duration)")
+        except Exception as e:
+            logger.error(f"Combined file is invalid: {e}")
+            os.remove(output_file)
+            raise ValueError(f"Combined file is invalid: {e}")
         
         # Calculate and log total combination time
         combination_end_time = time.time()
@@ -252,6 +280,15 @@ async def concatenate_videos(directory):
         error = await process.stderr.read()
         error_msg = error.decode()
         logger.error(f"Error combining videos: {error_msg}")
+        
+        # Clean up the failed output file if it exists
+        if os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+                logger.info(f"Removed failed combined file: {output_file}")
+            except Exception as e:
+                logger.warning(f"Could not remove failed combined file {output_file}: {e}")
+        
         raise RuntimeError(f"FFmpeg combination failed: {error_msg}")
 
 async def process_files():
