@@ -1119,12 +1119,27 @@ async def get_video_duration(file_path: str) -> float:
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
-            return float(stdout.decode().strip())
+            output = stdout.decode().strip()
+            if output == 'N/A':
+                # This is expected for some files, not an error
+                return 0
+            try:
+                return float(output)
+            except ValueError:
+                # Only log if it's not 'N/A'
+                if output != 'N/A':
+                    logger.error(f"Invalid duration output from ffprobe: {output}")
+                return 0
         else:
-            logger.error(f"Error getting video duration: {stderr.decode()}")
+            # Only log actual errors, not 'N/A' cases
+            error_msg = stderr.decode()
+            if 'N/A' not in error_msg:
+                logger.error(f"Error getting video duration: {error_msg}")
             return 0
     except Exception as e:
-        logger.error(f"Error getting video duration: {e}")
+        # Only log if it's not related to 'N/A'
+        if 'N/A' not in str(e):
+            logger.error(f"Error getting video duration: {e}")
         return 0
 
 class FileState:
