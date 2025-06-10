@@ -1282,23 +1282,21 @@ class ProcessingState:
 
     def is_file_processed(self, file_path: str) -> bool:
         """Check if a file has been processed (either in state or has MP4)."""
-        # Check if file is in state and marked as converted
-        if file_path in self.files and self.files[file_path].status == "converted":
-            return True
-        
-        # Check if MP4 exists
-        mp4_path = file_path.replace('.dav', '.mp4')
-        if os.path.exists(mp4_path):
-            # If DAV still exists, the conversion wasn't successful
-            if os.path.exists(file_path):
+        # If DAV file still exists, it wasn't processed successfully
+        if os.path.exists(file_path):
+            mp4_path = file_path.replace('.dav', '.mp4')
+            if os.path.exists(mp4_path):
                 logger.warning(f"Found incomplete conversion: {file_path} still exists, will reprocess")
                 try:
                     os.remove(mp4_path)
                     logger.info(f"Removed incomplete MP4 file: {mp4_path}")
                 except Exception as e:
                     logger.error(f"Could not remove incomplete MP4 file {mp4_path}: {e}")
-                return False
-            
+            return False
+        
+        # Check if MP4 exists
+        mp4_path = file_path.replace('.dav', '.mp4')
+        if os.path.exists(mp4_path):
             # If MP4 exists and DAV is gone, add it to state
             group_dir = os.path.dirname(mp4_path)
             logger.info(f"Found valid MP4 at {mp4_path}, adding to state with group {group_dir}")
