@@ -500,9 +500,9 @@ async def process_files():
                 
                 status = get_status(full_path)
                 if status == "combining":
-                    # Add combining task to ffmpeg queue
-                    await ffmpeg_queue.put(full_path)
-                    logger.info(f"Added combining task for {directory} to ffmpeg queue")
+                    # Directory is already marked for combining, no need to do anything
+                    # The combining task will be picked up from the queue
+                    pass
                 
                 elif status == "user_input":
                     match_info = configparser.ConfigParser()
@@ -993,6 +993,21 @@ async def async_convert_file(file_path, latest_file_path, end_time, filename):
                     logger.info(f"Removed original file: {file_path}")
                 except Exception as e:
                     logger.warning(f"Could not remove original file {file_path}: {e}")
+                
+                # Check if all files in the directory are converted
+                directory = os.path.dirname(file_path)
+                all_converted = True
+                for file in os.listdir(directory):
+                    if file.endswith('.dav'):
+                        all_converted = False
+                        break
+                
+                if all_converted:
+                    logger.info(f"🎉 All files in {directory} have been converted, marking for combining")
+                    update_status(directory, "combining")
+                    # Add combining task to queue
+                    await ffmpeg_queue.put(directory)
+                    logger.info(f"Added combining task for {directory} to ffmpeg queue")
                     
             else:
                 # Collect error output
