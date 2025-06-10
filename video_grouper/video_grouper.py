@@ -11,6 +11,7 @@ import configparser
 import json
 from typing import List, Tuple
 import time
+import signal
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +38,7 @@ STATUS_FILE = "processing_status.txt"
 MATCH_INFO_TEMPLATE = "match_info.ini.dist"
 MATCH_INFO_FILE = "match_info.ini"
 CAMERA_STATE_FILE = "camera_state.json"
+QUEUE_STATE_FILE = "ffmpeg_queue_state.json"
 
 STATES = ["downloading", "combining", "user_input", "post_processing", "finished"]
 
@@ -48,7 +50,6 @@ download_queue = asyncio.Queue()
 ffmpeg_queue = asyncio.Queue()
 queued_files = set()  # Track files in the ffmpeg queue
 ffmpeg_lock = asyncio.Lock()  # Lock to ensure only one ffmpeg operation runs at a time
-QUEUE_STATE_FILE = "ffmpeg_queue_state.json"
 
 class RecordingFile:
     def __init__(self, start_time: datetime, end_time: datetime, file_path: str):
@@ -80,6 +81,89 @@ class RecordingFile:
                     current_file = {}  # Reset for next file entry
 
         return sorted(files, key=lambda x: x.start_time)
+
+class ProcessingState:
+    def __init__(self, storage_path: str):
+        self.storage_path = storage_path
+        self.state_file = os.path.join(storage_path, "processing_state.json")
+        self.files = {}  # file_path -> FileState
+        logger.info(f"Initializing processing state at {self.state_file}")
+        self.load_state()
+
+    def load_state(self):
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    for file_path, state_data in data.items():
+                        self.files[file_path] = FileState.from_dict(state_data)
+                logger.info(f"Loaded state from {self.state_file} with {len(self.files)} files")
+            except Exception as e:
+                logger.error(f"Error loading state from {self.state_file}: {e}")
+        else:
+            logger.info(f"No existing state file at {self.state_file}")
+
+    def save_state(self):
+        try:
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            
+            data = {
+                file_path: state.to_dict()
+                for file_path, state in self.files.items()
+            }
+            with open(self.state_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Saved state to {self.state_file} with {len(self.files)} files")
+        except Exception as e:
+            logger.error(f"Error saving state to {self.state_file}: {e}")
+
+    def update_file_state(self, file_path: str, **kwargs):
+        if file_path not in self.files:
+            self.files[file_path] = FileState(file_path=file_path, group_dir="")
+        
+        state = self.files[file_path]
+        for key, value in kwargs.items():
+            setattr(state, key, value)
+        state.last_updated = datetime.now()
+        self.save_state()
+
+    def get_pending_files(self):
+        return [f for f in self.files.values() if f.status in ["pending", "error"]]
+
+    def get_unconverted_files(self):
+        return [f for f in self.files.values() if f.status == "downloaded"]
+
+    def is_file_processed(self, file_path: str) -> bool:
+        """Check if a file has been processed (either in state or has MP4)."""
+        # If DAV file still exists, it wasn't processed successfully
+        if os.path.exists(file_path):
+            mp4_path = file_path.replace('.dav', '.mp4')
+            if os.path.exists(mp4_path):
+                logger.warning(f"Found incomplete conversion: {file_path} still exists, will reprocess")
+                try:
+                    os.remove(mp4_path)
+                    logger.info(f"Removed incomplete MP4 file: {mp4_path}")
+                except Exception as e:
+                    logger.error(f"Could not remove incomplete MP4 file {mp4_path}: {e}")
+            return False
+        
+        # Check if MP4 exists
+        mp4_path = file_path.replace('.dav', '.mp4')
+        if os.path.exists(mp4_path):
+            # If MP4 exists and DAV is gone, add it to state
+            group_dir = os.path.dirname(mp4_path)
+            logger.info(f"Found valid MP4 at {mp4_path}, adding to state with group {group_dir}")
+            self.update_file_state(
+                file_path,
+                group_dir=group_dir,
+                status="converted"
+            )
+            # Force a save of the state
+            self.save_state()
+            return True
+        
+        return False
 
 def update_status(root, status):
     """Update the processing status of a directory."""
@@ -136,35 +220,6 @@ async def run_ffmpeg(command):
         await process.wait()
     except Exception as e:
         logger.error(f"FFmpeg command failed: {e}")
-
-async def convert_single_dav_to_mp4(input_file_path: str) -> str:
-    """Convert a single DAV file to MP4 format and delete the original DAV file.
-    
-    Args:
-        input_file_path: Path to the input DAV file
-        
-    Returns:
-        Path to the converted MP4 file
-    """
-    output_file_path = input_file_path.replace(".dav", ".mp4")
-    if not os.path.exists(output_file_path):
-        command = ["ffmpeg", "-i", input_file_path, "-vcodec", "copy", "-acodec", "alac", "-threads", "0", "-async", "1", output_file_path]
-        await run_ffmpeg(command)
-        
-        # Delete the DAV file after successful conversion
-        try:
-            os.remove(input_file_path)
-        except Exception as e:
-            logger.error(f"Error deleting DAV file {input_file_path}: {e}")
-            
-    return output_file_path
-
-async def convert_davs_to_mp4(directory_path):
-    """Convert all DAV files in a directory to MP4 format."""
-    for input_file in os.listdir(directory_path):
-        if input_file.endswith(".dav"):
-            input_file_path = os.path.join(directory_path, input_file)
-            await convert_single_dav_to_mp4(input_file_path)
 
 def all_fields_filled(match_info):
     required_fields = ["start_time_offset", "my_team_name", "opponent_team_name", "location"]
@@ -318,6 +373,9 @@ async def concatenate_videos(directory):
 def save_queue_state():
     """Save the current state of the ffmpeg queue to a file."""
     try:
+        # Get the full path to the queue state file
+        queue_state_path = os.path.join(config["APP"]["video_storage_path"], QUEUE_STATE_FILE)
+        
         # Convert queue items to a list of dictionaries
         queue_items = []
         for item in queued_files:
@@ -336,7 +394,7 @@ def save_queue_state():
                 })
         
         # Save to file
-        with open(QUEUE_STATE_FILE, 'w') as f:
+        with open(queue_state_path, 'w') as f:
             json.dump(queue_items, f, indent=2)
         logger.info(f"Saved queue state with {len(queue_items)} items")
     except Exception as e:
@@ -344,12 +402,13 @@ def save_queue_state():
 
 async def load_queue_state():
     """Load the ffmpeg queue state from file."""
-    if not os.path.exists(QUEUE_STATE_FILE):
+    queue_state_path = os.path.join(config["APP"]["video_storage_path"], QUEUE_STATE_FILE)
+    if not os.path.exists(queue_state_path):
         logger.info("No queue state file found")
         return
     
     try:
-        with open(QUEUE_STATE_FILE, 'r') as f:
+        with open(queue_state_path, 'r') as f:
             queue_items = json.load(f)
         
         # Clear existing queue
@@ -390,7 +449,6 @@ async def process_ffmpeg_queue():
                 
                 # Create a task for the conversion without waiting
                 asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
-                queued_files.remove(file_path)  # Remove from tracking set after logging
             else:  # Combining task
                 directory = task
                 dir_name = os.path.basename(directory)
@@ -403,8 +461,8 @@ async def process_ffmpeg_queue():
                 save_queue_state()
                 
                 # Create a task for combining without waiting
+                # Note: We don't remove from queued_files here - it will be removed in async_combine_videos after successful completion
                 asyncio.create_task(async_combine_videos(directory))
-                queued_files.remove(directory)  # Remove from tracking set after logging
             
             ffmpeg_queue.task_done()
             
@@ -548,6 +606,12 @@ async def async_combine_videos(directory):
                 # Update status to user_input
                 update_status(directory, "user_input")
                 
+                # Remove directory from queued_files and save updated state
+                if directory in queued_files:
+                    queued_files.remove(directory)
+                    save_queue_state()
+                    logger.info(f"Removed {directory} from ffmpeg queue after successful combination")
+                
             else:
                 # Collect error output
                 error = await process.stderr.read()
@@ -567,64 +631,6 @@ async def async_combine_videos(directory):
         except Exception as e:
             logger.error(f"Error combining videos in {directory}: {e}")
             raise
-
-async def process_files():
-    while True:
-        try:
-            storage_path = config["APP"]["video_storage_path"]
-            logger.info(f"Processing files in {storage_path}")
-            for directory in os.listdir(storage_path):
-                full_path = os.path.join(storage_path, directory)
-                if not os.path.isdir(full_path):
-                    continue
-                
-                status = get_status(full_path)
-                if status == "combining":
-                    # Directory is already marked for combining, no need to do anything
-                    # The combining task will be picked up from the queue
-                    pass
-                
-                elif status == "user_input":
-                    match_info = configparser.ConfigParser()
-                    match_info_path = os.path.join(full_path, MATCH_INFO_FILE)
-                    if not os.path.exists(match_info_path):
-                        logger.info(f"No match info file exists in {full_path}")
-                        continue
-
-                    match_info.read(match_info_path)
-                    if all_fields_filled(match_info["MATCH"]):
-                        update_status(full_path, "post_processing")
-                    else:
-                        logger.info(f"Waiting for match info in {full_path}")
-
-                elif status == "post_processing":
-                    match_info_path = os.path.join(full_path, MATCH_INFO_FILE)
-                    if not os.path.exists(match_info_path):
-                        logger.info(f"Skipping post-processing: {match_info_path} missing")
-                        continue
-                    
-                    match_info = configparser.ConfigParser()
-                    match_info.read(match_info_path)
-                    if "MATCH" not in match_info:
-                        logger.info(f"Skipping post-processing: Invalid {match_info_path}")
-                        continue
-
-                    await trim_video(full_path, match_info["MATCH"])
-        except Exception as e:
-            logger.error(f"Unexpected error processing files: {e}")
-        
-        await asyncio.sleep(config["APP"].getint("check_interval_seconds"))
-
-def cleanup_dav_files(directory):
-    dav_files = [f for f in os.listdir(directory) if f.endswith(".dav")]
-    for file in dav_files:
-        file_path = os.path.join(directory, file)
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            logger.error(f"Error deleting {file}: {e}")
-    
-    logger.info("Dav file cleanup complete.")
 
 async def trim_video(directory, match_info):
     logger.info("Starting video trimming and renaming process...")
@@ -720,9 +726,10 @@ async def trim_video(directory, match_info):
         
         logger.info(f"✨ Successfully trimmed video to {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
         
-        # Clean up DAV files
-        logger.info("Cleaning up DAV files...")
-        cleanup_dav_files(directory)
+        # Verify no DAV files remain
+        dav_files = [f for f in os.listdir(directory) if f.endswith(".dav")]
+        if dav_files:
+            logger.warning(f"Found {len(dav_files)} DAV files that should have been removed during conversion: {', '.join(dav_files)}")
         
         # Update status
         update_status(directory, "finished")
@@ -770,38 +777,52 @@ async def check_device_availability(auth) -> bool:
     try:
         device_check_url = f"http://{DEVICE_IP}/cgi-bin/recordManager.cgi?action=getCaps"
         logger.info(f"Checking for camera devices available on network: {device_check_url}")
-        response = await make_http_request(device_check_url, auth=auth)
         
-        current_state = load_camera_state()
-        is_available = response.status_code == 200
-        
-        # Handle state transitions
-        if is_available and not current_state['is_connected']:
-            # Camera just connected
-            # If we have a previous connected event without a disconnected event, remove it
-            if current_state['connection_events'] and current_state['connection_events'][-1][1] == 'connected':
-                current_state['connection_events'].pop()
-                logger.info("Removed orphaned connected event")
-            
-            current_state['connection_events'].append((datetime.now(), 'connected'))
-            current_state['is_connected'] = True
-            logger.info(f"Camera connected at {current_state['connection_events'][-1][0]}")
-            save_camera_state(current_state)
-        elif not is_available and current_state['is_connected']:
-            # Camera just disconnected
-            current_state['connection_events'].append((datetime.now(), 'disconnected'))
-            current_state['is_connected'] = False
-            logger.info(f"Camera disconnected at {current_state['connection_events'][-1][0]}")
-            save_camera_state(current_state)
-        
-        if is_available:
-            logger.info("Camera is available")
-            return True
-        else:
-            logger.info(f"Camera is not available. Status Code: {response.status_code}")
-            return False
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(device_check_url, auth=auth, timeout=5.0)
+                is_available = response.status_code == 200
+                
+                current_state = load_camera_state()
+                
+                # Handle state transitions
+                if is_available and not current_state['is_connected']:
+                    # Camera just connected
+                    # If we have a previous connected event without a disconnected event, remove it
+                    if current_state['connection_events'] and current_state['connection_events'][-1][1] == 'connected':
+                        current_state['connection_events'].pop()
+                        logger.info("Removed orphaned connected event")
+                    
+                    current_state['connection_events'].append((datetime.now(), 'connected'))
+                    current_state['is_connected'] = True
+                    logger.info(f"Camera connected at {current_state['connection_events'][-1][0]}")
+                    save_camera_state(current_state)
+                elif not is_available and current_state['is_connected']:
+                    # Camera just disconnected
+                    current_state['connection_events'].append((datetime.now(), 'disconnected'))
+                    current_state['is_connected'] = False
+                    logger.info(f"Camera disconnected at {current_state['connection_events'][-1][0]}")
+                    save_camera_state(current_state)
+                
+                if is_available:
+                    logger.info("Camera is available")
+                    return True
+                else:
+                    logger.info(f"Camera is not available. Status Code: {response.status_code}")
+                    return False
+                    
+            except httpx.ConnectError:
+                logger.info("Could not connect to camera - connection error")
+                return False
+            except httpx.TimeoutException:
+                logger.info("Could not connect to camera - timeout")
+                return False
+            except Exception as e:
+                logger.error(f"Error checking device availability: {e}")
+                return False
+                
     except Exception as e:
-        logger.info(f"Camera device was not found at {DEVICE_IP}: {e}")
+        logger.error(f"Fatal error checking device availability: {e}")
         return False
 
 async def shutdown_handler():
@@ -918,44 +939,56 @@ async def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f}TB"
 
 async def download_with_progress(client: httpx.AsyncClient, url: str, file_path: str, auth: httpx.DigestAuth, total_size: int, directory: str = None):
-    """Download a file with progress tracking."""
-    filename = os.path.basename(file_path)
-    dir_name = os.path.basename(directory) if directory else "unknown directory"
-    
-    async with client.stream("GET", url, auth=auth, timeout=1200.0, follow_redirects=True) as response:
-        if response.status_code != 200:
-            raise httpx.HTTPStatusError(f"HTTP {response.status_code}", request=response.request, response=response)
-        
-        downloaded = 0
-        last_log_time = 0
-        last_log_size = 0
-        async with aiofiles.open(file_path, "wb") as f:
-            async for chunk in response.aiter_bytes():
-                await f.write(chunk)
-                downloaded += len(chunk)
+    """Download a file with progress tracking"""
+    try:
+        async with client.stream('GET', url, auth=auth) as response:
+            response.raise_for_status()
+            
+            # Create directory if it doesn't exist
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            
+            # Open file for writing
+            async with aiofiles.open(file_path, 'wb') as f:
+                downloaded = 0
+                last_update = time.time()
+                last_downloaded = 0
                 
-                # Log progress every second
-                current_time = time.time()
-                if current_time - last_log_time >= 1.0:
-                    # Calculate speed
-                    speed = (downloaded - last_log_size) / (current_time - last_log_time)
-                    speed_str = await format_size(speed) + "/s"
+                async for chunk in response.aiter_bytes():
+                    await f.write(chunk)
+                    downloaded += len(chunk)
                     
-                    # Calculate progress
-                    progress = (downloaded / total_size) * 100
-                    downloaded_str = await format_size(downloaded)
-                    total_str = await format_size(total_size)
-                    
-                    # Create progress bar
-                    bar_length = 20
-                    filled_length = int(bar_length * downloaded / total_size)
-                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                    
-                    # Log with progress bar
-                    logger.info(f"Downloading {filename} to {dir_name}: [{bar}] {progress:.1f}% ({downloaded_str}/{total_str}) @ {speed_str}")
-                    
-                    last_log_time = current_time
-                    last_log_size = downloaded
+                    # Update progress every second
+                    current_time = time.time()
+                    if current_time - last_update >= 1.0:
+                        speed = (downloaded - last_downloaded) / (current_time - last_update)
+                        progress = downloaded / total_size * 100
+                        bar_length = 20
+                        filled_length = int(bar_length * downloaded // total_size)
+                        bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                        logger.info(f"Downloading {os.path.basename(file_path)} to {os.path.basename(directory) if directory else ''}: [{bar}] {progress:.1f}% ({downloaded/1024/1024:.1f}MB/{total_size/1024/1024:.1f}GB) @ {speed/1024/1024:.1f}MB/s")
+                        last_update = current_time
+                        last_downloaded = downloaded
+                        
+    except asyncio.CancelledError:
+        logger.info(f"Download of {os.path.basename(file_path)} was cancelled")
+        try:
+            # Close the file handle before attempting to delete
+            if 'f' in locals():
+                await f.close()
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            logger.error(f"Error removing partial file {file_path}: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading {file_path}: {e}")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.error(f"Error removing partial file {file_path}: {e}")
+        raise
 
 async def async_convert_file(file_path, latest_file_path, end_time, filename):
     """Convert a single file asynchronously."""
@@ -1031,6 +1064,10 @@ async def async_convert_file(file_path, latest_file_path, end_time, filename):
                 if os.path.getsize(mp4_path) == 0:
                     raise ValueError(f"Conversion completed but output file is empty: {mp4_path}")
                 
+                # Verify the MP4 duration matches the DAV file
+                if not await verify_mp4_duration(file_path, mp4_path):
+                    raise ValueError(f"MP4 duration does not match DAV file: {file_path}")
+                
                 # Calculate and log total conversion time
                 conversion_end_time = time.time()
                 conversion_duration = conversion_end_time - start_time
@@ -1068,30 +1105,80 @@ async def async_convert_file(file_path, latest_file_path, end_time, filename):
                     raise
                     
                 # Clean up the original DAV file only after successful conversion
-                try:
-                    os.remove(file_path)
-                    logger.info(f"Removed original file: {file_path}")
-                except Exception as e:
-                    logger.warning(f"Could not remove original file {file_path}: {e}")
+                max_retries = 3
+                retry_delay = 1  # seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            # Verify deletion
+                            if os.path.exists(file_path):
+                                raise OSError(f"File still exists after deletion: {file_path}")
+                            logger.info(f"Successfully removed DAV file: {file_path}")
+                            break
+                    except Exception as e:
+                        if attempt == max_retries - 1:  # Last attempt
+                            logger.error(f"Failed to delete DAV file after {max_retries} attempts: {file_path}")
+                            raise
+                        logger.warning(f"Attempt {attempt + 1} failed to delete DAV file: {e}")
+                        await asyncio.sleep(retry_delay)
+                
+                # Remove the file from queued_files and save updated state
+                # Find and remove the tuple containing this file_path
+                for item in list(queued_files):
+                    if isinstance(item, tuple) and item[0] == file_path:
+                        queued_files.remove(item)
+                        save_queue_state()
+                        logger.info(f"Removed {filename} from ffmpeg queue after successful conversion")
+                        break
+                    
+                # Mark the file as processed in the directory plan
+                directory = os.path.dirname(file_path)
+                plans_file = os.path.join(config["APP"]["video_storage_path"], "directory_plans.json")
+                if os.path.exists(plans_file):
+                    with open(plans_file, "r") as f:
+                        plans = json.load(f)
+                        if directory in plans:
+                            plan = DirectoryPlan.from_dict(plans[directory])
+                            plan.mark_file_processed(filename)
+                            plans[directory] = plan.to_dict()
+                            with open(plans_file, "w") as f:
+                                json.dump(plans, f, indent=2)
+                            logger.info(f"Marked {filename} as processed in directory plan")
                 
                 # Check if all files in the directory are converted
-                directory = os.path.dirname(file_path)
                 all_converted = True
+                all_downloaded = True
+                
+                # Get the directory plan for this directory
+                if os.path.exists(plans_file):
+                    with open(plans_file, "r") as f:
+                        plans = json.load(f)
+                        if directory in plans:
+                            plan = DirectoryPlan.from_dict(plans[directory])
+                            # Check if all expected MP4 files exist
+                            for expected_file in plan.expected_files:
+                                expected_path = os.path.join(directory, os.path.basename(expected_file.file_path).replace('.dav', '.mp4'))
+                                if not os.path.exists(expected_path):
+                                    all_downloaded = False
+                                    logger.info(f"Waiting for {os.path.basename(expected_path)} to be downloaded and converted")
+                                    break
+                
+                # Check for any remaining DAV files
                 for file in os.listdir(directory):
                     if file.endswith('.dav'):
                         all_converted = False
                         break
                 
-                if all_converted:
-                    logger.info(f"🎉 All files in {directory} have been converted, marking for combining")
+                if all_converted and all_downloaded:
+                    logger.info(f"🎉 All files in {directory} have been downloaded and converted, marking for combining")
                     update_status(directory, "combining")
                     # Add combining task to queue
                     queued_files.add(directory)
                     await ffmpeg_queue.put(directory)
                     logger.info(f"Added combining task for {directory} to ffmpeg queue")
-                    # Save updated queue state
-                    save_queue_state()
-                    
+                
             else:
                 # Collect error output
                 error = await process.stderr.read()
@@ -1126,6 +1213,7 @@ class DirectoryPlan:
         self.directory_path = directory_path
         self.expected_files = []  # List of RecordingFile objects
         self.processed_files = set()  # Set of filenames that have been processed
+        self.downloaded_files = set()  # Set of filenames that have been downloaded but not yet processed
         self.status = "pending"  # pending, downloading, combining, user_input, post_processing, finished
 
     def add_file(self, file: RecordingFile):
@@ -1138,18 +1226,25 @@ class DirectoryPlan:
 
     def get_next_file(self) -> RecordingFile:
         for file in self.expected_files:
-            if os.path.basename(file.file_path) not in self.processed_files:
+            filename = os.path.basename(file.file_path)
+            if filename not in self.processed_files and filename not in self.downloaded_files:
                 return file
         return None
 
     def mark_file_processed(self, filename: str):
         self.processed_files.add(filename)
+        if filename in self.downloaded_files:
+            self.downloaded_files.remove(filename)
+
+    def mark_file_downloaded(self, filename: str):
+        self.downloaded_files.add(filename)
 
     def to_dict(self):
         return {
             'directory_path': self.directory_path,
             'expected_files': [os.path.basename(f.file_path).replace('.dav', '.mp4') for f in self.expected_files],
             'processed_files': list(self.processed_files),
+            'downloaded_files': list(self.downloaded_files),
             'status': self.status
         }
 
@@ -1157,6 +1252,7 @@ class DirectoryPlan:
     def from_dict(cls, data):
         plan = cls(data['directory_path'])
         plan.processed_files = set(data['processed_files'])
+        plan.downloaded_files = set(data.get('downloaded_files', []))  # Handle older state files that might not have this field
         plan.status = data['status']
         return plan
 
@@ -1175,10 +1271,13 @@ async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
             logger.warning(f"Could not get duration for MP4 file: {mp4_path}")
             return False
             
-        # Allow for 1 second difference to account for rounding
+        # Calculate and log the duration difference
         duration_diff = abs(dav_duration - mp4_duration)
-        if duration_diff > 1:
-            logger.warning(f"Duration mismatch: DAV={dav_duration:.1f}s, MP4={mp4_duration:.1f}s, diff={duration_diff:.1f}s")
+        logger.info(f"Duration check for {os.path.basename(mp4_path)}: DAV={dav_duration:.2f}s, MP4={mp4_duration:.2f}s, Difference={duration_diff:.2f}s")
+        
+        # Allow for up to 5 seconds difference
+        if duration_diff > 5:
+            logger.warning(f"Duration mismatch is greater than 5 seconds.")
             return False
             
         return True
@@ -1186,7 +1285,7 @@ async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
         logger.error(f"Error verifying MP4 duration: {e}")
         return False
 
-async def find_and_download_files(auth):
+async def find_and_download_files(auth: httpx.DigestAuth, processing_state: ProcessingState):
     async with download_lock:
         if not await check_device_availability(auth):
             logger.info("Camera is not available - skipping download")
@@ -1341,7 +1440,7 @@ async def find_and_download_files(auth):
                             os.remove(mp4_path)
                             logger.info(f"Removed invalid MP4 file: {mp4_path}")
                             # Add to ffmpeg queue for reprocessing
-                            queued_files.add(full_download_path)  # Add to tracking set
+                            queued_files.add((full_download_path, latest_file_path, next_file.end_time))  # Add full tuple
                             asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
                         except Exception as e:
                             logger.error(f"Could not remove invalid MP4 file {mp4_path}: {e}")
@@ -1375,10 +1474,11 @@ async def find_and_download_files(auth):
                                 
                                 if await verify_file_complete(full_download_path, next_file.file_path):
                                     logger.info(f"✅ {filename}")
-                                    # Add to ffmpeg queue for processing
-                                    queued_files.add(full_download_path)  # Add to tracking set
+                                    # Add to ffmpeg queue for processing with full tuple
+                                    queued_files.add((full_download_path, latest_file_path, next_file.end_time))
                                     asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
-                                    plan.mark_file_processed(filename)
+                                    # Mark as downloaded but not processed yet
+                                    plan.mark_file_downloaded(filename)
                                 else:
                                     logger.error(f"❌ Download incomplete: {next_file.file_path}")
                                     delete_incomplete_file(full_download_path)
@@ -1389,7 +1489,7 @@ async def find_and_download_files(auth):
                         logger.error(f"❌ Error setting up download for {next_file.file_path}: {e}")
                 else:
                     logger.info(f"🟡 Skipping {filename} (already exists and complete)")
-                    plan.mark_file_processed(filename)
+                    plan.mark_file_downloaded(filename)
 
             # If all files in this plan are processed, mark it for combining
             if plan.is_complete():
@@ -1401,13 +1501,12 @@ async def find_and_download_files(auth):
         with open(plans_file, "w") as f:
             json.dump({path: plan.to_dict() for path, plan in directory_plans.items()}, f, indent=2)
 
-async def download_files():
-    auth = httpx.DigestAuth(AUTH_USERNAME, AUTH_PASSWORD)
+async def download_files(processing_state: ProcessingState, auth: httpx.DigestAuth):
     while True:
         try:
             logger.info("Checking for new files...")
             if await check_device_availability(auth):
-                await find_and_download_files(auth)
+                await find_and_download_files(auth, processing_state)
         except Exception as e:
             logger.error(f"Unexpected error downloading files: {e}")
         
@@ -1495,90 +1594,6 @@ class FileState:
         if data['end_time']:
             state.end_time = datetime.fromisoformat(data['end_time'])
         return state
-
-class ProcessingState:
-    def __init__(self, storage_path: str):
-        self.storage_path = storage_path
-        self.state_file = os.path.join(storage_path, "processing_state.json")
-        self.files = {}  # file_path -> FileState
-        logger.info(f"Initializing processing state at {self.state_file}")
-        self.load_state()
-
-    def load_state(self):
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, 'r') as f:
-                    data = json.load(f)
-                    for file_path, state_data in data.items():
-                        self.files[file_path] = FileState.from_dict(state_data)
-                logger.info(f"Loaded state from {self.state_file} with {len(self.files)} files")
-            except Exception as e:
-                logger.error(f"Error loading state from {self.state_file}: {e}")
-        else:
-            logger.info(f"No existing state file at {self.state_file}")
-
-    def save_state(self):
-        try:
-            # Ensure the directory exists
-            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
-            
-            data = {
-                file_path: state.to_dict()
-                for file_path, state in self.files.items()
-            }
-            with open(self.state_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            logger.info(f"Saved state to {self.state_file} with {len(self.files)} files")
-        except Exception as e:
-            logger.error(f"Error saving state to {self.state_file}: {e}")
-
-    def update_file_state(self, file_path: str, **kwargs):
-        if file_path not in self.files:
-            self.files[file_path] = FileState(file_path=file_path, group_dir="")
-        
-        state = self.files[file_path]
-        for key, value in kwargs.items():
-            setattr(state, key, value)
-        state.last_updated = datetime.now()
-        self.save_state()
-
-    def get_pending_files(self):
-        return [f for f in self.files.values() if f.status in ["pending", "error"]]
-
-    def get_unconverted_files(self):
-        return [f for f in self.files.values() if f.status == "downloaded"]
-
-    def is_file_processed(self, file_path: str) -> bool:
-        """Check if a file has been processed (either in state or has MP4)."""
-        # If DAV file still exists, it wasn't processed successfully
-        if os.path.exists(file_path):
-            mp4_path = file_path.replace('.dav', '.mp4')
-            if os.path.exists(mp4_path):
-                logger.warning(f"Found incomplete conversion: {file_path} still exists, will reprocess")
-                try:
-                    os.remove(mp4_path)
-                    logger.info(f"Removed incomplete MP4 file: {mp4_path}")
-                except Exception as e:
-                    logger.error(f"Could not remove incomplete MP4 file {mp4_path}: {e}")
-            return False
-        
-        # Check if MP4 exists
-        mp4_path = file_path.replace('.dav', '.mp4')
-        if os.path.exists(mp4_path):
-            # If MP4 exists and DAV is gone, add it to state
-            group_dir = os.path.dirname(mp4_path)
-            logger.info(f"Found valid MP4 at {mp4_path}, adding to state with group {group_dir}")
-            self.update_file_state(
-                file_path,
-                group_dir=group_dir,
-                status="converted"
-            )
-            # Force a save of the state
-            self.save_state()
-            return True
-        
-        return False
-
 def find_group_directory(file_path: str, storage_path: str, processing_state: ProcessingState) -> str:
     """Find an appropriate group directory for a new file based on time proximity.
     Uses the state file to find a file whose end time is within 5 seconds of the new file's start time."""
@@ -1714,37 +1729,48 @@ async def scan_for_unprocessed_files(storage_path: str, processing_state: Proces
     # Force a final save after scanning
     processing_state.save_state()
 
-async def process_pending_files(processing_state: ProcessingState, auth):
-    """Process any pending files in the state."""
-    latest_file_path = os.path.join(processing_state.storage_path, LATEST_VIDEO_FILE)
-    
+async def manage_directory_states(processing_state: ProcessingState, auth: httpx.DigestAuth):
+    """Manage the state of all directories, handling transitions between states."""
     while True:
         try:
-            # Process pending downloads
-            pending_files = processing_state.get_pending_files()
-            for file_state in pending_files:
-                if file_state.status == "pending":
-                    await download_file(file_state, auth, processing_state)
-                elif file_state.status == "error":
-                    # Retry failed downloads
-                    logger.info(f"Retrying failed download: {file_state.file_path}")
-                    await download_file(file_state, auth, processing_state)
-
-            # Process unconverted files
-            unconverted_files = processing_state.get_unconverted_files()
-            for file_state in unconverted_files:
-                await convert_single_dav_to_mp4(file_state.file_path)
-                processing_state.update_file_state(file_state.file_path, status="converted")
-                processing_state.save_state()
+            storage_path = processing_state.storage_path
+            for directory in os.listdir(storage_path):
+                full_path = os.path.join(storage_path, directory)
+                if not os.path.isdir(full_path):
+                    continue
                 
-                # Update latest_video.txt with the end time
-                if file_state.end_time:
-                    with open(latest_file_path, "w") as latest_file:
-                        latest_file.write(file_state.end_time.strftime(default_date_format))
+                status = get_status(full_path)
+                
+                if status == "user_input":
+                    match_info = configparser.ConfigParser()
+                    match_info_path = os.path.join(full_path, MATCH_INFO_FILE)
+                    if not os.path.exists(match_info_path):
+                        logger.info(f"No match info file exists in {full_path}")
+                        continue
 
-            await asyncio.sleep(1)  # Prevent tight loop
+                    match_info.read(match_info_path)
+                    if all_fields_filled(match_info["MATCH"]):
+                        update_status(full_path, "post_processing")
+                    else:
+                        logger.info(f"Waiting for match info in {full_path}")
+                
+                elif status == "post_processing":
+                    match_info_path = os.path.join(full_path, MATCH_INFO_FILE)
+                    if not os.path.exists(match_info_path):
+                        logger.info(f"Skipping post-processing: {match_info_path} missing")
+                        continue
+                    
+                    match_info = configparser.ConfigParser()
+                    match_info.read(match_info_path)
+                    if "MATCH" not in match_info:
+                        logger.info(f"Skipping post-processing: Invalid {match_info_path}")
+                        continue
+
+                    await trim_video(full_path, match_info["MATCH"])
+
+            await asyncio.sleep(60)  # Check every minute
         except Exception as e:
-            logger.error(f"Error processing pending files: {e}")
+            logger.error(f"Error managing directory states: {e}")
             await asyncio.sleep(5)  # Back off on error
 
 async def download_file(file_state: FileState, auth, processing_state: ProcessingState):
@@ -1800,36 +1826,32 @@ async def download_file(file_state: FileState, auth, processing_state: Processin
         )
 
 async def main():
+    # Create storage directory if it doesn't exist
+    storage_path = config["APP"]["video_storage_path"]
+    os.makedirs(storage_path, exist_ok=True)
+    
+    # Initialize processing state
+    processing_state = ProcessingState(storage_path)
+    auth = httpx.DigestAuth(AUTH_USERNAME, AUTH_PASSWORD)
+    
+    # Create tasks
+    ffmpeg_task = asyncio.create_task(process_ffmpeg_queue())
+    state_task = asyncio.create_task(manage_directory_states(processing_state, auth))
+    download_task = asyncio.create_task(download_files(processing_state, auth))
+    
     try:
-        storage_path = config["APP"]["video_storage_path"]
-        processing_state = ProcessingState(storage_path)
-        
-        # Load queue state before starting background tasks
-        await load_queue_state()
-        
-        # Start background tasks
-        asyncio.create_task(process_ffmpeg_queue())
-        asyncio.create_task(process_pending_files(processing_state, httpx.DigestAuth(AUTH_USERNAME, AUTH_PASSWORD)))
-        
-        # Initial scan for unprocessed files
-        await scan_for_unprocessed_files(storage_path, processing_state)
-        
-        # Run the main tasks
-        await asyncio.gather(
-            download_files(),
-            process_files()
-        )
-    except asyncio.CancelledError:
-        logger.error("Shutting down gracefully...")
-        # Save queue state before shutting down
-        save_queue_state()
-        await shutdown_handler()
+        # Wait for all tasks
+        await asyncio.gather(ffmpeg_task, state_task, download_task)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        # Save queue state before shutting down
-        save_queue_state()
-        await shutdown_handler()
+        logger.error(f"Unexpected error in main loop: {e}")
+        raise
 
 if __name__ == "__main__":
     logger.info("Starting video processing...")
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt, shutting down...")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
