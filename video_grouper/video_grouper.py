@@ -46,6 +46,8 @@ download_lock = asyncio.Lock()
 # Global queues for different tasks
 download_queue = asyncio.Queue()
 ffmpeg_queue = asyncio.Queue()
+queued_files = set()  # Track files in the ffmpeg queue
+ffmpeg_lock = asyncio.Lock()  # Lock to ensure only one ffmpeg operation runs at a time
 
 class RecordingFile:
     def __init__(self, start_time: datetime, end_time: datetime, file_path: str):
@@ -297,6 +299,195 @@ async def concatenate_videos(directory):
         
         raise RuntimeError(f"FFmpeg combination failed: {error_msg}")
 
+async def process_ffmpeg_queue():
+    """Process ffmpeg conversion tasks in the background."""
+    while True:
+        try:
+            task = await ffmpeg_queue.get()
+            if isinstance(task, tuple):  # MP4 conversion task
+                file_path, latest_file_path, end_time = task
+                filename = os.path.basename(file_path)
+                queued_files.remove(file_path)  # Remove from tracking set
+                queue_size = ffmpeg_queue.qsize()
+                logger.info(f"🔄 Converting {filename} (queue size: {queue_size})")
+                if queue_size > 0:
+                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
+                
+                # Create a task for the conversion without waiting
+                asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
+            else:  # Combining task
+                directory = task
+                dir_name = os.path.basename(directory)
+                queue_size = ffmpeg_queue.qsize()
+                logger.info(f"🔄 Combining videos in {dir_name} (queue size: {queue_size})")
+                if queue_size > 0:
+                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
+                
+                # Create a task for combining without waiting
+                asyncio.create_task(async_combine_videos(directory))
+            
+            ffmpeg_queue.task_done()
+            
+        except Exception as e:
+            logger.error(f"Error in ffmpeg queue: {e}")
+        await asyncio.sleep(0.1)
+
+async def async_combine_videos(directory):
+    """Combine videos in a directory asynchronously."""
+    async with ffmpeg_lock:  # Ensure only one ffmpeg operation runs at a time
+        try:
+            output_file = os.path.join(directory, "combined.mp4")
+            list_file = os.path.join(directory, "video_list.txt")
+            
+            # Check for existing combined file and remove if invalid
+            if os.path.exists(output_file):
+                if os.path.getsize(output_file) == 0:
+                    logger.info(f"Found empty combined.mp4 file, removing it")
+                    os.remove(output_file)
+                else:
+                    # Try to get duration to verify file is valid
+                    try:
+                        duration = await get_video_duration(output_file)
+                        if duration <= 0:
+                            logger.info(f"Found invalid combined.mp4 file, removing it")
+                            os.remove(output_file)
+                    except Exception as e:
+                        logger.info(f"Found corrupted combined.mp4 file, removing it: {e}")
+                        os.remove(output_file)
+            
+            # Check for any unconverted DAV files
+            dav_files = [f for f in os.listdir(directory) if f.endswith('.dav')]
+            if dav_files:
+                logger.info(f"Found {len(dav_files)} unconverted DAV files in {directory}, waiting for conversion to complete")
+                return
+            
+            # Get list of MP4 files and their sizes
+            mp4_files = []
+            total_size = 0
+            for file in sorted(os.listdir(directory)):
+                if file.endswith(".mp4"):
+                    file_path = os.path.join(directory, file)
+                    file_size = os.path.getsize(file_path)
+                    mp4_files.append((file, file_size))
+                    total_size += file_size
+            
+            if not mp4_files:
+                logger.error(f"No MP4 files found in {directory}")
+                raise ValueError(f"No MP4 files found in {directory}")
+            
+            logger.info(f"Found {len(mp4_files)} files to combine (total size: {await format_size(total_size)})")
+            
+            # Write file list
+            with open(list_file, "w") as f:
+                for file, _ in mp4_files:
+                    f.write(f"file '{os.path.join(directory, file)}'\n")
+
+            if not os.path.exists(list_file):
+                logger.error(f"Unable to combine videos: missing {list_file}")
+                raise ValueError(f"Missing {list_file}")
+
+            logger.info(f"Combining videos in {directory}")
+            command = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
+                "-i", list_file, "-c", "copy",
+                "-progress", "pipe:1",  # Output progress to stdout
+                output_file
+            ]
+            
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Track progress
+            last_logged_percentage = 0
+            start_time = time.time()
+            
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                    
+                line = line.decode().strip()
+                if line.startswith('out_time_ms='):
+                    # Extract time in microseconds
+                    time_ms = int(line.split('=')[1])
+                    # Convert to seconds
+                    time_sec = time_ms / 1000000
+                    
+                    # Get the total duration of all input files
+                    total_duration = 0
+                    for file, _ in mp4_files:
+                        file_path = os.path.join(directory, file)
+                        duration = await get_video_duration(file_path)
+                        total_duration += duration
+                    
+                    if total_duration > 0:
+                        progress = (time_sec / total_duration) * 100
+                        # Log only at 10% intervals
+                        current_percentage = int(progress / 10) * 10
+                        if current_percentage > last_logged_percentage:
+                            elapsed_time = time.time() - start_time
+                            minutes = int(elapsed_time // 60)
+                            seconds = int(elapsed_time % 60)
+                            logger.info(f"Combining videos: {current_percentage}% (elapsed time: {minutes}m {seconds}s)")
+                            last_logged_percentage = current_percentage
+            
+            # Wait for the process to complete
+            await process.wait()
+            
+            if process.returncode == 0:
+                # Verify the output file exists and has content
+                if not os.path.exists(output_file):
+                    raise FileNotFoundError(f"Combination completed but output file not found: {output_file}")
+                
+                if os.path.getsize(output_file) == 0:
+                    raise ValueError(f"Combination completed but output file is empty: {output_file}")
+                    
+                # Verify the combined file is valid by checking its duration
+                try:
+                    duration = await get_video_duration(output_file)
+                    if duration <= 0:
+                        logger.error("Combined file is invalid (zero duration)")
+                        os.remove(output_file)
+                        raise ValueError("Combined file is invalid (zero duration)")
+                except Exception as e:
+                    logger.error(f"Combined file is invalid: {e}")
+                    os.remove(output_file)
+                    raise ValueError(f"Combined file is invalid: {e}")
+                
+                # Calculate and log total combination time
+                combination_end_time = time.time()
+                combination_duration = combination_end_time - start_time
+                minutes = int(combination_duration // 60)
+                seconds = int(combination_duration % 60)
+                
+                logger.info(f"✨ Successfully combined {len(mp4_files)} videos into {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
+                
+                # Update status to user_input
+                update_status(directory, "user_input")
+                
+            else:
+                # Collect error output
+                error = await process.stderr.read()
+                error_msg = error.decode()
+                logger.error(f"Error combining videos: {error_msg}")
+                
+                # Clean up the failed output file if it exists
+                if os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                        logger.info(f"Removed failed combined file: {output_file}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove failed combined file {output_file}: {e}")
+                
+                raise RuntimeError(f"FFmpeg combination failed: {error_msg}")
+                
+        except Exception as e:
+            logger.error(f"Error combining videos in {directory}: {e}")
+            raise
+
 async def process_files():
     while True:
         try:
@@ -309,17 +500,9 @@ async def process_files():
                 
                 status = get_status(full_path)
                 if status == "combining":
-                    # Files are already converted to MP4, just need to combine them
-                    await concatenate_videos(full_path)
-                    match_info_path = os.path.join(full_path, MATCH_INFO_FILE)
-                    if not os.path.exists(MATCH_INFO_TEMPLATE):
-                        logger.info(f"Missing match info template: {MATCH_INFO_TEMPLATE}")
-                        continue
-
-                    if not os.path.exists(match_info_path):
-                        with open(MATCH_INFO_TEMPLATE, "r") as template, open(match_info_path, "w") as match_info:
-                            match_info.write(template.read())
-                    update_status(full_path, "user_input")
+                    # Add combining task to ffmpeg queue
+                    await ffmpeg_queue.put(full_path)
+                    logger.info(f"Added combining task for {directory} to ffmpeg queue")
                 
                 elif status == "user_input":
                     match_info = configparser.ConfigParser()
@@ -694,166 +877,151 @@ async def download_with_progress(client: httpx.AsyncClient, url: str, file_path:
                     last_log_time = current_time
                     last_log_size = downloaded
 
-async def process_ffmpeg_queue():
-    """Process ffmpeg conversion tasks in the background."""
-    while True:
-        try:
-            file_path, latest_file_path, end_time = await ffmpeg_queue.get()
-            filename = os.path.basename(file_path)
-            logger.info(f"🔄 Converting {filename}")
-            
-            # Create a task for the conversion without waiting
-            asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
-            
-            ffmpeg_queue.task_done()
-        except Exception as e:
-            logger.error(f"Error in ffmpeg queue: {e}")
-        await asyncio.sleep(0.1)
-
 async def async_convert_file(file_path, latest_file_path, end_time, filename):
     """Convert a single file asynchronously."""
-    try:
-        # Start timing
-        start_time = time.time()
-        
-        # Verify input file exists and is readable
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-        
-        if not os.access(file_path, os.R_OK):
-            raise PermissionError(f"Cannot read input file: {file_path}")
+    async with ffmpeg_lock:  # Ensure only one ffmpeg operation runs at a time
+        try:
+            # Start timing
+            start_time = time.time()
             
-        mp4_path = file_path.replace('.dav', '.mp4')
-        
-        # Check if output directory is writable
-        output_dir = os.path.dirname(mp4_path)
-        if not os.access(output_dir, os.W_OK):
-            raise PermissionError(f"Cannot write to output directory: {output_dir}")
-        
-        # Run ffmpeg with progress monitoring
-        command = [
-            "ffmpeg", "-i", file_path,
-            "-vcodec", "copy", "-acodec", "alac",
-            "-threads", "0", "-async", "1",
-            "-progress", "pipe:1",  # Output progress to stdout
-            mp4_path
-        ]
-        
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        # Track last logged percentage
-        last_logged_percentage = 0
-        error_output = []
-        
-        # Monitor conversion progress
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
+            # Verify input file exists and is readable
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Input file not found: {file_path}")
+            
+            if not os.access(file_path, os.R_OK):
+                raise PermissionError(f"Cannot read input file: {file_path}")
                 
-            line = line.decode().strip()
-            if line.startswith('out_time_ms='):
-                # Extract time in microseconds
-                time_ms = int(line.split('=')[1])
-                # Convert to seconds
-                time_sec = time_ms / 1000000
-                
-                # Get the video duration using ffprobe
-                duration = await get_video_duration(file_path)
-                if duration > 0:
-                    progress = (time_sec / duration) * 100
-                    # Log only at 10% intervals
-                    current_percentage = int(progress / 10) * 10
-                    if current_percentage > last_logged_percentage:
-                        logger.info(f"Converting {filename}: {current_percentage}%")
-                        last_logged_percentage = current_percentage
-        
-        # Wait for the process to complete
-        await process.wait()
-        
-        if process.returncode == 0:
-            # Verify the output file exists and has content
-            if not os.path.exists(mp4_path):
-                raise FileNotFoundError(f"Conversion completed but output file not found: {mp4_path}")
+            mp4_path = file_path.replace('.dav', '.mp4')
             
-            if os.path.getsize(mp4_path) == 0:
-                raise ValueError(f"Conversion completed but output file is empty: {mp4_path}")
+            # Check if output directory is writable
+            output_dir = os.path.dirname(mp4_path)
+            if not os.access(output_dir, os.W_OK):
+                raise PermissionError(f"Cannot write to output directory: {output_dir}")
             
-            # Calculate and log total conversion time
-            conversion_end_time = time.time()
-            conversion_duration = conversion_end_time - start_time
-            minutes = int(conversion_duration // 60)
-            seconds = int(conversion_duration % 60)
+            # Run ffmpeg with progress monitoring
+            command = [
+                "ffmpeg", "-i", file_path,
+                "-vcodec", "copy", "-acodec", "alac",
+                "-threads", "0", "-async", "1",
+                "-progress", "pipe:1",  # Output progress to stdout
+                mp4_path
+            ]
             
-            mp4_filename = os.path.basename(mp4_path)
-            directory = os.path.basename(os.path.dirname(mp4_path))
-            logger.info(f"✨ {mp4_filename} in {directory} (conversion took {minutes}m {seconds}s)")
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
             
-            # Update latest_video.txt with the end time of the processed video
-            try:
-                timestamp = end_time.strftime(default_date_format)
-                if not timestamp:
-                    raise ValueError("Generated timestamp is empty")
+            # Track last logged percentage
+            last_logged_percentage = 0
+            error_output = []
+            
+            # Monitor conversion progress
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
                     
-                # Create a temporary file first
-                temp_file = latest_file_path + ".tmp"
-                with open(temp_file, "w") as latest_file:
-                    latest_file.write(timestamp)
-                
-                # Verify the temp file has content
-                with open(temp_file, "r") as f:
-                    if not f.read().strip():
-                        raise ValueError("Temporary file is empty after write")
-                
-                # If everything is good, rename the temp file to the actual file
-                os.replace(temp_file, latest_file_path)
-                logger.info(f"Updated latest_video.txt with timestamp: {timestamp}")
-                
-            except Exception as e:
-                logger.error(f"Error updating latest_video.txt: {e}")
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                raise
-                
-            # Clean up the original DAV file only after successful conversion
-            try:
-                os.remove(file_path)
-                logger.info(f"Removed original file: {file_path}")
-            except Exception as e:
-                logger.warning(f"Could not remove original file {file_path}: {e}")
-                
-        else:
-            # Collect error output
-            error = await process.stderr.read()
-            error_msg = error.decode()
-            logger.error(f"Error converting {filename}: {error_msg}")
+                line = line.decode().strip()
+                if line.startswith('out_time_ms='):
+                    # Extract time in microseconds
+                    time_ms = int(line.split('=')[1])
+                    # Convert to seconds
+                    time_sec = time_ms / 1000000
+                    
+                    # Get the video duration using ffprobe
+                    duration = await get_video_duration(file_path)
+                    if duration > 0:
+                        progress = (time_sec / duration) * 100
+                        # Log only at 10% intervals
+                        current_percentage = int(progress / 10) * 10
+                        if current_percentage > last_logged_percentage:
+                            logger.info(f"Converting {filename}: {current_percentage}%")
+                            last_logged_percentage = current_percentage
             
-            # Clean up partial output file if it exists
-            if os.path.exists(mp4_path):
+            # Wait for the process to complete
+            await process.wait()
+            
+            if process.returncode == 0:
+                # Verify the output file exists and has content
+                if not os.path.exists(mp4_path):
+                    raise FileNotFoundError(f"Conversion completed but output file not found: {mp4_path}")
+                
+                if os.path.getsize(mp4_path) == 0:
+                    raise ValueError(f"Conversion completed but output file is empty: {mp4_path}")
+                
+                # Calculate and log total conversion time
+                conversion_end_time = time.time()
+                conversion_duration = conversion_end_time - start_time
+                minutes = int(conversion_duration // 60)
+                seconds = int(conversion_duration % 60)
+                
+                mp4_filename = os.path.basename(mp4_path)
+                directory = os.path.basename(os.path.dirname(mp4_path))
+                logger.info(f"✨ {mp4_filename} in {directory} (conversion took {minutes}m {seconds}s)")
+                
+                # Update latest_video.txt with the end time of the processed video
                 try:
-                    os.remove(mp4_path)
-                    logger.info(f"Removed incomplete output file: {mp4_path}")
+                    timestamp = end_time.strftime(default_date_format)
+                    if not timestamp:
+                        raise ValueError("Generated timestamp is empty")
+                        
+                    # Create a temporary file first
+                    temp_file = latest_file_path + ".tmp"
+                    with open(temp_file, "w") as latest_file:
+                        latest_file.write(timestamp)
+                    
+                    # Verify the temp file has content
+                    with open(temp_file, "r") as f:
+                        if not f.read().strip():
+                            raise ValueError("Temporary file is empty after write")
+                    
+                    # If everything is good, rename the temp file to the actual file
+                    os.replace(temp_file, latest_file_path)
+                    logger.info(f"Updated latest_video.txt with timestamp: {timestamp}")
+                    
                 except Exception as e:
-                    logger.warning(f"Could not remove incomplete output file {mp4_path}: {e}")
-            
-            raise RuntimeError(f"FFmpeg conversion failed: {error_msg}")
-            
-    except FileNotFoundError as e:
-        logger.error(f"File error during conversion of {filename}: {e}")
-        raise
-    except PermissionError as e:
-        logger.error(f"Permission error during conversion of {filename}: {e}")
-        raise
-    except ValueError as e:
-        logger.error(f"Invalid data during conversion of {filename}: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error converting file {filename}: {e}")
-        raise
+                    logger.error(f"Error updating latest_video.txt: {e}")
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                    raise
+                    
+                # Clean up the original DAV file only after successful conversion
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Removed original file: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Could not remove original file {file_path}: {e}")
+                    
+            else:
+                # Collect error output
+                error = await process.stderr.read()
+                error_msg = error.decode()
+                logger.error(f"Error converting {filename}: {error_msg}")
+                
+                # Clean up partial output file if it exists
+                if os.path.exists(mp4_path):
+                    try:
+                        os.remove(mp4_path)
+                        logger.info(f"Removed incomplete output file: {mp4_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove incomplete output file {mp4_path}: {e}")
+                
+                raise RuntimeError(f"FFmpeg conversion failed: {error_msg}")
+                
+        except FileNotFoundError as e:
+            logger.error(f"File error during conversion of {filename}: {e}")
+            raise
+        except PermissionError as e:
+            logger.error(f"Permission error during conversion of {filename}: {e}")
+            raise
+        except ValueError as e:
+            logger.error(f"Invalid data during conversion of {filename}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error converting file {filename}: {e}")
+            raise
 
 class DirectoryPlan:
     def __init__(self, directory_path: str):
@@ -1075,6 +1243,7 @@ async def find_and_download_files(auth):
                             os.remove(mp4_path)
                             logger.info(f"Removed invalid MP4 file: {mp4_path}")
                             # Add to ffmpeg queue for reprocessing
+                            queued_files.add(full_download_path)  # Add to tracking set
                             asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
                         except Exception as e:
                             logger.error(f"Could not remove invalid MP4 file {mp4_path}: {e}")
@@ -1109,6 +1278,7 @@ async def find_and_download_files(auth):
                                 if await verify_file_complete(full_download_path, next_file.file_path):
                                     logger.info(f"✅ {filename}")
                                     # Add to ffmpeg queue for processing
+                                    queued_files.add(full_download_path)  # Add to tracking set
                                     asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
                                     plan.mark_file_processed(filename)
                                 else:
