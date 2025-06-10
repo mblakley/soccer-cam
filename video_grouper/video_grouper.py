@@ -1038,20 +1038,27 @@ async def async_convert_file(file_path, latest_file_path, end_time, filename):
                     
                 line = line.decode().strip()
                 if line.startswith('out_time_ms='):
-                    # Extract time in microseconds
-                    time_ms = int(line.split('=')[1])
-                    # Convert to seconds
-                    time_sec = time_ms / 1000000
-                    
-                    # Get the video duration using ffprobe
-                    duration = await get_video_duration(file_path)
-                    if duration > 0:
-                        progress = (time_sec / duration) * 100
-                        # Log only at 10% intervals
-                        current_percentage = int(progress / 10) * 10
-                        if current_percentage > last_logged_percentage:
-                            logger.info(f"Converting {filename}: {current_percentage}%")
-                            last_logged_percentage = current_percentage
+                    try:
+                        # Extract time in microseconds
+                        time_value = line.split('=')[1]
+                        if time_value == 'N/A':
+                            continue  # Skip N/A values
+                        time_ms = int(time_value)
+                        # Convert to seconds
+                        time_sec = time_ms / 1000000
+                        
+                        # Get the video duration using ffprobe
+                        duration = await get_video_duration(file_path)
+                        if duration > 0:
+                            progress = (time_sec / duration) * 100
+                            # Log only at 10% intervals
+                            current_percentage = int(progress / 10) * 10
+                            if current_percentage > last_logged_percentage:
+                                logger.info(f"Converting {filename}: {current_percentage}%")
+                                last_logged_percentage = current_percentage
+                    except (ValueError, ZeroDivisionError) as e:
+                        # Skip invalid progress values
+                        continue
             
             # Wait for the process to complete
             await process.wait()
