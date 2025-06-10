@@ -156,18 +156,103 @@ async def concatenate_videos(directory):
     output_file = os.path.join(directory, "combined.mp4")
     list_file = os.path.join(directory, "video_list.txt")
     
+    # Get list of MP4 files and their sizes
+    mp4_files = []
+    total_size = 0
+    for file in sorted(os.listdir(directory)):
+        if file.endswith(".mp4"):
+            file_path = os.path.join(directory, file)
+            file_size = os.path.getsize(file_path)
+            mp4_files.append((file, file_size))
+            total_size += file_size
+    
+    if not mp4_files:
+        logger.error(f"No MP4 files found in {directory}")
+        raise ValueError(f"No MP4 files found in {directory}")
+    
+    logger.info(f"Found {len(mp4_files)} files to combine (total size: {await format_size(total_size)})")
+    
+    # Write file list
     with open(list_file, "w") as f:
-        for file in sorted(os.listdir(directory)):
-            if file.endswith(".mp4"):
-                f.write(f"file '{os.path.join(directory, file)}'\n")
+        for file, _ in mp4_files:
+            f.write(f"file '{os.path.join(directory, file)}'\n")
 
     if not os.path.exists(list_file):
         logger.error(f"Unable to combine videos: missing {list_file}")
         raise ValueError(f"Missing {list_file}")
 
     logger.info(f"Combining videos in {directory}")
-    command = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", output_file]
-    await run_ffmpeg(command)
+    command = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
+        "-i", list_file, "-c", "copy",
+        "-progress", "pipe:1",  # Output progress to stdout
+        output_file
+    ]
+    
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Track progress
+    last_logged_percentage = 0
+    start_time = time.time()
+    
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+            
+        line = line.decode().strip()
+        if line.startswith('out_time_ms='):
+            # Extract time in microseconds
+            time_ms = int(line.split('=')[1])
+            # Convert to seconds
+            time_sec = time_ms / 1000000
+            
+            # Get the total duration of all input files
+            total_duration = 0
+            for file, _ in mp4_files:
+                file_path = os.path.join(directory, file)
+                duration = await get_video_duration(file_path)
+                total_duration += duration
+            
+            if total_duration > 0:
+                progress = (time_sec / total_duration) * 100
+                # Log only at 10% intervals
+                current_percentage = int(progress / 10) * 10
+                if current_percentage > last_logged_percentage:
+                    elapsed_time = time.time() - start_time
+                    minutes = int(elapsed_time // 60)
+                    seconds = int(elapsed_time % 60)
+                    logger.info(f"Combining videos: {current_percentage}% (elapsed time: {minutes}m {seconds}s)")
+                    last_logged_percentage = current_percentage
+    
+    # Wait for the process to complete
+    await process.wait()
+    
+    if process.returncode == 0:
+        # Verify the output file exists and has content
+        if not os.path.exists(output_file):
+            raise FileNotFoundError(f"Combination completed but output file not found: {output_file}")
+        
+        if os.path.getsize(output_file) == 0:
+            raise ValueError(f"Combination completed but output file is empty: {output_file}")
+        
+        # Calculate and log total combination time
+        combination_end_time = time.time()
+        combination_duration = combination_end_time - start_time
+        minutes = int(combination_duration // 60)
+        seconds = int(combination_duration % 60)
+        
+        logger.info(f"✨ Successfully combined {len(mp4_files)} videos into {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
+    else:
+        # Collect error output
+        error = await process.stderr.read()
+        error_msg = error.decode()
+        logger.error(f"Error combining videos: {error_msg}")
+        raise RuntimeError(f"FFmpeg combination failed: {error_msg}")
 
 async def process_files():
     while True:
@@ -236,10 +321,16 @@ def cleanup_dav_files(directory):
     logger.info("Dav file cleanup complete.")
 
 async def trim_video(directory, match_info):
-    logger.info("Trimming and renaming video...")
+    logger.info("Starting video trimming and renaming process...")
     combined_file = os.path.join(directory, "combined.mp4")
     if not os.path.exists(combined_file):
         logger.info(f"Skipping trim: Missing {combined_file}")
+        return
+
+    # Get the total duration of the combined file
+    total_duration = await get_video_duration(combined_file)
+    if total_duration <= 0:
+        logger.error(f"Could not determine duration of {combined_file}")
         return
 
     dir_date = os.path.basename(directory).split('-')[0]
@@ -260,12 +351,82 @@ async def trim_video(directory, match_info):
         f"{match_info['location'].lower().replace(' ', '')}-{formatted_date}-raw.mp4"
     )
 
-    logger.info(f"Trimming {output_file} starting at {start_time_offset}")
-    command = ["ffmpeg", "-y", "-i", combined_file, "-ss", start_time_offset, "-c", "copy", output_file]
-    await run_ffmpeg(command)
-
-    cleanup_dav_files(directory)
-    update_status(directory, "finished")
+    logger.info(f"Trimming {os.path.basename(combined_file)} starting at {start_time_offset}")
+    logger.info(f"Output will be saved to: {output_file}")
+    
+    command = [
+        "ffmpeg", "-y", "-i", combined_file,
+        "-ss", start_time_offset,
+        "-c", "copy",
+        "-progress", "pipe:1",  # Output progress to stdout
+        output_file
+    ]
+    
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Track progress
+    last_logged_percentage = 0
+    start_time = time.time()
+    
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+            
+        line = line.decode().strip()
+        if line.startswith('out_time_ms='):
+            # Extract time in microseconds
+            time_ms = int(line.split('=')[1])
+            # Convert to seconds
+            time_sec = time_ms / 1000000
+            
+            if total_duration > 0:
+                progress = (time_sec / total_duration) * 100
+                # Log only at 10% intervals
+                current_percentage = int(progress / 10) * 10
+                if current_percentage > last_logged_percentage:
+                    elapsed_time = time.time() - start_time
+                    minutes = int(elapsed_time // 60)
+                    seconds = int(elapsed_time % 60)
+                    logger.info(f"Trimming video: {current_percentage}% (elapsed time: {minutes}m {seconds}s)")
+                    last_logged_percentage = current_percentage
+    
+    # Wait for the process to complete
+    await process.wait()
+    
+    if process.returncode == 0:
+        # Verify the output file exists and has content
+        if not os.path.exists(output_file):
+            raise FileNotFoundError(f"Trimming completed but output file not found: {output_file}")
+        
+        if os.path.getsize(output_file) == 0:
+            raise ValueError(f"Trimming completed but output file is empty: {output_file}")
+        
+        # Calculate and log total trimming time
+        trim_end_time = time.time()
+        trim_duration = trim_end_time - start_time
+        minutes = int(trim_duration // 60)
+        seconds = int(trim_duration % 60)
+        
+        logger.info(f"✨ Successfully trimmed video to {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
+        
+        # Clean up DAV files
+        logger.info("Cleaning up DAV files...")
+        cleanup_dav_files(directory)
+        
+        # Update status
+        update_status(directory, "finished")
+        logger.info(f"✅ Processing complete for {directory}")
+    else:
+        # Collect error output
+        error = await process.stderr.read()
+        error_msg = error.decode()
+        logger.error(f"Error trimming video: {error_msg}")
+        raise RuntimeError(f"FFmpeg trimming failed: {error_msg}")
 
 def load_camera_state():
     """Load the camera state from file."""
