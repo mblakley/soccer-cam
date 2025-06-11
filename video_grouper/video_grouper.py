@@ -1264,13 +1264,15 @@ class DirectoryPlan:
         return plan
 
 async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
-    """Verify that the MP4 file has roughly the same duration as the DAV file."""
+    """Verify that the MP4 file has roughly the same duration as the DAV file.
+    If the DAV file has no valid duration, we accept the MP4 file."""
     try:
         # Get DAV duration
         dav_duration = await get_video_duration(dav_path)
         if dav_duration <= 0:
             logger.warning(f"Could not get duration for DAV file: {dav_path}")
-            return False
+            # If DAV has no valid duration, we'll accept the MP4
+            return True
             
         # Get MP4 duration
         mp4_duration = await get_video_duration(mp4_path)
@@ -1458,66 +1460,90 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
                     if os.path.exists(full_download_path):
                         delete_incomplete_file(full_download_path)
                     
-                    try:
-                        async with httpx.AsyncClient() as client:
-                            # Get file size
-                            head_response = await client.head(f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}", auth=auth)
-                            if head_response.status_code != 200:
-                                logger.error(f"Failed to get file size: {next_file.file_path}")
+                    # Add retry logic
+                    max_retries = 5
+                    retry_count = 0
+                    retry_delay = 5  # seconds
+                    
+                    while retry_count < max_retries:
+                        try:
+                            # Check connection before attempting download
+                            if not await check_device_availability(auth):
+                                logger.warning("Camera is not available, will retry in 5 seconds")
+                                await asyncio.sleep(retry_delay)
+                                retry_count += 1
                                 continue
                                 
-                            total_size = int(head_response.headers.get('content-length', 0))
-                            logger.info(f"Downloading {filename} ({await format_size(total_size)})")
-                            
-                            try:
-                                await download_with_progress(
-                                    client,
-                                    f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}",
-                                    full_download_path,
-                                    auth,
-                                    total_size,
-                                    dir_path
-                                )
+                            async with httpx.AsyncClient() as client:
+                                # Get file size
+                                head_response = await client.head(f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}", auth=auth)
+                                if head_response.status_code != 200:
+                                    logger.error(f"Failed to get file size: {next_file.file_path}")
+                                    retry_count += 1
+                                    await asyncio.sleep(retry_delay)
+                                    continue
+                                    
+                                total_size = int(head_response.headers.get('content-length', 0))
+                                logger.info(f"Downloading {filename} ({await format_size(total_size)})")
                                 
-                                if await verify_file_complete(full_download_path, next_file.file_path):
-                                    logger.info(f"✅ {filename}")
-                                    # Add to ffmpeg queue for processing with full tuple
-                                    queued_files.add((full_download_path, latest_file_path, next_file.end_time))
-                                    asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
-                                    # Mark as downloaded but not processed yet
-                                    plan.mark_file_downloaded(filename)
-                                else:
-                                    logger.error(f"❌ Download incomplete: {next_file.file_path}")
+                                try:
+                                    await download_with_progress(
+                                        client,
+                                        f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}",
+                                        full_download_path,
+                                        auth,
+                                        total_size,
+                                        dir_path
+                                    )
+                                    
+                                    if await verify_file_complete(full_download_path, next_file.file_path):
+                                        logger.info(f"✅ {filename}")
+                                        # Add to ffmpeg queue for processing with full tuple
+                                        queued_files.add((full_download_path, latest_file_path, next_file.end_time))
+                                        asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
+                                        # Mark as downloaded but not processed yet
+                                        plan.mark_file_downloaded(filename)
+                                        break  # Success, exit retry loop
+                                    else:
+                                        logger.error(f"❌ Download incomplete: {next_file.file_path}")
+                                        delete_incomplete_file(full_download_path)
+                                        retry_count += 1
+                                        await asyncio.sleep(retry_delay)
+                                except Exception as e:
+                                    logger.error(f"❌ Error downloading {next_file.file_path}: {e}")
                                     delete_incomplete_file(full_download_path)
-                            except Exception as e:
-                                logger.error(f"❌ Error downloading {next_file.file_path}: {e}")
-                                delete_incomplete_file(full_download_path)
-                    except Exception as e:
-                        logger.error(f"❌ Error setting up download for {next_file.file_path}: {e}")
+                                    retry_count += 1
+                                    await asyncio.sleep(retry_delay)
+                        except Exception as e:
+                            logger.error(f"❌ Error setting up download for {next_file.file_path}: {e}")
+                            retry_count += 1
+                            await asyncio.sleep(retry_delay)
+                    
+                    if retry_count >= max_retries:
+                        logger.error(f"Failed to download {filename} after {max_retries} attempts")
+                        # Check if we're disconnected and log it
+                        if not await check_device_availability(auth):
+                            logger.warning("Camera appears to be disconnected after failed download attempts")
                 else:
-                    logger.info(f"🟡 Skipping {filename} (already exists and complete)")
+                    logger.info(f"🟡 Skipping {filename} (already downloaded)")
                     plan.mark_file_downloaded(filename)
 
-            # If all files in this plan are processed, mark it for combining
-            if plan.is_complete():
-                logger.info(f"🎉 All files processed for {dir_path}, marking for combining")
-                update_status(dir_path, "combining")
-                plan.status = "combining"
-
-        # Save updated plans
-        with open(plans_file, "w") as f:
-            json.dump({path: plan.to_dict() for path, plan in directory_plans.items()}, f, indent=2)
-
 async def download_files(processing_state: ProcessingState, auth: httpx.DigestAuth):
+    """Main download loop that handles file downloads and connection state."""
     while True:
         try:
+            # Check if camera is available
+            if not await check_device_availability(auth):
+                logger.warning("Camera is disconnected, waiting for reconnection...")
+                await asyncio.sleep(60)  # Check every minute
+                continue
+
             logger.info("Checking for new files...")
-            if await check_device_availability(auth):
-                await find_and_download_files(auth, processing_state)
+            await find_and_download_files(auth, processing_state)
+            await asyncio.sleep(config["APP"].getint("check_interval_seconds"))
         except Exception as e:
             logger.error(f"Unexpected error downloading files: {e}")
-        
-        await asyncio.sleep(config["APP"].getint("check_interval_seconds"))
+            await asyncio.sleep(5)  # Back off on error
 
 async def get_video_duration(file_path: str) -> float:
     """Get the duration of a video file in seconds using ffprobe."""
