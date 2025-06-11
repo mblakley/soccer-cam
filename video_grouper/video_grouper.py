@@ -436,32 +436,45 @@ async def process_ffmpeg_queue():
     while True:
         try:
             task = await ffmpeg_queue.get()
-            if isinstance(task, tuple):  # MP4 conversion task
-                file_path, latest_file_path, end_time = task
-                filename = os.path.basename(file_path)
-                queue_size = ffmpeg_queue.qsize()
-                logger.info(f"🔄 Converting {filename} (queue size: {queue_size})")
-                if queue_size > 0:
-                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
-                
-                # Save queue state before processing
-                save_queue_state()
-                
-                # Create a task for the conversion without waiting
-                asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
+            if isinstance(task, tuple):
+                if len(task) == 3:  # MP4 conversion task
+                    file_path, latest_file_path, end_time = task
+                    filename = os.path.basename(file_path)
+                    queue_size = ffmpeg_queue.qsize()
+                    logger.info(f"🔄 Converting {filename} (queue size: {queue_size})")
+                    if queue_size > 0:
+                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
+                    
+                    # Save queue state before processing
+                    save_queue_state()
+                    
+                    # Create a task for the conversion without waiting
+                    asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
+                elif len(task) == 4:  # Trim task
+                    input_file, output_file, start_time_offset, total_duration = task
+                    filename = os.path.basename(input_file)
+                    queue_size = ffmpeg_queue.qsize()
+                    logger.info(f"🔄 Trimming {filename} (queue size: {queue_size})")
+                    if queue_size > 0:
+                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
+                    
+                    # Save queue state before processing
+                    save_queue_state()
+                    
+                    # Create a task for trimming without waiting
+                    asyncio.create_task(async_trim_file(input_file, output_file, start_time_offset, total_duration))
             else:  # Combining task
                 directory = task
                 dir_name = os.path.basename(directory)
                 queue_size = ffmpeg_queue.qsize()
                 logger.info(f"🔄 Combining videos in {dir_name} (queue size: {queue_size})")
                 if queue_size > 0:
-                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f) for f in queued_files)}")
+                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
                 
                 # Save queue state before processing
                 save_queue_state()
                 
                 # Create a task for combining without waiting
-                # Note: We don't remove from queued_files here - it will be removed in async_combine_videos after successful completion
                 asyncio.create_task(async_combine_videos(directory))
             
             ffmpeg_queue.task_done()
@@ -663,83 +676,108 @@ async def trim_video(directory, match_info):
         f"{match_info['location'].lower().replace(' ', '')}-{formatted_date}-raw.mp4"
     )
 
-    logger.info(f"Trimming {os.path.basename(combined_file)} starting at {start_time_offset}")
+    logger.info(f"Adding trim task for {os.path.basename(combined_file)} to ffmpeg queue")
     logger.info(f"Output will be saved to: {output_file}")
     
-    command = [
-        "ffmpeg", "-y", "-i", combined_file,
-        "-ss", start_time_offset,
-        "-c", "copy",
-        "-progress", "pipe:1",  # Output progress to stdout
-        output_file
-    ]
-    
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    
-    # Track progress
-    last_logged_percentage = 0
-    start_time = time.time()
-    
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
+    # Add to ffmpeg queue
+    queued_files.add((combined_file, output_file, start_time_offset, total_duration))
+    await ffmpeg_queue.put((combined_file, output_file, start_time_offset, total_duration))
+    save_queue_state()
+
+async def async_trim_file(input_file: str, output_file: str, start_time_offset: str, total_duration: float):
+    """Trim a video file asynchronously."""
+    async with ffmpeg_lock:  # Ensure only one ffmpeg operation runs at a time
+        try:
+            logger.info(f"Trimming {os.path.basename(input_file)} starting at {start_time_offset}")
             
-        line = line.decode().strip()
-        if line.startswith('out_time_ms='):
-            # Extract time in microseconds
-            time_ms = int(line.split('=')[1])
-            # Convert to seconds
-            time_sec = time_ms / 1000000
+            command = [
+                "ffmpeg", "-y", "-i", input_file,
+                "-ss", start_time_offset,
+                "-c", "copy",
+                "-progress", "pipe:1",  # Output progress to stdout
+                output_file
+            ]
             
-            if total_duration > 0:
-                progress = (time_sec / total_duration) * 100
-                # Log only at 10% intervals
-                current_percentage = int(progress / 10) * 10
-                if current_percentage > last_logged_percentage:
-                    elapsed_time = time.time() - start_time
-                    minutes = int(elapsed_time // 60)
-                    seconds = int(elapsed_time % 60)
-                    logger.info(f"Trimming video: {current_percentage}% (elapsed time: {minutes}m {seconds}s)")
-                    last_logged_percentage = current_percentage
-    
-    # Wait for the process to complete
-    await process.wait()
-    
-    if process.returncode == 0:
-        # Verify the output file exists and has content
-        if not os.path.exists(output_file):
-            raise FileNotFoundError(f"Trimming completed but output file not found: {output_file}")
-        
-        if os.path.getsize(output_file) == 0:
-            raise ValueError(f"Trimming completed but output file is empty: {output_file}")
-        
-        # Calculate and log total trimming time
-        trim_end_time = time.time()
-        trim_duration = trim_end_time - start_time
-        minutes = int(trim_duration // 60)
-        seconds = int(trim_duration % 60)
-        
-        logger.info(f"✨ Successfully trimmed video to {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
-        
-        # Verify no DAV files remain
-        dav_files = [f for f in os.listdir(directory) if f.endswith(".dav")]
-        if dav_files:
-            logger.warning(f"Found {len(dav_files)} DAV files that should have been removed during conversion: {', '.join(dav_files)}")
-        
-        # Update status
-        update_status(directory, "finished")
-        logger.info(f"✅ Processing complete for {directory}")
-    else:
-        # Collect error output
-        error = await process.stderr.read()
-        error_msg = error.decode()
-        logger.error(f"Error trimming video: {error_msg}")
-        raise RuntimeError(f"FFmpeg trimming failed: {error_msg}")
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Track progress
+            last_logged_percentage = 0
+            start_time = time.time()
+            
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                    
+                line = line.decode().strip()
+                if line.startswith('out_time_ms='):
+                    # Extract time in microseconds
+                    time_ms = int(line.split('=')[1])
+                    # Convert to seconds
+                    time_sec = time_ms / 1000000
+                    
+                    if total_duration > 0:
+                        progress = (time_sec / total_duration) * 100
+                        # Log only at 10% intervals
+                        current_percentage = int(progress / 10) * 10
+                        if current_percentage > last_logged_percentage:
+                            elapsed_time = time.time() - start_time
+                            minutes = int(elapsed_time // 60)
+                            seconds = int(elapsed_time % 60)
+                            logger.info(f"Trimming {os.path.basename(input_file)}: {current_percentage}% (elapsed time: {minutes}m {seconds}s)")
+                            last_logged_percentage = current_percentage
+            
+            # Wait for the process to complete
+            await process.wait()
+            
+            if process.returncode == 0:
+                # Verify the output file exists and has content
+                if not os.path.exists(output_file):
+                    raise FileNotFoundError(f"Trimming completed but output file not found: {output_file}")
+                
+                if os.path.getsize(output_file) == 0:
+                    raise ValueError(f"Trimming completed but output file is empty: {output_file}")
+                
+                # Calculate and log total trimming time
+                trim_end_time = time.time()
+                trim_duration = trim_end_time - start_time
+                minutes = int(trim_duration // 60)
+                seconds = int(trim_duration % 60)
+                
+                logger.info(f"✨ Successfully trimmed {os.path.basename(input_file)} to {os.path.basename(output_file)} (took {minutes}m {seconds}s)")
+                
+                # Update status
+                update_status(os.path.dirname(input_file), "finished")
+                logger.info(f"✅ Processing complete for {os.path.dirname(input_file)}")
+                
+                # Remove from queued_files and save updated state
+                if (input_file, output_file, start_time_offset, total_duration) in queued_files:
+                    queued_files.remove((input_file, output_file, start_time_offset, total_duration))
+                    save_queue_state()
+                    logger.info(f"Removed {os.path.basename(input_file)} from ffmpeg queue after successful trimming")
+            else:
+                # Collect error output
+                error = await process.stderr.read()
+                error_msg = error.decode()
+                logger.error(f"Error trimming {os.path.basename(input_file)}: {error_msg}")
+                
+                # Clean up the failed output file if it exists
+                if os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                        logger.info(f"Removed failed trimmed file: {output_file}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove failed trimmed file {output_file}: {e}")
+                
+                raise RuntimeError(f"FFmpeg trimming failed: {error_msg}")
+                
+        except Exception as e:
+            logger.error(f"Error trimming {os.path.basename(input_file)}: {e}")
+            raise
 
 def load_camera_state():
     """Load the camera state from file."""
@@ -1428,6 +1466,11 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
                 plan.status = "downloading"
 
             while not plan.is_complete():
+                # Check connection before attempting next file
+                if not await check_device_availability(auth):
+                    logger.warning("Camera appears to be disconnected after failed download attempts")
+                    return  # Exit early when disconnected
+
                 next_file = plan.get_next_file()
                 if not next_file:
                     break
@@ -1469,10 +1512,8 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
                         try:
                             # Check connection before attempting download
                             if not await check_device_availability(auth):
-                                logger.warning("Camera is not available, will retry in 5 seconds")
-                                await asyncio.sleep(retry_delay)
-                                retry_count += 1
-                                continue
+                                logger.warning("Camera appears to be disconnected after failed download attempts")
+                                return  # Exit early when disconnected
                                 
                             async with httpx.AsyncClient() as client:
                                 # Get file size
@@ -1495,38 +1536,22 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
                                         total_size,
                                         dir_path
                                     )
-                                    
-                                    if await verify_file_complete(full_download_path, next_file.file_path):
-                                        logger.info(f"✅ {filename}")
-                                        # Add to ffmpeg queue for processing with full tuple
-                                        queued_files.add((full_download_path, latest_file_path, next_file.end_time))
-                                        asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
-                                        # Mark as downloaded but not processed yet
-                                        plan.mark_file_downloaded(filename)
-                                        break  # Success, exit retry loop
-                                    else:
-                                        logger.error(f"❌ Download incomplete: {next_file.file_path}")
-                                        delete_incomplete_file(full_download_path)
-                                        retry_count += 1
-                                        await asyncio.sleep(retry_delay)
+                                    plan.mark_file_downloaded(filename)
+                                    break
                                 except Exception as e:
-                                    logger.error(f"❌ Error downloading {next_file.file_path}: {e}")
-                                    delete_incomplete_file(full_download_path)
+                                    logger.error(f"Error downloading {filename}: {e}")
                                     retry_count += 1
-                                    await asyncio.sleep(retry_delay)
+                                    if retry_count < max_retries:
+                                        await asyncio.sleep(retry_delay)
+                                    else:
+                                        logger.error(f"Failed to download {filename} after {max_retries} attempts")
                         except Exception as e:
-                            logger.error(f"❌ Error setting up download for {next_file.file_path}: {e}")
+                            logger.error(f"Error during download attempt: {e}")
                             retry_count += 1
-                            await asyncio.sleep(retry_delay)
-                    
-                    if retry_count >= max_retries:
-                        logger.error(f"Failed to download {filename} after {max_retries} attempts")
-                        # Check if we're disconnected and log it
-                        if not await check_device_availability(auth):
-                            logger.warning("Camera appears to be disconnected after failed download attempts")
-                else:
-                    logger.info(f"🟡 Skipping {filename} (already downloaded)")
-                    plan.mark_file_downloaded(filename)
+                            if retry_count < max_retries:
+                                await asyncio.sleep(retry_delay)
+                            else:
+                                logger.error(f"Failed to download {filename} after {max_retries} attempts")
 
 async def download_files(processing_state: ProcessingState, auth: httpx.DigestAuth):
     """Main download loop that handles file downloads and connection state."""
@@ -1535,7 +1560,7 @@ async def download_files(processing_state: ProcessingState, auth: httpx.DigestAu
             # Check if camera is available
             if not await check_device_availability(auth):
                 logger.warning("Camera is disconnected, waiting for reconnection...")
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)  # Check every minute when disconnected
                 continue
 
             logger.info("Checking for new files...")
