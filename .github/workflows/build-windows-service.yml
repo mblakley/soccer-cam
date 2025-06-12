@@ -21,32 +21,6 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Install NSIS
-      run: |
-        $nsisUrl = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.09/nsis-3.09-setup.exe/download"
-        $nsisInstaller = Join-Path $env:RUNNER_TEMP "nsis-setup.exe"
-        Write-Host "Downloading NSIS installer to $nsisInstaller"
-        
-        try {
-          Invoke-WebRequest -Uri $nsisUrl -OutFile $nsisInstaller -ErrorAction Stop
-          if (-not (Test-Path $nsisInstaller)) {
-            throw "NSIS installer was not downloaded successfully"
-          }
-          
-          Write-Host "Installing NSIS..."
-          $process = Start-Process -FilePath $nsisInstaller -ArgumentList "/S" -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "NSIS installation failed with exit code $($process.ExitCode)"
-          }
-          
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-          Write-Host "NSIS installation completed successfully"
-        }
-        catch {
-          Write-Error "Failed to install NSIS: $_"
-          exit 1
-        }
-
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -80,8 +54,10 @@ jobs:
         pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=tray_agent --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray_agent.py
 
     - name: Build installer
-      run: |
-        makensis /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer.nsi
+      uses: joncloud/makensis-action@v4.1
+      with:
+        script-file: video_grouper/installer.nsi
+        arguments: "/DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }}"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
