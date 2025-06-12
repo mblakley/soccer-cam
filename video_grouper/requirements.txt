@@ -1,5 +1,3 @@
-httpx
-aiofiles
 pywin32
 cx_Freeze
 pyinstaller

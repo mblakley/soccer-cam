@@ -54,7 +54,12 @@ jobs:
         pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=tray_agent --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray_agent.py
 
     - name: Install NSIS
-      uses: medzin/install-nsis@v3
+      run: |
+        $nsisUrl = "https://sourceforge.net/projects/nsis/files/NSIS%203/3.09/nsis-3.09-setup.exe/download"
+        $nsisInstaller = "nsis-setup.exe"
+        Invoke-WebRequest -Uri $nsisUrl -OutFile $nsisInstaller
+        Start-Process -FilePath $nsisInstaller -ArgumentList "/S" -Wait
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
     - name: Build installer
       run: |

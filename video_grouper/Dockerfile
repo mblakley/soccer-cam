@@ -18,14 +18,21 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY requirements-docker.txt .
+RUN pip install -r requirements-docker.txt
 
 # Create version.py with build arguments
-RUN echo '"""\nVersion information for VideoGrouper.\nThis file is automatically updated during the build process.\n"""\n\nVERSION = "'${VERSION}'"\nBUILD_NUMBER = "'${BUILD_NUMBER}'"' > version.py
+RUN cat > version.py << EOF
+"""
+Version information for VideoGrouper.
+This file is automatically updated during the build process.
+"""
+
+VERSION = "${VERSION}"
+BUILD_NUMBER = "${BUILD_NUMBER}"
+EOF
 
 COPY video_grouper.py .
-COPY config.ini .
 COPY match_info.ini.dist .
 
 # Set version as environment variable

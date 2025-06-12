@@ -4,3 +4,6 @@ services:
       context: ./video_grouper
     volumes:
       - ./shared_data:/shared_data
+      - ./video_grouper/config.ini:/app/config.ini
+    environment:
+      - PYTHONUNBUFFERED=1
