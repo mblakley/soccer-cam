@@ -37,11 +37,13 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'build-windows-service.yml',
-              branch: context.ref,
+              head_sha: context.sha,
               status: 'completed',
               conclusion: 'success',
               per_page: 1
             });
+            
+            console.log('Workflow runs:', JSON.stringify(data, null, 2));
             
             if (!data.workflow_runs || data.workflow_runs.length === 0) {
               throw new Error('No successful workflow runs found');
