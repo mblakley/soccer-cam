@@ -1,0 +1,64 @@
+name: Build Docker Container
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches: [ main ]
+    paths:
+      - 'video_grouper/**'
+      - 'docker-compose.yaml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'video_grouper/**'
+      - 'docker-compose.yaml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history for versioning
+    
+    - name: Get version from tag
+      id: get_version
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        version=${GITHUB_REF#refs/tags/v}
+        echo "VERSION=$version" >> $GITHUB_ENV
+        echo "BUILD_NUMBER=0" >> $GITHUB_ENV
+        
+    - name: Get version from commit
+      id: get_version_commit
+      if: startsWith(github.ref, 'refs/heads/')
+      run: |
+        sha=$(git rev-parse --short HEAD)
+        echo "VERSION=0.0.0" >> $GITHUB_ENV
+        echo "BUILD_NUMBER=$sha" >> $GITHUB_ENV
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        context: ./video_grouper
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:${{ env.VERSION }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:dev-${{ env.BUILD_NUMBER }}
+        cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:buildcache
+        cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:buildcache,mode=max
+        build-args: |
+          VERSION=${{ env.VERSION }}
+          BUILD_NUMBER=${{ env.BUILD_NUMBER }} 
