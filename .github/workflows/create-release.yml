@@ -30,7 +30,7 @@ jobs:
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-artifacts
+          name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
           path: artifacts
 
       - name: Update Release
@@ -58,4 +58,4 @@ jobs:
             artifacts/VideoGrouperService.exe
             artifacts/tray_agent.exe
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
