@@ -2,8 +2,10 @@ name: Build Windows Service
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
@@ -15,40 +17,54 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Extract version
-      id: version
-      run: |
-        $version = $env:GITHUB_REF -replace 'refs/tags/v', ''
-        echo "VERSION=$version" >> $env:GITHUB_ENV
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.9'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -r video_grouper/requirements.txt
         pip install pyinstaller
+
+    - name: Extract version information
+      id: version
+      run: |
+        if ($env:GITHUB_REF -like 'refs/tags/*') {
+          $VERSION = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          $BUILD_NUMBER = '0'
+        } else {
+          $VERSION = '0.0.0'
+          $BUILD_NUMBER = git rev-list --count HEAD
+        }
+        echo "VERSION=$VERSION" >> $env:GITHUB_ENV
+        echo "BUILD_NUMBER=$BUILD_NUMBER" >> $env:GITHUB_ENV
+
+    - name: Update version.py
+      run: |
+        echo "VERSION = '${{ env.VERSION }}'" > video_grouper/version.py
+        echo "BUILD_NUMBER = '${{ env.BUILD_NUMBER }}'" >> video_grouper/version.py
 
     - name: Build service executable
       run: |
-        pyinstaller --noconfirm --onefile --windowed --icon "video_grouper/icon.ico" --name "VideoGrouperService" "video_grouper/service.py"
+        pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperService --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/service_wrapper.py
 
     - name: Build tray agent executable
       run: |
-        pyinstaller --noconfirm --onefile --windowed --icon "video_grouper/icon.ico" --name "tray_agent" "video_grouper/tray_agent.py"
+        pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=tray_agent --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray_agent.py
 
     - name: Build installer
-      run: |
-        powershell -ExecutionPolicy Bypass -File build-installer.ps1
+      uses: joncloud/makensis-action@v4.1
+      with:
+        script-file: video_grouper/installer.nsi
+        arguments: "/DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }}"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: windows-artifacts
+        name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
         path: |
           video_grouper/dist/VideoGrouperSetup.exe
-          dist/VideoGrouperService.exe
-          dist/tray_agent.exe 
+          video_grouper/dist/VideoGrouperService.exe
+          video_grouper/dist/tray_agent.exe
