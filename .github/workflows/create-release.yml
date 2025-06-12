@@ -17,6 +17,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=0" >> $GITHUB_ENV
 
       - name: Wait for Windows build
         uses: lewagon/wait-on-check-action@v1.3.4
@@ -25,7 +26,7 @@ jobs:
           check-name: 'Build Windows Service'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
-          conclusion: success
+          allowed-conclusions: success
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
