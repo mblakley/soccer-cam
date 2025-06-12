@@ -1,11 +1,12 @@
-name: Update Release
+name: Create Release
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  wait-for-builds:
+  create-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,32 +19,16 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Wait for Windows build
-        uses: lewagon/wait-on-check-action@v1.3.1
-        with:
-          ref: ${{ github.ref }}
-          check-name: 'Build Windows Service'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
-
-      - name: Wait for Docker build
-        uses: lewagon/wait-on-check-action@v1.3.1
-        with:
-          ref: ${{ github.ref }}
-          check-name: 'Build Docker Container'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
-
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: VideoGrouper-${{ env.VERSION }}-0
+          name: windows-artifacts
           path: artifacts
 
-      - name: Update Release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          release_id: ${{ github.event.release.id }}
+          name: Release ${{ env.VERSION }}
           body: |
             # VideoGrouper ${{ env.VERSION }}
             
@@ -64,6 +49,5 @@ jobs:
             artifacts/VideoGrouperSetup.exe
             artifacts/VideoGrouperService.exe
             artifacts/tray_agent.exe
-          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
