@@ -2,10 +2,14 @@
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 
-; Version information
-!define VERSION "${VERSION}"
-!define BUILD_NUMBER "${BUILD_NUMBER}"
-!define FULL_VERSION "${VERSION}"
+; Version information - only define if not passed from command line
+!ifndef VERSION
+    !define VERSION "0.0.0"
+!endif
+!ifndef BUILD_NUMBER
+    !define BUILD_NUMBER "0"
+!endif
+!define FULL_VERSION "${VERSION}.${BUILD_NUMBER}"
 
 ; Application information
 !define APPNAME "VideoGrouper"
@@ -20,7 +24,7 @@ InstallDirRegKey HKLM "Software\${APPNAME}" "Install_Dir"
 RequestExecutionLevel admin
 
 ; Version information for installer properties
-VIProductVersion "${VERSION}.0"
+VIProductVersion "${VERSION}.${BUILD_NUMBER}"
 VIAddVersionKey "ProductName" "${APPNAME}"
 VIAddVersionKey "CompanyName" "${COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${DESCRIPTION}"
@@ -120,7 +124,6 @@ Function StorageConfigPageLeave
 FunctionEnd
 
 ; Variables
-Var PythonInstalled
 Var PythonVersion
 
 Section "Install Python" SecPython
@@ -197,26 +200,15 @@ Section "Install Service" SecService
     WriteUninstaller "$INSTDIR\uninstall.exe"
     
     ; Add uninstall information to Add/Remove Programs
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "DisplayName" "${APPNAME}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "DisplayIcon" "$INSTDIR\VideoGrouperService.exe"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "Publisher" "${COMPANYNAME}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "DisplayVersion" "${FULL_VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "Version" "${VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "VersionMajor" "${VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-                     "VersionMinor" "0"
-    ;WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-    ;                 "URLInfoAbout" "https://videogrouper.com"
-    WriteRegStr HKLM "Software\${APPNAME}" "Version" "${FULL_VERSION}"
-    WriteRegStr HKLM "Software\${APPNAME}" "Install_Dir" "$INSTDIR"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\icon.ico"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${FULL_VERSION}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Version" "${VERSION}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "VersionMajor" "${VERSION}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "VersionMinor" "0"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${COMPANYNAME}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "InstallLocation" "$INSTDIR"
 SectionEnd
 
 Section "Uninstall"
@@ -224,22 +216,24 @@ Section "Uninstall"
     ExecWait '"$INSTDIR\VideoGrouperService.exe" stop'
     ExecWait '"$INSTDIR\VideoGrouperService.exe" remove'
     
-    ; Remove startup shortcut
-    Delete "$SMSTARTUP\VideoGrouperTray.lnk"
-    
     ; Remove files and directories
     Delete "$INSTDIR\VideoGrouperService.exe"
     Delete "$INSTDIR\tray_agent.exe"
     Delete "$INSTDIR\icon.ico"
-    Delete "$INSTDIR\config.ini"
     Delete "$INSTDIR\match_info.ini.dist"
     Delete "$INSTDIR\requirements.txt"
+    Delete "$INSTDIR\config.ini"
     Delete "$INSTDIR\uninstall.exe"
+    
+    ; Remove startup shortcut
+    Delete "$SMSTARTUP\VideoGrouperTray.lnk"
+    
+    ; Remove directories
     RMDir /r "$INSTDIR\logs"
     RMDir /r "$INSTDIR\config"
     RMDir "$INSTDIR"
     
-    ; Remove uninstall information from registry
+    ; Remove registry keys
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
     DeleteRegKey HKLM "Software\${APPNAME}"
 SectionEnd 
