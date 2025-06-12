@@ -30,15 +30,15 @@ jobs:
     - name: Extract version information
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-          BUILD_NUMBER=0
-        else
-          VERSION=0.0.0
-          BUILD_NUMBER=$(git rev-list --count HEAD)
-        fi
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
+        if ($env:GITHUB_REF -like 'refs/tags/*') {
+          $VERSION = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          $BUILD_NUMBER = '0'
+        } else {
+          $VERSION = '0.0.0'
+          $BUILD_NUMBER = git rev-list --count HEAD
+        }
+        echo "VERSION=$VERSION" >> $env:GITHUB_ENV
+        echo "BUILD_NUMBER=$BUILD_NUMBER" >> $env:GITHUB_ENV
 
     - name: Update version.py
       run: |
