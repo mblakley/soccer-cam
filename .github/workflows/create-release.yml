@@ -1,0 +1,69 @@
+name: Update Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  wait-for-builds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Wait for Windows build
+        uses: lewagon/wait-on-check-action@v1.3.1
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'Build Windows Service'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Wait for Docker build
+        uses: lewagon/wait-on-check-action@v1.3.1
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'Build Docker Container'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: VideoGrouper-${{ env.VERSION }}-0
+          path: artifacts
+
+      - name: Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          release_id: ${{ github.event.release.id }}
+          body: |
+            # VideoGrouper ${{ env.VERSION }}
+            
+            ## Windows Installer
+            Download and run VideoGrouperSetup.exe to install the Windows application.
+            
+            ## Docker Container
+            Pull the Docker image:
+            ```bash
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:${{ env.VERSION }}
+            ```
+            
+            See [Docker Hub](https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/video-grouper) for more details.
+            
+            ## Changes
+            See the commit history for details.
+          files: |
+            artifacts/VideoGrouperSetup.exe
+            artifacts/VideoGrouperService.exe
+            artifacts/tray_agent.exe
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
