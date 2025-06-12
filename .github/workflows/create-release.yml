@@ -1,12 +1,11 @@
-name: Create Release
+name: Update Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [created]
 
 jobs:
-  create-release:
+  update-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,16 +18,25 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      - name: Wait for Windows build
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'Build Windows Service'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          conclusion: success
+
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
           name: windows-artifacts
           path: artifacts
 
-      - name: Create Release
+      - name: Update Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ env.VERSION }}
+          release_id: ${{ github.event.release.id }}
           body: |
             # VideoGrouper ${{ env.VERSION }}
             
