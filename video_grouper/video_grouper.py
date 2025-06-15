@@ -798,10 +798,27 @@ def load_camera_state():
         'is_connected': False
     }
 
+def cleanup_connection_events(connection_events: List[Tuple[datetime, str]], max_age_days: int = 7) -> List[Tuple[datetime, str]]:
+    """Clean up old connection events, keeping only events from the last max_age_days days."""
+    current_time = datetime.now()
+    cutoff_time = current_time - timedelta(days=max_age_days)
+    
+    # Keep only events newer than cutoff_time
+    cleaned_events = [(time, event_type) for time, event_type in connection_events if time > cutoff_time]
+    
+    # If we removed events, log it
+    if len(cleaned_events) < len(connection_events):
+        logger.info(f"Cleaned up {len(connection_events) - len(cleaned_events)} old connection events")
+    
+    return cleaned_events
+
 def save_camera_state(state):
     """Save the camera state to file."""
     state_file = os.path.join(config["APP"]["video_storage_path"], CAMERA_STATE_FILE)
     try:
+        # Clean up old connection events before saving
+        state['connection_events'] = cleanup_connection_events(state['connection_events'])
+        
         with open(state_file, 'w') as f:
             json.dump({
                 'connection_events': [{'time': time.isoformat(), 'type': event_type} 
@@ -811,56 +828,53 @@ def save_camera_state(state):
     except Exception as e:
         logger.error(f"Error saving camera state: {e}")
 
-async def check_device_availability(auth) -> bool:
+async def check_device_availability(auth: httpx.DigestAuth) -> bool:
+    """Check if the camera is available and update connection state."""
     try:
-        device_check_url = f"http://{DEVICE_IP}/cgi-bin/recordManager.cgi?action=getCaps"
-        logger.info(f"Checking for camera devices available on network: {device_check_url}")
+        # Get current camera state
+        camera_state = load_camera_state()
+        connection_events = camera_state['connection_events']
+        was_connected = camera_state['is_connected']
         
+        # Try to connect to the camera
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(device_check_url, auth=auth, timeout=5.0)
-                is_available = response.status_code == 200
-                
-                current_state = load_camera_state()
-                
-                # Handle state transitions
-                if is_available and not current_state['is_connected']:
-                    # Camera just connected
-                    # If we have a previous connected event without a disconnected event, remove it
-                    if current_state['connection_events'] and current_state['connection_events'][-1][1] == 'connected':
-                        current_state['connection_events'].pop()
-                        logger.info("Removed orphaned connected event")
-                    
-                    current_state['connection_events'].append((datetime.now(), 'connected'))
-                    current_state['is_connected'] = True
-                    logger.info(f"Camera connected at {current_state['connection_events'][-1][0]}")
-                    save_camera_state(current_state)
-                elif not is_available and current_state['is_connected']:
-                    # Camera just disconnected
-                    current_state['connection_events'].append((datetime.now(), 'disconnected'))
-                    current_state['is_connected'] = False
-                    logger.info(f"Camera disconnected at {current_state['connection_events'][-1][0]}")
-                    save_camera_state(current_state)
-                
-                if is_available:
-                    logger.info("Camera is available")
-                    return True
-                else:
-                    logger.info(f"Camera is not available. Status Code: {response.status_code}")
-                    return False
-                    
-            except httpx.ConnectError:
-                logger.info("Could not connect to camera - connection error")
-                return False
-            except httpx.TimeoutException:
-                logger.info("Could not connect to camera - timeout")
-                return False
-            except Exception as e:
-                logger.error(f"Error checking device availability: {e}")
-                return False
-                
+            response = await client.get(
+                f"http://{DEVICE_IP}/cgi-bin/recordManager.cgi?action=getCaps",
+                auth=auth,
+                timeout=5.0
+            )
+            
+        is_connected = response.status_code == 200
+        
+        # If connection state changed, add an event
+        if is_connected != was_connected:
+            current_time = datetime.now()
+            event_type = "connected" if is_connected else "disconnected"
+            connection_events.append((current_time, event_type))
+            
+            # Save updated state
+            camera_state['connection_events'] = connection_events
+            camera_state['is_connected'] = is_connected
+            save_camera_state(camera_state)
+            
+            logger.info(f"Camera {event_type} at {current_time}")
+        
+        return is_connected
+        
     except Exception as e:
-        logger.error(f"Fatal error checking device availability: {e}")
+        # If we get an error, assume disconnected
+        current_time = datetime.now()
+        camera_state = load_camera_state()
+        connection_events = camera_state['connection_events']
+        
+        # Only add disconnect event if we were previously connected
+        if camera_state['is_connected']:
+            connection_events.append((current_time, "disconnected"))
+            camera_state['connection_events'] = connection_events
+            camera_state['is_connected'] = False
+            save_camera_state(camera_state)
+            logger.info(f"Camera disconnected at {current_time} due to error: {e}")
+        
         return False
 
 async def shutdown_handler():
@@ -1004,7 +1018,7 @@ async def download_with_progress(client: httpx.AsyncClient, url: str, file_path:
                         bar_length = 20
                         filled_length = int(bar_length * downloaded // total_size)
                         bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                        logger.info(f"Downloading {os.path.basename(file_path)} to {os.path.basename(directory) if directory else ''}: [{bar}] {progress:.1f}% ({downloaded/1024/1024:.1f}MB/{total_size/1024/1024:.1f}GB) @ {speed/1024/1024:.1f}MB/s")
+                        logger.info(f"Downloading {os.path.basename(file_path)} to {os.path.basename(directory) if directory else ''}: [{bar}] {progress:.1f}% ({downloaded/1024/1024:.1f}MB/{total_size/1024/1024:.1f}MB) @ {speed/1024/1024:.1f}MB/s")
                         last_update = current_time
                         last_downloaded = downloaded
                         
@@ -1333,40 +1347,38 @@ async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
         return False
 
 async def find_and_download_files(auth: httpx.DigestAuth, processing_state: ProcessingState):
-    async with download_lock:
-        if not await check_device_availability(auth):
-            logger.info("Camera is not available - skipping download")
-            return
-
-        # Get the current time window
-        current_time = datetime.now()
-        window_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        window_end = current_time
-
-        # Get the camera's connection events
-        camera_state = load_camera_state()
-        connection_events = camera_state['connection_events']
-        
+    """Find and download new files from the camera."""
+    try:
         # Get the latest processed video time
         latest_file_path = os.path.join(config["APP"]["video_storage_path"], LATEST_VIDEO_FILE)
+        window_start = None
+        window_end = datetime.now()
+        
         if os.path.exists(latest_file_path):
             try:
                 with open(latest_file_path, "r") as latest_file:
-                    latest_video_timestamp = latest_file.read().strip()
-                    if latest_video_timestamp:  # Only parse if we have content
-                        window_start = datetime.strptime(latest_video_timestamp, default_date_format)
-                    else:
-                        logger.info("latest_video.txt is empty, using start of day as window start")
+                    content = latest_file.read().strip()
+                    if content:  # Only parse if file is not empty
+                        window_start = datetime.strptime(content, default_date_format)
+                        logger.info(f"Found latest processed video time: {window_start}")
             except Exception as e:
-                logger.warning(f"Error reading latest_video.txt: {e}, using start of day as window start")
-
-        # Query for all files since latest_video.txt
+                logger.error(f"Error reading latest video time: {e}")
+        
+        # If no window_start, use start of day
+        if not window_start:
+            window_start = window_end.replace(hour=0, minute=0, second=0, microsecond=0)
+            logger.info(f"No latest video time found, using start of day: {window_start}")
+        
+        # Add a 5-minute buffer to window_start to avoid missing files
+        window_start = window_start - timedelta(minutes=5)
+        
+        # Format times for API
         start_time_formatted = window_start.strftime("%Y-%m-%d%%20%H:%M:%S")
         end_time_formatted = window_end.strftime("%Y-%m-%d%%20%H:%M:%S")
-
+        
         logger.info(f"Searching for files between {window_start} and {window_end}")
-
-        # Get all files from the API
+        
+        # Create a media file finder factory
         response = await make_http_request(f"http://{DEVICE_IP}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
         if response.status_code != 200:
             logger.info("Failed to create media file finder factory.")
@@ -1402,34 +1414,22 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
             logger.info("No new files found")
             return
 
-        # Filter out files that were recorded during connection periods
+        # Filter out files that are too old or too new
         filtered_files = []
         for file in files:
-            # Check if file was recorded during any connection period
-            skip_file = False
-            for i in range(0, len(connection_events), 2):
-                if i + 1 >= len(connection_events):
-                    # Last connected event without a matching disconnected
-                    connected_time = connection_events[i][0]
-                    disconnected_time = current_time
-                else:
-                    connected_time = connection_events[i][0]
-                    disconnected_time = connection_events[i + 1][0]
-
-                # If file was recorded during this connection period, skip it
-                if connected_time <= file.start_time <= disconnected_time:
-                    logger.info(f"Skipping {file.file_path} (recorded during connection period {connected_time} to {disconnected_time})")
-                    skip_file = True
-                    break
-
-            if not skip_file:
-                filtered_files.append(file)
+            if file.start_time < window_start:
+                logger.info(f"Skipping {os.path.basename(file.file_path)} (too old: {file.start_time})")
+                continue
+            if file.end_time > window_end:
+                logger.info(f"Skipping {os.path.basename(file.file_path)} (too new: {file.end_time})")
+                continue
+            filtered_files.append(file)
 
         if not filtered_files:
-            logger.info("No files to process after filtering connection periods")
+            logger.info("No files found within time window")
             return
 
-        # Create directory plans
+        # Create directory plans for the filtered files
         storage_path = config["APP"]["video_storage_path"]
         directory_plans = {}  # directory_path -> DirectoryPlan
         current_plan = None
@@ -1497,61 +1497,67 @@ async def find_and_download_files(auth: httpx.DigestAuth, processing_state: Proc
                         except Exception as e:
                             logger.error(f"Could not remove invalid MP4 file {mp4_path}: {e}")
                     continue
-                
-                # Download if needed
-                if not os.path.exists(full_download_path) or not await verify_file_complete(full_download_path, next_file.file_path):
-                    if os.path.exists(full_download_path):
-                        delete_incomplete_file(full_download_path)
-                    
-                    # Add retry logic
-                    max_retries = 5
-                    retry_count = 0
-                    retry_delay = 5  # seconds
-                    
-                    while retry_count < max_retries:
-                        try:
-                            # Check connection before attempting download
-                            if not await check_device_availability(auth):
-                                logger.warning("Camera appears to be disconnected after failed download attempts")
-                                return  # Exit early when disconnected
-                                
-                            async with httpx.AsyncClient() as client:
-                                # Get file size
-                                head_response = await client.head(f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}", auth=auth)
-                                if head_response.status_code != 200:
-                                    logger.error(f"Failed to get file size: {next_file.file_path}")
-                                    retry_count += 1
-                                    await asyncio.sleep(retry_delay)
-                                    continue
-                                    
-                                total_size = int(head_response.headers.get('content-length', 0))
-                                logger.info(f"Downloading {filename} ({await format_size(total_size)})")
-                                
-                                try:
-                                    await download_with_progress(
-                                        client,
-                                        f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}",
-                                        full_download_path,
-                                        auth,
-                                        total_size,
-                                        dir_path
-                                    )
-                                    plan.mark_file_downloaded(filename)
-                                    break
-                                except Exception as e:
-                                    logger.error(f"Error downloading {filename}: {e}")
-                                    retry_count += 1
-                                    if retry_count < max_retries:
-                                        await asyncio.sleep(retry_delay)
-                                    else:
-                                        logger.error(f"Failed to download {filename} after {max_retries} attempts")
-                        except Exception as e:
-                            logger.error(f"Error during download attempt: {e}")
-                            retry_count += 1
-                            if retry_count < max_retries:
+
+                # Create directory if it doesn't exist
+                os.makedirs(dir_path, exist_ok=True)
+
+                # Download the file
+                retry_count = 0
+                max_retries = 3
+                retry_delay = 60  # seconds
+
+                while retry_count < max_retries:
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            # Get file size
+                            head_response = await client.head(f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}", auth=auth)
+                            if head_response.status_code != 200:
+                                logger.error(f"Failed to get file size: {next_file.file_path}")
+                                retry_count += 1
                                 await asyncio.sleep(retry_delay)
-                            else:
-                                logger.error(f"Failed to download {filename} after {max_retries} attempts")
+                                continue
+                                
+                            total_size = int(head_response.headers.get('content-length', 0))
+                            logger.info(f"Downloading {filename} ({await format_size(total_size)})")
+                            
+                            try:
+                                await download_with_progress(
+                                    client,
+                                    f"http://{DEVICE_IP}/cgi-bin/RPC_Loadfile{next_file.file_path}",
+                                    full_download_path,
+                                    auth,
+                                    total_size,
+                                    dir_path
+                                )
+                                plan.mark_file_downloaded(filename)
+                                
+                                # Add to ffmpeg queue for conversion
+                                queued_files.add((full_download_path, latest_file_path, next_file.end_time))
+                                asyncio.create_task(ffmpeg_queue.put((full_download_path, latest_file_path, next_file.end_time)))
+                                logger.info(f"Added {filename} to conversion queue")
+                                break
+                            except Exception as e:
+                                logger.error(f"Error downloading {filename}: {e}")
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    await asyncio.sleep(retry_delay)
+                                else:
+                                    logger.error(f"Failed to download {filename} after {max_retries} attempts")
+                    except Exception as e:
+                        logger.error(f"Error in download loop: {e}")
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            logger.error(f"Failed to download {filename} after {max_retries} attempts")
+
+                # Save updated directory plans
+                with open(plans_file, "w") as f:
+                    json.dump({k: v.to_dict() for k, v in directory_plans.items()}, f, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in find_and_download_files: {e}")
+        raise
 
 async def download_files(processing_state: ProcessingState, auth: httpx.DigestAuth):
     """Main download loop that handles file downloads and connection state."""
