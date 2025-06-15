@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -44,12 +44,11 @@ def mock_file_system():
 def mock_httpx():
     """Mock httpx client for all tests."""
     with patch('httpx.AsyncClient') as mock:
-        client = Mock()
+        client = AsyncMock()
         response = Mock()
         response.status_code = 200
         response.text = "object=123"
         response.headers = {'content-length': '1048576'}
         client.__aenter__.return_value.get.return_value = response
-        client.__aenter__.return_value.head.return_value = response
         mock.return_value = client
         yield mock 

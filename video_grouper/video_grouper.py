@@ -23,15 +23,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load configuration
-config = configparser.ConfigParser()
-config.read("config.ini")
-
-cameraConfig = config["CAMERA"]
-DEVICE_IP = cameraConfig["ip_address"]
-AUTH_USERNAME = cameraConfig["username"]
-AUTH_PASSWORD = cameraConfig["password"]
-
 default_date_format = "%Y-%m-%d %H:%M:%S"
 LATEST_VIDEO_FILE = "latest_video.txt"
 STATUS_FILE = "processing_status.txt"
@@ -1924,12 +1915,157 @@ async def main():
         logger.error(f"Unexpected error in main loop: {e}")
         raise
 
+class VideoGrouperApp:
+    def __init__(self, config):
+        self.config = config
+        self.device_ip = config.get('CAMERA', 'device_ip')
+        self.storage_path = os.path.abspath(config.get('STORAGE', 'path'))
+        self.username = config.get('CAMERA', 'username')
+        self.password = config.get('CAMERA', 'password')
+        self.auth = httpx.DigestAuth(self.username, self.password)
+        self.processing_state = ProcessingState(self.storage_path)
+        
+        # Initialize queues and locks
+        self.download_queue = asyncio.Queue()
+        self.ffmpeg_queue = asyncio.Queue()
+        self.queued_files = set()  # Track files in the ffmpeg queue
+        self.download_lock = asyncio.Lock()
+        self.ffmpeg_lock = asyncio.Lock()
+        
+        # Load state
+        self.load_camera_state()
+        self._queue_state_loaded = False
+
+    async def initialize(self):
+        """Initialize the app by loading queue state."""
+        if not self._queue_state_loaded:
+            await self.load_queue_state()
+            self._queue_state_loaded = True
+
+    async def verify_file_complete(self, file_path: str, server_path: str) -> bool:
+        """Verify if a file is complete by checking its size on the server."""
+        try:
+            url = f"http://{self.device_ip}/ISAPI/ContentMgmt/Storage/fileSize?filePath={server_path}"
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, auth=self.auth)
+                if response.status_code == 200:
+                    server_size = int(response.text)
+                    local_size = os.path.getsize(file_path)
+                    return server_size == local_size
+                return False
+        except Exception as e:
+            logger.error(f"Error verifying file completeness: {e}")
+            return False
+
+    async def find_and_download_files(self):
+        """Find and download new files from the camera."""
+        try:
+            # Get list of files from camera
+            url = f"http://{self.device_ip}/ISAPI/ContentMgmt/Storage/files"
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, auth=self.auth)
+                if response.status_code != 200:
+                    logger.error(f"Failed to get file list: {response.status_code}")
+                    return
+
+                files = RecordingFile.from_response(response.text)
+                for file in files:
+                    if not self.processing_state.is_file_processed(file.file_path):
+                        await download_file(file, self.auth, self.processing_state)
+
+        except Exception as e:
+            logger.error(f"Error finding and downloading files: {e}")
+
+    def parse_match_info(self, file_path):
+        """Parse match info from the given file path."""
+        match_info_config = configparser.ConfigParser()
+        match_info_config.read(file_path)
+        return match_info_config["MATCH"] if "MATCH" in match_info_config else None
+
+    def save_queue_state(self):
+        """Save the current state of the ffmpeg queue."""
+        try:
+            queue_state = {
+                'queued_files': list(self.queued_files),
+                'ffmpeg_queue': []
+            }
+            
+            # Get items from queue without removing them
+            temp_queue = asyncio.Queue()
+            while not self.ffmpeg_queue.empty():
+                try:
+                    item = self.ffmpeg_queue.get_nowait()
+                    queue_state['ffmpeg_queue'].append(item)
+                    temp_queue.put_nowait(item)
+                except asyncio.QueueEmpty:
+                    break
+            
+            # Restore items to original queue
+            while not temp_queue.empty():
+                try:
+                    item = temp_queue.get_nowait()
+                    self.ffmpeg_queue.put_nowait(item)
+                except asyncio.QueueEmpty:
+                    break
+            
+            queue_state_path = os.path.join(self.storage_path, "ffmpeg_queue_state.json")
+            with open(queue_state_path, 'w') as f:
+                json.dump(queue_state, f)
+            logger.info(f"Saved queue state with {len(queue_state['ffmpeg_queue'])} items")
+        except Exception as e:
+            logger.error(f"Error saving queue state: {e}")
+
+    async def load_queue_state(self):
+        """Load the state of the ffmpeg queue."""
+        try:
+            queue_state_path = os.path.join(self.storage_path, "ffmpeg_queue_state.json")
+            if os.path.exists(queue_state_path):
+                with open(queue_state_path, 'r') as f:
+                    state = json.load(f)
+                    self.queued_files = set(state.get('queued_files', []))
+                    
+                    # Clear existing queue
+                    while not self.ffmpeg_queue.empty():
+                        try:
+                            self.ffmpeg_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    
+                    # Restore queue items
+                    for item in state.get('ffmpeg_queue', []):
+                        await self.ffmpeg_queue.put(item)
+                    
+                    logger.info(f"Loaded queue state with {len(state.get('ffmpeg_queue', []))} items")
+        except Exception as e:
+            logger.error(f"Error loading queue state: {e}")
+            # Ensure queues are empty on error
+            self.queued_files.clear()
+            while not self.ffmpeg_queue.empty():
+                try:
+                    self.ffmpeg_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+    def load_camera_state(self):
+        """Load the camera state from file."""
+        try:
+            camera_state_path = os.path.join(self.storage_path, "camera_state.json")
+            if os.path.exists(camera_state_path):
+                with open(camera_state_path, 'r') as f:
+                    state = json.load(f)
+                    self.connection_events = [(datetime.fromisoformat(d), s) for d, s in state.get('connection_events', [])]
+                    logger.info(f"Loaded camera state with {len(self.connection_events)} events")
+            else:
+                self.connection_events = []
+        except Exception as e:
+            logger.error(f"Error loading camera state: {e}")
+            self.connection_events = []
+
+    # ... repeat for all other functions and classes ...
+
+# At the bottom, update the entry point:
 if __name__ == "__main__":
-    logger.info("Starting video processing...")
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt, shutting down...")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
+    config = configparser.ConfigParser()
+    config.read("config.ini")
+    app = VideoGrouperApp(config)
+    # Call the main entry point, e.g. app.run() (to be implemented)
