@@ -22,15 +22,13 @@ COPY requirements-docker.txt .
 RUN pip install -r requirements-docker.txt
 
 # Create version.py with build arguments
-RUN cat > version.py << EOF
-"""
-Version information for VideoGrouper.
-This file is automatically updated during the build process.
-"""
-
-VERSION = "${VERSION}"
-BUILD_NUMBER = "${BUILD_NUMBER}"
-EOF
+RUN echo '"""' > version.py && \
+    echo 'Version information for VideoGrouper.' >> version.py && \
+    echo 'This file is automatically updated during the build process.' >> version.py && \
+    echo '"""' >> version.py && \
+    echo '' >> version.py && \
+    echo "VERSION = '${VERSION}'" >> version.py && \
+    echo "BUILD_NUMBER = '${BUILD_NUMBER}'" >> version.py
 
 COPY video_grouper.py .
 COPY match_info.ini.dist .
