@@ -373,27 +373,32 @@ async def concatenate_videos(directory):
 def save_queue_state():
     """Save the current state of the ffmpeg queue to a file."""
     try:
-        # Get the full path to the queue state file
         queue_state_path = os.path.join(config["APP"]["video_storage_path"], QUEUE_STATE_FILE)
-        
-        # Convert queue items to a list of dictionaries
         queue_items = []
         for item in queued_files:
-            if isinstance(item, tuple):  # MP4 conversion task
-                file_path, latest_file_path, end_time = item
-                queue_items.append({
-                    'type': 'conversion',
-                    'file_path': file_path,
-                    'latest_file_path': latest_file_path,
-                    'end_time': end_time.isoformat() if end_time else None
-                })
-            else:  # Combining task
+            if isinstance(item, tuple):
+                if len(item) == 3:
+                    file_path, latest_file_path, end_time = item
+                    queue_items.append({
+                        'type': 'conversion',
+                        'file_path': file_path,
+                        'latest_file_path': latest_file_path,
+                        'end_time': end_time.isoformat() if end_time else None
+                    })
+                elif len(item) == 4:
+                    input_file, output_file, start_time_offset, total_duration = item
+                    queue_items.append({
+                        'type': 'trim',
+                        'input_file': input_file,
+                        'output_file': output_file,
+                        'start_time_offset': start_time_offset,
+                        'total_duration': total_duration
+                    })
+            else:
                 queue_items.append({
                     'type': 'combining',
                     'directory': item
                 })
-        
-        # Save to file
         with open(queue_state_path, 'w') as f:
             json.dump(queue_items, f, indent=2)
         logger.info(f"Saved queue state with {len(queue_items)} items")
@@ -401,84 +406,65 @@ def save_queue_state():
         logger.error(f"Error saving queue state: {e}")
 
 async def load_queue_state():
-    """Load the ffmpeg queue state from file."""
     queue_state_path = os.path.join(config["APP"]["video_storage_path"], QUEUE_STATE_FILE)
     if not os.path.exists(queue_state_path):
         logger.info("No queue state file found")
         return
-    
     try:
         with open(queue_state_path, 'r') as f:
             queue_items = json.load(f)
-        
-        # Clear existing queue
         while not ffmpeg_queue.empty():
             await ffmpeg_queue.get()
             ffmpeg_queue.task_done()
         queued_files.clear()
-        
-        # Add items back to queue
         for item in queue_items:
             if item['type'] == 'conversion':
                 end_time = datetime.fromisoformat(item['end_time']) if item['end_time'] else None
                 queued_files.add((item['file_path'], item['latest_file_path'], end_time))
                 await ffmpeg_queue.put((item['file_path'], item['latest_file_path'], end_time))
-            else:  # combining
+            elif item['type'] == 'trim':
+                queued_files.add((item['input_file'], item['output_file'], item['start_time_offset'], item['total_duration']))
+                await ffmpeg_queue.put((item['input_file'], item['output_file'], item['start_time_offset'], item['total_duration']))
+            else:
                 queued_files.add(item['directory'])
                 await ffmpeg_queue.put(item['directory'])
-        
         logger.info(f"Loaded queue state with {len(queue_items)} items")
     except Exception as e:
         logger.error(f"Error loading queue state: {e}")
 
 async def process_ffmpeg_queue():
-    """Process ffmpeg conversion tasks in the background."""
     while True:
         try:
             task = await ffmpeg_queue.get()
             if isinstance(task, tuple):
-                if len(task) == 3:  # MP4 conversion task
+                if len(task) == 3:
                     file_path, latest_file_path, end_time = task
                     filename = os.path.basename(file_path)
                     queue_size = ffmpeg_queue.qsize()
                     logger.info(f"🔄 Converting {filename} (queue size: {queue_size})")
                     if queue_size > 0:
-                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
-                    
-                    # Save queue state before processing
+                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files if isinstance(f, tuple) and len(f) == 3)}")
                     save_queue_state()
-                    
-                    # Create a task for the conversion without waiting
                     asyncio.create_task(async_convert_file(file_path, latest_file_path, end_time, filename))
-                elif len(task) == 4:  # Trim task
+                elif len(task) == 4:
                     input_file, output_file, start_time_offset, total_duration = task
                     filename = os.path.basename(input_file)
                     queue_size = ffmpeg_queue.qsize()
                     logger.info(f"🔄 Trimming {filename} (queue size: {queue_size})")
                     if queue_size > 0:
-                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
-                    
-                    # Save queue state before processing
+                        logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files if isinstance(f, tuple) and len(f) == 4)}")
                     save_queue_state()
-                    
-                    # Create a task for trimming without waiting
                     asyncio.create_task(async_trim_file(input_file, output_file, start_time_offset, total_duration))
-            else:  # Combining task
+            else:
                 directory = task
                 dir_name = os.path.basename(directory)
                 queue_size = ffmpeg_queue.qsize()
                 logger.info(f"🔄 Combining videos in {dir_name} (queue size: {queue_size})")
                 if queue_size > 0:
-                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f[0]) for f in queued_files)}")
-                
-                # Save queue state before processing
+                    logger.info(f"Files still in queue: {', '.join(os.path.basename(f) if isinstance(f, str) else str(f) for f in queued_files if not isinstance(f, tuple))}")
                 save_queue_state()
-                
-                # Create a task for combining without waiting
                 asyncio.create_task(async_combine_videos(directory))
-            
             ffmpeg_queue.task_done()
-            
         except Exception as e:
             logger.error(f"Error in ffmpeg queue: {e}")
         await asyncio.sleep(0.1)
@@ -651,38 +637,38 @@ async def trim_video(directory, match_info):
     if not os.path.exists(combined_file):
         logger.info(f"Skipping trim: Missing {combined_file}")
         return
-
-    # Get the total duration of the combined file
     total_duration = await get_video_duration(combined_file)
     if total_duration <= 0:
         logger.error(f"Could not determine duration of {combined_file}")
         return
-
     dir_date = os.path.basename(directory).split('-')[0]
     formatted_date = datetime.strptime(dir_date, "%Y.%m.%d").strftime("%m-%d-%Y")
     output_dir = os.path.join(directory, f"{dir_date} - {match_info['my_team_name']} vs {match_info['opponent_team_name']} ({str(match_info['location'])})")
     create_directory(output_dir)
-
-    # Validate start_time_offset
     start_time_offset = match_info.get("start_time_offset", "").strip()
     if not start_time_offset:
         logger.info(f"Skipping trim: Missing start_time_offset in {directory}")
         return
-
     output_file = os.path.join(
         output_dir,
         f"{match_info['my_team_name'].lower().replace(' ', '')}-"
         f"{match_info['opponent_team_name'].lower().replace(' ', '')}-"
         f"{match_info['location'].lower().replace(' ', '')}-{formatted_date}-raw.mp4"
     )
-
-    logger.info(f"Adding trim task for {os.path.basename(combined_file)} to ffmpeg queue")
-    logger.info(f"Output will be saved to: {output_file}")
-    
-    # Add to ffmpeg queue
-    queued_files.add((combined_file, output_file, start_time_offset, total_duration))
-    await ffmpeg_queue.put((combined_file, output_file, start_time_offset, total_duration))
-    save_queue_state()
+    # Prevent duplicate trim tasks
+    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+        duration = await get_video_duration(output_file)
+        if duration > 0:
+            logger.info(f"Trim output {output_file} already exists and is valid, skipping trim task.")
+            return
+    # Only add if not already queued
+    trim_task = (combined_file, output_file, start_time_offset, total_duration)
+    if trim_task not in queued_files:
+        logger.info(f"Adding trim task for {os.path.basename(combined_file)} to ffmpeg queue")
+        logger.info(f"Output will be saved to: {output_file}")
+        queued_files.add(trim_task)
+        await ffmpeg_queue.put(trim_task)
+        save_queue_state()
 
 async def async_trim_file(input_file: str, output_file: str, start_time_offset: str, total_duration: float):
     """Trim a video file asynchronously."""
@@ -1318,33 +1304,61 @@ class DirectoryPlan:
 async def verify_mp4_duration(dav_path: str, mp4_path: str) -> bool:
     """Verify that the MP4 file has roughly the same duration as the DAV file.
     If the DAV file has no valid duration, we accept the MP4 file."""
-    try:
-        # Get DAV duration
-        dav_duration = await get_video_duration(dav_path)
-        if dav_duration <= 0:
-            logger.warning(f"Could not get duration for DAV file: {dav_path}")
-            # If DAV has no valid duration, we'll accept the MP4
+    max_attempts = 3
+    attempt = 0
+    
+    while attempt < max_attempts:
+        try:
+            # Check if both files exist
+            if not os.path.exists(dav_path):
+                logger.warning(f"DAV file does not exist: {dav_path}")
+                return False
+                
+            if not os.path.exists(mp4_path):
+                logger.warning(f"MP4 file does not exist: {mp4_path}")
+                return False
+                
+            # Get DAV duration
+            dav_duration = await get_video_duration(dav_path)
+            if dav_duration <= 0:
+                logger.warning(f"Could not get duration for DAV file: {dav_path}")
+                # If DAV has no valid duration, we'll accept the MP4
+                return True
+                
+            # Get MP4 duration
+            mp4_duration = await get_video_duration(mp4_path)
+            if mp4_duration <= 0:
+                logger.warning(f"Could not get duration for MP4 file: {mp4_path}")
+                attempt += 1
+                if attempt < max_attempts:
+                    await asyncio.sleep(1)  # Wait 1 second before retrying
+                    continue
+                return False
+                
+            # Calculate and log the duration difference
+            duration_diff = abs(dav_duration - mp4_duration)
+            logger.info(f"Duration check for {os.path.basename(mp4_path)}: DAV={dav_duration:.2f}s, MP4={mp4_duration:.2f}s, Difference={duration_diff:.2f}s")
+            
+            # Allow for up to 5 seconds difference
+            if duration_diff > 5:
+                logger.warning(f"Duration mismatch is greater than 5 seconds.")
+                attempt += 1
+                if attempt < max_attempts:
+                    await asyncio.sleep(1)  # Wait 1 second before retrying
+                    continue
+                return False
+                
             return True
-            
-        # Get MP4 duration
-        mp4_duration = await get_video_duration(mp4_path)
-        if mp4_duration <= 0:
-            logger.warning(f"Could not get duration for MP4 file: {mp4_path}")
+        except Exception as e:
+            logger.error(f"Error verifying MP4 duration (attempt {attempt + 1}/{max_attempts}): {e}")
+            attempt += 1
+            if attempt < max_attempts:
+                await asyncio.sleep(1)  # Wait 1 second before retrying
+                continue
             return False
-            
-        # Calculate and log the duration difference
-        duration_diff = abs(dav_duration - mp4_duration)
-        logger.info(f"Duration check for {os.path.basename(mp4_path)}: DAV={dav_duration:.2f}s, MP4={mp4_duration:.2f}s, Difference={duration_diff:.2f}s")
-        
-        # Allow for up to 5 seconds difference
-        if duration_diff > 5:
-            logger.warning(f"Duration mismatch is greater than 5 seconds.")
-            return False
-            
-        return True
-    except Exception as e:
-        logger.error(f"Error verifying MP4 duration: {e}")
-        return False
+    
+    logger.warning(f"Failed to verify MP4 duration after {max_attempts} attempts")
+    return False
 
 async def find_and_download_files(auth: httpx.DigestAuth, processing_state: ProcessingState):
     """Find and download new files from the camera."""
