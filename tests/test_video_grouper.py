@@ -8,11 +8,11 @@ import httpx
 import configparser
 from video_grouper.video_grouper import (
     ProcessingState, DirectoryPlan, RecordingFile,
+    create_directory, VideoGrouperApp
+)
+from video_grouper.ffmpeg_utils import (
     verify_mp4_duration, get_video_duration,
-    verify_file_complete, async_convert_file,
-    find_and_download_files, process_ffmpeg_queue,
-    create_directory, check_device_availability,
-    download_with_progress, VideoGrouperApp
+    async_convert_file
 )
 import tempfile
 
@@ -21,9 +21,10 @@ import tempfile
 def mock_config():
     config = configparser.ConfigParser()
     config['CAMERA'] = {
+        'type': 'dahua',
         'device_ip': '192.168.1.100',
         'username': 'admin',
-        'password': 'admin'
+        'password': 'password'
     }
     config['STORAGE'] = {
         'path': os.path.abspath('test/videos')
@@ -47,11 +48,23 @@ def mock_processing_state():
     return ProcessingState(storage_path=os.path.abspath('test/videos'))
 
 @pytest.fixture
-def app(mock_config):
-    instance = VideoGrouperApp(mock_config)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(instance.initialize())
-    return instance
+def mock_camera():
+    with patch('video_grouper.cameras.dahua.DahuaCamera') as mock:
+        camera = mock.return_value
+        camera.check_availability = AsyncMock(return_value=True)
+        camera.get_file_list = AsyncMock(return_value=[])
+        camera.get_file_size = AsyncMock(return_value=1000)
+        camera.download_file = AsyncMock(return_value=True)
+        camera.stop_recording = AsyncMock(return_value=True)
+        camera.connection_events = []
+        camera.is_connected = True
+        yield camera
+
+@pytest.fixture
+def app(mock_config, mock_camera):
+    app = VideoGrouperApp(mock_config)
+    app.camera = mock_camera
+    return app
 
 # Test ProcessingState
 def test_processing_state_initialization():
@@ -65,15 +78,15 @@ def test_processing_state_update_file():
 
 # Test DirectoryPlan
 def test_directory_plan_initialization():
-    plan = DirectoryPlan(directory_path='dir1')
-    assert plan.directory_path == 'dir1'
-    assert plan.expected_files == []
+    plan = DirectoryPlan(path='dir1')
+    assert plan.path == 'dir1'
+    assert plan.files == []
 
 def test_directory_plan_add_file(sample_recording_file):
-    plan = DirectoryPlan(directory_path='dir1')
+    plan = DirectoryPlan(path='dir1')
     plan.add_file(sample_recording_file)
-    assert len(plan.expected_files) == 1
-    assert plan.expected_files[0].file_path == sample_recording_file.file_path
+    assert len(plan.files) == 1
+    assert plan.files[0] == sample_recording_file
 
 # Test RecordingFile
 def test_recording_file_from_response():
@@ -91,7 +104,7 @@ def test_recording_file_from_response():
 @pytest.mark.asyncio
 async def test_verify_mp4_duration_success():
     with patch('os.path.exists', return_value=True), \
-         patch('video_grouper.video_grouper.get_video_duration', AsyncMock(return_value=100.0)):
+         patch('video_grouper.ffmpeg_utils.get_video_duration', AsyncMock(return_value=100.0)):
         result = await verify_mp4_duration('test.dav', 'test.mp4')
         assert result is True
 
@@ -106,7 +119,7 @@ async def test_verify_mp4_duration_retry():
     durations = [100.0, 100.0, 100.0]
     mp4_durations = [90.0, 95.0, 100.0]
     with patch('os.path.exists', return_value=True), \
-         patch('video_grouper.video_grouper.get_video_duration', side_effect=lambda f: durations.pop(0) if f.endswith('.dav') else mp4_durations.pop(0)):
+         patch('video_grouper.ffmpeg_utils.get_video_duration', side_effect=lambda f: durations.pop(0) if f.endswith('.dav') else mp4_durations.pop(0)):
         result = await verify_mp4_duration('test.dav', 'test.mp4')
         assert result is True
 
@@ -131,55 +144,35 @@ async def test_get_video_duration_error():
         mock_subprocess.return_value = mock_process
         
         duration = await get_video_duration('test.dav')
-        assert duration == 0.0
+        assert duration is None
 
 # Test verify_file_complete
 @pytest.mark.asyncio
-async def test_verify_file_complete_success(app):
-    with patch('httpx.AsyncClient') as mock_client_class, \
-         patch('os.path.getsize', return_value=1000):
-        mock_client = mock_client_class.return_value
-        mock_client.__aenter__.return_value = mock_client
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = "1000"
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        result = await app.verify_file_complete('test.dav', '/record/test.dav')
+async def test_verify_file_complete_success(app, mock_camera):
+    with patch('os.path.getsize', return_value=1000):
+        mock_camera.get_file_size.return_value = 1000
+        result = await app.verify_file_complete('test.dav')
         assert result is True
 
 @pytest.mark.asyncio
-async def test_verify_file_complete_failure(app):
-    with patch('httpx.AsyncClient.get') as mock_get, \
-         patch('os.path.getsize', return_value=1000):
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.text = "2000"  # Different size
-        mock_get.return_value = mock_response
-        
-        result = await app.verify_file_complete('test.dav', '/record/test.dav')
+async def test_verify_file_complete_failure(app, mock_camera):
+    with patch('os.path.getsize', return_value=1000):
+        mock_camera.get_file_size.return_value = 500
+        result = await app.verify_file_complete('test.dav')
         assert result is False
 
 # Test find_and_download_files
 @pytest.mark.asyncio
-async def test_find_and_download_files_success(app):
-    with patch('httpx.AsyncClient.get') as mock_get, \
-         patch('video_grouper.video_grouper.RecordingFile.from_response') as mock_from_response, \
-         patch('video_grouper.video_grouper.download_file') as mock_download:
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.text = "test response"
-        mock_get.return_value = mock_response
-        
-        mock_file = RecordingFile(
-            file_path="/record/test.dav",
-            start_time=datetime.now(),
-            end_time=datetime.now() + timedelta(minutes=5)
-        )
-        mock_from_response.return_value = [mock_file]
-        
-        await app.find_and_download_files()
-        assert mock_download.called
+async def test_find_and_download_files_success(app, mock_camera):
+    mock_camera.check_availability.return_value = True
+    mock_camera.get_file_list.return_value = [
+        {'path': 'test.dav', 'size': 1000}
+    ]
+    mock_camera.get_file_size.return_value = 1000
+    mock_camera.download_file.return_value = True
+    
+    await app.find_and_download_files()
+    assert mock_camera.download_file.called
 
 # Test process_ffmpeg_queue
 @pytest.mark.asyncio
@@ -226,12 +219,16 @@ def test_state_saving():
 
 # Test error handling
 @pytest.mark.asyncio
-async def test_error_handling_during_download(app):
-    with patch('httpx.AsyncClient.get') as mock_get:
-        mock_get.side_effect = Exception("Network error")
-        
-        await app.find_and_download_files()
-        # Should not raise exception
+async def test_error_handling_during_download(app, mock_camera):
+    mock_camera.check_availability.return_value = True
+    mock_camera.get_file_list.return_value = [
+        {'path': 'test.dav', 'size': 1000}
+    ]
+    mock_camera.get_file_size.return_value = 1000
+    mock_camera.download_file.return_value = False
+    
+    await app.find_and_download_files()
+    assert mock_camera.download_file.called
 
 @pytest.mark.asyncio
 async def test_error_handling_during_conversion():
@@ -255,31 +252,25 @@ async def test_error_handling_during_conversion():
 
 # Test camera connection scenarios
 @pytest.mark.asyncio
-async def test_camera_disconnected_behavior(app):
-    with patch('httpx.AsyncClient.get') as mock_get:
-        mock_get.side_effect = httpx.ConnectError("Connection failed")
-        
-        await app.find_and_download_files()
-        # Should not raise exception
+async def test_camera_disconnected_behavior(app, mock_camera):
+    mock_camera.is_connected = False
+    mock_camera.check_availability.return_value = False
+    await app.find_and_download_files()
+    assert not mock_camera.get_file_list.called
 
 @pytest.mark.asyncio
-async def test_incomplete_dav_file_before_disconnect(app):
+async def test_incomplete_dav_file_before_disconnect(app, mock_camera):
     with patch('os.path.exists', return_value=True), \
-         patch('os.path.getsize', return_value=1000), \
-         patch('httpx.AsyncClient.get') as mock_get:
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.text = "2000"  # Different size
-        mock_get.return_value = mock_response
-        
-        result = await app.verify_file_complete('test.dav', '/record/test.dav')
+         patch('os.path.getsize', return_value=1000):
+        mock_camera.get_file_size.return_value = 2000  # Different size
+        result = await app.verify_file_complete('test.dav')
         assert result is False
 
 @pytest.mark.asyncio
 async def test_corrupted_mp4_file():
     # DAV exists, MP4 exists, DAV duration is 100, MP4 duration is 0
     with patch('os.path.exists', side_effect=lambda x: True), \
-         patch('video_grouper.video_grouper.get_video_duration', side_effect=lambda x: 100.0 if x.endswith('.dav') else 0.0):
+         patch('video_grouper.ffmpeg_utils.get_video_duration', side_effect=lambda x: 100.0 if x.endswith('.dav') else 0.0):
         result = await verify_mp4_duration('test.dav', 'test.mp4')
         assert result is False
 
@@ -287,7 +278,7 @@ async def test_corrupted_mp4_file():
 async def test_mp4_not_fully_processed_from_dav():
     # DAV exists, MP4 exists, DAV duration is 100, MP4 duration is 50
     with patch('os.path.exists', side_effect=lambda x: True), \
-         patch('video_grouper.video_grouper.get_video_duration', side_effect=lambda x: 100.0 if x.endswith('.dav') else 50.0):
+         patch('video_grouper.ffmpeg_utils.get_video_duration', side_effect=lambda x: 100.0 if x.endswith('.dav') else 50.0):
         result = await verify_mp4_duration('test.dav', 'test.mp4')
         assert result is False
 
@@ -302,7 +293,7 @@ async def test_trim_task_not_readded_if_output_exists(app):
     # Mock file existence and ensure queue is empty
     with patch('os.path.exists', return_value=True), \
          patch('os.path.getsize', return_value=1000), \
-         patch('video_grouper.video_grouper.get_video_duration', AsyncMock(return_value=100.0)):
+         patch('video_grouper.ffmpeg_utils.get_video_duration', AsyncMock(return_value=100.0)):
         
         # Clear any existing state
         app.queued_files.clear()
