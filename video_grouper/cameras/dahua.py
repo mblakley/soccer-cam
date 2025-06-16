@@ -1,11 +1,12 @@
 import json
 import os
-from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
-
-import aiofiles
+import re
 import httpx
 import logging
+import time
+import aiofiles
+from datetime import datetime
+from typing import List, Tuple, Dict, Any, Optional
 
 from .base import Camera
 from video_grouper.models import RecordingFile
@@ -25,6 +26,7 @@ class DahuaCamera(Camera):
         self._connection_events = []
         self._state_file = os.path.join(config['storage_path'], "camera_state.json")
         self._client = client
+        self.logger = logging.getLogger(__name__)
         self._load_state()
     
     def _load_state(self):
@@ -103,7 +105,7 @@ class DahuaCamera(Camera):
         """Get list of recording files from the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/loadfile.cgi?action=findFile&object=1"
+            url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=factory.create"
             
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -114,18 +116,57 @@ class DahuaCamera(Camera):
                 close_client = True
             
             try:
+                # First create the media file finder factory
                 response = await client.get(url, auth=auth)
+                if response.status_code != 200:
+                    logger.error(f"Failed to create media file finder factory: {response.status_code}")
+                    return []
+                
+                object_id = response.text.split('=')[1].strip()
+                
+                # Now find files using the object ID
+                from datetime import datetime
+                start_time = datetime.now().replace(hour=0, minute=0, second=0).strftime("%Y-%m-%d%%20%H:%M:%S")
+                end_time = datetime.now().strftime("%Y-%m-%d%%20%H:%M:%S")
+                
+                findfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time}&condition.EndTime={end_time}&condition.VideoStream=Main"
+                response = await client.get(findfile_url, auth=auth)
+                if response.status_code != 200:
+                    logger.error(f"Failed to find media files: {response.status_code}")
+                    return []
+                
+                # Get the next files
+                response = await client.get(f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100", auth=auth)
                 if response.status_code == 200:
                     files = []
+                    current_file = {}
+                    
                     for line in response.text.strip().split('\n'):
-                        if not line.startswith('object='):
-                            parts = {}
-                            for part in line.split('&'):
-                                if '=' in part:
-                                    key, value = part.split('=', 1)
-                                    parts[key] = value
-                            if parts:
-                                files.append(parts)
+                        if line.startswith("items["):
+                            key, value = line.split("=", 1)
+                            key = key.strip()
+                            value = value.strip()
+                            
+                            file_index = key.split('[')[1].split(']')[0]
+                            field = key.split('.')[1]
+                            
+                            # Initialize dict for this file index if needed
+                            if file_index not in current_file:
+                                current_file[file_index] = {}
+                            
+                            # Map the fields to our expected output format
+                            if field == "FilePath":
+                                current_file[file_index]["path"] = value
+                            elif field == "StartTime":
+                                current_file[file_index]["startTime"] = value
+                            elif field == "EndTime":
+                                current_file[file_index]["endTime"] = value
+                    
+                    # Convert our dict of dicts to a list of dicts
+                    for _, file_data in current_file.items():
+                        if "path" in file_data and "startTime" in file_data and "endTime" in file_data:
+                            files.append(file_data)
+                    
                     return files
                 return []
             finally:
@@ -139,7 +180,7 @@ class DahuaCamera(Camera):
         """Get size of a file on the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/loadfile.cgi?action=getFileSize&object={file_path}"
+            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{file_path}"
             
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -150,9 +191,9 @@ class DahuaCamera(Camera):
                 close_client = True
             
             try:
-                response = await client.get(url, auth=auth)
+                response = await client.head(url, auth=auth)
                 if response.status_code == 200:
-                    return int(response.text.split('=')[1])
+                    return int(response.headers.get('content-length', 0))
                 return 0
             finally:
                 if close_client:
@@ -161,41 +202,79 @@ class DahuaCamera(Camera):
             logger.error(f"Error getting file size: {e}")
             return 0
     
-    async def download_file(self, remote_path: str, local_path: str) -> bool:
-        """Download a file from the camera."""
+    async def download_file(self, server_path: str, local_path: str) -> bool:
+        """Download a file from the camera to the local filesystem with progress tracking."""
         try:
-            auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/loadfile.cgi?action=downloadFile&object={remote_path}"
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
             
-            # Use the provided client if available, otherwise create a new one
-            if self._client:
-                client = self._client
-                close_client = False
-            else:
-                client = httpx.AsyncClient()
-                close_client = True
+            # Get file size first for progress tracking
+            file_size = await self.get_file_size(server_path)
+            if file_size <= 0:
+                self.logger.error(f"Invalid file size for {server_path}: {file_size}")
+                return False
             
-            try:
-                response = await client.get(url, auth=auth)
-                if response.status_code == 200:
-                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            # Get directory name for better logging
+            dir_name = os.path.basename(os.path.dirname(local_path))
+            file_name = os.path.basename(local_path)
+            
+            self.logger.info(f"Downloading {file_name} to directory '{dir_name}' ({file_size/1024/1024:.1f}MB)")
+            
+            async with httpx.AsyncClient() as client:
+                url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{server_path}"
+                auth = httpx.DigestAuth(self.username, self.password)
+                
+                async with client.stream('GET', url, auth=auth) as response:
+                    if response.status_code != 200:
+                        self.logger.error(f"Download failed with status {response.status_code}: {response.text}")
+                        return False
+                    
+                    # Open file for writing and stream the download
                     async with aiofiles.open(local_path, 'wb') as f:
+                        downloaded = 0
+                        last_update = time.time()
+                        last_downloaded = 0
+                        
                         async for chunk in response.aiter_bytes():
                             await f.write(chunk)
-                    return True
-                return False
-            finally:
-                if close_client:
-                    await client.aclose()
+                            downloaded += len(chunk)
+                            
+                            # Update progress every second
+                            current_time = time.time()
+                            if current_time - last_update >= 1.0:
+                                speed = (downloaded - last_downloaded) / (current_time - last_update)
+                                progress = downloaded / file_size * 100
+                                bar_length = 20
+                                filled_length = int(bar_length * downloaded // file_size)
+                                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                                self.logger.info(f"Downloading {file_name} to directory '{dir_name}': [{bar}] {progress:.1f}% ({downloaded/1024/1024:.1f}MB/{file_size/1024/1024:.1f}MB) @ {speed/1024/1024:.1f}MB/s")
+                                last_update = current_time
+                                last_downloaded = downloaded
+                    
+                    # Verify the download is complete
+                    if downloaded == file_size:
+                        self.logger.info(f"Download complete: {os.path.basename(server_path)}")
+                        return True
+                    else:
+                        self.logger.error(f"Download incomplete: {os.path.basename(server_path)} ({downloaded}/{file_size} bytes)")
+                        return False
+                        
         except Exception as e:
-            logger.error(f"Error downloading file: {e}")
+            self.logger.error(f"Error downloading {server_path}: {e}")
+            # Clean up partial download if it exists
+            if os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                    self.logger.info(f"Removed partial download: {local_path}")
+                except Exception as e:
+                    self.logger.error(f"Failed to remove partial download {local_path}: {e}")
             return False
     
     async def stop_recording(self) -> bool:
         """Stop recording on the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=0"
+            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
             
             # Use the provided client if available, otherwise create a new one
             if self._client:
