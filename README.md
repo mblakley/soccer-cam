@@ -1,5 +1,52 @@
 # Soccer Cam
-Created for the purpose of automating the download and processing of videos.  Initially used for generating full recordings of youth soccer games, but can be used for any videos recorded on compatible Dahua/EmpireTech cameras.
+
+A tool for managing and processing soccer game recordings from IP cameras.
+
+## Features
+
+- Connect to Dahua IP cameras
+- Download and organize recording files
+- Convert proprietary .dav files to standard MP4 format
+- Group related recordings together
+
+## Installation
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/soccer-cam.git
+   cd soccer-cam
+   ```
+
+2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Create a configuration file:
+   ```
+   cp config.ini.example config.ini
+   ```
+   Then edit `config.ini` with your camera and storage settings.
+
+## Usage
+
+Run the application:
+
+```
+python -m video_grouper
+```
+
+## Development
+
+Run tests:
+
+```
+python -m pytest
+```
+
+## License
+
+MIT
 
 ## Compatible Cameras
 - EmpireTech IPC-Color4K-B180 (verified)
