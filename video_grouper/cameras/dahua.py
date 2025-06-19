@@ -31,8 +31,11 @@ class DahuaCamera(Camera):
         self.logger = logging.getLogger(__name__)
         self._load_state()
     
-    async def _log_http_call(self, name: str, request: httpx.Request, response: httpx.Response = None, error: Exception = None):
-        """Logs the details of an HTTP request and its response to files."""
+    async def _log_http_call(self, name: str, request: httpx.Request, response: httpx.Response = None, error: Exception = None, stream_response: bool = False):
+        """Logs the details of an HTTP request and its response to files if LOG_LEVEL is 'debug'."""
+        if os.environ.get("LOG_LEVEL", "").lower() != "debug":
+            return
+            
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         
         # Log Request
@@ -56,7 +59,7 @@ class DahuaCamera(Camera):
                     await f.write(f"  {key}: {value}\n")
                 await f.write("\nBody:\n")
                 # Handle streamed content differently
-                if 'aiter_bytes' in dir(response):
+                if stream_response:
                      await f.write("[Streamed content not logged]")
                 else:
                     await f.write(response.text)
@@ -282,7 +285,7 @@ class DahuaCamera(Camera):
                 
             try:
                 async with client.stream("GET", url, auth=auth) as response:
-                    await self._log_http_call("download_file", response.request, response)
+                    await self._log_http_call("download_file", response.request, response, stream_response=True)
                     if response.status_code != 200:
                         self.logger.error(f"Download failed with status {response.status_code}: {response.text}")
                         return False
@@ -448,7 +451,7 @@ class DahuaCamera(Camera):
                 # Download just the first 1MB of the file (should be enough for a frame)
                 headers = {"Range": "bytes=0-1048576"}
                 async with client.stream('GET', url, auth=auth, headers=headers) as response:
-                    await self._log_http_call("get_screenshot", response.request, response)
+                    await self._log_http_call("get_screenshot", response.request, response, stream_response=True)
                     if response.status_code not in [200, 206]:
                         logger.error(f"Screenshot download failed with status {response.status_code}")
                         return False
