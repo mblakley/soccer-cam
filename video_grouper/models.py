@@ -1,8 +1,14 @@
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, TypedDict
 import logging
 
 logger = logging.getLogger(__name__)
+
+class ConnectionEvent(TypedDict):
+    """Represents a single camera connection event."""
+    event_datetime: str
+    event_type: str # "connected" or "disconnected"
+    message: str
 
 class RecordingFile:
     """Represents a recording file from a camera."""

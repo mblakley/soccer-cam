@@ -5,10 +5,13 @@ import logging
 import time
 import aiofiles
 from datetime import datetime
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 import asyncio
+import pytz
 
 from .base import Camera
+from video_grouper.time_utils import parse_utc_from_string
+from video_grouper.models import ConnectionEvent
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +75,7 @@ class DahuaCamera(Camera):
             if os.path.exists(self._state_file):
                 with open(self._state_file, 'r') as f:
                     state = json.load(f)
-                    self._connection_events = [(datetime.fromisoformat(t), e) for t, e in state.get('connection_events', [])]
+                    self._connection_events: List[ConnectionEvent] = state.get('connection_events', [])
                     self._is_connected = state.get('is_connected', False)
         except Exception as e:
             logger.error(f"Error loading camera state: {e}")
@@ -81,14 +84,44 @@ class DahuaCamera(Camera):
         """Save camera state to file."""
         try:
             state = {
-                'connection_events': [(t.isoformat(), e) for t, e in self._connection_events],
+                'connection_events': self._connection_events,
                 'is_connected': self._is_connected
             }
             os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
             with open(self._state_file, 'w') as f:
-                json.dump(state, f)
+                json.dump(state, f, indent=4)
         except Exception as e:
             logger.error(f"Error saving camera state: {e}")
+    
+    def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
+        """Returns a list of timeframes when the camera was connected."""
+        timeframes = []
+        start_time = None
+        
+        # We need to parse the datetime strings from the loaded events
+        parsed_events = []
+        for event in self._connection_events:
+            dt = datetime.fromisoformat(event['event_datetime'])
+            if dt.tzinfo is None:
+                dt = pytz.utc.localize(dt)
+            parsed_events.append((dt, event['event_type']))
+
+        sorted_events = sorted(parsed_events, key=lambda x: x[0])
+        
+        for event_time, event_type in sorted_events:
+            if event_type == "connected":
+                if start_time is None:
+                    start_time = event_time
+            else:  # any other event is a disconnection
+                if start_time is not None:
+                    timeframes.append((start_time, event_time))
+                    start_time = None
+                    
+        # If the last event was a connection, it's still connected.
+        if start_time is not None:
+            timeframes.append((start_time, None))  # None indicates it's ongoing.
+            
+        return timeframes
     
     async def check_availability(self) -> bool:
         """Check if the camera is available."""
@@ -113,13 +146,23 @@ class DahuaCamera(Camera):
                 if response.status_code == 200:
                     if not self._is_connected:
                         self._is_connected = True
-                        self._connection_events.append((datetime.now(), "connected"))
+                        event: ConnectionEvent = {
+                            "event_datetime": datetime.now(pytz.utc).isoformat(),
+                            "event_type": "connected",
+                            "message": "Successfully connected to camera."
+                        }
+                        self._connection_events.append(event)
                         self._save_state()
                     return True
                 else:
                     if self._is_connected:
                         self._is_connected = False
-                        self._connection_events.append((datetime.now(), f"connection failed: {response.status_code}"))
+                        event: ConnectionEvent = {
+                            "event_datetime": datetime.now(pytz.utc).isoformat(),
+                            "event_type": "disconnected",
+                            "message": f"Connection failed with status code: {response.status_code}"
+                        }
+                        self._connection_events.append(event)
                         logger.info(f"Camera is not available at {self.ip}")
                         self._save_state()
                     return False
@@ -127,14 +170,24 @@ class DahuaCamera(Camera):
                 logger.info(f"Unable to connect to camera at {self.ip}: {e}")
                 if self._is_connected:
                     self._is_connected = False
-                    self._connection_events.append((datetime.now(), f"connection failed: {e}"))
+                    event: ConnectionEvent = {
+                        "event_datetime": datetime.now(pytz.utc).isoformat(),
+                        "event_type": "disconnected",
+                        "message": str(e)
+                    }
+                    self._connection_events.append(event)
                     self._save_state()
                 return False
-            except httpx.RequestError:
+            except httpx.RequestError as e:
                 logger.info(f"Camera is not available at {self.ip} : {e}")
                 if self._is_connected:
                     self._is_connected = False
-                    self._connection_events.append((datetime.now(), "connection error"))
+                    event: ConnectionEvent = {
+                        "event_datetime": datetime.now(pytz.utc).isoformat(),
+                        "event_type": "disconnected",
+                        "message": str(e)
+                    }
+                    self._connection_events.append(event)
                     self._save_state()
                 return False
             except Exception as e:
@@ -147,7 +200,12 @@ class DahuaCamera(Camera):
             logger.error(f"Error checking camera availability: {e}", exc_info=True)
             if self._is_connected:
                 self._is_connected = False
-                self._connection_events.append((datetime.now(), f"connection error: {str(e)}"))
+                event: ConnectionEvent = {
+                    "event_datetime": datetime.now(pytz.utc).isoformat(),
+                    "event_type": "disconnected",
+                    "message": str(e)
+                }
+                self._connection_events.append(event)
                 self._save_state()
             return False
     
@@ -219,10 +277,38 @@ class DahuaCamera(Camera):
                                 current_file[file_index]["endTime"] = value
                     
                     # Convert our dict of dicts to a list of dicts
+                    raw_files = []
                     for _, file_data in current_file.items():
                         if "path" in file_data and "startTime" in file_data and "endTime" in file_data:
-                            files.append(file_data)
+                            raw_files.append(file_data)
                     
+                    # Filter out files that overlap with connected timeframes
+                    connected_timeframes = self.get_connected_timeframes()
+                    if not connected_timeframes:
+                        return raw_files
+
+                    for file_info in raw_files:
+                        try:
+                            file_start_naive = datetime.strptime(file_info['startTime'], '%Y-%m-%d %H:%M:%S')
+                            file_end_naive = datetime.strptime(file_info['endTime'], '%Y-%m-%d %H:%M:%S')
+                            file_start = pytz.utc.localize(file_start_naive)
+                            file_end = pytz.utc.localize(file_end_naive)
+                        except (ValueError, KeyError) as e:
+                            logger.warning(f"Could not parse file time for {file_info}: {e}")
+                            continue
+
+                        is_overlapping = False
+                        for frame_start, frame_end in connected_timeframes:
+                            frame_end_or_now = frame_end or datetime.now(pytz.utc)
+
+                            if file_start < frame_end_or_now and file_end > frame_start:
+                                is_overlapping = True
+                                logger.debug(f"File from {file_start} to {file_end} overlaps with connected timeframe from {frame_start} to {frame_end_or_now}, ignoring.")
+                                break
+                        
+                        if not is_overlapping:
+                            files.append(file_info)
+
                     return files
                 return []
             finally:
@@ -416,7 +502,11 @@ class DahuaCamera(Camera):
     @property
     def connection_events(self) -> List[Tuple[datetime, str]]:
         """Get list of connection events."""
-        return self._connection_events
+        # This property might need to be updated or removed if it's used elsewhere,
+        # as the internal format has changed. For now, returning an empty list
+        # to satisfy the abstract base class. A better approach would be to refactor
+        # consumers of this property.
+        return []
     
     @property
     def is_connected(self) -> bool:

@@ -4,14 +4,16 @@ import configparser
 import logging
 import json
 import asyncio
+import pytz
 from pathlib import Path
+from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
                              QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox)
 from PyQt6.QtCore import QTimer, QSize
 from video_grouper.locking import FileLock
 from video_grouper.paths import get_shared_data_path
 from video_grouper.directory_state import DirectoryState
-from video_grouper.time_utils import get_all_timezones
+from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 
@@ -78,6 +80,14 @@ class ConfigWindow(QWidget):
         processing_queue_layout.addWidget(self.processing_queue_list)
         processing_queue_tab.setLayout(processing_queue_layout)
         tabs.addTab(processing_queue_tab, 'Processing Queue')
+
+        # Connection History Tab
+        connection_tab = QWidget()
+        connection_layout = QVBoxLayout()
+        self.connection_events_list = QListWidget()
+        connection_layout.addWidget(self.connection_events_list)
+        connection_tab.setLayout(connection_layout)
+        tabs.addTab(connection_tab, 'Connection History')
 
         # Skipped Files Tab
         skipped_tab = QWidget()
@@ -203,6 +213,7 @@ class ConfigWindow(QWidget):
         self.refresh_queue_displays()
         self.refresh_skipped_files_display()
         self.refresh_match_info_display()
+        self.refresh_connection_events_display()
 
     def refresh_queue_displays(self):
         """Refreshes the text in the queue display tabs."""
@@ -409,6 +420,88 @@ class ConfigWindow(QWidget):
     def save_match_info(self):
         # This method is now deprecated and handled by the item widget's save logic.
         pass
+
+    def refresh_connection_events_display(self):
+        """Reads and displays camera connection timeframes."""
+        self.connection_events_list.clear()
+        storage_path_str = self.config.get('STORAGE', 'path', fallback=None)
+        if not storage_path_str or not os.path.isdir(storage_path_str):
+            self.connection_events_list.addItem("Storage path not configured or not found.")
+            return
+
+        state_file = Path(storage_path_str) / "camera_state.json"
+        if not state_file.exists():
+            self.connection_events_list.addItem("No connection history found.")
+            return
+
+        try:
+            with FileLock(state_file):
+                with open(state_file, 'r') as f:
+                    state_data = json.load(f)
+        except (TimeoutError, Exception) as e:
+            logger.error(f"Error reading camera state file: {e}")
+            self.connection_events_list.addItem(f"Error reading state file: {e}")
+            return
+            
+        connection_events = state_data.get('connection_events', [])
+        if not connection_events:
+            self.connection_events_list.addItem("No connection events recorded.")
+            return
+
+        # Parse events
+        parsed_events = []
+        for event in connection_events:
+            t_str = event['event_datetime']
+            event_type = event['event_type']
+            dt_obj = datetime.fromisoformat(t_str)
+            if dt_obj.tzinfo is None:
+                dt_obj = pytz.utc.localize(dt_obj)
+            parsed_events.append((dt_obj, event_type))
+        
+        # Get timeframes
+        timeframes = []
+        start_time = None
+        sorted_events = sorted(parsed_events, key=lambda x: x[0])
+        
+        for event_time, event_type in sorted_events:
+            if event_type == "connected":
+                if start_time is None:
+                    start_time = event_time
+            else:  # any other event is a disconnection
+                if start_time is not None:
+                    timeframes.append((start_time, event_time))
+                    start_time = None
+                    
+        if start_time is not None:
+            timeframes.append((start_time, None))
+
+        # Display timeframes
+        if not timeframes:
+            self.connection_events_list.addItem("No complete connection periods found.")
+            return
+
+        tz_str = self.config.get('APP', 'timezone', fallback='UTC')
+        
+        for start, end in reversed(timeframes): # Show most recent first
+            start_local = convert_utc_to_local(start, tz_str)
+            start_str = start_local.strftime('%Y-%m-%d %H:%M:%S')
+
+            if end:
+                end_local = convert_utc_to_local(end, tz_str)
+                end_str = end_local.strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Find the corresponding disconnection event to get the message
+                message = f"Disconnected: {end_str}"
+                for event in connection_events:
+                    if datetime.fromisoformat(event['event_datetime']).astimezone(pytz.utc) == end.astimezone(pytz.utc) and event['event_type'] == 'disconnected':
+                        message = f"Disconnected: {end_str} ({event['message']})"
+                        break
+                
+                display_text = f"Connected: {start_str}  |  {message}"
+            else:
+                display_text = f"Connected: {start_str}  |  (Still connected)"
+            
+            self.connection_events_list.addItem(display_text)
 
 def main():
     """Main entry point for the standalone configuration UI."""

@@ -10,13 +10,13 @@ requires-python = ">=3.9"
 dependencies = [
     "httpx>=0.25.0",
     "aiofiles>=23.2.1",
+    "pytz>=2024.1",
 ]
 
 [project.optional-dependencies]
 tray = [
     "PyQt6>=6.6.0",
     "pywin32>=306",
-    "pytz>=2024.1",
 ]
 service = [
     "pywin32>=306",
