@@ -267,7 +267,7 @@ class VideoGrouperApp:
                         logger.info("Camera is connected. Starting downloads.")
                         self.camera_connected.set()
                     
-                    if self.camera.connection_events and self.camera.connection_events[-1][1] == "connected":
+                    if self.camera.is_connected:
                         await self.sync_files_from_camera()
                 else:
                     if self.camera_connected.is_set():

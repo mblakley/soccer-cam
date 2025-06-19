@@ -324,6 +324,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "httpx" },
+    { name = "pytz" },
 ]
 
 [package.optional-dependencies]
@@ -336,7 +337,6 @@ service = [
 ]
 tray = [
     { name = "pyqt6" },
-    { name = "pytz" },
     { name = "pywin32" },
 ]
 
@@ -347,7 +347,7 @@ requires-dist = [
     { name = "pyqt6", marker = "extra == 'tray'", specifier = ">=6.6.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.1" },
-    { name = "pytz", marker = "extra == 'tray'", specifier = ">=2024.1" },
+    { name = "pytz", specifier = ">=2024.1" },
     { name = "pywin32", marker = "extra == 'service'", specifier = ">=306" },
     { name = "pywin32", marker = "extra == 'tray'", specifier = ">=306" },
 ]

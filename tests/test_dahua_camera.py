@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 from pathlib import Path
 from unittest.mock import patch
+import pytz
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,8 +76,9 @@ class TestDahuaCameraAvailability:
         assert result is True
         assert camera._is_connected is True
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0][1] == "connected"
-        assert isinstance(camera._connection_events[0][0], datetime)
+        assert camera._connection_events[0]['event_type'] == "connected"
+        assert "Successfully connected" in camera._connection_events[0]['message']
+        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
         
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
@@ -110,8 +112,9 @@ class TestDahuaCameraAvailability:
         assert result is False
         assert camera._is_connected is False
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0][1] == "connection failed: Connection error"
-        assert isinstance(camera._connection_events[0][0], datetime)
+        assert camera._connection_events[0]['event_type'] == "disconnected"
+        assert "Connection error" in camera._connection_events[0]['message']
+        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
         
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
@@ -183,14 +186,214 @@ class TestDahuaCameraAvailability:
         assert result is False
         assert camera._is_connected is False
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0][1] == "connection failed: 404"
-        assert isinstance(camera._connection_events[0][0], datetime)
+        assert camera._connection_events[0]['event_type'] == "disconnected"
+        assert "404" in camera._connection_events[0]['message']
+        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
         
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/recordManager.cgi?action=getCaps",
             auth=mock_client.get.call_args[1]["auth"]
         )
+
+class TestDahuaFileFiltering:
+    """Tests for file filtering based on connection status."""
+
+    @pytest.fixture
+    def camera(self, mock_config):
+        """Fixture for a DahuaCamera with a mock client."""
+        mock_client = AsyncMock()
+        
+        # Mock responses for get_file_list
+        factory_response = MagicMock()
+        factory_response.status_code = 200
+        factory_response.text = "result=12345"
+        
+        find_response = MagicMock()
+        find_response.status_code = 200
+        find_response.text = "OK"
+        
+        # This will be the file list returned in tests
+        file_list_response = MagicMock()
+        file_list_response.status_code = 200
+        
+        mock_client.get.side_effect = [factory_response, find_response, file_list_response]
+        
+        camera_instance = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path=mock_config['storage_path'],
+            client=mock_client
+        )
+        camera_instance._log_http_call = AsyncMock()
+        return camera_instance, file_list_response
+
+    @pytest.mark.asyncio
+    async def test_filter_file_within_connected_timeframe(self, camera):
+        """A file completely within a connected timeframe should be filtered out."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            },
+            {
+                "event_datetime": datetime(2024, 1, 1, 14, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "disconnected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 11:00:00
+items[0].EndTime=2024-01-01 11:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 0
+
+    @pytest.mark.asyncio
+    async def test_keep_file_outside_connected_timeframe(self, camera):
+        """A file completely outside a connected timeframe should be kept."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            },
+            {
+                "event_datetime": datetime(2024, 1, 1, 14, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "disconnected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 15:00:00
+items[0].EndTime=2024-01-01 15:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 1
+        assert files[0]['path'] == '/path/to/file1.dav'
+
+    @pytest.mark.asyncio
+    async def test_filter_file_overlapping_start_of_connected_timeframe(self, camera):
+        """A file that starts before and ends inside a connected timeframe should be filtered out."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            },
+            {
+                "event_datetime": datetime(2024, 1, 1, 14, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "disconnected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 09:30:00
+items[0].EndTime=2024-01-01 10:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 0
+
+    @pytest.mark.asyncio
+    async def test_filter_file_overlapping_end_of_connected_timeframe(self, camera):
+        """A file that starts inside and ends after a connected timeframe should be filtered out."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            },
+            {
+                "event_datetime": datetime(2024, 1, 1, 14, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "disconnected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 13:30:00
+items[0].EndTime=2024-01-01 14:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 0
+
+    @pytest.mark.asyncio
+    async def test_filter_file_encompassing_connected_timeframe(self, camera):
+        """A file that starts before and ends after a connected timeframe should be filtered out."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            },
+            {
+                "event_datetime": datetime(2024, 1, 1, 11, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "disconnected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 09:00:00
+items[0].EndTime=2024-01-01 12:00:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 0
+
+    @pytest.mark.asyncio
+    async def test_filter_with_ongoing_connection(self, camera):
+        """A file recorded during an ongoing connection should be filtered out."""
+        cam, file_response = camera
+        
+        cam._connection_events = [
+            {
+                "event_datetime": datetime(2024, 1, 1, 10, 0, 0, tzinfo=pytz.utc).isoformat(),
+                "event_type": "connected", "message": ""
+            }
+        ]
+        
+        file_response.text = """found=1
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 11:00:00
+items[0].EndTime=2024-01-01 11:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_connection_events(self, camera):
+        """If there are no connection events, no files should be filtered."""
+        cam, file_response = camera
+        
+        cam._connection_events = []
+        
+        file_response.text = """found=2
+items[0].FilePath=/path/to/file1.dav
+items[0].StartTime=2024-01-01 11:00:00
+items[0].EndTime=2024-01-01 11:30:00
+items[1].FilePath=/path/to/file2.dav
+items[1].StartTime=2024-01-01 12:00:00
+items[1].EndTime=2024-01-01 12:30:00
+"""
+        
+        files = await cam.get_file_list(datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0))
+        assert len(files) == 2
 
 class TestDahuaCameraFileOperations:
     """Tests for file operations."""
