@@ -1,7 +1,11 @@
 services:
   video-grouper:
     build:
-      context: ./video_grouper
+      context: .
+      dockerfile: ./video_grouper/Dockerfile
+      args:
+        VERSION: "1.0.0"
+        BUILD_NUMBER: "1"
     volumes:
       - ./shared_data:/shared_data
       - ./video_grouper/config.ini:/app/config.ini

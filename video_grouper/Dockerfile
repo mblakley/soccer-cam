@@ -4,7 +4,7 @@ FROM python:3.10-slim
 ARG VERSION=0.0.0
 ARG BUILD_NUMBER=0
 
-WORKDIR /app
+# Install ffmpeg
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     wget ca-certificates xz-utils && \
@@ -18,23 +18,33 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements-docker.txt .
-RUN pip install -r requirements-docker.txt
+# Set up working directory
+WORKDIR /app
+
+# Copy only necessary files
+COPY video_grouper/__init__.py /app/video_grouper/
+COPY video_grouper/__main__.py /app/video_grouper/
+COPY video_grouper/video_grouper.py /app/video_grouper/
+COPY video_grouper/ffmpeg_utils.py /app/video_grouper/
+COPY video_grouper/models.py /app/video_grouper/
+COPY video_grouper/match_info.ini.dist /app/video_grouper/
+COPY video_grouper/cameras /app/video_grouper/cameras
 
 # Create version.py with build arguments
-RUN echo '"""' > version.py && \
-    echo 'Version information for VideoGrouper.' >> version.py && \
-    echo 'This file is automatically updated during the build process.' >> version.py && \
-    echo '"""' >> version.py && \
-    echo '' >> version.py && \
-    echo "VERSION = '${VERSION}'" >> version.py && \
-    echo "BUILD_NUMBER = '${BUILD_NUMBER}'" >> version.py
+RUN echo '"""' > /app/video_grouper/version.py && \
+    echo 'Version information for VideoGrouper.' >> /app/video_grouper/version.py && \
+    echo 'This file is automatically updated during the build process.' >> /app/video_grouper/version.py && \
+    echo '"""' >> /app/video_grouper/version.py && \
+    echo '' >> /app/video_grouper/version.py && \
+    echo "VERSION = '${VERSION}'" >> /app/video_grouper/version.py && \
+    echo "BUILD_NUMBER = '${BUILD_NUMBER}'" >> /app/video_grouper/version.py
 
-COPY video_grouper.py .
-COPY match_info.ini.dist .
+# Install dependencies directly
+RUN pip install httpx aiofiles
 
 # Set version as environment variable
 ENV VERSION=${VERSION}
 ENV BUILD_NUMBER=${BUILD_NUMBER}
 
-CMD ["python", "./video_grouper.py"]
+# Set the entry point
+CMD ["python", "-m", "video_grouper"]

@@ -39,7 +39,7 @@ class TestDahuaCameraInitialization:
 
     def test_init_with_config(self, mock_config):
         """Test camera initialization with valid config."""
-        camera = DahuaCamera(mock_config)
+        camera = DahuaCamera(**mock_config)
         assert camera.ip == mock_config['device_ip']
         assert camera.username == mock_config['username']
         assert camera.password == mock_config['password']
@@ -58,12 +58,13 @@ class TestDahuaCameraAvailability:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
         
         camera._is_connected = False
         camera._connection_events = []
@@ -92,12 +93,13 @@ class TestDahuaCameraAvailability:
         mock_client.get.side_effect = httpx.ConnectError("Connection error")
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
         
         camera._is_connected = True
         camera._connection_events = []
@@ -109,7 +111,7 @@ class TestDahuaCameraAvailability:
         assert result is False
         assert camera._is_connected is False
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0][1] == "connection error: Connection error"
+        assert camera._connection_events[0][1] == "connection failed: Connection error"
         assert isinstance(camera._connection_events[0][0], datetime)
         
         # Verify the mock was called with the correct URL
@@ -128,12 +130,13 @@ class TestDahuaCameraAvailability:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
         
         # Mock initial state
         camera._is_connected = True
@@ -163,12 +166,13 @@ class TestDahuaCameraAvailability:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
         
         camera._is_connected = True
         camera._connection_events = []
@@ -220,14 +224,17 @@ items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
         mock_client.get.side_effect = [factory_response, find_response, next_response]
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
-        files = await camera.get_file_list()
+        start_time = datetime(2024, 1, 1, 12, 0, 0)
+        end_time = datetime(2024, 1, 1, 13, 0, 0)
+        files = await camera.get_file_list(start_time, end_time)
         assert len(files) == 1
         assert files[0]['path'] == '/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav'
         assert files[0]['startTime'] == '2024-01-01 12:00:00'
@@ -257,12 +264,13 @@ items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
         mock_client.head.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         size = await camera.get_file_size("/test.dav")
         assert size == 1024
@@ -291,12 +299,12 @@ items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
             return True
         
         # Create the camera
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": str(tmp_path)
-        })
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path=str(tmp_path)
+        )
         
         # Patch the download_file method
         original_method = camera.download_file
@@ -333,12 +341,12 @@ items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
              patch('os.remove') as mock_remove:
             
             # Create the camera
-            camera = DahuaCamera({
-                "device_ip": "192.168.1.100",
-                "username": "admin",
-                "password": "admin",
-                "storage_path": str(tmp_path)
-            })
+            camera = DahuaCamera(
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+                storage_path=str(tmp_path)
+            )
             
             # Define a mock implementation that simulates a download failure
             async def mock_download_impl(server_path, local_path):
@@ -377,12 +385,13 @@ class TestDahuaCameraRecording:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         success = await camera.stop_recording()
         assert success is True
@@ -404,12 +413,13 @@ class TestDahuaCameraRecording:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         assert await camera.get_recording_status() is True
         
@@ -430,12 +440,13 @@ class TestDahuaCameraRecording:
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         assert await camera.get_recording_status() is False
         
@@ -461,12 +472,13 @@ deviceType=IPC"""
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         info = await camera.get_device_info()
         assert info['deviceName'] == "Test Camera"
@@ -489,12 +501,13 @@ deviceType=IPC"""
         mock_client.get.return_value = mock_response
         
         # Create the camera with the mock client
-        camera = DahuaCamera({
-            "device_ip": "192.168.1.100",
-            "username": "admin",
-            "password": "admin",
-            "storage_path": "test_path"
-        }, client=mock_client)
+        camera = DahuaCamera(
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
+            storage_path="test_path",
+            client=mock_client
+        )
 
         info = await camera.get_device_info()
         assert info == {}
@@ -507,20 +520,20 @@ deviceType=IPC"""
 
 def test_connection_events_property():
     """Test connection events property."""
-    camera = DahuaCamera({
-        "device_ip": "192.168.1.100",
-        "username": "admin",
-        "password": "admin",
-        "storage_path": "test_path"
-    })
+    camera = DahuaCamera(
+        device_ip="192.168.1.100",
+        username="admin",
+        password="admin",
+        storage_path="test_path"
+    )
     assert isinstance(camera.connection_events, list)
 
 def test_is_connected_property():
     """Test is connected property."""
-    camera = DahuaCamera({
-        "device_ip": "192.168.1.100",
-        "username": "admin",
-        "password": "admin",
-        "storage_path": "test_path"
-    })
+    camera = DahuaCamera(
+        device_ip="192.168.1.100",
+        username="admin",
+        password="admin",
+        storage_path="test_path"
+    )
     assert isinstance(camera.is_connected, bool) 

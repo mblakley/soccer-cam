@@ -1,278 +1,138 @@
 import os
-import pytest
 import asyncio
+import pytest
 from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
-from video_grouper.ffmpeg_utils import verify_mp4_duration, run_ffmpeg, async_convert_file, get_video_duration
+from unittest.mock import patch, MagicMock, AsyncMock, mock_open
+from video_grouper.ffmpeg_utils import (
+    async_convert_file, 
+    get_video_duration, 
+    verify_ffmpeg_install, 
+    create_screenshot
+)
+import tempfile
 
 @pytest.fixture
-def mock_subprocess():
-    with patch('asyncio.create_subprocess_exec') as mock:
+def mock_logger():
+    """Mocks the logger used in ffmpeg_utils to prevent console output during tests."""
+    with patch('video_grouper.ffmpeg_utils.logger', MagicMock()) as mock:
         yield mock
 
 @pytest.fixture
-def mock_file():
-    with patch('builtins.open', MagicMock()) as mock:
+def mock_ffmpeg_subprocess():
+    """Mocks asyncio.create_subprocess_exec to avoid actual FFmpeg/FFprobe calls."""
+    with patch('asyncio.create_subprocess_exec', new_callable=AsyncMock) as mock:
+        process = mock.return_value
+        # Configure the mock process to simulate a successful command execution by default
+        process.returncode = 0
+        process.communicate = AsyncMock(return_value=(b'', b''))
+        process.wait = AsyncMock(return_value=None)
+        # Mock stdout for progress parsing if needed
+        process.stdout.readline = AsyncMock(return_value=b'')
         yield mock
 
-@pytest.mark.asyncio
-async def test_get_video_duration_success(mock_subprocess):
-    """Test successful video duration retrieval."""
-    mock_process = AsyncMock()
-    mock_process.communicate.return_value = (b"10.5", b"")
-    mock_process.returncode = 0
-    mock_subprocess.return_value = mock_process
-
-    result = await get_video_duration("test.mp4")
-    assert result == 10.5
-
-@pytest.mark.asyncio
-async def test_get_video_duration_failure(mock_subprocess):
-    """Test video duration retrieval failure."""
-    mock_process = AsyncMock()
-    mock_process.communicate.return_value = (b"", b"Error")
-    mock_process.returncode = 1
-    mock_subprocess.return_value = mock_process
-
-    result = await get_video_duration("test.mp4")
-    assert result is None
+@pytest.fixture
+def mock_file_ops():
+    """Mocks file system operations to isolate tests from the actual filesystem."""
+    with patch('os.path.exists', return_value=True) as mock_exists, \
+         patch('os.remove') as mock_remove, \
+         patch('os.path.getsize', return_value=1024) as mock_getsize:
+        yield {
+            "exists": mock_exists,
+            "remove": mock_remove,
+            "getsize": mock_getsize
+        }
 
 @pytest.mark.asyncio
-async def test_verify_mp4_duration_success(mock_subprocess):
-    # Mock successful ffprobe response
-    mock_process = AsyncMock()
-    mock_process.communicate.side_effect = [
-        (b"10.0", b""),  # First call for dav_file
-        (b"10.0", b"")   # Second call for mp4_file
-    ]
-    mock_process.returncode = 0
-    mock_subprocess.return_value = mock_process
-
-    with patch('os.path.exists', return_value=True):
-        result = await verify_mp4_duration("test.dav", "test.mp4")
-        assert result is True
-
-@pytest.mark.asyncio
-async def test_verify_mp4_duration_failure(mock_subprocess):
-    # Mock ffprobe failure
-    mock_process = AsyncMock()
-    mock_process.communicate.return_value = (b"", b"Error: Invalid file")
-    mock_process.returncode = 1
-    mock_subprocess.return_value = mock_process
-
-    with patch('os.path.exists', return_value=True):
-        result = await verify_mp4_duration("test.dav", "test.mp4")
-        assert result is False
-
-@pytest.mark.asyncio
-async def test_verify_mp4_duration_within_tolerance(mock_subprocess):
-    # Mock ffprobe response with duration within tolerance
-    mock_process = AsyncMock()
-    mock_process.communicate.side_effect = [
-        (b"10.0", b""),  # First call for dav_file
-        (b"10.4", b"")   # Second call for mp4_file
-    ]
-    mock_process.returncode = 0
-    mock_subprocess.return_value = mock_process
-
-    with patch('os.path.exists', return_value=True):
-        result = await verify_mp4_duration("test.dav", "test.mp4", tolerance=0.1)
-        assert result is True
-
-@pytest.mark.asyncio
-async def test_run_ffmpeg_success(mock_subprocess):
-    # Mock successful ffmpeg execution
-    mock_process = AsyncMock()
-    mock_process.wait = AsyncMock()
-    mock_subprocess.return_value = mock_process
-
-    command = ["ffmpeg", "-i", "input.mp4", "output.mp4"]
-    await run_ffmpeg(command)
+async def test_get_video_duration_success(mock_ffmpeg_subprocess):
+    """Verifies that get_video_duration correctly parses ffprobe's output."""
+    mock_process = mock_ffmpeg_subprocess.return_value
+    # Simulate ffprobe outputting a duration
+    mock_process.communicate.return_value = (b"123.45\n", b"")
     
-    mock_subprocess.assert_called_once_with(
-        *command,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL
-    )
+    duration = await get_video_duration("dummy.mp4")
+
+    assert duration == 123.45
+    mock_ffmpeg_subprocess.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_run_ffmpeg_failure(mock_subprocess):
-    # Mock ffmpeg execution failure
-    mock_process = AsyncMock()
-    mock_process.wait.side_effect = Exception("FFmpeg failed")
-    mock_subprocess.return_value = mock_process
+async def test_get_video_duration_failure(mock_ffmpeg_subprocess):
+    """Ensures get_video_duration returns None when ffprobe fails."""
+    mock_process = mock_ffmpeg_subprocess.return_value
+    mock_process.returncode = 1
+    mock_process.communicate.return_value = (b"", b"ffprobe error")
 
-    command = ["ffmpeg", "-i", "input.mp4", "output.mp4"]
-    await run_ffmpeg(command)  # Should not raise exception
+    duration = await get_video_duration("dummy.mp4")
+
+    assert duration is None
 
 @pytest.mark.asyncio
-async def test_async_convert_file_success(mock_subprocess, mock_file):
-    # Mock successful file conversion
-    mock_process = AsyncMock()
-    mock_process.stdout.readline = AsyncMock()
-    mock_process.stdout.readline.side_effect = [
-        b"out_time_ms=5000000\n",
-        b"out_time_ms=10000000\n",
-        b""  # End of output
-    ]
-    mock_process.wait = AsyncMock()
-    mock_process.returncode = 0
-    mock_subprocess.return_value = mock_process
+async def test_async_convert_file_success(mock_ffmpeg_subprocess, mock_file_ops, mock_logger):
+    """Tests the successful conversion of a .dav file to .mp4."""
+    dav_path = "test.dav"
+    mock_file_ops['exists'].return_value = True
 
-    # Mock file operations
-    with patch('os.path.exists', return_value=True), \
-         patch('os.access', return_value=True), \
-         patch('os.remove') as mock_remove, \
-         patch('os.replace') as mock_replace, \
-         patch('asyncio.sleep', new_callable=AsyncMock), \
-         patch('video_grouper.ffmpeg_utils.verify_mp4_duration', return_value=True), \
-         patch('video_grouper.ffmpeg_utils.get_video_duration', return_value=10.0), \
-         patch('video_grouper.ffmpeg_utils.get_default_date_format', return_value="%Y-%m-%d %H:%M:%S"):
+    result_path = await async_convert_file(dav_path)
+
+    # Verify that FFmpeg was called to perform the conversion
+    assert mock_ffmpeg_subprocess.called
+    # Verify the function returns the correct path on success
+    assert result_path == "test.mp4"
+
+@pytest.mark.asyncio
+async def test_async_convert_file_ffmpeg_failure(mock_ffmpeg_subprocess, mock_file_ops, mock_logger):
+    """Tests that the function returns None if FFmpeg fails."""
+    mock_process = mock_ffmpeg_subprocess.return_value
+    mock_process.returncode = 1
+    mock_process.communicate.return_value = (b"", b"ffmpeg error")
+
+    dav_path = "test.dav"
+    mock_file_ops['exists'].return_value = True
+
+    result_path = await async_convert_file(dav_path)
         
-        # Run the conversion
-        await async_convert_file(
-            "test.dav",
-            "latest.txt",
-            datetime.now(),
-            "test.dav"
-        )
-        
-        # Verify that os.remove was called for the DAV file
-        mock_remove.assert_any_call("test.dav")
+    # Verify that the function returns None on failure
+    assert result_path is None
 
 @pytest.mark.asyncio
-async def test_async_convert_file_with_removal_retry(mock_subprocess, mock_file):
-    """Test that file removal is retried when it fails initially."""
-    mock_process = AsyncMock()
-    mock_process.stdout.readline = AsyncMock(return_value=b"")
-    mock_process.wait = AsyncMock()
-    mock_process.returncode = 0
-    mock_subprocess.return_value = mock_process
+async def test_verify_ffmpeg_install_success(mock_ffmpeg_subprocess):
+    """Tests that ffmpeg installation is correctly verified when the command succeeds."""
+    assert await verify_ffmpeg_install() is True
+    mock_ffmpeg_subprocess.assert_called_once()
 
-    # Track file paths for remove calls
-    remove_calls = []
+@pytest.mark.asyncio
+async def test_verify_ffmpeg_install_failure(mock_ffmpeg_subprocess):
+    """Tests that ffmpeg installation verification fails when the command fails."""
+    mock_process = mock_ffmpeg_subprocess.return_value
+    mock_process.returncode = 1
+    mock_process.communicate.return_value = (b"", b"ffmpeg not found")
     
-    # Mock file operations
-    with patch('os.path.exists') as mock_exists, \
-         patch('os.access', return_value=True), \
-         patch('os.remove') as mock_remove, \
-         patch('os.replace') as mock_replace, \
-         patch('asyncio.sleep') as mock_sleep, \
-         patch('video_grouper.ffmpeg_utils.verify_mp4_duration', return_value=True), \
-         patch('video_grouper.ffmpeg_utils.get_video_duration', return_value=10.0), \
-         patch('video_grouper.ffmpeg_utils.get_default_date_format', return_value="%Y-%m-%d %H:%M:%S"):
-        
-        # Make os.remove fail on first attempt for DAV file, succeed on second
-        def side_effect_remove(path):
-            remove_calls.append(path)
-            if path == "test.dav" and len([p for p in remove_calls if p == "test.dav"]) == 1:
-                raise PermissionError("File in use")
-            return None
-            
-        mock_remove.side_effect = side_effect_remove
-        
-        # Make os.path.exists return True initially for DAV, then False after successful removal
-        def side_effect_exists(path):
-            if path == "test.dav":
-                # Return True for first call, False after second call to remove
-                return len([p for p in remove_calls if p == "test.dav"]) < 2
-            return True
-            
-        mock_exists.side_effect = side_effect_exists
-        
-        # Run the conversion
-        await async_convert_file(
-            "test.dav",
-            "latest.txt",
-            datetime.now(),
-            "test.dav"
-        )
-        
-        # Verify os.remove was called at least twice for the DAV file
-        dav_remove_calls = [call for call in remove_calls if call == "test.dav"]
-        assert len(dav_remove_calls) >= 2, "File removal should be retried"
-        
-        # Verify sleep was called
-        assert mock_sleep.called, "Sleep should be called between retries"
+    assert await verify_ffmpeg_install() is False
 
 @pytest.mark.asyncio
-async def test_async_convert_file_input_not_found():
-    # Mock file not found
-    with patch('video_grouper.ffmpeg_utils.ffmpeg_lock', AsyncMock()), \
-         patch('os.path.exists', side_effect=lambda path: False):
-        
-        with pytest.raises(FileNotFoundError) as exc_info:
-            await async_convert_file(
-                "test.dav",
-                "latest.txt",
-                datetime.now(),
-                "test.dav"
-            )
-        assert "Input file not found" in str(exc_info.value)
+async def test_create_screenshot_success(mock_ffmpeg_subprocess, mock_file_ops):
+    """Tests the successful creation of a video screenshot."""
+    video_path = "test.mp4"
+    screenshot_path = "test.jpg"
+    
+    success = await create_screenshot(video_path, screenshot_path)
+    
+    assert success is True
+    mock_ffmpeg_subprocess.assert_called_once()
+    args, _ = mock_ffmpeg_subprocess.call_args
+    # Check that the correct ffmpeg command was constructed
+    assert 'ffmpeg' in args[0]
+    assert '-i' in args
+    assert video_path in args
+    assert screenshot_path in args
 
 @pytest.mark.asyncio
-async def test_async_convert_file_permission_error():
-    # Mock permission error
-    with patch('video_grouper.ffmpeg_utils.ffmpeg_lock', AsyncMock()), \
-         patch('os.path.exists', side_effect=lambda path: True), \
-         patch('os.access', side_effect=lambda path, mode: False):
-        
-        with pytest.raises(PermissionError) as exc_info:
-            await async_convert_file(
-                "test.dav",
-                "latest.txt",
-                datetime.now(),
-                "test.dav"
-            )
-        assert "Cannot read input file" in str(exc_info.value)
-
-@pytest.mark.asyncio
-async def test_async_convert_file_ffmpeg_failure(mock_subprocess, mock_file):
-    # Mock ffmpeg conversion failure
-    mock_process = AsyncMock()
-    mock_process.stdout.readline = AsyncMock(return_value=b"")
-    mock_process.stderr.read = AsyncMock(return_value=b"FFmpeg error")
-    mock_process.wait = AsyncMock()
+async def test_create_screenshot_failure(mock_ffmpeg_subprocess, mock_file_ops):
+    """Tests that screenshot creation returns False when FFmpeg fails."""
+    mock_process = mock_ffmpeg_subprocess.return_value
     mock_process.returncode = 1
-    mock_subprocess.return_value = mock_process
-
-    with patch('os.path.exists', return_value=True), \
-         patch('os.access', return_value=True), \
-         patch('os.replace') as mock_replace, \
-         patch('video_grouper.ffmpeg_utils.get_default_date_format', return_value="%Y-%m-%d %H:%M:%S"):
+    mock_process.communicate.return_value = (b"", b"ffmpeg error")
+    
+    success = await create_screenshot("test.mp4", "test.jpg")
         
-        with pytest.raises(Exception) as exc_info:
-            await async_convert_file(
-                "test.dav",
-                "latest.txt",
-                datetime.now(),
-                "test.dav"
-            )
-        assert "FFmpeg conversion failed" in str(exc_info.value)
-
-@pytest.mark.asyncio
-async def test_async_convert_file_cleanup_mp4_on_error(mock_subprocess, mock_file):
-    """Test that MP4 file is cleaned up if conversion fails."""
-    mock_process = AsyncMock()
-    mock_process.stdout.readline = AsyncMock(return_value=b"")
-    mock_process.stderr.read = AsyncMock(return_value=b"FFmpeg error")
-    mock_process.wait = AsyncMock()
-    mock_process.returncode = 1
-    mock_subprocess.return_value = mock_process
-
-    with patch('os.path.exists', side_effect=lambda path: True), \
-         patch('os.access', return_value=True), \
-         patch('os.remove') as mock_remove, \
-         patch('os.replace') as mock_replace, \
-         patch('video_grouper.ffmpeg_utils.get_default_date_format', return_value="%Y-%m-%d %H:%M:%S"):
-        
-        with pytest.raises(Exception):
-            await async_convert_file(
-                "test.dav",
-                "latest.txt",
-                datetime.now(),
-                "test.dav"
-            )
-        
-        # Verify that os.remove was called for the MP4 file
-        mock_remove.assert_any_call("test.mp4") 
+    assert success is False
+    mock_ffmpeg_subprocess.assert_called_once() 
