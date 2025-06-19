@@ -2,7 +2,7 @@ import os
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QDialog)
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtCore import Qt, QSize
-from video_grouper.time_utils import parse_utc_from_string, convert_utc_to_local
+from video_grouper.time_utils import parse_dt_from_string_with_tz, convert_utc_to_local
 
 class ImagePreviewDialog(QDialog):
     """A simple dialog to show a larger version of an image."""
@@ -44,8 +44,9 @@ class QueueItemWidget(QWidget):
         # Display group name and converted local time
         if group_name:
             try:
-                utc_time = parse_utc_from_string(group_name)
-                local_time = convert_utc_to_local(utc_time, timezone_str)
+                # The source timezone is hardcoded as America/New_York
+                source_dt = parse_dt_from_string_with_tz(group_name, 'America/New_York')
+                local_time = convert_utc_to_local(source_dt, timezone_str)
                 local_time_str = local_time.strftime('%Y-%m-%d %I:%M:%S %p %Z')
                 main_content_layout.addWidget(QLabel(f"<b>Group:</b> {group_name}"))
                 main_content_layout.addWidget(QLabel(f"<i>{local_time_str}</i>"))

@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime
 from .locking import FileLock
-from .file_state import FileState
+from .models import RecordingFile
 
 if TYPE_CHECKING:
     from .models import RecordingFile
@@ -18,7 +18,7 @@ class DirectoryState:
     def __init__(self, directory_path: str):
         self.directory_path = directory_path
         self.state_file_path = os.path.join(directory_path, "state.json")
-        self.files: dict[str, Union[FileState, RecordingFile]] = {}
+        self.files: dict[str, RecordingFile] = {}
         self._lock = asyncio.Lock()
         self.status: str = "pending"
         self.error_message: Optional[str] = None
@@ -49,7 +49,7 @@ class DirectoryState:
                             # Ensure backward compatibility with older state files
                             file_data.setdefault('total_size', 0)
                             
-                            self.files[file_path] = FileState.from_dict(file_data)
+                            self.files[file_path] = RecordingFile.from_dict(file_data)
                             self.files[file_path].file_path = file_path # Ensure file_path is set
 
                     logger.debug(f"Loaded {len(self.files)} files from directory state")
@@ -89,7 +89,7 @@ class DirectoryState:
         async with self._lock:
             self._save_state_nolock()
             
-    async def add_file(self, file_path, file_obj):
+    async def add_file(self, file_path, file_obj: RecordingFile):
         """Adds or updates a file in the directory state."""
         async with self._lock:
             if file_path not in self.files:
@@ -97,11 +97,11 @@ class DirectoryState:
                     file_obj.group_dir = self.directory_path
                 
                 self.files[file_path] = file_obj
+                self._save_state_nolock()
 
     async def update_file_state(self, file_path: str, **kwargs) -> None:
         """Update the state of a file in the plan."""
         async with self._lock:
-            self._load_state()
             if file_path not in self.files:
                 logger.warning(f"File {os.path.basename(file_path)} not found in directory state")
                 return
@@ -117,21 +117,21 @@ class DirectoryState:
             self._save_state_nolock()
             logger.debug(f"Updated state for {os.path.basename(file_path)}")
         
-    def get_file_by_path(self, file_path: str) -> Optional[Union[FileState, RecordingFile]]:
+    def get_file_by_path(self, file_path: str) -> Optional[RecordingFile]:
         """Get a file by its full path."""
         return self.files.get(file_path)
 
-    def get_file_by_status(self, status: str) -> list[Union[FileState, RecordingFile]]:
+    def get_file_by_status(self, status: str) -> list[RecordingFile]:
         """Get all files with the specified status."""
         return [f for f in self.files.values() if hasattr(f, 'status') and f.status == status]
         
-    def get_last_file(self) -> Optional['RecordingFile']:
+    def get_last_file(self) -> Optional[RecordingFile]:
         """Returns the last file in the group based on end time."""
         if not self.files:
             return None
         return max(self.files.values(), key=lambda f: f.end_time)
 
-    def get_files_by_status(self, status: str) -> list['RecordingFile']:
+    def get_files_by_status(self, status: str) -> list[RecordingFile]:
         """Returns a list of files matching the given status."""
         return [f for f in self.files.values() if f.status == status]
 
@@ -173,19 +173,20 @@ class DirectoryState:
         
     async def mark_file_as_skipped(self, file_path: str) -> None:
         """Marks a file to be skipped in future processing, without changing its status."""
-        if file_path in self.files:
-            self.files[file_path].skip = True
-            self._save_state_nolock()
+        async with self._lock:
+            if file_path in self.files:
+                self.files[file_path].skip = True
+                self._save_state_nolock()
 
     async def update_file_status(self, file_path: str, status: str):
-        if file_path in self.files:
-            self.files[file_path].status = status
-            self._save_state_nolock()
+        async with self._lock:
+            if file_path in self.files:
+                self.files[file_path].status = status
+                self._save_state_nolock()
 
     async def update_group_status(self, status: str, error_message: Optional[str] = None):
         """Update the status of all files in the group."""
         async with self._lock:
-            self._load_state()
             self.status = status
             self.error_message = error_message
             self._save_state_nolock()
