@@ -197,7 +197,8 @@ class TestDahuaCameraFileOperations:
     """Tests for file operations."""
 
     @pytest.mark.asyncio
-    async def test_get_file_list_success(self):
+    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    async def test_get_file_list_success(self, mock_log_call):
         """Test successful file list retrieval."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
@@ -205,7 +206,7 @@ class TestDahuaCameraFileOperations:
         # First response for factory.create
         factory_response = MagicMock()
         factory_response.status_code = 200
-        factory_response.text = "result=123456"
+        factory_response.text = "result=3039757640"
         
         # Second response for findFile
         find_response = MagicMock()
@@ -215,10 +216,27 @@ class TestDahuaCameraFileOperations:
         # Third response for findNextFile
         next_response = MagicMock()
         next_response.status_code = 200
-        next_response.text = """items[0].Channel=1
-items[0].StartTime=2024-01-01 12:00:00
+        next_response.text = """found=1
+items[0].Channel=1
+items[0].Cluster=7861
+items[0].CutLength=320256446
+items[0].Disk=0
+items[0].Duration=1800
 items[0].EndTime=2024-01-01 12:30:00
-items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
+items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav
+items[0].FileState=Temporary
+items[0].Flags[0]=Manual
+items[0].Length=320256446
+items[0].Partition=0
+items[0].PicIndex=0
+items[0].Repeat=0
+items[0].StartTime=2024-01-01 12:00:00
+items[0].Type=dav
+items[0].UTCOffset=-14400
+items[0].VideoStream=Main
+items[0].WorkDir=/mnt/dvr/mmc1p2_0
+items[0].WorkDirSN=0
+"""
         
         # Configure the mock to return different responses for different calls
         mock_client.get.side_effect = [factory_response, find_response, next_response]
@@ -247,14 +265,15 @@ items[0].FilePath=/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"""
             auth=mock_client.get.call_args_list[0][1]["auth"]
         )
         # We can't check the exact URL for the second call due to the dynamic date, but we can check it contains the right pattern
-        assert "mediaFileFind.cgi?action=findFile&object=123456" in mock_client.get.call_args_list[1][0][0]
+        assert "mediaFileFind.cgi?action=findFile&object=3039757640" in mock_client.get.call_args_list[1][0][0]
         mock_client.get.assert_any_call(
-            "http://192.168.1.100/cgi-bin/mediaFileFind.cgi?action=findNextFile&object=123456&count=100",
+            "http://192.168.1.100/cgi-bin/mediaFileFind.cgi?action=findNextFile&object=3039757640&count=100",
             auth=mock_client.get.call_args_list[2][1]["auth"]
         )
 
     @pytest.mark.asyncio
-    async def test_get_file_size_success(self):
+    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    async def test_get_file_size_success(self, mock_log_call):
         """Test successful file size retrieval."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
@@ -376,7 +395,8 @@ class TestDahuaCameraRecording:
     """Tests for recording operations."""
 
     @pytest.mark.asyncio
-    async def test_stop_recording_success(self):
+    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    async def test_stop_recording_success(self, mock_log_call):
         """Test successful recording stop."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
@@ -403,7 +423,8 @@ class TestDahuaCameraRecording:
         assert isinstance(call_args[1]["auth"], httpx.DigestAuth)
 
     @pytest.mark.asyncio
-    async def test_get_recording_status_recording(self):
+    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    async def test_get_recording_status_recording(self, mock_log_call):
         """Test recording status when recording is active."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
@@ -460,7 +481,8 @@ class TestDahuaCameraDeviceInfo:
     """Tests for device info operations."""
 
     @pytest.mark.asyncio
-    async def test_get_device_info_success(self):
+    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    async def test_get_device_info_success(self, mock_log_call):
         """Test successful device info retrieval."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
