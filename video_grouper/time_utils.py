@@ -22,4 +22,13 @@ def convert_utc_to_local(utc_dt: datetime, tz_str: str) -> datetime:
 def parse_utc_from_string(dt_str: str, fmt: str = "%Y.%m.%d-%H.%M.%S") -> datetime:
     """Parses a string into a timezone-aware UTC datetime."""
     dt_naive = datetime.strptime(dt_str, fmt)
-    return pytz.utc.localize(dt_naive) 
+    return pytz.utc.localize(dt_naive)
+
+def parse_dt_from_string_with_tz(dt_str: str, tz_str: str, fmt: str = "%Y.%m.%d-%H.%M.%S") -> datetime:
+    """Parses a string into a timezone-aware datetime."""
+    dt_naive = datetime.strptime(dt_str, fmt)
+    try:
+        source_tz = pytz.timezone(tz_str)
+    except pytz.UnknownTimeZoneError:
+        source_tz = pytz.utc # fallback to UTC
+    return source_tz.localize(dt_naive) 

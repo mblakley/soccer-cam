@@ -26,6 +26,13 @@ class RecordingFile:
         self.screenshot_path = None
         self.skip = skip
         self.group_dir = None
+        self.last_updated = datetime.now()
+        self.error_message: Optional[str] = None
+
+    @property
+    def mp4_path(self) -> str:
+        """Returns the expected path for the MP4 file."""
+        return self.file_path.replace('.dav', '.mp4')
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the recording file to a dictionary for serialization."""
@@ -37,7 +44,9 @@ class RecordingFile:
             'metadata': self.metadata,
             'skip': self.skip,
             'screenshot_path': self.screenshot_path,
-            'group_dir': self.group_dir
+            'group_dir': self.group_dir,
+            'last_updated': self.last_updated.isoformat(),
+            'error_message': self.error_message
         }
         
     @classmethod
@@ -57,6 +66,9 @@ class RecordingFile:
         
         file.screenshot_path = data.get('screenshot_path')
         file.group_dir = data.get('group_dir')
+        if 'last_updated' in data and data['last_updated']:
+            file.last_updated = datetime.fromisoformat(data['last_updated'])
+        file.error_message = data.get('error_message')
         
         return file
 

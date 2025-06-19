@@ -1,6 +1,4 @@
-import asyncio
 import configparser
-import json
 import os
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
@@ -41,10 +39,6 @@ def mock_camera():
 
 @pytest.fixture
 def async_context_manager_mock():
-    """Fixture to create a mock for an async context manager."""
-    async def async_magic_mock(*args, **kwargs):
-        pass
-    
     mock_file = MagicMock()
     mock_file.write = AsyncMock()
     
@@ -132,6 +126,53 @@ class TestVideoGrouperAppWithMocks:
         # Check that a file was added to the download queue
         assert app.download_queue.qsize() == 1
 
+    @patch('os.path.isdir')
+    async def test_sync_groups_consecutive_files(self, mock_isdir, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera):
+        """Test that syncing consecutive files adds them to the same group."""
+        app = setup_app(mock_config, mock_camera)
+        mock_makedirs.reset_mock()
+
+        start_time_1 = datetime(2025, 1, 1, 12, 0, 0)
+        end_time_1 = start_time_1 + timedelta(minutes=5)
+        group_dir_name = start_time_1.strftime('%Y.%m.%d-%H.%M.%S')
+        existing_group_path = os.path.join(STORAGE_PATH, group_dir_name)
+        existing_file = RecordingFile(start_time_1, end_time_1, os.path.join(existing_group_path, "file1.dav"))
+
+        start_time_2 = end_time_1
+        end_time_2 = start_time_2 + timedelta(minutes=5)
+        mock_file_list = [{'path': '/remote/file2.dav', 'startTime': start_time_2.strftime(DEFAULT_DATE_FORMAT), 'endTime': end_time_2.strftime(DEFAULT_DATE_FORMAT)}]
+        
+        app.camera.get_file_list.return_value = mock_file_list
+        app._get_latest_processed_time = AsyncMock(return_value=start_time_1)
+        app._update_latest_processed_time = AsyncMock()
+
+        mock_listdir.return_value = [group_dir_name]
+        mock_isdir.return_value = True
+        
+        with patch('video_grouper.video_grouper.DirectoryState') as mock_dir_state_class:
+            find_dir_state_mock = MagicMock()
+            find_dir_state_mock.get_last_file.return_value = existing_file
+            
+            add_file_state_mock = MagicMock()
+            add_file_state_mock.is_file_in_state.return_value = False
+            add_file_state_mock.get_file_by_path.return_value = None
+            add_file_state_mock.add_file = AsyncMock()
+            
+            mock_dir_state_class.side_effect = [find_dir_state_mock, add_file_state_mock]
+            
+            state_file_path = os.path.join(existing_group_path, "state.json")
+            mock_exists.side_effect = lambda path: path == state_file_path
+            
+            await app.sync_files_from_camera()
+
+            mock_makedirs.assert_not_called()
+            assert mock_dir_state_class.call_count == 2
+            mock_dir_state_class.assert_any_call(existing_group_path)
+            
+            add_file_state_mock.add_file.assert_called_once()
+            added_file = add_file_state_mock.add_file.call_args.args[1]
+            assert added_file.file_path == os.path.join(existing_group_path, 'file2.dav')
+
 
     async def test_handle_combine_task(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera, async_context_manager_mock):
         """Test combine task generates correct ffmpeg command and updates state."""
@@ -161,8 +202,16 @@ class TestVideoGrouperAppWithMocks:
                 proc_mock.returncode = 0
                 mock_exec.return_value = proc_mock
                 
-                # mock exists for the file list
-                mock_exists.return_value = True
+                concat_list_path = os.path.join(group_dir, "filelist.txt")
+                match_info_path = os.path.join(group_dir, "match_info.ini")
+
+                def side_effect(path):
+                    if path == concat_list_path:
+                        return True
+                    if path == match_info_path:
+                        return False
+                    return False
+                mock_exists.side_effect = side_effect
 
                 await app._handle_combine_task(group_dir)
 
@@ -170,21 +219,12 @@ class TestVideoGrouperAppWithMocks:
             mock_exec.assert_called_once()
             
             # Verify the file list for combining was created and then removed
-            concat_list_path = os.path.join(group_dir, "filelist.txt")
             mock_aio_open.assert_called_once_with(concat_list_path, 'w')
             
             # Since the file list is created and removed within the same function,
             # we need to ensure our mock for os.path.exists returns True for it
             # before we assert that os.remove is called.
-            original_exists = mock_exists.side_effect
-            def side_effect(path):
-                if path == concat_list_path:
-                    return True
-                if original_exists:
-                    return original_exists(path)
-                return True
-            mock_exists.side_effect = side_effect
-
+            # This check is now handled by the more specific side_effect
             mock_remove.assert_called_once_with(concat_list_path)
 
             # Verify state was updated to "combined"

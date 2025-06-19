@@ -48,6 +48,45 @@ class ConfigWindow(QWidget):
         # Create tab widget
         tabs = QTabWidget()
         
+        # Match Info Tab
+        match_tab = QWidget()
+        match_layout = QVBoxLayout()
+        self.match_info_list = QListWidget()
+        self.match_info_list.setSpacing(5)
+        self.match_info_list.setWordWrap(True)
+        self.match_info_list.setStyleSheet("QListWidget::item { border-bottom: 1px solid #ddd; }")
+        match_layout.addWidget(self.match_info_list)
+        match_tab.setLayout(match_layout)
+        tabs.addTab(match_tab, 'Match Info')
+
+        # Download Queue Tab
+        download_queue_tab = QWidget()
+        download_queue_layout = QVBoxLayout()
+        self.download_queue_list = QListWidget()
+        self.download_queue_list.setSpacing(5)
+        self.download_queue_list.setIconSize(QSize(160, 90))
+        download_queue_layout.addWidget(self.download_queue_list)
+        download_queue_tab.setLayout(download_queue_layout)
+        tabs.addTab(download_queue_tab, 'Download Queue')
+
+        # Processing Queue Tab
+        processing_queue_tab = QWidget()
+        processing_queue_layout = QVBoxLayout()
+        self.processing_queue_list = QListWidget()
+        self.processing_queue_list.setSpacing(5)
+        self.processing_queue_list.setIconSize(QSize(160, 90))
+        processing_queue_layout.addWidget(self.processing_queue_list)
+        processing_queue_tab.setLayout(processing_queue_layout)
+        tabs.addTab(processing_queue_tab, 'Processing Queue')
+
+        # Skipped Files Tab
+        skipped_tab = QWidget()
+        skipped_layout = QVBoxLayout()
+        self.skipped_list = QListWidget()
+        skipped_layout.addWidget(self.skipped_list)
+        skipped_tab.setLayout(skipped_layout)
+        tabs.addTab(skipped_tab, 'Skipped Files')
+        
         # Settings Tab
         settings_tab = QWidget()
         settings_layout = QVBoxLayout()
@@ -100,45 +139,6 @@ class ConfigWindow(QWidget):
 
         # Load existing values into fields
         self.load_settings_into_ui()
-
-        # Match Info Tab
-        match_tab = QWidget()
-        match_layout = QVBoxLayout()
-        self.match_info_list = QListWidget()
-        self.match_info_list.setSpacing(5)
-        self.match_info_list.setWordWrap(True)
-        self.match_info_list.setStyleSheet("QListWidget::item { border-bottom: 1px solid #ddd; }")
-        match_layout.addWidget(self.match_info_list)
-        match_tab.setLayout(match_layout)
-        tabs.addTab(match_tab, 'Match Info')
-
-        # Skipped Files Tab
-        skipped_tab = QWidget()
-        skipped_layout = QVBoxLayout()
-        self.skipped_list = QListWidget()
-        skipped_layout.addWidget(self.skipped_list)
-        skipped_tab.setLayout(skipped_layout)
-        tabs.addTab(skipped_tab, 'Skipped Files')
-        
-        # Download Queue Tab
-        download_queue_tab = QWidget()
-        download_queue_layout = QVBoxLayout()
-        self.download_queue_list = QListWidget()
-        self.download_queue_list.setSpacing(5)
-        self.download_queue_list.setIconSize(QSize(160, 90))
-        download_queue_layout.addWidget(self.download_queue_list)
-        download_queue_tab.setLayout(download_queue_layout)
-        tabs.addTab(download_queue_tab, 'Download Queue')
-
-        # Processing Queue Tab
-        processing_queue_tab = QWidget()
-        processing_queue_layout = QVBoxLayout()
-        self.processing_queue_list = QListWidget()
-        self.processing_queue_list.setSpacing(5)
-        self.processing_queue_list.setIconSize(QSize(160, 90))
-        processing_queue_layout.addWidget(self.processing_queue_list)
-        processing_queue_tab.setLayout(processing_queue_layout)
-        tabs.addTab(processing_queue_tab, 'Processing Queue')
 
         layout.addWidget(tabs)
         self.setLayout(layout)
@@ -307,6 +307,7 @@ class ConfigWindow(QWidget):
         self.skipped_list.clear()
         storage_path_str = self.config.get('STORAGE', 'path', fallback=None)
         if not storage_path_str or not os.path.isdir(storage_path_str): return
+        tz_str = self.config.get('APP', 'timezone', fallback='UTC')
 
         try:
             for dirname in os.listdir(storage_path_str):
@@ -327,7 +328,8 @@ class ConfigWindow(QWidget):
                             file_path=file_obj.file_path,
                             skip_callback=None, # No "unskip" functionality for now
                             show_thumbnail=False,
-                            group_name=group_name
+                            group_name=group_name,
+                            timezone_str=tz_str
                         )
                         list_item = QListWidgetItem(self.skipped_list)
                         list_item.setSizeHint(widget.sizeHint())

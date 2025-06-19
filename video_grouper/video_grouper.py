@@ -45,7 +45,8 @@ def find_group_directory(file_start_time: datetime, storage_path: str, existing_
                 last_file = dir_state.get_last_file()
                 if last_file and last_file.end_time:
                     # Dahua cameras can have a small gap between files of the same recording
-                    if 0 <= (file_start_time - last_file.end_time).total_seconds() <= 15:
+                    time_difference = (file_start_time - last_file.end_time).total_seconds()
+                    if 0 <= time_difference <= 15:
                         logger.info(f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}")
                         return group_dir_path
             except Exception as e:
@@ -126,8 +127,17 @@ class VideoGrouperApp:
                             await self.add_to_ffmpeg_queue(task)
                         
                         elif file_obj.status in ["pending", "download_failed"] and file_obj.file_path not in self.queued_for_download:
-                            logger.info(f"AUDIT: Found pending/failed download in {group_dir}, adding to download queue: {file_obj.file_path}")
-                            await self.add_to_download_queue(file_obj)
+                            logger.info(f"AUDIT: Found pending/failed download in {group_dir}, re-adding to download queue: {file_obj.file_path}")
+                            # Reconstruct a RecordingFile object to pass to the queue
+                            recording_file = RecordingFile(
+                                start_time=file_obj.start_time,
+                                end_time=file_obj.end_time,
+                                file_path=file_obj.file_path,
+                                metadata=file_obj.metadata,
+                                status=file_obj.status,
+                                skip=file_obj.skip
+                            )
+                            await self.add_to_download_queue(recording_file)
                             
                         elif file_obj.status == "conversion_failed" and ('convert', file_obj.file_path) not in self.queued_for_ffmpeg:
                             logger.info(f"AUDIT: Found failed conversion in {group_dir}, re-queuing for conversion: {file_obj.file_path}")
@@ -231,7 +241,7 @@ class VideoGrouperApp:
                     if existing_file_obj:
                         recording_file.skip = existing_file_obj.skip
 
-                    await dir_state.add_file(recording_file)
+                    await dir_state.add_file(local_path, recording_file)
                     
                     # Add to download queue if not skipped
                     if not recording_file.skip:
@@ -272,109 +282,74 @@ class VideoGrouperApp:
                 await asyncio.sleep(self.poll_interval)
 
     async def handle_download_task(self, recording_file: RecordingFile):
-        logger.info(f"Downloading {os.path.basename(recording_file.file_path)}...")
-        
-        group_dir = os.path.dirname(recording_file.file_path)
+        """
+        Handles the download of a single file from the camera.
+        Updates the file's state upon success or failure.
+        """
+        file_path = recording_file.file_path
+        group_dir = os.path.dirname(file_path)
         dir_state = DirectoryState(group_dir)
 
         try:
-            # Re-check skip status right before processing
-            file_state = dir_state.get_file_by_path(recording_file.file_path)
-            if file_state and file_state.skip:
-                logger.info(f"Skipping download for {os.path.basename(recording_file.file_path)} because 'skip' is true.")
-                return
-
-            server_path = recording_file.metadata.get('path')
-            if not server_path:
-                raise ValueError("Missing 'path' in recording_file metadata")
-
+            logger.info(f"Starting download of {os.path.basename(file_path)}")
+            await dir_state.update_file_state(file_path, status="downloading")
+            
+            # This is a placeholder for the actual download logic
             download_successful = await self.camera.download_file(
-                file_path=server_path,
-                local_path=recording_file.file_path
+                file_path=recording_file.metadata['path'],
+                local_path=file_path
             )
 
             if download_successful:
-                logger.info(f"Successfully downloaded {os.path.basename(recording_file.file_path)}")
+                await dir_state.update_file_state(file_path, status="downloaded")
+                logger.info(f"Successfully downloaded {os.path.basename(file_path)}")
                 
-                # Verify file size
-                if os.path.getsize(recording_file.file_path) == 0:
-                    raise Exception("Downloaded file is empty.")
+                # After successful download, add to FFmpeg queue
+                await self.add_to_ffmpeg_queue(('convert', file_path))
 
-                await dir_state.update_file_status(recording_file.file_path, "downloaded")
-                await self.add_to_ffmpeg_queue(('convert', recording_file.file_path))
+                # Now that it's handled, remove it from the queue state
+                self.queued_for_download.remove(file_path)
+                await self._save_download_queue_state()
             else:
-                raise Exception("Download failed.")
+                await dir_state.update_file_state(file_path, status="download_failed")
+                logger.error(f"Download failed for {os.path.basename(file_path)}")
 
         except Exception as e:
-            logger.error(f"Failed to download {os.path.basename(recording_file.file_path)}: {e}")
-            await dir_state.update_file_status(recording_file.file_path, "download_failed")
-            
-            # Optional: Add retry logic here if desired
-            await asyncio.sleep(5) # Wait before allowing a potential retry
-
-        finally:
-            self.download_queue.task_done()
-            if recording_file.file_path in self.queued_for_download:
-                self.queued_for_download.remove(recording_file.file_path)
-            await self._save_download_queue_state()
+            logger.error(f"An error occurred during download of {os.path.basename(file_path)}: {e}", exc_info=True)
+            await dir_state.update_file_state(file_path, status="download_failed")
 
     async def process_download_queue(self):
-        """Processes the download queue, waiting for camera connection."""
-        logger.info("Starting download queue processor. Waiting for camera connection...")
+        """Continuously processes files from the download queue."""
         while True:
-            try:
-                await self.camera_connected.wait()
-                
-                recording_file = await self.download_queue.get()
-                
-                if not self.camera_connected.is_set():
-                    logger.warning("Camera disconnected while fetching from queue. Re-queueing.")
-                    await self.download_queue.put(recording_file)
-                    continue
-
-                await self.handle_download_task(recording_file)
-            except asyncio.CancelledError:
-                logger.info("Download queue processing cancelled.")
-                break
-            except Exception as e:
-                logger.error(f"Error in download queue processor: {e}", exc_info=True)
-                await asyncio.sleep(5)
+            recording_file = await self.download_queue.get()
+            await self.handle_download_task(recording_file)
+            self.download_queue.task_done()
 
     async def process_ffmpeg_queue(self):
-        """Processes the ffmpeg queue for converting, combining, and trimming videos."""
-        logger.info("Starting FFmpeg queue processor.")
+        """Continuously processes tasks from the FFmpeg queue."""
         while True:
+            task = await self.ffmpeg_queue.get()
+            
+            task_type, item_path = task
             try:
-                task = await self.ffmpeg_queue.get()
-                
-                try:
-                    task_type, payload = task
-                except ValueError:
-                    logger.error(f"Skipping malformed task in FFmpeg queue: {task}")
-                    self.ffmpeg_queue.task_done()
-                    continue
-
-                task_handled = True
                 if task_type == 'convert':
-                    await self._handle_conversion_task(payload)
+                    await self._handle_conversion_task(item_path)
                 elif task_type == 'combine':
-                    await self._handle_combine_task(payload)
+                    await self._handle_combine_task(item_path)
                 elif task_type == 'trim':
-                    task_handled = await self._handle_trim_task(payload)
+                    await self._handle_trim_task(item_path)
                 else:
                     logger.warning(f"Unknown ffmpeg task type: {task_type}")
 
-                if task_handled:
-                    self.queued_for_ffmpeg.discard(task)
-                
-                self.ffmpeg_queue.task_done()
+                # If no exception, task is successful, remove from state
+                self.queued_for_ffmpeg.remove(task)
+                await self._save_ffmpeg_queue_state()
 
             except Exception as e:
-                logger.error(f"Error in ffmpeg queue processor: {e}", exc_info=True)
-                # If the task itself caused the error, we still need to mark it as done.
-                if 'task' in locals() and not self.ffmpeg_queue.empty():
-                    self.ffmpeg_queue.task_done()
-                await asyncio.sleep(5)
+                logger.error(f"Error processing FFmpeg task {task}, it will be retried on next run. Error: {e}", exc_info=True)
+                # Task failed, do not remove from state, it will be re-queued on next startup
+            
+            self.ffmpeg_queue.task_done()
 
     async def _handle_conversion_task(self, file_path: str):
         """Handle a video conversion task."""
@@ -415,10 +390,11 @@ class VideoGrouperApp:
                     logger.info(f"Group {os.path.basename(group_dir)} is ready for combining.")
                     await self.add_to_ffmpeg_queue(('combine', group_dir))
             else:
-                raise Exception("Conversion resulted in no output file.")
+                await dir_state.set_file_status(file_path, "conversion_failed")
+                logger.error(f"Conversion failed for {file_path}")
         except Exception as e:
-            logger.error(f"Error during conversion task for {file_path}: {e}")
-            await dir_state.update_file_status(file_path, "conversion_failed")
+            await dir_state.set_file_status(file_path, "conversion_failed")
+            logger.error(f"An unexpected error occurred during conversion of {file_path}: {e}", exc_info=True)
 
     async def _handle_combine_task(self, group_dir: str):
         """Combines all converted MP4 files in a group directory."""
@@ -595,42 +571,52 @@ class VideoGrouperApp:
         return dict(config['MATCH']) if 'MATCH' in config else None
 
     async def add_to_download_queue(self, recording_file: RecordingFile):
-        """Add a file to the download queue and save state."""
+        """Adds a file to the download queue if it's not already present."""
         if recording_file.file_path not in self.queued_for_download:
-            self.queued_for_download.add(recording_file.file_path)
             await self.download_queue.put(recording_file)
-            logger.info(f"Added {os.path.basename(recording_file.file_path)} to download queue.")
+            self.queued_for_download.add(recording_file.file_path)
+            logger.info(f"Added to download queue: {os.path.basename(recording_file.file_path)}")
+            await self._save_download_queue_state()
+        else:
+            logger.debug(f"File {recording_file.file_path} is already in the download queue.")
 
     async def add_to_ffmpeg_queue(self, task: Tuple[str, Any]):
-        """Add a task to the ffmpeg queue and save state."""
+        """Adds a task to the FFmpeg queue if it's not already present."""
         if task not in self.queued_for_ffmpeg:
-            self.queued_for_ffmpeg.add(task)
             await self.ffmpeg_queue.put(task)
-            logger.info(f"Added task {task[0]}:{os.path.basename(str(task[1]))} to FFmpeg queue.")
+            self.queued_for_ffmpeg.add(task)
+            logger.info(f"Added task to FFmpeg queue: {task}")
+            await self._save_ffmpeg_queue_state()
+        else:
+            logger.debug(f"Task {task} is already in the FFmpeg queue.")
 
     async def _save_download_queue_state(self):
-        """Save the current state of the download queue."""
+        """Saves the current download queue to a JSON file."""
         queue_path = os.path.join(self.storage_path, DOWNLOAD_QUEUE_STATE_FILE)
         try:
-            # Drain queue to a list, serialize, then refill
-            items = []
+            queue_items = []
+            # Create a temporary copy of the queue to iterate over
+            temp_queue = asyncio.Queue()
             while not self.download_queue.empty():
-                items.append(await self.download_queue.get())
+                item = await self.download_queue.get()
+                queue_items.append(item)
+                await temp_queue.put(item)
+            
+            # Restore the original queue
+            self.download_queue = temp_queue
 
-            # Serialize items
-            data_to_save = [item.to_dict() for item in items]
+            # Now, `queue_items` contains all items from the queue
+            # and they are also back in the queue for processing.
+            data_to_save = [item.to_dict() for item in queue_items]
 
             async with aiofiles.open(queue_path, 'w') as f:
-                await f.write(json.dumps(data_to_save, indent=2))
-
-            # Refill queue
-            for item in items:
-                await self.download_queue.put(item)
+                await f.write(json.dumps(data_to_save, indent=4))
+            logger.info(f"Saved download queue state with {len(data_to_save)} items.")
         except Exception as e:
-            logger.error(f"Error saving download queue state: {e}")
+            logger.error(f"Failed to save download queue state: {e}", exc_info=True)
 
     async def _save_ffmpeg_queue_state(self):
-        """Save the current state of the ffmpeg queue."""
+        """Saves the current FFmpeg queue to a JSON file."""
         queue_path = os.path.join(self.storage_path, FFMPEG_QUEUE_STATE_FILE)
         try:
             items = []
@@ -648,25 +634,38 @@ class VideoGrouperApp:
             for item in items:
                 await self.ffmpeg_queue.put(item)
         except Exception as e:
-            logger.error(f"Error saving ffmpeg queue state: {e}")
+            logger.error(f"Failed to save FFmpeg queue state: {e}", exc_info=True)
 
     async def _load_queues_from_state(self):
-        """Load queue states from files."""
-        # Load download queue
+        """Loads the download and FFmpeg queues from their state files."""
+        # Load Download Queue
         download_queue_path = os.path.join(self.storage_path, DOWNLOAD_QUEUE_STATE_FILE)
         if os.path.exists(download_queue_path):
             try:
                 async with aiofiles.open(download_queue_path, 'r') as f:
                     content = await f.read()
-                    items = json.loads(content)
-                    for item_data in items:
-                        rf = RecordingFile.from_dict(item_data)
-                        await self.add_to_download_queue(rf)
-                logger.info(f"Loaded {self.download_queue.qsize()} items into download queue.")
-            except Exception as e:
-                logger.error(f"Error loading download queue state: {e}")
+                    if not content.strip():
+                        logger.warning("LOAD: download_queue_state.json is empty, skipping.")
+                        return
 
-        # Load ffmpeg queue
+                    items = json.loads(content)
+                    if not isinstance(items, list):
+                        logger.error(f"LOAD: download_queue_state.json is not a list, but a {type(items)}. Skipping.")
+                        return
+
+                    for item_data in items:
+                        try:
+                            # Reconstruct RecordingFile object from dict
+                            recording_file = RecordingFile.from_dict(item_data)
+                            await self.add_to_download_queue(recording_file)
+                        except KeyError as e:
+                            logger.warning(f"LOAD: Skipping malformed item in download_queue_state.json (missing key: {e}): {item_data}")
+                    logger.info(f"LOAD: Loaded {len(items)} items from download_queue_state.json")
+
+            except Exception as e:
+                logger.error(f"Failed to load download queue state: {e}", exc_info=True)
+
+        # Load FFmpeg Queue (existing logic)
         ffmpeg_queue_path = os.path.join(self.storage_path, FFMPEG_QUEUE_STATE_FILE)
         if os.path.exists(ffmpeg_queue_path):
             try:
