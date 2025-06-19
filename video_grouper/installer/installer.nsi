@@ -18,7 +18,7 @@
 
 ; General settings
 Name "${APPNAME}"
-OutFile "dist\VideoGrouperSetup.exe"
+OutFile "..\dist\VideoGrouperSetup.exe"
 InstallDir "$PROGRAMFILES\${APPNAME}"
 InstallDirRegKey HKLM "Software\${APPNAME}" "Install_Dir"
 RequestExecutionLevel admin
@@ -34,14 +34,14 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2024 ${COMPANYNAME}"
 
 ; Interface Settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "icon.ico"
-!define MUI_UNICON "icon.ico"
+!define MUI_ICON "..\icon.ico"
+!define MUI_UNICON "..\icon.ico"
 !define MUI_WELCOMEPAGE_TITLE "Welcome to ${APPNAME} ${FULL_VERSION} Setup"
 !define MUI_WELCOMEPAGE_TEXT "This will install ${APPNAME} ${FULL_VERSION} on your computer.$\r$\n$\r$\nClick Next to continue."
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "LICENSE"
+!insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 
 ; Custom pages for configuration
 Page custom CameraConfigPage CameraConfigPageLeave
@@ -180,11 +180,11 @@ Section "Install Service" SecService
     FileClose $0
     
     ; Copy files
-    File "dist\VideoGrouperService.exe"
-    File "dist\tray_agent.exe"
-    File "icon.ico"
-    File "match_info.ini.dist"
-    File "requirements.txt"
+    File "..\dist\service\VideoGrouperService.exe"
+    File "..\dist\tray\VideoGrouperTray.exe"
+    File "..\icon.ico"
+    File "..\match_info.ini.dist"
+    File "..\requirements.txt"
     
     ; Install Python dependencies
     ExecWait 'pip install -r "$INSTDIR\requirements.txt"'
@@ -194,7 +194,7 @@ Section "Install Service" SecService
     ExecWait '"$INSTDIR\VideoGrouperService.exe" start'
     
     ; Create startup shortcut for tray agent
-    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\tray_agent.exe" "" "$INSTDIR\icon.ico"
+    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
     
     ; Create uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -218,7 +218,7 @@ Section "Uninstall"
     
     ; Remove files and directories
     Delete "$INSTDIR\VideoGrouperService.exe"
-    Delete "$INSTDIR\tray_agent.exe"
+    Delete "$INSTDIR\VideoGrouperTray.exe"
     Delete "$INSTDIR\icon.ico"
     Delete "$INSTDIR\match_info.ini.dist"
     Delete "$INSTDIR\requirements.txt"

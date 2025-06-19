@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import httpx
 import logging
 import time
@@ -96,7 +95,7 @@ class DahuaCamera(Camera):
         try:
             auth = httpx.DigestAuth(self.username, self.password)
             url = f"http://{self.ip}/cgi-bin/recordManager.cgi?action=getCaps"
-            logger.info(f"Checking availability at {url}")
+            logger.info(f"Checking availability of camera at {self.ip}")
             
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -107,10 +106,9 @@ class DahuaCamera(Camera):
                 close_client = True
                 
             try:
-                print(f"\nMaking request to: {url}")
+                logger.debug(f"Making request to: {url}")
                 response = await client.get(url, auth=auth)
-                print(f"Got response with status {response.status_code}")
-                logger.info(f"Got response with status {response.status_code}")
+                logger.debug(f"Got response with status {response.status_code}")
                 
                 if response.status_code == 200:
                     if not self._is_connected:
@@ -122,24 +120,31 @@ class DahuaCamera(Camera):
                     if self._is_connected:
                         self._is_connected = False
                         self._connection_events.append((datetime.now(), f"connection failed: {response.status_code}"))
+                        logger.info(f"Camera is not available at {self.ip}")
                         self._save_state()
                     return False
             except httpx.ConnectError as e:
-                logger.info("Unable to connect to camera")
+                logger.info(f"Unable to connect to camera at {self.ip}: {e}")
                 if self._is_connected:
                     self._is_connected = False
                     self._connection_events.append((datetime.now(), f"connection failed: {e}"))
                     self._save_state()
                 return False
+            except httpx.RequestError:
+                logger.info(f"Camera is not available at {self.ip} : {e}")
+                if self._is_connected:
+                    self._is_connected = False
+                    self._connection_events.append((datetime.now(), "connection error"))
+                    self._save_state()
+                return False
             except Exception as e:
-                print(f"Request failed with error: {e}")
-                logger.error(f"Request failed with error: {e}")
+                logger.error(f"Request to {url} failed with error: {e}")
                 raise
             finally:
                 if close_client:
                     await client.aclose()
         except Exception as e:
-            logger.error(f"Error checking camera availability: {e}")
+            logger.error(f"Error checking camera availability: {e}", exc_info=True)
             if self._is_connected:
                 self._is_connected = False
                 self._connection_events.append((datetime.now(), f"connection error: {str(e)}"))
@@ -162,7 +167,7 @@ class DahuaCamera(Camera):
             
             try:
                 # First create the media file finder factory
-                response = await client.get(f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
+                response = await client.get(url, auth=auth)
                 await self._log_http_call("get_file_list_factory", response.request, response)
 
                 if response.status_code != 200:

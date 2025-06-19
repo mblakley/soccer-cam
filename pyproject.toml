@@ -1,0 +1,31 @@
+[project]
+name = "video-grouper"
+version = "0.1.0"
+description = "A tool to automatically group and process video files from a security camera."
+authors = [
+    {name = "Your Name", email = "you@example.com"},
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "httpx>=0.25.0",
+    "aiofiles>=23.2.1",
+]
+
+[project.optional-dependencies]
+tray = [
+    "PyQt6>=6.6.0",
+    "pywin32>=306",
+    "pytz>=2024.1",
+]
+service = [
+    "pywin32>=306",
+]
+dev = [
+    "pytest>=7.4.3",
+    "pytest-asyncio>=0.21.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build" 

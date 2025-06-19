@@ -7,16 +7,13 @@ build_exe_options = {
                 "servicemanager", "socket", "asyncio", "logging", "httpx", 
                 "aiofiles", "configparser", "json", "datetime", "signal"],
     "excludes": [],
-    "include_files": [
-        "config.ini",
-        "match_info.ini.dist",
-        "requirements.txt"
-    ]
+    "include_files": []
 }
 
 base = None
-if sys.platform == "win32":
-    base = "Win32GUI"
+# Service executables are command-line apps, not GUI apps
+# if sys.platform == "win32":
+#     base = "Win32GUI"
 
 setup(
     name="VideoGrouperService",
@@ -25,10 +22,10 @@ setup(
     options={"build_exe": build_exe_options},
     executables=[
         Executable(
-            "service_wrapper.py",
+            "main.py",
             base=base,
             target_name="VideoGrouperService.exe",
-            icon=None  # Add icon path if you have one
+            icon=None
         )
     ]
 ) 
