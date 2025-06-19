@@ -467,88 +467,79 @@ class VideoGrouperApp:
                     await self.add_to_ffmpeg_queue(('trim', group_dir))
             else:
                 logger.error(f"Failed to combine videos in {group_dir}")
-
+                await dir_state.update_group_status("combine_failed", error_message="ffmpeg combine command failed.")
         except Exception as e:
-            logger.error(f"Error during combine task for {group_dir}: {e}")
+            logger.error(f"Error during combine for {group_dir}: {e}")
+            await dir_state.update_group_status("combine_failed", error_message=str(e))
         finally:
-            # Clean up the file list
             if os.path.exists(file_list_path):
                 os.remove(file_list_path)
 
-    async def _handle_trim_task(self, group_dir: str):
-        """Trims the combined video based on match_info.ini."""
-        logger.info(f"Starting trim task for {group_dir}")
-        dir_state = DirectoryState(group_dir)
-        combined_path = os.path.join(group_dir, "combined.mp4")
+    async def _handle_trim_task(self, group_dir: str, match_info_config: configparser.ConfigParser = None):
+        """
+        Handles trimming of a combined video file based on match_info.ini.
+        If the match info is valid and the combined file exists, it will trim the video.
+        """
+        logger.info(f"TRIM: Handling trim task for {group_dir}")
 
+        dir_state = DirectoryState(group_dir)
+        match_config = match_info_config
+
+        if match_config is None:
+            if not self.is_match_info_populated(group_dir):
+                logger.warning(f"TRIM: Match info for {group_dir} is not populated. Re-queueing.")
+                await self._requeue_ffmpeg_task_later(('trim', group_dir), delay_seconds=60)
+                return
+
+            match_info_path = os.path.join(group_dir, "match_info.ini")
+            match_config = configparser.ConfigParser()
+            try:
+                read_files = match_config.read(match_info_path)
+                if not read_files:
+                    logger.error(f"TRIM: Failed to read match_info.ini at {match_info_path}")
+                    await dir_state.update_group_status("trim_failed", error_message="Failed to read match_info.ini")
+                    return
+            except configparser.Error as e:
+                logger.error(f"TRIM: Error parsing match_info.ini for {group_dir}: {e}")
+                await dir_state.update_group_status("trim_failed", error_message=f"Error parsing match_info.ini: {e}")
+                return
+
+        combined_path = os.path.join(group_dir, "combined.mp4")
         if not os.path.exists(combined_path):
-            logger.warning(f"Cannot trim: combined.mp4 does not exist in {group_dir}. Was it deleted?")
-            return True # Consider this handled, don't requeue
-            
-        if not self.is_match_info_populated(group_dir):
-            logger.info(f"Match info for {group_dir} is not populated. Re-queueing trim task for later.")
-            asyncio.create_task(self._requeue_ffmpeg_task_later(('trim', group_dir), 60))
-            return False # Not handled, needs requeue
+            logger.error(f"TRIM: Combined video not found at {combined_path}. Cannot trim.")
+            await dir_state.update_group_status("trim_failed", error_message="Combined video not found for trimming.")
+            return
 
         try:
-            match_info_path = os.path.join(group_dir, "match_info.ini")
-            match_info = self.parse_match_info(match_info_path)
-            if not match_info:
-                logger.error(f"Could not parse match_info.ini in {group_dir}")
-                return True # Consider this handled, don't requeue
+            my_team_name = match_config.get('MATCH', 'my_team_name')
+            opponent_team_name = match_config.get('MATCH', 'opponent_team_name')
+            location = match_config.get('MATCH', 'location')
+            start_offset = match_config.get('MATCH', 'start_time_offset', fallback='00:00:00')
+            total_duration_str = match_config.get('MATCH', 'total_duration')
+
+            # Convert total_duration from HH:MM:SS to seconds
+            h, m, s = map(int, total_duration_str.split(':'))
+            total_duration_seconds = timedelta(hours=h, minutes=m, seconds=s).total_seconds()
             
-            my_team_name = match_info.get('my_team_name')
-            opponent_team_name = match_info.get('opponent_team_name')
-            location = match_info.get('location')
-            start_offset = match_info.get('start_time_offset')
-            total_duration_str = match_info.get('total_duration')
+            # Sanitize names for filename
+            my_team_sanitized = re.sub(r'[^a-zA-Z0-9]', '', my_team_name).lower()
+            opponent_sanitized = re.sub(r'[^a-zA-Z0-9]', '', opponent_team_name).lower()
+            location_sanitized = re.sub(r'[^a-zA-Z0-9]', '', location).lower()
 
-            # Extract date from group_dir name (e.g., "2025.06.20" from "2025.06.20-12.30.00")
-            try:
-                group_date_str = os.path.basename(group_dir).split('-')[0]
-                date_for_filename = datetime.strptime(group_date_str, "%Y.%m.%d").strftime("%m-%d-%Y")
-            except (ValueError, IndexError):
-                logger.warning(f"Could not parse date from group directory name: {os.path.basename(group_dir)}. Using current date as fallback.")
-                now = datetime.now()
-                group_date_str = now.strftime("%Y.%m.%d")
-                date_for_filename = now.strftime("%m-%d-%Y")
+            output_filename = f"{my_team_sanitized}-{opponent_sanitized}-{location_sanitized}.mp4"
+            output_path = os.path.join(os.path.dirname(group_dir), output_filename) # Save to parent directory of group
 
-            subdir_name = f"{group_date_str} - {my_team_name} vs {opponent_team_name} ({location})"
-            output_dir = os.path.join(group_dir, subdir_name)
-            create_directory(output_dir)
-            
-            base_filename = f"{my_team_name}-{opponent_team_name}-{location}-{date_for_filename}-raw.mp4"
-            filename = base_filename.lower().replace(' ', '')
-            output_path = os.path.join(output_dir, filename)
-
-            total_duration_seconds_str = None
-            if total_duration_str and total_duration_str.strip():
-                try:
-                    parts = total_duration_str.strip().split(':')
-                    parts = [int(p) for p in parts]
-                    total_duration_seconds = 0
-                    if len(parts) == 1:
-                        total_duration_seconds = parts[0]
-                    elif len(parts) == 2:
-                        total_duration_seconds = parts[0] * 60 + parts[1]
-                    elif len(parts) == 3:
-                        total_duration_seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
-                    
-                    if total_duration_seconds > 0:
-                        total_duration_seconds_str = str(total_duration_seconds)
-
-                except (ValueError, TypeError):
-                    logger.warning(f"Invalid 'total_duration' value '{total_duration_str}' in {os.path.join(group_dir, 'match_info.ini')}. Ignoring.")
+            logger.info(f"TRIM: Preparing to trim {combined_path} to {output_path} with offset {start_offset} and duration {total_duration_seconds}s")
 
             trim_successful = await trim_video(
                 input_path=combined_path,
                 output_path=output_path,
-                start_offset=str(start_offset),
-                duration=total_duration_seconds_str
+                start_offset=start_offset,
+                duration=str(int(total_duration_seconds))
             )
 
             if trim_successful:
-                logger.info(f"Successfully trimmed video for {group_dir}")
+                logger.info(f"TRIM: Successfully trimmed video to {output_path}")
                 await dir_state.update_group_status("trimmed")
             else:
                 logger.error(f"Failed to trim video for {group_dir}")

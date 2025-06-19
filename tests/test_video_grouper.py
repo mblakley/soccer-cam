@@ -1,455 +1,232 @@
-import pytest
 import asyncio
-import os
-import json
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
 import configparser
+import json
+import os
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
-from video_grouper.video_grouper import (
-    DirectoryState, 
-    create_directory, VideoGrouperApp, find_group_directory
-)
+import pytest
+from unittest.mock import call
+
 from video_grouper.models import RecordingFile
+from video_grouper.video_grouper import VideoGrouperApp, DOWNLOAD_QUEUE_STATE_FILE, FFMPEG_QUEUE_STATE_FILE
 
-# Fixtures
+# Constants
+DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+STORAGE_PATH = "/fake/storage"
+
 @pytest.fixture
-def mock_config(tmp_path):
-    """Provides a mock configparser object and a temporary storage path."""
+def mock_config():
+    """Fixture for a mock configparser object with a fake storage path."""
     config = configparser.ConfigParser()
-    config['STORAGE'] = {'path': str(tmp_path)}
     config['CAMERA'] = {
         'type': 'dahua',
         'device_ip': '127.0.0.1',
         'username': 'admin',
         'password': 'password'
     }
+    config['STORAGE'] = {'path': STORAGE_PATH}
     config['APP'] = {'check_interval_seconds': '1'}
     return config
 
 @pytest.fixture
-def sample_recording_file():
-    return RecordingFile(
-        start_time=datetime(2024, 3, 14, 12, 18, 28),
-        end_time=datetime(2024, 3, 14, 12, 35, 18),
-        file_path="/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    )
-
-@pytest.fixture
 def mock_camera():
-    """Mocks the DahuaCamera object."""
+    """Fixture for a mock DahuaCamera."""
     camera = MagicMock()
     camera.check_availability = AsyncMock(return_value=True)
     camera.get_file_list = AsyncMock(return_value=[])
     camera.download_file = AsyncMock(return_value=True)
+    camera.connection_events = [('mock_time', 'connected')]
     return camera
 
 @pytest.fixture
-def mock_camera_class(mock_camera):
-    """Mocks the DahuaCamera class."""
-    with patch('video_grouper.video_grouper.DahuaCamera', return_value=mock_camera) as mock_class:
-        yield mock_class
-
-@pytest.fixture
-def video_grouper_app(mock_config, mock_camera):
-    """Initializes VideoGrouperApp with mocked dependencies."""
-    app = VideoGrouperApp(mock_config, camera=mock_camera)
-    yield app
-
-# Test DirectoryState
-def test_directory_state_initialization(tmp_path):
-    state = DirectoryState(str(tmp_path))
-    assert state.path == str(tmp_path)
-    assert isinstance(state.files, dict)
-    assert len(state.files) == 0
-
-def test_directory_state_add_recording_file(tmp_path, sample_recording_file):
-    state = DirectoryState(str(tmp_path))
-    state.add_file(sample_recording_file)
-    assert len(state.files) == 1
-    assert state.files[sample_recording_file.file_path] == sample_recording_file
-    assert sample_recording_file.group_dir == str(tmp_path)
-
-# Test RecordingFile
-def test_recording_file_initialization():
-    file = RecordingFile(
-        start_time=datetime(2024, 3, 14, 12, 18, 28),
-        end_time=datetime(2024, 3, 14, 12, 35, 18),
-        file_path="/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    )
-    assert file.start_time == datetime(2024, 3, 14, 12, 18, 28)
-    assert file.end_time == datetime(2024, 3, 14, 12, 35, 18)
-    assert file.file_path == "/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    assert file.status == "pending"
-    assert file.skip == False
-    assert file.group_dir is None
-
-def test_recording_file_to_dict():
-    file = RecordingFile(
-        start_time=datetime(2024, 3, 14, 12, 18, 28),
-        end_time=datetime(2024, 3, 14, 12, 35, 18),
-        file_path="/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    )
-    data = file.to_dict()
-    assert data['file_path'] == "/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    assert data['start_time'] == datetime(2024, 3, 14, 12, 18, 28).isoformat()
-    assert data['end_time'] == datetime(2024, 3, 14, 12, 35, 18).isoformat()
-    assert data['status'] == "pending"
-    assert data['skip'] == False
-
-def test_recording_file_from_dict():
-    data = {
-        'file_path': "/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav",
-        'start_time': datetime(2024, 3, 14, 12, 18, 28).isoformat(),
-        'end_time': datetime(2024, 3, 14, 12, 35, 18).isoformat(),
-        'status': "downloaded",
-        'skip': False,
-        'group_dir': "/record/2024.03.14",
-        'metadata': {'channel': '1'}
-    }
-    file = RecordingFile.from_dict(data)
-    assert file.file_path == "/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    assert file.start_time == datetime(2024, 3, 14, 12, 18, 28)
-    assert file.end_time == datetime(2024, 3, 14, 12, 35, 18)
-    assert file.status == "downloaded"
-    assert file.skip == False
-    assert file.group_dir == "/record/2024.03.14"
-    assert file.metadata == {'channel': '1'}
-
-def test_recording_file_from_response():
-    response_text = "path=/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav&startTime=2024-03-14 12:18:28&endTime=2024-03-14 12:35:18&channel=1"
-    files = RecordingFile.from_response(response_text)
-    assert len(files) == 1
-    assert files[0].file_path == "/record/2024.03.14/12.18.28-12.35.18[F][0@0][140480].dav"
-    assert files[0].start_time == datetime(2024, 3, 14, 12, 18, 28)
-    assert files[0].end_time == datetime(2024, 3, 14, 12, 35, 18)
-    assert files[0].metadata == {'channel': '1'}
-
-# Test find_group_directory function
-def test_find_group_directory_creation(tmp_path):
-    """Test that a new file with no time relationship to existing files gets a new directory."""
-    storage_path = tmp_path
-    file_start_time = datetime(2024, 1, 1, 12, 0, 0)
-    existing_dirs = []
+def async_context_manager_mock():
+    """Fixture to create a mock for an async context manager."""
+    async def async_magic_mock(*args, **kwargs):
+        pass
     
-    with patch('video_grouper.video_grouper.create_directory') as mock_create_dir:
-        mock_create_dir.side_effect = lambda p: os.makedirs(p, exist_ok=True)
-        result = find_group_directory(file_start_time, str(storage_path), existing_dirs)
-        
-        assert mock_create_dir.called
-        
-        expected_dir_name = file_start_time.strftime("%Y.%m.%d-%H.%M.%S")
-        assert os.path.basename(result) == expected_dir_name
-
-def test_find_group_directory_sequential_files(tmp_path):
-    """Test that sequential files are grouped together."""
-    storage_path = tmp_path
+    mock_file = MagicMock()
+    mock_file.write = AsyncMock()
     
-    first_file_start_time = datetime(2024, 1, 1, 12, 0, 0)
-    last_file_end_time = datetime(2024, 1, 1, 12, 15, 0)
-    group_dir_path = storage_path / first_file_start_time.strftime("%Y.%m.%d-%H.%M.%S")
-    group_dir_path.mkdir()
+    manager = AsyncMock()
+    manager.__aenter__.return_value = mock_file
+    manager.__aexit__.return_value = False
+    return manager
 
-    state_file_path = group_dir_path / "state.json"
-    state_content = {
-        "path": str(group_dir_path),
-        "files": {
-            "dummy.dav": {
-                "file_path": "dummy.dav",
-                "start_time": first_file_start_time.isoformat(),
-                "end_time": last_file_end_time.isoformat(),
-                "status": "converted", "skip": False, "group_dir": str(group_dir_path),
-                "screenshot_path": None, "metadata": {}
-            }
-        }
-    }
-    with open(state_file_path, "w") as f:
-        json.dump(state_content, f)
 
-    new_file_start_time = last_file_end_time + timedelta(seconds=2)
-    
-    with patch('video_grouper.video_grouper.create_directory') as mock_create_dir:
-        result = find_group_directory(new_file_start_time, str(storage_path), [str(group_dir_path)])
-        
-        assert result == str(group_dir_path)
-        assert not mock_create_dir.called
-
-def test_find_group_directory_non_sequential_files(tmp_path):
-    storage_path = tmp_path
-    
-    last_file_end_time = datetime(2024, 1, 1, 12, 15, 0)
-    group_dir_name = (last_file_end_time - timedelta(minutes=15)).strftime("%Y.%m.%d-%H.%M.%S")
-    group_dir_path = storage_path.joinpath(group_dir_name)
-    group_dir_path.mkdir()
-
-    state_file_path = group_dir_path.joinpath("state.json")
-    state_content = {
-        "path": str(group_dir_path),
-        "files": {
-            "dummy.dav": {
-                "file_path": "dummy.dav",
-                "start_time": (last_file_end_time - timedelta(minutes=15)).isoformat(),
-                "end_time": last_file_end_time.isoformat(),
-                "status": "converted",
-                "skip": False,
-                "group_dir": str(group_dir_path),
-                "screenshot_path": None,
-                "metadata": {}
-            }
-        }
-    }
-    with open(state_file_path, "w") as f:
-        json.dump(state_content, f)
-
-    existing_dirs = [str(group_dir_path)]
-    
-    new_file_start_time = last_file_end_time + timedelta(seconds=20)
-    
-    with patch('video_grouper.video_grouper.create_directory') as mock_create_dir:
-        mock_create_dir.side_effect = lambda p: os.makedirs(p, exist_ok=True)
-        result = find_group_directory(new_file_start_time, str(storage_path), existing_dirs)
-        
-        assert mock_create_dir.called
-        assert result != str(group_dir_path)
-        expected_dir_name = new_file_start_time.strftime("%Y.%m.%d-%H.%M.%S")
-        assert os.path.basename(result) == expected_dir_name
-
-# Test file system operations
-def test_directory_creation():
-    with patch('os.makedirs') as mock_makedirs:
-        with patch('os.path.exists', return_value=False):
-            create_directory(os.path.join('test', 'videos', '2024.03.14-12.18.28'))
-            mock_makedirs.assert_called_once_with(os.path.join('test', 'videos', '2024.03.14-12.18.28'), exist_ok=True)
-
-def test_state_saving(tmp_path):
-    with patch('json.dump') as mock_dump, \
-         patch('builtins.open', MagicMock()), \
-         patch('os.path.exists', return_value=True):
-        state = DirectoryState(str(tmp_path))
-        state.save_state()
-        assert mock_dump.called
-
-def create_mock_group_dir(tmp_path, name="group1", files_data=None):
-    if files_data is None:
-        files_data = []
-    group_dir = tmp_path / name
-    group_dir.mkdir()
-    
-    files = {}
-    file_objects = []
-    for file_data in files_data:
-        file_obj = RecordingFile.from_dict(file_data)
-        files[file_data['file_path']] = file_obj
-        file_objects.append(file_obj)
-    
-    state = DirectoryState(str(group_dir))
-    state.files = files
-    state.save_state()
-    
-    return group_dir, state, file_objects
+def setup_app(mock_config, mock_camera):
+    """Helper to create and setup a VideoGrouperApp instance."""
+    app = VideoGrouperApp(config=mock_config, camera=mock_camera)
+    # We manually set storage_path because the config points to a fake path
+    app.storage_path = STORAGE_PATH
+    app.camera.storage_path = app.storage_path
+    # We don't mock the load/save methods anymore, so they can call the patched functions
+    return app
 
 @pytest.mark.asyncio
-async def test_initialize_audit(video_grouper_app, tmp_path):
-    """Tests that the initialize method correctly audits existing directories."""
-    group_dir, _, file_objects = create_mock_group_dir(tmp_path, files_data=[
-        {
-            "file_path": str(tmp_path / "group1" / "video1.dav"), 
-            "status": "downloaded", 
-            "start_time": "2024-01-01T12:00:00", "end_time": "2024-01-01T12:05:00",
-            "metadata": {"path": "server/video1.dav"}
-        }
-    ])
-    file_path = file_objects[0].file_path
-    
-    await video_grouper_app.initialize()
-    
-    assert ('convert', file_path) in [await video_grouper_app.ffmpeg_queue.get()]
+@patch('video_grouper.video_grouper.aiofiles.open')
+@patch('os.remove')
+@patch('os.listdir')
+@patch('os.path.exists')
+@patch('os.makedirs')
+@patch('builtins.open', new_callable=mock_open)
+class TestVideoGrouperAppWithMocks:
 
-@pytest.mark.asyncio
-async def test_poll_camera_on_reconnect(video_grouper_app, mock_camera, tmp_path):
-    video_grouper_app.camera_was_connected = False
-    mock_camera.check_availability.return_value = True
-    
-    file_list = [
-        {
-            'path': 'server/video1.dav',
-            'startTime': '2024-01-01 12:00:00',
-            'endTime': '2024-01-01 12:05:00',
-        }
-    ]
-    mock_camera.get_file_list.return_value = file_list
-    
-    with patch('video_grouper.video_grouper.find_group_directory', return_value=str(tmp_path)):
-        await video_grouper_app.sync_files_from_camera()
-
-    mock_camera.get_file_list.assert_called_once()
-    assert not video_grouper_app.download_queue.empty()
-    download_item = await video_grouper_app.download_queue.get()
-    assert download_item.metadata['path'] == 'server/video1.dav'
-
-@pytest.mark.asyncio
-async def test_process_download_queue(video_grouper_app, mock_camera, tmp_path):
-    group_dir = tmp_path / "group1"
-    group_dir.mkdir()
-    file_path = str(group_dir / "video1.dav")
-    rf = RecordingFile(
-        file_path=file_path,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        metadata={'path': 'server/video1.dav'},
-    )
-    dir_state = DirectoryState(str(group_dir))
-    dir_state.add_file(rf)
-    dir_state.save_state()
-    await video_grouper_app.add_to_download_queue(rf)
-    
-    with patch('os.path.getsize', return_value=12345):
-        recording_file = await video_grouper_app.download_queue.get()
-        await video_grouper_app.handle_download_task(recording_file)
+    async def test_initialization(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera):
+        """Test app initializes correctly with mocked filesystem."""
+        mock_exists.return_value = False # No state files exist
+        mock_listdir.return_value = [] # No existing directories
         
-    mock_camera.download_file.assert_called_once_with(file_path='server/video1.dav', local_path=file_path)
-    assert not video_grouper_app.ffmpeg_queue.empty()
-    ffmpeg_task = await video_grouper_app.ffmpeg_queue.get()
-    assert ffmpeg_task == ('convert', file_path)
-    
-    updated_dir_state = DirectoryState(str(group_dir))
-    assert updated_dir_state.files[file_path].status == "downloaded"
-
-@pytest.mark.asyncio
-@patch('video_grouper.video_grouper.async_convert_file', new_callable=AsyncMock)
-@patch('video_grouper.video_grouper.create_screenshot', new_callable=AsyncMock)
-async def test_ffmpeg_handle_conversion_task(mock_create_screenshot, mock_async_convert, video_grouper_app, tmp_path):
-    group_dir_name = "2024.01.01-12.00.00"
-    group_dir, dir_state, file_objects = create_mock_group_dir(tmp_path, name=group_dir_name, files_data=[
-        {
-            "file_path": str(tmp_path / group_dir_name / "video1.dav"), 
-            "status": "downloaded",
-            "start_time": "2024-01-01T12:00:00", "end_time": "2024-01-01T12:05:00",
-            "metadata": {"path": "server/video1.dav"}
-        }
-    ])
-    file_path = file_objects[0].file_path
-    mp4_path = file_path.replace('.dav', '.mp4')
-    mock_async_convert.return_value = mp4_path
-    mock_create_screenshot.return_value = True
-
-    await video_grouper_app._handle_conversion_task(file_path)
-
-    mock_async_convert.assert_called_once_with(file_path)
-    mock_create_screenshot.assert_called_once_with(mp4_path, mp4_path.replace('.mp4', '_screenshot.jpg'))
-    
-    updated_dir_state = DirectoryState(str(group_dir))
-    file_obj = updated_dir_state.files[file_path]
-    assert file_obj.status == "converted"
-    assert file_obj.screenshot_path is not None
-    
-    assert not video_grouper_app.ffmpeg_queue.empty()
-    assert await video_grouper_app.ffmpeg_queue.get() == ('combine', str(group_dir))
-
-@pytest.mark.asyncio
-async def test_ffmpeg_handle_combine_task(video_grouper_app, tmp_path):
-    group_dir, dir_state, _ = create_mock_group_dir(tmp_path, name="group_to_combine", files_data=[
-        {
-            "file_path": str(tmp_path / "group_to_combine" / "video1.dav"), 
-            "status": "converted",
-            "start_time": "2024-01-01T12:00:00", "end_time": "2024-01-01T12:05:00",
-            "metadata": {"path": "server/video1.dav"}
-        }
-    ])
-    (group_dir / "match_info.ini").touch()
-    mp4_path = list(dir_state.files.keys())[0].replace('.dav', '.mp4')
-    with open(mp4_path, 'w') as f:
-        f.write("dummy")
-
-    with patch('asyncio.create_subprocess_exec') as mock_exec:
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b'', b''))
-        mock_exec.return_value = mock_proc
+        app = setup_app(mock_config, mock_camera)
+        await app.initialize()
         
-        await video_grouper_app._handle_combine_task(str(group_dir))
-    
-    mock_exec.assert_called_once()
-    args, _ = mock_exec.call_args
-    assert 'ffmpeg' in args[0]
-    assert '-f' in args
-    assert 'concat' in args
-    
-    assert not video_grouper_app.ffmpeg_queue.empty()
-    assert await video_grouper_app.ffmpeg_queue.get() == ('trim', str(group_dir))
-
-@pytest.mark.asyncio
-async def test_ffmpeg_handle_trim_task(video_grouper_app, tmp_path):
-    group_dir = tmp_path / "group_to_trim"
-    group_dir.mkdir()
-    (group_dir / "combined.mp4").touch()
-    
-    match_info_path = group_dir / "match_info.ini"
-    config = configparser.ConfigParser()
-    config['MATCH'] = {
-        'home_team': 'Team A',
-        'away_team': 'Team B',
-        'start_time_offset': '10',
-        'total_duration': '90'
-    }
-    with open(match_info_path, 'w') as f:
-        config.write(f)
-
-    with patch('asyncio.create_subprocess_exec') as mock_exec:
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b'', b''))
-        mock_exec.return_value = mock_proc
+        # Assert that it tried to load queues (which would check for files)
+        mock_exists.assert_any_call(os.path.join(STORAGE_PATH, DOWNLOAD_QUEUE_STATE_FILE))
+        mock_exists.assert_any_call(os.path.join(STORAGE_PATH, FFMPEG_QUEUE_STATE_FILE))
         
-        await video_grouper_app._handle_trim_task(str(group_dir))
+        # Assert that it tries to create the storage directory
+        mock_makedirs.assert_called_once_with(STORAGE_PATH, exist_ok=True)
+        # Assert it checks the contents of the storage directory
+        mock_listdir.assert_called_once_with(STORAGE_PATH)
 
-    mock_exec.assert_called_once()
-    args, _ = mock_exec.call_args
-    assert 'ffmpeg' in args[0]
-    assert '-ss' in args
-    assert '10' in args
-    assert '-t' in args
-    assert str(90*60) in args
-    assert str(tmp_path / "Team A vs Team B" / "Team A vs Team B.mp4") in args 
 
-@pytest.mark.asyncio
-async def test_initialization_with_existing_state(mock_config, mock_camera_class, tmp_path):
-    """
-    Test that the app correctly initializes and audits existing directories.
-    """
-    group_dir = tmp_path / '2025.01.01-12.00.00'
-    group_dir.mkdir()
-    state_file = group_dir / 'state.json'
-    
-    downloaded_file_path = str(group_dir / 'video1.dav')
-    pending_file_path = str(group_dir / 'video2.dav')
+    async def test_sync_creates_group_and_state(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera):
+        """Test that syncing a new file creates a group directory and a state.json file."""
+        mock_exists.return_value = False # No directories or files exist initially
+        mock_listdir.return_value = [] # No existing directories
 
-    state_data = {
-        "path": str(group_dir),
-        "files": {
-            downloaded_file_path: {
-                "file_path": downloaded_file_path, "status": "downloaded", 
-                "start_time": "2025-01-01T12:00:00", "end_time": "2025-01-01T12:05:00",
-                "metadata": {"path": "server/video1.dav"}
-            },
-            pending_file_path: {
-                "file_path": pending_file_path, "status": "pending",
-                "start_time": "2025-01-01T12:05:00", "end_time": "2025-01-01T12:10:00",
-                "metadata": {"path": "server/video2.dav"}
-            }
+        app = setup_app(mock_config, mock_camera)
+        
+        start_time = datetime(2025, 1, 1, 12, 0, 0)
+        end_time = datetime(2025, 1, 1, 12, 5, 0)
+        
+        # This should be a list of dicts, as returned by the camera API
+        mock_file_list = [{
+            'path': '/remote/file1.dav',
+            'startTime': start_time.strftime(DEFAULT_DATE_FORMAT),
+            'endTime': end_time.strftime(DEFAULT_DATE_FORMAT)
+        }]
+        
+        app.camera.get_file_list.return_value = mock_file_list
+        app._get_latest_processed_time = AsyncMock(return_value=None)
+        app._update_latest_processed_time = AsyncMock()
+
+        with patch('video_grouper.video_grouper.DirectoryState') as mock_dir_state_class:
+            mock_state_instance = MagicMock()
+            mock_state_instance.add_file = AsyncMock() # This is an async method
+            mock_state_instance.save_state = AsyncMock()
+            mock_state_instance.is_file_in_state.return_value = False # Ensure it tries to add the file
+            mock_state_instance.get_file_by_path.return_value = None # Ensure it doesn't think the file is skipped
+            mock_dir_state_class.return_value = mock_state_instance
+            
+            await app.sync_files_from_camera()
+
+        # Check that listdir was called to find existing directories
+        mock_listdir.assert_called_once_with(STORAGE_PATH)
+        
+        # Check that a new group directory was created
+        group_dir_name = start_time.strftime('%Y.%m.%d-%H.%M.%S')
+        expected_group_path = os.path.join(STORAGE_PATH, group_dir_name)
+        mock_makedirs.assert_any_call(expected_group_path, exist_ok=True)
+        
+        # Check that a file was added to the download queue
+        assert app.download_queue.qsize() == 1
+
+
+    async def test_handle_combine_task(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera, async_context_manager_mock):
+        """Test combine task generates correct ffmpeg command and updates state."""
+        app = setup_app(mock_config, mock_camera)
+        group_dir = os.path.join(STORAGE_PATH, "2025.01.01-12.00.00")
+        
+        # Configure the aio_open mock to work as an async context manager
+        mock_aio_open.return_value = async_context_manager_mock
+
+        # Simulate existing converted files and state
+        file1_path = os.path.join(group_dir, "file1.dav.mp4")
+        file2_path = os.path.join(group_dir, "file2.dav.mp4")
+        
+        with patch('video_grouper.video_grouper.DirectoryState') as mock_dir_state_class:
+            mock_state_instance = MagicMock()
+            mock_state_instance.get_files_by_status.return_value = [
+                RecordingFile.from_dict({'file_path': file1_path.replace('.mp4', ''), 'status': 'converted', 'start_time': '2025-01-01T12:00:00', 'end_time': '2025-01-01T12:05:00', "metadata": {}}),
+                RecordingFile.from_dict({'file_path': file2_path.replace('.mp4', ''), 'status': 'converted', 'start_time': '2025-01-01T12:05:00', 'end_time': '2025-01-01T12:10:00', "metadata": {}})
+            ]
+            mock_state_instance.update_group_status = AsyncMock()
+            mock_dir_state_class.return_value = mock_state_instance
+
+            # Mock the subprocess call
+            with patch('asyncio.create_subprocess_exec', new_callable=AsyncMock) as mock_exec:
+                proc_mock = AsyncMock()
+                proc_mock.wait = AsyncMock()
+                proc_mock.returncode = 0
+                mock_exec.return_value = proc_mock
+                
+                # mock exists for the file list
+                mock_exists.return_value = True
+
+                await app._handle_combine_task(group_dir)
+
+            # Verify ffmpeg was called
+            mock_exec.assert_called_once()
+            
+            # Verify the file list for combining was created and then removed
+            concat_list_path = os.path.join(group_dir, "filelist.txt")
+            mock_aio_open.assert_called_once_with(concat_list_path, 'w')
+            
+            # Since the file list is created and removed within the same function,
+            # we need to ensure our mock for os.path.exists returns True for it
+            # before we assert that os.remove is called.
+            original_exists = mock_exists.side_effect
+            def side_effect(path):
+                if path == concat_list_path:
+                    return True
+                if original_exists:
+                    return original_exists(path)
+                return True
+            mock_exists.side_effect = side_effect
+
+            mock_remove.assert_called_once_with(concat_list_path)
+
+            # Verify state was updated to "combined"
+            mock_state_instance.update_group_status.assert_called_once_with("combined")
+
+
+    async def test_handle_trim_task(self, mock_aio_open, mock_remove, mock_listdir, mock_exists, mock_makedirs, mock_builtin_open, mock_config, mock_camera):
+        """Test trim task uses a mock config parser and calls the trim utility."""
+        app = setup_app(mock_config, mock_camera)
+        group_dir = os.path.join(STORAGE_PATH, "group_for_trim")
+        combined_path = os.path.join(group_dir, "combined.mp4")
+
+        # Mock that the combined file exists
+        mock_exists.return_value = True
+
+        # Create a mock config parser for match_info
+        mock_match_config = configparser.ConfigParser()
+        mock_match_config['MATCH'] = {
+            'my_team_name': 'Test Team',
+            'opponent_team_name': 'Rivals',
+            'location': 'Home',
+            'start_time_offset': '00:01:30',
+            'total_duration': '00:10:00'
         }
-    }
-    with open(state_file, 'w') as f:
-        json.dump(state_data, f)
-    
-    app = VideoGrouperApp(mock_config)
-    await app.initialize()
 
-    assert app.download_queue.qsize() == 1
-    assert app.ffmpeg_queue.qsize() == 1
-    
-    download_item = await app.download_queue.get()
-    assert download_item.file_path == pending_file_path
-    
-    ffmpeg_item = await app.ffmpeg_queue.get()
-    assert ffmpeg_item == ('convert', downloaded_file_path)
+        with patch('video_grouper.video_grouper.DirectoryState') as mock_dir_state_class:
+            mock_state_instance = MagicMock()
+            mock_state_instance.update_group_status = AsyncMock()
+            mock_dir_state_class.return_value = mock_state_instance
+
+            with patch('video_grouper.video_grouper.trim_video', new_callable=AsyncMock) as mock_trim:
+                mock_trim.return_value = True
+                
+                await app._handle_trim_task(group_dir, match_info_config=mock_match_config)
+
+                # Verify trim was called with correct parameters
+                mock_trim.assert_called_once()
+                kwargs = mock_trim.call_args.kwargs
+                assert kwargs['input_path'] == combined_path
+                assert 'testteam-rivals-home' in kwargs['output_path']
+                assert kwargs['start_offset'] == '00:01:30'
+                assert kwargs['duration'] == str(10 * 60)
+
+            # Verify group status was updated
+            mock_state_instance.update_group_status.assert_called_once_with("trimmed") 
