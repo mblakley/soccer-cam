@@ -10,8 +10,10 @@ import asyncio
 import configparser
 from pathlib import Path
 from video_grouper import main
-from video_grouper.update_manager import check_and_update
+from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
+from video_grouper.paths import get_shared_data_path
+from video_grouper.locking import FileLock
 
 # Configure logging
 logging.basicConfig(
@@ -35,9 +37,15 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         
         # Load configuration
         self.config = configparser.ConfigParser()
-        config_path = Path('C:\\ProgramData\\VideoGrouper\\config.ini')
-        if config_path.exists():
-            self.config.read(config_path)
+        self.config_path = get_shared_data_path() / 'config.ini'
+        try:
+            with FileLock(self.config_path):
+                if self.config_path.exists():
+                    self.config.read(self.config_path)
+        except TimeoutError as e:
+            logger.error(f"Could not acquire lock to read config file for service: {e}")
+        except Exception as e:
+            logger.error(f"Error loading configuration for service: {e}")
             
         # Get update URL from config
         self.update_url = self.config.get('Updates', 'update_url', fallback='https://updates.videogrouper.com')
@@ -101,4 +109,7 @@ def main():
         servicemanager.PrepareToHostSingle(VideoGrouperService)
         servicemanager.StartServiceCtrlDispatcher()
     else:
-        win32serviceutil.HandleCommandLine(VideoGrouperService) 
+        win32serviceutil.HandleCommandLine(VideoGrouperService)
+        
+if __name__ == '__main__':
+    main() 

@@ -26,3 +26,4 @@ backup_count = 5
 
 [APP]
 check_interval_seconds = 60
+timezone = America/New York

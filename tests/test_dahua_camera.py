@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Dict, Any
 from unittest.mock import AsyncMock, MagicMock
 import httpx
-import respx
 from pathlib import Path
 from unittest.mock import patch
 
