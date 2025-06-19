@@ -179,7 +179,7 @@ class DahuaCamera(Camera):
                     self._save_state()
                 return False
             except httpx.RequestError as e:
-                logger.info(f"Camera is not available at {self.ip} : {e}")
+                logger.info(f"Request to camera at {self.ip} failed")
                 if self._is_connected:
                     self._is_connected = False
                     event: ConnectionEvent = {
