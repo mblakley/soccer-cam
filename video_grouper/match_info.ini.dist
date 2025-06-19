@@ -1,5 +1,6 @@
 [MATCH]
-start_time_offset=
+start_time_offset=00:00:00
 my_team_name=
 opponent_team_name=
 location=
+total_duration=00:05:30

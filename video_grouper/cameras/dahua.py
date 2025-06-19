@@ -6,29 +6,64 @@ import logging
 import time
 import aiofiles
 from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
+import asyncio
 
 from .base import Camera
-from video_grouper.models import RecordingFile
 
 logger = logging.getLogger(__name__)
 
 class DahuaCamera(Camera):
     """Dahua camera implementation."""
     
-    def __init__(self, config: Dict[str, str], client=None):
+    def __init__(self, device_ip: str, username: str, password: str, storage_path: str, client=None):
         """Initialize the Dahua camera with configuration."""
-        self.ip = config['device_ip']
-        self.username = config['username']
-        self.password = config['password']
-        self.storage_path = config['storage_path']
+        self.ip = device_ip
+        self.username = username
+        self.password = password
+        self.storage_path = storage_path
         self._is_connected = False
         self._connection_events = []
-        self._state_file = os.path.join(config['storage_path'], "camera_state.json")
+        self._state_file = os.path.join(self.storage_path, "camera_state.json")
+        self._log_dir = os.path.join(self.storage_path, "camera_http_logs")
+        os.makedirs(self._log_dir, exist_ok=True)
         self._client = client
         self.logger = logging.getLogger(__name__)
         self._load_state()
     
+    async def _log_http_call(self, name: str, request: httpx.Request, response: httpx.Response = None, error: Exception = None):
+        """Logs the details of an HTTP request and its response to files."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        
+        # Log Request
+        req_filename = os.path.join(self._log_dir, f"{timestamp}_{name}_request.log")
+        async with aiofiles.open(req_filename, 'w') as f:
+            await f.write(f"URL: {request.method} {request.url}\n")
+            await f.write("Headers:\n")
+            for key, value in request.headers.items():
+                await f.write(f"  {key}: {value}\n")
+            if request.content:
+                await f.write("\nBody:\n")
+                await f.write(request.content.decode('utf-8', errors='ignore'))
+
+        # Log Response
+        res_filename = os.path.join(self._log_dir, f"{timestamp}_{name}_response.log")
+        async with aiofiles.open(res_filename, 'w') as f:
+            if response:
+                await f.write(f"Status Code: {response.status_code}\n")
+                await f.write("Headers:\n")
+                for key, value in response.headers.items():
+                    await f.write(f"  {key}: {value}\n")
+                await f.write("\nBody:\n")
+                # Handle streamed content differently
+                if 'aiter_bytes' in dir(response):
+                     await f.write("[Streamed content not logged]")
+                else:
+                    await f.write(response.text)
+            elif error:
+                await f.write(f"Error: {type(error).__name__}\n")
+                await f.write(str(error))
+
     def _load_state(self):
         """Load camera state from file."""
         try:
@@ -86,6 +121,13 @@ class DahuaCamera(Camera):
                         self._connection_events.append((datetime.now(), f"connection failed: {response.status_code}"))
                         self._save_state()
                     return False
+            except httpx.ConnectError as e:
+                logger.info("Unable to connect to camera")
+                if self._is_connected:
+                    self._is_connected = False
+                    self._connection_events.append((datetime.now(), f"connection failed: {e}"))
+                    self._save_state()
+                return False
             except Exception as e:
                 print(f"Request failed with error: {e}")
                 logger.error(f"Request failed with error: {e}")
@@ -101,7 +143,7 @@ class DahuaCamera(Camera):
                 self._save_state()
             return False
     
-    async def get_file_list(self) -> List[Dict[str, str]]:
+    async def get_file_list(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         """Get list of recording files from the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
@@ -117,7 +159,9 @@ class DahuaCamera(Camera):
             
             try:
                 # First create the media file finder factory
-                response = await client.get(url, auth=auth)
+                response = await client.get(f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=factory.create", auth=auth)
+                await self._log_http_call("get_file_list_factory", response.request, response)
+
                 if response.status_code != 200:
                     logger.error(f"Failed to create media file finder factory: {response.status_code}")
                     return []
@@ -125,18 +169,22 @@ class DahuaCamera(Camera):
                 object_id = response.text.split('=')[1].strip()
                 
                 # Now find files using the object ID
-                from datetime import datetime
-                start_time = datetime.now().replace(hour=0, minute=0, second=0).strftime("%Y-%m-%d%%20%H:%M:%S")
-                end_time = datetime.now().strftime("%Y-%m-%d%%20%H:%M:%S")
+                start_time_str = start_time.strftime("%Y-%m-%d%%20%H:%M:%S")
+                end_time_str = end_time.strftime("%Y-%m-%d%%20%H:%M:%S")
                 
-                findfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time}&condition.EndTime={end_time}&condition.VideoStream=Main"
+                findfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_str}&condition.EndTime={end_time_str}&condition.VideoStream=Main"
                 response = await client.get(findfile_url, auth=auth)
+                await self._log_http_call("get_file_list_find", response.request, response)
+                
                 if response.status_code != 200:
                     logger.error(f"Failed to find media files: {response.status_code}")
                     return []
                 
                 # Get the next files
-                response = await client.get(f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100", auth=auth)
+                nextfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100"
+                response = await client.get(nextfile_url, auth=auth)
+                await self._log_http_call("get_file_list_next", response.request, response)
+
                 if response.status_code == 200:
                     files = []
                     current_file = {}
@@ -192,6 +240,7 @@ class DahuaCamera(Camera):
             
             try:
                 response = await client.head(url, auth=auth)
+                await self._log_http_call("get_file_size", response.request, response)
                 if response.status_code == 200:
                     return int(response.headers.get('content-length', 0))
                 return 0
@@ -202,16 +251,16 @@ class DahuaCamera(Camera):
             logger.error(f"Error getting file size: {e}")
             return 0
     
-    async def download_file(self, server_path: str, local_path: str) -> bool:
-        """Download a file from the camera to the local filesystem with progress tracking."""
+    async def download_file(self, file_path: str, local_path: str) -> bool:
+        """Downloads a file from the camera to a local path."""
         try:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             
             # Get file size first for progress tracking
-            file_size = await self.get_file_size(server_path)
-            if file_size <= 0:
-                self.logger.error(f"Invalid file size for {server_path}: {file_size}")
+            file_size = await self.get_file_size(file_path)
+            if file_size == 0:
+                logger.warning(f"File {file_path} is empty, skipping download.")
                 return False
             
             # Get directory name for better logging
@@ -220,11 +269,20 @@ class DahuaCamera(Camera):
             
             self.logger.info(f"Downloading {file_name} to directory '{dir_name}' ({file_size/1024/1024:.1f}MB)")
             
-            async with httpx.AsyncClient() as client:
-                url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{server_path}"
-                auth = httpx.DigestAuth(self.username, self.password)
+            auth = httpx.DigestAuth(self.username, self.password)
+            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{file_path}"
+            
+            # Use the provided client if available, otherwise create a new one
+            if self._client:
+                client = self._client
+                close_client = False
+            else:
+                client = httpx.AsyncClient()
+                close_client = True
                 
-                async with client.stream('GET', url, auth=auth) as response:
+            try:
+                async with client.stream("GET", url, auth=auth) as response:
+                    await self._log_http_call("download_file", response.request, response)
                     if response.status_code != 200:
                         self.logger.error(f"Download failed with status {response.status_code}: {response.text}")
                         return False
@@ -253,14 +311,17 @@ class DahuaCamera(Camera):
                     
                     # Verify the download is complete
                     if downloaded == file_size:
-                        self.logger.info(f"Download complete: {os.path.basename(server_path)}")
+                        self.logger.info(f"Download complete: {os.path.basename(file_path)}")
                         return True
                     else:
-                        self.logger.error(f"Download incomplete: {os.path.basename(server_path)} ({downloaded}/{file_size} bytes)")
+                        self.logger.error(f"Download incomplete: {os.path.basename(file_path)} ({downloaded}/{file_size} bytes)")
                         return False
                         
+            finally:
+                if close_client:
+                    await client.aclose()
         except Exception as e:
-            self.logger.error(f"Error downloading {server_path}: {e}")
+            self.logger.error(f"Error downloading {file_path}: {e}")
             # Clean up partial download if it exists
             if os.path.exists(local_path):
                 try:
@@ -270,25 +331,33 @@ class DahuaCamera(Camera):
                     self.logger.error(f"Failed to remove partial download {local_path}: {e}")
             return False
     
-    async def stop_recording(self) -> bool:
-        """Stop recording on the camera."""
+    async def start_recording(self):
+        """Starts video recording on the camera."""
         try:
-            auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
-            
-            # Use the provided client if available, otherwise create a new one
-            if self._client:
-                client = self._client
-                close_client = False
-            else:
-                client = httpx.AsyncClient()
-                close_client = True
-            
+            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
+            client = self._client or httpx.AsyncClient()
             try:
-                response = await client.get(url, auth=auth)
+                response = await client.get(url, auth=httpx.DigestAuth(self.username, self.password))
+                await self._log_http_call("start_recording", response.request, response)
                 return response.status_code == 200
             finally:
-                if close_client:
+                if not self._client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}")
+            return False
+    
+    async def stop_recording(self):
+        """Stops video recording on the camera."""
+        try:
+            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
+            client = self._client or httpx.AsyncClient()
+            try:
+                response = await client.get(url, auth=httpx.DigestAuth(self.username, self.password))
+                await self._log_http_call("stop_recording", response.request, response)
+                return response.status_code == 200
+            finally:
+                if not self._client:
                     await client.aclose()
         except Exception as e:
             logger.error(f"Error stopping recording: {e}")
@@ -297,24 +366,16 @@ class DahuaCamera(Camera):
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""
         try:
-            auth = httpx.DigestAuth(self.username, self.password)
             url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
-            
-            # Use the provided client if available, otherwise create a new one
-            if self._client:
-                client = self._client
-                close_client = False
-            else:
-                client = httpx.AsyncClient()
-                close_client = True
-            
+            client = self._client or httpx.AsyncClient()
             try:
-                response = await client.get(url, auth=auth)
+                response = await client.get(url, auth=httpx.DigestAuth(self.username, self.password))
+                await self._log_http_call("get_recording_status", response.request, response)
                 if response.status_code == 200:
                     return "RecordMode[0].Mode=1" in response.text
                 return False
             finally:
-                if close_client:
+                if not self._client:
                     await client.aclose()
         except Exception as e:
             logger.error(f"Error getting recording status: {e}")
@@ -323,29 +384,22 @@ class DahuaCamera(Camera):
     async def get_device_info(self) -> Dict[str, Any]:
         """Get device information from the camera."""
         try:
-            auth = httpx.DigestAuth(self.username, self.password)
             url = f"http://{self.ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
-            
-            # Use the provided client if available, otherwise create a new one
-            if self._client:
-                client = self._client
-                close_client = False
-            else:
-                client = httpx.AsyncClient()
-                close_client = True
-            
+            client = self._client or httpx.AsyncClient()
             try:
-                response = await client.get(url, auth=auth)
+                response = await client.get(url, auth=httpx.DigestAuth(self.username, self.password))
+                await self._log_http_call("get_device_info", response.request, response)
                 if response.status_code == 200:
+                    lines = response.text.strip().split('\n')
                     info = {}
-                    for line in response.text.split('\n'):
+                    for line in lines:
                         if '=' in line:
                             key, value = line.split('=', 1)
                             info[key.strip()] = value.strip()
                     return info
                 return {}
             finally:
-                if close_client:
+                if not self._client:
                     await client.aclose()
         except Exception as e:
             logger.error(f"Error getting device info: {e}")
@@ -360,3 +414,83 @@ class DahuaCamera(Camera):
     def is_connected(self) -> bool:
         """Get connection status."""
         return self._is_connected 
+    
+    async def get_screenshot(self, server_path: str, output_path: str) -> bool:
+        """Get a screenshot from a video file on the camera.
+        
+        Args:
+            server_path: The path to the file on the camera
+            output_path: The path to save the screenshot to
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Use ffmpeg to extract a frame from the video
+            # First download a small part of the file
+            temp_file = os.path.join(os.path.dirname(output_path), "temp_screenshot.dav")
+            
+            auth = httpx.DigestAuth(self.username, self.password)
+            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{server_path}"
+            
+            # Use the provided client if available, otherwise create a new one
+            if self._client:
+                client = self._client
+                close_client = False
+            else:
+                client = httpx.AsyncClient()
+                close_client = True
+                
+            try:
+                # Download just the first 1MB of the file (should be enough for a frame)
+                headers = {"Range": "bytes=0-1048576"}
+                async with client.stream('GET', url, auth=auth, headers=headers) as response:
+                    await self._log_http_call("get_screenshot", response.request, response)
+                    if response.status_code not in [200, 206]:
+                        logger.error(f"Screenshot download failed with status {response.status_code}")
+                        return False
+                        
+                    # Save to temp file
+                    async with aiofiles.open(temp_file, 'wb') as f:
+                        async for chunk in response.aiter_bytes():
+                            await f.write(chunk)
+                
+                # Use ffmpeg to extract the first frame
+                cmd = [
+                    'ffmpeg',
+                    '-i', temp_file,
+                    '-ss', '00:00:01',  # Skip to 1 second in
+                    '-vframes', '1',    # Extract 1 frame
+                    '-q:v', '2',        # High quality
+                    output_path
+                ]
+                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                stdout, stderr = await process.communicate()
+                
+                # Clean up temp file
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                
+                if process.returncode == 0 and os.path.exists(output_path):
+                    logger.info(f"Successfully created screenshot at {output_path}")
+                    return True
+                else:
+                    logger.error(f"Failed to create screenshot: {stderr.decode()}")
+                    return False
+                    
+            finally:
+                if close_client:
+                    await client.aclose()
+                    
+        except Exception as e:
+            logger.error(f"Error getting screenshot: {e}")
+            return False 

@@ -10,7 +10,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "video-grouper=video_grouper.__main__:main",
+            "video-grouper=video_grouper.__main__:main_entry",
         ],
     },
     python_requires=">=3.8",
