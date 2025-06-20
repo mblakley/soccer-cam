@@ -206,6 +206,20 @@ class TrimTask(FFmpegTask):
             return None
         return cls(group_dir, match_info)
 
+@dataclass(frozen=True)
+class YouTubeUploadTask(FFmpegTask):
+    """Task for uploading videos to YouTube."""
+    
+    def __init__(self, group_dir: str):
+        super().__init__("youtube_upload", group_dir)
+    
+    def to_dict(self) -> dict:
+        """Convert task to a dictionary for serialization."""
+        return {
+            "task_type": self.task_type,
+            "item_path": self.item_path
+        }
+
 # Factory function to create the appropriate task type
 def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[MatchInfo] = None) -> Optional[FFmpegTask]:
     """Create an FFmpeg task of the appropriate type."""
@@ -217,6 +231,8 @@ def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[Matc
         if match_info is None:
             return TrimTask.from_path(item_path)
         return TrimTask(item_path, match_info)
+    elif task_type == "youtube_upload":
+        return YouTubeUploadTask(item_path)
     else:
         logger.warning(f"Unknown task type: {task_type}")
         return None

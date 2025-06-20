@@ -6,7 +6,7 @@ import logging
 import asyncio
 import threading
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 from PyQt6.QtCore import (QRunnable, QThreadPool, QTimer, QObject,
                           pyqtSignal as Signal, pyqtSlot as Slot)
 from PyQt6.QtGui import QIcon, QAction
@@ -15,6 +15,7 @@ import win32service
 from video_grouper.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
+from video_grouper.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
 from video_grouper.paths import get_shared_data_path
 
@@ -81,6 +82,25 @@ class AutocamRunner(QRunnable):
         except Exception as e:
             logger.error(f"An error occurred during Once Autocam automation: {e}")
             self.signals.finished.emit(self.group_dir, False)
+
+class YouTubeAuthRunner(QRunnable):
+    class Signals(QObject):
+        finished = Signal(bool, str)
+
+    def __init__(self, credentials_file: str, token_file: str):
+        super().__init__()
+        self.credentials_file = credentials_file
+        self.token_file = token_file
+        self.signals = self.Signals()
+
+    @Slot()
+    def run(self):
+        try:
+            success, message = authenticate_youtube(self.credentials_file, self.token_file)
+            self.signals.finished.emit(success, message)
+        except Exception as e:
+            logger.error(f"Error during YouTube authentication: {e}")
+            self.signals.finished.emit(False, f"Authentication error: {str(e)}")
 
 def get_autocam_input_output_paths(group_dir: Path):
     for root, _, files in os.walk(group_dir):
@@ -412,6 +432,36 @@ class SystemTrayIcon(QSystemTrayIcon):
                     state_data['status'] = 'autocam_complete'
                     with open(state_file, "w") as f:
                         json.dump(state_data, f, indent=4)
+                    
+                    # Check if YouTube uploads are enabled
+                    if self.config.has_section("youtube") and self.config.getboolean("youtube", "enabled", fallback=False):
+                        # Add to YouTube upload queue
+                        logger.info(f"YouTube uploads are enabled. Adding group '{group_name}' to YouTube upload queue.")
+                        ffmpeg_queue_path = groups_dir / "ffmpeg_queue_state.json"
+                        
+                        youtube_task = {
+                            "task_type": "youtube_upload",
+                            "item_path": str(group_dir)
+                        }
+                        
+                        try:
+                            # Load existing queue
+                            queue = []
+                            if ffmpeg_queue_path.exists():
+                                with open(ffmpeg_queue_path, "r") as f:
+                                    queue = json.load(f)
+                            
+                            # Check if this task is already in the queue
+                            if not any(task.get("task_type") == "youtube_upload" and 
+                                      task.get("item_path") == str(group_dir) for task in queue):
+                                queue.append(youtube_task)
+                                with open(ffmpeg_queue_path, "w") as f:
+                                    json.dump(queue, f, indent=4)
+                                logger.info(f"Added group '{group_name}' to YouTube upload queue.")
+                        except Exception as e:
+                            logger.error(f"Error adding group '{group_name}' to YouTube upload queue: {e}")
+                    else:
+                        logger.info(f"YouTube uploads are not enabled. Skipping upload for group '{group_name}'.")
                 except (json.JSONDecodeError, IOError) as e:
                     logger.error(f"Could not update status to autocam_complete for group {group_name}: {e}")
             else:

@@ -5,16 +5,18 @@ import logging
 import json
 import asyncio
 import pytz
+import threading
 from pathlib import Path
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
                              QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox)
-from PyQt6.QtCore import QTimer, QSize
+from PyQt6.QtCore import QTimer, QSize, pyqtSignal as Signal
 from video_grouper.locking import FileLock
 from video_grouper.paths import get_shared_data_path
 from video_grouper.directory_state import DirectoryState
 from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
 from video_grouper.models import MatchInfo
+from video_grouper.youtube_upload import authenticate_youtube
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 
@@ -29,11 +31,15 @@ def all_fields_filled(match_info):
     return all(field.strip() for field in required_fields)
 
 class ConfigWindow(QWidget):
-    def __init__(self):
+    # Signal emitted when configuration is saved
+    config_saved = Signal()
+
+    def __init__(self, config=None):
         super().__init__()
         self.config_path = get_shared_data_path() / 'config.ini'
-        self.config = configparser.ConfigParser()
-        self.load_config()
+        self.config = config if config is not None else configparser.ConfigParser()
+        if config is None:
+            self.load_config()
         self.init_ui()
         
     def load_config(self):
@@ -141,6 +147,34 @@ class ConfigWindow(QWidget):
         storage_group.setLayout(storage_layout)
         settings_layout.addWidget(storage_group)
 
+        # -- YouTube Settings Group --
+        youtube_group = QGroupBox("YouTube Upload Settings")
+        youtube_layout = QFormLayout()
+        
+        # YouTube enabled checkbox
+        self.youtube_enabled = QCheckBox("Enable YouTube Uploads")
+        
+        # Credentials file path
+        self.youtube_credentials_path = QLineEdit()
+        browse_creds_button = QPushButton('Browse...')
+        browse_creds_button.clicked.connect(self.browse_youtube_credentials)
+        
+        # Authentication button
+        self.youtube_auth_button = QPushButton('Authenticate with YouTube')
+        self.youtube_auth_button.clicked.connect(self.authenticate_youtube)
+        
+        # Status label
+        self.youtube_status_label = QLabel("Not authenticated")
+        
+        youtube_layout.addRow('', self.youtube_enabled)
+        youtube_layout.addRow('Credentials File:', self.youtube_credentials_path)
+        youtube_layout.addRow('', browse_creds_button)
+        youtube_layout.addRow('', self.youtube_auth_button)
+        youtube_layout.addRow('Status:', self.youtube_status_label)
+        
+        youtube_group.setLayout(youtube_layout)
+        settings_layout.addWidget(youtube_group)
+
         # -- User Preferences Group --
         prefs_group = QGroupBox("User Preferences")
         prefs_layout = QFormLayout()
@@ -184,6 +218,17 @@ class ConfigWindow(QWidget):
             tz_str = self.config.get('APP', 'timezone', fallback='UTC')
             if tz_str in get_all_timezones():
                 self.timezone_combo.setCurrentText(tz_str)
+        if 'YOUTUBE' in self.config:
+            self.youtube_enabled.setChecked(self.config.getboolean('YOUTUBE', 'enabled', fallback=False))
+            self.youtube_credentials_path.setText(self.config.get('YOUTUBE', 'credentials_file', fallback='youtube/client_secret.json'))
+            
+            # Check if token exists to update status label
+            token_file = self.config.get('YOUTUBE', 'token_file', fallback='youtube/token.json')
+            token_path = os.path.join(self.config.get('STORAGE', 'path', fallback='.'), token_file)
+            if os.path.exists(token_path):
+                self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
+            else:
+                self.youtube_status_label.setText("Not authenticated")
 
     def toggle_password_visibility(self, checked):
         """Toggles the visibility of the password field."""
@@ -197,23 +242,109 @@ class ConfigWindow(QWidget):
         if path:
             self.storage_path.setText(path)
             
+    def browse_youtube_credentials(self):
+        """Browse for YouTube credentials file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 'Select YouTube Credentials File', '', 'JSON Files (*.json)')
+        if file_path:
+            # Make path relative to storage path if possible
+            storage_path = self.storage_path.text()
+            if storage_path and os.path.exists(storage_path) and file_path.startswith(storage_path):
+                rel_path = os.path.relpath(file_path, storage_path)
+                self.youtube_credentials_path.setText(rel_path)
+            else:
+                self.youtube_credentials_path.setText(file_path)
+
+    def authenticate_youtube(self):
+        """Authenticate with YouTube API."""
+        # Get credentials file path
+        credentials_file = self.youtube_credentials_path.text()
+        if not credentials_file:
+            QMessageBox.warning(self, 'Warning', 'Please specify the YouTube credentials file path.')
+            return
+        
+        # Get storage path for resolving relative paths
+        storage_path = self.storage_path.text()
+        if not storage_path:
+            QMessageBox.warning(self, 'Warning', 'Please specify the storage path first.')
+            return
+        
+        # Resolve paths
+        if not os.path.isabs(credentials_file):
+            credentials_file = os.path.join(storage_path, credentials_file)
+        
+        # Get token file path from config or use default
+        if 'YOUTUBE' in self.config and 'token_file' in self.config['YOUTUBE']:
+            token_file = self.config.get('YOUTUBE', 'token_file')
+        else:
+            token_file = 'youtube/token.json'
+        
+        if not os.path.isabs(token_file):
+            token_file = os.path.join(storage_path, token_file)
+        
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(token_file), exist_ok=True)
+        
+        # Update status
+        self.youtube_status_label.setText("Authenticating...")
+        self.youtube_auth_button.setEnabled(False)
+        
+        # Run authentication in a separate thread to avoid freezing UI
+        def auth_thread():
+            try:
+                success, message = authenticate_youtube(credentials_file, token_file)
+                
+                # Update UI in the main thread
+                def update_ui():
+                    self.youtube_auth_button.setEnabled(True)
+                    if success:
+                        self.youtube_status_label.setText("Authenticated")
+                        QMessageBox.information(self, 'Success', message)
+                    else:
+                        self.youtube_status_label.setText("Authentication failed")
+                        QMessageBox.warning(self, 'Authentication Failed', message)
+                
+                # Execute in main thread
+                QTimer.singleShot(0, update_ui)
+                
+            except Exception as e:
+                logger.error(f"Error during YouTube authentication: {e}")
+                
+                def show_error():
+                    self.youtube_auth_button.setEnabled(True)
+                    self.youtube_status_label.setText("Authentication error")
+                    QMessageBox.critical(self, 'Error', f"Authentication error: {str(e)}")
+                
+                QTimer.singleShot(0, show_error)
+        
+        # Start authentication thread
+        threading.Thread(target=auth_thread, daemon=True).start()
+
     def save_settings(self):
         """Saves all settings from the Settings tab."""
         try:
             if 'CAMERA' not in self.config: self.config.add_section('CAMERA')
             if 'STORAGE' not in self.config: self.config.add_section('STORAGE')
             if 'APP' not in self.config: self.config.add_section('APP')
+            if 'YOUTUBE' not in self.config: self.config.add_section('YOUTUBE')
                 
             self.config['CAMERA']['device_ip'] = self.ip_address.text()
             self.config['CAMERA']['username'] = self.username.text()
             self.config['CAMERA']['password'] = self.password.text()
             self.config['STORAGE']['path'] = self.storage_path.text()
             self.config['APP']['timezone'] = self.timezone_combo.currentText()
+            self.config['YOUTUBE']['enabled'] = str(self.youtube_enabled.isChecked())
+            self.config['YOUTUBE']['credentials_file'] = self.youtube_credentials_path.text()
+            
+            # Set default token file if not already set
+            if 'token_file' not in self.config['YOUTUBE']:
+                self.config['YOUTUBE']['token_file'] = 'youtube/token.json'
             
             with FileLock(self.config_path):
                 with open(self.config_path, 'w') as f:
                     self.config.write(f)
             QMessageBox.information(self, 'Success', 'Settings saved successfully.')
+            self.config_saved.emit()
 
         except TimeoutError:
             QMessageBox.critical(self, 'Error', 'Could not save settings: file is locked.')
@@ -278,11 +409,17 @@ class ConfigWindow(QWidget):
                 with open(queue_file, 'r') as f: queue_data = json.load(f)
             if not queue_data: return
 
-            for group_dir in queue_data:
-                item = QListWidgetItem(os.path.basename(group_dir))
-                self.autocam_queue_list.addItem(item)
+            for item in queue_data:
+                group_name = item.get('group_name', 'Unknown')
+                status = item.get('status', 'unknown')
+                display_text = f"{group_name} - Status: {status}"
+                self.autocam_queue_list.addItem(display_text)
         except Exception as e:
             logger.error(f"Error refreshing autocam queue display: {e}")
+            
+    def refresh_autocam_queue_tab(self):
+        """Refreshes the autocam queue tab."""
+        self.refresh_autocam_queue_display()
 
     def refresh_processing_queue_display(self):
         """Reads and displays the FFmpeg processing queue state."""
