@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 import pytest
 from unittest.mock import call
 
-from video_grouper.models import RecordingFile
+from video_grouper.models import RecordingFile, MatchInfo
 from video_grouper.video_grouper import VideoGrouperApp, DOWNLOAD_QUEUE_STATE_FILE, FFMPEG_QUEUE_STATE_FILE
+from video_grouper.directory_state import DirectoryState
 
 # Constants
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -232,7 +233,7 @@ class TestVideoGrouperAppWithMocks:
 
 
     async def test_handle_trim_task(self, mock_aio_open, mock_remove, mock_listdir, mock_exists, mock_makedirs, mock_builtin_open, mock_config, mock_camera):
-        """Test trim task uses a mock config parser and calls the trim utility."""
+        """Test trim task uses a MatchInfo object and calls the trim utility."""
         app = setup_app(mock_config, mock_camera)
         group_dir = os.path.join(STORAGE_PATH, "group_for_trim")
         combined_path = os.path.join(group_dir, "combined.mp4")
@@ -240,15 +241,14 @@ class TestVideoGrouperAppWithMocks:
         # Mock that the combined file exists
         mock_exists.return_value = True
 
-        # Create a mock config parser for match_info
-        mock_match_config = configparser.ConfigParser()
-        mock_match_config['MATCH'] = {
-            'my_team_name': 'Test Team',
-            'opponent_team_name': 'Rivals',
-            'location': 'Home',
-            'start_time_offset': '00:01:30',
-            'total_duration': '00:10:00'
-        }
+        # Create a MatchInfo object
+        match_info = MatchInfo(
+            my_team_name='Test Team',
+            opponent_team_name='Rivals',
+            location='Home',
+            start_time_offset='00:01:30',
+            total_duration='00:10:00'
+        )
 
         with patch('video_grouper.video_grouper.DirectoryState') as mock_dir_state_class:
             mock_state_instance = MagicMock()
@@ -258,7 +258,7 @@ class TestVideoGrouperAppWithMocks:
             with patch('video_grouper.video_grouper.trim_video', new_callable=AsyncMock) as mock_trim:
                 mock_trim.return_value = True
                 
-                await app._handle_trim_task(group_dir, match_info_config=mock_match_config)
+                await app._handle_trim_task(group_dir, match_info=match_info)
 
                 # Verify trim was called with correct parameters
                 mock_trim.assert_called_once()

@@ -5,12 +5,12 @@ import asyncio
 import logging
 import configparser
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, Set
 import aiofiles
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import RecordingFile
+from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, create_ffmpeg_task, task_from_dict
 from video_grouper.cameras.dahua import DahuaCamera
 
 # Constants
@@ -121,8 +121,8 @@ class VideoGrouperApp:
                             logger.info(f"AUDIT: Skipping file {file_obj.file_path} in {group_dir} as per state file.")
                             continue
 
-                        if file_obj.status == "downloaded" and file_obj.file_path not in self.queued_for_ffmpeg:
-                            task = ('convert', file_obj.file_path)
+                        if file_obj.status == "downloaded" and file_obj.file_path not in self.queued_for_download:
+                            task = ConvertTask(file_obj.file_path)
                             logger.info(f"AUDIT: Found downloaded file in {group_dir}, adding to FFmpeg queue: {task}")
                             await self.add_to_ffmpeg_queue(task)
                         
@@ -139,14 +139,14 @@ class VideoGrouperApp:
                             )
                             await self.add_to_download_queue(recording_file)
                             
-                        elif file_obj.status == "conversion_failed" and ('convert', file_obj.file_path) not in self.queued_for_ffmpeg:
+                        elif file_obj.status == "conversion_failed" and file_obj.file_path not in self.queued_for_ffmpeg:
                             logger.info(f"AUDIT: Found failed conversion in {group_dir}, re-queuing for conversion: {file_obj.file_path}")
-                            await self.add_to_ffmpeg_queue(('convert', file_obj.file_path))
+                            await self.add_to_ffmpeg_queue(ConvertTask(file_obj.file_path))
 
-                    if dir_state.is_ready_for_combining() and ('combine', group_dir) not in self.queued_for_ffmpeg:
+                    if dir_state.is_ready_for_combining() and group_dir not in self.queued_for_ffmpeg:
                         combined_path = os.path.join(group_dir, "combined.mp4")
                         if not os.path.exists(combined_path):
-                            task = ('combine', group_dir)
+                            task = CombineTask(group_dir)
                             logger.info(f"AUDIT: All files converted in {group_dir}, adding combine task to FFmpeg queue: {task}")
                             await self.add_to_ffmpeg_queue(task)
 
@@ -156,10 +156,17 @@ class VideoGrouperApp:
                         combined_path = os.path.join(group_dir, "combined.mp4")
                         if os.path.exists(combined_path):
                             if self.is_match_info_populated(group_dir):
-                                task = ('trim', group_dir)
-                                if task not in self.queued_for_ffmpeg:
-                                    logger.info(f"AUDIT: Found combined group with populated match info and combined.mp4 in {group_dir}. Queueing trim: {task}")
-                                    await self.add_to_ffmpeg_queue(task)
+                                # Create a MatchInfo object for the task
+                                match_info_path = os.path.join(group_dir, "match_info.ini")
+                                match_info = MatchInfo.from_file(match_info_path)
+                                if match_info:
+                                    # Create a TrimTask
+                                    task = TrimTask(group_dir, match_info)
+                                    if task not in self.queued_for_ffmpeg:
+                                        logger.info(f"AUDIT: Found combined group with populated match info and combined.mp4 in {group_dir}. Queueing trim: {task}")
+                                        await self.add_to_ffmpeg_queue(task)
+                                else:
+                                    logger.warning(f"AUDIT: Failed to create MatchInfo object for {group_dir}. Not queueing trim task.")
                             else:
                                 logger.info(f"AUDIT: Found combined group with no match_info.ini in {group_dir}. Not ready to trim.")
                         else:
@@ -305,7 +312,7 @@ class VideoGrouperApp:
                 logger.info(f"Successfully downloaded {os.path.basename(file_path)}")
                 
                 # After successful download, add to FFmpeg queue
-                await self.add_to_ffmpeg_queue(('convert', file_path))
+                await self.add_to_ffmpeg_queue(ConvertTask(file_path))
 
                 # Now that it's handled, remove it from the queue state
                 self.queued_for_download.remove(file_path)
@@ -330,16 +337,16 @@ class VideoGrouperApp:
         while True:
             task = await self.ffmpeg_queue.get()
             
-            task_type, item_path = task
             try:
-                if task_type == 'convert':
-                    await self._handle_conversion_task(item_path)
-                elif task_type == 'combine':
-                    await self._handle_combine_task(item_path)
-                elif task_type == 'trim':
-                    await self._handle_trim_task(item_path)
+                if isinstance(task, ConvertTask):
+                    await self._handle_conversion_task(task.item_path)
+                elif isinstance(task, CombineTask):
+                    await self._handle_combine_task(task.item_path)
+                elif isinstance(task, TrimTask):
+                    await self._handle_trim_task(task.item_path, match_info=task.match_info)
                 else:
-                    logger.warning(f"Unknown ffmpeg task type: {task_type}")
+                    logger.warning(f"Unknown ffmpeg task type: {task}")
+                    continue
 
                 # If no exception, task is successful, remove from state
                 self.queued_for_ffmpeg.remove(task)
@@ -388,7 +395,7 @@ class VideoGrouperApp:
 
                 if dir_state.is_ready_for_combining():
                     logger.info(f"Group {os.path.basename(group_dir)} is ready for combining.")
-                    await self.add_to_ffmpeg_queue(('combine', group_dir))
+                    await self.add_to_ffmpeg_queue(CombineTask(group_dir))
             else:
                 await dir_state.set_file_status(file_path, "conversion_failed")
                 logger.error(f"Conversion failed for {file_path}")
@@ -438,9 +445,13 @@ class VideoGrouperApp:
                 logger.info(f"Successfully combined videos in {group_dir}")
                 await dir_state.update_group_status("combined")
                 
-                # Check for match_info.ini and queue trim task if it exists
-                if os.path.exists(os.path.join(group_dir, "match_info.ini")):
-                    await self.add_to_ffmpeg_queue(('trim', group_dir))
+                # Check for match_info.ini and queue trim task if it's populated
+                match_info_path = os.path.join(group_dir, "match_info.ini")
+                if os.path.exists(match_info_path) and self.is_match_info_populated(group_dir):
+                    match_info = MatchInfo.from_file(match_info_path)
+                    if match_info:
+                        task = TrimTask(group_dir, match_info)
+                        await self.add_to_ffmpeg_queue(task)
             else:
                 logger.error(f"Failed to combine videos in {group_dir}")
                 await dir_state.update_group_status("combine_failed", error_message="ffmpeg combine command failed.")
@@ -451,33 +462,31 @@ class VideoGrouperApp:
             if os.path.exists(file_list_path):
                 os.remove(file_list_path)
 
-    async def _handle_trim_task(self, group_dir: str, match_info_config: configparser.ConfigParser = None):
+    async def _handle_trim_task(self, group_dir: str, match_info: Optional[MatchInfo] = None):
         """
         Handles trimming of a combined video file based on match_info.ini.
         If the match info is valid and the combined file exists, it will trim the video.
+        
+        Args:
+            group_dir: The directory containing the combined video
+            match_info: Optional MatchInfo object. If None, it will be loaded from match_info.ini
         """
         logger.info(f"TRIM: Handling trim task for {group_dir}")
 
         dir_state = DirectoryState(group_dir)
-        match_config = match_info_config
-
-        if match_config is None:
+        
+        # Load match info if not provided
+        if match_info is None:
             if not self.is_match_info_populated(group_dir):
                 logger.warning(f"TRIM: Match info for {group_dir} is not populated. Re-queueing.")
-                await self._requeue_ffmpeg_task_later(('trim', group_dir), delay_seconds=60)
+                await self._requeue_ffmpeg_task_later(TrimTask(group_dir), delay_seconds=60)
                 return
 
             match_info_path = os.path.join(group_dir, "match_info.ini")
-            match_config = configparser.ConfigParser()
-            try:
-                read_files = match_config.read(match_info_path)
-                if not read_files:
-                    logger.error(f"TRIM: Failed to read match_info.ini at {match_info_path}")
-                    await dir_state.update_group_status("trim_failed", error_message="Failed to read match_info.ini")
-                    return
-            except configparser.Error as e:
-                logger.error(f"TRIM: Error parsing match_info.ini for {group_dir}: {e}")
-                await dir_state.update_group_status("trim_failed", error_message=f"Error parsing match_info.ini: {e}")
+            match_info = MatchInfo.from_file(match_info_path)
+            if match_info is None:
+                logger.error(f"TRIM: Failed to read match_info.ini at {match_info_path}")
+                await dir_state.update_group_status("trim_failed", error_message="Failed to read match_info.ini")
                 return
 
         combined_path = os.path.join(group_dir, "combined.mp4")
@@ -487,20 +496,14 @@ class VideoGrouperApp:
             return
 
         try:
-            my_team_name = match_config.get('MATCH', 'my_team_name')
-            opponent_team_name = match_config.get('MATCH', 'opponent_team_name')
-            location = match_config.get('MATCH', 'location')
-            start_offset = match_config.get('MATCH', 'start_time_offset', fallback='00:00:00')
-            total_duration_str = match_config.get('MATCH', 'total_duration')
-
-            # Convert total_duration from HH:MM:SS to seconds
-            h, m, s = map(int, total_duration_str.split(':'))
-            total_duration_seconds = timedelta(hours=h, minutes=m, seconds=s).total_seconds()
+            my_team_name = match_info.my_team_name
+            opponent_team_name = match_info.opponent_team_name
+            location = match_info.location
+            start_offset = match_info.start_time_offset
+            total_duration_seconds = match_info.get_total_duration_seconds()
             
-            # Sanitize names for filename
-            my_team_sanitized = re.sub(r'[^a-zA-Z0-9]', '', my_team_name).lower()
-            opponent_sanitized = re.sub(r'[^a-zA-Z0-9]', '', opponent_team_name).lower()
-            location_sanitized = re.sub(r'[^a-zA-Z0-9]', '', location).lower()
+            # Get sanitized names for filename
+            my_team_sanitized, opponent_sanitized, location_sanitized = match_info.get_sanitized_names()
 
             # Get date from group directory name to add to filename
             group_name = os.path.basename(group_dir)
@@ -537,9 +540,11 @@ class VideoGrouperApp:
                 await dir_state.update_group_status("trimmed")
             else:
                 logger.error(f"Failed to trim video for {group_dir}")
+                await dir_state.update_group_status("trim_failed", error_message="FFmpeg trim command failed")
 
         except Exception as e:
             logger.error(f"Error during trim task for {group_dir}: {e}")
+            await dir_state.update_group_status("trim_failed", error_message=str(e))
             
         return True # Handled
 
@@ -564,29 +569,17 @@ class VideoGrouperApp:
         if not os.path.exists(match_info_path):
             return False
         
-        try:
-            config = configparser.ConfigParser()
-            config.read(match_info_path)
-            
-            if not config.has_section('MATCH'):
-                return False
-            
-            required_fields = ['my_team_name', 'opponent_team_name', 'location', 'start_time_offset']
-            for field in required_fields:
-                value = config.get('MATCH', field, fallback='').strip()
-                if not value: # Check if value is an empty string
-                    return False
-            
-            return True
-        except configparser.Error:
-            logger.error(f"Error parsing match_info.ini in {group_dir}")
+        match_info = MatchInfo.from_file(match_info_path)
+        if match_info is None:
             return False
+        
+        # Check that required fields are populated
+        required_fields = [match_info.my_team_name, match_info.opponent_team_name, match_info.location, match_info.start_time_offset]
+        return all(field.strip() for field in required_fields)
 
-    def parse_match_info(self, file_path: str) -> Optional[Dict[str, str]]:
+    def parse_match_info(self, file_path: str) -> Optional[MatchInfo]:
         """Parse match info file."""
-        config = configparser.ConfigParser()
-        config.read(file_path)
-        return dict(config['MATCH']) if 'MATCH' in config else None
+        return MatchInfo.from_file(file_path)
 
     async def add_to_download_queue(self, recording_file: RecordingFile):
         """Adds a file to the download queue if it's not already present."""
@@ -598,7 +591,7 @@ class VideoGrouperApp:
         else:
             logger.debug(f"File {recording_file.file_path} is already in the download queue.")
 
-    async def add_to_ffmpeg_queue(self, task: Tuple[str, Any]):
+    async def add_to_ffmpeg_queue(self, task: FFmpegTask):
         """Adds a task to the FFmpeg queue if it's not already present."""
         if task not in self.queued_for_ffmpeg:
             await self.ffmpeg_queue.put(task)
@@ -642,13 +635,15 @@ class VideoGrouperApp:
                 items.append(await self.ffmpeg_queue.get())
             
             # Serialize the drained items
-            data_to_save = [list(item) for item in items]
+            data_to_save = []
+            for item in items:
+                data_to_save.append(item.to_dict())
 
             logger.info(f"Saving FFmpeg queue state with {len(data_to_save)} items: {data_to_save}")
             async with aiofiles.open(queue_path, 'w') as f:
                 await f.write(json.dumps(data_to_save, indent=2))
             
-            # Refill the queue
+            # Refill the queue with original items
             for item in items:
                 await self.ffmpeg_queue.put(item)
         except Exception as e:
@@ -683,7 +678,7 @@ class VideoGrouperApp:
             except Exception as e:
                 logger.error(f"Failed to load download queue state: {e}", exc_info=True)
 
-        # Load FFmpeg Queue (existing logic)
+        # Load FFmpeg Queue
         ffmpeg_queue_path = os.path.join(self.storage_path, FFMPEG_QUEUE_STATE_FILE)
         if os.path.exists(ffmpeg_queue_path):
             try:
@@ -701,9 +696,25 @@ class VideoGrouperApp:
                         return
 
                     for item in items:
-                        if isinstance(item, list) and len(item) == 2:
-                            logger.info(f"LOAD: Adding task to FFmpeg queue: {tuple(item)}")
-                            await self.add_to_ffmpeg_queue(tuple(item))
+                        if isinstance(item, dict):
+                            # New dictionary format
+                            task = task_from_dict(item)
+                            if task:
+                                logger.info(f"LOAD: Adding task to FFmpeg queue from dict: {task}")
+                                await self.add_to_ffmpeg_queue(task)
+                            else:
+                                logger.warning(f"LOAD: Failed to create task from dict: {item}")
+                        elif isinstance(item, list) and len(item) >= 2:
+                            # Legacy list format
+                            task_type, item_path = item[0], item[1]
+                            
+                            # Create the appropriate task object
+                            task = create_ffmpeg_task(task_type, item_path)
+                            if task:
+                                logger.info(f"LOAD: Adding task to FFmpeg queue from list: {task}")
+                                await self.add_to_ffmpeg_queue(task)
+                            else:
+                                logger.warning(f"LOAD: Failed to create task from list: {item}")
                         else:
                             logger.warning(f"LOAD: Skipping malformed item in ffmpeg_queue_state.json: {item}")
 
@@ -775,7 +786,7 @@ class VideoGrouperApp:
                 logger.error(f"Error processing directory {dir_path} for cleanup: {e}")
         return deleted_count
 
-    async def _requeue_ffmpeg_task_later(self, task: Tuple[str, Any], delay_seconds: int):
+    async def _requeue_ffmpeg_task_later(self, task: FFmpegTask, delay_seconds: int):
         """Waits for a delay and then adds a task back to the FFmpeg queue."""
         await asyncio.sleep(delay_seconds)
         logger.info(f"Re-queueing delayed task: {task}")
