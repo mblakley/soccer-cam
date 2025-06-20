@@ -502,8 +502,26 @@ class VideoGrouperApp:
             opponent_sanitized = re.sub(r'[^a-zA-Z0-9]', '', opponent_team_name).lower()
             location_sanitized = re.sub(r'[^a-zA-Z0-9]', '', location).lower()
 
-            output_filename = f"{my_team_sanitized}-{opponent_sanitized}-{location_sanitized}.mp4"
-            output_path = os.path.join(os.path.dirname(group_dir), output_filename) # Save to parent directory of group
+            # Get date from group directory name to add to filename
+            group_name = os.path.basename(group_dir)
+            date_str_ymd = "nodate"
+            date_str_mdy = "nodate"
+            try:
+                date_part = group_name.split('-')[0]
+                dt_obj = datetime.strptime(date_part, '%Y.%m.%d')
+                date_str_ymd = dt_obj.strftime('%Y.%m.%d')
+                date_str_mdy = dt_obj.strftime('%m-%d-%Y')
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Could not parse date from group name '{group_name}'. Using generic date string. Error: {e}")
+
+            # Create the subdirectory for the trimmed file
+            sub_dir_name = f"{date_str_ymd} - {my_team_name} vs {opponent_team_name} ({location})"
+            sub_dir_path = os.path.join(group_dir, sub_dir_name)
+            os.makedirs(sub_dir_path, exist_ok=True)
+
+            # Define the output filename and path
+            output_filename = f"{my_team_sanitized}-{opponent_sanitized}-{location_sanitized}-{date_str_mdy}-raw.mp4"
+            output_path = os.path.join(sub_dir_path, output_filename)
 
             logger.info(f"TRIM: Preparing to trim {combined_path} to {output_path} with offset {start_offset} and duration {total_duration_seconds}s")
 

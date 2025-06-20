@@ -7,20 +7,23 @@ import asyncio
 import threading
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import (QRunnable, QThreadPool, QTimer, QObject,
+                          pyqtSignal as Signal, pyqtSlot as Slot)
+from PyQt6.QtGui import QIcon, QAction
 import win32serviceutil
 import win32service
+from video_grouper.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from .config_ui import ConfigWindow
 from video_grouper.paths import get_shared_data_path
 
 # Configure logging
-log_dir = Path('C:/ProgramData/VideoGrouper')
-log_dir.mkdir(parents=True, exist_ok=True)
+# log_dir = Path('C:/ProgramData/VideoGrouper')
+# log_dir.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
-    filename=log_dir / 'tray_agent.log',
+    # filename=log_dir / 'tray_agent.log',
+    stream=sys.stdout,
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
@@ -58,8 +61,38 @@ class UpdateChecker(threading.Thread):
             # Sleep for an hour
             threading.Event().wait(3600)
 
+class RunnerSignals(QObject):
+    finished = Signal(Path, bool)
+
+class AutocamRunner(QRunnable):
+    def __init__(self, input_path: str, output_path: str, group_dir: Path):
+        super().__init__()
+        self.input_path = input_path
+        self.output_path = output_path
+        self.group_dir = group_dir
+        self.signals = RunnerSignals()
+
+    @Slot()
+    def run(self):
+        try:
+            # Assuming run_autocam_on_file returns True on success, False on failure
+            success = run_autocam_on_file(self.input_path, self.output_path)
+            self.signals.finished.emit(self.group_dir, success)
+        except Exception as e:
+            logger.error(f"An error occurred during Once Autocam automation: {e}")
+            self.signals.finished.emit(self.group_dir, False)
+
+def get_autocam_input_output_paths(group_dir: Path):
+    for root, _, files in os.walk(group_dir):
+        for file in files:
+            if file.endswith("-raw.mp4"):
+                input_path = Path(root) / file
+                output_path = input_path.with_name(input_path.name.replace("-raw.mp4", ".mp4"))
+                return str(input_path), str(output_path)
+    raise FileNotFoundError(f"No '-raw.mp4' file found in {group_dir}")
+
 class SystemTrayIcon(QSystemTrayIcon):
-    update_available = pyqtSignal(str)
+    update_available = Signal(str)
     
     def __init__(self):
         super().__init__()
@@ -75,8 +108,24 @@ class SystemTrayIcon(QSystemTrayIcon):
         # Get update URL from config
         self.update_url = self.config.get('Updates', 'update_url', fallback='https://updates.videogrouper.com')
         
+        # Ensure essential paths are configured
+        if not self.config.has_section('paths'):
+            self.config.add_section('paths')
+        if not self.config.has_option('paths', 'shared_data_path'):
+            self.config.set('paths', 'shared_data_path', str(get_shared_data_path()))
+
+        self._is_first_check = True
         self.init_ui()
         self.start_update_checker()
+        
+        self.threadpool = QThreadPool()
+        logger.info(f"Using a thread pool with {self.threadpool.maxThreadCount()} threads.")
+
+        self._autocam_queue_timer = QTimer()
+        self._autocam_queue_processing = False
+        self._autocam_queue_timer.timeout.connect(self._check_autocam_queue)
+        self._autocam_queue_timer.start(10000)
+        self._check_autocam_queue()
         
     def init_ui(self):
         # Create tray icon
@@ -89,30 +138,36 @@ class SystemTrayIcon(QSystemTrayIcon):
         menu = QMenu()
         
         # Service control actions
-        start_action = menu.addAction('Start Service')
+        start_action = QAction('Start Service', self)
         start_action.triggered.connect(self.start_service)
+        menu.addAction(start_action)
         
-        stop_action = menu.addAction('Stop Service')
+        stop_action = QAction('Stop Service', self)
         stop_action.triggered.connect(self.stop_service)
+        menu.addAction(stop_action)
         
-        restart_action = menu.addAction('Restart Service')
+        restart_action = QAction('Restart Service', self)
         restart_action.triggered.connect(self.restart_service)
+        menu.addAction(restart_action)
         
         menu.addSeparator()
         
         # Configuration action
-        config_action = menu.addAction('Configuration')
+        config_action = QAction('Configuration', self)
         config_action.triggered.connect(self.show_config)
+        menu.addAction(config_action)
         
         # Update action
-        self.update_action = menu.addAction('Check for Updates')
+        self.update_action = QAction('Check for Updates', self)
         self.update_action.triggered.connect(self.check_updates)
+        menu.addAction(self.update_action)
         
         menu.addSeparator()
         
         # Exit action
-        exit_action = menu.addAction('Exit')
+        exit_action = QAction('Exit', self)
         exit_action.triggered.connect(self.exit_app)
+        menu.addAction(exit_action)
         
         self.setContextMenu(menu)
         
@@ -130,9 +185,24 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.show_config()
             
     def show_config(self):
-        self.config_window = ConfigWindow()
-        self.config_window.show()
+        if not hasattr(self, 'config_window') or self.config_window is None:
+            self.config_window = ConfigWindow(self.config)
+            self.config_window.config_saved.connect(self.on_config_saved)
         
+        self.config_window.show()
+        self.config_window.raise_()
+        self.config_window.activateWindow()
+        self.refresh_autocam_queue_ui()
+    
+    def refresh_autocam_queue_ui(self):
+        if hasattr(self, 'config_window') and self.config_window:
+            self.config_window.refresh_autocam_queue_tab()
+
+    def on_config_saved(self):
+        self.config = configparser.ConfigParser()
+        self.config.read(self.config_path)
+        logger.info("Configuration saved.")
+
     def start_service(self):
         try:
             win32serviceutil.StartService('VideoGrouperService')
@@ -174,7 +244,186 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.showMessage('Updates', message)
         
     def exit_app(self):
+        if hasattr(self, 'config_window') and self.config_window:
+            self.config_window.close()
         QApplication.quit()
+
+    def _check_autocam_queue(self):
+        logger.info("Checking Autocam queue...")
+        if self._autocam_queue_processing:
+            return
+
+        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        logger.info(f"Scanning for groups in '{groups_dir}'")
+        autocam_queue_path = groups_dir / "autocam_queue_state.json"
+
+        queue = []
+        if autocam_queue_path.exists():
+            try:
+                with open(autocam_queue_path, "r") as f:
+                    queue = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                logger.warning("Could not read autocam queue file. Starting fresh.")
+                queue = []
+
+        queue_changed = False
+
+        # On first run, reset 'processing' items to 'queued'
+        if self._is_first_check:
+            for item in queue:
+                if item['status'] == 'processing':
+                    item['status'] = 'queued'
+                    logger.warning(f"Found job in 'processing' state from previous run. Re-queueing group '{item['group_name']}'.")
+                    queue_changed = True
+            self._is_first_check = False
+
+        existing_group_names = {item['group_name'] for item in queue}
+
+        for group_dir in groups_dir.iterdir():
+            if group_dir.is_dir() and group_dir.name not in existing_group_names:
+                state_file = group_dir / "state.json"
+                if state_file.exists():
+                    try:
+                        with open(state_file, "r") as f:
+                            state_data = json.load(f)
+                        status = state_data.get("status")
+                        if status == "trimmed":
+                            group_name = group_dir.name
+                            queue.append({"group_name": group_name, "status": "queued"})
+                            logger.info(f"Found new trimmed group '{group_name}'. Adding to Autocam queue.")
+                            queue_changed = True
+                    except (json.JSONDecodeError, IOError) as e:
+                        logger.error(f"Error processing state.json for group {group_dir.name}: {e}")
+
+        for item in queue:
+            if item['status'] == 'autocam_failed':
+                item['status'] = 'queued'
+                logger.info(f"Re-queueing failed Autocam job for group '{item['group_name']}'.")
+                queue_changed = True
+
+        if queue_changed:
+            with open(autocam_queue_path, "w") as f:
+                json.dump(queue, f, indent=4)
+            self.refresh_autocam_queue_ui()
+
+        if any(item['status'] == 'queued' for item in queue):
+            self._autocam_queue_processing = True
+            logger.info("Found items in autocam queue. Starting runner.")
+            self._run_autocam_from_queue()
+        
+        logger.info("Autocam queue check finished.")
+
+    def _run_autocam_from_queue(self):
+        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        autocam_queue_path = groups_dir / "autocam_queue_state.json"
+
+        if not autocam_queue_path.exists():
+            self._autocam_queue_processing = False
+            return
+
+        try:
+            with open(autocam_queue_path, "r") as f:
+                queue = json.load(f)
+        except json.JSONDecodeError:
+            logger.error("Could not decode autocam queue. Resetting.")
+            os.remove(autocam_queue_path)
+            self._autocam_queue_processing = False
+            return
+
+        item_to_process = None
+        for item in queue:
+            if item['status'] == 'queued':
+                item_to_process = item
+                break
+
+        if not item_to_process:
+            logger.info("No queued items found in autocam queue.")
+            self._autocam_queue_processing = False
+            return
+
+        group_name = item_to_process['group_name']
+        group_dir = groups_dir / group_name
+
+        try:
+            input_path, output_path = get_autocam_input_output_paths(group_dir)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error(f"Could not find video file for group {group_name}: {e}")
+            item_to_process['status'] = 'autocam_failed'
+            with open(autocam_queue_path, "w") as f:
+                json.dump(queue, f, indent=4)
+            self._autocam_queue_processing = False
+            QTimer.singleShot(0, self._check_autocam_queue)
+            return
+
+        item_to_process['status'] = 'processing'
+        with open(autocam_queue_path, "w") as f:
+            json.dump(queue, f, indent=4)
+        
+        self.refresh_autocam_queue_ui()
+
+        logger.info(f"Starting Autocam process for group {group_name}...")
+        self._autocam_queue_timer.stop()
+        logger.info("Autocam queue timer stopped while processing.")
+        runner = AutocamRunner(input_path, output_path, group_dir)
+        runner.signals.finished.connect(self.on_autocam_runner_finished)
+        self.threadpool.start(runner)
+
+    def on_autocam_runner_finished(self, group_dir, success):
+        group_name = group_dir.name
+
+        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        autocam_queue_path = groups_dir / "autocam_queue_state.json"
+
+        with open(autocam_queue_path, "r") as f:
+            queue = json.load(f)
+
+        item_found = False
+        if success:
+            # On success, remove the item from the queue
+            original_length = len(queue)
+            queue = [item for item in queue if item['group_name'] != group_name]
+            if len(queue) < original_length:
+                item_found = True
+                logger.info(f"Successfully processed and removed group '{group_name}' from Autocam queue.")
+        else:
+            # On failure, mark as failed to be retried later
+            for item in queue:
+                if item['group_name'] == group_name:
+                    item['status'] = 'autocam_failed'
+                    item_found = True
+                    break
+
+        if not item_found:
+            logger.error(f"Finished job for group {group_name}, but it was not found in the queue.")
+            self._autocam_queue_processing = False
+            return
+
+        with open(autocam_queue_path, "w") as f:
+            json.dump(queue, f, indent=4)
+
+        # Update the group's main state file on success
+        if success:
+            logger.info(f"Updating group '{group_name}' status to autocam_complete.")
+            state_file = group_dir / "state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, "r") as f:
+                        state_data = json.load(f)
+                    state_data['status'] = 'autocam_complete'
+                    with open(state_file, "w") as f:
+                        json.dump(state_data, f, indent=4)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.error(f"Could not update status to autocam_complete for group {group_name}: {e}")
+            else:
+                logger.warning(f"state.json not found for group {group_name} on successful completion.")
+        else:
+            logger.error(f"AUTOCAM_RUNNER: Failed to process video for group {group_name}.")
+
+        self.refresh_autocam_queue_ui()
+
+        self._autocam_queue_processing = False
+        self._autocam_queue_timer.start()
+        logger.info("Autocam queue timer restarted.")
 
 def main():
     app = QApplication(sys.argv)

@@ -81,6 +81,15 @@ class ConfigWindow(QWidget):
         processing_queue_tab.setLayout(processing_queue_layout)
         tabs.addTab(processing_queue_tab, 'Processing Queue')
 
+        # Autocam Queue Tab
+        autocam_queue_tab = QWidget()
+        autocam_queue_layout = QVBoxLayout()
+        self.autocam_queue_list = QListWidget()
+        self.autocam_queue_list.setSpacing(5)
+        autocam_queue_layout.addWidget(self.autocam_queue_list)
+        autocam_queue_tab.setLayout(autocam_queue_layout)
+        tabs.addTab(autocam_queue_tab, 'Autocam Queue')
+
         # Connection History Tab
         connection_tab = QWidget()
         connection_layout = QVBoxLayout()
@@ -219,6 +228,7 @@ class ConfigWindow(QWidget):
         """Refreshes the text in the queue display tabs."""
         self.refresh_download_queue_display()
         self.refresh_processing_queue_display()
+        self.refresh_autocam_queue_display()
 
     def refresh_download_queue_display(self):
         """Reads and displays the download queue state."""
@@ -252,8 +262,23 @@ class ConfigWindow(QWidget):
         except TimeoutError:
             self.download_queue_list.addItem("Could not read queue state: file is locked.")
         except Exception as e:
-            logger.error(f"Error reading download queue state: {e}")
-            self.download_queue_list.addItem("Error reading download queue state.")
+            logger.error(f"Error refreshing download queue display: {e}")
+
+    def refresh_autocam_queue_display(self):
+        """Reads and displays the autocam queue state."""
+        queue_file = get_shared_data_path() / "autocam_queue_state.json"
+        self.autocam_queue_list.clear()
+        try:
+            with FileLock(queue_file):
+                if not queue_file.exists(): return
+                with open(queue_file, 'r') as f: queue_data = json.load(f)
+            if not queue_data: return
+
+            for group_dir in queue_data:
+                item = QListWidgetItem(os.path.basename(group_dir))
+                self.autocam_queue_list.addItem(item)
+        except Exception as e:
+            logger.error(f"Error refreshing autocam queue display: {e}")
 
     def refresh_processing_queue_display(self):
         """Reads and displays the FFmpeg processing queue state."""
