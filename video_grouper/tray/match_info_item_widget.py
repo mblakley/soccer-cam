@@ -92,4 +92,30 @@ class MatchInfoItemWidget(QWidget):
     def on_save_clicked(self):
         """Callback when the save button is clicked."""
         if self.refresh_callback:
-            self.refresh_callback(self) 
+            # Format the start time offset to HH:MM:SS format
+            start_time = self.start_time_offset.text().strip()
+            if ":" not in start_time:
+                # Assume MM:SS format and convert to HH:MM:SS
+                try:
+                    minutes, seconds = start_time.split(":", 1)
+                    start_time = f"00:{minutes.zfill(2)}:{seconds.zfill(2)}"
+                except ValueError:
+                    # If no colon, assume seconds only
+                    try:
+                        seconds = int(start_time)
+                        minutes = seconds // 60
+                        seconds = seconds % 60
+                        start_time = f"00:{minutes:02d}:{seconds:02d}"
+                    except ValueError:
+                        start_time = "00:00:00"
+            elif len(start_time.split(":")) == 2:
+                # MM:SS format, add hours
+                start_time = f"00:{start_time}"
+            
+            info_dict = {
+                "start_time_offset": start_time,
+                "my_team_name": self.my_team_name.text().strip(),
+                "opponent_team_name": self.opponent_team_name.text().strip(),
+                "location": self.location.text().strip()
+            }
+            self.refresh_callback(self.group_dir_path, info_dict) 

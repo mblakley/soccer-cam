@@ -14,15 +14,19 @@ from video_grouper.locking import FileLock
 from video_grouper.paths import get_shared_data_path
 from video_grouper.directory_state import DirectoryState
 from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
+from video_grouper.models import MatchInfo
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 
 logger = logging.getLogger(__name__)
 
-def all_fields_filled(match_section):
+def all_fields_filled(match_info):
     """Checks if all required match info fields are filled."""
-    required = ['my_team_name', 'opponent_team_name', 'location', 'start_time_offset']
-    return all(match_section.get(field) for field in required)
+    if match_info is None:
+        return False
+    
+    required_fields = [match_info.my_team_name, match_info.opponent_team_name, match_info.location, match_info.start_time_offset]
+    return all(field.strip() for field in required_fields)
 
 class ConfigWindow(QWidget):
     def __init__(self):
@@ -391,11 +395,9 @@ class ConfigWindow(QWidget):
                 if dir_state.status == "combined":
                     # Check if match info is already populated
                     match_info_path = os.path.join(group_dir_path, "match_info.ini")
-                    match_info = configparser.ConfigParser()
-                    if os.path.exists(match_info_path):
-                        match_info.read(match_info_path)
+                    match_info = MatchInfo.from_file(match_info_path)
                     
-                    if not all_fields_filled(match_info["MATCH"] if "MATCH" in match_info else {}):
+                    if not all_fields_filled(match_info):
                         widget = MatchInfoItemWidget(group_dir_path, self.save_match_info, timezone_str=tz_str)
                         list_item = QListWidgetItem(self.match_info_list)
                         list_item.setSizeHint(widget.sizeHint())
@@ -409,21 +411,35 @@ class ConfigWindow(QWidget):
         try:
             match_info_path = os.path.join(group_dir_path, "match_info.ini")
             
+            # Create a MatchInfo object with the provided data
+            match_info = MatchInfo(
+                my_team_name=info_dict["my_team_name"],
+                opponent_team_name=info_dict["opponent_team_name"],
+                location=info_dict["location"],
+                start_time_offset=info_dict["start_time_offset"]
+            )
+            
+            # Convert to ConfigParser to save to file
             with FileLock(match_info_path):
-                match_info = configparser.ConfigParser()
+                config = configparser.ConfigParser()
                 if os.path.exists(match_info_path):
-                    match_info.read(match_info_path)
+                    config.read(match_info_path)
                 
-                if "MATCH" not in match_info:
-                    match_info.add_section("MATCH")
+                if "MATCH" not in config:
+                    config.add_section("MATCH")
                     
-                match_info["MATCH"]["start_time_offset"] = info_dict["start_time_offset"]
-                match_info["MATCH"]["my_team_name"] = info_dict["my_team_name"]
-                match_info["MATCH"]["opponent_team_name"] = info_dict["opponent_team_name"]
-                match_info["MATCH"]["location"] = info_dict["location"]
+                config["MATCH"]["start_time_offset"] = match_info.start_time_offset
+                config["MATCH"]["my_team_name"] = match_info.my_team_name
+                config["MATCH"]["opponent_team_name"] = match_info.opponent_team_name
+                config["MATCH"]["location"] = match_info.location
+                # Preserve total_duration if it exists
+                if "total_duration" in config["MATCH"]:
+                    match_info.total_duration = config["MATCH"]["total_duration"]
+                else:
+                    config["MATCH"]["total_duration"] = match_info.total_duration
                 
                 with open(match_info_path, 'w') as f:
-                    match_info.write(f)
+                    config.write(f)
             
             QMessageBox.information(self, 'Success', f'Match info saved for {os.path.basename(group_dir_path)}')
             self.refresh_match_info_display()
@@ -442,10 +458,6 @@ class ConfigWindow(QWidget):
         # This method is now deprecated and replaced by refresh_match_info_display.
         pass
             
-    def save_match_info(self):
-        # This method is now deprecated and handled by the item widget's save logic.
-        pass
-
     def refresh_connection_events_display(self):
         """Reads and displays camera connection timeframes."""
         self.connection_events_list.clear()
