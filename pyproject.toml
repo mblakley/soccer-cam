@@ -12,6 +12,8 @@ dependencies = [
     "aiofiles>=23.2.1",
     "pytz>=2024.1",
     "pywinauto>=0.6.8",
+    "google-api-python-client>=2.100.0",
+    "google-auth-oauthlib>=1.0.0",
 ]
 
 [project.optional-dependencies]

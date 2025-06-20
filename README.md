@@ -8,6 +8,8 @@ A tool for managing and processing soccer game recordings from IP cameras.
 - Download and organize recording files
 - Convert proprietary .dav files to standard MP4 format
 - Group related recordings together
+- Process videos with Once Autocam for automated camera tracking
+- Automatically upload videos to YouTube
 
 ## Installation
 
@@ -92,6 +94,23 @@ To start the execution of the script, run it directly with python:
 python .\video_grouper\video_grouper.py
 ```
 The application will start to run, and will poll for the presence of the camera at the configured IP address.  Once it finds a camera that can be queried and returns a success response, it will find any videos that have been recorded to the SD card and start to download them to the configured video storage location.  The recording files are grouped into directories by date and time, and once all recordings have been downloaded, all recordings in each directory are combined into a single video.
+
+## YouTube Upload Feature
+
+The application can automatically upload both raw and processed videos to YouTube after Once Autocam processing is complete. To enable this feature:
+
+1. Follow the setup instructions in `video_grouper/youtube/README.md` to create Google Cloud credentials
+2. Create a `youtube` directory in your shared data path
+3. Place your `client_secret.json` file in the `youtube` directory
+4. Enable YouTube uploads in your `config.ini`:
+   ```ini
+   [YOUTUBE]
+   enabled = true
+   credentials_file = youtube/client_secret.json
+   token_file = youtube/token.json
+   ```
+
+When a video is processed by Once Autocam, both the raw and processed videos will be uploaded to YouTube as unlisted videos. The video titles and descriptions will include the team names and location from the match_info.ini file.
 
 ## Running in Docker
 

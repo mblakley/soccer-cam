@@ -10,8 +10,9 @@ import aiofiles
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, create_ffmpeg_task, task_from_dict
+from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, create_ffmpeg_task, task_from_dict
 from video_grouper.cameras.dahua import DahuaCamera
+from video_grouper.youtube_upload import upload_group_videos
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -171,6 +172,17 @@ class VideoGrouperApp:
                                 logger.info(f"AUDIT: Found combined group with no match_info.ini in {group_dir}. Not ready to trim.")
                         else:
                             logger.info(f"AUDIT: Found combined group with missing combined.mp4 in {group_dir}. Please check the group directory.")
+                    
+                    # Check for autocam_complete groups and add them to YouTube upload queue
+                    if dir_state.status == "autocam_complete":
+                        # Check if YouTube upload is enabled in config
+                        if self.config.has_section('YOUTUBE') and self.config.getboolean('YOUTUBE', 'enabled', fallback=False):
+                            youtube_task = YouTubeUploadTask(group_dir)
+                            if youtube_task not in self.queued_for_ffmpeg:
+                                logger.info(f"AUDIT: Found autocam_complete group in {group_dir}. Queueing for YouTube upload.")
+                                await self.add_to_ffmpeg_queue(youtube_task)
+                        else:
+                            logger.info(f"AUDIT: Found autocam_complete group in {group_dir}, but YouTube upload is not enabled in config.")
 
                 except Exception as e:
                     logger.error(f"Error during state audit for {group_dir}: {e}")
@@ -333,30 +345,33 @@ class VideoGrouperApp:
             self.download_queue.task_done()
 
     async def process_ffmpeg_queue(self):
-        """Continuously processes tasks from the FFmpeg queue."""
+        """Process tasks in the FFmpeg queue."""
+        logger.info("Starting FFmpeg queue processor")
         while True:
-            task = await self.ffmpeg_queue.get()
-            
             try:
-                if isinstance(task, ConvertTask):
+                task = await self.ffmpeg_queue.get()
+                logger.info(f"Processing FFmpeg task: {task}")
+                
+                if task.task_type == "convert":
                     await self._handle_conversion_task(task.item_path)
-                elif isinstance(task, CombineTask):
+                elif task.task_type == "combine":
                     await self._handle_combine_task(task.item_path)
-                elif isinstance(task, TrimTask):
-                    await self._handle_trim_task(task.item_path, match_info=task.match_info)
+                elif task.task_type == "trim":
+                    if isinstance(task, TrimTask):
+                        await self._handle_trim_task(task.item_path, task.match_info)
+                    else:
+                        await self._handle_trim_task(task.item_path)
+                elif task.task_type == "youtube_upload":
+                    await self._handle_youtube_upload_task(task.item_path)
                 else:
-                    logger.warning(f"Unknown ffmpeg task type: {task}")
-                    continue
-
-                # If no exception, task is successful, remove from state
-                self.queued_for_ffmpeg.remove(task)
+                    logger.warning(f"Unknown task type: {task.task_type}")
+                
+                self.ffmpeg_queue.task_done()
+                self.queued_for_ffmpeg.discard(task)
                 await self._save_ffmpeg_queue_state()
-
             except Exception as e:
-                logger.error(f"Error processing FFmpeg task {task}, it will be retried on next run. Error: {e}", exc_info=True)
-                # Task failed, do not remove from state, it will be re-queued on next startup
-            
-            self.ffmpeg_queue.task_done()
+                logger.error(f"Error processing FFmpeg task: {e}")
+                await asyncio.sleep(5)
 
     async def _handle_conversion_task(self, file_path: str):
         """Handle a video conversion task."""
@@ -791,3 +806,42 @@ class VideoGrouperApp:
         await asyncio.sleep(delay_seconds)
         logger.info(f"Re-queueing delayed task: {task}")
         await self.ffmpeg_queue.put(task)
+
+    async def _handle_youtube_upload_task(self, group_dir: str):
+        """Handle a YouTube upload task."""
+        logger.info(f"Processing YouTube upload task for {group_dir}")
+        
+        try:
+            # Get the credentials and token file paths from config
+            credentials_file = self.config.get('YOUTUBE', 'credentials_file', fallback=None)
+            token_file = self.config.get('YOUTUBE', 'token_file', fallback=None)
+            
+            if not credentials_file or not token_file:
+                logger.error("YouTube credentials or token file path not configured")
+                return
+            
+            # Ensure the paths are absolute
+            if not os.path.isabs(credentials_file):
+                credentials_file = os.path.join(self.storage_path, credentials_file)
+            
+            if not os.path.isabs(token_file):
+                token_file = os.path.join(self.storage_path, token_file)
+            
+            # Check if credentials file exists
+            if not os.path.exists(credentials_file):
+                logger.error(f"YouTube credentials file not found: {credentials_file}")
+                return
+            
+            # Upload the videos
+            success = upload_group_videos(group_dir, credentials_file, token_file)
+            
+            if success:
+                logger.info(f"Successfully uploaded videos for {group_dir} to YouTube")
+            else:
+                logger.error(f"Failed to upload videos for {group_dir} to YouTube")
+                # Re-queue the task for later
+                await self._requeue_ffmpeg_task_later(YouTubeUploadTask(group_dir), 300)  # Try again in 5 minutes
+        except Exception as e:
+            logger.error(f"Error during YouTube upload for {group_dir}: {e}")
+            # Re-queue the task for later
+            await self._requeue_ffmpeg_task_later(YouTubeUploadTask(group_dir), 300)  # Try again in 5 minutes

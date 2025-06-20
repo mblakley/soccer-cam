@@ -27,3 +27,11 @@ backup_count = 5
 [APP]
 check_interval_seconds = 60
 timezone = America/New York
+
+[YOUTUBE]
+# Set to true to enable YouTube uploads
+enabled = false
+# Path to the client_secret.json file from Google Cloud Console
+credentials_file = youtube/client_secret.json
+# Path to store the token.json file
+token_file = youtube/token.json
