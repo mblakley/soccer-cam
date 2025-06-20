@@ -46,3 +46,4 @@ pywin32==310
     # via video-grouper (pyproject.toml)
 sniffio==1.3.1
     # via anyio
+pywinauto==0.6.8
