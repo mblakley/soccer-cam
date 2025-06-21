@@ -35,6 +35,7 @@ This document explains how to set up YouTube API credentials for automatic video
    - Add the following scopes:
      - `https://www.googleapis.com/auth/youtube.upload`
      - `https://www.googleapis.com/auth/youtube.readonly`
+     - `https://www.googleapis.com/auth/youtube` (required for playlist operations)
    - Add your email as a test user
 4. Create the OAuth client ID:
    - Application type: Desktop app
@@ -48,14 +49,28 @@ This document explains how to set up YouTube API credentials for automatic video
 
 ### 4. Configure the Application
 
-1. Create a directory named `youtube` in the shared data directory
-2. Place the `client_secret.json` file in this directory
-3. Update the `config.ini` file to enable YouTube uploads:
+1. Place the `client_secret.json` file in the `youtube` directory inside your storage path
+   - The application will automatically create this directory if it doesn't exist
+   - For example, if your storage path is `/path/to/storage`, place the file at `/path/to/storage/youtube/client_secret.json`
+2. Update the `config.ini` file to enable YouTube uploads:
    ```ini
    [YOUTUBE]
    enabled = true
-   credentials_file = youtube/client_secret.json
-   token_file = youtube/token.json
+   privacy_status = unlisted
+   
+   # Playlist configuration for processed videos
+   [youtube.playlist.processed]
+   # Format string for playlist name. Available variables: {my_team_name}, {opponent_team_name}, {location}
+   name_format = {my_team_name} 2013s
+   description = Processed videos for {my_team_name} 2013s team
+   privacy_status = unlisted
+   
+   # Playlist configuration for raw videos
+   [youtube.playlist.raw]
+   # Format string for playlist name. Available variables: {my_team_name}, {opponent_team_name}, {location}
+   name_format = {my_team_name} 2013s - Full Field
+   description = Raw full field videos for {my_team_name} 2013s team
+   privacy_status = unlisted
    ```
 
 ### 5. First-time Authentication
@@ -69,6 +84,34 @@ When the application attempts to upload a video for the first time, it will:
 
 This authentication process only needs to be completed once. Subsequent uploads will use the saved token.
 
+## Video Title and Playlist Features
+
+### Video Title Format
+
+Videos are automatically titled using the following format:
+- `<my_team_name> vs <opponent_team_name> (<location>) MM-DD-YYYY`
+- Raw videos have " raw" appended to the title
+
+For example:
+- Processed video: "FC United vs City Kickers (Home Field) 04-15-2023"
+- Raw video: "FC United vs City Kickers (Home Field) 04-15-2023 raw"
+
+The date is extracted from the video group directory name.
+
+### Playlist Features
+
+Videos are automatically added to playlists based on the configuration:
+
+1. **Processed Videos**: Added to a playlist named according to the format in `youtube.playlist.processed.name_format`
+   - Default: `{my_team_name} 2013s`
+
+2. **Raw Videos**: Added to a playlist named according to the format in `youtube.playlist.raw.name_format`
+   - Default: `{my_team_name} 2013s - Full Field`
+
+If a playlist with the specified name doesn't exist, it will be created automatically.
+
+You can customize the playlist naming format in the configuration UI under Settings > YouTube Upload Settings > Playlist Configuration.
+
 ## Troubleshooting
 
 - **Error: "redirect_uri_mismatch"**: This means the redirect URI used by the application doesn't match any authorized URIs in your Google Cloud Console. Make sure you've added both versions (with and without trailing slash) of the redirect URIs to your OAuth client:
@@ -77,9 +120,10 @@ This authentication process only needs to be completed once. Subsequent uploads 
   - `http://127.0.0.1:8080/` (with trailing slash)
   - `http://127.0.0.1:8080` (without trailing slash)
 
-- **Error: "insufficientPermissions"**: Make sure you've added both required scopes to your OAuth consent screen:
+- **Error: "insufficientPermissions"**: Make sure you've added all required scopes to your OAuth consent screen:
   - `https://www.googleapis.com/auth/youtube.upload`
   - `https://www.googleapis.com/auth/youtube.readonly`
+  - `https://www.googleapis.com/auth/youtube`
   
   You may need to delete your existing `token.json` file and re-authenticate if you've updated the scopes.
 

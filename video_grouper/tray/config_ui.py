@@ -11,12 +11,13 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
                              QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox)
 from PyQt6.QtCore import QTimer, QSize, pyqtSignal as Signal
+from PyQt6.QtGui import QIcon
 from video_grouper.locking import FileLock
 from video_grouper.paths import get_shared_data_path
 from video_grouper.directory_state import DirectoryState
 from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
 from video_grouper.models import MatchInfo
-from video_grouper.youtube_upload import authenticate_youtube
+from video_grouper.youtube_upload import authenticate_youtube, get_youtube_paths
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 
@@ -40,6 +41,13 @@ class ConfigWindow(QWidget):
         self.config = config if config is not None else configparser.ConfigParser()
         if config is None:
             self.load_config()
+        
+        # Set the window icon
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, '..', 'icon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        
         self.init_ui()
         
     def load_config(self):
@@ -154,23 +162,38 @@ class ConfigWindow(QWidget):
         # YouTube enabled checkbox
         self.youtube_enabled = QCheckBox("Enable YouTube Uploads")
         
-        # Credentials file path
-        self.youtube_credentials_path = QLineEdit()
-        browse_creds_button = QPushButton('Browse...')
-        browse_creds_button.clicked.connect(self.browse_youtube_credentials)
-        
         # Authentication button
         self.youtube_auth_button = QPushButton('Authenticate with YouTube')
         self.youtube_auth_button.clicked.connect(self.authenticate_youtube)
         
-        # Status label
+        # Status label and refresh button
+        status_layout = QVBoxLayout()
         self.youtube_status_label = QLabel("Not authenticated")
+        refresh_status_button = QPushButton("Refresh Status")
+        refresh_status_button.clicked.connect(self.refresh_youtube_status)
+        status_layout.addWidget(self.youtube_status_label)
+        status_layout.addWidget(refresh_status_button)
+        
+        # Playlist configuration
+        playlist_group = QGroupBox("Playlist Configuration")
+        playlist_layout = QFormLayout()
+        
+        # Processed videos playlist
+        self.processed_playlist_name = QLineEdit()
+        self.processed_playlist_name.setPlaceholderText("{my_team_name} 2013s")
+        
+        # Raw videos playlist
+        self.raw_playlist_name = QLineEdit()
+        self.raw_playlist_name.setPlaceholderText("{my_team_name} 2013s - Full Field")
+        
+        playlist_layout.addRow("Processed Videos Playlist:", self.processed_playlist_name)
+        playlist_layout.addRow("Raw Videos Playlist:", self.raw_playlist_name)
+        playlist_group.setLayout(playlist_layout)
         
         youtube_layout.addRow('', self.youtube_enabled)
-        youtube_layout.addRow('Credentials File:', self.youtube_credentials_path)
-        youtube_layout.addRow('', browse_creds_button)
         youtube_layout.addRow('', self.youtube_auth_button)
-        youtube_layout.addRow('Status:', self.youtube_status_label)
+        youtube_layout.addRow('Status:', status_layout)
+        youtube_layout.addRow('', playlist_group)
         
         youtube_group.setLayout(youtube_layout)
         settings_layout.addWidget(youtube_group)
@@ -220,15 +243,42 @@ class ConfigWindow(QWidget):
                 self.timezone_combo.setCurrentText(tz_str)
         if 'YOUTUBE' in self.config:
             self.youtube_enabled.setChecked(self.config.getboolean('YOUTUBE', 'enabled', fallback=False))
-            self.youtube_credentials_path.setText(self.config.get('YOUTUBE', 'credentials_file', fallback='youtube/client_secret.json'))
             
-            # Check if token exists to update status label
-            token_file = self.config.get('YOUTUBE', 'token_file', fallback='youtube/token.json')
-            token_path = os.path.join(self.config.get('STORAGE', 'path', fallback='.'), token_file)
-            if os.path.exists(token_path):
-                self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
-            else:
-                self.youtube_status_label.setText("Not authenticated")
+            # Check token status
+            storage_path = self.config.get('STORAGE', 'path', fallback=None)
+            if storage_path:
+                self.check_youtube_token_status()
+            
+        # Load playlist configuration
+        if 'youtube.playlist.processed' in self.config:
+            self.processed_playlist_name.setText(self.config.get('youtube.playlist.processed', 'name_format', fallback="{my_team_name} 2013s"))
+        if 'youtube.playlist.raw' in self.config:
+            self.raw_playlist_name.setText(self.config.get('youtube.playlist.raw', 'name_format', fallback="{my_team_name} 2013s - Full Field"))
+
+    def check_youtube_token_status(self, token_file_path=None):
+        """Check if the YouTube token file exists and update the status label accordingly."""
+        storage_path = self.storage_path.text()
+        if not storage_path:
+            self.youtube_status_label.setText("Storage path not set")
+            return
+        
+        # Get token file path
+        _, token_file = get_youtube_paths(storage_path)
+        
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, 'r') as f:
+                    token_data = json.load(f)
+                    
+                # Check if token has basic required fields
+                if 'token' in token_data and 'refresh_token' in token_data:
+                    self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
+                else:
+                    self.youtube_status_label.setText("Token exists but may be invalid")
+            except Exception:
+                self.youtube_status_label.setText("Token file exists but is not valid JSON")
+        else:
+            self.youtube_status_label.setText("Not authenticated")
 
     def toggle_password_visibility(self, checked):
         """Toggles the visibility of the password field."""
@@ -242,48 +292,23 @@ class ConfigWindow(QWidget):
         if path:
             self.storage_path.setText(path)
             
-    def browse_youtube_credentials(self):
-        """Browse for YouTube credentials file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 'Select YouTube Credentials File', '', 'JSON Files (*.json)')
-        if file_path:
-            # Make path relative to storage path if possible
-            storage_path = self.storage_path.text()
-            if storage_path and os.path.exists(storage_path) and file_path.startswith(storage_path):
-                rel_path = os.path.relpath(file_path, storage_path)
-                self.youtube_credentials_path.setText(rel_path)
-            else:
-                self.youtube_credentials_path.setText(file_path)
-
     def authenticate_youtube(self):
         """Authenticate with YouTube API."""
-        # Get credentials file path
-        credentials_file = self.youtube_credentials_path.text()
-        if not credentials_file:
-            QMessageBox.warning(self, 'Warning', 'Please specify the YouTube credentials file path.')
-            return
-        
-        # Get storage path for resolving relative paths
+        # Get storage path for resolving paths
         storage_path = self.storage_path.text()
         if not storage_path:
             QMessageBox.warning(self, 'Warning', 'Please specify the storage path first.')
             return
         
-        # Resolve paths
-        if not os.path.isabs(credentials_file):
-            credentials_file = os.path.join(storage_path, credentials_file)
+        # Get credentials and token file paths
+        credentials_file, token_file = get_youtube_paths(storage_path)
         
-        # Get token file path from config or use default
-        if 'YOUTUBE' in self.config and 'token_file' in self.config['YOUTUBE']:
-            token_file = self.config.get('YOUTUBE', 'token_file')
-        else:
-            token_file = 'youtube/token.json'
-        
-        if not os.path.isabs(token_file):
-            token_file = os.path.join(storage_path, token_file)
-        
-        # Make sure the directory exists
-        os.makedirs(os.path.dirname(token_file), exist_ok=True)
+        # Check if credentials file exists
+        if not os.path.exists(credentials_file):
+            QMessageBox.warning(self, 'Warning', 
+                               f"YouTube credentials file not found at: {credentials_file}\n\n"
+                               f"Please place your client_secret.json file in the {os.path.dirname(credentials_file)} directory.")
+            return
         
         # Update status
         self.youtube_status_label.setText("Authenticating...")
@@ -318,7 +343,21 @@ class ConfigWindow(QWidget):
                 QTimer.singleShot(0, show_error)
         
         # Start authentication thread
-        threading.Thread(target=auth_thread, daemon=True).start()
+        auth_thread = threading.Thread(target=auth_thread, daemon=True)
+        auth_thread.start()
+        
+        # Add a timeout to check if the thread is still running
+        def check_auth_thread():
+            if auth_thread.is_alive():
+                # Thread is still running after timeout, assume it's stuck
+                self.youtube_auth_button.setEnabled(True)
+                self.youtube_status_label.setText("Authentication timed out")
+                QMessageBox.warning(self, 'Authentication Timeout', 
+                                   "Authentication process is taking too long. The browser may have completed, but the callback failed.\n\n"
+                                   "Check if a token.json file was created in your YouTube directory. If it exists, authentication may have succeeded despite this error.")
+            
+        # Check after 30 seconds
+        QTimer.singleShot(30000, check_auth_thread)
 
     def save_settings(self):
         """Saves all settings from the Settings tab."""
@@ -327,6 +366,8 @@ class ConfigWindow(QWidget):
             if 'STORAGE' not in self.config: self.config.add_section('STORAGE')
             if 'APP' not in self.config: self.config.add_section('APP')
             if 'YOUTUBE' not in self.config: self.config.add_section('YOUTUBE')
+            if 'youtube.playlist.processed' not in self.config: self.config.add_section('youtube.playlist.processed')
+            if 'youtube.playlist.raw' not in self.config: self.config.add_section('youtube.playlist.raw')
                 
             self.config['CAMERA']['device_ip'] = self.ip_address.text()
             self.config['CAMERA']['username'] = self.username.text()
@@ -334,11 +375,15 @@ class ConfigWindow(QWidget):
             self.config['STORAGE']['path'] = self.storage_path.text()
             self.config['APP']['timezone'] = self.timezone_combo.currentText()
             self.config['YOUTUBE']['enabled'] = str(self.youtube_enabled.isChecked())
-            self.config['YOUTUBE']['credentials_file'] = self.youtube_credentials_path.text()
             
-            # Set default token file if not already set
-            if 'token_file' not in self.config['YOUTUBE']:
-                self.config['YOUTUBE']['token_file'] = 'youtube/token.json'
+            # Save playlist configuration
+            self.config['youtube.playlist.processed']['name_format'] = self.processed_playlist_name.text() or "{my_team_name} 2013s"
+            self.config['youtube.playlist.processed']['description'] = f"Processed videos for {'{my_team_name}'} 2013s team"
+            self.config['youtube.playlist.processed']['privacy_status'] = "unlisted"
+            
+            self.config['youtube.playlist.raw']['name_format'] = self.raw_playlist_name.text() or "{my_team_name} 2013s - Full Field"
+            self.config['youtube.playlist.raw']['description'] = f"Raw full field videos for {'{my_team_name}'} 2013s team"
+            self.config['youtube.playlist.raw']['privacy_status'] = "unlisted"
             
             with FileLock(self.config_path):
                 with open(self.config_path, 'w') as f:
@@ -677,6 +722,14 @@ class ConfigWindow(QWidget):
             
             self.connection_events_list.addItem(display_text)
 
+    def refresh_youtube_status(self):
+        """Manually refresh the YouTube token status."""
+        storage_path = self.storage_path.text()
+        if storage_path:
+            self.check_youtube_token_status()
+        else:
+            self.youtube_status_label.setText("Storage path not set")
+
 def main():
     """Main entry point for the standalone configuration UI."""
     logging.basicConfig(
@@ -687,6 +740,12 @@ def main():
     logger.info("Running Configuration UI in standalone mode")
 
     app = QApplication(sys.argv)
+    
+    # Set the application icon
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(script_dir, '..', 'icon.ico')
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
     # Config path is now handled by the window itself
     window = ConfigWindow()
