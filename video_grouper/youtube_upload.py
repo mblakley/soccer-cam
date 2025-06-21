@@ -3,6 +3,7 @@ import logging
 import json
 import time
 from pathlib import Path
+from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -16,10 +17,33 @@ logger = logging.getLogger(__name__)
 # If modifying these scopes, delete the token.json file.
 SCOPES = [
     'https://www.googleapis.com/auth/youtube.upload',
-    'https://www.googleapis.com/auth/youtube.readonly'
+    'https://www.googleapis.com/auth/youtube.readonly',
+    'https://www.googleapis.com/auth/youtube',  # Required for playlist operations
 ]
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
+
+# Default paths for YouTube credentials and token
+YOUTUBE_DIR = "youtube"
+CREDENTIALS_FILENAME = "client_secret.json"
+TOKEN_FILENAME = "token.json"
+
+def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
+    """Get the paths for YouTube credentials and token files.
+    
+    Args:
+        storage_path: Base storage path from STORAGE.path
+        
+    Returns:
+        Tuple[str, str]: (credentials_file_path, token_file_path)
+    """
+    youtube_dir = os.path.join(storage_path, YOUTUBE_DIR)
+    os.makedirs(youtube_dir, exist_ok=True)
+    
+    credentials_file = os.path.join(youtube_dir, CREDENTIALS_FILENAME)
+    token_file = os.path.join(youtube_dir, TOKEN_FILENAME)
+    
+    return credentials_file, token_file
 
 def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, str]:
     """Authenticate with YouTube API.
@@ -103,6 +127,7 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
             
             # Save the credentials for the next run
             try:
+                os.makedirs(os.path.dirname(token_file), exist_ok=True)
                 with open(token_file, 'w') as token:
                     token.write(creds.to_json())
             except Exception as e:
@@ -168,7 +193,8 @@ class YouTubeUploader:
     
     def upload_video(self, video_path: str, title: str, description: str, 
                      tags: Optional[List[str]] = None, 
-                     privacy_status: str = "unlisted") -> Optional[str]:
+                     privacy_status: str = "unlisted",
+                     playlist_id: Optional[str] = None) -> Optional[str]:
         """Upload a video to YouTube.
         
         Args:
@@ -177,6 +203,7 @@ class YouTubeUploader:
             description: Description of the video
             tags: List of tags for the video
             privacy_status: Privacy status of the video (private, unlisted, public)
+            playlist_id: Optional playlist ID to add the video to
             
         Returns:
             str: YouTube video ID if upload was successful, None otherwise
@@ -234,6 +261,11 @@ class YouTubeUploader:
             logger.info(f"Upload complete for {os.path.basename(video_path)}")
             video_id = response['id']
             logger.info(f"Video ID: {video_id}")
+            
+            # Add to playlist if specified
+            if playlist_id and video_id:
+                self.add_video_to_playlist(video_id, playlist_id)
+            
             return video_id
             
         except HttpError as e:
@@ -242,14 +274,182 @@ class YouTubeUploader:
         except Exception as e:
             logger.error(f"An error occurred during upload: {e}")
             return None
+    
+    def find_playlist_by_name(self, name: str) -> Optional[str]:
+        """Find a playlist by name.
+        
+        Args:
+            name: The name of the playlist to find
+            
+        Returns:
+            str: Playlist ID if found, None otherwise
+        """
+        if not self.youtube:
+            if not self.authenticate():
+                logger.error("Failed to authenticate with YouTube API")
+                return None
+        
+        try:
+            # Get the authenticated user's playlists
+            request = self.youtube.playlists().list(
+                part="snippet",
+                mine=True,
+                maxResults=50
+            )
+            
+            while request:
+                response = request.execute()
+                
+                for playlist in response.get('items', []):
+                    if playlist['snippet']['title'] == name:
+                        return playlist['id']
+                
+                # Get the next page of results
+                request = self.youtube.playlists().list_next(request, response)
+            
+            # Playlist not found
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding playlist: {e}")
+            return None
+    
+    def create_playlist(self, name: str, description: str = "", privacy_status: str = "unlisted") -> Optional[str]:
+        """Create a new playlist.
+        
+        Args:
+            name: The name of the playlist
+            description: The description of the playlist
+            privacy_status: The privacy status of the playlist (private, unlisted, public)
+            
+        Returns:
+            str: Playlist ID if created successfully, None otherwise
+        """
+        if not self.youtube:
+            if not self.authenticate():
+                logger.error("Failed to authenticate with YouTube API")
+                return None
+        
+        try:
+            # Create the playlist
+            request = self.youtube.playlists().insert(
+                part="snippet,status",
+                body={
+                    "snippet": {
+                        "title": name,
+                        "description": description
+                    },
+                    "status": {
+                        "privacyStatus": privacy_status
+                    }
+                }
+            )
+            
+            response = request.execute()
+            playlist_id = response['id']
+            logger.info(f"Created playlist: {name} (ID: {playlist_id})")
+            return playlist_id
+            
+        except Exception as e:
+            logger.error(f"Error creating playlist: {e}")
+            return None
+    
+    def get_or_create_playlist(self, name: str, description: str = "", privacy_status: str = "unlisted") -> Optional[str]:
+        """Get a playlist by name or create it if it doesn't exist.
+        
+        Args:
+            name: The name of the playlist
+            description: The description of the playlist (used if creating)
+            privacy_status: The privacy status of the playlist (used if creating)
+            
+        Returns:
+            str: Playlist ID if found or created successfully, None otherwise
+        """
+        playlist_id = self.find_playlist_by_name(name)
+        if playlist_id:
+            logger.info(f"Found existing playlist: {name} (ID: {playlist_id})")
+            return playlist_id
+        
+        # Playlist not found, create it
+        return self.create_playlist(name, description, privacy_status)
+    
+    def add_video_to_playlist(self, video_id: str, playlist_id: str) -> bool:
+        """Add a video to a playlist.
+        
+        Args:
+            video_id: The ID of the video to add
+            playlist_id: The ID of the playlist to add the video to
+            
+        Returns:
+            bool: True if the video was added successfully, False otherwise
+        """
+        if not self.youtube:
+            if not self.authenticate():
+                logger.error("Failed to authenticate with YouTube API")
+                return False
+        
+        try:
+            # Add the video to the playlist
+            request = self.youtube.playlistItems().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {
+                            "kind": "youtube#video",
+                            "videoId": video_id
+                        }
+                    }
+                }
+            )
+            
+            response = request.execute()
+            logger.info(f"Added video {video_id} to playlist {playlist_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding video to playlist: {e}")
+            return False
 
-def upload_group_videos(group_dir: str, credentials_file: str, token_file: str) -> bool:
+def format_video_title(match_info, file_path: str, group_dir: str) -> str:
+    """Format the video title according to the specified format.
+    
+    Args:
+        match_info: MatchInfo object containing team names and location
+        file_path: Path to the video file
+        group_dir: Path to the group directory
+        
+    Returns:
+        str: Formatted video title
+    """
+    # Extract date from group directory name (format: YYYY.MM.DD-HH.MM.SS)
+    try:
+        dir_name = os.path.basename(group_dir)
+        date_part = dir_name.split('-')[0]  # YYYY.MM.DD
+        date_obj = datetime.strptime(date_part, "%Y.%m.%d")
+        formatted_date = date_obj.strftime("%m-%d-%Y")
+    except Exception:
+        # Fallback to current date if parsing fails
+        formatted_date = datetime.now().strftime("%m-%d-%Y")
+    
+    # Base title format: "<my_team_name> vs <opponent_team_name> (<location>) MM-DD-YYYY"
+    base_title = f"{match_info.my_team_name} vs {match_info.opponent_team_name} ({match_info.location}) {formatted_date}"
+    
+    # Check if this is a raw file
+    if "-raw.mp4" in file_path:
+        return f"{base_title} raw"
+    
+    return base_title
+
+def upload_group_videos(group_dir: str, credentials_file: str, token_file: str, 
+                        playlist_config: Optional[Dict[str, Any]] = None) -> bool:
     """Upload all videos from a group directory to YouTube.
     
     Args:
         group_dir: Path to the group directory
         credentials_file: Path to the client_secret.json file
         token_file: Path to store the token.json file
+        playlist_config: Optional configuration for playlists
         
     Returns:
         bool: True if all uploads were successful, False otherwise
@@ -308,10 +508,25 @@ def upload_group_videos(group_dir: str, credentials_file: str, token_file: str) 
             
             match_info = MatchInfo.from_file(str(match_info_file))
             if match_info:
-                title_prefix = f"{match_info.my_team_name} vs {match_info.opponent_team_name}"
+                # Use the match info for video titles and descriptions
+                raw_title = format_video_title(match_info, str(raw_file), str(group_path))
+                processed_title = format_video_title(match_info, str(processed_file), str(group_path))
                 description = f"Soccer match: {match_info.my_team_name} vs {match_info.opponent_team_name} at {match_info.location}"
+            else:
+                # Fallback titles if match info couldn't be parsed
+                raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
+                processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
         except Exception as e:
             logger.error(f"Error reading match info: {e}")
+            # Fallback titles if match info couldn't be parsed
+            raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
+            processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
+            match_info = None
+    else:
+        # Fallback titles if match info doesn't exist
+        raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
+        processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
+        match_info = None
     
     # Create YouTube uploader
     uploader = YouTubeUploader(credentials_file, token_file)
@@ -321,37 +536,74 @@ def upload_group_videos(group_dir: str, credentials_file: str, token_file: str) 
     
     success = True
     
-    # Upload raw video if it exists
-    if raw_file:
-        raw_title = f"{title_prefix} - Raw Recording"
-        raw_id = uploader.upload_video(
-            str(raw_file),
-            title=raw_title,
-            description=f"{description} (Raw recording)",
-            tags=["soccer", "raw footage"],
-            privacy_status="unlisted"
-        )
-        if not raw_id:
-            logger.error(f"Failed to upload raw video: {raw_file}")
-            success = False
-        else:
-            logger.info(f"Successfully uploaded raw video: {raw_file} (ID: {raw_id})")
+    # Default playlist configuration if none provided
+    if playlist_config is None and match_info:
+        playlist_config = {
+            "processed": {
+                "name_format": "{my_team_name} 2013s",
+                "description": f"Processed videos for {match_info.my_team_name} 2013s team"
+            },
+            "raw": {
+                "name_format": "{my_team_name} 2013s - Full Field",
+                "description": f"Raw full field videos for {match_info.my_team_name} 2013s team"
+            }
+        }
     
     # Upload processed video if it exists
-    if processed_file:
-        processed_title = f"{title_prefix} - Processed"
+    if processed_file and match_info:
+        # Get or create the playlist for processed videos
+        processed_playlist_id = None
+        if playlist_config and "processed" in playlist_config:
+            playlist_name = playlist_config["processed"]["name_format"].format(
+                my_team_name=match_info.my_team_name,
+                opponent_team_name=match_info.opponent_team_name,
+                location=match_info.location
+            )
+            playlist_desc = playlist_config["processed"].get("description", f"Processed videos for {match_info.my_team_name}")
+            processed_playlist_id = uploader.get_or_create_playlist(playlist_name, playlist_desc)
+        
+        # Upload the processed video
         processed_id = uploader.upload_video(
             str(processed_file),
             title=processed_title,
             description=f"{description} (Processed with Once Autocam)",
             tags=["soccer", "autocam"],
-            privacy_status="unlisted"
+            privacy_status="unlisted",
+            playlist_id=processed_playlist_id
         )
         if not processed_id:
             logger.error(f"Failed to upload processed video: {processed_file}")
             success = False
         else:
             logger.info(f"Successfully uploaded processed video: {processed_file} (ID: {processed_id})")
+    
+    # Upload raw video if it exists
+    if raw_file and match_info:
+        # Get or create the playlist for raw videos
+        raw_playlist_id = None
+        if playlist_config and "raw" in playlist_config:
+            playlist_name = playlist_config["raw"]["name_format"].format(
+                my_team_name=match_info.my_team_name,
+                opponent_team_name=match_info.opponent_team_name,
+                location=match_info.location
+            )
+            playlist_desc = playlist_config["raw"].get("description", f"Raw videos for {match_info.my_team_name}")
+            raw_playlist_id = uploader.get_or_create_playlist(playlist_name, playlist_desc)
+        
+        # Upload the raw video
+        raw_id = uploader.upload_video(
+            str(raw_file),
+            title=raw_title,
+            description=f"{description} (Raw recording)",
+            tags=["soccer", "raw footage"],
+            privacy_status="unlisted",
+            playlist_id=raw_playlist_id
+        )
+        if not raw_id:
+            logger.error(f"Failed to upload raw video: {raw_file}")
+            success = False
+        else:
+            logger.info(f"Successfully uploaded raw video: {raw_file} (ID: {raw_id})")
     
     # Update state if all uploads were successful
     if success:

@@ -31,7 +31,30 @@ timezone = America/New York
 [YOUTUBE]
 # Set to true to enable YouTube uploads
 enabled = false
-# Path to the client_secret.json file from Google Cloud Console
-credentials_file = youtube/client_secret.json
-# Path to store the token.json file
-token_file = youtube/token.json
+# The privacy status for uploaded videos (private, unlisted, public)
+privacy_status = unlisted
+
+[AUTOCAM]
+# Whether to enable autocam processing
+enabled = true
+
+# The path to the autocam executable
+executable = /path/to/autocam
+
+# Playlist configuration for processed videos
+[YOUTUBE.PLAYLIST.PROCESSED]
+# Format string for playlist name. Available variables: {my_team_name}, {opponent_team_name}, {location}
+name_format = {my_team_name} 2013s
+# Description for the playlist
+description = Processed videos for {my_team_name} 2013s team
+# Privacy status for the playlist (private, unlisted, public)
+privacy_status = unlisted
+
+# Playlist configuration for raw videos
+[YOUTUBE.PLAYLIST.RAW]
+# Format string for playlist name. Available variables: {my_team_name}, {opponent_team_name}, {location}
+name_format = {my_team_name} 2013s - Full Field
+# Description for the playlist
+description = Raw full field videos for {my_team_name} 2013s team
+# Privacy status for the playlist (private, unlisted, public)
+privacy_status = unlisted

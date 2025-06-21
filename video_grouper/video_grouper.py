@@ -12,7 +12,7 @@ from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, c
 from video_grouper.directory_state import DirectoryState
 from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, create_ffmpeg_task, task_from_dict
 from video_grouper.cameras.dahua import DahuaCamera
-from video_grouper.youtube_upload import upload_group_videos
+from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -812,28 +812,35 @@ class VideoGrouperApp:
         logger.info(f"Processing YouTube upload task for {group_dir}")
         
         try:
-            # Get the credentials and token file paths from config
-            credentials_file = self.config.get('YOUTUBE', 'credentials_file', fallback=None)
-            token_file = self.config.get('YOUTUBE', 'token_file', fallback=None)
-            
-            if not credentials_file or not token_file:
-                logger.error("YouTube credentials or token file path not configured")
-                return
-            
-            # Ensure the paths are absolute
-            if not os.path.isabs(credentials_file):
-                credentials_file = os.path.join(self.storage_path, credentials_file)
-            
-            if not os.path.isabs(token_file):
-                token_file = os.path.join(self.storage_path, token_file)
+            # Get the credentials and token file paths using the helper function
+            credentials_file, token_file = get_youtube_paths(self.storage_path)
             
             # Check if credentials file exists
             if not os.path.exists(credentials_file):
                 logger.error(f"YouTube credentials file not found: {credentials_file}")
                 return
             
-            # Upload the videos
-            success = upload_group_videos(group_dir, credentials_file, token_file)
+            # Get playlist configuration
+            playlist_config = None
+            if self.config.has_section('youtube.playlist.processed') and self.config.has_section('youtube.playlist.raw'):
+                playlist_config = {
+                    "processed": {
+                        "name_format": self.config.get('youtube.playlist.processed', 'name_format', fallback="{my_team_name} 2013s"),
+                        "description": self.config.get('youtube.playlist.processed', 'description', fallback="Processed videos"),
+                        "privacy_status": self.config.get('youtube.playlist.processed', 'privacy_status', fallback="unlisted")
+                    },
+                    "raw": {
+                        "name_format": self.config.get('youtube.playlist.raw', 'name_format', fallback="{my_team_name} 2013s - Full Field"),
+                        "description": self.config.get('youtube.playlist.raw', 'description', fallback="Raw videos"),
+                        "privacy_status": self.config.get('youtube.playlist.raw', 'privacy_status', fallback="unlisted")
+                    }
+                }
+                logger.info(f"Using playlist configuration: {playlist_config}")
+            else:
+                logger.info("No playlist configuration found in config file, using defaults")
+            
+            # Upload the videos with playlist configuration
+            success = upload_group_videos(group_dir, credentials_file, token_file, playlist_config)
             
             if success:
                 logger.info(f"Successfully uploaded videos for {group_dir} to YouTube")
