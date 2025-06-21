@@ -40,6 +40,18 @@ class Camera(ABC):
         """Get device information from the camera."""
         pass
     
+    @abstractmethod
+    def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
+        """Returns a list of timeframes when the camera was connected.
+        
+        Each timeframe is a tuple of (start_time, end_time), where end_time is None
+        if the camera is currently connected (i.e., the connection is ongoing).
+        
+        Returns:
+            List of tuples representing start and end times of connection periods
+        """
+        pass
+    
     @property
     @abstractmethod
     def connection_events(self) -> List[Tuple[datetime, str]]:

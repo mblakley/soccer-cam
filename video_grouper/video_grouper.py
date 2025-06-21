@@ -7,6 +7,7 @@ import configparser
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List, Any, Set
 import aiofiles
+import pytz
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
@@ -99,6 +100,9 @@ class VideoGrouperApp:
         """Initialize the application by scanning existing files and populating queues."""
         logger.info("Initializing VideoGrouperApp")
         create_directory(self.storage_path)
+        
+        # Filter existing state files to remove recordings that overlap with connected timeframes
+        await self._filter_existing_state_files()
 
         if not self._queues_loaded:
             await self._load_queues_from_state()
@@ -228,6 +232,9 @@ class VideoGrouperApp:
             
             latest_end_time = None
 
+            # Get connected timeframes for filtering
+            connected_timeframes = self.camera.get_connected_timeframes()
+            
             for file_info in files:
                 try:
                     filename = os.path.basename(file_info['path'])
@@ -236,6 +243,25 @@ class VideoGrouperApp:
 
                     if latest_end_time is None or file_end_time > latest_end_time:
                         latest_end_time = file_end_time
+
+                    # Check if the file overlaps with any connected timeframe
+                    should_skip = False
+                    if connected_timeframes:
+                        # Convert to UTC for comparison with connected timeframes
+                        file_start_utc = pytz.utc.localize(file_start_time) if file_start_time.tzinfo is None else file_start_time
+                        file_end_utc = pytz.utc.localize(file_end_time) if file_end_time.tzinfo is None else file_end_time
+                        
+                        for frame_start, frame_end in connected_timeframes:
+                            frame_end_or_now = frame_end or datetime.now(pytz.utc)
+                            
+                            # Check for overlap: if file starts before frame ends AND file ends after frame starts
+                            if file_start_utc < frame_end_or_now and file_end_utc > frame_start:
+                                logger.info(f"Skipping file {filename} as it overlaps with connected timeframe from {frame_start} to {frame_end_or_now}")
+                                should_skip = True
+                                break
+                    
+                    if should_skip:
+                        continue
 
                     group_dir = find_group_directory(file_start_time, self.storage_path, existing_dirs)
                     if group_dir not in existing_dirs:
@@ -681,11 +707,31 @@ class VideoGrouperApp:
                         logger.error(f"LOAD: download_queue_state.json is not a list, but a {type(items)}. Skipping.")
                         return
 
+                    # Get connected timeframes for filtering
+                    connected_timeframes = self.camera.get_connected_timeframes()
+
                     for item_data in items:
                         try:
                             # Reconstruct RecordingFile object from dict
                             recording_file = RecordingFile.from_dict(item_data)
-                            await self.add_to_download_queue(recording_file)
+                            
+                            # Check if the recording overlaps with any connected timeframe
+                            should_skip = False
+                            if connected_timeframes:
+                                file_start_utc = pytz.utc.localize(recording_file.start_time) if recording_file.start_time.tzinfo is None else recording_file.start_time
+                                file_end_utc = pytz.utc.localize(recording_file.end_time) if recording_file.end_time.tzinfo is None else recording_file.end_time
+                                
+                                for frame_start, frame_end in connected_timeframes:
+                                    frame_end_or_now = frame_end or datetime.now(pytz.utc)
+                                    
+                                    # Check for overlap: if file starts before frame ends AND file ends after frame starts
+                                    if file_start_utc < frame_end_or_now and file_end_utc > frame_start:
+                                        logger.info(f"Not loading {os.path.basename(recording_file.file_path)} from queue state as it overlaps with connected timeframe from {frame_start} to {frame_end_or_now}")
+                                        should_skip = True
+                                        break
+                            
+                            if not should_skip:
+                                await self.add_to_download_queue(recording_file)
                         except KeyError as e:
                             logger.warning(f"LOAD: Skipping malformed item in download_queue_state.json (missing key: {e}): {item_data}")
                     logger.info(f"LOAD: Loaded {len(items)} items from download_queue_state.json")
@@ -852,3 +898,66 @@ class VideoGrouperApp:
             logger.error(f"Error during YouTube upload for {group_dir}: {e}")
             # Re-queue the task for later
             await self._requeue_ffmpeg_task_later(YouTubeUploadTask(group_dir), 300)  # Try again in 5 minutes
+
+    async def _filter_existing_state_files(self):
+        """Filter existing state.json files to remove recordings that overlap with connected timeframes."""
+        # Get connected timeframes
+        connected_timeframes = self.camera.get_connected_timeframes()
+        if not connected_timeframes:
+            logger.info("No connected timeframes found. Skipping state file filtering.")
+            return
+            
+        logger.info(f"Filtering existing state files for recordings that overlap with connected timeframes.")
+        
+        # Get all directories in the storage path
+        try:
+            dirs = [os.path.join(self.storage_path, d) for d in os.listdir(self.storage_path) 
+                   if os.path.isdir(os.path.join(self.storage_path, d))]
+        except FileNotFoundError:
+            logger.warning(f"Storage directory {self.storage_path} not found.")
+            return
+            
+        filtered_count = 0
+        
+        # Process each directory
+        for group_dir in dirs:
+            try:
+                state_file_path = os.path.join(group_dir, "state.json")
+                if not os.path.exists(state_file_path):
+                    continue
+                    
+                dir_state = DirectoryState(group_dir)
+                
+                # Get all files in the directory state
+                files_to_filter = []
+                
+                for file_path, recording in list(dir_state.files.items()):
+                    # Check if the recording overlaps with any connected timeframe
+                    if recording.start_time and recording.end_time:
+                        file_start_utc = pytz.utc.localize(recording.start_time) if recording.start_time.tzinfo is None else recording.start_time
+                        file_end_utc = pytz.utc.localize(recording.end_time) if recording.end_time.tzinfo is None else recording.end_time
+                        
+                        for frame_start, frame_end in connected_timeframes:
+                            frame_end_or_now = frame_end or datetime.now(pytz.utc)
+                            
+                            # Check for overlap: if file starts before frame ends AND file ends after frame starts
+                            if file_start_utc < frame_end_or_now and file_end_utc > frame_start:
+                                logger.info(f"Filtering out {os.path.basename(file_path)} from {os.path.basename(group_dir)} as it overlaps with connected timeframe from {frame_start} to {frame_end_or_now}")
+                                files_to_filter.append(file_path)
+                                filtered_count += 1
+                                break
+                
+                # Remove filtered files from the directory state
+                for file_path in files_to_filter:
+                    if file_path in dir_state.files:
+                        dir_state.files.pop(file_path)
+                
+                # Save the updated directory state
+                if files_to_filter:
+                    await dir_state.save_state()
+                    
+            except Exception as e:
+                logger.error(f"Error filtering directory state for {group_dir}: {e}")
+                
+        if filtered_count > 0:
+            logger.info(f"Filtered out {filtered_count} recordings that overlap with connected timeframes.")
