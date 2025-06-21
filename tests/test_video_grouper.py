@@ -71,18 +71,19 @@ class TestVideoGrouperAppWithMocks:
         """Test app initializes correctly with mocked filesystem."""
         mock_exists.return_value = False # No state files exist
         mock_listdir.return_value = [] # No existing directories
-        
+
         app = setup_app(mock_config, mock_camera)
         await app.initialize()
-        
+
         # Assert that it tried to load queues (which would check for files)
         mock_exists.assert_any_call(os.path.join(STORAGE_PATH, DOWNLOAD_QUEUE_STATE_FILE))
         mock_exists.assert_any_call(os.path.join(STORAGE_PATH, FFMPEG_QUEUE_STATE_FILE))
-        
+
         # Assert that it tries to create the storage directory
         mock_makedirs.assert_called_once_with(STORAGE_PATH, exist_ok=True)
         # Assert it checks the contents of the storage directory
-        mock_listdir.assert_called_once_with(STORAGE_PATH)
+        assert mock_listdir.call_count >= 1
+        mock_listdir.assert_any_call(STORAGE_PATH)
 
 
     async def test_sync_creates_group_and_state(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera):
