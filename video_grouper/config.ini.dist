@@ -28,6 +28,19 @@ backup_count = 5
 check_interval_seconds = 60
 timezone = America/New York
 
+[TEAMSNAP]
+# Set to true to enable TeamSnap integration
+enabled = false
+# OAuth credentials (get these from TeamSnap developer portal)
+client_id = your_client_id
+client_secret = your_client_secret
+# Access token (get this using get_teamsnap_token.py)
+access_token = your_access_token
+# Your team ID from TeamSnap (find this using list_teamsnap_teams.py)
+team_id = your_team_id
+# Your team name as it should appear in video titles
+my_team_name = Your Team Name
+
 [YOUTUBE]
 # Set to true to enable YouTube uploads
 enabled = false
