@@ -130,6 +130,12 @@ class DirectoryState:
         if not self.files:
             return None
         return max(self.files.values(), key=lambda f: f.end_time)
+    
+    def get_first_file(self) -> Optional[RecordingFile]:
+        """Returns the first file in the group based on start time."""
+        if not self.files:
+            return None
+        return min(self.files.values(), key=lambda f: f.start_time)
 
     def get_files_by_status(self, status: str) -> list[RecordingFile]:
         """Returns a list of files matching the given status."""

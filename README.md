@@ -10,6 +10,7 @@ A tool for managing and processing soccer game recordings from IP cameras.
 - Group related recordings together
 - Process videos with Once Autocam for automated camera tracking
 - Automatically upload videos to YouTube
+- TeamSnap integration to automatically populate match information
 
 ## Installation
 
@@ -245,3 +246,33 @@ I cut the ethernet cable off close to the female connector, crimped a new male e
 - Video post-processing.  It should be able "follow the ball", either by manually inputting X coordinates and timestamps, or by running a ball detection algorithm to generate the coordinates, and sliding the frame back and forth across the image.
 - Audio quality.  It's possible to connect a microphone to the camera, but I haven't tried it.
 - Setup HTTPS security.  It should be possible to generate a certificate to allow the camera to serve the Web UI over HTTPS.  This isn't a huge security risk, since I'm usually recording in the middle of a field.
+
+## TeamSnap Integration
+
+The application can automatically retrieve game information from TeamSnap to populate the match_info.ini file. This eliminates the need to manually enter team names and locations for each recording.
+
+To enable this feature:
+
+1. Enable TeamSnap integration in your `config.ini`:
+   ```ini
+   [TEAMSNAP]
+   enabled = true
+   client_id = your_client_id
+   client_secret = your_client_secret
+   team_id = your_team_id
+   my_team_name = Your Team Name
+   ```
+
+2. Obtain OAuth credentials from the TeamSnap developer portal:
+   - Register a new application at https://www.teamsnap.com/documentation/apiv3
+   - Set the redirect URI to a local URL (e.g., http://localhost:8080)
+   - Copy the client ID and client secret to your config.ini
+
+3. The first time you run the application with TeamSnap integration enabled, it will prompt you to authenticate with TeamSnap. Follow the instructions to complete the authentication process.
+
+Once configured, the application will automatically:
+1. Check if there was a game at the time a recording was made
+2. Populate the match_info.ini file with team names and location
+3. Leave the start_time_offset and total_duration fields for manual adjustment
+
+You'll still need to manually set the start_time_offset and total_duration values in the match_info.ini file, as these require human judgment to determine when the actual game play begins and ends.

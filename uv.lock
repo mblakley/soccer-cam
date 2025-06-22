@@ -681,6 +681,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pytz" },
     { name = "pywinauto" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -709,5 +710,6 @@ requires-dist = [
     { name = "pywin32", marker = "extra == 'service'", specifier = ">=306" },
     { name = "pywin32", marker = "extra == 'tray'", specifier = ">=306" },
     { name = "pywinauto", specifier = ">=0.6.8" },
+    { name = "requests", specifier = ">=2.31.0" },
 ]
 provides-extras = ["tray", "service", "dev"]

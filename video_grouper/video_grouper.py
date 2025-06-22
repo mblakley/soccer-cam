@@ -14,6 +14,7 @@ from video_grouper.directory_state import DirectoryState
 from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, create_ffmpeg_task, task_from_dict
 from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
+from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -83,6 +84,13 @@ class VideoGrouperApp:
                 self.camera = DahuaCamera(**camera_config)
             else:
                 raise ValueError(f"Unsupported camera type: {camera_type}")
+        
+        # Initialize TeamSnap API if enabled
+        self.teamsnap_api = None
+        if self.config.has_section('TEAMSNAP') and self.config.getboolean('TEAMSNAP', 'enabled', fallback=False):
+            logger.info("Initializing TeamSnap API integration")
+            config_path = os.path.join("shared_data", "config.ini")
+            self.teamsnap_api = TeamSnapAPI(config_path)
         
         self.download_queue = asyncio.Queue()
         self.ffmpeg_queue = asyncio.Queue()
@@ -590,8 +598,10 @@ class VideoGrouperApp:
         return True # Handled
 
     async def _ensure_match_info_exists(self, group_dir: str):
-        """Creates match_info.ini in the group directory if it doesn't exist."""
+        """Creates match_info.ini in the group directory if it doesn't exist and populates it with TeamSnap data if available."""
         match_info_path = os.path.join(group_dir, "match_info.ini")
+        
+        # Create default match_info.ini if it doesn't exist
         if not os.path.exists(match_info_path):
             logger.info(f"Creating default match_info.ini in {group_dir}")
             try:
@@ -603,6 +613,66 @@ class VideoGrouperApp:
                         await dest.write(content)
             except Exception as e:
                 logger.error(f"Failed to create match_info.ini from dist: {e}")
+                return
+        
+        # Check if TeamSnap integration is enabled and if match info is not already populated
+        if (self.teamsnap_api and 
+            self.teamsnap_api.enabled and 
+            not self.is_match_info_populated(group_dir) and 
+            os.path.exists(match_info_path)):
+            
+            try:
+                # Get the directory state to find the recording timespan
+                dir_state = DirectoryState(group_dir)
+                
+                # Get the first file's start time and last file's end time to determine the timespan
+                first_file = dir_state.get_first_file()
+                last_file = dir_state.get_last_file()
+                
+                if not first_file or not first_file.start_time or not last_file or not last_file.end_time:
+                    logger.warning(f"Cannot find recording timespan for {group_dir}, skipping TeamSnap lookup")
+                    return
+                
+                start_time = first_file.start_time
+                end_time = last_file.end_time
+                
+                logger.info(f"Looking up TeamSnap game information for recording timespan from {start_time} to {end_time}")
+                
+                # Create a config parser to read and update the match_info.ini file
+                config = configparser.ConfigParser()
+                config.read(match_info_path)
+                
+                if not config.has_section('MATCH'):
+                    config.add_section('MATCH')
+                
+                # Keep existing values for start_time_offset and total_duration
+                start_time_offset = config.get('MATCH', 'start_time_offset', fallback='00:00:00')
+                total_duration = config.get('MATCH', 'total_duration', fallback='01:30:00')
+                
+                # Populate match info using TeamSnap API
+                match_info = {}
+                success = self.teamsnap_api.populate_match_info(match_info, start_time, end_time)
+                
+                if success and match_info:
+                    logger.info(f"Found TeamSnap game: {match_info.get('home_team')} vs {match_info.get('away_team')} at {match_info.get('location')}")
+                    
+                    # Update team names and location
+                    config.set('MATCH', 'my_team_name', match_info.get('home_team', ''))
+                    config.set('MATCH', 'opponent_team_name', match_info.get('away_team', ''))
+                    config.set('MATCH', 'location', match_info.get('location', ''))
+                    config.set('MATCH', 'start_time_offset', start_time_offset)
+                    config.set('MATCH', 'total_duration', total_duration)
+                    
+                    # Write the updated config back to the file
+                    with open(match_info_path, 'w') as f:
+                        config.write(f)
+                    
+                    logger.info(f"Updated match_info.ini with TeamSnap data for {group_dir}")
+                else:
+                    logger.info(f"No TeamSnap game information found for recording from {start_time} to {end_time}")
+            
+            except Exception as e:
+                logger.error(f"Error retrieving TeamSnap game information: {e}", exc_info=True)
 
     def is_match_info_populated(self, group_dir: str) -> bool:
         """Checks if the match_info.ini file exists and is populated with non-default values."""
