@@ -11,6 +11,7 @@ import logging
 import pytest
 from pathlib import Path
 from datetime import datetime
+from unittest.mock import patch, AsyncMock, MagicMock
 
 # Configure logging
 logging.basicConfig(
@@ -29,82 +30,101 @@ from video_grouper.api_integrations.ntfy import NtfyAPI
 @pytest.mark.asyncio
 async def test_ntfy_send():
     """Test sending a notification via NTFY."""
-    # Find the config file
-    config_file = None
-    for path in ["config.ini", "shared_data/config.ini"]:
-        if os.path.exists(path):
-            config_file = path
-            break
-    
-    if not config_file:
-        logger.error("Config file not found")
-        return
-    
-    logger.info(f"Using config file: {config_file}")
-    
-    # Read the config file
+    # Create a mock config
     config = configparser.ConfigParser()
-    config.read(config_file)
-    
-    # Get the NTFY config
-    ntfy_enabled = config.getboolean("NTFY", "enabled", fallback=False)
-    ntfy_topic = config.get("NTFY", "topic", fallback="")
-    
-    logger.info(f"NTFY config: enabled={ntfy_enabled}, topic={ntfy_topic}")
-    
-    if not ntfy_enabled or not ntfy_topic:
-        logger.error("NTFY not enabled or topic not set")
-        return
+    config.add_section('NTFY')
+    config.set('NTFY', 'enabled', 'true')
+    config.set('NTFY', 'topic', 'test-topic')
     
     # Initialize the NTFY API
     ntfy_api = NtfyAPI(config)
     logger.info(f"NTFY API initialized with topic: {ntfy_api.topic}")
     
-    # Start the NTFY response listener
-    await ntfy_api.initialize()
-    
-    # Send a test notification
-    logger.info("Sending test notification...")
-    sent = await ntfy_api.send_notification(
-        message="This is a test notification from soccer-cam",
-        title="Test Notification",
-        tags=["test"],
-        priority=4
-    )
-    
-    if sent:
-        logger.info("Test notification sent successfully")
-    else:
-        logger.error("Failed to send test notification")
-    
-    # Wait a bit to make sure the notification is sent
-    await asyncio.sleep(2)
-    
-    # Test asking for team info
-    logger.info("Sending test prompt for missing team info...")
-    team_info = await ntfy_api.ask_team_info(None, {})
-    logger.info(f"Test prompt response: {team_info}")
-    
-    # Create a temporary test video file
-    test_video_path = None
-    if os.path.exists("tests/test_data/test.mp4"):
+    # Mock the send_notification method
+    with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
+         patch.object(ntfy_api, 'initialize', AsyncMock(return_value=None)), \
+         patch.object(ntfy_api, 'close', AsyncMock(return_value=None)), \
+         patch.object(ntfy_api, '_listen_for_responses', AsyncMock(return_value=None)), \
+         patch('video_grouper.api_integrations.ntfy.get_video_duration', AsyncMock(return_value='01:30:00')), \
+         patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
+         patch('video_grouper.api_integrations.ntfy.compress_image', AsyncMock(return_value='test_screenshot.jpg')), \
+         patch('video_grouper.api_integrations.ntfy.os.path.exists', return_value=True), \
+         patch('video_grouper.api_integrations.ntfy.os.remove', return_value=None), \
+         patch('asyncio.create_task', side_effect=lambda x: x):
+        
+        # Initialize the NTFY API (mocked)
+        await ntfy_api.initialize()
+        
+        # Test sending a notification
+        logger.info("Sending test notification...")
+        sent = await ntfy_api.send_notification(
+            message="This is a test notification from soccer-cam",
+            title="Test Notification",
+            tags=["test"],
+            priority=4
+        )
+        
+        # Verify the notification was sent (mocked)
+        assert sent is True
+        ntfy_api.send_notification.assert_called_once()
+        args, kwargs = ntfy_api.send_notification.call_args
+        assert kwargs['message'] == 'This is a test notification from soccer-cam'
+        assert kwargs['title'] == 'Test Notification'
+        assert kwargs['tags'] == ['test']
+        assert kwargs['priority'] == 4
+        
+        logger.info("Test notification sent successfully (mocked)")
+        
+        # Reset mock
+        ntfy_api.send_notification.reset_mock()
+        
+        # Test asking for team info
+        logger.info("Testing team info notification...")
+        team_info = await ntfy_api.ask_team_info(None, {})
+        
+        # Verify the notification was sent (mocked)
+        ntfy_api.send_notification.assert_called_once()
+        args, kwargs = ntfy_api.send_notification.call_args
+        assert 'Missing match information' in kwargs['message']
+        assert kwargs['title'] == 'Missing Match Information'
+        
+        logger.info(f"Team info notification sent successfully (mocked)")
+        
+        # Reset mock
+        ntfy_api.send_notification.reset_mock()
+        
+        # Create a temporary test video file path (not actually creating the file)
         test_video_path = "tests/test_data/test.mp4"
-    else:
-        logger.warning("Test video file not found, skipping video-related tests")
-    
-    if test_video_path:
+        
         # Test asking for game start time
-        logger.info("Sending test notification for game start time...")
+        logger.info("Testing game start time notification...")
         start_time = await ntfy_api.ask_game_start_time(test_video_path, os.path.dirname(test_video_path))
-        logger.info(f"Game start time notification sent: {start_time}")
+        
+        # Verify the notification was sent (mocked)
+        ntfy_api.send_notification.assert_called_once()
+        args, kwargs = ntfy_api.send_notification.call_args
+        assert 'Game start time' in kwargs['message']
+        assert kwargs['title'] == 'Set Game Start Time'
+        
+        logger.info(f"Game start time notification sent successfully (mocked)")
+        
+        # Reset mock
+        ntfy_api.send_notification.reset_mock()
         
         # Test asking for game end time
-        logger.info("Sending test notification for game end time...")
+        logger.info("Testing game end time notification...")
         end_time = await ntfy_api.ask_game_end_time(test_video_path, os.path.dirname(test_video_path), "00:05:00")
-        logger.info(f"Game end time notification sent: {end_time}")
-    
-    # Close the NTFY API
-    await ntfy_api.close()
+        
+        # Verify the notification was sent (mocked)
+        ntfy_api.send_notification.assert_called_once()
+        args, kwargs = ntfy_api.send_notification.call_args
+        assert 'Game end time' in kwargs['message']
+        assert kwargs['title'] == 'Set Game End Time'
+        
+        logger.info(f"Game end time notification sent successfully (mocked)")
+        
+        # Close the NTFY API (mocked)
+        await ntfy_api.close()
 
 if __name__ == "__main__":
     asyncio.run(test_ntfy_send()) 

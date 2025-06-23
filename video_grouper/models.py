@@ -89,34 +89,206 @@ class MatchInfo:
             logger.error(f"Error parsing match info file {file_path}: {e}")
             return None
     
+    @classmethod
+    def get_or_create(cls, group_dir: str) -> Tuple[Optional['MatchInfo'], configparser.ConfigParser]:
+        """Get an existing MatchInfo object or create a new one with default values.
+        
+        Args:
+            group_dir: The group directory path
+            
+        Returns:
+            A tuple of (MatchInfo object or None, ConfigParser object)
+        """
+        match_info_path = os.path.join(group_dir, "match_info.ini")
+        config = configparser.ConfigParser()
+        
+        # Create the file if it doesn't exist
+        if not os.path.exists(match_info_path):
+            if not os.path.exists(group_dir):
+                os.makedirs(group_dir)
+                
+            # Try to copy from dist file if available
+            source_dist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "match_info.ini.dist")
+            if os.path.exists(source_dist_path):
+                try:
+                    with open(source_dist_path, 'r') as src, open(match_info_path, 'w') as dest:
+                        dest.write(src.read())
+                except Exception as e:
+                    logger.error(f"Failed to create match_info.ini from dist: {e}")
+            else:
+                # Create empty file
+                with open(match_info_path, "w") as f:
+                    config.write(f)
+        
+        # Read the config
+        config.read(match_info_path)
+        
+        # Ensure the MATCH section exists
+        if "MATCH" not in config:
+            config["MATCH"] = {}
+            with open(match_info_path, "w") as f:
+                config.write(f)
+        
+        # Create the MatchInfo object
+        match_info = cls.from_config(config)
+        return match_info, config
+    
+    @classmethod
+    def update_team_info(cls, group_dir: str, team_info: dict) -> Optional['MatchInfo']:
+        """Update team information in the match_info.ini file.
+        
+        Args:
+            group_dir: The group directory path
+            team_info: Dictionary with team information (team_name, opponent_name, location)
+            
+        Returns:
+            Updated MatchInfo object or None if the update failed
+        """
+        match_info_path = os.path.join(group_dir, "match_info.ini")
+        match_info, config = cls.get_or_create(group_dir)
+        
+        # Update the config with team information
+        if team_info:
+            if 'team_name' in team_info:
+                config["MATCH"]["my_team_name"] = team_info['team_name']
+                logger.info(f"Updated match_info.ini with team_name: {team_info['team_name']}")
+                
+            if 'opponent_name' in team_info:
+                config["MATCH"]["opponent_team_name"] = team_info['opponent_name']
+                logger.info(f"Updated match_info.ini with opponent_name: {team_info['opponent_name']}")
+                
+            if 'location' in team_info:
+                config["MATCH"]["location"] = team_info['location']
+                logger.info(f"Updated match_info.ini with location: {team_info['location']}")
+        
+        # Ensure required fields exist with default values if not set
+        if "my_team_name" not in config["MATCH"]:
+            config["MATCH"]["my_team_name"] = "My Team"
+        if "opponent_team_name" not in config["MATCH"]:
+            config["MATCH"]["opponent_team_name"] = "Opponent"
+        if "location" not in config["MATCH"]:
+            config["MATCH"]["location"] = "Unknown"
+        if "start_time_offset" not in config["MATCH"]:
+            config["MATCH"]["start_time_offset"] = "00:00:00"
+        if "total_duration" not in config["MATCH"]:
+            config["MATCH"]["total_duration"] = "01:30:00"
+        
+        # Save the config
+        with open(match_info_path, "w") as f:
+            config.write(f)
+        
+        # Return the updated MatchInfo object
+        return cls.from_file(match_info_path)
+    
+    @classmethod
+    def update_game_times(cls, group_dir: str, start_time_offset: Optional[str] = None, 
+                         total_duration: Optional[str] = None) -> Optional['MatchInfo']:
+        """Update game time information in the match_info.ini file.
+        
+        Args:
+            group_dir: The group directory path
+            start_time_offset: The start time offset (HH:MM:SS format)
+            total_duration: The total duration (HH:MM:SS format)
+            
+        Returns:
+            Updated MatchInfo object or None if the update failed
+        """
+        match_info_path = os.path.join(group_dir, "match_info.ini")
+        match_info, config = cls.get_or_create(group_dir)
+        
+        # Update the config with game time information
+        if start_time_offset:
+            config["MATCH"]["start_time_offset"] = start_time_offset
+            logger.info(f"Updated match_info.ini with start_time_offset: {start_time_offset}")
+            
+        if total_duration:
+            config["MATCH"]["total_duration"] = total_duration
+            logger.info(f"Updated match_info.ini with total_duration: {total_duration}")
+        
+        # Save the config
+        with open(match_info_path, "w") as f:
+            config.write(f)
+        
+        # Ensure required fields exist with default values if not set
+        if "my_team_name" not in config["MATCH"]:
+            config["MATCH"]["my_team_name"] = "My Team"
+        if "opponent_team_name" not in config["MATCH"]:
+            config["MATCH"]["opponent_team_name"] = "Opponent"
+        if "location" not in config["MATCH"]:
+            config["MATCH"]["location"] = "Unknown"
+            
+        # Save the config again with defaults
+        with open(match_info_path, "w") as f:
+            config.write(f)
+        
+        # Return the updated MatchInfo object
+        return cls.from_file(match_info_path)
+    
+    def get_team_info(self) -> dict:
+        """Get team information as a dictionary.
+        
+        Returns:
+            Dictionary with team information
+        """
+        return {
+            'team_name': self.my_team_name,
+            'opponent_name': self.opponent_team_name,
+            'location': self.location
+        }
+    
+    def is_populated(self) -> bool:
+        """Check if the match info is populated with non-default values.
+        
+        Returns:
+            True if all required fields are populated, False otherwise
+        """
+        required_fields = [self.my_team_name, self.opponent_team_name, self.location, self.start_time_offset]
+        return all(field.strip() for field in required_fields)
+    
     def get_total_duration_seconds(self) -> int:
         """Convert total_duration from MM:SS or HH:MM:SS to seconds."""
-        parts = self.total_duration.split(':')
-        
-        if len(parts) == 2:
-            # MM:SS format
-            m, s = map(int, parts)
-            return int(timedelta(minutes=m, seconds=s).total_seconds())
-        elif len(parts) == 3:
-            # HH:MM:SS format
-            h, m, s = map(int, parts)
-            return int(timedelta(hours=h, minutes=m, seconds=s).total_seconds())
-        else:
-            logger.warning(f"Invalid time format: {self.total_duration}, using default of 90 minutes")
+        if not self.total_duration or not self.total_duration.strip():
+            logger.warning("Empty total_duration, using default of 90 minutes")
+            return 90 * 60  # Default to 90 minutes
+            
+        try:
+            parts = self.total_duration.split(':')
+            
+            if len(parts) == 2:
+                # MM:SS format
+                m, s = map(int, parts)
+                return int(timedelta(minutes=m, seconds=s).total_seconds())
+            elif len(parts) == 3:
+                # HH:MM:SS format
+                h, m, s = map(int, parts)
+                return int(timedelta(hours=h, minutes=m, seconds=s).total_seconds())
+            else:
+                logger.warning(f"Invalid time format: {self.total_duration}, using default of 90 minutes")
+                return 90 * 60  # Default to 90 minutes
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Error parsing duration '{self.total_duration}': {e}, using default of 90 minutes")
             return 90 * 60  # Default to 90 minutes
     
     def get_start_offset(self) -> str:
         """Get start_time_offset in HH:MM:SS format."""
-        parts = self.start_time_offset.split(':')
-        
-        if len(parts) == 2:
-            # Convert MM:SS to HH:MM:SS
-            return f"00:{parts[0].zfill(2)}:{parts[1].zfill(2)}"
-        elif len(parts) == 3:
-            # Already in HH:MM:SS format
-            return self.start_time_offset
-        else:
-            logger.warning(f"Invalid time format: {self.start_time_offset}, using default of 00:00:00")
+        if not self.start_time_offset or not self.start_time_offset.strip():
+            logger.warning("Empty start_time_offset, using default of 00:00:00")
+            return "00:00:00"
+            
+        try:
+            parts = self.start_time_offset.split(':')
+            
+            if len(parts) == 2:
+                # Convert MM:SS to HH:MM:SS
+                return f"00:{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+            elif len(parts) == 3:
+                # Already in HH:MM:SS format
+                return self.start_time_offset
+            else:
+                logger.warning(f"Invalid time format: {self.start_time_offset}, using default of 00:00:00")
+                return "00:00:00"
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Error parsing start offset '{self.start_time_offset}': {e}, using default of 00:00:00")
             return "00:00:00"
     
     def get_sanitized_names(self) -> Tuple[str, str, str]:
