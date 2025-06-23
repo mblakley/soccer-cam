@@ -249,9 +249,7 @@ I cut the ethernet cable off close to the female connector, crimped a new male e
 
 ## TeamSnap Integration
 
-The application can automatically retrieve game information from TeamSnap to populate the match_info.ini file. This eliminates the need to manually enter team names and locations for each recording.
-
-To enable this feature:
+The application includes integration with TeamSnap, which can automatically populate match information based on your team's schedule. To enable this feature:
 
 1. Enable TeamSnap integration in your `config.ini`:
    ```ini
@@ -259,20 +257,42 @@ To enable this feature:
    enabled = true
    client_id = your_client_id
    client_secret = your_client_secret
+   access_token = your_access_token
    team_id = your_team_id
    my_team_name = Your Team Name
    ```
 
-2. Obtain OAuth credentials from the TeamSnap developer portal:
-   - Register a new application at https://www.teamsnap.com/documentation/apiv3
-   - Set the redirect URI to a local URL (e.g., http://localhost:8080)
-   - Copy the client ID and client secret to your config.ini
+2. Follow the instructions in the TeamSnap API documentation to obtain your credentials.
 
-3. The first time you run the application with TeamSnap integration enabled, it will prompt you to authenticate with TeamSnap. Follow the instructions to complete the authentication process.
+When a new video is processed, the application will check your TeamSnap schedule to find a match that corresponds to the recording time and automatically populate the match information.
 
-Once configured, the application will automatically:
-1. Check if there was a game at the time a recording was made
-2. Populate the match_info.ini file with team names and location
-3. Leave the start_time_offset and total_duration fields for manual adjustment
+## NTFY Integration
 
-You'll still need to manually set the start_time_offset and total_duration values in the match_info.ini file, as these require human judgment to determine when the actual game play begins and ends.
+The application includes integration with NTFY.sh, which allows you to receive notifications on your phone when a video needs your attention. This feature is particularly useful for identifying the exact start and end times of a game within a longer recording.
+
+### How it works
+
+1. When a video is combined, the application sends a notification to your phone with a screenshot from the beginning of the video.
+2. You'll be asked if the game has started at this point in the video.
+3. If you respond "No", another screenshot will be sent from 5 minutes later in the video.
+4. Once you respond "Yes", the application will set the start time to 5 minutes before that point.
+5. The same process is repeated to identify the end of the game.
+6. Once both start and end times are identified, the video will be automatically trimmed.
+
+### Setup
+
+1. Enable NTFY integration in your `config.ini`:
+   ```ini
+   [NTFY]
+   enabled = true
+   server_url = https://ntfy.sh
+   topic = your-unique-soccer-cam-topic
+   ```
+
+2. Install the NTFY app on your phone (available on [Google Play](https://play.google.com/store/apps/details?id=io.heckel.ntfy), [F-Droid](https://f-droid.org/packages/io.heckel.ntfy/), or the [App Store](https://apps.apple.com/us/app/ntfy/id1625396347)).
+
+3. Subscribe to your chosen topic in the app.
+
+### Security Note
+
+Choose a unique, hard-to-guess topic name for security. Anyone who knows your topic name can send and receive notifications on that channel. If you don't specify a topic name, a random one will be generated and displayed in the application logs when it starts up.

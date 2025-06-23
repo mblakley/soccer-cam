@@ -41,6 +41,15 @@ team_id = your_team_id
 # Your team name as it should appear in video titles
 my_team_name = Your Team Name
 
+[NTFY]
+# Set to true to enable NTFY integration for game start/end time detection
+enabled = false
+# NTFY server URL (default is ntfy.sh)
+server_url = https://ntfy.sh
+# Topic name for notifications (if not provided, a random one will be generated)
+# Use a unique, hard-to-guess topic name for security
+topic = your-unique-soccer-cam-topic
+
 [YOUTUBE]
 # Set to true to enable YouTube uploads
 enabled = false

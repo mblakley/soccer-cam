@@ -5,9 +5,12 @@ import asyncio
 import logging
 import configparser
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List, Any, Set
+from typing import Dict, Optional, Tuple, List, Any, Set, Union
 import aiofiles
 import pytz
+import shutil
+import time
+import traceback
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
@@ -15,6 +18,7 @@ from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTa
 from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
+from video_grouper.api_integrations.ntfy import NtfyAPI
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -92,6 +96,7 @@ class VideoGrouperApp:
             config_path = os.path.join("shared_data", "config.ini")
             self.teamsnap_api = TeamSnapAPI(config_path)
         
+        self.ntfy_api = None  # NTFY API client
         self.download_queue = asyncio.Queue()
         self.ffmpeg_queue = asyncio.Queue()
         self.camera_connected = asyncio.Event()
@@ -103,6 +108,17 @@ class VideoGrouperApp:
         
         self._queues_loaded = False
         self.camera_was_connected = False
+        self._last_processed_time = None
+        self._last_connected_check = None
+        self._connected_timeframes = []
+        self._camera_initialized = False
+        self._teamsnap_initialized = False
+        self._ntfy_initialized = False  # NTFY initialization flag
+        self._tasks = []
+        self._shutdown_event = asyncio.Event()
+        
+        # Track NTFY processed directories to avoid duplicate processing
+        self._ntfy_processed_dirs = set()
 
     async def initialize(self):
         """Initialize the application by scanning existing files and populating queues."""
@@ -138,7 +154,7 @@ class VideoGrouperApp:
                             task = ConvertTask(file_obj.file_path)
                             logger.info(f"AUDIT: Found downloaded file in {group_dir}, adding to FFmpeg queue: {task}")
                             await self.add_to_ffmpeg_queue(task)
-                        
+
                         elif file_obj.status in ["pending", "download_failed"] and file_obj.file_path not in self.queued_for_download:
                             logger.info(f"AUDIT: Found pending/failed download in {group_dir}, re-adding to download queue: {file_obj.file_path}")
                             # Reconstruct a RecordingFile object to pass to the queue
@@ -151,7 +167,7 @@ class VideoGrouperApp:
                                 skip=file_obj.skip
                             )
                             await self.add_to_download_queue(recording_file)
-                            
+
                         elif file_obj.status == "conversion_failed" and file_obj.file_path not in self.queued_for_ffmpeg:
                             logger.info(f"AUDIT: Found failed conversion in {group_dir}, re-queuing for conversion: {file_obj.file_path}")
                             await self.add_to_ffmpeg_queue(ConvertTask(file_obj.file_path))
@@ -168,7 +184,12 @@ class VideoGrouperApp:
                         await self._ensure_match_info_exists(group_dir)
                         combined_path = os.path.join(group_dir, "combined.mp4")
                         if os.path.exists(combined_path):
-                            if self.is_match_info_populated(group_dir):
+                            # Check if NTFY integration is enabled and match info is not populated
+                            if self.ntfy_api and self.ntfy_api.enabled and not self.is_match_info_populated(group_dir):
+                                logger.info(f"AUDIT: Found combined video in {group_dir} that needs NTFY processing")
+                                # Create a task to process this combined video with NTFY
+                                asyncio.create_task(self._process_combined_with_ntfy(group_dir, combined_path))
+                            elif self.is_match_info_populated(group_dir):
                                 # Create a MatchInfo object for the task
                                 match_info_path = os.path.join(group_dir, "match_info.ini")
                                 match_info = MatchInfo.from_file(match_info_path)
@@ -184,7 +205,7 @@ class VideoGrouperApp:
                                 logger.info(f"AUDIT: Found combined group with no match_info.ini in {group_dir}. Not ready to trim.")
                         else:
                             logger.info(f"AUDIT: Found combined group with missing combined.mp4 in {group_dir}. Please check the group directory.")
-                    
+
                     # Check for autocam_complete groups and add them to YouTube upload queue
                     if dir_state.status == "autocam_complete":
                         # Check if YouTube upload is enabled in config
@@ -199,6 +220,16 @@ class VideoGrouperApp:
                 except Exception as e:
                     logger.error(f"Error during state audit for {group_dir}: {e}")
         
+        # Initialize TeamSnap API
+        if not self._teamsnap_initialized:
+            self._initialize_teamsnap()
+            self._teamsnap_initialized = True
+            
+        # Initialize NTFY API
+        if not self._ntfy_initialized:
+            self._initialize_ntfy()
+            self._ntfy_initialized = True
+
         logger.info("Initialization complete")
 
     async def run(self):
@@ -215,11 +246,25 @@ class VideoGrouperApp:
         await asyncio.gather(*tasks)
 
     async def shutdown(self):
-        """Saves the state of all queues to disk."""
-        logger.info("Saving all queue states...")
-        await self._save_download_queue_state()
-        await self._save_ffmpeg_queue_state()
-        logger.info("All queue states saved.")
+        """Shut down the application."""
+        logger.info("Shutting down VideoGrouperApp")
+        self._shutdown_event.set()
+        
+        # Shutdown NTFY API if initialized
+        if self.ntfy_api and self.ntfy_api.enabled:
+            await self.ntfy_api.shutdown()
+        
+        # Cancel all running tasks
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+                
+        # Close camera connection if open
+        if self.camera:
+            if hasattr(self.camera, 'close') and callable(self.camera.close):
+                await self.camera.close()
+            
+        logger.info("VideoGrouperApp shutdown complete")
 
     async def sync_files_from_camera(self):
         start_time = await self._get_latest_processed_time()
@@ -435,7 +480,7 @@ class VideoGrouperApp:
                 
                 final_screenshot_path = screenshot_path if screenshot_success else None
 
-                await dir_state.update_file_status(file_path, "converted", screenshot_path=final_screenshot_path)
+                await dir_state.update_file_state(file_path, status="converted", screenshot_path=final_screenshot_path)
 
                 # Create match_info.ini if it doesn't exist
                 await self._ensure_match_info_exists(group_dir)
@@ -446,10 +491,10 @@ class VideoGrouperApp:
                     logger.info(f"Group {os.path.basename(group_dir)} is ready for combining.")
                     await self.add_to_ffmpeg_queue(CombineTask(group_dir))
             else:
-                await dir_state.set_file_status(file_path, "conversion_failed")
+                await dir_state.update_file_state(file_path, status="conversion_failed")
                 logger.error(f"Conversion failed for {file_path}")
         except Exception as e:
-            await dir_state.set_file_status(file_path, "conversion_failed")
+            await dir_state.update_file_state(file_path, status="conversion_failed")
             logger.error(f"An unexpected error occurred during conversion of {file_path}: {e}", exc_info=True)
 
     async def _handle_combine_task(self, group_dir: str):
@@ -494,13 +539,70 @@ class VideoGrouperApp:
                 logger.info(f"Successfully combined videos in {group_dir}")
                 await dir_state.update_group_status("combined")
                 
-                # Check for match_info.ini and queue trim task if it's populated
-                match_info_path = os.path.join(group_dir, "match_info.ini")
-                if os.path.exists(match_info_path) and self.is_match_info_populated(group_dir):
-                    match_info = MatchInfo.from_file(match_info_path)
-                    if match_info:
-                        task = TrimTask(group_dir, match_info)
-                        await self.add_to_ffmpeg_queue(task)
+                # Check if NTFY integration is enabled to get game start/end times
+                if self.ntfy_api and self.ntfy_api.enabled:
+                    logger.info("Using NTFY to determine game start and end times")
+                    
+                    # Create match_info.ini if it doesn't exist
+                    await self._ensure_match_info_exists(group_dir)
+                    match_info_path = os.path.join(group_dir, "match_info.ini")
+                    
+                    # Ask user for game start time via NTFY
+                    start_time_offset = await self.ntfy_api.ask_game_start_time(
+                        combined_video_path=combined_path,
+                        group_dir=group_dir
+                    )
+                    
+                    if start_time_offset:
+                        # Update match_info.ini with the start time
+                        config = configparser.ConfigParser()
+                        if os.path.exists(match_info_path):
+                            config.read(match_info_path)
+                        
+                        if "MATCH" not in config:
+                            config.add_section("MATCH")
+                            
+                        # Set default values if they don't exist
+                        if "my_team_name" not in config["MATCH"]:
+                            config["MATCH"]["my_team_name"] = "My Team"
+                        if "opponent_team_name" not in config["MATCH"]:
+                            config["MATCH"]["opponent_team_name"] = "Opponent"
+                        if "location" not in config["MATCH"]:
+                            config["MATCH"]["location"] = "Unknown"
+                            
+                        config["MATCH"]["start_time_offset"] = start_time_offset
+                        
+                        # Ask for game end time
+                        total_duration = await self.ntfy_api.ask_game_end_time(
+                            combined_video_path=combined_path,
+                            group_dir=group_dir,
+                            start_time_offset=start_time_offset
+                        )
+                        
+                        if total_duration:
+                            config["MATCH"]["total_duration"] = total_duration
+                        else:
+                            config["MATCH"]["total_duration"] = "01:30:00"  # Default 90 minutes
+                        
+                        # Save the updated config
+                        with open(match_info_path, 'w') as f:
+                            config.write(f)
+                        
+                        # Now that match info is populated, queue the trim task
+                        match_info = MatchInfo.from_file(match_info_path)
+                        if match_info:
+                            task = TrimTask(group_dir, match_info)
+                            await self.add_to_ffmpeg_queue(task)
+                    else:
+                        logger.warning("Failed to determine game start time via NTFY")
+                else:
+                    # Check for match_info.ini and queue trim task if it's populated (original behavior)
+                    match_info_path = os.path.join(group_dir, "match_info.ini")
+                    if os.path.exists(match_info_path) and self.is_match_info_populated(group_dir):
+                        match_info = MatchInfo.from_file(match_info_path)
+                        if match_info:
+                            task = TrimTask(group_dir, match_info)
+                            await self.add_to_ffmpeg_queue(task)
             else:
                 logger.error(f"Failed to combine videos in {group_dir}")
                 await dir_state.update_group_status("combine_failed", error_message="ffmpeg combine command failed.")
@@ -1031,3 +1133,131 @@ class VideoGrouperApp:
                 
         if filtered_count > 0:
             logger.info(f"Filtered out {filtered_count} recordings that overlap with connected timeframes.")
+
+    def _initialize_teamsnap(self):
+        """Initialize the TeamSnap API integration."""
+        config_path = os.path.join(self.storage_path, "config.ini")
+        self.teamsnap_api = TeamSnapAPI(config_path)
+        if self.teamsnap_api.enabled:
+            logger.info("TeamSnap API integration enabled")
+        else:
+            logger.info("TeamSnap API integration disabled")
+            
+    def _initialize_ntfy(self):
+        """Initialize the NTFY API integration."""
+        logger.info("Initializing NTFY API integration")
+        self.ntfy_api = NtfyAPI(self.config)
+        logger.info(f"NTFY API enabled: {self.ntfy_api.enabled}, topic: {self.ntfy_api.topic}")
+        if self.ntfy_api and self.ntfy_api.enabled:
+            logger.info("NTFY API integration enabled")
+            asyncio.create_task(self.ntfy_api.initialize())
+        else:
+            logger.info("NTFY API integration disabled")
+
+    async def _process_combined_with_ntfy(self, group_dir: str, combined_path: str, force=False):
+        """Process a combined video with NTFY to determine game start and end times."""
+        logger.info(f"Processing combined video with NTFY: {group_dir}")
+        
+        # Skip if we've already processed this directory
+        if group_dir in self._ntfy_processed_dirs and not force:
+            logger.info(f"Directory {group_dir} already processed with NTFY, skipping")
+            return
+            
+        # Check if match info is already populated
+        if self.is_match_info_populated(group_dir) and not force:
+            logger.info(f"Match info already populated for {group_dir}, skipping NTFY processing")
+            self._ntfy_processed_dirs.add(group_dir)
+            return
+            
+        # Add to processed set to avoid duplicate processing
+        self._ntfy_processed_dirs.add(group_dir)
+        
+        if not self.ntfy_api or not self.ntfy_api.enabled:
+            logger.warning("NTFY API not enabled, skipping game time detection")
+            return
+            
+        # Ensure match info file exists
+        await self._ensure_match_info_exists(group_dir)
+        
+        # Ask for game start time
+        start_time = await self.ntfy_api.ask_game_start_time(combined_path, group_dir)
+        
+        if start_time:
+            # Update match info with start time
+            match_info_path = os.path.join(group_dir, "match_info.ini")
+            config = configparser.ConfigParser()
+            config.read(match_info_path)
+            
+            if "match" not in config:
+                config["match"] = {}
+                
+            config["match"]["start_time_offset"] = start_time
+            
+            with open(match_info_path, "w") as f:
+                config.write(f)
+                
+            logger.info(f"Updated match_info.ini with start_time_offset: {start_time}")
+            
+            # Ask for game end time
+            end_time = await self.ntfy_api.ask_game_end_time(combined_path, group_dir, start_time)
+            
+            if end_time:
+                # Update match info with total duration
+                config = configparser.ConfigParser()
+                config.read(match_info_path)
+                
+                if "match" not in config:
+                    config["match"] = {}
+                    
+                # Convert time strings to seconds for calculation
+                start_seconds = self._time_to_seconds(start_time)
+                end_seconds = self._time_to_seconds(end_time)
+                total_duration = end_seconds - start_seconds
+                
+                # Format as HH:MM:SS
+                total_duration_str = str(timedelta(seconds=total_duration)).split('.')[0]
+                config["match"]["total_duration"] = total_duration_str
+                
+                with open(match_info_path, "w") as f:
+                    config.write(f)
+                    
+                logger.info(f"Updated match_info.ini with total_duration: {total_duration_str}")
+        else:
+            logger.warning(f"Failed to determine game start time for {group_dir}")
+            
+    def _time_to_seconds(self, time_str: str) -> int:
+        """Convert a time string in format HH:MM:SS to seconds."""
+        h, m, s = map(int, time_str.split(':'))
+        return h * 3600 + m * 60 + s
+
+    async def process_combined_directory_with_ntfy(self, group_dir_name: str, force=False):
+        """
+        Manually process a specific combined directory with NTFY.
+        
+        Args:
+            group_dir_name: The name of the directory to process (e.g., "2025.06.14-10.37.25")
+            force: If True, process with NTFY even if match_info is already populated
+        """
+        logger.info(f"Manually triggering NTFY processing for {os.path.join(self.storage_path, group_dir_name)}")
+        group_dir = os.path.join(self.storage_path, group_dir_name)
+        if not os.path.exists(group_dir):
+            logger.error(f"Directory {group_dir} does not exist")
+            return False
+            
+        combined_path = os.path.join(group_dir, "combined.mp4")
+        if not os.path.exists(combined_path):
+            logger.error(f"Combined video not found at {combined_path}")
+            return False
+            
+        dir_state = DirectoryState(group_dir)
+        if dir_state.status != "combined":
+            logger.error(f"Directory {group_dir} is not in 'combined' state")
+            return False
+            
+        # Remove from processed set if forcing
+        if force and group_dir in self._ntfy_processed_dirs:
+            self._ntfy_processed_dirs.remove(group_dir)
+            
+        # Process with NTFY
+        await self._process_combined_with_ntfy(group_dir, combined_path, force)
+        return True
