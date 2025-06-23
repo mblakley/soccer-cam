@@ -539,62 +539,10 @@ class VideoGrouperApp:
                 logger.info(f"Successfully combined videos in {group_dir}")
                 await dir_state.update_group_status("combined")
                 
-                # Check if NTFY integration is enabled to get game start/end times
+                # Check if NTFY integration is enabled to send notifications
                 if self.ntfy_api and self.ntfy_api.enabled:
-                    logger.info("Using NTFY to determine game start and end times")
-                    
-                    # Create match_info.ini if it doesn't exist
-                    await self._ensure_match_info_exists(group_dir)
-                    match_info_path = os.path.join(group_dir, "match_info.ini")
-                    
-                    # Ask user for game start time via NTFY
-                    start_time_offset = await self.ntfy_api.ask_game_start_time(
-                        combined_video_path=combined_path,
-                        group_dir=group_dir
-                    )
-                    
-                    if start_time_offset:
-                        # Update match_info.ini with the start time
-                        config = configparser.ConfigParser()
-                        if os.path.exists(match_info_path):
-                            config.read(match_info_path)
-                        
-                        if "MATCH" not in config:
-                            config.add_section("MATCH")
-                            
-                        # Set default values if they don't exist
-                        if "my_team_name" not in config["MATCH"]:
-                            config["MATCH"]["my_team_name"] = "My Team"
-                        if "opponent_team_name" not in config["MATCH"]:
-                            config["MATCH"]["opponent_team_name"] = "Opponent"
-                        if "location" not in config["MATCH"]:
-                            config["MATCH"]["location"] = "Unknown"
-                            
-                        config["MATCH"]["start_time_offset"] = start_time_offset
-                        
-                        # Ask for game end time
-                        total_duration = await self.ntfy_api.ask_game_end_time(
-                            combined_video_path=combined_path,
-                            group_dir=group_dir,
-                            start_time_offset=start_time_offset
-                        )
-                        
-                        if total_duration:
-                            config["MATCH"]["total_duration"] = total_duration
-                        else:
-                            config["MATCH"]["total_duration"] = "01:30:00"  # Default 90 minutes
-                        
-                        # Save the updated config
-                        with open(match_info_path, 'w') as f:
-                            config.write(f)
-                        
-                        # Now that match info is populated, queue the trim task
-                        match_info = MatchInfo.from_file(match_info_path)
-                        if match_info:
-                            task = TrimTask(group_dir, match_info)
-                            await self.add_to_ffmpeg_queue(task)
-                    else:
-                        logger.warning("Failed to determine game start time via NTFY")
+                    logger.info("Using NTFY to send notifications about match information")
+                    await self._process_combined_with_ntfy(group_dir, combined_path)
                 else:
                     # Check for match_info.ini and queue trim task if it's populated (original behavior)
                     match_info_path = os.path.join(group_dir, "match_info.ini")
@@ -701,27 +649,13 @@ class VideoGrouperApp:
 
     async def _ensure_match_info_exists(self, group_dir: str):
         """Creates match_info.ini in the group directory if it doesn't exist and populates it with TeamSnap data if available."""
-        match_info_path = os.path.join(group_dir, "match_info.ini")
-        
-        # Create default match_info.ini if it doesn't exist
-        if not os.path.exists(match_info_path):
-            logger.info(f"Creating default match_info.ini in {group_dir}")
-            try:
-                # Assuming video_grouper.py and match_info.ini.dist are in the same directory
-                source_dist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "match_info.ini.dist")
-                async with aiofiles.open(source_dist_path, 'r') as src:
-                    content = await src.read()
-                    async with aiofiles.open(match_info_path, 'w') as dest:
-                        await dest.write(content)
-            except Exception as e:
-                logger.error(f"Failed to create match_info.ini from dist: {e}")
-                return
+        # Use the new MatchInfo.get_or_create method
+        match_info, config = MatchInfo.get_or_create(group_dir)
         
         # Check if TeamSnap integration is enabled and if match info is not already populated
         if (self.teamsnap_api and 
             self.teamsnap_api.enabled and 
-            not self.is_match_info_populated(group_dir) and 
-            os.path.exists(match_info_path)):
+            not self.is_match_info_populated(group_dir)):
             
             try:
                 # Get the directory state to find the recording timespan
@@ -740,34 +674,22 @@ class VideoGrouperApp:
                 
                 logger.info(f"Looking up TeamSnap game information for recording timespan from {start_time} to {end_time}")
                 
-                # Create a config parser to read and update the match_info.ini file
-                config = configparser.ConfigParser()
-                config.read(match_info_path)
-                
-                if not config.has_section('MATCH'):
-                    config.add_section('MATCH')
-                
-                # Keep existing values for start_time_offset and total_duration
-                start_time_offset = config.get('MATCH', 'start_time_offset', fallback='00:00:00')
-                total_duration = config.get('MATCH', 'total_duration', fallback='01:30:00')
-                
                 # Populate match info using TeamSnap API
-                match_info = {}
-                success = self.teamsnap_api.populate_match_info(match_info, start_time, end_time)
+                match_info_dict = {}
+                success = self.teamsnap_api.populate_match_info(match_info_dict, start_time, end_time)
                 
-                if success and match_info:
-                    logger.info(f"Found TeamSnap game: {match_info.get('home_team')} vs {match_info.get('away_team')} at {match_info.get('location')}")
+                if success and match_info_dict:
+                    logger.info(f"Found TeamSnap game: {match_info_dict.get('home_team')} vs {match_info_dict.get('away_team')} at {match_info_dict.get('location')}")
                     
-                    # Update team names and location
-                    config.set('MATCH', 'my_team_name', match_info.get('home_team', ''))
-                    config.set('MATCH', 'opponent_team_name', match_info.get('away_team', ''))
-                    config.set('MATCH', 'location', match_info.get('location', ''))
-                    config.set('MATCH', 'start_time_offset', start_time_offset)
-                    config.set('MATCH', 'total_duration', total_duration)
+                    # Convert TeamSnap match info format to our format
+                    team_info = {
+                        'team_name': match_info_dict.get('home_team', ''),
+                        'opponent_name': match_info_dict.get('away_team', ''),
+                        'location': match_info_dict.get('location', '')
+                    }
                     
-                    # Write the updated config back to the file
-                    with open(match_info_path, 'w') as f:
-                        config.write(f)
+                    # Update match info with team information
+                    MatchInfo.update_team_info(group_dir, team_info)
                     
                     logger.info(f"Updated match_info.ini with TeamSnap data for {group_dir}")
                 else:
@@ -786,9 +708,8 @@ class VideoGrouperApp:
         if match_info is None:
             return False
         
-        # Check that required fields are populated
-        required_fields = [match_info.my_team_name, match_info.opponent_team_name, match_info.location, match_info.start_time_offset]
-        return all(field.strip() for field in required_fields)
+        # Use the new is_populated method
+        return match_info.is_populated()
 
     def parse_match_info(self, file_path: str) -> Optional[MatchInfo]:
         """Parse match info file."""
@@ -1176,55 +1097,29 @@ class VideoGrouperApp:
             logger.warning("NTFY API not enabled, skipping game time detection")
             return
             
-        # Ensure match info file exists
-        await self._ensure_match_info_exists(group_dir)
+        # Get existing match info
+        match_info, config = MatchInfo.get_or_create(group_dir)
         
-        # Ask for game start time
-        start_time = await self.ntfy_api.ask_game_start_time(combined_path, group_dir)
+        # Extract existing team info
+        existing_info = {}
+        if match_info:
+            existing_info = match_info.get_team_info()
+            
+        # Send notifications about missing team information
+        await self.ntfy_api.ask_team_info(combined_path, existing_info)
         
-        if start_time:
-            # Update match info with start time
-            match_info_path = os.path.join(group_dir, "match_info.ini")
-            config = configparser.ConfigParser()
-            config.read(match_info_path)
+        # Send notification about setting game start time
+        await self.ntfy_api.ask_game_start_time(combined_path, group_dir)
+        
+        # If we have a start time in the config, send notification about setting game end time
+        if match_info and match_info.start_time_offset:
+            await self.ntfy_api.ask_game_end_time(combined_path, group_dir, match_info.start_time_offset)
             
-            if "match" not in config:
-                config["match"] = {}
-                
-            config["match"]["start_time_offset"] = start_time
-            
-            with open(match_info_path, "w") as f:
-                config.write(f)
-                
-            logger.info(f"Updated match_info.ini with start_time_offset: {start_time}")
-            
-            # Ask for game end time
-            end_time = await self.ntfy_api.ask_game_end_time(combined_path, group_dir, start_time)
-            
-            if end_time:
-                # Update match info with total duration
-                config = configparser.ConfigParser()
-                config.read(match_info_path)
-                
-                if "match" not in config:
-                    config["match"] = {}
-                    
-                # Convert time strings to seconds for calculation
-                start_seconds = self._time_to_seconds(start_time)
-                end_seconds = self._time_to_seconds(end_time)
-                total_duration = end_seconds - start_seconds
-                
-                # Format as HH:MM:SS
-                total_duration_str = str(timedelta(seconds=total_duration)).split('.')[0]
-                config["match"]["total_duration"] = total_duration_str
-                
-                with open(match_info_path, "w") as f:
-                    config.write(f)
-                    
-                logger.info(f"Updated match_info.ini with total_duration: {total_duration_str}")
-        else:
-            logger.warning(f"Failed to determine game start time for {group_dir}")
-            
+        # Log that notifications have been sent
+        logger.info(f"Sent notifications about match information for {group_dir}")
+        
+        # Note: We don't queue a trim task here since the user needs to manually update match_info.ini
+
     def _time_to_seconds(self, time_str: str) -> int:
         """Convert a time string in format HH:MM:SS to seconds."""
         h, m, s = map(int, time_str.split(':'))
