@@ -41,6 +41,17 @@ team_id = your_team_id
 # Your team name as it should appear in video titles
 my_team_name = Your Team Name
 
+[PLAYMETRICS]
+# Set to true to enable PlayMetrics integration
+enabled = false
+# Your PlayMetrics login credentials
+username = your_email@example.com
+password = your_password
+# Your team ID from PlayMetrics (optional, will try to find from dashboard if not provided)
+team_id = your_team_id
+# Your team name as it should appear in video titles (optional, will try to extract from PlayMetrics)
+team_name = Your Team Name
+
 [NTFY]
 # Set to true to enable NTFY integration for game start/end time detection
 enabled = false
