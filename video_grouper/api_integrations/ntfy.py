@@ -290,6 +290,20 @@ class NtfyAPI:
                 # Log all incoming messages
                 logger.info(f"Processing message content: '{message}'")
                 
+                # Check if this is a text input response (JSON format)
+                try:
+                    # Try to parse as JSON
+                    if message.strip().startswith('{') and message.strip().endswith('}'):
+                        json_data = json.loads(message)
+                        if 'id' in json_data and ('response' in json_data or 'text' in json_data):
+                            logger.info(f"Detected text input response: {json_data}")
+                            message_id = json_data.get('id')
+                            response_text = json_data.get('response', json_data.get('text', ''))
+                            self._handle_specific_response(message_id, response_text)
+                            return
+                except json.JSONDecodeError:
+                    pass  # Not JSON, continue with normal processing
+                
                 # Check for game started/ended responses
                 if any(keyword in lower_message for keyword in ["yes", "game started", "game ended", "started", "ended"]):
                     logger.info(f"Detected YES response: '{message}'")
@@ -305,6 +319,30 @@ class NtfyAPI:
                 button = response_data.get("button", "")
                 
                 logger.info(f"Detected action event: Action={action}, Button={button}")
+                
+                # Check if this is a text input response
+                if "input" in response_data:
+                    input_text = response_data.get("input", "")
+                    logger.info(f"Detected text input: {input_text}")
+                    
+                    # Try to extract message ID from the body if available
+                    body = response_data.get("body", "")
+                    message_id = None
+                    
+                    # Try to find message ID in the body
+                    if isinstance(body, str) and "id" in body.lower():
+                        try:
+                            body_data = json.loads(body)
+                            if "id" in body_data:
+                                message_id = body_data["id"]
+                        except:
+                            pass
+                    
+                    if message_id:
+                        self._handle_specific_response(message_id, input_text)
+                    else:
+                        self._handle_response({"response": input_text})
+                    return
                 
                 # Check for game started/ended responses in any field
                 if any(keyword in str(value).lower() for value in response_data.values() 
@@ -352,240 +390,166 @@ class NtfyAPI:
             logger.info(f"Processed response for message {most_recent_id}: {response}")
         else:
             logger.warning(f"Future for message {most_recent_id} already completed or missing")
+            
+    def _handle_specific_response(self, message_id: str, response: str):
+        """Handle a response to a specific message ID."""
+        if message_id in self.pending_messages:
+            future = self.pending_messages[message_id]
+            if not future.done():
+                # For text input responses, create a structured response
+                response_data = {
+                    'id': message_id,
+                    'response': response,
+                    'timestamp': time.time()
+                }
+                
+                future.set_result(response_data)
+                
+                # Clean up
+                del self.pending_messages[message_id]
+                if message_id in self.message_timestamps:
+                    del self.message_timestamps[message_id]
+                
+                logger.info(f"Processed specific response for message {message_id}: {response}")
+            else:
+                logger.warning(f"Future for message {message_id} already completed")
+        else:
+            logger.warning(f"No pending message with ID {message_id}")
+            # Try to handle as a regular response as fallback
+            self._handle_response(response)
     
     async def ask_game_start_time(self, 
-                                 combined_video_path: str, 
-                                 group_dir: str, 
-                                 time_offset_minutes: int = 5) -> Optional[str]:
+                             combined_video_path: str, 
+                             group_dir: str, 
+                             time_offset_minutes: int = 5) -> Optional[str]:
         """
-        Ask the user to identify when the game starts by sending screenshots at intervals.
+        Send notification about the need to set game start time.
         
         Args:
-            combined_video_path: Path to the combined video
+            combined_video_path: Path to the combined video file
             group_dir: Path to the group directory
             time_offset_minutes: Minutes between screenshots
             
         Returns:
-            str: Start time offset in HH:MM:SS format or None if not determined
+            None as we're not getting input, just sending notifications
         """
-        if not self.enabled or not os.path.exists(combined_video_path):
+        if not self.enabled:
+            logger.warning("NTFY integration not enabled - cannot send game start time notification")
             return None
             
-        # Get video duration
-        duration = await get_video_duration(combined_video_path)
-        if duration is None:
-            logger.error(f"Failed to get duration for {combined_video_path}")
-            return None
-            
-        # Convert duration to seconds if it's a float
-        if isinstance(duration, float):
-            duration_seconds = int(duration)
-        else:
-            # Try to parse duration string (HH:MM:SS)
-            try:
-                h, m, s = map(int, duration.split(':'))
-                duration_seconds = h * 3600 + m * 60 + s
-            except (ValueError, AttributeError):
-                logger.error(f"Invalid duration format: {duration}")
+        # Create screenshots at different times in the video
+        try:
+            # Get video duration
+            duration = await get_video_duration(combined_video_path)
+            if not duration:
+                logger.error(f"Failed to get video duration for {combined_video_path}")
                 return None
-        
-        # Calculate interval in seconds
-        interval_seconds = time_offset_minutes * 60
-        
-        # Start from the beginning and check at intervals
-        current_offset = 0
-        max_offset = min(duration_seconds, 45 * 60)  # Max 45 minutes
-        
-        while current_offset <= max_offset:
-            # Format time as HH:MM:SS
-            formatted_time = str(timedelta(seconds=current_offset)).split('.')[0]
-            
-            # Create a screenshot at the current offset
-            time_str = str(timedelta(seconds=current_offset)).split('.')[0]
-            formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = os.path.join(group_dir, f"{formatted_datetime}_{time_str.replace(':', '')}.jpg")
-            
-            # Skip if we've already processed this time offset for this video
-            screenshot_key = f"{combined_video_path}_{current_offset}"
-            if screenshot_key in self.processed_screenshots:
-                logger.info(f"Already processed screenshot at {time_str}, skipping")
-                current_offset += interval_seconds
-                continue
                 
-            # Mark as processed
-            self.processed_screenshots.add(screenshot_key)
+            # Parse the duration
+            if isinstance(duration, str):
+                h, m, s = map(int, duration.split(':'))
+                total_seconds = h * 3600 + m * 60 + s
+            else:
+                total_seconds = int(duration)
+                
+            # Create a screenshot at the beginning of the video
+            screenshot_path = os.path.join(os.path.dirname(combined_video_path), "temp_screenshot_start.jpg")
             
             screenshot_created = await create_screenshot(
                 combined_video_path, 
                 screenshot_path, 
-                time_offset=time_str
+                time_offset="00:00:00"
             )
             
             if not screenshot_created:
-                logger.error(f"Failed to create screenshot at {time_str}")
-                current_offset += interval_seconds
-                continue
-            
-            # Compress the screenshot to reduce file size
-            compressed_path = await compress_image(
+                logger.error(f"Failed to create screenshot at start of video {combined_video_path}")
+                return None
+                
+            # Compress the screenshot
+            screenshot_path = await compress_image(
                 screenshot_path,
-                quality=60,  # Medium quality (0-100)
-                max_width=800  # Reasonable width for mobile devices
+                quality=60,
+                max_width=800
             )
-            
-            # Generate a unique message ID for tracking
-            message_id = f"start_{formatted_datetime}_{current_offset}"
             
             # Send notification with the screenshot
-            actions = [
-                {
-                    "action": "http", 
-                    "label": "Yes, game started", 
-                    "url": f"https://ntfy.sh/{self.topic}",
-                    "method": "POST",
-                    "headers": {"Content-Type": "text/plain"},
-                    "body": f"Yes, game started at {formatted_time} (ID: {message_id})",
-                    "clear": True
-                },
-                {
-                    "action": "http", 
-                    "label": "No, not yet", 
-                    "url": f"https://ntfy.sh/{self.topic}",
-                    "method": "POST",
-                    "headers": {"Content-Type": "text/plain"},
-                    "body": f"No, not yet at {formatted_time} (ID: {message_id})",
-                    "clear": True
-                }
-            ]
-            
-            # Create a future to wait for the response
-            response_future = asyncio.Future()
-            
-            # Store the future to be completed when a response is received
-            self.pending_messages[message_id] = response_future
-            self.message_timestamps[message_id] = time.time()
-            
-            # Send notification
-            sent = await self.send_notification(
-                message=f"Has the game started at this point ({formatted_time} into the video)?\nTimestamp: {formatted_datetime}\nID: {message_id}",
-                title="Game Start Time Detection",
-                tags=["soccer", "question"],
+            await self.send_notification(
+                message=f"Game start time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
+                title="Set Game Start Time",
+                tags=["warning", "info"],
                 priority=4,
-                image_path=compressed_path,
-                actions=actions
+                image_path=screenshot_path
             )
             
-            # Clean up the compressed image if it's different from the original
-            if compressed_path != screenshot_path and os.path.exists(compressed_path):
+            # Clean up the screenshot
+            if os.path.exists(screenshot_path):
                 try:
-                    os.remove(compressed_path)
+                    os.remove(screenshot_path)
                 except Exception as e:
-                    logger.warning(f"Failed to remove compressed image {compressed_path}: {e}")
-            
-            if not sent:
-                logger.error("Failed to send notification")
-                del self.pending_messages[message_id]
-                del self.message_timestamps[message_id]
-                current_offset += interval_seconds
-                continue
-                
-            # Wait for a response with a timeout
-            try:
-                logger.info(f"Waiting for response to message {message_id}")
-                response = await asyncio.wait_for(response_future, timeout=self.message_timeout)
-                
-                # Check if the response indicates the game has started
-                if response and "Yes, game started" in response:
-                    logger.info(f"User confirmed game started at {formatted_time}")
-                    return formatted_time
+                    logger.warning(f"Failed to remove screenshot {screenshot_path}: {e}")
                     
-                # If user says not yet, continue to next interval
-                logger.info(f"User indicated game has not started at {formatted_time}")
-                
-            except asyncio.TimeoutError:
-                logger.warning(f"No response received for game start time at {formatted_time}")
-                # Clean up the pending message
-                if message_id in self.pending_messages:
-                    del self.pending_messages[message_id]
-                    del self.message_timestamps[message_id]
+            logger.info(f"Sent notification about setting game start time for {group_dir}")
             
-            # Move to the next interval
-            current_offset += interval_seconds
+        except Exception as e:
+            logger.error(f"Error creating screenshots for game start time notification: {e}")
             
-        logger.warning("Failed to determine game start time - no positive response received")
         return None
         
     async def ask_game_end_time(self, 
-                             combined_video_path: str, 
-                             group_dir: str,
-                             start_time_offset: str,
-                             time_offset_minutes: int = 5) -> Optional[str]:
+                         combined_video_path: str, 
+                         group_dir: str,
+                         start_time_offset: str,
+                         time_offset_minutes: int = 5) -> Optional[str]:
         """
-        Ask the user to identify when the game ends by sending screenshots at intervals.
+        Send notification about the need to set game end time.
         
         Args:
-            combined_video_path: Path to the combined video
+            combined_video_path: Path to the combined video file
             group_dir: Path to the group directory
             start_time_offset: Start time offset in HH:MM:SS format
             time_offset_minutes: Minutes between screenshots
             
         Returns:
-            str: End time offset in HH:MM:SS format or None if not determined
+            None as we're not getting input, just sending notifications
         """
-        if not self.enabled or not os.path.exists(combined_video_path):
+        if not self.enabled:
+            logger.warning("NTFY integration not enabled - cannot send game end time notification")
             return None
             
-        # Get video duration
-        duration = await get_video_duration(combined_video_path)
-        if duration is None:
-            logger.error(f"Failed to get duration for {combined_video_path}")
-            return None
-            
-        # Convert duration to seconds if it's a float
-        if isinstance(duration, float):
-            duration_seconds = int(duration)
-        else:
-            # Try to parse duration string (HH:MM:SS)
-            try:
-                h, m, s = map(int, duration.split(':'))
-                duration_seconds = h * 3600 + m * 60 + s
-            except (ValueError, AttributeError):
-                logger.error(f"Invalid duration format: {duration}")
-                return None
-        
-        # Convert start time offset to seconds
+        # Create screenshots at different times in the video
         try:
-            h, m, s = map(int, start_time_offset.split(':'))
-            start_seconds = h * 3600 + m * 60 + s
-        except (ValueError, AttributeError):
-            logger.error(f"Invalid start time offset format: {start_time_offset}")
-            return None
-        
-        # Calculate interval in seconds
-        interval_seconds = time_offset_minutes * 60
-        
-        # Start from the start time + 45 minutes (typical game length)
-        current_offset = start_seconds + 45 * 60
-        max_offset = min(duration_seconds, start_seconds + 120 * 60)  # Max 2 hours after start
-        
-        while current_offset <= max_offset:
-            # Format time as HH:MM:SS
-            formatted_time = str(timedelta(seconds=current_offset)).split('.')[0]
-            
-            # Create a screenshot at the current offset
-            time_str = str(timedelta(seconds=current_offset)).split('.')[0]
-            formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = os.path.join(group_dir, f"{formatted_datetime}_{time_str.replace(':', '')}.jpg")
-            
-            # Skip if we've already processed this time offset for this video
-            screenshot_key = f"{combined_video_path}_{current_offset}"
-            if screenshot_key in self.processed_screenshots:
-                logger.info(f"Already processed screenshot at {time_str}, skipping")
-                current_offset += interval_seconds
-                continue
+            # Get video duration
+            duration = await get_video_duration(combined_video_path)
+            if not duration:
+                logger.error(f"Failed to get video duration for {combined_video_path}")
+                return None
                 
-            # Mark as processed
-            self.processed_screenshots.add(screenshot_key)
+            # Parse the duration
+            if isinstance(duration, str):
+                h, m, s = map(int, duration.split(':'))
+                total_seconds = h * 3600 + m * 60 + s
+            else:
+                total_seconds = int(duration)
+                
+            # Parse start time offset
+            try:
+                start_h, start_m, start_s = map(int, start_time_offset.split(':'))
+                start_seconds = start_h * 3600 + start_m * 60 + start_s
+            except (ValueError, AttributeError):
+                logger.error(f"Invalid start time offset format: {start_time_offset}")
+                # Use a default offset of 5 seconds
+                start_seconds = 5
+            
+            # Calculate a point after the start time for the screenshot
+            # Make sure it's within the video duration
+            mid_point = min(start_seconds + 60, total_seconds - 5)  # 1 minute after start or near end
+            if mid_point < 0:
+                mid_point = 5  # Default to 5 seconds if calculation results in negative value
+                
+            time_str = str(timedelta(seconds=mid_point)).split('.')[0]
+            
+            # Create a screenshot at the calculated time
+            screenshot_path = os.path.join(os.path.dirname(combined_video_path), "temp_screenshot_end.jpg")
             
             screenshot_created = await create_screenshot(
                 combined_video_path, 
@@ -594,97 +558,37 @@ class NtfyAPI:
             )
             
             if not screenshot_created:
-                logger.error(f"Failed to create screenshot at {time_str}")
-                current_offset += interval_seconds
-                continue
-            
-            # Compress the screenshot to reduce file size
-            compressed_path = await compress_image(
+                logger.error(f"Failed to create screenshot at {time_str} of video {combined_video_path}")
+                return None
+                
+            # Compress the screenshot
+            screenshot_path = await compress_image(
                 screenshot_path,
-                quality=60,  # Medium quality (0-100)
-                max_width=800  # Reasonable width for mobile devices
+                quality=60,
+                max_width=800
             )
-            
-            # Generate a unique message ID for tracking
-            message_id = f"end_{formatted_datetime}_{current_offset}"
             
             # Send notification with the screenshot
-            actions = [
-                {
-                    "action": "http", 
-                    "label": "Yes, game ended", 
-                    "url": f"https://ntfy.sh/{self.topic}",
-                    "method": "POST",
-                    "headers": {"Content-Type": "text/plain"},
-                    "body": f"Yes, game ended at {formatted_time} (ID: {message_id})",
-                    "clear": True
-                },
-                {
-                    "action": "http", 
-                    "label": "No, not yet", 
-                    "url": f"https://ntfy.sh/{self.topic}",
-                    "method": "POST",
-                    "headers": {"Content-Type": "text/plain"},
-                    "body": f"No, not yet at {formatted_time} (ID: {message_id})",
-                    "clear": True
-                }
-            ]
-            
-            # Create a future to wait for the response
-            response_future = asyncio.Future()
-            
-            # Store the future to be completed when a response is received
-            self.pending_messages[message_id] = response_future
-            self.message_timestamps[message_id] = time.time()
-            
-            # Send notification
-            sent = await self.send_notification(
-                message=f"Has the game ended at this point ({formatted_time} into the video)?\nTimestamp: {formatted_datetime}\nID: {message_id}",
-                title="Game End Time Detection",
-                tags=["soccer", "question"],
+            await self.send_notification(
+                message=f"Game end time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
+                title="Set Game End Time",
+                tags=["warning", "info"],
                 priority=4,
-                image_path=compressed_path,
-                actions=actions
+                image_path=screenshot_path
             )
             
-            # Clean up the compressed image if it's different from the original
-            if compressed_path != screenshot_path and os.path.exists(compressed_path):
+            # Clean up the screenshot
+            if os.path.exists(screenshot_path):
                 try:
-                    os.remove(compressed_path)
+                    os.remove(screenshot_path)
                 except Exception as e:
-                    logger.warning(f"Failed to remove compressed image {compressed_path}: {e}")
-            
-            if not sent:
-                logger.error("Failed to send notification")
-                del self.pending_messages[message_id]
-                del self.message_timestamps[message_id]
-                current_offset += interval_seconds
-                continue
-                
-            # Wait for a response with a timeout
-            try:
-                logger.info(f"Waiting for response to message {message_id}")
-                response = await asyncio.wait_for(response_future, timeout=self.message_timeout)
-                
-                # Check if the response indicates the game has ended
-                if response and "Yes, game ended" in response:
-                    logger.info(f"User confirmed game ended at {formatted_time}")
-                    return formatted_time
+                    logger.warning(f"Failed to remove screenshot {screenshot_path}: {e}")
                     
-                # If user says not yet, continue to next interval
-                logger.info(f"User indicated game has not ended at {formatted_time}")
-                
-            except asyncio.TimeoutError:
-                logger.warning(f"No response received for game end time at {formatted_time}")
-                # Clean up the pending message
-                if message_id in self.pending_messages:
-                    del self.pending_messages[message_id]
-                    del self.message_timestamps[message_id]
+            logger.info(f"Sent notification about setting game end time for {group_dir}")
             
-            # Move to the next interval
-            current_offset += interval_seconds
+        except Exception as e:
+            logger.error(f"Error creating screenshots for game end time notification: {e}")
             
-        logger.warning("Failed to determine game end time - no positive response received")
         return None
 
     async def send_notification(self,
@@ -800,3 +704,98 @@ class NtfyAPI:
         else:
             logger.warning(f"No pending message with ID {message_id}")
             return {'is_affirmative': False, 'message': 'No pending message'}
+
+    async def ask_team_info(self, combined_video_path: str, existing_info: Dict[str, str] = None) -> Dict[str, str]:
+        """
+        Send notifications about missing team information fields.
+        
+        Args:
+            combined_video_path: Path to the combined video file
+            existing_info: Dictionary with existing team info fields
+            
+        Returns:
+            Dict containing team_name, opponent_name, and location (same as existing_info)
+        """
+        if not self.enabled:
+            logger.warning("NTFY integration not enabled - cannot send team information notifications")
+            return existing_info or {}
+            
+        # Initialize with existing info or empty dict
+        team_info = existing_info or {}
+        
+        # Check for missing fields
+        missing_fields = []
+        if 'team_name' not in team_info and 'my_team_name' not in team_info:
+            missing_fields.append("team name")
+        if 'opponent_name' not in team_info and 'opponent_team_name' not in team_info:
+            missing_fields.append("opponent team name")
+        if 'location' not in team_info:
+            missing_fields.append("game location")
+        
+        # If there are missing fields, send a notification
+        if missing_fields:
+            missing_fields_str = ", ".join(missing_fields)
+            
+            # Create a screenshot if video path provided
+            screenshot_path = None
+            if combined_video_path and os.path.exists(combined_video_path):
+                try:
+                    # Create a screenshot at the middle of the video
+                    duration = await get_video_duration(combined_video_path)
+                    if duration:
+                        # Parse the duration
+                        if isinstance(duration, str):
+                            h, m, s = map(int, duration.split(':'))
+                            total_seconds = h * 3600 + m * 60 + s
+                        else:
+                            total_seconds = int(duration)
+                        
+                        # Take screenshot at the middle
+                        mid_point = total_seconds // 2
+                        time_str = str(timedelta(seconds=mid_point)).split('.')[0]
+                        
+                        # Create temporary screenshot
+                        formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        screenshot_path = os.path.join(os.path.dirname(combined_video_path), 
+                                                    f"temp_screenshot_{formatted_datetime}.jpg")
+                        
+                        screenshot_created = await create_screenshot(
+                            combined_video_path, 
+                            screenshot_path, 
+                            time_offset=time_str
+                        )
+                        
+                        if not screenshot_created:
+                            screenshot_path = None
+                        else:
+                            # Compress the screenshot
+                            screenshot_path = await compress_image(
+                                screenshot_path,
+                                quality=60,
+                                max_width=800
+                            )
+                except Exception as e:
+                    logger.error(f"Error creating screenshot: {e}")
+                    screenshot_path = None
+            
+            # Send the notification
+            await self.send_notification(
+                message=f"Missing match information: {missing_fields_str}. Please update match_info.ini manually.",
+                title="Missing Match Information",
+                tags=["warning", "info"],
+                priority=4,
+                image_path=screenshot_path
+            )
+            
+            # Clean up the screenshot if it exists
+            if screenshot_path and os.path.exists(screenshot_path):
+                try:
+                    os.remove(screenshot_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove screenshot {screenshot_path}: {e}")
+            
+            logger.info(f"Sent notification about missing match information: {missing_fields_str}")
+        else:
+            logger.info("All team information fields are populated, no notification needed")
+        
+        return team_info
