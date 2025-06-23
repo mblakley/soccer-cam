@@ -19,6 +19,7 @@ from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.api_integrations.ntfy import NtfyAPI
+from video_grouper.api_integrations.playmetrics.scraper import PlayMetricsScraper
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -120,6 +121,9 @@ class VideoGrouperApp:
         # Track NTFY processed directories to avoid duplicate processing
         self._ntfy_processed_dirs = set()
 
+        # Initialize PlayMetrics integration
+        self._initialize_playmetrics()
+
     async def initialize(self):
         """Initialize the application by scanning existing files and populating queues."""
         logger.info("Initializing VideoGrouperApp")
@@ -188,7 +192,7 @@ class VideoGrouperApp:
                             if self.ntfy_api and self.ntfy_api.enabled and not self.is_match_info_populated(group_dir):
                                 logger.info(f"AUDIT: Found combined video in {group_dir} that needs NTFY processing")
                                 # Create a task to process this combined video with NTFY
-                                asyncio.create_task(self._process_combined_with_ntfy(group_dir, combined_path))
+                                asyncio.create_task(self._process_combined_directory(group_dir, combined_path))
                             elif self.is_match_info_populated(group_dir):
                                 # Create a MatchInfo object for the task
                                 match_info_path = os.path.join(group_dir, "match_info.ini")
@@ -542,7 +546,7 @@ class VideoGrouperApp:
                 # Check if NTFY integration is enabled to send notifications
                 if self.ntfy_api and self.ntfy_api.enabled:
                     logger.info("Using NTFY to send notifications about match information")
-                    await self._process_combined_with_ntfy(group_dir, combined_path)
+                    await self._process_combined_directory(group_dir, combined_path)
                 else:
                     # Check for match_info.ini and queue trim task if it's populated (original behavior)
                     match_info_path = os.path.join(group_dir, "match_info.ini")
@@ -1074,6 +1078,96 @@ class VideoGrouperApp:
             asyncio.create_task(self.ntfy_api.initialize())
         else:
             logger.info("NTFY API integration disabled")
+
+    async def _process_combined_directory(self, group_dir, combined_path, force=False):
+        """Process a directory with a combined video file."""
+        logger.info(f"Processing combined directory: {group_dir}")
+        
+        # Try to get match info from TeamSnap
+        teamsnap_success = await self._process_combined_with_teamsnap(group_dir, combined_path, force)
+        
+        # If TeamSnap failed or is disabled, try PlayMetrics
+        if not teamsnap_success and self.playmetrics_api:
+            playmetrics_success = await self._process_combined_with_playmetrics(group_dir, combined_path, force)
+            
+            # If PlayMetrics failed or is disabled, try NTFY
+            if not playmetrics_success and self.ntfy_api:
+                await self._process_combined_with_ntfy(group_dir, combined_path, force)
+        # If TeamSnap is disabled but PlayMetrics is enabled, try PlayMetrics
+        elif not self.teamsnap_api and self.playmetrics_api:
+            playmetrics_success = await self._process_combined_with_playmetrics(group_dir, combined_path, force)
+            
+            # If PlayMetrics failed or is disabled, try NTFY
+            if not playmetrics_success and self.ntfy_api:
+                await self._process_combined_with_ntfy(group_dir, combined_path, force)
+        # If both TeamSnap and PlayMetrics are disabled but NTFY is enabled, try NTFY
+        elif not self.teamsnap_api and not self.playmetrics_api and self.ntfy_api:
+            await self._process_combined_with_ntfy(group_dir, combined_path, force)
+
+    async def _process_combined_with_playmetrics(self, group_dir: str, combined_path: str, force=False):
+        """Process a combined video with PlayMetrics to determine team information."""
+        logger.info(f"Processing combined video with PlayMetrics: {group_dir}")
+        
+        # Skip if we've already processed this directory
+        if group_dir in self._playmetrics_processed_dirs and not force:
+            logger.info(f"Directory {group_dir} already processed with PlayMetrics, skipping")
+            return True
+            
+        # Check if match info is already populated
+        if self.is_match_info_populated(group_dir) and not force:
+            logger.info(f"Match info already populated for {group_dir}, skipping PlayMetrics processing")
+            self._playmetrics_processed_dirs.add(group_dir)
+            return True
+        
+        # Get the first file in the group to determine the recording date
+        dir_state = DirectoryState(group_dir)
+        files = dir_state.get_files()
+        
+        if not files:
+            logger.warning(f"No files found in {group_dir}, skipping PlayMetrics processing")
+            return False
+            
+        # Get the recording date from the first file
+        first_file = files[0]
+        recording_date = first_file.date_time
+        
+        # Get or create match info
+        match_info = MatchInfo.get_or_create(group_dir)
+        
+        # Try to populate match info from PlayMetrics
+        if self.playmetrics_api.populate_match_info(match_info, recording_date):
+            logger.info(f"Successfully populated match info from PlayMetrics for {group_dir}")
+            self._playmetrics_processed_dirs.add(group_dir)
+            return True
+        else:
+            logger.warning(f"Failed to populate match info from PlayMetrics for {group_dir}")
+            return False
+
+    def _initialize_playmetrics(self):
+        """Initialize PlayMetrics integration."""
+        self.playmetrics_api = None
+        
+        # Check if PlayMetrics integration is enabled
+        if not self.config.getboolean("PLAYMETRICS", "enabled", fallback=False):
+            logger.info("PlayMetrics integration is disabled")
+            return
+            
+        logger.info("Initializing PlayMetrics integration")
+        self.playmetrics_api = PlayMetricsScraper(self.config)
+        
+        # Initialize the scraper
+        if not self.playmetrics_api.initialize():
+            logger.error("Failed to initialize PlayMetrics scraper")
+            self.playmetrics_api = None
+            return
+            
+        # Login to PlayMetrics
+        if not self.playmetrics_api.login():
+            logger.error("Failed to login to PlayMetrics")
+            self.playmetrics_api = None
+            return
+            
+        logger.info("PlayMetrics integration initialized successfully")
 
     async def _process_combined_with_ntfy(self, group_dir: str, combined_path: str, force=False):
         """Process a combined video with NTFY to determine game start and end times."""
