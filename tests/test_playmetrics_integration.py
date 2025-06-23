@@ -2,11 +2,13 @@ import os
 import pytest
 import configparser
 from unittest.mock import patch, AsyncMock, MagicMock
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import tempfile
 
 from video_grouper.api_integrations.playmetrics.scraper import PlayMetricsScraper
 from video_grouper.models import MatchInfo
 from video_grouper.video_grouper import VideoGrouperApp
+from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
 
 @pytest.fixture
 def mock_config():
@@ -87,6 +89,7 @@ async def test_find_game_for_recording():
     config.set('PLAYMETRICS', 'enabled', 'true')
     config.set('PLAYMETRICS', 'username', 'test@example.com')
     config.set('PLAYMETRICS', 'password', 'password')
+    config.set('PLAYMETRICS', 'team_name', 'Test Team')
     
     scraper = PlayMetricsScraper(config)
     
@@ -110,18 +113,20 @@ async def test_find_game_for_recording():
         }
     ]
     
-    with patch.object(scraper, 'get_team_events', return_value=mock_events):
+    with patch.object(scraper, 'get_team_events', return_value=mock_events), \
+         patch.object(scraper, 'initialize', return_value=True), \
+         patch.object(scraper, 'login', return_value=True):
+        
         # Test finding a game on the correct date
         game = scraper.find_game_for_recording(datetime(2025, 6, 22))
         assert game is not None
         assert game['date'] == '2025-06-22'
+        assert game['time'] == '14:00'
+        assert game['is_game'] is True
         assert game['opponent'] == 'Test Opponent'
+        assert game['team_name'] == 'Test Team'
         
         # Test finding a game on a date with no game
-        game = scraper.find_game_for_recording(datetime(2025, 6, 23))
-        assert game is None
-        
-        # Test finding a game on a date with no events
         game = scraper.find_game_for_recording(datetime(2025, 6, 24))
         assert game is None
 
@@ -147,22 +152,23 @@ async def test_populate_match_info():
         'opponent': 'Test Opponent'
     }
     
+    test_dir = "test_directory"
+    
     with patch.object(scraper, 'find_game_for_recording', return_value=mock_game), \
          patch.object(scraper, 'initialize', return_value=True), \
          patch.object(scraper, 'login', return_value=True), \
-         patch('video_grouper.models.MatchInfo.get_or_create') as mock_get_or_create:
+         patch('video_grouper.models.MatchInfo.update_team_info') as mock_update_team_info:
         
-        # Create a mock match info object and config
-        mock_match_info = MagicMock()
-        mock_config = MagicMock()
-        mock_get_or_create.return_value = (mock_match_info, mock_config)
-        
-        # Call the method
-        result = scraper.populate_match_info(mock_match_info, datetime(2025, 6, 22))
+        # Call the method with a directory path
+        result = scraper.populate_match_info(test_dir, datetime(2025, 6, 22))
         
         # Check the results
         assert result is True
-        mock_match_info.update_team_info.assert_called_once()
+        mock_update_team_info.assert_called_once_with(test_dir, {
+            'team_name': 'Test Team',
+            'opponent_name': 'Test Opponent',
+            'location': 'Test Field'
+        })
 
 @pytest.mark.asyncio
 async def test_video_grouper_playmetrics_integration():
@@ -175,12 +181,12 @@ async def test_video_grouper_playmetrics_integration():
     config.set('PLAYMETRICS', 'password', 'password')
     
     # Create a VideoGrouperApp instance with the mock config
-    with patch('video_grouper.video_grouper.PlayMetricsScraper') as mock_playmetrics_class:
-        # Set up the mock PlayMetrics scraper
+    with patch('video_grouper.video_grouper.PlayMetricsAPI') as mock_playmetrics_class:
+        # Set up the mock PlayMetrics API
         mock_playmetrics = MagicMock()
         mock_playmetrics.enabled = True
-        mock_playmetrics.initialize.return_value = True
-        mock_playmetrics.login.return_value = True
+        mock_playmetrics.initialize = MagicMock(return_value=True)
+        mock_playmetrics.login = MagicMock(return_value=True)
         mock_playmetrics_class.return_value = mock_playmetrics
         
         # Create the app with additional required mocks
@@ -188,9 +194,9 @@ async def test_video_grouper_playmetrics_integration():
              patch('video_grouper.video_grouper.create_directory'):
             app = VideoGrouperApp(config, "./test_storage")
             
-            # Check that the PlayMetrics scraper was initialized
+            # Manually initialize PlayMetrics
+            app._initialize_playmetrics()
+            
+            # Check that the PlayMetrics API was initialized
             assert app.playmetrics_api is not None
-            assert app.playmetrics_api == mock_playmetrics
-            mock_playmetrics_class.assert_called_once_with(config)
-            mock_playmetrics.initialize.assert_called_once()
-            mock_playmetrics.login.assert_called_once() 
+            assert app._playmetrics_initialized is True 

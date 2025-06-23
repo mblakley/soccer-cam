@@ -799,3 +799,197 @@ class NtfyAPI:
             logger.info("All team information fields are populated, no notification needed")
         
         return team_info
+
+    async def ask_resolve_game_conflict(self, 
+                            combined_video_path: str, 
+                            group_dir: str,
+                            game_options: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Send notification asking the user to resolve a conflict between games from different sources.
+        
+        Args:
+            combined_video_path: Path to the combined video file
+            group_dir: Path to the group directory
+            game_options: List of game dictionaries from TeamSnap and PlayMetrics
+            
+        Returns:
+            Dict containing the selected game information or None if no selection was made
+        """
+        if not self.enabled:
+            logger.warning("NTFY integration not enabled - cannot send game conflict resolution notification")
+            return None
+            
+        if not game_options or len(game_options) < 2:
+            logger.warning(f"Not enough game options to resolve conflict: {len(game_options) if game_options else 0}")
+            return game_options[0] if game_options else None
+            
+        logger.info(f"Asking user to resolve conflict between {len(game_options)} games")
+        
+        # Create a screenshot from a random point in the video for context
+        screenshot_path = None
+        if combined_video_path and os.path.exists(combined_video_path):
+            try:
+                # Get video duration
+                duration = await get_video_duration(combined_video_path)
+                if duration:
+                    # Parse the duration
+                    if isinstance(duration, str):
+                        h, m, s = map(int, duration.split(':'))
+                        total_seconds = h * 3600 + m * 60 + s
+                    else:
+                        total_seconds = int(duration)
+                    
+                    # Take screenshot at a random point in the middle third of the video
+                    import random
+                    start_point = total_seconds // 3
+                    end_point = total_seconds * 2 // 3
+                    random_point = random.randint(start_point, end_point)
+                    time_str = str(timedelta(seconds=random_point)).split('.')[0]
+                    
+                    # Create temporary screenshot
+                    formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    screenshot_path = os.path.join(os.path.dirname(combined_video_path), 
+                                                f"temp_screenshot_conflict_{formatted_datetime}.jpg")
+                    
+                    screenshot_created = await create_screenshot(
+                        combined_video_path, 
+                        screenshot_path, 
+                        time_offset=time_str
+                    )
+                    
+                    if not screenshot_created:
+                        logger.error(f"Failed to create screenshot for game conflict resolution")
+                        screenshot_path = None
+                    else:
+                        # Compress the screenshot
+                        screenshot_path = await compress_image(
+                            screenshot_path,
+                            quality=60,
+                            max_width=800
+                        )
+            except Exception as e:
+                logger.error(f"Error creating screenshot for game conflict: {e}")
+                screenshot_path = None
+        
+        # Create a unique message ID for this request
+        message_id = f"game_conflict_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # Create action buttons for each game option
+        actions = []
+        for i, game in enumerate(game_options):
+            # Extract relevant information for the button
+            source = game.get('source', 'Unknown')
+            team_name = game.get('team_name', 'Unknown Team')
+            opponent = game.get('opponent_name', game.get('opponent', 'Unknown Opponent'))
+            location = game.get('location', 'Unknown Location')
+            date = game.get('date', '')
+            
+            # Create a button with the opponent name
+            action = {
+                "action": f"http://localhost:8080/select_game/{i}",
+                "label": f"{opponent} ({source})",
+                "clear": True
+            }
+            actions.append(action)
+        
+        # Create a future for the response
+        response_future = asyncio.Future()
+        self.pending_messages[message_id] = response_future
+        self.message_timestamps[message_id] = time.time()
+        
+        # Send the notification with the screenshot and action buttons
+        message_text = (
+            f"Multiple games found for the recording in {os.path.basename(group_dir)}.\n"
+            f"Please select which game this recording is for:"
+        )
+        
+        # Add game details to the message
+        for i, game in enumerate(game_options):
+            source = game.get('source', 'Unknown')
+            team_name = game.get('team_name', 'Unknown Team')
+            opponent = game.get('opponent_name', game.get('opponent', 'Unknown Opponent'))
+            location = game.get('location', 'Unknown Location')
+            date = game.get('date', '')
+            
+            message_text += f"\n\n{i+1}. {team_name} vs {opponent} at {location} ({source})"
+            if date:
+                message_text += f" on {date}"
+        
+        # Add message ID to the notification for tracking responses
+        message_text += f"\n\nID: {message_id}"
+        
+        # Send the notification
+        sent = await self.send_notification(
+            message=message_text,
+            title="Game Conflict - Select Correct Game",
+            tags=["warning", "question"],
+            priority=4,
+            image_path=screenshot_path,
+            actions=actions
+        )
+        
+        if not sent:
+            logger.error(f"Failed to send game conflict notification")
+            if message_id in self.pending_messages:
+                del self.pending_messages[message_id]
+            if message_id in self.message_timestamps:
+                del self.message_timestamps[message_id]
+            return None
+        
+        # Clean up the screenshot if it exists
+        if screenshot_path and os.path.exists(screenshot_path):
+            try:
+                os.remove(screenshot_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove screenshot {screenshot_path}: {e}")
+        
+        # Wait for a response with a longer timeout (10 minutes)
+        try:
+            response = await asyncio.wait_for(response_future, timeout=600.0)
+            
+            # Parse the response to determine which game was selected
+            logger.info(f"Received response for game conflict: {response}")
+            
+            # Try to extract the game index from the response
+            selected_index = None
+            
+            # Check if it's a structured response
+            if isinstance(response, dict) and 'response' in response:
+                response_text = response['response']
+            else:
+                response_text = str(response)
+            
+            # Try to find the selected index in various response formats
+            if "select_game/" in response_text:
+                # Extract from URL pattern
+                import re
+                match = re.search(r'select_game/(\d+)', response_text)
+                if match:
+                    selected_index = int(match.group(1))
+            elif response_text.isdigit():
+                # Direct numeric response (1-based)
+                selected_index = int(response_text) - 1
+            else:
+                # Try to match opponent name
+                for i, game in enumerate(game_options):
+                    opponent = game.get('opponent_name', game.get('opponent', '')).lower()
+                    if opponent and opponent in response_text.lower():
+                        selected_index = i
+                        break
+            
+            # Return the selected game if a valid index was found
+            if selected_index is not None and 0 <= selected_index < len(game_options):
+                logger.info(f"User selected game option {selected_index + 1}: {game_options[selected_index]}")
+                return game_options[selected_index]
+            else:
+                logger.warning(f"Could not determine selected game from response: {response_text}")
+                return None
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"Timed out waiting for game conflict resolution")
+            # Clean up the pending message
+            if message_id in self.pending_messages:
+                del self.pending_messages[message_id]
+            if message_id in self.message_timestamps:
+                del self.message_timestamps[message_id]
+            return None

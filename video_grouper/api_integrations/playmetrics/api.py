@@ -1,19 +1,22 @@
 """
-PlayMetrics API integration using web scraping.
+PlayMetrics API integration using calendar ICS file.
 
-This module provides a way to scrape game information from the PlayMetrics website.
+This module provides a way to get game information from the PlayMetrics calendar.
 """
 
 import os
 import logging
-import asyncio
 import configparser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import tempfile
 from typing import Dict, List, Optional, Any, Tuple
 import time
+import re
+import json
 
 import requests
-from bs4 import BeautifulSoup
+import icalendar
+import pytz
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -26,61 +29,70 @@ logger = logging.getLogger(__name__)
 
 class PlayMetricsAPI:
     """
-    A class to interact with the PlayMetrics website via web scraping.
+    A class to interact with the PlayMetrics website via calendar integration.
     
     This class provides functionality to:
     - Log in to the PlayMetrics website
-    - Fetch upcoming games
-    - Get game details
+    - Extract the calendar URL
+    - Download and parse the calendar file
     - Match game information with recordings
     """
     
-    BASE_URL = "https://app.playmetrics.io"
+    BASE_URL = "https://playmetrics.com"
     LOGIN_URL = f"{BASE_URL}/login"
     DASHBOARD_URL = f"{BASE_URL}/dashboard"
     
-    def __init__(self, config: configparser.ConfigParser):
+    def __init__(self, config_path: str = None):
         """
         Initialize the PlayMetrics API.
         
         Args:
-            config: ConfigParser object containing PlayMetrics credentials
+            config_path: Path to the config.ini file. If None, use the default path.
         """
-        self.config = config
-        self.enabled = config.getboolean("PLAYMETRICS", "enabled", fallback=False)
+        self.config_path = config_path or os.path.join("shared_data", "config.ini")
+        self.config = self._load_config()
+        self.enabled = self.config.get('enabled', 'false').lower() == 'true'
+        self.username = self.config.get('username', '')
+        self.password = self.config.get('password', '')
+        self.team_id = self.config.get('team_id', '')
+        self.team_name = self.config.get('team_name', '')
         
-        if not self.enabled:
-            logger.info("PlayMetrics integration not enabled")
-            return
-            
-        self.username = config.get("PLAYMETRICS", "username", fallback=None)
-        self.password = config.get("PLAYMETRICS", "password", fallback=None)
-        self.team_id = config.get("PLAYMETRICS", "team_id", fallback=None)
-        
-        # Validate required configuration
-        if not self.username or not self.password:
-            logger.error("PlayMetrics username or password not configured")
-            self.enabled = False
-            return
-            
-        self.session = requests.Session()
+        # Initialize attributes
         self.driver = None
         self.logged_in = False
+        self.calendar_url = None
         
         # Cache for games to avoid repeated requests
-        self.games_cache = {}
+        self.events_cache = []
         self.last_cache_update = None
         self.cache_duration = timedelta(hours=1)  # Cache games for 1 hour
+    
+    def _load_config(self) -> Dict[str, str]:
+        """
+        Load the PlayMetrics configuration from config.ini.
+        
+        Returns:
+            Dictionary with PlayMetrics configuration.
+        """
+        if not os.path.exists(self.config_path):
+            logger.warning(f"PlayMetrics config file not found: {self.config_path}")
+            return {'enabled': 'false'}
+        
+        config = configparser.ConfigParser()
+        config.read(self.config_path)
+        
+        if not config.has_section('PLAYMETRICS'):
+            logger.warning("PlayMetrics section not found in config.ini")
+            return {'enabled': 'false'}
+        
+        return {k: v for k, v in config['PLAYMETRICS'].items()}
     
     def __del__(self):
         """Clean up resources when the object is destroyed."""
         self.close()
     
     def close(self):
-        """Close the session and browser."""
-        if self.session:
-            self.session.close()
-            
+        """Close the browser."""
         if self.driver:
             try:
                 self.driver.quit()
@@ -134,407 +146,395 @@ class PlayMetricsAPI:
             self.driver.get(self.LOGIN_URL)
             
             # Wait for the login form to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, "email"))
-            )
+            time.sleep(3)
+            
+            # Find the email and password fields
+            email_field = None
+            password_field = None
+            
+            # Try different selectors for email field
+            for selector in ["input[type='email']", "#username", "#email"]:
+                try:
+                    email_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    break
+                except:
+                    continue
+            
+            # Try different selectors for password field
+            for selector in ["input[type='password']", "#password"]:
+                try:
+                    password_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    break
+                except:
+                    continue
+            
+            if not email_field or not password_field:
+                logger.error("Could not find login form elements")
+                return False
             
             # Fill in login details
-            self.driver.find_element(By.ID, "email").send_keys(self.username)
-            self.driver.find_element(By.ID, "password").send_keys(self.password)
-            self.driver.find_element(By.XPATH, "//button[@type='submit']").click()
+            email_field.clear()
+            email_field.send_keys(self.username)
             
-            # Wait for dashboard to load
-            WebDriverWait(self.driver, 10).until(
-                EC.url_contains("/dashboard")
-            )
+            password_field.clear()
+            password_field.send_keys(self.password)
             
-            self.logged_in = True
-            logger.info("Successfully logged in to PlayMetrics")
-            return True
+            # Find and click the submit button
+            submit_button = self.driver.find_element(By.XPATH, "//button[@type='submit']")
+            submit_button.click()
+            
+            # Wait for login to complete
+            time.sleep(5)
+            
+            # Check if login was successful
+            if "/dashboard" in self.driver.current_url:
+                self.logged_in = True
+                logger.info("Successfully logged in to PlayMetrics")
+                return True
+            else:
+                logger.error("Login failed - not redirected to dashboard")
+                return False
             
         except Exception as e:
             logger.error(f"Error logging in to PlayMetrics: {e}")
             self.logged_in = False
             return False
     
-    def get_games(self, days_ahead: int = 7) -> List[Dict[str, Any]]:
+    def get_calendar_url(self) -> Optional[str]:
         """
-        Get upcoming games from PlayMetrics.
+        Navigate to the dashboard and find the calendar URL.
         
-        Args:
-            days_ahead: Number of days ahead to look for games
-            
         Returns:
-            List of game dictionaries with details
+            str: Calendar URL if found, None otherwise
+        """
+        if not self.enabled or not self.logged_in:
+            logger.warning("PlayMetrics not enabled or not logged in")
+            return None
+        
+        if self.calendar_url:
+            logger.debug("Using cached calendar URL")
+            return self.calendar_url
+        
+        try:
+            # Navigate to dashboard
+            logger.info("Navigating to dashboard to find calendar URL")
+            self.driver.get(self.DASHBOARD_URL)
+            time.sleep(3)
+            
+            # Look for elements containing calendar-related text
+            calendar_elements = []
+            
+            # Approach 1: Look for elements containing "calendar" text
+            elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Calendar') or contains(text(), 'calendar')]")
+            logger.debug(f"Found {len(elements)} elements containing 'calendar' text")
+            calendar_elements.extend(elements)
+            
+            # Approach 2: Look for elements containing "sync" text
+            elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Sync') or contains(text(), 'sync')]")
+            logger.debug(f"Found {len(elements)} elements containing 'sync' text")
+            calendar_elements.extend(elements)
+            
+            # Approach 3: Look for elements containing "ical" or "ics" text
+            elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'iCal') or contains(text(), 'ICS') or contains(text(), 'ics') or contains(text(), 'ical')]")
+            logger.debug(f"Found {len(elements)} elements containing 'iCal/ICS' text")
+            calendar_elements.extend(elements)
+            
+            # Find a suitable calendar element to click
+            calendar_button = None
+            for element in calendar_elements:
+                text = element.text.lower()
+                if "sync" in text and ("calendar" in text or "ical" in text or "ics" in text):
+                    calendar_button = element
+                    logger.info(f"Found calendar sync button: {element.text}")
+                    break
+            
+            if not calendar_button:
+                logger.error("Could not find calendar sync button")
+                return None
+            
+            # Click the calendar button
+            try:
+                calendar_button.click()
+                time.sleep(3)
+            except:
+                # Try JavaScript click if direct click fails
+                self.driver.execute_script("arguments[0].click();", calendar_button)
+                time.sleep(3)
+            
+            # Look for input fields that might contain the URL
+            input_fields = self.driver.find_elements(By.XPATH, "//input")
+            
+            for field in input_fields:
+                value = field.get_attribute("value")
+                if value and (".ics" in value or "ical" in value):
+                    self.calendar_url = value
+                    logger.info(f"Found calendar URL: {value}")
+                    return value
+            
+            # If not found in input fields, look for text that might contain a URL
+            page_source = self.driver.page_source
+            urls = re.findall(r'https?://\S+\.ics', page_source)
+            
+            if urls:
+                self.calendar_url = urls[0]
+                logger.info(f"Found calendar URL in page source: {urls[0]}")
+                return urls[0]
+            
+            logger.error("Could not find calendar URL")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting calendar URL: {e}")
+            return None
+    
+    def download_calendar(self) -> Optional[str]:
+        """
+        Download the PlayMetrics calendar file.
+        
+        Returns:
+            str: Path to the downloaded calendar file, or None if download failed
         """
         if not self.enabled:
-            logger.warning("PlayMetrics integration not enabled - cannot get games")
-            return []
+            logger.warning("PlayMetrics not enabled")
+            return None
             
+        # Check if we're logged in, and if not, try to log in
+        if not self.logged_in and not self.login():
+            logger.warning("PlayMetrics not logged in and login failed")
+            return None
+            
+        calendar_url = self.get_calendar_url()
+        if not calendar_url:
+            logger.error("No calendar URL available")
+            return None
+        
+        try:
+            logger.info(f"Downloading calendar from {calendar_url}")
+            response = requests.get(calendar_url)
+            response.raise_for_status()
+            
+            # Create a temporary file
+            fd, output_path = tempfile.mkstemp(suffix='.ics')
+            os.close(fd)
+            
+            with open(output_path, 'wb') as f:
+                f.write(response.content)
+            
+            logger.info(f"Calendar downloaded to {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to download calendar: {e}")
+            return None
+    
+    def parse_calendar(self, calendar_path: str) -> List[Dict]:
+        """
+        Parse the PlayMetrics calendar file.
+        
+        Args:
+            calendar_path: Path to the calendar file
+            
+        Returns:
+            List of event dictionaries
+        """
+        try:
+            logger.info(f"Parsing calendar file: {calendar_path}")
+            with open(calendar_path, 'rb') as f:
+                cal = icalendar.Calendar.from_ical(f.read())
+            
+            events = []
+            for component in cal.walk():
+                if component.name == "VEVENT":
+                    try:
+                        # Extract event details
+                        summary = str(component.get('summary', 'No Title'))
+                        description = str(component.get('description', ''))
+                        location = str(component.get('location', ''))
+                        
+                        # Extract start and end times
+                        start = component.get('dtstart').dt
+                        end = component.get('dtend').dt if component.get('dtend') else None
+                        
+                        # Convert to datetime if it's a date
+                        if not isinstance(start, datetime):
+                            start = datetime.combine(start, datetime.min.time())
+                            start = start.replace(tzinfo=pytz.UTC)
+                        
+                        if end and not isinstance(end, datetime):
+                            end = datetime.combine(end, datetime.min.time())
+                            end = end.replace(tzinfo=pytz.UTC)
+                        
+                        # Determine if this is a game
+                        is_game = any(keyword.lower() in summary.lower() for keyword in 
+                                     ["game", "match", "vs", "versus", "against", "@"])
+                        
+                        # Try to extract opponent name
+                        opponent = None
+                        if is_game:
+                            for keyword in ["vs", "versus", "against", "@"]:
+                                if keyword.lower() in summary.lower():
+                                    parts = summary.lower().split(keyword.lower(), 1)
+                                    if len(parts) > 1:
+                                        opponent = parts[1].strip()
+                                        break
+                            
+                            # If we couldn't extract opponent from the title, use the whole title
+                            if not opponent:
+                                opponent = summary
+                        
+                        # Create event dictionary
+                        event = {
+                            "id": str(hash(f"{start}-{summary}")),
+                            "title": summary,
+                            "description": description,
+                            "location": location,
+                            "start_time": start,
+                            "end_time": end,
+                            "is_game": is_game,
+                            "opponent": opponent
+                        }
+                        
+                        events.append(event)
+                    except Exception as e:
+                        logger.error(f"Error parsing event: {e}")
+                        continue
+            
+            logger.info(f"Found {len(events)} events in calendar")
+            return events
+        except Exception as e:
+            logger.error(f"Failed to parse calendar: {e}")
+            return []
+    
+    def get_events(self) -> List[Dict]:
+        """
+        Get all events from the PlayMetrics calendar.
+        
+        Returns:
+            List of event dictionaries
+        """
+        if not self.enabled:
+            logger.warning("PlayMetrics integration not enabled")
+            return []
+        
         # Check cache first
         if self.last_cache_update and datetime.now() - self.last_cache_update < self.cache_duration:
-            logger.info("Using cached games")
-            return list(self.games_cache.values())
-            
-        if not self.login():
+            logger.info("Using cached events")
+            return self.events_cache
+        
+        # Login if needed
+        if not self.logged_in and not self.login():
             logger.error("Failed to log in to PlayMetrics")
             return []
-            
-        games = []
-        try:
-            # Navigate to the team's schedule page
-            if self.team_id:
-                schedule_url = f"{self.BASE_URL}/teams/{self.team_id}/schedule"
-            else:
-                # If no team_id is specified, we'll try to find it from the dashboard
-                schedule_url = self._find_team_schedule_url()
-                
-            if not schedule_url:
-                logger.error("Could not find team schedule URL")
-                return []
-                
-            logger.info(f"Navigating to schedule: {schedule_url}")
-            self.driver.get(schedule_url)
-            
-            # Wait for the schedule to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".schedule-item"))
-            )
-            
-            # Get the page source and parse with BeautifulSoup
-            soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            
-            # Find all schedule items
-            schedule_items = soup.select(".schedule-item")
-            
-            # Calculate the date range we're interested in
-            today = datetime.now().date()
-            end_date = today + timedelta(days=days_ahead)
-            
-            for item in schedule_items:
-                try:
-                    # Extract date
-                    date_elem = item.select_one(".schedule-date")
-                    if not date_elem:
-                        continue
-                        
-                    # Parse date (format may vary, this is an example)
-                    date_text = date_elem.text.strip()
-                    game_date = self._parse_date(date_text)
-                    
-                    # Skip if the game is outside our date range
-                    if not game_date or game_date.date() < today or game_date.date() > end_date:
-                        continue
-                    
-                    # Extract other game details
-                    opponent = item.select_one(".opponent-name")
-                    opponent_name = opponent.text.strip() if opponent else "Unknown"
-                    
-                    location = item.select_one(".location")
-                    location_name = location.text.strip() if location else "Unknown"
-                    
-                    time_elem = item.select_one(".schedule-time")
-                    time_text = time_elem.text.strip() if time_elem else ""
-                    
-                    # Extract game ID from the link
-                    game_link = item.select_one("a")
-                    game_id = None
-                    if game_link and "href" in game_link.attrs:
-                        href = game_link["href"]
-                        # Extract the ID from the URL
-                        if "/games/" in href:
-                            game_id = href.split("/games/")[1].split("/")[0]
-                    
-                    # Create game dictionary
-                    game = {
-                        "id": game_id,
-                        "date": game_date,
-                        "opponent": opponent_name,
-                        "location": location_name,
-                        "time": time_text,
-                        "url": f"{self.BASE_URL}/games/{game_id}" if game_id else None
-                    }
-                    
-                    games.append(game)
-                    
-                    # Update cache
-                    if game_id:
-                        self.games_cache[game_id] = game
-                    
-                except Exception as e:
-                    logger.error(f"Error parsing game: {e}")
-            
-            # Update cache timestamp
-            self.last_cache_update = datetime.now()
-            
-            logger.info(f"Found {len(games)} upcoming games")
-            return games
-            
-        except Exception as e:
-            logger.error(f"Error getting games from PlayMetrics: {e}")
+        
+        # Download and parse calendar
+        calendar_path = self.download_calendar()
+        if not calendar_path:
+            logger.error("Failed to download calendar")
             return []
+        
+        events = self.parse_calendar(calendar_path)
+        
+        # Clean up temporary file
+        try:
+            os.remove(calendar_path)
+        except:
+            pass
+        
+        # Update cache
+        self.events_cache = events
+        self.last_cache_update = datetime.now()
+        
+        return events
     
-    def _find_team_schedule_url(self) -> Optional[str]:
+    def get_games(self) -> List[Dict]:
         """
-        Find the team schedule URL from the dashboard.
+        Get games from the PlayMetrics calendar.
         
         Returns:
-            The URL to the team's schedule page, or None if not found
+            List of game dictionaries
         """
-        try:
-            self.driver.get(self.DASHBOARD_URL)
-            
-            # Wait for the dashboard to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".team-card"))
-            )
-            
-            # Find team cards
-            team_cards = self.driver.find_elements(By.CSS_SELECTOR, ".team-card")
-            
-            if not team_cards:
-                logger.warning("No teams found on dashboard")
-                return None
-                
-            # Use the first team if no specific team ID is configured
-            team_card = team_cards[0]
-            
-            # Find the schedule link
-            schedule_link = team_card.find_element(By.XPATH, ".//a[contains(@href, '/schedule')]")
-            
-            if not schedule_link:
-                logger.warning("Schedule link not found")
-                return None
-                
-            # Get the href attribute
-            schedule_url = schedule_link.get_attribute("href")
-            
-            # Extract team ID from URL
-            if "/teams/" in schedule_url:
-                self.team_id = schedule_url.split("/teams/")[1].split("/")[0]
-                logger.info(f"Found team ID: {self.team_id}")
-            
-            return schedule_url
-            
-        except Exception as e:
-            logger.error(f"Error finding team schedule URL: {e}")
-            return None
+        events = self.get_events()
+        games = [event for event in events if event.get('is_game', False)]
+        logger.info(f"Found {len(games)} games in calendar")
+        return games
     
-    def _parse_date(self, date_text: str) -> Optional[datetime]:
+    def find_game_for_recording(self, recording_start: datetime, recording_end: datetime) -> Optional[Dict]:
         """
-        Parse a date string from PlayMetrics.
+        Find a game that corresponds to a recording timespan.
         
         Args:
-            date_text: Date string to parse
-            
-        Returns:
-            Parsed datetime object or None if parsing failed
-        """
-        date_formats = [
-            "%A, %B %d, %Y",  # Monday, June 22, 2025
-            "%b %d, %Y",      # Jun 22, 2025
-            "%m/%d/%Y"        # 06/22/2025
-        ]
+            recording_start: Start time of the recording
+            recording_end: End time of the recording
         
-        for date_format in date_formats:
-            try:
-                return datetime.strptime(date_text, date_format)
-            except ValueError:
+        Returns:
+            Game dictionary if found, None otherwise
+        """
+        if not self.enabled:
+            logger.warning("PlayMetrics integration not enabled")
+            return None
+        
+        games = self.get_games()
+        if not games:
+            logger.warning("No games found in PlayMetrics calendar")
+            return None
+        
+        # Convert recording times to UTC if they don't have timezone info
+        if recording_start.tzinfo is None:
+            recording_start = recording_start.replace(tzinfo=timezone.utc)
+        if recording_end.tzinfo is None:
+            recording_end = recording_end.replace(tzinfo=timezone.utc)
+        
+        # Define the time window for matching (3 hours before and after the game)
+        time_window = timedelta(hours=3)
+        
+        # Find games that overlap with the recording time
+        for game in games:
+            game_start = game.get('start_time')
+            
+            # Skip if no start time
+            if not game_start:
                 continue
-                
-        logger.warning(f"Could not parse date: {date_text}")
+            
+            # Convert to UTC if needed
+            if game_start.tzinfo is None:
+                game_start = game_start.replace(tzinfo=timezone.utc)
+            
+            # Check if the game is within the time window of the recording
+            if (abs(recording_start - game_start) <= time_window or
+                abs(recording_end - game_start) <= time_window):
+                logger.info(f"Found matching game: {game['title']} at {game_start}")
+                return game
+        
+        logger.info("No matching game found for the recording time")
         return None
     
-    def get_game_details(self, game_id: str) -> Dict[str, Any]:
+    def populate_match_info(self, match_info: Dict, recording_start: datetime, recording_end: datetime) -> bool:
         """
-        Get detailed information for a specific game.
+        Populate match information from PlayMetrics.
         
         Args:
-            game_id: ID of the game to get details for
-            
+            match_info: Dictionary to populate with match information
+            recording_start: Start time of the recording
+            recording_end: End time of the recording
+        
         Returns:
-            Dictionary with game details
+            True if match information was populated, False otherwise
         """
         if not self.enabled:
-            logger.warning("PlayMetrics integration not enabled - cannot get game details")
-            return {}
-            
-        # Check if we have this game in the cache
-        if game_id in self.games_cache:
-            # If we already have detailed info, return it
-            if "details_loaded" in self.games_cache[game_id]:
-                return self.games_cache[game_id]
-                
-        if not self.login():
-            logger.error("Failed to log in to PlayMetrics")
-            return {}
-            
-        try:
-            game_url = f"{self.BASE_URL}/games/{game_id}"
-            logger.info(f"Getting details for game {game_id} from {game_url}")
-            
-            self.driver.get(game_url)
-            
-            # Wait for the game details to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".game-details"))
-            )
-            
-            # Get the page source and parse with BeautifulSoup
-            soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            
-            # Extract game details
-            details = {}
-            
-            # Basic info that should be in the cache already
-            if game_id in self.games_cache:
-                details = self.games_cache[game_id].copy()
-            else:
-                details["id"] = game_id
-                
-            # Extract additional details from the game page
-            game_info = soup.select_one(".game-info")
-            if game_info:
-                # Extract team names
-                teams = game_info.select(".team-name")
-                if len(teams) >= 2:
-                    details["team_name"] = teams[0].text.strip()
-                    details["opponent_name"] = teams[1].text.strip()
-                
-                # Extract score if available
-                scores = game_info.select(".score")
-                if len(scores) >= 2:
-                    details["team_score"] = scores[0].text.strip()
-                    details["opponent_score"] = scores[1].text.strip()
-            
-            # Extract location details
-            location_elem = soup.select_one(".location-details")
-            if location_elem:
-                details["location"] = location_elem.text.strip()
-                
-                # Try to extract address
-                address_elem = soup.select_one(".location-address")
-                if address_elem:
-                    details["address"] = address_elem.text.strip()
-            
-            # Extract date and time
-            datetime_elem = soup.select_one(".game-datetime")
-            if datetime_elem:
-                details["datetime"] = datetime_elem.text.strip()
-            
-            # Mark as having loaded details
-            details["details_loaded"] = True
-            
-            # Update cache
-            self.games_cache[game_id] = details
-            
-            return details
-            
-        except Exception as e:
-            logger.error(f"Error getting game details from PlayMetrics: {e}")
-            return {}
-    
-    def find_game_for_recording(self, recording_date: datetime, 
-                               time_window_hours: int = 3) -> Optional[Dict[str, Any]]:
-        """
-        Find a game that matches the recording date.
-        
-        Args:
-            recording_date: Date of the recording
-            time_window_hours: Hours before/after to look for matching games
-            
-        Returns:
-            Dictionary with game details or None if no match found
-        """
-        if not self.enabled:
-            logger.warning("PlayMetrics integration not enabled - cannot find game")
-            return None
-            
-        # Get all games within a reasonable range
-        days_ahead = 7
-        days_behind = 1
-        
-        # Calculate days from today to recording date
-        days_diff = (recording_date.date() - datetime.now().date()).days
-        
-        # Adjust days_ahead and days_behind based on the recording date
-        if days_diff > 0:
-            days_ahead = max(days_diff + 1, days_ahead)
-            days_behind = 0
-        elif days_diff < 0:
-            days_ahead = 0
-            days_behind = abs(days_diff) + 1
-        
-        # Get games
-        games = self.get_games(days_ahead=days_ahead)
-        
-        # Filter games by date
-        start_window = recording_date - timedelta(hours=time_window_hours)
-        end_window = recording_date + timedelta(hours=time_window_hours)
-        
-        matching_games = []
-        for game in games:
-            game_date = game.get("date")
-            if not game_date:
-                continue
-                
-            # Check if the game is within the time window
-            if start_window <= game_date <= end_window:
-                matching_games.append(game)
-        
-        if not matching_games:
-            logger.info(f"No matching games found for recording date {recording_date}")
-            return None
-            
-        # If we have multiple matches, get the one closest to the recording time
-        if len(matching_games) > 1:
-            matching_games.sort(key=lambda g: abs((g.get("date") - recording_date).total_seconds()))
-            
-        # Get detailed info for the best match
-        best_match = matching_games[0]
-        game_id = best_match.get("id")
-        
-        if not game_id:
-            logger.warning("Best matching game has no ID")
-            return best_match
-            
-        # Get detailed info
-        detailed_game = self.get_game_details(game_id)
-        
-        logger.info(f"Found matching game: {detailed_game.get('team_name', 'Unknown')} vs {detailed_game.get('opponent_name', 'Unknown')} at {detailed_game.get('location', 'Unknown')}")
-        return detailed_game
-    
-    def populate_match_info(self, match_info, recording_date: datetime) -> bool:
-        """
-        Populate match info from PlayMetrics.
-        
-        Args:
-            match_info: MatchInfo object to populate
-            recording_date: Date of the recording
-            
-        Returns:
-            True if match info was populated, False otherwise
-        """
-        if not self.enabled:
-            logger.warning("PlayMetrics integration not enabled - cannot populate match info")
+            logger.warning("PlayMetrics integration not enabled")
             return False
-            
-        # Find a matching game
-        game = self.find_game_for_recording(recording_date)
         
+        game = self.find_game_for_recording(recording_start, recording_end)
         if not game:
-            logger.warning(f"No matching game found for recording date {recording_date}")
+            logger.warning("No matching game found in PlayMetrics")
             return False
-            
-        # Update match info
-        team_info = {
-            "team_name": game.get("team_name", ""),
-            "opponent_name": game.get("opponent_name", ""),
-            "location": game.get("location", "")
-        }
         
-        # Update the match info
-        match_info.update_team_info(team_info)
+        # Populate match information
+        match_info['title'] = game.get('title', '')
+        match_info['opponent'] = game.get('opponent', '')
+        match_info['location'] = game.get('location', '')
+        match_info['date'] = game.get('start_time').strftime('%Y-%m-%d')
+        match_info['time'] = game.get('start_time').strftime('%H:%M')
+        match_info['description'] = game.get('description', '')
         
-        logger.info(f"Populated match info from PlayMetrics: {team_info}")
+        logger.info(f"Populated match info from PlayMetrics: {match_info['title']}")
         return True 
