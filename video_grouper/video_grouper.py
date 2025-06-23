@@ -19,7 +19,7 @@ from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.api_integrations.ntfy import NtfyAPI
-from video_grouper.api_integrations.playmetrics.scraper import PlayMetricsScraper
+from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
 
 # Constants
 LATEST_VIDEO_FILE = "latest_video.txt"
@@ -97,6 +97,13 @@ class VideoGrouperApp:
             config_path = os.path.join("shared_data", "config.ini")
             self.teamsnap_api = TeamSnapAPI(config_path)
         
+        # Initialize PlayMetrics API if enabled
+        self.playmetrics_api = None
+        if self.config.has_section('PLAYMETRICS') and self.config.getboolean('PLAYMETRICS', 'enabled', fallback=False):
+            logger.info("Initializing PlayMetrics API integration")
+            config_path = os.path.join("shared_data", "config.ini")
+            self.playmetrics_api = PlayMetricsAPI(config_path)
+        
         self.ntfy_api = None  # NTFY API client
         self.download_queue = asyncio.Queue()
         self.ffmpeg_queue = asyncio.Queue()
@@ -114,15 +121,15 @@ class VideoGrouperApp:
         self._connected_timeframes = []
         self._camera_initialized = False
         self._teamsnap_initialized = False
+        self._playmetrics_initialized = False
         self._ntfy_initialized = False  # NTFY initialization flag
         self._tasks = []
         self._shutdown_event = asyncio.Event()
         
-        # Track NTFY processed directories to avoid duplicate processing
+        # Track processed directories to avoid duplicate processing
         self._ntfy_processed_dirs = set()
-
-        # Initialize PlayMetrics integration
-        self._initialize_playmetrics()
+        self._teamsnap_processed_dirs = set()
+        self._playmetrics_processed_dirs = set()
 
     async def initialize(self):
         """Initialize the application by scanning existing files and populating queues."""
@@ -1083,81 +1090,228 @@ class VideoGrouperApp:
         """Process a directory with a combined video file."""
         logger.info(f"Processing combined directory: {group_dir}")
         
-        # Try to get match info from TeamSnap
-        teamsnap_success = await self._process_combined_with_teamsnap(group_dir, combined_path, force)
-        
-        # If TeamSnap failed or is disabled, try PlayMetrics
-        if not teamsnap_success and self.playmetrics_api:
-            playmetrics_success = await self._process_combined_with_playmetrics(group_dir, combined_path, force)
-            
-            # If PlayMetrics failed or is disabled, try NTFY
-            if not playmetrics_success and self.ntfy_api:
-                await self._process_combined_with_ntfy(group_dir, combined_path, force)
-        # If TeamSnap is disabled but PlayMetrics is enabled, try PlayMetrics
-        elif not self.teamsnap_api and self.playmetrics_api:
-            playmetrics_success = await self._process_combined_with_playmetrics(group_dir, combined_path, force)
-            
-            # If PlayMetrics failed or is disabled, try NTFY
-            if not playmetrics_success and self.ntfy_api:
-                await self._process_combined_with_ntfy(group_dir, combined_path, force)
-        # If both TeamSnap and PlayMetrics are disabled but NTFY is enabled, try NTFY
-        elif not self.teamsnap_api and not self.playmetrics_api and self.ntfy_api:
-            await self._process_combined_with_ntfy(group_dir, combined_path, force)
-
-    async def _process_combined_with_playmetrics(self, group_dir: str, combined_path: str, force=False):
-        """Process a combined video with PlayMetrics to determine team information."""
-        logger.info(f"Processing combined video with PlayMetrics: {group_dir}")
-        
-        # Skip if we've already processed this directory
-        if group_dir in self._playmetrics_processed_dirs and not force:
-            logger.info(f"Directory {group_dir} already processed with PlayMetrics, skipping")
-            return True
-            
         # Check if match info is already populated
         if self.is_match_info_populated(group_dir) and not force:
-            logger.info(f"Match info already populated for {group_dir}, skipping PlayMetrics processing")
-            self._playmetrics_processed_dirs.add(group_dir)
+            logger.info(f"Match info already populated for {group_dir}, skipping processing")
             return True
-        
+            
         # Get the first file in the group to determine the recording date
         dir_state = DirectoryState(group_dir)
         files = dir_state.get_files()
         
         if not files:
-            logger.warning(f"No files found in {group_dir}, skipping PlayMetrics processing")
+            logger.warning(f"No files found in {group_dir}, skipping processing")
             return False
             
         # Get the recording date from the first file
         first_file = files[0]
         recording_date = first_file.date_time
         
-        # Get or create match info
-        match_info = MatchInfo.get_or_create(group_dir)
+        # Collect games from both TeamSnap and PlayMetrics
+        games = []
         
-        # Try to populate match info from PlayMetrics
-        if self.playmetrics_api.populate_match_info(match_info, recording_date):
-            logger.info(f"Successfully populated match info from PlayMetrics for {group_dir}")
-            self._playmetrics_processed_dirs.add(group_dir)
-            return True
-        else:
-            logger.warning(f"Failed to populate match info from PlayMetrics for {group_dir}")
+        # Try to get game info from TeamSnap
+        if self.teamsnap_api and self.teamsnap_api.enabled:
+            # Initialize TeamSnap if needed
+            if not self._teamsnap_initialized:
+                self._initialize_teamsnap()
+                self._teamsnap_initialized = True
+                
+            teamsnap_game = self.teamsnap_api.find_game_for_recording(recording_date)
+            if teamsnap_game:
+                # Add source information
+                teamsnap_game['source'] = 'TeamSnap'
+                games.append(teamsnap_game)
+                logger.info(f"Found TeamSnap game: {teamsnap_game.get('team_name', 'Unknown')} vs {teamsnap_game.get('opponent_name', 'Unknown')}")
+        
+        # Try to get game info from PlayMetrics
+        if not self._playmetrics_initialized:
+            self._initialize_playmetrics()
+                
+        if self.playmetrics_api and self.playmetrics_api.enabled:
+            # Get the recording start and end times
+            recording_start = first_file.start_time
+            last_file = files[-1]
+            recording_end = last_file.end_time or recording_date
+            
+            playmetrics_game = self.playmetrics_api.find_game_for_recording(recording_start, recording_end)
+            if playmetrics_game:
+                # Add source information
+                playmetrics_game['source'] = 'PlayMetrics'
+                games.append(playmetrics_game)
+                logger.info(f"Found PlayMetrics game: {playmetrics_game.get('title', 'Unknown')} vs {playmetrics_game.get('opponent', 'Unknown')}")
+        
+        # Check if we found any games
+        if not games:
+            logger.warning(f"No games found for recording date {recording_date}")
+            
+            # If no games found and NTFY is enabled, try NTFY as a fallback
+            if self.ntfy_api and self.ntfy_api.enabled:
+                await self._process_combined_with_ntfy(group_dir, combined_path, force)
+            
             return False
+            
+        # If we found exactly one game, use it
+        if len(games) == 1:
+            game = games[0]
+            source = game.get('source', 'Unknown')
+            
+            if source == 'TeamSnap':
+                # Create team info dictionary for TeamSnap
+                team_info = {
+                    'team_name': game.get('team_name', 'Our Team'),
+                    'opponent_name': game.get('opponent_name', 'Opponent'),
+                    'location': game.get('location', 'Unknown Location')
+                }
+                
+                # Update match info
+                MatchInfo.update_team_info(group_dir, team_info)
+                logger.info(f"Updated match info with TeamSnap data: {team_info}")
+                
+                # Add to processed set
+                if not hasattr(self, '_teamsnap_processed_dirs'):
+                    self._teamsnap_processed_dirs = set()
+                self._teamsnap_processed_dirs.add(group_dir)
+                
+                return True
+                
+            elif source == 'PlayMetrics':
+                # Create team info dictionary for PlayMetrics
+                team_info = {
+                    'team_name': game.get('title', 'Our Team'),
+                    'opponent_name': game.get('opponent', 'Opponent'),
+                    'location': game.get('location', 'Unknown Location'),
+                    'date': game.get('start_time').strftime('%Y-%m-%d'),
+                    'time': game.get('start_time').strftime('%H:%M'),
+                    'description': game.get('description', '')
+                }
+                
+                # Update match info
+                MatchInfo.update_team_info(group_dir, team_info)
+                logger.info(f"Updated match info with PlayMetrics data: {team_info}")
+                
+                # Add to processed set
+                if not hasattr(self, '_playmetrics_processed_dirs'):
+                    self._playmetrics_processed_dirs = set()
+                self._playmetrics_processed_dirs.add(group_dir)
+                
+                return True
+        
+        # If we found multiple games (conflict), let the user choose via NTFY
+        elif len(games) > 1:
+            logger.info(f"Found {len(games)} games for recording date {recording_date}, asking user to choose")
+            
+            # Initialize NTFY if needed
+            if not self._ntfy_initialized:
+                self._initialize_ntfy()
+                self._ntfy_initialized = True
+                
+            if self.ntfy_api and self.ntfy_api.enabled:
+                # Ask user to resolve the conflict
+                selected_game = await self.ntfy_api.ask_resolve_game_conflict(
+                    combined_video_path=combined_path,
+                    group_dir=group_dir,
+                    game_options=games
+                )
+                
+                if selected_game:
+                    source = selected_game.get('source', 'Unknown')
+                    logger.info(f"User selected game from {source}")
+                    
+                    # Create team info dictionary
+                    if source == 'TeamSnap':
+                        team_info = {
+                            'team_name': selected_game.get('team_name', 'Our Team'),
+                            'opponent_name': selected_game.get('opponent_name', 'Opponent'),
+                            'location': selected_game.get('location', 'Unknown Location')
+                        }
+                    elif source == 'PlayMetrics':
+                        team_info = {
+                            'team_name': selected_game.get('title', 'Our Team'),
+                            'opponent_name': selected_game.get('opponent', 'Opponent'),
+                            'location': selected_game.get('location', 'Unknown Location'),
+                            'date': selected_game.get('start_time').strftime('%Y-%m-%d'),
+                            'time': selected_game.get('start_time').strftime('%H:%M'),
+                            'description': selected_game.get('description', '')
+                        }
+                    else:
+                        team_info = {
+                            'team_name': selected_game.get('team_name', 'Our Team'),
+                            'opponent_name': selected_game.get('opponent_name', selected_game.get('opponent', 'Opponent')),
+                            'location': selected_game.get('location', 'Unknown Location')
+                        }
+                    
+                    # Update match info
+                    MatchInfo.update_team_info(group_dir, team_info)
+                    logger.info(f"Updated match info with user-selected game data: {team_info}")
+                    
+                    # Add to processed sets
+                    if source == 'TeamSnap':
+                        if not hasattr(self, '_teamsnap_processed_dirs'):
+                            self._teamsnap_processed_dirs = set()
+                        self._teamsnap_processed_dirs.add(group_dir)
+                    elif source == 'PlayMetrics':
+                        if not hasattr(self, '_playmetrics_processed_dirs'):
+                            self._playmetrics_processed_dirs = set()
+                        self._playmetrics_processed_dirs.add(group_dir)
+                    
+                    return True
+                else:
+                    logger.warning(f"User did not select a game, falling back to NTFY for manual input")
+                    await self._process_combined_with_ntfy(group_dir, combined_path, force)
+                    return False
+            else:
+                # If NTFY is not enabled, use the first game found
+                logger.warning(f"NTFY not enabled to resolve game conflict, using first game found")
+                game = games[0]
+                source = game.get('source', 'Unknown')
+                
+                # Create team info dictionary
+                if source == 'TeamSnap':
+                    team_info = {
+                        'team_name': game.get('team_name', 'Our Team'),
+                        'opponent_name': game.get('opponent_name', 'Opponent'),
+                        'location': game.get('location', 'Unknown Location')
+                    }
+                elif source == 'PlayMetrics':
+                    team_info = {
+                        'team_name': game.get('title', 'Our Team'),
+                        'opponent_name': game.get('opponent', 'Opponent'),
+                        'location': game.get('location', 'Unknown Location'),
+                        'date': game.get('start_time').strftime('%Y-%m-%d'),
+                        'time': game.get('start_time').strftime('%H:%M'),
+                        'description': game.get('description', '')
+                    }
+                else:
+                    team_info = {
+                        'team_name': game.get('team_name', 'Our Team'),
+                        'opponent_name': game.get('opponent_name', game.get('opponent', 'Opponent')),
+                        'location': game.get('location', 'Unknown Location')
+                    }
+                
+                # Update match info
+                MatchInfo.update_team_info(group_dir, team_info)
+                logger.info(f"Updated match info with first game data: {team_info}")
+                
+                return True
+                
+        return False
 
     def _initialize_playmetrics(self):
         """Initialize PlayMetrics integration."""
-        self.playmetrics_api = None
+        logger.info("Initializing PlayMetrics integration")
         
         # Check if PlayMetrics integration is enabled
-        if not self.config.getboolean("PLAYMETRICS", "enabled", fallback=False):
+        if not self.config.has_section('PLAYMETRICS') or not self.config.getboolean("PLAYMETRICS", "enabled", fallback=False):
             logger.info("PlayMetrics integration is disabled")
             return
             
-        logger.info("Initializing PlayMetrics integration")
-        self.playmetrics_api = PlayMetricsScraper(self.config)
+        config_path = os.path.join("shared_data", "config.ini")
+        self.playmetrics_api = PlayMetricsAPI(config_path)
         
-        # Initialize the scraper
-        if not self.playmetrics_api.initialize():
-            logger.error("Failed to initialize PlayMetrics scraper")
+        # Check if enabled
+        if not self.playmetrics_api.enabled:
+            logger.error("PlayMetrics integration is not properly configured")
             self.playmetrics_api = None
             return
             
@@ -1168,6 +1322,7 @@ class VideoGrouperApp:
             return
             
         logger.info("PlayMetrics integration initialized successfully")
+        self._playmetrics_initialized = True
 
     async def _process_combined_with_ntfy(self, group_dir: str, combined_path: str, force=False):
         """Process a combined video with NTFY to determine game start and end times."""

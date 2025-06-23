@@ -290,4 +290,74 @@ async def test_ask_team_info(mock_http_client):
         args, kwargs = ntfy_api.send_notification.call_args
         assert 'Missing match information:' in kwargs['message']
         # Only check that opponent_name is mentioned, don't check for absence of other fields
-        assert 'opponent team name' in kwargs['message'] 
+        assert 'opponent team name' in kwargs['message']
+
+@pytest.mark.asyncio
+async def test_ask_resolve_game_conflict():
+    """Test asking the user to resolve a game conflict via NTFY."""
+    config = configparser.ConfigParser()
+    config.add_section('NTFY')
+    config.set('NTFY', 'enabled', 'true')
+    config.set('NTFY', 'topic', 'test-topic')
+    
+    ntfy_api = NtfyAPI(config)
+    
+    # Create mock game options
+    game_options = [
+        {
+            'source': 'TeamSnap',
+            'team_name': 'Team A',
+            'opponent_name': 'Opponent A',
+            'location': 'Field A',
+            'date': '2025-06-22'
+        },
+        {
+            'source': 'PlayMetrics',
+            'team_name': 'Team B',
+            'opponent': 'Opponent B',
+            'location': 'Field B',
+            'date': '2025-06-22'
+        }
+    ]
+    
+    # Create a proper async mock for get_video_duration
+    async def mock_get_duration(*args, **kwargs):
+        return '01:30:00'
+    
+    # Create a mock future for simulating user response
+    mock_future = asyncio.Future()
+    mock_future.set_result({'action': 'http://localhost:8080/select_game/1'})
+    
+    # Mock the necessary methods
+    with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
+         patch('video_grouper.api_integrations.ntfy.get_video_duration', mock_get_duration), \
+         patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
+         patch('video_grouper.api_integrations.ntfy.compress_image', AsyncMock(return_value='screenshot.jpg')), \
+         patch('os.path.exists', return_value=True), \
+         patch('os.remove'), \
+         patch.object(asyncio, 'Future', return_value=mock_future), \
+         patch('asyncio.wait_for', AsyncMock(return_value={'action': 'http://localhost:8080/select_game/1'})):
+        
+        # Call the method
+        result = await ntfy_api.ask_resolve_game_conflict(
+            combined_video_path='test_video.mp4',
+            group_dir='test_dir',
+            game_options=game_options
+        )
+        
+        # Check the result
+        assert result is not None
+        assert result['source'] == 'PlayMetrics'
+        assert result['team_name'] == 'Team B'
+        assert result['opponent'] == 'Opponent B'
+        
+        # Check that send_notification was called with the correct parameters
+        ntfy_api.send_notification.assert_called_once()
+        call_args = ntfy_api.send_notification.call_args[1]
+        assert 'Multiple games found' in call_args['message']
+        assert 'Team A vs Opponent A' in call_args['message']
+        assert 'Team B vs Opponent B' in call_args['message']
+        assert call_args['title'] == 'Game Conflict - Select Correct Game'
+        assert len(call_args['actions']) == 2
+        assert call_args['actions'][0]['label'] == 'Opponent A (TeamSnap)'
+        assert call_args['actions'][1]['label'] == 'Opponent B (PlayMetrics)' 
