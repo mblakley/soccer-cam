@@ -8,6 +8,7 @@ import sys
 import asyncio
 import configparser
 import logging
+import pytest
 from pathlib import Path
 from datetime import datetime
 
@@ -25,6 +26,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from video_grouper.api_integrations.ntfy import NtfyAPI
 
+@pytest.mark.asyncio
 async def test_ntfy_send():
     """Test sending a notification via NTFY."""
     # Find the config file
