@@ -511,7 +511,17 @@ class DahuaCamera(Camera):
     @property
     def is_connected(self) -> bool:
         """Get connection status."""
-        return self._is_connected 
+        return self._is_connected
+    
+    async def close(self):
+        """Close any open resources."""
+        logger.info("Closing DahuaCamera resources")
+        if self._client:
+            try:
+                await self._client.aclose()
+                logger.info("Closed HTTP client")
+            except Exception as e:
+                logger.error(f"Error closing HTTP client: {e}")
     
     async def get_screenshot(self, server_path: str, output_path: str) -> bool:
         """Get a screenshot from a video file on the camera.
