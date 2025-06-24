@@ -200,10 +200,128 @@ class PlayMetricsAPI:
             self.logged_in = False
             return False
     
+    def get_available_teams(self) -> List[Dict[str, str]]:
+        """
+        Get all available teams for the logged-in user.
+        
+        Returns:
+            List of dictionaries containing team information:
+            [
+                {
+                    'id': '12345',
+                    'name': 'Team Name',
+                    'calendar_url': 'https://...'
+                },
+                ...
+            ]
+        """
+        if not self.enabled:
+            logger.warning("PlayMetrics integration not enabled")
+            return []
+            
+        # Check if we're logged in, and if not, try to log in
+        if not self.logged_in and not self.login():
+            logger.warning("PlayMetrics not logged in and login failed")
+            return []
+            
+        try:
+            # Navigate to dashboard
+            logger.info("Navigating to dashboard to find teams")
+            self.driver.get(self.DASHBOARD_URL)
+            time.sleep(3)
+            
+            # Look for team selector or team information
+            teams = []
+            
+            # Method 1: Check for team selector dropdown
+            try:
+                team_selector = self.driver.find_element(By.CSS_SELECTOR, "select.team-selector")
+                options = team_selector.find_elements(By.TAG_NAME, "option")
+                
+                for option in options:
+                    team_id = option.get_attribute("value")
+                    team_name = option.text.strip()
+                    
+                    if team_id and team_name:
+                        teams.append({
+                            'id': team_id,
+                            'name': team_name,
+                            'calendar_url': None  # Will be populated later
+                        })
+                
+                logger.info(f"Found {len(teams)} teams in team selector")
+            except Exception as e:
+                logger.debug(f"No team selector found: {e}")
+            
+            # Method 2: Check for team cards or links
+            if not teams:
+                try:
+                    team_elements = self.driver.find_elements(By.CSS_SELECTOR, ".team-card, .team-link, [data-team-id]")
+                    
+                    for element in team_elements:
+                        team_id = element.get_attribute("data-team-id") or ""
+                        team_name = element.text.strip()
+                        
+                        if team_name:
+                            teams.append({
+                                'id': team_id,
+                                'name': team_name,
+                                'calendar_url': None  # Will be populated later
+                            })
+                    
+                    logger.info(f"Found {len(teams)} team cards/links")
+                except Exception as e:
+                    logger.debug(f"No team cards/links found: {e}")
+            
+            # Method 3: Extract from page title if only one team
+            if not teams:
+                try:
+                    page_title = self.driver.title
+                    if "Dashboard" in page_title and "-" in page_title:
+                        team_name = page_title.split("-", 1)[1].strip()
+                        
+                        # Try to find team ID in the URL or page source
+                        team_id = ""
+                        if "teamId=" in self.driver.current_url:
+                            team_id = self.driver.current_url.split("teamId=")[1].split("&")[0]
+                        
+                        teams.append({
+                            'id': team_id,
+                            'name': team_name,
+                            'calendar_url': None  # Will be populated later
+                        })
+                        
+                        logger.info(f"Extracted team from page title: {team_name}")
+                except Exception as e:
+                    logger.debug(f"Could not extract team from page title: {e}")
+            
+            # Get calendar URL for each team
+            for team in teams:
+                # If we have multiple teams, we need to switch to the team first
+                if len(teams) > 1 and team['id']:
+                    try:
+                        # Try to switch to the team
+                        team_url = f"{self.DASHBOARD_URL}?teamId={team['id']}"
+                        self.driver.get(team_url)
+                        time.sleep(3)
+                    except Exception as e:
+                        logger.error(f"Error switching to team {team['name']}: {e}")
+                
+                # Now get the calendar URL
+                calendar_url = self.get_calendar_url()
+                if calendar_url:
+                    team['calendar_url'] = calendar_url
+            
+            return teams
+            
+        except Exception as e:
+            logger.error(f"Error getting available teams: {e}")
+            return []
+    
     def get_calendar_url(self) -> Optional[str]:
         """
         Navigate to the dashboard and find the calendar URL.
-        
+            
         Returns:
             str: Calendar URL if found, None otherwise
         """
@@ -307,7 +425,7 @@ class PlayMetricsAPI:
         if not calendar_url:
             logger.error("No calendar URL available")
             return None
-        
+                
         try:
             logger.info(f"Downloading calendar from {calendar_url}")
             response = requests.get(calendar_url)
@@ -396,8 +514,8 @@ class PlayMetricsAPI:
                         events.append(event)
                     except Exception as e:
                         logger.error(f"Error parsing event: {e}")
-                        continue
-            
+                continue
+                
             logger.info(f"Found {len(events)} events in calendar")
             return events
         except Exception as e:
@@ -407,7 +525,7 @@ class PlayMetricsAPI:
     def get_events(self) -> List[Dict]:
         """
         Get all events from the PlayMetrics calendar.
-        
+            
         Returns:
             List of event dictionaries
         """
@@ -433,12 +551,12 @@ class PlayMetricsAPI:
         
         events = self.parse_calendar(calendar_path)
         
-        # Clean up temporary file
+                # Clean up temporary file
         try:
             os.remove(calendar_path)
         except:
             pass
-        
+            
         # Update cache
         self.events_cache = events
         self.last_cache_update = datetime.now()
@@ -464,7 +582,7 @@ class PlayMetricsAPI:
         Args:
             recording_start: Start time of the recording
             recording_end: End time of the recording
-        
+            
         Returns:
             Game dictionary if found, None otherwise
         """
@@ -515,7 +633,7 @@ class PlayMetricsAPI:
             match_info: Dictionary to populate with match information
             recording_start: Start time of the recording
             recording_end: End time of the recording
-        
+            
         Returns:
             True if match information was populated, False otherwise
         """

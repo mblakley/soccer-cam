@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
-                             QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox)
+                             QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox, QHBoxLayout, QDialog, QScrollArea, QWidget)
 from PyQt6.QtCore import QTimer, QSize, pyqtSignal as Signal
 from PyQt6.QtGui import QIcon
 from video_grouper.locking import FileLock
@@ -198,6 +198,171 @@ class ConfigWindow(QWidget):
         youtube_group.setLayout(youtube_layout)
         settings_layout.addWidget(youtube_group)
 
+        # -- Team Management Tab --
+        team_management_tab = QWidget()
+        team_management_layout = QVBoxLayout()
+        
+        # Create tab widget for different integration types
+        team_integrations_tabs = QTabWidget()
+        
+        # -- TeamSnap Tab --
+        teamsnap_tab = QWidget()
+        teamsnap_layout = QVBoxLayout()
+        
+        # TeamSnap configurations list
+        teamsnap_list_group = QGroupBox("TeamSnap Configurations")
+        teamsnap_list_layout = QVBoxLayout()
+        
+        self.teamsnap_configs_list = QListWidget()
+        self.teamsnap_configs_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.teamsnap_configs_list.itemSelectionChanged.connect(self.load_selected_teamsnap_config)
+        
+        teamsnap_buttons_layout = QHBoxLayout()
+        self.add_teamsnap_button = QPushButton("Add")
+        self.add_teamsnap_button.clicked.connect(self.add_teamsnap_config)
+        self.remove_teamsnap_button = QPushButton("Remove")
+        self.remove_teamsnap_button.clicked.connect(self.remove_teamsnap_config)
+        teamsnap_buttons_layout.addWidget(self.add_teamsnap_button)
+        teamsnap_buttons_layout.addWidget(self.remove_teamsnap_button)
+        
+        teamsnap_list_layout.addWidget(self.teamsnap_configs_list)
+        teamsnap_list_layout.addLayout(teamsnap_buttons_layout)
+        teamsnap_list_group.setLayout(teamsnap_list_layout)
+        teamsnap_layout.addWidget(teamsnap_list_group)
+        
+        # TeamSnap configuration form
+        teamsnap_form_group = QGroupBox("TeamSnap Configuration")
+        teamsnap_form_layout = QFormLayout()
+        
+        # Configuration name
+        self.teamsnap_config_name = QLineEdit()
+        teamsnap_form_layout.addRow('Configuration Name:', self.teamsnap_config_name)
+        
+        # TeamSnap enabled checkbox
+        self.teamsnap_enabled = QCheckBox("Enable TeamSnap Integration")
+        teamsnap_form_layout.addRow('', self.teamsnap_enabled)
+        
+        # TeamSnap credentials
+        self.teamsnap_client_id = QLineEdit()
+        self.teamsnap_client_secret = QLineEdit()
+        self.teamsnap_client_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        # Show password checkbox
+        self.show_teamsnap_secret_checkbox = QCheckBox("Show Secret")
+        self.show_teamsnap_secret_checkbox.toggled.connect(lambda checked: self.teamsnap_client_secret.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
+        
+        # Hidden fields (not shown in UI but used for storage)
+        self.teamsnap_access_token = QLineEdit()
+        self.teamsnap_team_id = QLineEdit()
+        self.teamsnap_team_name = QLineEdit()
+        
+        # Fetch TeamSnap info button
+        self.fetch_teamsnap_info_button = QPushButton("Fetch Team Info")
+        self.fetch_teamsnap_info_button.clicked.connect(self.fetch_teamsnap_info)
+        
+        # Status label
+        self.teamsnap_status_label = QLabel("Not connected")
+        
+        # Add fields to layout
+        teamsnap_form_layout.addRow('Client ID:', self.teamsnap_client_id)
+        teamsnap_form_layout.addRow('Client Secret:', self.teamsnap_client_secret)
+        teamsnap_form_layout.addRow('', self.show_teamsnap_secret_checkbox)
+        teamsnap_form_layout.addRow('', self.fetch_teamsnap_info_button)
+        teamsnap_form_layout.addRow('Status:', self.teamsnap_status_label)
+        
+        # Save button
+        self.save_teamsnap_button = QPushButton("Save Configuration")
+        self.save_teamsnap_button.clicked.connect(self.save_teamsnap_config)
+        teamsnap_form_layout.addRow('', self.save_teamsnap_button)
+        
+        teamsnap_form_group.setLayout(teamsnap_form_layout)
+        teamsnap_layout.addWidget(teamsnap_form_group)
+        
+        teamsnap_tab.setLayout(teamsnap_layout)
+        
+        # -- PlayMetrics Tab --
+        playmetrics_tab = QWidget()
+        playmetrics_layout = QVBoxLayout()
+        
+        # PlayMetrics configurations list
+        playmetrics_list_group = QGroupBox("PlayMetrics Configurations")
+        playmetrics_list_layout = QVBoxLayout()
+        
+        self.playmetrics_configs_list = QListWidget()
+        self.playmetrics_configs_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.playmetrics_configs_list.itemSelectionChanged.connect(self.load_selected_playmetrics_config)
+        
+        playmetrics_buttons_layout = QHBoxLayout()
+        self.add_playmetrics_button = QPushButton("Add")
+        self.add_playmetrics_button.clicked.connect(self.add_playmetrics_config)
+        self.remove_playmetrics_button = QPushButton("Remove")
+        self.remove_playmetrics_button.clicked.connect(self.remove_playmetrics_config)
+        playmetrics_buttons_layout.addWidget(self.add_playmetrics_button)
+        playmetrics_buttons_layout.addWidget(self.remove_playmetrics_button)
+        
+        playmetrics_list_layout.addWidget(self.playmetrics_configs_list)
+        playmetrics_list_layout.addLayout(playmetrics_buttons_layout)
+        playmetrics_list_group.setLayout(playmetrics_list_layout)
+        playmetrics_layout.addWidget(playmetrics_list_group)
+        
+        # PlayMetrics configuration form
+        playmetrics_form_group = QGroupBox("PlayMetrics Configuration")
+        playmetrics_form_layout = QFormLayout()
+        
+        # Configuration name
+        self.playmetrics_config_name = QLineEdit()
+        playmetrics_form_layout.addRow('Configuration Name:', self.playmetrics_config_name)
+        
+        # PlayMetrics enabled checkbox
+        self.playmetrics_enabled = QCheckBox("Enable PlayMetrics Integration")
+        playmetrics_form_layout.addRow('', self.playmetrics_enabled)
+        
+        # PlayMetrics credentials
+        self.playmetrics_username = QLineEdit()
+        self.playmetrics_password = QLineEdit()
+        self.playmetrics_password.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        # Hidden fields (not shown in UI but used for storage)
+        self.playmetrics_team_id = QLineEdit()
+        self.playmetrics_team_name = QLineEdit()
+        
+        # Show password checkbox
+        self.show_playmetrics_password_checkbox = QCheckBox("Show Password")
+        self.show_playmetrics_password_checkbox.toggled.connect(lambda checked: self.playmetrics_password.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
+        
+        # Fetch PlayMetrics info button
+        self.fetch_playmetrics_info_button = QPushButton("Fetch Team Info")
+        self.fetch_playmetrics_info_button.clicked.connect(self.fetch_playmetrics_info)
+        
+        # Status label
+        self.playmetrics_status_label = QLabel("Not connected")
+        
+        # Add fields to layout
+        playmetrics_form_layout.addRow('Username:', self.playmetrics_username)
+        playmetrics_form_layout.addRow('Password:', self.playmetrics_password)
+        playmetrics_form_layout.addRow('', self.show_playmetrics_password_checkbox)
+        playmetrics_form_layout.addRow('', self.fetch_playmetrics_info_button)
+        playmetrics_form_layout.addRow('Status:', self.playmetrics_status_label)
+        
+        # Save button
+        self.save_playmetrics_button = QPushButton("Save Configuration")
+        self.save_playmetrics_button.clicked.connect(self.save_playmetrics_config)
+        playmetrics_form_layout.addRow('', self.save_playmetrics_button)
+        
+        playmetrics_form_group.setLayout(playmetrics_form_layout)
+        playmetrics_layout.addWidget(playmetrics_form_group)
+        
+        playmetrics_tab.setLayout(playmetrics_layout)
+        
+        # Add tabs to team integrations tab widget
+        team_integrations_tabs.addTab(teamsnap_tab, "TeamSnap")
+        team_integrations_tabs.addTab(playmetrics_tab, "PlayMetrics")
+        
+        team_management_layout.addWidget(team_integrations_tabs)
+        team_management_tab.setLayout(team_management_layout)
+        
         # -- User Preferences Group --
         prefs_group = QGroupBox("User Preferences")
         prefs_layout = QFormLayout()
@@ -216,6 +381,7 @@ class ConfigWindow(QWidget):
 
         settings_tab.setLayout(settings_layout)
         tabs.addTab(settings_tab, 'Settings')
+        tabs.addTab(team_management_tab, 'Team Management')
 
         # Load existing values into fields
         self.load_settings_into_ui()
@@ -248,6 +414,59 @@ class ConfigWindow(QWidget):
             storage_path = self.config.get('STORAGE', 'path', fallback=None)
             if storage_path:
                 self.check_youtube_token_status()
+        
+        # Load TeamSnap configurations
+        self.teamsnap_configs_list.clear()
+        for section in self.config.sections():
+            if section.startswith('TEAMSNAP.'):
+                config_name = section[len('TEAMSNAP.'):]
+                self.teamsnap_configs_list.addItem(config_name)
+        
+        # Load PlayMetrics configurations
+        self.playmetrics_configs_list.clear()
+        for section in self.config.sections():
+            if section.startswith('PLAYMETRICS.'):
+                config_name = section[len('PLAYMETRICS.'):]
+                self.playmetrics_configs_list.addItem(config_name)
+        
+        # Load legacy TeamSnap settings into a default configuration if it exists
+        if 'TEAMSNAP' in self.config and not any(s.startswith('TEAMSNAP.') for s in self.config.sections()):
+            # Create a default configuration
+            default_name = "Default"
+            section_name = f"TEAMSNAP.{default_name}"
+            
+            if section_name not in self.config:
+                self.config.add_section(section_name)
+                
+                # Copy settings from the legacy section
+                self.config[section_name]['enabled'] = self.config.get('TEAMSNAP', 'enabled', fallback='false')
+                self.config[section_name]['client_id'] = self.config.get('TEAMSNAP', 'client_id', fallback='')
+                self.config[section_name]['client_secret'] = self.config.get('TEAMSNAP', 'client_secret', fallback='')
+                self.config[section_name]['access_token'] = self.config.get('TEAMSNAP', 'access_token', fallback='')
+                self.config[section_name]['team_id'] = self.config.get('TEAMSNAP', 'team_id', fallback='')
+                self.config[section_name]['team_name'] = self.config.get('TEAMSNAP', 'my_team_name', fallback='')
+                
+                # Add to list
+                self.teamsnap_configs_list.addItem(default_name)
+        
+        # Load legacy PlayMetrics settings into a default configuration if it exists
+        if 'PLAYMETRICS' in self.config and not any(s.startswith('PLAYMETRICS.') for s in self.config.sections()):
+            # Create a default configuration
+            default_name = "Default"
+            section_name = f"PLAYMETRICS.{default_name}"
+            
+            if section_name not in self.config:
+                self.config.add_section(section_name)
+                
+                # Copy settings from the legacy section
+                self.config[section_name]['enabled'] = self.config.get('PLAYMETRICS', 'enabled', fallback='false')
+                self.config[section_name]['username'] = self.config.get('PLAYMETRICS', 'username', fallback='')
+                self.config[section_name]['password'] = self.config.get('PLAYMETRICS', 'password', fallback='')
+                self.config[section_name]['team_id'] = self.config.get('PLAYMETRICS', 'team_id', fallback='')
+                self.config[section_name]['team_name'] = self.config.get('PLAYMETRICS', 'team_name', fallback='')
+                
+                # Add to list
+                self.playmetrics_configs_list.addItem(default_name)
             
         # Load playlist configuration
         if 'youtube.playlist.processed' in self.config:
@@ -729,6 +948,610 @@ class ConfigWindow(QWidget):
             self.check_youtube_token_status()
         else:
             self.youtube_status_label.setText("Storage path not set")
+
+    def fetch_teamsnap_info(self):
+        """Fetch team information from TeamSnap using the provided credentials."""
+        # Check if client ID and secret are provided
+        client_id = self.teamsnap_client_id.text().strip()
+        client_secret = self.teamsnap_client_secret.text().strip()
+        
+        if not client_id or not client_secret:
+            QMessageBox.warning(self, 'Missing Credentials', 'Please enter your TeamSnap Client ID and Client Secret.')
+            return
+        
+        # Update status
+        self.teamsnap_status_label.setText("Connecting to TeamSnap...")
+        self.fetch_teamsnap_info_button.setEnabled(False)
+        
+        # Run in a separate thread to avoid freezing UI
+        def teamsnap_thread():
+            try:
+                # Save client ID and secret to a temporary config
+                temp_config = configparser.ConfigParser()
+                temp_config.add_section('TEAMSNAP')
+                temp_config.set('TEAMSNAP', 'enabled', 'true')
+                temp_config.set('TEAMSNAP', 'client_id', client_id)
+                temp_config.set('TEAMSNAP', 'client_secret', client_secret)
+                
+                # Import here to avoid circular imports
+                from video_grouper.api_integrations.teamsnap import TeamSnapAPI
+                
+                # Initialize TeamSnap API
+                teamsnap_api = TeamSnapAPI(temp_config)
+                
+                # Get access token
+                success = teamsnap_api.get_access_token()
+                
+                if not success:
+                    def show_error():
+                        self.teamsnap_status_label.setText("Authentication failed")
+                        self.fetch_teamsnap_info_button.setEnabled(True)
+                        QMessageBox.critical(self, 'Error', 'Failed to authenticate with TeamSnap. Please check your credentials.')
+                    
+                    QTimer.singleShot(0, show_error)
+                    return
+                
+                # Get team information
+                teams = teamsnap_api.get_teams()
+                
+                if not teams:
+                    def show_no_teams():
+                        self.teamsnap_status_label.setText("No teams found")
+                        self.fetch_teamsnap_info_button.setEnabled(True)
+                        QMessageBox.warning(self, 'No Teams', 'No teams found in your TeamSnap account.')
+                    
+                    QTimer.singleShot(0, show_no_teams)
+                    return
+                
+                # Show team selection dialog
+                def show_team_selection():
+                    dialog = QDialog(self)
+                    dialog.setWindowTitle("Select Teams")
+                    dialog.resize(400, 300)
+                    main_layout = QVBoxLayout(dialog)
+                    
+                    main_layout.addWidget(QLabel("Select the teams you want to enable:"))
+                    
+                    # Create a scrollable area for teams
+                    scroll_area = QScrollArea()
+                    scroll_area.setWidgetResizable(True)
+                    scroll_content = QWidget()
+                    scroll_layout = QVBoxLayout(scroll_content)
+                    
+                    # Create checkboxes for each team
+                    team_checkboxes = []
+                    for team in teams:
+                        team_name = team.get('name', 'Unknown Team')
+                        checkbox = QCheckBox(team_name)
+                        
+                        # Check if this team is already configured
+                        team_id = team.get('id')
+                        for section in self.config.sections():
+                            if section.startswith('TEAMSNAP.TEAM.') and self.config.get(section, 'team_id', fallback='') == team_id:
+                                checkbox.setChecked(self.config.getboolean(section, 'enabled', fallback=True))
+                                break
+                        
+                        scroll_layout.addWidget(checkbox)
+                        team_checkboxes.append((checkbox, team))
+                    
+                    scroll_layout.addStretch(1)
+                    scroll_area.setWidget(scroll_content)
+                    main_layout.addWidget(scroll_area)
+                    
+                    # Add buttons
+                    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+                    buttons.accepted.connect(dialog.accept)
+                    buttons.rejected.connect(dialog.reject)
+                    main_layout.addWidget(buttons)
+                    
+                    # Show dialog and process results
+                    if dialog.exec() == QDialog.DialogCode.Accepted:
+                        # Save selected teams
+                        selected_teams = [(checkbox.isChecked(), team) for checkbox, team in team_checkboxes]
+                        self.save_teamsnap_teams(teamsnap_api.access_token, selected_teams)
+                    else:
+                        self.teamsnap_status_label.setText("Team selection canceled")
+                        self.fetch_teamsnap_info_button.setEnabled(True)
+                
+                QTimer.singleShot(0, show_team_selection)
+                
+            except Exception as e:
+                logger.error(f"Error fetching TeamSnap info: {e}")
+                
+                def show_error():
+                    self.teamsnap_status_label.setText("Error")
+                    self.fetch_teamsnap_info_button.setEnabled(True)
+                    QMessageBox.critical(self, 'Error', f"Error fetching TeamSnap info: {str(e)}")
+                
+                QTimer.singleShot(0, show_error)
+        
+        # Start thread
+        thread = threading.Thread(target=teamsnap_thread, daemon=True)
+        thread.start()
+    
+    def save_teamsnap_teams(self, access_token, selected_teams):
+        """Save the selected TeamSnap teams to the config."""
+        try:
+            # First, save the main TeamSnap credentials
+            if 'TEAMSNAP' not in self.config:
+                self.config.add_section('TEAMSNAP')
+            
+            self.config['TEAMSNAP']['enabled'] = 'true'
+            self.config['TEAMSNAP']['client_id'] = self.teamsnap_client_id.text().strip()
+            self.config['TEAMSNAP']['client_secret'] = self.teamsnap_client_secret.text().strip()
+            self.config['TEAMSNAP']['access_token'] = access_token
+            
+            # Remove existing team configurations
+            for section in list(self.config.sections()):
+                if section.startswith('TEAMSNAP.TEAM.'):
+                    self.config.remove_section(section)
+            
+            # Add new team configurations
+            enabled_teams = []
+            for i, (enabled, team) in enumerate(selected_teams):
+                section_name = f"TEAMSNAP.TEAM.{i+1}"
+                self.config.add_section(section_name)
+                self.config[section_name]['enabled'] = str(enabled).lower()
+                self.config[section_name]['team_id'] = team.get('id', '')
+                self.config[section_name]['team_name'] = team.get('name', 'Unknown Team')
+                
+                if enabled:
+                    enabled_teams.append(team.get('name', 'Unknown Team'))
+            
+            # Save config
+            with FileLock(self.config_path):
+                with open(self.config_path, 'w') as f:
+                    self.config.write(f)
+            
+            # Update status
+            if enabled_teams:
+                self.teamsnap_status_label.setText(f"Connected: {len(enabled_teams)} teams enabled")
+                QMessageBox.information(self, 'Success', f'Successfully configured {len(enabled_teams)} TeamSnap teams')
+            else:
+                self.teamsnap_status_label.setText("Connected: No teams enabled")
+                QMessageBox.information(self, 'Success', 'TeamSnap credentials saved, but no teams are enabled')
+            
+            self.fetch_teamsnap_info_button.setEnabled(True)
+            
+            # Reload the config to update UI
+            self.load_settings_into_ui()
+            
+        except Exception as e:
+            logger.error(f"Error saving TeamSnap teams: {e}")
+            self.teamsnap_status_label.setText("Error saving teams")
+            self.fetch_teamsnap_info_button.setEnabled(True)
+            QMessageBox.critical(self, 'Error', f"Error saving TeamSnap teams: {str(e)}")
+
+    def fetch_playmetrics_info(self):
+        """Fetch team information from PlayMetrics using the provided credentials."""
+        # Check if username and password are provided
+        username = self.playmetrics_username.text().strip()
+        password = self.playmetrics_password.text().strip()
+        
+        if not username or not password:
+            QMessageBox.warning(self, 'Missing Credentials', 'Please enter your PlayMetrics username and password.')
+            return
+        
+        # Update status
+        self.playmetrics_status_label.setText("Connecting to PlayMetrics...")
+        self.fetch_playmetrics_info_button.setEnabled(False)
+        
+        # Run in a separate thread to avoid freezing UI
+        def playmetrics_thread():
+            try:
+                # Save username and password to a temporary config
+                temp_config = configparser.ConfigParser()
+                temp_config.add_section('PLAYMETRICS')
+                temp_config.set('PLAYMETRICS', 'enabled', 'true')
+                temp_config.set('PLAYMETRICS', 'username', username)
+                temp_config.set('PLAYMETRICS', 'password', password)
+                
+                # Import here to avoid circular imports
+                from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+                
+                # Initialize PlayMetrics API
+                playmetrics_api = PlayMetricsAPI()
+                playmetrics_api.enabled = True
+                playmetrics_api.username = username
+                playmetrics_api.password = password
+                
+                # Login to PlayMetrics
+                success = playmetrics_api.login()
+                
+                if not success:
+                    def show_error():
+                        self.playmetrics_status_label.setText("Authentication failed")
+                        self.fetch_playmetrics_info_button.setEnabled(True)
+                        QMessageBox.critical(self, 'Error', 'Failed to authenticate with PlayMetrics. Please check your credentials.')
+                    
+                    QTimer.singleShot(0, show_error)
+                    return
+                
+                # Get available teams
+                teams = playmetrics_api.get_available_teams()
+                
+                if not teams:
+                    def show_no_teams():
+                        self.playmetrics_status_label.setText("No teams found")
+                        self.fetch_playmetrics_info_button.setEnabled(True)
+                        QMessageBox.warning(self, 'No Teams', 'Could not find any teams in your PlayMetrics account.')
+                    
+                    QTimer.singleShot(0, show_no_teams)
+                    return
+                
+                def show_team_selection():
+                    # Create dialog for team selection
+                    dialog = QDialog(self)
+                    dialog.setWindowTitle("Select PlayMetrics Teams")
+                    dialog_layout = QVBoxLayout()
+                    
+                    # Add instructions
+                    instructions = QLabel("Select the teams you want to enable for video processing:")
+                    dialog_layout.addWidget(instructions)
+                    
+                    # Create scroll area for teams
+                    scroll = QScrollArea()
+                    scroll.setWidgetResizable(True)
+                    scroll_content = QWidget()
+                    scroll_layout = QVBoxLayout(scroll_content)
+                    
+                    # Create checkboxes for each team
+                    team_checkboxes = []
+                    for team in teams:
+                        checkbox = QCheckBox(f"{team['name']}")
+                        checkbox.setChecked(True)  # Default to checked
+                        checkbox.setProperty("team_data", team)
+                        team_checkboxes.append(checkbox)
+                        scroll_layout.addWidget(checkbox)
+                    
+                    scroll_content.setLayout(scroll_layout)
+                    scroll.setWidget(scroll_content)
+                    dialog_layout.addWidget(scroll)
+                    
+                    # Add buttons
+                    button_layout = QHBoxLayout()
+                    ok_button = QPushButton("OK")
+                    cancel_button = QPushButton("Cancel")
+                    
+                    ok_button.clicked.connect(dialog.accept)
+                    cancel_button.clicked.connect(dialog.reject)
+                    
+                    button_layout.addWidget(ok_button)
+                    button_layout.addWidget(cancel_button)
+                    dialog_layout.addLayout(button_layout)
+                    
+                    dialog.setLayout(dialog_layout)
+                    
+                    # Show dialog and process result
+                    if dialog.exec() == QDialog.DialogCode.Accepted:
+                        # Get selected teams
+                        selected_teams = []
+                        for checkbox in team_checkboxes:
+                            if checkbox.isChecked():
+                                team_data = checkbox.property("team_data")
+                                selected_teams.append(team_data)
+                        
+                        # Save selected teams
+                        self.save_playmetrics_teams(username, password, selected_teams)
+                    else:
+                        # User cancelled
+                        self.playmetrics_status_label.setText("Team selection cancelled")
+                        self.fetch_playmetrics_info_button.setEnabled(True)
+                
+                QTimer.singleShot(0, show_team_selection)
+                
+            except Exception as e:
+                logger.error(f"Error fetching PlayMetrics info: {e}")
+                
+                def show_error():
+                    self.playmetrics_status_label.setText("Error")
+                    self.fetch_playmetrics_info_button.setEnabled(True)
+                    QMessageBox.critical(self, 'Error', f"Error fetching PlayMetrics info: {str(e)}")
+                
+                QTimer.singleShot(0, show_error)
+        
+        # Start thread
+        thread = threading.Thread(target=playmetrics_thread, daemon=True)
+        thread.start()
+    
+    def save_playmetrics_teams(self, username, password, selected_teams):
+        """Save the selected PlayMetrics teams to the config file."""
+        try:
+            # Update status
+            self.playmetrics_status_label.setText("Saving team configurations...")
+            
+            # Remove existing PlayMetrics team configurations
+            for section in list(self.config.sections()):
+                if section.startswith('PLAYMETRICS.') and section != 'PLAYMETRICS':
+                    self.config.remove_section(section)
+            
+            # Add base PlayMetrics section if it doesn't exist
+            if not self.config.has_section('PLAYMETRICS'):
+                self.config.add_section('PLAYMETRICS')
+            
+            # Update base PlayMetrics section
+            self.config['PLAYMETRICS']['enabled'] = 'true'
+            self.config['PLAYMETRICS']['username'] = username
+            self.config['PLAYMETRICS']['password'] = password
+            
+            # Add selected teams
+            enabled_teams = []
+            for team in selected_teams:
+                team_name = team['name']
+                team_id = team['id']
+                calendar_url = team['calendar_url']
+                
+                # Create a sanitized name for the section
+                section_name = f"PLAYMETRICS.{team_name.replace(' ', '_')}"
+                
+                # Add section
+                self.config.add_section(section_name)
+                self.config[section_name]['enabled'] = 'true'
+                self.config[section_name]['team_name'] = team_name
+                self.config[section_name]['team_id'] = team_id
+                if calendar_url:
+                    self.config[section_name]['calendar_url'] = calendar_url
+                
+                # Copy credentials
+                self.config[section_name]['username'] = username
+                self.config[section_name]['password'] = password
+                
+                enabled_teams.append(team_name)
+            
+            # Save config
+            with FileLock(self.config_path):
+                with open(self.config_path, 'w') as f:
+                    self.config.write(f)
+            
+            # Update status
+            if enabled_teams:
+                self.playmetrics_status_label.setText(f"Connected: {len(enabled_teams)} teams enabled")
+                QMessageBox.information(self, 'Success', f'Successfully configured {len(enabled_teams)} PlayMetrics teams')
+            else:
+                self.playmetrics_status_label.setText("Connected: No teams enabled")
+                QMessageBox.information(self, 'Success', 'PlayMetrics credentials saved, but no teams are enabled')
+            
+            self.fetch_playmetrics_info_button.setEnabled(True)
+            
+            # Reload the config to update UI
+            self.load_settings_into_ui()
+            
+        except Exception as e:
+            logger.error(f"Error saving PlayMetrics teams: {e}")
+            self.playmetrics_status_label.setText("Error saving teams")
+            self.fetch_playmetrics_info_button.setEnabled(True)
+            QMessageBox.critical(self, 'Error', f"Error saving PlayMetrics teams: {str(e)}")
+
+    # Methods for managing multiple TeamSnap configurations
+    def add_teamsnap_config(self):
+        """Add a new TeamSnap configuration."""
+        # Clear form fields
+        self.teamsnap_config_name.clear()
+        self.teamsnap_client_id.clear()
+        self.teamsnap_client_secret.clear()
+        self.teamsnap_access_token.clear()
+        self.teamsnap_team_id.clear()
+        self.teamsnap_team_name.clear()
+        self.teamsnap_enabled.setChecked(True)
+        self.teamsnap_status_label.setText("Not connected")
+        
+        # Deselect any selected item in the list
+        self.teamsnap_configs_list.clearSelection()
+    
+    def remove_teamsnap_config(self):
+        """Remove the selected TeamSnap configuration."""
+        selected_items = self.teamsnap_configs_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select a configuration to remove.")
+            return
+        
+        selected_item = selected_items[0]
+        config_name = selected_item.text()
+        
+        # Confirm deletion
+        reply = QMessageBox.question(self, 'Confirm Deletion', 
+                                     f"Are you sure you want to delete the configuration '{config_name}'?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Remove from list widget
+            row = self.teamsnap_configs_list.row(selected_item)
+            self.teamsnap_configs_list.takeItem(row)
+            
+            # Remove from config
+            section_name = f"TEAMSNAP.{config_name}"
+            if section_name in self.config:
+                self.config.remove_section(section_name)
+            
+            # Save config
+            try:
+                with FileLock(self.config_path):
+                    with open(self.config_path, 'w') as f:
+                        self.config.write(f)
+            except Exception as e:
+                logger.error(f"Error saving config after removing TeamSnap configuration: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+    
+    def load_selected_teamsnap_config(self):
+        """Load the selected TeamSnap configuration into the form."""
+        selected_items = self.teamsnap_configs_list.selectedItems()
+        if not selected_items:
+            return
+        
+        config_name = selected_items[0].text()
+        section_name = f"TEAMSNAP.{config_name}"
+        
+        if section_name in self.config:
+            self.teamsnap_config_name.setText(config_name)
+            self.teamsnap_enabled.setChecked(self.config.getboolean(section_name, 'enabled', fallback=True))
+            self.teamsnap_client_id.setText(self.config.get(section_name, 'client_id', fallback=''))
+            self.teamsnap_client_secret.setText(self.config.get(section_name, 'client_secret', fallback=''))
+            self.teamsnap_access_token.setText(self.config.get(section_name, 'access_token', fallback=''))
+            self.teamsnap_team_id.setText(self.config.get(section_name, 'team_id', fallback=''))
+            self.teamsnap_team_name.setText(self.config.get(section_name, 'team_name', fallback=''))
+            
+            # Update status label
+            team_name = self.config.get(section_name, 'team_name', fallback='')
+            if team_name:
+                self.teamsnap_status_label.setText(f"Connected: {team_name}")
+            else:
+                self.teamsnap_status_label.setText("Not connected")
+    
+    def save_teamsnap_config(self):
+        """Save the current TeamSnap configuration."""
+        config_name = self.teamsnap_config_name.text().strip()
+        
+        if not config_name:
+            QMessageBox.warning(self, "Missing Name", "Please enter a name for this configuration.")
+            return
+        
+        # Create or update section
+        section_name = f"TEAMSNAP.{config_name}"
+        if section_name not in self.config:
+            self.config.add_section(section_name)
+        
+        # Save values
+        self.config[section_name]['enabled'] = str(self.teamsnap_enabled.isChecked())
+        self.config[section_name]['client_id'] = self.teamsnap_client_id.text()
+        self.config[section_name]['client_secret'] = self.teamsnap_client_secret.text()
+        self.config[section_name]['access_token'] = self.teamsnap_access_token.text()
+        self.config[section_name]['team_id'] = self.teamsnap_team_id.text()
+        self.config[section_name]['team_name'] = self.teamsnap_team_name.text()
+        
+        # Save config
+        try:
+            with FileLock(self.config_path):
+                with open(self.config_path, 'w') as f:
+                    self.config.write(f)
+            
+            # Update list widget
+            found = False
+            for i in range(self.teamsnap_configs_list.count()):
+                if self.teamsnap_configs_list.item(i).text() == config_name:
+                    found = True
+                    break
+            
+            if not found:
+                self.teamsnap_configs_list.addItem(config_name)
+            
+            QMessageBox.information(self, "Success", f"Configuration '{config_name}' saved successfully.")
+        except Exception as e:
+            logger.error(f"Error saving TeamSnap configuration: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+    
+    # Methods for managing multiple PlayMetrics configurations
+    def add_playmetrics_config(self):
+        """Add a new PlayMetrics configuration."""
+        # Clear form fields
+        self.playmetrics_config_name.clear()
+        self.playmetrics_username.clear()
+        self.playmetrics_password.clear()
+        self.playmetrics_team_id.clear()
+        self.playmetrics_team_name.clear()
+        self.playmetrics_enabled.setChecked(True)
+        self.playmetrics_status_label.setText("Not connected")
+        
+        # Deselect any selected item in the list
+        self.playmetrics_configs_list.clearSelection()
+    
+    def remove_playmetrics_config(self):
+        """Remove the selected PlayMetrics configuration."""
+        selected_items = self.playmetrics_configs_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select a configuration to remove.")
+            return
+        
+        selected_item = selected_items[0]
+        config_name = selected_item.text()
+        
+        # Confirm deletion
+        reply = QMessageBox.question(self, 'Confirm Deletion', 
+                                     f"Are you sure you want to delete the configuration '{config_name}'?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Remove from list widget
+            row = self.playmetrics_configs_list.row(selected_item)
+            self.playmetrics_configs_list.takeItem(row)
+            
+            # Remove from config
+            section_name = f"PLAYMETRICS.{config_name}"
+            if section_name in self.config:
+                self.config.remove_section(section_name)
+            
+            # Save config
+            try:
+                with FileLock(self.config_path):
+                    with open(self.config_path, 'w') as f:
+                        self.config.write(f)
+            except Exception as e:
+                logger.error(f"Error saving config after removing PlayMetrics configuration: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+    
+    def load_selected_playmetrics_config(self):
+        """Load the selected PlayMetrics configuration into the form."""
+        selected_items = self.playmetrics_configs_list.selectedItems()
+        if not selected_items:
+            return
+        
+        config_name = selected_items[0].text()
+        section_name = f"PLAYMETRICS.{config_name}"
+        
+        if section_name in self.config:
+            self.playmetrics_config_name.setText(config_name)
+            self.playmetrics_enabled.setChecked(self.config.getboolean(section_name, 'enabled', fallback=True))
+            self.playmetrics_username.setText(self.config.get(section_name, 'username', fallback=''))
+            self.playmetrics_password.setText(self.config.get(section_name, 'password', fallback=''))
+            self.playmetrics_team_id.setText(self.config.get(section_name, 'team_id', fallback=''))
+            self.playmetrics_team_name.setText(self.config.get(section_name, 'team_name', fallback=''))
+            
+            # Update status label
+            team_name = self.config.get(section_name, 'team_name', fallback='')
+            if team_name:
+                self.playmetrics_status_label.setText(f"Connected: {team_name}")
+            else:
+                self.playmetrics_status_label.setText("Not connected")
+    
+    def save_playmetrics_config(self):
+        """Save the current PlayMetrics configuration."""
+        config_name = self.playmetrics_config_name.text().strip()
+        
+        if not config_name:
+            QMessageBox.warning(self, "Missing Name", "Please enter a name for this configuration.")
+            return
+        
+        # Create or update section
+        section_name = f"PLAYMETRICS.{config_name}"
+        if section_name not in self.config:
+            self.config.add_section(section_name)
+        
+        # Save values
+        self.config[section_name]['enabled'] = str(self.playmetrics_enabled.isChecked())
+        self.config[section_name]['username'] = self.playmetrics_username.text()
+        self.config[section_name]['password'] = self.playmetrics_password.text()
+        self.config[section_name]['team_id'] = self.playmetrics_team_id.text()
+        self.config[section_name]['team_name'] = self.playmetrics_team_name.text()
+        
+        # Save config
+        try:
+            with FileLock(self.config_path):
+                with open(self.config_path, 'w') as f:
+                    self.config.write(f)
+            
+            # Update list widget
+            found = False
+            for i in range(self.playmetrics_configs_list.count()):
+                if self.playmetrics_configs_list.item(i).text() == config_name:
+                    found = True
+                    break
+            
+            if not found:
+                self.playmetrics_configs_list.addItem(config_name)
+            
+            QMessageBox.information(self, "Success", f"Configuration '{config_name}' saved successfully.")
+        except Exception as e:
+            logger.error(f"Error saving PlayMetrics configuration: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
 
 def main():
     """Main entry point for the standalone configuration UI."""

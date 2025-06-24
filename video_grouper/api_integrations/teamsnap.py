@@ -323,4 +323,102 @@ class TeamSnapAPI:
                 logger.error(f"Error parsing game date: {e}")
         
         logger.info(f"Populated match info: {match_info}")
-        return True 
+        return True
+    
+    def get_access_token(self) -> bool:
+        """
+        Get an OAuth access token using client credentials.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.enabled:
+            logger.warning("TeamSnap API is not enabled")
+            return False
+            
+        client_id = self.config.get('client_id', '')
+        client_secret = self.config.get('client_secret', '')
+        
+        if not client_id or not client_secret:
+            logger.error("TeamSnap client ID or secret is missing")
+            return False
+            
+        # OAuth token endpoint
+        token_url = "https://auth.teamsnap.com/oauth/token"
+        
+        # Request body
+        data = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'grant_type': 'client_credentials',
+            'scope': 'read'
+        }
+        
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        try:
+            logger.info("Requesting TeamSnap access token")
+            response = requests.post(token_url, data=data, headers=headers)
+            response.raise_for_status()
+            
+            token_data = response.json()
+            self.access_token = token_data.get('access_token', '')
+            
+            if self.access_token:
+                logger.info("Successfully obtained TeamSnap access token")
+                # Discover API endpoints with the new token
+                self._discover_api_endpoints()
+                return True
+            else:
+                logger.error("No access token in response")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error getting TeamSnap access token: {e}")
+            return False
+            
+    def get_teams(self) -> List[Dict]:
+        """
+        Get all teams accessible to the user.
+        
+        Returns:
+            List of team dictionaries, or empty list if request failed
+        """
+        if not self.enabled or not self.access_token:
+            logger.warning("TeamSnap API is not enabled or access token is missing")
+            return []
+            
+        # Check if we have the teams endpoint
+        if 'teams' not in self.endpoints:
+            logger.error("Teams endpoint not found")
+            return []
+            
+        teams_url = self.endpoints['teams']
+        
+        logger.debug(f"Fetching teams from {teams_url}")
+        
+        teams_data = self._make_api_request(teams_url)
+        
+        if not teams_data or 'collection' not in teams_data or 'items' not in teams_data['collection']:
+            logger.error("Failed to fetch teams")
+            return []
+            
+        # Extract teams from the response
+        teams = []
+        for item in teams_data['collection']['items']:
+            team_data = self._extract_data_from_item(item)
+            
+            # Add team ID from href
+            team_href = self._find_link_in_item(item, 'self')
+            if team_href:
+                team_id = team_href.split('/')[-1]
+                team_data['id'] = team_id
+                
+            # Only include active teams
+            if team_data.get('is_active', False):
+                teams.append(team_data)
+                
+        logger.info(f"Found {len(teams)} active teams")
+        return teams 
