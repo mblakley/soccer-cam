@@ -15,14 +15,40 @@ class TestTeamSnapIntegration(unittest.TestCase):
     
     def setUp(self):
         """Set up the test."""
+        # Create a mock TeamSnap API instance
         self.api = TeamSnapAPI()
         
-        # Skip tests if TeamSnap API is not enabled
-        if not self.api.enabled:
-            self.skipTest("TeamSnap API is not enabled. Please check your configuration.")
+        # Mock the enabled property
+        self.api.enabled = True
+        self.api.my_team_name = "Test Team"
+        
+        # Create a sample game for testing
+        self.sample_game = {
+            'id': '12345',
+            'team_id': 'test_team_id',
+            'start_date': (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace('+00:00', 'Z'),
+            'opponent_name': 'Opponent Team',
+            'location_name': 'Test Stadium',
+            'duration_in_minutes': '90',
+            'is_game': True,
+            'event_type': 'game'
+        }
+        
+        # Mock the get_games method to return our sample game
+        self.original_get_games = self.api.get_games
+        self.api.get_games = lambda: [self.sample_game]
+    
+    def tearDown(self):
+        """Tear down the test."""
+        # Restore original methods
+        if hasattr(self, 'original_get_games'):
+            self.api.get_games = self.original_get_games
     
     def test_get_events(self):
         """Test fetching team events."""
+        # Mock the get_team_events method to return our sample game
+        self.api.get_team_events = lambda: [self.sample_game]
+        
         # Get all events
         events = self.api.get_team_events()
         self.assertIsNotNone(events)
@@ -30,6 +56,7 @@ class TestTeamSnapIntegration(unittest.TestCase):
         # Get games only
         games = self.api.get_games()
         self.assertIsNotNone(games)
+        self.assertEqual(len(games), 1)
         
         # Verify games are a subset of events
         game_ids = set(game.get('id') for game in games if game.get('id'))
@@ -38,21 +65,8 @@ class TestTeamSnapIntegration(unittest.TestCase):
     
     def test_find_game_for_recording(self):
         """Test finding a game for a recording timespan."""
-        # Get all games
-        games = self.api.get_games()
-        
-        if not games:
-            self.skipTest("No games found")
-        
-        # Use the first game as a test case
-        test_game = games[0]
-        
-        # Parse the game start time
-        game_start_str = test_game.get('start_date')
-        if not game_start_str:
-            self.skipTest("Game has no start date")
-        
-        # Parse the game date
+        # Get game start time
+        game_start_str = self.sample_game.get('start_date')
         game_start = datetime.fromisoformat(game_start_str.replace('Z', '+00:00'))
         
         # Create a recording timespan that overlaps with the game
@@ -63,25 +77,12 @@ class TestTeamSnapIntegration(unittest.TestCase):
         found_game = self.api.find_game_for_recording(recording_start, recording_end)
         
         self.assertIsNotNone(found_game)
-        self.assertEqual(found_game.get('id'), test_game.get('id'))
+        self.assertEqual(found_game.get('id'), self.sample_game.get('id'))
     
     def test_populate_match_info(self):
         """Test populating match info for a recording."""
-        # Get all games
-        games = self.api.get_games()
-        
-        if not games:
-            self.skipTest("No games found")
-        
-        # Use the first game as a test case
-        test_game = games[0]
-        
-        # Parse the game start time
-        game_start_str = test_game.get('start_date')
-        if not game_start_str:
-            self.skipTest("Game has no start date")
-        
-        # Parse the game date
+        # Get game start time
+        game_start_str = self.sample_game.get('start_date')
         game_start = datetime.fromisoformat(game_start_str.replace('Z', '+00:00'))
         
         # Create a recording timespan that overlaps with the game

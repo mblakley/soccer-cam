@@ -1068,23 +1068,194 @@ class VideoGrouperApp:
 
     def _initialize_teamsnap(self):
         """Initialize the TeamSnap API integration."""
+        logger.info("Initializing TeamSnap API integration")
         config_path = os.path.join(self.storage_path, "config.ini")
-        self.teamsnap_api = TeamSnapAPI(config_path)
-        if self.teamsnap_api.enabled:
-            logger.info("TeamSnap API integration enabled")
-        else:
-            logger.info("TeamSnap API integration disabled")
+        
+        # Check for team configurations (TEAMSNAP.TEAM.*)
+        team_configs = [section for section in self.config.sections() if section.startswith('TEAMSNAP.TEAM.')]
+        
+        # Initialize the list of TeamSnap API instances
+        self.teamsnap_apis = []
+        
+        # If no team configurations are found, use the legacy configuration
+        if not team_configs:
+            if self.config.has_section('TEAMSNAP') and self.config.getboolean('TEAMSNAP', 'enabled', fallback=False):
+                logger.info("Using legacy TeamSnap configuration")
+                self.teamsnap_api = TeamSnapAPI(config_path)
+                if self.teamsnap_api.enabled:
+                    self.teamsnap_apis.append(self.teamsnap_api)
+            else:
+                logger.info("TeamSnap API integration disabled - no configuration found")
+                self.teamsnap_api = None
+            return
             
-    def _initialize_ntfy(self):
-        """Initialize the NTFY API integration."""
-        logger.info("Initializing NTFY API integration")
-        self.ntfy_api = NtfyAPI(self.config)
-        logger.info(f"NTFY API enabled: {self.ntfy_api.enabled}, topic: {self.ntfy_api.topic}")
-        if self.ntfy_api and self.ntfy_api.enabled:
-            logger.info("NTFY API integration enabled")
-            asyncio.create_task(self.ntfy_api.initialize())
+        # Process each enabled team configuration
+        for section in team_configs:
+            if self.config.getboolean(section, 'enabled', fallback=False):
+                logger.info(f"Initializing TeamSnap team configuration: {section}")
+                
+                # Create a temporary config for this team
+                temp_config = configparser.ConfigParser()
+                temp_config.add_section('TEAMSNAP')
+                
+                # First, copy base TeamSnap settings (credentials, etc.)
+                if self.config.has_section('TEAMSNAP'):
+                    for key, value in self.config['TEAMSNAP'].items():
+                        if key not in ['team_id', 'team_name']:  # Skip team-specific settings
+                            temp_config['TEAMSNAP'][key] = value
+                
+                # Then, copy team-specific settings
+                temp_config['TEAMSNAP']['enabled'] = 'true'
+                for key, value in self.config[section].items():
+                    if key in ['team_id', 'team_name']:  # Only copy team-specific settings
+                        temp_config['TEAMSNAP'][key] = value
+                
+                # Save the temporary config to a file
+                temp_config_path = os.path.join(self.storage_path, f"temp_teamsnap_config_{section}.ini")
+                with open(temp_config_path, 'w') as f:
+                    temp_config.write(f)
+                
+                # Initialize TeamSnap API with the temporary config
+                teamsnap_api = TeamSnapAPI(temp_config_path)
+                
+                # Clean up the temporary config file
+                try:
+                    os.remove(temp_config_path)
+                except:
+                    pass
+                    
+                if teamsnap_api.enabled:
+                    logger.info(f"TeamSnap API integration enabled for {section}")
+                    self.teamsnap_apis.append(teamsnap_api)
+                else:
+                    logger.info(f"TeamSnap API integration disabled for {section}")
+        
+        # Set the primary TeamSnap API instance (for backward compatibility)
+        if self.teamsnap_apis:
+            self.teamsnap_api = self.teamsnap_apis[0]
         else:
-            logger.info("NTFY API integration disabled")
+            logger.info("No enabled TeamSnap team configurations found")
+            self.teamsnap_api = None
+
+    def _initialize_playmetrics(self):
+        """Initialize PlayMetrics integration."""
+        logger.info("Initializing PlayMetrics integration")
+
+        # Check for team configurations (PLAYMETRICS.TEAM.*)
+        team_configs = [section for section in self.config.sections() if section.startswith('PLAYMETRICS.')]
+        
+        # Initialize list to store PlayMetrics API instances
+        self.playmetrics_apis = []
+        
+        # First check if we have any team-specific configurations
+        if team_configs:
+            for section in team_configs:
+                # Skip if this is the base PLAYMETRICS section
+                if section == 'PLAYMETRICS':
+                    continue
+                    
+                # Check if this team is enabled
+                if not self.config.getboolean(section, 'enabled', fallback=False):
+                    logger.info(f"PlayMetrics team configuration {section} is disabled, skipping")
+                    continue
+                
+                logger.info(f"Initializing PlayMetrics team: {section}")
+                
+                # Create a temporary config for this team
+                temp_config = configparser.ConfigParser()
+                temp_config.add_section('PLAYMETRICS')
+                
+                # First, copy base PlayMetrics settings (credentials, etc.)
+                if self.config.has_section('PLAYMETRICS'):
+                    for key, value in self.config['PLAYMETRICS'].items():
+                        if key not in ['team_id', 'team_name']:  # Skip team-specific settings
+                            temp_config['PLAYMETRICS'][key] = value
+                
+                # Then, override with team-specific settings
+                temp_config['PLAYMETRICS']['enabled'] = 'true'
+                for key, value in self.config[section].items():
+                    if key in ['team_id', 'team_name', 'username', 'password']:  # Only copy team-specific settings
+                        temp_config['PLAYMETRICS'][key] = value
+                
+                # Save the temporary config to a file
+                temp_config_path = os.path.join(self.storage_path, f"temp_playmetrics_{section}_config.ini")
+                os.makedirs(os.path.dirname(temp_config_path), exist_ok=True)
+                with open(temp_config_path, 'w') as f:
+                    temp_config.write(f)
+                
+                # Initialize PlayMetrics API with the temporary config
+                playmetrics_api = PlayMetricsAPI(temp_config_path)
+                
+                # Clean up the temporary config file
+                try:
+                    os.remove(temp_config_path)
+                except Exception as e:
+                    logger.warning(f"Could not remove temporary config file: {e}")
+                
+                # Check if enabled
+                if not playmetrics_api or not playmetrics_api.enabled:
+                    logger.error(f"PlayMetrics team {section} is not properly configured")
+                    continue
+                    
+                # Login to PlayMetrics
+                if not playmetrics_api.login():
+                    logger.error(f"Failed to login to PlayMetrics for team {section}")
+                    continue
+                    
+                logger.info(f"PlayMetrics team {section} initialized successfully")
+                self.playmetrics_apis.append(playmetrics_api)
+        
+        # If no team configs found or no teams were successfully initialized, try legacy approach
+        if not self.playmetrics_apis and self.config.has_section('PLAYMETRICS') and self.config.getboolean('PLAYMETRICS', 'enabled', fallback=False):
+            logger.info("No team-specific PlayMetrics configurations found, using legacy configuration")
+            
+            # Create a temporary config for PlayMetrics
+            temp_config = configparser.ConfigParser()
+            temp_config.add_section('PLAYMETRICS')
+            
+            # Copy all PlayMetrics settings
+            for key, value in self.config['PLAYMETRICS'].items():
+                temp_config['PLAYMETRICS'][key] = value
+            
+            # Save the temporary config to a file
+            temp_config_path = os.path.join(self.storage_path, "temp_playmetrics_config.ini")
+            os.makedirs(os.path.dirname(temp_config_path), exist_ok=True)
+            with open(temp_config_path, 'w') as f:
+                temp_config.write(f)
+            
+            # Initialize PlayMetrics API with the temporary config
+            self.playmetrics_api = PlayMetricsAPI(temp_config_path)
+            
+            # Clean up the temporary config file
+            try:
+                os.remove(temp_config_path)
+            except Exception as e:
+                logger.warning(f"Could not remove temporary config file: {e}")
+            
+            # Check if enabled
+            if not self.playmetrics_api or not self.playmetrics_api.enabled:
+                logger.error("PlayMetrics integration is not properly configured")
+                self.playmetrics_api = None
+                return
+                
+            # Login to PlayMetrics
+            if not self.playmetrics_api.login():
+                logger.error("Failed to login to PlayMetrics")
+                self.playmetrics_api = None
+                return
+                
+            # Add to the list for consistent access
+            self.playmetrics_apis.append(self.playmetrics_api)
+            
+            logger.info("PlayMetrics integration initialized successfully (legacy mode)")
+        
+        # Set initialization flag
+        self._playmetrics_initialized = len(self.playmetrics_apis) > 0
+        
+        if self._playmetrics_initialized:
+            logger.info(f"PlayMetrics integration initialized with {len(self.playmetrics_apis)} teams")
+        else:
+            logger.info("PlayMetrics integration not initialized - no valid configurations found")
 
     async def _process_combined_directory(self, group_dir, combined_path, force=False):
         """Process a directory with a combined video file."""
@@ -1106,18 +1277,32 @@ class VideoGrouperApp:
         # Get the recording date from the first file
         first_file = files[0]
         recording_date = first_file.date_time
+        recording_start = first_file.start_time
+        last_file = files[-1]
+        recording_end = last_file.end_time or recording_date
         
         # Collect games from both TeamSnap and PlayMetrics
         games = []
         
         # Try to get game info from TeamSnap
-        if self.teamsnap_api and self.teamsnap_api.enabled:
-            # Initialize TeamSnap if needed
-            if not self._teamsnap_initialized:
-                self._initialize_teamsnap()
-                self._teamsnap_initialized = True
-                
-            teamsnap_game = self.teamsnap_api.find_game_for_recording(recording_date)
+        if not self._teamsnap_initialized:
+            self._initialize_teamsnap()
+            self._teamsnap_initialized = True
+        
+        # Check all enabled TeamSnap teams
+        if hasattr(self, 'teamsnap_apis') and self.teamsnap_apis:
+            for teamsnap_api in self.teamsnap_apis:
+                if teamsnap_api and teamsnap_api.enabled:
+                    teamsnap_game = teamsnap_api.find_game_for_recording(recording_start, recording_end)
+                    if teamsnap_game:
+                        # Add source information and team name
+                        teamsnap_game['source'] = 'TeamSnap'
+                        teamsnap_game['team_name'] = teamsnap_api.my_team_name
+                        games.append(teamsnap_game)
+                        logger.info(f"Found TeamSnap game for team {teamsnap_api.my_team_name}: {teamsnap_game.get('team_name', 'Unknown')} vs {teamsnap_game.get('opponent_name', 'Unknown')}")
+        # Fallback to legacy TeamSnap API instance
+        elif self.teamsnap_api and self.teamsnap_api.enabled:
+            teamsnap_game = self.teamsnap_api.find_game_for_recording(recording_start, recording_end)
             if teamsnap_game:
                 # Add source information
                 teamsnap_game['source'] = 'TeamSnap'
@@ -1128,12 +1313,19 @@ class VideoGrouperApp:
         if not self._playmetrics_initialized:
             self._initialize_playmetrics()
                 
-        if self.playmetrics_api and self.playmetrics_api.enabled:
-            # Get the recording start and end times
-            recording_start = first_file.start_time
-            last_file = files[-1]
-            recording_end = last_file.end_time or recording_date
-            
+        # Check all enabled PlayMetrics teams
+        if hasattr(self, 'playmetrics_apis') and self.playmetrics_apis:
+            for playmetrics_api in self.playmetrics_apis:
+                if playmetrics_api and playmetrics_api.enabled:
+                    playmetrics_game = playmetrics_api.find_game_for_recording(recording_start, recording_end)
+                    if playmetrics_game:
+                        # Add source information and team name
+                        playmetrics_game['source'] = 'PlayMetrics'
+                        playmetrics_game['team_name'] = playmetrics_api.team_name
+                        games.append(playmetrics_game)
+                        logger.info(f"Found PlayMetrics game for team {playmetrics_api.team_name}: {playmetrics_game.get('title', 'Unknown')} vs {playmetrics_game.get('opponent', 'Unknown')}")
+        # Fallback to legacy PlayMetrics API instance
+        elif self.playmetrics_api and self.playmetrics_api.enabled:
             playmetrics_game = self.playmetrics_api.find_game_for_recording(recording_start, recording_end)
             if playmetrics_game:
                 # Add source information
@@ -1151,178 +1343,75 @@ class VideoGrouperApp:
             
             return False
             
-        # If we found exactly one game, use it
-        if len(games) == 1:
-            game = games[0]
-            source = game.get('source', 'Unknown')
-            
-            if source == 'TeamSnap':
-                # Create team info dictionary for TeamSnap
-                team_info = {
-                    'team_name': game.get('team_name', 'Our Team'),
-                    'opponent_name': game.get('opponent_name', 'Opponent'),
-                    'location': game.get('location', 'Unknown Location')
-                }
-                
-                # Update match info
-                MatchInfo.update_team_info(group_dir, team_info)
-                logger.info(f"Updated match info with TeamSnap data: {team_info}")
-                
-                # Add to processed set
-                if not hasattr(self, '_teamsnap_processed_dirs'):
-                    self._teamsnap_processed_dirs = set()
-                self._teamsnap_processed_dirs.add(group_dir)
-                
-                return True
-                
-            elif source == 'PlayMetrics':
-                # Create team info dictionary for PlayMetrics
-                team_info = {
-                    'team_name': game.get('title', 'Our Team'),
-                    'opponent_name': game.get('opponent', 'Opponent'),
-                    'location': game.get('location', 'Unknown Location'),
-                    'date': game.get('start_time').strftime('%Y-%m-%d'),
-                    'time': game.get('start_time').strftime('%H:%M'),
-                    'description': game.get('description', '')
-                }
-                
-                # Update match info
-                MatchInfo.update_team_info(group_dir, team_info)
-                logger.info(f"Updated match info with PlayMetrics data: {team_info}")
-                
-                # Add to processed set
-                if not hasattr(self, '_playmetrics_processed_dirs'):
-                    self._playmetrics_processed_dirs = set()
-                self._playmetrics_processed_dirs.add(group_dir)
-                
-                return True
+        # If we found multiple games, select the most likely match
+        # For now, we'll just use the first one found
+        # TODO: Implement a better selection algorithm if needed
+        game = games[0]
+        source = game.get('source', 'Unknown')
         
-        # If we found multiple games (conflict), let the user choose via NTFY
-        elif len(games) > 1:
-            logger.info(f"Found {len(games)} games for recording date {recording_date}, asking user to choose")
+        if source == 'TeamSnap':
+            # Create team info dictionary for TeamSnap
+            match_info = {
+                'home_team': game.get('team_name', self.teamsnap_api.my_team_name if self.teamsnap_api else 'Home Team'),
+                'away_team': game.get('opponent_name', ''),
+                'location': game.get('location_name', ''),
+                'date': '',
+                'time': ''
+            }
             
-            # Initialize NTFY if needed
-            if not self._ntfy_initialized:
-                self._initialize_ntfy()
-                self._ntfy_initialized = True
-                
-            if self.ntfy_api and self.ntfy_api.enabled:
-                # Ask user to resolve the conflict
-                selected_game = await self.ntfy_api.ask_resolve_game_conflict(
-                    combined_video_path=combined_path,
-                    group_dir=group_dir,
-                    game_options=games
-                )
-                
-                if selected_game:
-                    source = selected_game.get('source', 'Unknown')
-                    logger.info(f"User selected game from {source}")
-                    
-                    # Create team info dictionary
-                    if source == 'TeamSnap':
-                        team_info = {
-                            'team_name': selected_game.get('team_name', 'Our Team'),
-                            'opponent_name': selected_game.get('opponent_name', 'Opponent'),
-                            'location': selected_game.get('location', 'Unknown Location')
-                        }
-                    elif source == 'PlayMetrics':
-                        team_info = {
-                            'team_name': selected_game.get('title', 'Our Team'),
-                            'opponent_name': selected_game.get('opponent', 'Opponent'),
-                            'location': selected_game.get('location', 'Unknown Location'),
-                            'date': selected_game.get('start_time').strftime('%Y-%m-%d'),
-                            'time': selected_game.get('start_time').strftime('%H:%M'),
-                            'description': selected_game.get('description', '')
-                        }
-                    else:
-                        team_info = {
-                            'team_name': selected_game.get('team_name', 'Our Team'),
-                            'opponent_name': selected_game.get('opponent_name', selected_game.get('opponent', 'Opponent')),
-                            'location': selected_game.get('location', 'Unknown Location')
-                        }
-                    
-                    # Update match info
-                    MatchInfo.update_team_info(group_dir, team_info)
-                    logger.info(f"Updated match info with user-selected game data: {team_info}")
-                    
-                    # Add to processed sets
-                    if source == 'TeamSnap':
-                        if not hasattr(self, '_teamsnap_processed_dirs'):
-                            self._teamsnap_processed_dirs = set()
-                        self._teamsnap_processed_dirs.add(group_dir)
-                    elif source == 'PlayMetrics':
-                        if not hasattr(self, '_playmetrics_processed_dirs'):
-                            self._playmetrics_processed_dirs = set()
-                        self._playmetrics_processed_dirs.add(group_dir)
-                    
-                    return True
-                else:
-                    logger.warning(f"User did not select a game, falling back to NTFY for manual input")
-                    await self._process_combined_with_ntfy(group_dir, combined_path, force)
-                    return False
-            else:
-                # If NTFY is not enabled, use the first game found
-                logger.warning(f"NTFY not enabled to resolve game conflict, using first game found")
-                game = games[0]
-                source = game.get('source', 'Unknown')
-                
-                # Create team info dictionary
-                if source == 'TeamSnap':
-                    team_info = {
-                        'team_name': game.get('team_name', 'Our Team'),
-                        'opponent_name': game.get('opponent_name', 'Opponent'),
-                        'location': game.get('location', 'Unknown Location')
-                    }
-                elif source == 'PlayMetrics':
-                    team_info = {
-                        'team_name': game.get('title', 'Our Team'),
-                        'opponent_name': game.get('opponent', 'Opponent'),
-                        'location': game.get('location', 'Unknown Location'),
-                        'date': game.get('start_time').strftime('%Y-%m-%d'),
-                        'time': game.get('start_time').strftime('%H:%M'),
-                        'description': game.get('description', '')
-                    }
-                else:
-                    team_info = {
-                        'team_name': game.get('team_name', 'Our Team'),
-                        'opponent_name': game.get('opponent_name', game.get('opponent', 'Opponent')),
-                        'location': game.get('location', 'Unknown Location')
-                    }
-                
-                # Update match info
-                MatchInfo.update_team_info(group_dir, team_info)
-                logger.info(f"Updated match info with first game data: {team_info}")
-                
-                return True
-                
-        return False
+            # Parse the game date
+            game_start_str = game.get('start_date')
+            if game_start_str:
+                try:
+                    game_start = datetime.fromisoformat(game_start_str.replace('Z', '+00:00'))
+                    match_info['date'] = game_start.strftime('%Y-%m-%d')
+                    match_info['time'] = game_start.strftime('%H:%M')
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error parsing game date: {e}")
+        elif source == 'PlayMetrics':
+            # Create team info dictionary for PlayMetrics
+            match_info = {
+                'home_team': self.playmetrics_api.team_name if self.playmetrics_api else 'Home Team',
+                'away_team': game.get('opponent', ''),
+                'location': game.get('location', ''),
+                'date': '',
+                'time': ''
+            }
+            
+            # Parse the game date
+            game_start = game.get('start_time')
+            if game_start:
+                try:
+                    match_info['date'] = game_start.strftime('%Y-%m-%d')
+                    match_info['time'] = game_start.strftime('%H:%M')
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error parsing game date: {e}")
+        
+        # Save match info to file
+        match_info_path = os.path.join(group_dir, 'match_info.ini')
+        match_info_config = configparser.ConfigParser()
+        match_info_config['MATCH'] = match_info
+        
+        with open(match_info_path, 'w') as f:
+            match_info_config.write(f)
+            
+        logger.info(f"Saved match info to {match_info_path}: {match_info}")
+        
+        # Process with the match info
+        await self._handle_trim_task(group_dir, MatchInfo(**match_info))
+        
+        return True
 
-    def _initialize_playmetrics(self):
-        """Initialize PlayMetrics integration."""
-        logger.info("Initializing PlayMetrics integration")
-        
-        # Check if PlayMetrics integration is enabled
-        if not self.config.has_section('PLAYMETRICS') or not self.config.getboolean("PLAYMETRICS", "enabled", fallback=False):
-            logger.info("PlayMetrics integration is disabled")
-            return
-            
-        config_path = os.path.join("shared_data", "config.ini")
-        self.playmetrics_api = PlayMetricsAPI(config_path)
-        
-        # Check if enabled
-        if not self.playmetrics_api.enabled:
-            logger.error("PlayMetrics integration is not properly configured")
-            self.playmetrics_api = None
-            return
-            
-        # Login to PlayMetrics
-        if not self.playmetrics_api.login():
-            logger.error("Failed to login to PlayMetrics")
-            self.playmetrics_api = None
-            return
-            
-        logger.info("PlayMetrics integration initialized successfully")
-        self._playmetrics_initialized = True
+    def _initialize_ntfy(self):
+        """Initialize the NTFY API integration."""
+        logger.info("Initializing NTFY API integration")
+        self.ntfy_api = NtfyAPI(self.config)
+        logger.info(f"NTFY API enabled: {self.ntfy_api.enabled}, topic: {self.ntfy_api.topic}")
+        if self.ntfy_api and self.ntfy_api.enabled:
+            logger.info("NTFY API integration enabled")
+            asyncio.create_task(self.ntfy_api.initialize())
+        else:
+            logger.info("NTFY API integration disabled")
 
     async def _process_combined_with_ntfy(self, group_dir: str, combined_path: str, force=False):
         """Process a combined video with NTFY to determine game start and end times."""

@@ -1,8 +1,8 @@
 import os
-import pytest
 import tempfile
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
+from selenium.webdriver.common.by import By
 
 from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
 
@@ -63,8 +63,24 @@ foo = bar
         # Mock the webdriver
         mock_driver = MagicMock()
         mock_webdriver.Chrome.return_value = mock_driver
+        mock_options = MagicMock()
+        mock_webdriver.ChromeOptions.return_value = mock_options
         
-        # Mock successful login
+        # Set up find_element behavior for CSS_SELECTOR
+        def mock_find_element(by, value):
+            mock_element = MagicMock()
+            if by == By.CSS_SELECTOR:
+                if value in ["input[type='email']", "#username", "#email"]:
+                    return mock_element
+                elif value in ["input[type='password']", "#password"]:
+                    return mock_element
+            elif by == By.XPATH and value == "//button[@type='submit']":
+                return mock_element
+            raise Exception(f"Element not found: {by}, {value}")
+            
+        mock_driver.find_element.side_effect = mock_find_element
+        
+        # Mock successful login redirect
         mock_driver.current_url = "https://playmetrics.com/dashboard"
         
         # Create a temporary config file

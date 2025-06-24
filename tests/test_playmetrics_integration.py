@@ -1,14 +1,11 @@
 import os
 import pytest
 import configparser
-from unittest.mock import patch, AsyncMock, MagicMock
-from datetime import datetime, timedelta, timezone
-import tempfile
-
-from video_grouper.api_integrations.playmetrics.scraper import PlayMetricsScraper
-from video_grouper.models import MatchInfo
+from unittest.mock import patch, MagicMock, mock_open
+from datetime import datetime, timezone, timedelta
 from video_grouper.video_grouper import VideoGrouperApp
 from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+import tempfile
 
 @pytest.fixture
 def mock_config():
@@ -23,27 +20,43 @@ def mock_config():
     return config
 
 @pytest.fixture
-def playmetrics_scraper(mock_config):
-    """Create a PlayMetricsScraper instance with mock configuration."""
-    return PlayMetricsScraper(mock_config)
+def playmetrics_api(mock_config):
+    """Create a PlayMetricsAPI instance with mock configuration."""
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
+        mock_config.write(f)
+        config_path = f.name
+    
+    api = PlayMetricsAPI(config_path)
+    
+    # Clean up the temporary file after the test
+    yield api
+    os.unlink(config_path)
 
 @pytest.mark.asyncio
-async def test_playmetrics_initialization(playmetrics_scraper):
-    """Test that the PlayMetrics scraper initializes correctly."""
-    assert playmetrics_scraper.enabled is True
-    assert playmetrics_scraper.username == 'test@example.com'
-    assert playmetrics_scraper.password == 'password'
-    assert playmetrics_scraper.team_id == '12345'
+async def test_playmetrics_initialization(playmetrics_api):
+    """Test that the PlayMetrics API initializes correctly."""
+    assert playmetrics_api.enabled is True
+    assert playmetrics_api.username == 'test@example.com'
+    assert playmetrics_api.password == 'password'
+    assert playmetrics_api.team_id == '12345'
+    assert playmetrics_api.team_name == 'Test Team'
 
 @pytest.mark.asyncio
 async def test_playmetrics_disabled():
-    """Test that the PlayMetrics scraper is disabled when not configured."""
+    """Test that the PlayMetrics API is disabled when not configured."""
     config = configparser.ConfigParser()
     config.add_section('PLAYMETRICS')
     config.set('PLAYMETRICS', 'enabled', 'false')
     
-    scraper = PlayMetricsScraper(config)
-    assert scraper.enabled is False
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
+        config.write(f)
+        config_path = f.name
+    
+    try:
+        api = PlayMetricsAPI(config_path)
+        assert api.enabled is False
+    finally:
+        os.unlink(config_path)
 
 @pytest.mark.asyncio
 async def test_get_team_events():
@@ -55,35 +68,46 @@ async def test_get_team_events():
     config.set('PLAYMETRICS', 'password', 'password')
     config.set('PLAYMETRICS', 'team_id', '12345')
     
-    scraper = PlayMetricsScraper(config)
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
+        config.write(f)
+        config_path = f.name
     
-    # Create mock event data
-    mock_event_data = {
-        'date': '2025-06-22',
-        'time': '14:00',
-        'title': 'Game vs Test Opponent',
-        'location': 'Test Field',
-        'is_game': True,
-        'opponent': 'Test Opponent'
-    }
-    
-    # Mock the get_team_events method directly
-    with patch.object(scraper, 'get_team_events', return_value=[mock_event_data]):
-        # Call the method
-        events = scraper.get_team_events()
+    try:
+        api = PlayMetricsAPI(config_path)
+        
+        # Create mock event data
+        game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+        mock_events = [
+            {
+                "id": "1",
+                "title": "Game vs Test Opponent",
+                "description": "Game description",
+                "location": "Test Field",
+                "start_time": game_time,
+                "end_time": game_time + timedelta(hours=2),
+                "is_game": True,
+                "opponent": "Test Opponent"
+            }
+        ]
+        
+        # Mock the get_events method
+        api.get_events = MagicMock(return_value=mock_events)
+        
+        # Call the get_games method
+        games = api.get_games()
         
         # Check the results
-        assert len(events) == 1
-        assert events[0]['date'] == '2025-06-22'
-        assert events[0]['time'] == '14:00'
-        assert events[0]['title'] == 'Game vs Test Opponent'
-        assert events[0]['location'] == 'Test Field'
-        assert events[0]['is_game'] is True
-        assert events[0]['opponent'] == 'Test Opponent'
+        assert len(games) == 1
+        assert games[0]['title'] == 'Game vs Test Opponent'
+        assert games[0]['location'] == 'Test Field'
+        assert games[0]['is_game'] is True
+        assert games[0]['opponent'] == 'Test Opponent'
+    finally:
+        os.unlink(config_path)
 
 @pytest.mark.asyncio
 async def test_find_game_for_recording():
-    """Test finding a game for a recording date."""
+    """Test finding a game for a recording timespan."""
     config = configparser.ConfigParser()
     config.add_section('PLAYMETRICS')
     config.set('PLAYMETRICS', 'enabled', 'true')
@@ -91,44 +115,62 @@ async def test_find_game_for_recording():
     config.set('PLAYMETRICS', 'password', 'password')
     config.set('PLAYMETRICS', 'team_name', 'Test Team')
     
-    scraper = PlayMetricsScraper(config)
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
+        config.write(f)
+        config_path = f.name
     
-    # Mock the get_team_events method
-    mock_events = [
-        {
-            'date': '2025-06-22',
-            'time': '14:00',
-            'title': 'Game vs Test Opponent',
-            'location': 'Test Field',
-            'is_game': True,
-            'opponent': 'Test Opponent'
-        },
-        {
-            'date': '2025-06-23',
-            'time': '16:00',
-            'title': 'Practice',
-            'location': 'Training Ground',
-            'is_game': False,
-            'opponent': None
-        }
-    ]
-    
-    with patch.object(scraper, 'get_team_events', return_value=mock_events), \
-         patch.object(scraper, 'initialize', return_value=True), \
-         patch.object(scraper, 'login', return_value=True):
+    try:
+        api = PlayMetricsAPI(config_path)
         
-        # Test finding a game on the correct date
-        game = scraper.find_game_for_recording(datetime(2025, 6, 22))
+        # Create mock event data
+        game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+        mock_events = [
+            {
+                "id": "1",
+                "title": "Game vs Test Opponent",
+                "description": "Game description",
+                "location": "Test Field",
+                "start_time": game_time,
+                "end_time": game_time + timedelta(hours=2),
+                "is_game": True,
+                "opponent": "Test Opponent"
+            },
+            {
+                "id": "2",
+                "title": "Practice",
+                "description": "Practice description",
+                "location": "Training Ground",
+                "start_time": game_time + timedelta(days=1),
+                "end_time": game_time + timedelta(days=1, hours=2),
+                "is_game": False,
+                "opponent": None
+            }
+        ]
+        
+        # Mock the get_games method
+        api.get_games = MagicMock(return_value=mock_events)
+        
+        # Test finding a game that overlaps with the recording timespan
+        recording_start = game_time - timedelta(minutes=30)
+        recording_end = game_time + timedelta(hours=1)
+        
+        game = api.find_game_for_recording(recording_start, recording_end)
+        
+        # Check the results
         assert game is not None
-        assert game['date'] == '2025-06-22'
-        assert game['time'] == '14:00'
-        assert game['is_game'] is True
-        assert game['opponent'] == 'Test Opponent'
-        assert game['team_name'] == 'Test Team'
+        assert game['id'] == '1'
+        assert game['title'] == 'Game vs Test Opponent'
         
-        # Test finding a game on a date with no game
-        game = scraper.find_game_for_recording(datetime(2025, 6, 24))
+        # Test finding a game that doesn't match the recording timespan
+        recording_start = game_time + timedelta(days=2)
+        recording_end = recording_start + timedelta(hours=1)
+        
+        game = api.find_game_for_recording(recording_start, recording_end)
+        
+        # Check that no game was found
         assert game is None
+    finally:
+        os.unlink(config_path)
 
 @pytest.mark.asyncio
 async def test_populate_match_info():
@@ -140,63 +182,88 @@ async def test_populate_match_info():
     config.set('PLAYMETRICS', 'password', 'password')
     config.set('PLAYMETRICS', 'team_name', 'Test Team')
     
-    scraper = PlayMetricsScraper(config)
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
+        config.write(f)
+        config_path = f.name
     
-    # Mock the find_game_for_recording method
-    mock_game = {
-        'date': '2025-06-22',
-        'time': '14:00',
-        'title': 'Game vs Test Opponent',
-        'location': 'Test Field',
-        'is_game': True,
-        'opponent': 'Test Opponent'
-    }
-    
-    test_dir = "test_directory"
-    
-    with patch.object(scraper, 'find_game_for_recording', return_value=mock_game), \
-         patch.object(scraper, 'initialize', return_value=True), \
-         patch.object(scraper, 'login', return_value=True), \
-         patch('video_grouper.models.MatchInfo.update_team_info') as mock_update_team_info:
+    try:
+        api = PlayMetricsAPI(config_path)
         
-        # Call the method with a directory path
-        result = scraper.populate_match_info(test_dir, datetime(2025, 6, 22))
+        # Create mock game data
+        game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+        mock_game = {
+            "id": "1",
+            "title": "Game vs Test Opponent",
+            "description": "Game description",
+            "location": "Test Field",
+            "start_time": game_time,
+            "end_time": game_time + timedelta(hours=2),
+            "is_game": True,
+            "opponent": "Test Opponent"
+        }
+        
+        # Mock the find_game_for_recording method
+        api.find_game_for_recording = MagicMock(return_value=mock_game)
+        
+        # Create a match info dictionary to populate
+        match_info = {}
+        
+        # Call the populate_match_info method
+        recording_start = game_time - timedelta(minutes=30)
+        recording_end = game_time + timedelta(hours=1)
+        result = api.populate_match_info(match_info, recording_start, recording_end)
         
         # Check the results
         assert result is True
-        mock_update_team_info.assert_called_once_with(test_dir, {
-            'team_name': 'Test Team',
-            'opponent_name': 'Test Opponent',
-            'location': 'Test Field'
-        })
+        assert match_info['title'] == 'Game vs Test Opponent'
+        assert match_info['opponent'] == 'Test Opponent'
+        assert match_info['location'] == 'Test Field'
+        assert match_info['date'] == game_time.strftime('%Y-%m-%d')
+        assert match_info['time'] == game_time.strftime('%H:%M')
+    finally:
+        os.unlink(config_path)
 
 @pytest.mark.asyncio
 async def test_video_grouper_playmetrics_integration():
     """Test the PlayMetrics integration in the VideoGrouperApp class."""
     # Create a mock config with PlayMetrics enabled
     config = configparser.ConfigParser()
+    
+    # Add required sections
+    config.add_section('CAMERA')
+    config.set('CAMERA', 'type', 'dahua')
+    config.set('CAMERA', 'device_ip', '192.168.1.100')
+    config.set('CAMERA', 'username', 'admin')
+    config.set('CAMERA', 'password', 'admin')
+    
+    config.add_section('STORAGE')
+    config.set('STORAGE', 'path', './test_storage')
+    
     config.add_section('PLAYMETRICS')
     config.set('PLAYMETRICS', 'enabled', 'true')
     config.set('PLAYMETRICS', 'username', 'test@example.com')
     config.set('PLAYMETRICS', 'password', 'password')
     
     # Create a VideoGrouperApp instance with the mock config
-    with patch('video_grouper.video_grouper.PlayMetricsAPI') as mock_playmetrics_class:
+    with patch('video_grouper.video_grouper.PlayMetricsAPI') as mock_playmetrics_class, \
+         patch('builtins.open', mock_open()), \
+         patch('os.path.exists', return_value=True), \
+         patch('os.path.join', lambda *args: '/'.join(args)), \
+         patch('os.makedirs'), \
+         patch('video_grouper.video_grouper.create_directory'), \
+         patch('video_grouper.video_grouper.DahuaCamera'):
+        
         # Set up the mock PlayMetrics API
         mock_playmetrics = MagicMock()
         mock_playmetrics.enabled = True
-        mock_playmetrics.initialize = MagicMock(return_value=True)
         mock_playmetrics.login = MagicMock(return_value=True)
         mock_playmetrics_class.return_value = mock_playmetrics
         
-        # Create the app with additional required mocks
-        with patch('os.makedirs'), \
-             patch('video_grouper.video_grouper.create_directory'):
-            app = VideoGrouperApp(config, "./test_storage")
-            
-            # Manually initialize PlayMetrics
-            app._initialize_playmetrics()
-            
-            # Check that the PlayMetrics API was initialized
-            assert app.playmetrics_api is not None
-            assert app._playmetrics_initialized is True 
+        app = VideoGrouperApp(config)
+        
+        # Manually initialize PlayMetrics
+        app._initialize_playmetrics()
+        
+        # Check that the PlayMetrics API was initialized
+        assert app.playmetrics_api is not None
+        assert app._playmetrics_initialized is True 
