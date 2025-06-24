@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
                              QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox, QHBoxLayout, QDialog, QScrollArea, QWidget)
-from PyQt6.QtCore import QTimer, QSize, pyqtSignal as Signal
+from PyQt6.QtCore import QTimer, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QIcon
 from video_grouper.locking import FileLock
 from video_grouper.paths import get_shared_data_path
@@ -18,6 +18,7 @@ from video_grouper.directory_state import DirectoryState
 from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
 from video_grouper.models import MatchInfo
 from video_grouper.youtube_upload import authenticate_youtube, get_youtube_paths
+from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 
@@ -371,6 +372,93 @@ class ConfigWindow(QWidget):
         prefs_layout.addRow("Timezone:", self.timezone_combo)
         prefs_group.setLayout(prefs_layout)
         settings_layout.addWidget(prefs_group)
+        
+        # -- Cloud Sync Group --
+        cloud_sync_group = QGroupBox("Cloud Sync")
+        cloud_sync_layout = QHBoxLayout()  # Main layout is horizontal to split left/right sides
+
+        # Left side - Username and password fields stacked vertically
+        self.auth_stack_left = QVBoxLayout()
+        self.auth_stack_left.setContentsMargins(0, 0, 10, 0)  # Add some right margin
+
+        # Username field
+        username_layout = QFormLayout()
+        self.cloud_username = QLineEdit()
+        self.cloud_username.textChanged.connect(self.update_cloud_sync_ui_state)
+        username_layout.addRow("Username:", self.cloud_username)
+
+        # Password field
+        self.cloud_password = QLineEdit()
+        self.cloud_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.cloud_password.textChanged.connect(self.update_cloud_sync_ui_state)
+        username_layout.addRow("Password:", self.cloud_password)
+
+        # Show password checkbox
+        self.show_cloud_password_checkbox = QCheckBox("Show Password")
+        self.show_cloud_password_checkbox.toggled.connect(lambda checked: self.cloud_password.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
+        username_layout.addRow("", self.show_cloud_password_checkbox)
+
+        self.auth_stack_left.addLayout(username_layout)
+
+        # Signed in state (initially hidden)
+        self.signed_in_layout = QVBoxLayout()
+        self.signed_in_label = QLabel("Signed in as: Not signed in")
+        self.signed_in_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sign_out_button = QPushButton("Sign Out")
+        self.sign_out_button.clicked.connect(self.sign_out_cloud)
+        self.signed_in_layout.addWidget(self.signed_in_label)
+        self.signed_in_layout.addWidget(self.sign_out_button)
+        self.signed_in_layout.addStretch(1)
+
+        # Create widgets to hold the layouts
+        self.auth_widget = QWidget()
+        self.auth_widget.setLayout(self.auth_stack_left)
+        self.signed_in_widget = QWidget()
+        self.signed_in_widget.setLayout(self.signed_in_layout)
+        self.signed_in_widget.setVisible(False)  # Initially hidden
+
+        # Right side - Google auth
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(10, 0, 0, 0)  # Add some left margin
+
+        # OR label centered
+        or_label = QLabel("OR")
+        or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        right_layout.addWidget(or_label)
+
+        # Google auth button
+        self.google_auth_button = QPushButton("Sign in with Google")
+        self.google_auth_button.clicked.connect(self.authenticate_with_google)
+        right_layout.addWidget(self.google_auth_button)
+
+        # Google auth status
+        self.google_auth_status = QLabel("Not signed in")
+        self.google_auth_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        right_layout.addWidget(self.google_auth_status)
+
+        # Add stretches to center the content vertically
+        right_layout.addStretch(1)
+
+        # Add left and right layouts to the main horizontal layout
+        left_container = QVBoxLayout()
+        left_container.addWidget(self.auth_widget)
+        left_container.addWidget(self.signed_in_widget)
+        cloud_sync_layout.addLayout(left_container, 1)  # 1 = stretch factor
+        cloud_sync_layout.addLayout(right_layout, 1)
+
+        # Create a wrapper layout for the sync button (to span both columns)
+        wrapper_layout = QVBoxLayout()
+        wrapper_layout.addLayout(cloud_sync_layout)
+
+        # Sync to cloud button
+        self.sync_to_cloud_button = QPushButton("Sync to Cloud")
+        self.sync_to_cloud_button.clicked.connect(self.sync_to_cloud)
+        self.sync_to_cloud_button.setEnabled(False)  # Disabled by default until authenticated
+        wrapper_layout.addWidget(self.sync_to_cloud_button)
+
+        cloud_sync_group.setLayout(wrapper_layout)
+        settings_layout.addWidget(cloud_sync_group)
 
         settings_layout.addStretch(1) # Pushes content to the top
 
@@ -397,23 +485,31 @@ class ConfigWindow(QWidget):
         
     def load_settings_into_ui(self):
         """Populates the UI fields from the loaded config."""
-        if 'CAMERA' in self.config:
-            self.ip_address.setText(self.config.get('CAMERA', 'device_ip', fallback=''))
-            self.username.setText(self.config.get('CAMERA', 'username', fallback=''))
-            self.password.setText(self.config.get('CAMERA', 'password', fallback=''))
-        if 'STORAGE' in self.config:
-            self.storage_path.setText(self.config.get('STORAGE', 'path', fallback=''))
-        if 'APP' in self.config:
-            tz_str = self.config.get('APP', 'timezone', fallback='UTC')
-            if tz_str in get_all_timezones():
-                self.timezone_combo.setCurrentText(tz_str)
-        if 'YOUTUBE' in self.config:
-            self.youtube_enabled.setChecked(self.config.getboolean('YOUTUBE', 'enabled', fallback=False))
-            
-            # Check token status
-            storage_path = self.config.get('STORAGE', 'path', fallback=None)
-            if storage_path:
-                self.check_youtube_token_status()
+        # Camera settings
+        self.ip_address.setText(self.config.get('CAMERA', 'device_ip', fallback=''))
+        self.username.setText(self.config.get('CAMERA', 'username', fallback=''))
+        self.password.setText(self.config.get('CAMERA', 'password', fallback=''))
+        
+        # Storage settings
+        self.storage_path.setText(self.config.get('STORAGE', 'path', fallback=''))
+        
+        # User preferences
+        timezone = self.config.get('APP', 'timezone', fallback='UTC')
+        index = self.timezone_combo.findText(timezone)
+        if index >= 0:
+            self.timezone_combo.setCurrentIndex(index)
+        
+        # YouTube settings
+        youtube_enabled = self.config.getboolean('YOUTUBE', 'enabled', fallback=False)
+        self.youtube_enabled.setChecked(youtube_enabled)
+        self.processed_playlist_name.setText(self.config.get('youtube.playlist.processed', 'name_format', fallback='{my_team_name} 2013s'))
+        self.raw_playlist_name.setText(self.config.get('youtube.playlist.raw', 'name_format', fallback='{my_team_name} 2013s - Full Field'))
+        
+        # Update UI states
+        self.update_cloud_sync_ui_state()
+        
+        # Check YouTube token status
+        self.refresh_youtube_status()
         
         # Load TeamSnap configurations
         self.teamsnap_configs_list.clear()
@@ -587,6 +683,7 @@ class ConfigWindow(QWidget):
             if 'YOUTUBE' not in self.config: self.config.add_section('YOUTUBE')
             if 'youtube.playlist.processed' not in self.config: self.config.add_section('youtube.playlist.processed')
             if 'youtube.playlist.raw' not in self.config: self.config.add_section('youtube.playlist.raw')
+            if 'CLOUD' not in self.config: self.config.add_section('CLOUD')
                 
             self.config['CAMERA']['device_ip'] = self.ip_address.text()
             self.config['CAMERA']['username'] = self.username.text()
@@ -603,6 +700,10 @@ class ConfigWindow(QWidget):
             self.config['youtube.playlist.raw']['name_format'] = self.raw_playlist_name.text() or "{my_team_name} 2013s - Full Field"
             self.config['youtube.playlist.raw']['description'] = f"Raw full field videos for {'{my_team_name}'} 2013s team"
             self.config['youtube.playlist.raw']['privacy_status'] = "unlisted"
+            
+            # Make sure the cloud endpoint URL is set with a default value if not present
+            if 'endpoint_url' not in self.config['CLOUD']:
+                self.config['CLOUD']['endpoint_url'] = "https://example.com/api/sync"
             
             with FileLock(self.config_path):
                 with open(self.config_path, 'w') as f:
@@ -1552,6 +1653,176 @@ class ConfigWindow(QWidget):
         except Exception as e:
             logger.error(f"Error saving PlayMetrics configuration: {e}")
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+
+    def authenticate_with_google(self):
+        """Authenticate with Google for cloud sync."""
+        def auth_thread():
+            try:
+                # This would normally open a browser window for OAuth
+                # For now, we just simulate the authentication
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                auth_result = asyncio.get_event_loop().run_until_complete(
+                    GoogleAuthProvider.authenticate()
+                )
+                
+                if auth_result:
+                    # Update UI in the main thread
+                    def update_ui():
+                        email = auth_result.get('email', 'unknown')
+                        self.google_auth_status.setText(f"Signed in as: {email}")
+                        # Store the token in the password field for use during sync
+                        self.cloud_password.setText(auth_result.get('access_token', ''))
+                        QMessageBox.information(self, "Success", "Successfully signed in with Google")
+                        # Update UI state
+                        self.update_cloud_sync_ui_state()
+                    
+                    QApplication.instance().postEvent(
+                        self,
+                        QTimer.singleShot(0, update_ui)
+                    )
+                else:
+                    def show_error():
+                        QMessageBox.warning(self, "Authentication Failed", 
+                                          "Failed to authenticate with Google. Please try again.")
+                    
+                    QApplication.instance().postEvent(
+                        self,
+                        QTimer.singleShot(0, show_error)
+                    )
+            except Exception as e:
+                logger.error(f"Error during Google authentication: {e}")
+                
+                def show_error():
+                    QMessageBox.critical(self, "Error", 
+                                       f"An error occurred during authentication: {str(e)}")
+                
+                QApplication.instance().postEvent(
+                    self,
+                    QTimer.singleShot(0, show_error)
+                )
+        
+        # Start authentication in a separate thread to avoid blocking the UI
+        threading.Thread(target=auth_thread, daemon=True).start()
+    
+    def sync_to_cloud(self):
+        """Sync configuration to the cloud."""
+        if not self.cloud_username.text() and "Signed in as:" not in self.google_auth_status.text():
+            QMessageBox.warning(self, "Authentication Required", 
+                              "Please sign in with your username/password or Google account.")
+            return
+        
+        # Save settings before syncing
+        self.save_settings()
+        
+        def sync_thread():
+            try:
+                # Get endpoint URL from config
+                endpoint_url = self.config.get('CLOUD', 'endpoint_url', fallback="https://example.com/api/sync")
+                
+                # Initialize cloud sync with the endpoint URL
+                cloud_sync = CloudSync(endpoint_url)
+                
+                # Set credentials based on authentication method
+                if self.cloud_username.text() and self.cloud_password.text():
+                    cloud_sync.set_credentials(self.cloud_username.text(), self.cloud_password.text())
+                else:
+                    # Extract email from Google auth status
+                    email = self.google_auth_status.text().replace("Signed in as: ", "")
+                    # For Google auth, we use the email as username and the token stored in cloud_password
+                    cloud_sync.set_credentials(email, self.cloud_password.text())
+                
+                # Upload the config
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                success = asyncio.get_event_loop().run_until_complete(
+                    cloud_sync.upload_config(self.config_path)
+                )
+                
+                if success:
+                    def show_success():
+                        QMessageBox.information(self, "Success", "Configuration successfully synced to cloud.")
+                    
+                    QApplication.instance().postEvent(
+                        self,
+                        QTimer.singleShot(0, show_success)
+                    )
+                else:
+                    def show_error():
+                        QMessageBox.warning(self, "Sync Failed", 
+                                          "Failed to sync configuration to cloud. Please check your credentials and try again.")
+                        # Update UI state in case authentication is no longer valid
+                        self.update_cloud_sync_ui_state()
+                    
+                    QApplication.instance().postEvent(
+                        self,
+                        QTimer.singleShot(0, show_error)
+                    )
+            except Exception as e:
+                logger.error(f"Error during cloud sync: {e}")
+                
+                def show_error():
+                    QMessageBox.critical(self, "Error", 
+                                       f"An error occurred during cloud sync: {str(e)}")
+                    # Update UI state in case of error
+                    self.update_cloud_sync_ui_state()
+                
+                QApplication.instance().postEvent(
+                    self,
+                    QTimer.singleShot(0, show_error)
+                )
+        
+        # Start sync in a separate thread to avoid blocking the UI
+        threading.Thread(target=sync_thread, daemon=True).start()
+        
+        # Show a message that sync is in progress
+        QMessageBox.information(self, "Sync Started", 
+                              "Cloud sync has started. You will be notified when it completes.")
+
+    def update_cloud_sync_ui_state(self):
+        """Update the state of cloud sync UI elements based on authentication status."""
+        try:
+            is_authenticated = False
+            
+            # Check if authenticated with username/password
+            if self.cloud_username.text() and self.cloud_password.text():
+                is_authenticated = True
+                self.signed_in_label.setText(f"Signed in as: {self.cloud_username.text()}")
+                self.auth_widget.setVisible(False)
+                self.signed_in_widget.setVisible(True)
+                self.google_auth_button.setEnabled(False)
+            
+            # Check if authenticated with Google (based on status label)
+            elif "Signed in as:" in self.google_auth_status.text():
+                is_authenticated = True
+                email = self.google_auth_status.text().replace("Signed in as: ", "")
+                self.signed_in_label.setText(f"Signed in as: {email}")
+                self.auth_widget.setVisible(False)
+                self.signed_in_widget.setVisible(True)
+                self.google_auth_button.setEnabled(False)
+            else:
+                # Not authenticated
+                self.auth_widget.setVisible(True)
+                self.signed_in_widget.setVisible(False)
+                self.google_auth_button.setEnabled(True)
+            
+            # Enable sync button only if user is authenticated
+            self.sync_to_cloud_button.setEnabled(is_authenticated)
+        except Exception as e:
+            logger.error(f"Error updating cloud sync UI state: {e}")
+
+    def sign_out_cloud(self):
+        """Sign out from cloud sync."""
+        # Clear credentials
+        self.cloud_username.clear()
+        self.cloud_password.clear()
+        self.google_auth_status.setText("Not signed in")
+        
+        # Update UI state
+        self.auth_widget.setVisible(True)
+        self.signed_in_widget.setVisible(False)
+        self.google_auth_button.setEnabled(True)
+        self.sync_to_cloud_button.setEnabled(False)
+        
+        QMessageBox.information(self, "Signed Out", "You have been signed out.")
 
 def main():
     """Main entry point for the standalone configuration UI."""
