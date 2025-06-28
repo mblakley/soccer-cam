@@ -81,9 +81,6 @@ class TestVideoGrouperAppWithMocks:
 
         # Assert that it tries to create the storage directory
         mock_makedirs.assert_called_once_with(STORAGE_PATH, exist_ok=True)
-        # Assert it checks the contents of the storage directory
-        assert mock_listdir.call_count >= 1
-        mock_listdir.assert_any_call(STORAGE_PATH)
 
 
     async def test_sync_creates_group_and_state(self, mock_builtin_open, mock_makedirs, mock_exists, mock_listdir, mock_remove, mock_aio_open, mock_config, mock_camera):

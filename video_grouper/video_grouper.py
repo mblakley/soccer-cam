@@ -5,17 +5,13 @@ import asyncio
 import logging
 import configparser
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List, Any, Set, Union
+from typing import Dict, Optional, List
 import aiofiles
 import pytz
-import shutil
-import time
-import traceback
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
 from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, create_ffmpeg_task, task_from_dict
-from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.api_integrations.ntfy import NtfyAPI
@@ -132,104 +128,13 @@ class VideoGrouperApp:
         self._playmetrics_processed_dirs = set()
 
     async def initialize(self):
-        """Initialize the application by scanning existing files and populating queues."""
+        """Initialize the application by setting up storage, loading queues, and APIs."""
         logger.info("Initializing VideoGrouperApp")
         create_directory(self.storage_path)
         
-        # Filter existing state files to remove recordings that overlap with connected timeframes
-        await self._filter_existing_state_files()
-
         if not self._queues_loaded:
             await self._load_queues_from_state()
             self._queues_loaded = True
-
-        logger.info("Scanning for existing group directories to audit state...")
-        for item in os.listdir(self.storage_path):
-            group_dir = os.path.join(self.storage_path, item)
-            if os.path.isdir(group_dir) and not item.startswith('.'):
-                state_file_path = os.path.join(group_dir, "state.json")
-                if not os.path.exists(state_file_path):
-                    continue
-
-                logger.info(f"Auditing state for {os.path.basename(group_dir)}")
-                try:
-                    dir_state = DirectoryState(group_dir)
-                    files_to_process = list(dir_state.files.values())
-
-                    for file_obj in files_to_process:
-                        if file_obj.skip:
-                            logger.info(f"AUDIT: Skipping file {file_obj.file_path} in {group_dir} as per state file.")
-                            continue
-
-                        if file_obj.status == "downloaded" and file_obj.file_path not in self.queued_for_download:
-                            task = ConvertTask(file_obj.file_path)
-                            logger.info(f"AUDIT: Found downloaded file in {group_dir}, adding to FFmpeg queue: {task}")
-                            await self.add_to_ffmpeg_queue(task)
-
-                        elif file_obj.status in ["pending", "download_failed"] and file_obj.file_path not in self.queued_for_download:
-                            logger.info(f"AUDIT: Found pending/failed download in {group_dir}, re-adding to download queue: {file_obj.file_path}")
-                            # Reconstruct a RecordingFile object to pass to the queue
-                            recording_file = RecordingFile(
-                                start_time=file_obj.start_time,
-                                end_time=file_obj.end_time,
-                                file_path=file_obj.file_path,
-                                metadata=file_obj.metadata,
-                                status=file_obj.status,
-                                skip=file_obj.skip
-                            )
-                            await self.add_to_download_queue(recording_file)
-
-                        elif file_obj.status == "conversion_failed" and file_obj.file_path not in self.queued_for_ffmpeg:
-                            logger.info(f"AUDIT: Found failed conversion in {group_dir}, re-queuing for conversion: {file_obj.file_path}")
-                            await self.add_to_ffmpeg_queue(ConvertTask(file_obj.file_path))
-
-                    if dir_state.is_ready_for_combining() and group_dir not in self.queued_for_ffmpeg:
-                        combined_path = os.path.join(group_dir, "combined.mp4")
-                        if not os.path.exists(combined_path):
-                            task = CombineTask(group_dir)
-                            logger.info(f"AUDIT: All files converted in {group_dir}, adding combine task to FFmpeg queue: {task}")
-                            await self.add_to_ffmpeg_queue(task)
-
-                    # New audit for trimming combined videos with populated info
-                    if dir_state.status == "combined":
-                        await self._ensure_match_info_exists(group_dir)
-                        combined_path = os.path.join(group_dir, "combined.mp4")
-                        if os.path.exists(combined_path):
-                            # Check if NTFY integration is enabled and match info is not populated
-                            if self.ntfy_api and self.ntfy_api.enabled and not self.is_match_info_populated(group_dir):
-                                logger.info(f"AUDIT: Found combined video in {group_dir} that needs NTFY processing")
-                                # Create a task to process this combined video with NTFY
-                                asyncio.create_task(self._process_combined_directory(group_dir, combined_path))
-                            elif self.is_match_info_populated(group_dir):
-                                # Create a MatchInfo object for the task
-                                match_info_path = os.path.join(group_dir, "match_info.ini")
-                                match_info = MatchInfo.from_file(match_info_path)
-                                if match_info:
-                                    # Create a TrimTask
-                                    task = TrimTask(group_dir, match_info)
-                                    if task not in self.queued_for_ffmpeg:
-                                        logger.info(f"AUDIT: Found combined group with populated match info and combined.mp4 in {group_dir}. Queueing trim: {task}")
-                                        await self.add_to_ffmpeg_queue(task)
-                                else:
-                                    logger.warning(f"AUDIT: Failed to create MatchInfo object for {group_dir}. Not queueing trim task.")
-                            else:
-                                logger.info(f"AUDIT: Found combined group with no match_info.ini in {group_dir}. Not ready to trim.")
-                        else:
-                            logger.info(f"AUDIT: Found combined group with missing combined.mp4 in {group_dir}. Please check the group directory.")
-
-                    # Check for autocam_complete groups and add them to YouTube upload queue
-                    if dir_state.status == "autocam_complete":
-                        # Check if YouTube upload is enabled in config
-                        if self.config.has_section('YOUTUBE') and self.config.getboolean('YOUTUBE', 'enabled', fallback=False):
-                            youtube_task = YouTubeUploadTask(group_dir)
-                            if youtube_task not in self.queued_for_ffmpeg:
-                                logger.info(f"AUDIT: Found autocam_complete group in {group_dir}. Queueing for YouTube upload.")
-                                await self.add_to_ffmpeg_queue(youtube_task)
-                        else:
-                            logger.info(f"AUDIT: Found autocam_complete group in {group_dir}, but YouTube upload is not enabled in config.")
-
-                except Exception as e:
-                    logger.error(f"Error during state audit for {group_dir}: {e}")
         
         # Initialize TeamSnap API
         if not self._teamsnap_initialized:
@@ -249,6 +154,7 @@ class VideoGrouperApp:
         await self.initialize()
         
         tasks = [
+            asyncio.create_task(self.poll_for_external_state_changes()),
             asyncio.create_task(self.poll_camera_for_files()),
             asyncio.create_task(self.process_download_queue()),
             asyncio.create_task(self.process_ffmpeg_queue()),
@@ -272,8 +178,7 @@ class VideoGrouperApp:
                 
         # Close camera connection if open
         if self.camera:
-            if hasattr(self.camera, 'close') and callable(self.camera.close):
-                await self.camera.close()
+            await self.camera.close()
             
         logger.info("VideoGrouperApp shutdown complete")
 
@@ -1493,3 +1398,126 @@ class VideoGrouperApp:
         # Process with NTFY
         await self._process_combined_with_ntfy(group_dir, combined_path, force)
         return True
+
+    async def _audit_storage_directory(self):
+        """Scans the storage directory and queues tasks based on state files."""
+        logger.info("AUDIT DEBUG: Starting audit storage directory")
+        # Filter existing state files to remove recordings that overlap with connected timeframes
+        try:
+            await self._filter_existing_state_files()
+            logger.info("AUDIT DEBUG: Finished filtering existing state files")
+        except Exception as e:
+            logger.error(f"AUDIT DEBUG: Error filtering state files: {e}", exc_info=True)
+            # Continue with audit even if filtering fails
+
+        logger.info("Scanning for existing group directories to audit state...")
+        logger.info(f"AUDIT DEBUG: Storage path: {self.storage_path}")
+        items = os.listdir(self.storage_path)
+        logger.info(f"AUDIT DEBUG: Items in storage path: {items}")
+        for item in items:
+            group_dir = os.path.join(self.storage_path, item)
+            logger.info(f"AUDIT DEBUG: Checking item: {item}, is_dir: {os.path.isdir(group_dir)}, starts_with_dot: {item.startswith('.')}")
+            if os.path.isdir(group_dir) and not item.startswith('.'):
+                state_file_path = os.path.join(group_dir, "state.json")
+                logger.info(f"AUDIT DEBUG: State file path: {state_file_path}, exists: {os.path.exists(state_file_path)}")
+                if not os.path.exists(state_file_path):
+                    continue
+
+                logger.info(f"Auditing state for {os.path.basename(group_dir)}")
+                try:
+                    dir_state = DirectoryState(group_dir)
+                    files_to_process = list(dir_state.files.values())
+
+                    for file_obj in files_to_process:
+                        if file_obj.skip:
+                            logger.info(f"AUDIT: Skipping file {file_obj.file_path} in {group_dir} as per state file.")
+                            continue
+
+                        if file_obj.status == "downloaded" and file_obj.file_path not in self.queued_for_download:
+                            task = ConvertTask(file_obj.file_path)
+                            logger.info(f"AUDIT: Found downloaded file in {group_dir}, adding to FFmpeg queue: {task}")
+                            await self.add_to_ffmpeg_queue(task)
+
+                        elif file_obj.status in ["pending", "download_failed"] and file_obj.file_path not in self.queued_for_download:
+                            logger.info(f"AUDIT: Found pending/failed download in {group_dir}, re-adding to download queue: {file_obj.file_path}")
+                            # Reconstruct a RecordingFile object to pass to the queue
+                            recording_file = RecordingFile(
+                                start_time=file_obj.start_time,
+                                end_time=file_obj.end_time,
+                                file_path=file_obj.file_path,
+                                metadata=file_obj.metadata,
+                                status=file_obj.status,
+                                skip=file_obj.skip
+                            )
+                            await self.add_to_download_queue(recording_file)
+
+                        elif file_obj.status == "conversion_failed" and file_obj.file_path not in self.queued_for_ffmpeg:
+                            logger.info(f"AUDIT: Found failed conversion in {group_dir}, re-queuing for conversion: {file_obj.file_path}")
+                            await self.add_to_ffmpeg_queue(ConvertTask(file_obj.file_path))
+
+                    if dir_state.is_ready_for_combining():
+                        combined_path = os.path.join(group_dir, "combined.mp4")
+                        logger.info(f"AUDIT DEBUG: Group {group_dir} is ready for combining, combined_path={combined_path}, exists={os.path.exists(combined_path)}")
+                        if not os.path.exists(combined_path):
+                            # Check if a CombineTask for this directory is already queued
+                            combine_task = CombineTask(group_dir)
+                            logger.info(f"AUDIT DEBUG: Checking if combine task already queued: {combine_task} in {self.queued_for_ffmpeg}")
+                            if combine_task not in self.queued_for_ffmpeg:
+                                logger.info(f"AUDIT: All files converted in {group_dir}, adding combine task to FFmpeg queue: {combine_task}")
+                                await self.add_to_ffmpeg_queue(combine_task)
+                            else:
+                                logger.info(f"AUDIT DEBUG: Combine task already queued for {group_dir}")
+                        else:
+                            logger.info(f"AUDIT DEBUG: Combined file already exists at {combined_path}")
+
+                    # New audit for trimming combined videos with populated info
+                    if dir_state.status == "combined":
+                        await self._ensure_match_info_exists(group_dir)
+                        combined_path = os.path.join(group_dir, "combined.mp4")
+                        if os.path.exists(combined_path):
+                            # Check if NTFY integration is enabled and match info is not populated
+                            if self.ntfy_api and self.ntfy_api.enabled and not self.is_match_info_populated(group_dir):
+                                logger.info(f"AUDIT: Found combined video in {group_dir} that needs NTFY processing")
+                                # Create a task to process this combined video with NTFY
+                                asyncio.create_task(self._process_combined_directory(group_dir, combined_path))
+                            elif self.is_match_info_populated(group_dir):
+                                # Create a MatchInfo object for the task
+                                match_info_path = os.path.join(group_dir, "match_info.ini")
+                                match_info = MatchInfo.from_file(match_info_path)
+                                if match_info:
+                                    # Create a TrimTask
+                                    task = TrimTask(group_dir, match_info)
+                                    if task not in self.queued_for_ffmpeg:
+                                        logger.info(f"AUDIT: Found combined group with populated match info and combined.mp4 in {group_dir}. Queueing trim: {task}")
+                                        await self.add_to_ffmpeg_queue(task)
+                                else:
+                                    logger.warning(f"AUDIT: Failed to create MatchInfo object for {group_dir}. Not queueing trim task.")
+                            else:
+                                logger.info(f"AUDIT: Found combined group with no match_info.ini in {group_dir}. Not ready to trim.")
+                        else:
+                            logger.info(f"AUDIT: Found combined group with missing combined.mp4 in {group_dir}. Please check the group directory.")
+
+                    # Check for autocam_complete groups and add them to YouTube upload queue
+                    if dir_state.status == "autocam_complete":
+                        # Check if YouTube upload is enabled in config
+                        if self.config.has_section('YOUTUBE') and self.config.getboolean('YOUTUBE', 'enabled', fallback=False):
+                            youtube_task = YouTubeUploadTask(group_dir)
+                            if youtube_task not in self.queued_for_ffmpeg:
+                                logger.info(f"AUDIT: Found autocam_complete group in {group_dir}. Queueing for YouTube upload.")
+                                await self.add_to_ffmpeg_queue(youtube_task)
+                        else:
+                            logger.info(f"AUDIT: Found autocam_complete group in {group_dir}, but YouTube upload is not enabled in config.")
+
+                except Exception as e:
+                    logger.error(f"Error during state audit for {group_dir}: {e}")
+
+    async def poll_for_external_state_changes(self):
+        """Polls for external state changes in the storage directory and queues tasks."""
+        logger.info("Starting poller for external state changes.")
+        while True:
+            try:
+                await self._audit_storage_directory()
+                await asyncio.sleep(self.poll_interval)
+            except Exception as e:
+                logger.error(f"Error polling for external state changes: {e}", exc_info=True)
+                await asyncio.sleep(self.poll_interval)
