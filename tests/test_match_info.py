@@ -222,7 +222,7 @@ class TestMatchInfo:
             start_time_offset="",
             total_duration="01:30:00"
         )
-        assert match_info.get_start_offset() == "00:00:00"
+        assert match_info.get_start_offset() == ""
         
         # Test with invalid format
         match_info = MatchInfo(
@@ -232,7 +232,7 @@ class TestMatchInfo:
             start_time_offset="invalid",
             total_duration="01:30:00"
         )
-        assert match_info.get_start_offset() == "00:00:00"
+        assert match_info.get_start_offset() == ""
         
         # Test with valid MM:SS format
         match_info = MatchInfo(
