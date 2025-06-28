@@ -3,7 +3,8 @@ import logging
 from typing import Any, Dict, Optional
 from .polling_processor_base import PollingProcessor
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import ConvertTask, CombineTask, TrimTask, VideoUploadTask, RecordingFile, MatchInfo
+from video_grouper.models import VideoUploadTask, RecordingFile, MatchInfo
+from .tasks.video import ConvertTask, CombineTask, TrimTask
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class StateAuditor(PollingProcessor):
                         match_info = MatchInfo.from_file(match_info_path)
                         if match_info and match_info.is_populated():
                             if self.video_processor:
-                                await self.video_processor.add_work(TrimTask(group_dir, match_info))
+                                await self.video_processor.add_work(TrimTask.from_match_info(group_dir, match_info))
             
             # Check for videos to upload (autocam_complete status)
             if dir_state.status == "autocam_complete":

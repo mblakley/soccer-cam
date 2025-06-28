@@ -11,7 +11,8 @@ import pytz
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, VideoUploadTask, create_ffmpeg_task, task_from_dict
+from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, VideoUploadTask, task_from_dict
+from video_grouper.task_processors.tasks.video import ConvertTask, CombineTask, TrimTask
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.api_integrations.ntfy import NtfyAPI
@@ -461,7 +462,7 @@ class VideoGrouperApp:
                     if os.path.exists(match_info_path) and self.is_match_info_populated(group_dir):
                         match_info = MatchInfo.from_file(match_info_path)
                         if match_info:
-                            task = TrimTask(group_dir, match_info)
+                            task = TrimTask.from_match_info(group_dir, match_info)
                             await self.add_to_ffmpeg_queue(task)
             else:
                 logger.error(f"Failed to combine videos in {group_dir}")
@@ -490,7 +491,9 @@ class VideoGrouperApp:
         if match_info is None:
             if not self.is_match_info_populated(group_dir):
                 logger.warning(f"TRIM: Match info for {group_dir} is not populated. Re-queueing.")
-                await self._requeue_ffmpeg_task_later(TrimTask(group_dir), delay_seconds=60)
+                # Create a placeholder TrimTask for re-queueing
+                placeholder_task = TrimTask(group_dir=group_dir, start_time="00:00:00", end_time="01:30:00")
+                await self._requeue_ffmpeg_task_later(placeholder_task, delay_seconds=60)
                 return
 
             match_info_path = os.path.join(group_dir, "match_info.ini")
@@ -775,7 +778,22 @@ class VideoGrouperApp:
                             task_type, item_path = item[0], item[1]
                             
                             # Create the appropriate task object
-                            task = create_ffmpeg_task(task_type, item_path)
+                            task = None
+                            if task_type == "convert":
+                                task = ConvertTask(file_path=item_path)
+                            elif task_type == "combine":
+                                task = CombineTask(group_dir=item_path)
+                            elif task_type == "trim":
+                                # For trim tasks, try to load match info from the directory
+                                match_info_path = os.path.join(item_path, "match_info.ini")
+                                match_info = self.parse_match_info(match_info_path)
+                                if match_info:
+                                    task = TrimTask.from_match_info(item_path, match_info)
+                                else:
+                                    logger.warning(f"LOAD: Could not load match info for trim task: {item_path}")
+                            else:
+                                logger.warning(f"LOAD: Unknown task type: {task_type}")
+                            
                             if task:
                                 logger.info(f"LOAD: Adding task to FFmpeg queue from list: {task}")
                                 await self.add_to_ffmpeg_queue(task)
@@ -1483,7 +1501,7 @@ class VideoGrouperApp:
                                 match_info = MatchInfo.from_file(match_info_path)
                                 if match_info:
                                     # Create a TrimTask
-                                    task = TrimTask(group_dir, match_info)
+                                    task = TrimTask.from_match_info(group_dir, match_info)
                                     if task not in self.queued_for_ffmpeg:
                                         logger.info(f"AUDIT: Found combined group with populated match info and combined.mp4 in {group_dir}. Queueing trim: {task}")
                                         await self.add_to_ffmpeg_queue(task)

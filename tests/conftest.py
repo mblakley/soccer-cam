@@ -1,7 +1,10 @@
 import pytest
+import pytest_asyncio
 import asyncio
 import os
 from unittest.mock import Mock, patch, AsyncMock
+import tempfile
+import configparser
 
 @pytest.fixture(autouse=True)
 def mock_ffmpeg():
@@ -45,3 +48,56 @@ def mock_httpx():
         client.__aenter__.return_value.get.return_value = response
         mock.return_value = client
         yield mock 
+
+@pytest.fixture
+def temp_storage():
+    """Create a temporary storage directory for testing."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        yield temp_dir
+
+@pytest.fixture
+def mock_config(temp_storage):
+    """Create a mock configuration object."""
+    config = configparser.ConfigParser()
+    config.add_section('STORAGE')
+    config.set('STORAGE', 'path', temp_storage)
+    config.add_section('APP')
+    config.set('APP', 'check_interval_seconds', '1')
+    config.add_section('CAMERA')
+    config.set('CAMERA', 'type', 'dahua')
+    config.set('CAMERA', 'device_ip', '192.168.1.100')
+    config.set('CAMERA', 'username', 'admin')
+    config.set('CAMERA', 'password', 'password')
+    config.add_section('YOUTUBE')
+    config.set('YOUTUBE', 'enabled', 'true')
+    return config
+
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def cleanup_asyncio_tasks():
+    """Automatically cancel all pending asyncio tasks at the end of each test."""
+    # Run the test
+    yield
+    
+    # Get all pending tasks
+    try:
+        current_task = asyncio.current_task()
+        all_tasks = asyncio.all_tasks()
+        
+        # Filter out the current task to avoid cancelling ourselves
+        pending_tasks = [task for task in all_tasks if task != current_task and not task.done()]
+        
+        if pending_tasks:
+            # Cancel all pending tasks
+            for task in pending_tasks:
+                task.cancel()
+            
+            # Wait for all tasks to complete (with cancellation)
+            try:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+            except Exception:
+                # Ignore exceptions during cleanup
+                pass
+                
+    except RuntimeError:
+        # Event loop might already be closed
+        pass 
