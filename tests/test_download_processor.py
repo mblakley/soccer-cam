@@ -9,7 +9,8 @@ from datetime import datetime
 import pytest
 
 from video_grouper.task_processors.download_processor import DownloadProcessor
-from video_grouper.models import RecordingFile, ConvertTask
+from video_grouper.models import RecordingFile
+from video_grouper.task_processors.tasks import ConvertTask
 from video_grouper.directory_state import DirectoryState
 
 
@@ -98,7 +99,7 @@ class TestDownloadProcessor:
         # Verify convert task was queued
         queued_task = mock_video.add_work.call_args[0][0]
         assert isinstance(queued_task, ConvertTask)
-        assert queued_task.item_path == recording_file.file_path
+        assert queued_task.file_path == recording_file.file_path
         
         # Verify file status was updated
         mock_dir_state_instance.update_file_state.assert_any_call(
@@ -209,32 +210,7 @@ class TestDownloadProcessor:
             '/test/group/test.dav', status="downloaded"
         )
     
-    def test_deserialize_item(self, temp_storage, mock_config, mock_camera):
-        """Test deserializing RecordingFile from state data."""
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
-        
-        # Test valid recording file data
-        file_data = {
-            'start_time': '2023-01-01T10:00:00',
-            'end_time': '2023-01-01T10:05:00',
-            'file_path': '/test/path/test.dav',
-            'metadata': {'path': '/test.dav'},
-            'status': 'pending'
-        }
-        
-        recording_file = processor.deserialize_item(file_data)
-        
-        assert isinstance(recording_file, RecordingFile)
-        assert recording_file.file_path == '/test/path/test.dav'
-        assert recording_file.status == 'pending'
-        
-        # Test invalid data
-        invalid_data = {'invalid_key': 'value'}
-        recording_file = processor.deserialize_item(invalid_data)
-        
-        assert recording_file is None
-    
-    def test_get_item_key(self, temp_storage, mock_config, mock_camera):
+    def test_get_item_key_recording_file(self, temp_storage, mock_config, mock_camera):
         """Test getting unique key for RecordingFile."""
         processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
         
@@ -246,5 +222,4 @@ class TestDownloadProcessor:
         )
         
         key = processor.get_item_key(recording_file)
-        
-        assert key == "/test/path/test.dav" 
+        assert key.startswith("recording:/test/path/test.dav:") 

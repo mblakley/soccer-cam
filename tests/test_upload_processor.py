@@ -9,6 +9,7 @@ import pytest
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.models import VideoUploadTask
+from video_grouper.task_processors.tasks import YoutubeUploadTask
 
 
 @pytest.fixture
@@ -55,93 +56,61 @@ class TestUploadProcessor:
         
         processor = UploadProcessor(temp_storage, mock_config)
         
-        upload_task = VideoUploadTask(group_dir)
+        upload_task = YoutubeUploadTask(group_dir)
         await processor.process_item(upload_task)
         
         # Should complete without error (credentials check is logged but doesn't fail)
     
     @pytest.mark.asyncio
-    @patch('video_grouper.task_processors.upload_processor.get_youtube_paths')
-    @patch('os.path.exists')
-    async def test_upload_task_processing_success(self, mock_exists, mock_get_paths, temp_storage, mock_config):
+    async def test_upload_task_processing_success(self, temp_storage, mock_config):
         """Test successful upload task processing."""
         group_dir = "/test/group"
-        credentials_file = "/test/youtube/client_secret.json"
-        token_file = "/test/youtube/token.json"
-        
-        # Mock the path functions
-        mock_get_paths.return_value = (credentials_file, token_file)
-        mock_exists.return_value = True  # Credentials file exists
         
         processor = UploadProcessor(temp_storage, mock_config)
         
-        # Mock the upload function
-        with patch('video_grouper.task_processors.upload_processor.upload_group_videos') as mock_upload:
-            mock_upload.return_value = True
+        # Mock the upload functionality at the task level
+        with patch.object(YoutubeUploadTask, 'execute') as mock_execute:
+            mock_execute.return_value = True
             
-            upload_task = VideoUploadTask(group_dir)
+            upload_task = YoutubeUploadTask(group_dir)
             await processor.process_item(upload_task)
             
-            mock_upload.assert_called_once()
-            
-            # Verify upload was called with correct arguments
-            call_args = mock_upload.call_args
-            assert call_args[0][0] == group_dir  # group_dir
-            assert call_args[0][1] == credentials_file  # credentials_file
-            assert call_args[0][3] is not None  # playlist_config
+            mock_execute.assert_called_once()
     
     @pytest.mark.asyncio
-    @patch('video_grouper.task_processors.upload_processor.get_youtube_paths')
-    @patch('os.path.exists')
-    async def test_upload_task_processing_failure(self, mock_exists, mock_get_paths, temp_storage, mock_config):
+    async def test_upload_task_processing_failure(self, temp_storage, mock_config):
         """Test failed upload task processing."""
         group_dir = "/test/group"
-        credentials_file = "/test/youtube/client_secret.json"
-        token_file = "/test/youtube/token.json"
-        
-        # Mock the path functions
-        mock_get_paths.return_value = (credentials_file, token_file)
-        mock_exists.return_value = True  # Credentials file exists
         
         processor = UploadProcessor(temp_storage, mock_config)
         
-        # Mock the upload function to fail
-        with patch('video_grouper.task_processors.upload_processor.upload_group_videos') as mock_upload:
-            mock_upload.return_value = False
+        # Mock the upload functionality at the task level
+        with patch.object(YoutubeUploadTask, 'execute') as mock_execute:
+            mock_execute.return_value = False
             
-            upload_task = VideoUploadTask(group_dir)
+            upload_task = YoutubeUploadTask(group_dir)
             await processor.process_item(upload_task)
             
-            mock_upload.assert_called_once()
+            mock_execute.assert_called_once()
     
     @pytest.mark.asyncio
-    @patch('video_grouper.task_processors.upload_processor.get_youtube_paths')
-    @patch('os.path.exists')
-    async def test_upload_task_processing_exception(self, mock_exists, mock_get_paths, temp_storage, mock_config):
+    async def test_upload_task_processing_exception(self, temp_storage, mock_config):
         """Test upload task processing with exception."""
         group_dir = "/test/group"
-        credentials_file = "/test/youtube/client_secret.json"
-        token_file = "/test/youtube/token.json"
-        
-        # Mock the path functions
-        mock_get_paths.return_value = (credentials_file, token_file)
-        mock_exists.return_value = True  # Credentials file exists
         
         processor = UploadProcessor(temp_storage, mock_config)
         
-        # Mock the upload function to raise exception
-        with patch('video_grouper.task_processors.upload_processor.upload_group_videos') as mock_upload:
-            mock_upload.side_effect = Exception("Upload error")
+        # Mock the upload functionality at the task level
+        with patch.object(YoutubeUploadTask, 'execute') as mock_execute:
+            mock_execute.side_effect = Exception("Upload error")
             
-            upload_task = VideoUploadTask(group_dir)
+            upload_task = YoutubeUploadTask(group_dir)
             await processor.process_item(upload_task)
             
             # Should complete without raising the exception
     
     @pytest.mark.asyncio
-    @patch('video_grouper.task_processors.upload_processor.get_youtube_paths')
-    @patch('os.path.exists')
-    async def test_upload_task_no_playlist_config(self, mock_exists, mock_get_paths, temp_storage):
+    async def test_upload_task_no_playlist_config(self, temp_storage):
         """Test upload task when no playlist configuration is available."""
         # Create config without playlist sections
         config = configparser.ConfigParser()
@@ -149,53 +118,26 @@ class TestUploadProcessor:
         config.set('APP', 'check_interval_seconds', '10')
         
         group_dir = "/test/group"
-        credentials_file = "/test/youtube/client_secret.json"
-        token_file = "/test/youtube/token.json"
-        
-        # Mock the path functions
-        mock_get_paths.return_value = (credentials_file, token_file)
-        mock_exists.return_value = True  # Credentials file exists
         
         processor = UploadProcessor(temp_storage, config)
         
-        # Mock the upload function
-        with patch('video_grouper.task_processors.upload_processor.upload_group_videos') as mock_upload:
-            mock_upload.return_value = True
+        # Mock the upload functionality at the task level
+        with patch.object(YoutubeUploadTask, 'execute') as mock_execute:
+            mock_execute.return_value = True
             
-            upload_task = VideoUploadTask(group_dir)
+            upload_task = YoutubeUploadTask(group_dir)
             await processor.process_item(upload_task)
             
-            mock_upload.assert_called_once()
-            
-            # Verify upload was called with None playlist_config
-            call_args = mock_upload.call_args
-            assert call_args[0][3] is None  # playlist_config should be None
-    
-    def test_deserialize_upload_task(self, temp_storage, mock_config):
-        """Test deserializing VideoUploadTask from state data."""
-        processor = UploadProcessor(temp_storage, mock_config)
-        
-        # Test valid task data
-        task_data = {'item_path': '/test/path'}
-        task = processor.deserialize_item(task_data)
-        
-        assert isinstance(task, VideoUploadTask)
-        assert task.item_path == '/test/path'
-        
-        # Test invalid task data
-        invalid_data = {'invalid_key': 'value'}
-        task = processor.deserialize_item(invalid_data)
-        
-        assert task is None
+            mock_execute.assert_called_once()
     
     def test_get_item_key(self, temp_storage, mock_config):
-        """Test getting unique key for VideoUploadTask."""
+        """Test getting unique key for BaseUploadTask."""
         processor = UploadProcessor(temp_storage, mock_config)
         
-        upload_task = VideoUploadTask("/test/path/group")
-        key = processor.get_item_key(upload_task)
-        
-        assert key == "/test/path/group"
+        # Test YouTube upload task
+        youtube_task = YoutubeUploadTask(group_dir="/test/path/group")
+        key = processor.get_item_key(youtube_task)
+        assert key.startswith("youtube_upload:/test/path/group:")
     
     def test_get_state_file_name(self, temp_storage, mock_config):
         """Test getting state file name."""

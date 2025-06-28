@@ -8,7 +8,8 @@ from datetime import datetime
 import pytest
 
 from video_grouper.video_grouper_refactored import VideoGrouperApp
-from video_grouper.models import RecordingFile, ConvertTask, VideoUploadTask
+from video_grouper.models import RecordingFile
+from video_grouper.task_processors.tasks import ConvertTask, YoutubeUploadTask
 from video_grouper.directory_state import DirectoryState
 
 
@@ -111,38 +112,50 @@ class TestVideoGrouperAppRefactored:
         """Test adding download task through convenience method."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
         
-        recording_file = RecordingFile(
-            start_time=datetime(2023, 1, 1, 10, 0, 0),
-            end_time=datetime(2023, 1, 1, 10, 5, 0),
-            file_path="/test/path/test.dav",
-            metadata={'path': '/test.dav'}
-        )
-        
-        await app.add_download_task(recording_file)
-        
-        assert app.download_processor.get_queue_size() == 1
+        try:
+            recording_file = RecordingFile(
+                start_time=datetime(2023, 1, 1, 10, 0, 0),
+                end_time=datetime(2023, 1, 1, 10, 5, 0),
+                file_path="/test/path/test.dav",
+                metadata={'path': '/test.dav'}
+            )
+            
+            await app.add_download_task(recording_file)
+            
+            assert app.download_processor.get_queue_size() == 1
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            await app.shutdown()
     
     @pytest.mark.asyncio
     async def test_add_video_task(self, mock_config, mock_camera):
         """Test adding video task through convenience method."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
         
-        convert_task = ConvertTask("/test/path/test.dav")
-        
-        await app.add_video_task(convert_task)
-        
-        assert app.video_processor.get_queue_size() == 1
+        try:
+            convert_task = ConvertTask(file_path="/test/path/test.dav")
+            
+            await app.add_video_task(convert_task)
+            
+            assert app.video_processor.get_queue_size() == 1
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            await app.shutdown()
     
     @pytest.mark.asyncio
     async def test_add_youtube_task(self, mock_config, mock_camera):
         """Test adding YouTube task through convenience method."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
-        
-        upload_task = VideoUploadTask("/test/path/group")
-        
-        await app.add_youtube_task(upload_task)
-        
-        assert app.upload_processor.get_queue_size() == 1
+
+        try:
+            upload_task = YoutubeUploadTask(group_dir="/test/path/group")
+
+            await app.add_youtube_task(upload_task)
+
+            assert app.upload_processor.get_queue_size() == 1
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            await app.shutdown()
     
     def test_get_queue_sizes(self, mock_config, mock_camera):
         """Test getting queue sizes."""
@@ -178,31 +191,35 @@ class TestVideoGrouperAppRefactored:
         """Test a complete workflow integration."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
         
-        # Use mock paths instead of creating actual files
-        group_dir = "/test/group"
-        test_file = "/test/group/test.dav"
-        
-        # Create and add tasks
-        recording_file = RecordingFile(
-            start_time=datetime(2023, 1, 1, 10, 0, 0),
-            end_time=datetime(2023, 1, 1, 10, 5, 0),
-            file_path=test_file,
-            metadata={'path': '/test.dav'}
-        )
-        
-        convert_task = ConvertTask(test_file)
-        upload_task = VideoUploadTask(group_dir)
-        
-        # Add tasks to queues
-        await app.add_download_task(recording_file)
-        await app.add_video_task(convert_task)
-        await app.add_youtube_task(upload_task)
-        
-        # Verify tasks were added
-        queue_sizes = app.get_queue_sizes()
-        assert queue_sizes['download'] == 1
-        assert queue_sizes['video'] == 1
-        assert queue_sizes['youtube'] == 1
+        try:
+            # Use mock paths instead of creating actual files
+            group_dir = "/test/group"
+            test_file = "/test/group/test.dav"
+            
+            # Create and add tasks
+            recording_file = RecordingFile(
+                start_time=datetime(2023, 1, 1, 10, 0, 0),
+                end_time=datetime(2023, 1, 1, 10, 5, 0),
+                file_path=test_file,
+                metadata={'path': '/test.dav'}
+            )
+            
+            convert_task = ConvertTask(file_path=test_file)
+            upload_task = YoutubeUploadTask(group_dir=group_dir)
+            
+            # Add tasks to queues
+            await app.add_download_task(recording_file)
+            await app.add_video_task(convert_task)
+            await app.add_youtube_task(upload_task)
+            
+            # Verify tasks were added
+            queue_sizes = app.get_queue_sizes()
+            assert queue_sizes['download'] == 1
+            assert queue_sizes['video'] == 1
+            assert queue_sizes['youtube'] == 1
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            await app.shutdown()
     
     @pytest.mark.asyncio
     async def test_error_handling_during_initialization(self, mock_config):
@@ -223,13 +240,18 @@ class TestVideoGrouperAppRefactored:
         
         mock_camera.close.assert_called_once()
     
-    def test_storage_path_handling(self, mock_config, mock_camera):
+    @pytest.mark.asyncio
+    async def test_storage_path_handling(self, mock_config, mock_camera):
         """Test storage path is properly handled."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
         
-        # Storage path should be absolute
-        assert os.path.isabs(app.storage_path)
-        
-        # All processors should have the same storage path
-        for processor in app.processors:
-            assert processor.storage_path == app.storage_path 
+        try:
+            # Storage path should be absolute
+            assert os.path.isabs(app.storage_path)
+            
+            # All processors should have the same storage path
+            for processor in app.processors:
+                assert processor.storage_path == app.storage_path
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            await app.shutdown() 

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional, Any, TypedDict, Tuple, Union, List
+from typing import Optional, Any, TypedDict, Tuple
 import logging
 import configparser
 import os
@@ -299,127 +299,192 @@ class MatchInfo:
         
         return my_team_sanitized, opponent_sanitized, location_sanitized
 
-# Base FFmpeg task class
-@dataclass(frozen=True)
-class FFmpegTask:
-    """Base class for FFmpeg tasks."""
-    task_type: str
-    item_path: str
+# Import task classes from the new task processors module
+# These imports provide backward compatibility for existing code
+try:
+    from video_grouper.task_processors.tasks.video import (
+        BaseFfmpegTask as FFmpegTask,
+        ConvertTask,
+        CombineTask, 
+        TrimTask,
+    )
+    from video_grouper.task_processors.tasks.upload import (
+        BaseUploadTask,
+        VideoUploadTask,
+    )
+    from video_grouper.task_processors.tasks.download import (
+        BaseDownloadTask,
+        DahuaDownloadTask,
+    )
     
-    def __hash__(self):
-        """Make FFmpegTask hashable so it can be used in sets and as dictionary keys."""
-        return hash((self.task_type, self.item_path))
-    
-    def __eq__(self, other):
-        """Define equality for FFmpegTask objects."""
-        if not isinstance(other, FFmpegTask):
-            return False
-        return (self.task_type == other.task_type and
-                self.item_path == other.item_path)
-    
-    def to_dict(self) -> dict:
-        """Convert task to a dictionary for serialization."""
-        return {
-            "task_type": self.task_type,
-            "item_path": self.item_path
-        }
-
-@dataclass(frozen=True)
-class ConvertTask(FFmpegTask):
-    """Task for converting a video file."""
-    def __init__(self, file_path: str):
-        super().__init__("convert", file_path)
-
-@dataclass(frozen=True)
-class CombineTask(FFmpegTask):
-    """Task for combining multiple video files."""
-    def __init__(self, group_dir: str):
-        super().__init__("combine", group_dir)
-
-@dataclass(frozen=True)
-class TrimTask(FFmpegTask):
-    """Task for trimming a video file."""
-    match_info: MatchInfo
-    
-    def __init__(self, group_dir: str, match_info: MatchInfo):
-        super().__init__("trim", group_dir)
-        object.__setattr__(self, 'match_info', match_info)
-    
-    def __hash__(self):
-        """Make TrimTask hashable so it can be used in sets and as dictionary keys."""
-        return hash((self.task_type, self.item_path, self.match_info))
-    
-    def __eq__(self, other):
-        """Define equality for TrimTask objects."""
-        if not isinstance(other, TrimTask):
-            return False
-        return (super().__eq__(other) and
-                self.match_info == other.match_info)
-    
-    def to_dict(self) -> dict:
-        """Convert task to a dictionary for serialization."""
-        # We only serialize the basic info, match_info will be loaded from file when needed
-        return {
-            "task_type": self.task_type,
-            "item_path": self.item_path,
-            # Include minimal match info for debugging purposes
-            "match_info_summary": {
-                "my_team_name": self.match_info.my_team_name,
-                "opponent_team_name": self.match_info.opponent_team_name
-            }
-        }
-    
-    @classmethod
-    def from_path(cls, group_dir: str) -> Optional['TrimTask']:
-        """Create a TrimTask from a group directory path."""
-        match_info_path = os.path.join(group_dir, "match_info.ini")
-        match_info = MatchInfo.from_file(match_info_path)
-        if match_info is None:
+    # Unified task_from_dict function for backward compatibility
+    def task_from_dict(task_dict: dict):
+        """Create a task from a serialized dictionary - supports all task types."""
+        task_type = task_dict.get("task_type", "")
+        
+        # Video tasks
+        if task_type == "convert":
+            return ConvertTask.from_dict(task_dict)
+        elif task_type == "combine":
+            return CombineTask.from_dict(task_dict)
+        elif task_type == "trim":
+            return TrimTask.from_dict(task_dict)
+        
+        # Upload tasks
+        elif task_type == "youtube_upload":
+            return VideoUploadTask.from_dict(task_dict)
+        
+        # Download tasks
+        elif task_type == "dahua_download":
+            return DahuaDownloadTask.from_dict(task_dict)
+        
+        else:
+            logger.warning(f"Unknown task type in task_from_dict: {task_type}")
             return None
-        return cls(group_dir, match_info)
+            
+    # Simple task creation function for backward compatibility
+    def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[MatchInfo] = None) -> Optional[FFmpegTask]:
+        """Create an FFmpeg task of the appropriate type."""
+        if task_type == "convert":
+            return ConvertTask(file_path=item_path)
+        elif task_type == "combine":
+            return CombineTask(group_dir=item_path)
+        elif task_type == "trim":
+            if match_info is None:
+                # Try to load from file
+                match_info_path = os.path.join(item_path, "match_info.ini")
+                match_info = MatchInfo.from_file(match_info_path)
+                if match_info is None:
+                    return None
+            return TrimTask.from_match_info(item_path, match_info)
+        elif task_type == "youtube_upload":
+            return VideoUploadTask(group_dir=item_path)
+        else:
+            logger.warning(f"Unknown task type: {task_type}")
+            return None
+except ImportError:
+    # Fallback for tests or if task_processors module is not available
+    logger.warning("Could not import new task classes, using legacy definitions")
+    
+    # Legacy task class definitions for backward compatibility
+    @dataclass(frozen=True)
+    class FFmpegTask:
+        """Base class for FFmpeg tasks."""
+        task_type: str
+        item_path: str
+        
+        def __hash__(self):
+            """Make FFmpegTask hashable so it can be used in sets and as dictionary keys."""
+            return hash((self.task_type, self.item_path))
+        
+        def __eq__(self, other):
+            """Define equality for FFmpegTask objects."""
+            if not isinstance(other, FFmpegTask):
+                return False
+            return (self.task_type == other.task_type and
+                    self.item_path == other.item_path)
+        
+        def to_dict(self) -> dict:
+            """Convert task to a dictionary for serialization."""
+            return {
+                "task_type": self.task_type,
+                "item_path": self.item_path
+            }
 
-@dataclass(frozen=True)
-class VideoUploadTask(FFmpegTask):
-    """Task for uploading videos to YouTube."""
-    
-    def __init__(self, group_dir: str):
-        super().__init__("youtube_upload", group_dir)
-    
-    def to_dict(self) -> dict:
-        """Convert task to a dictionary for serialization."""
-        return {
-            "task_type": self.task_type,
-            "item_path": self.item_path
-        }
+    @dataclass(frozen=True)
+    class ConvertTask(FFmpegTask):
+        """Task for converting a video file."""
+        def __init__(self, file_path: str):
+            super().__init__("convert", file_path)
 
-# Factory function to create the appropriate task type
-def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[MatchInfo] = None) -> Optional[FFmpegTask]:
-    """Create an FFmpeg task of the appropriate type."""
-    if task_type == "convert":
-        return ConvertTask(item_path)
-    elif task_type == "combine":
-        return CombineTask(item_path)
-    elif task_type == "trim":
-        if match_info is None:
-            return TrimTask.from_path(item_path)
-        return TrimTask(item_path, match_info)
-    elif task_type == "youtube_upload":
-        return VideoUploadTask(item_path)
-    else:
-        logger.warning(f"Unknown task type: {task_type}")
-        return None
+    @dataclass(frozen=True)
+    class CombineTask(FFmpegTask):
+        """Task for combining multiple video files."""
+        def __init__(self, group_dir: str):
+            super().__init__("combine", group_dir)
 
-# Function to create a task from a serialized dictionary
-def task_from_dict(task_dict: dict) -> Optional[FFmpegTask]:
-    """Create an FFmpeg task from a serialized dictionary."""
-    task_type = task_dict.get("task_type")
-    item_path = task_dict.get("item_path")
-    
-    if not task_type or not item_path:
-        logger.warning(f"Invalid task dictionary: {task_dict}")
-        return None
-    
-    return create_ffmpeg_task(task_type, item_path)
+    @dataclass(frozen=True)
+    class TrimTask(FFmpegTask):
+        """Task for trimming a video file."""
+        match_info: MatchInfo
+        
+        def __init__(self, group_dir: str, match_info: MatchInfo):
+            super().__init__("trim", group_dir)
+            object.__setattr__(self, 'match_info', match_info)
+        
+        def __hash__(self):
+            """Make TrimTask hashable so it can be used in sets and as dictionary keys."""
+            return hash((self.task_type, self.item_path, self.match_info))
+        
+        def __eq__(self, other):
+            """Define equality for TrimTask objects."""
+            if not isinstance(other, TrimTask):
+                return False
+            return (super().__eq__(other) and
+                    self.match_info == other.match_info)
+        
+        def to_dict(self) -> dict:
+            """Convert task to a dictionary for serialization."""
+            return {
+                "task_type": self.task_type,
+                "item_path": self.item_path,
+                "match_info_summary": {
+                    "my_team_name": self.match_info.my_team_name,
+                    "opponent_team_name": self.match_info.opponent_team_name
+                }
+            }
+        
+        @classmethod
+        def from_path(cls, group_dir: str) -> Optional['TrimTask']:
+            """Create a TrimTask from a group directory path."""
+            match_info_path = os.path.join(group_dir, "match_info.ini")
+            match_info = MatchInfo.from_file(match_info_path)
+            if match_info is None:
+                return None
+            return cls(group_dir, match_info)
+
+    @dataclass(frozen=True)
+    class VideoUploadTask(FFmpegTask):
+        """Task for uploading videos to YouTube."""
+        
+        def __init__(self, group_dir: str):
+            super().__init__("youtube_upload", group_dir)
+        
+        def to_dict(self) -> dict:
+            """Convert task to a dictionary for serialization."""
+            return {
+                "task_type": self.task_type,
+                "item_path": self.item_path
+            }
+
+    # Factory function to create the appropriate task type
+    def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[MatchInfo] = None) -> Optional[FFmpegTask]:
+        """Create an FFmpeg task of the appropriate type."""
+        if task_type == "convert":
+            return ConvertTask(item_path)
+        elif task_type == "combine":
+            return CombineTask(item_path)
+        elif task_type == "trim":
+            if match_info is None:
+                return TrimTask.from_path(item_path)
+            return TrimTask(item_path, match_info)
+        elif task_type == "youtube_upload":
+            return VideoUploadTask(item_path)
+        else:
+            logger.warning(f"Unknown task type: {task_type}")
+            return None
+
+    # Function to create a task from a serialized dictionary
+    def task_from_dict(task_dict: dict) -> Optional[FFmpegTask]:
+        """Create an FFmpeg task from a serialized dictionary."""
+        task_type = task_dict.get("task_type")
+        item_path = task_dict.get("item_path")
+        
+        if not task_type or not item_path:
+            logger.warning(f"Invalid task dictionary: {task_dict}")
+            return None
+        
+        return create_ffmpeg_task(task_type, item_path)
 
 class RecordingFile:
     """Represents a recording file from a camera."""

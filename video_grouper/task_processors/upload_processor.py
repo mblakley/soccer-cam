@@ -1,89 +1,54 @@
 import os
 import logging
+import asyncio
 from typing import Any, Dict, Optional
+import aiofiles
 from .queue_processor_base import QueueProcessor
-from video_grouper.models import VideoUploadTask
-from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
+from .tasks.upload import BaseUploadTask
+from .task_queue_service import get_task_queue_service
 
 logger = logging.getLogger(__name__)
 
 class UploadProcessor(QueueProcessor):
     """
-    Task processor for video uploads.
-    Processes video upload queue sequentially, one video at a time.
+    Task processor for upload operations (YouTube, etc.).
+    Processes upload tasks sequentially.
     """
     
     def __init__(self, storage_path: str, config: Any):
         super().__init__(storage_path, config)
         
+        # Register this processor with the task queue service
+        task_queue_service = get_task_queue_service()
+        task_queue_service.set_upload_processor(self)
+    
     def get_state_file_name(self) -> str:
         return "upload_queue_state.json"
     
-    async def process_item(self, item: VideoUploadTask) -> None:
+    async def process_item(self, item: BaseUploadTask) -> None:
         """
-        Upload videos for a group directory.
+        Process an upload task.
         
         Args:
-            item: VideoUploadTask to process
+            item: BaseUploadTask to process
         """
-        group_dir = item.item_path
-        logger.info(f"UPLOAD: Processing upload task for {group_dir}")
-        
         try:
-            # Get the credentials and token file paths using the helper function
-            credentials_file, token_file = get_youtube_paths(self.storage_path)
+            logger.info(f"UPLOAD: Processing task: {item}")
             
-            # Check if credentials file exists
-            if not os.path.exists(credentials_file):
-                logger.error(f"UPLOAD: Credentials file not found: {credentials_file}")
-                return
+            # Get the task queue service to pass to the task
+            task_queue_service = get_task_queue_service()
             
-            # Get playlist configuration
-            playlist_config = None
-            if self.config.has_section('youtube.playlist.processed') and self.config.has_section('youtube.playlist.raw'):
-                playlist_config = {
-                    "processed": {
-                        "name_format": self.config.get('youtube.playlist.processed', 'name_format', fallback="{my_team_name} 2013s"),
-                        "description": self.config.get('youtube.playlist.processed', 'description', fallback="Processed videos"),
-                        "privacy_status": self.config.get('youtube.playlist.processed', 'privacy_status', fallback="unlisted")
-                    },
-                    "raw": {
-                        "name_format": self.config.get('youtube.playlist.raw', 'name_format', fallback="{my_team_name} 2013s - Full Field"),
-                        "description": self.config.get('youtube.playlist.raw', 'description', fallback="Raw videos"),
-                        "privacy_status": self.config.get('youtube.playlist.raw', 'privacy_status', fallback="unlisted")
-                    }
-                }
-                logger.info(f"UPLOAD: Using playlist configuration: {playlist_config}")
-            else:
-                logger.info("UPLOAD: No playlist configuration found in config file, using defaults")
-            
-            # Upload the videos with playlist configuration
-            success = upload_group_videos(group_dir, credentials_file, token_file, playlist_config)
+            # Execute the task using its own execute method
+            success = await item.execute(task_queue_service)
             
             if success:
-                logger.info(f"UPLOAD: Successfully uploaded videos for {group_dir}")
+                logger.info(f"UPLOAD: Successfully completed task: {item}")
             else:
-                logger.error(f"UPLOAD: Failed to upload videos for {group_dir}")
+                logger.error(f"UPLOAD: Task execution failed: {item}")
                 
         except Exception as e:
-            logger.error(f"UPLOAD: Error during upload for {group_dir}: {e}")
+            logger.error(f"UPLOAD: Error processing task {item}: {e}")
     
-    def serialize_item(self, item: VideoUploadTask) -> Dict[str, Any]:
-        """Serialize a VideoUploadTask for state persistence."""
-        return item.to_dict()
-    
-    def deserialize_item(self, item_data: Dict[str, Any]) -> Optional[VideoUploadTask]:
-        """Deserialize a VideoUploadTask from state data."""
-        try:
-            if 'item_path' in item_data:
-                return VideoUploadTask(item_data['item_path'])
-            else:
-                logger.error(f"UPLOAD: Missing item_path in task data: {item_data}")
-                return None
-        except Exception as e:
-            logger.error(f"UPLOAD: Failed to deserialize VideoUploadTask: {e}")
-            return None
-    
-    def get_item_key(self, item: VideoUploadTask) -> str:
-        """Get unique key for a VideoUploadTask."""
-        return item.item_path 
+    def get_item_key(self, item: BaseUploadTask) -> str:
+        """Get unique key for a BaseUploadTask."""
+        return f"{item.task_type}:{item.get_item_path()}:{hash(item)}" 

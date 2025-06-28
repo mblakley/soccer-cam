@@ -11,7 +11,8 @@ import pytest_asyncio
 from configparser import ConfigParser
 
 from video_grouper.video_grouper import VideoGrouperApp
-from video_grouper.models import ConvertTask, CombineTask, TrimTask, VideoUploadTask, MatchInfo, RecordingFile
+from video_grouper.models import VideoUploadTask, MatchInfo, RecordingFile
+from video_grouper.task_processors.tasks.video import ConvertTask, CombineTask, TrimTask
 
 @pytest.fixture
 def temp_storage_path(tmp_path):
@@ -271,8 +272,9 @@ async def test_poll_for_trimming(app_instance: VideoGrouperApp):
 
     task = await asyncio.wait_for(app_instance.ffmpeg_queue.get(), timeout=1)
     assert isinstance(task, TrimTask)
-    assert task.item_path == group_dir
-    assert task.match_info.my_team_name == "My Team"
+    assert task.get_item_path() == group_dir
+    assert task.start_time == "00:05:00"
+    assert task.end_time == "01:35:00"
 
 
 @pytest.mark.asyncio

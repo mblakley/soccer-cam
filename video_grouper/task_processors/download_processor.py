@@ -1,9 +1,12 @@
 import os
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
+
+from video_grouper.task_processors.tasks.download import BaseDownloadTask
 from .queue_processor_base import QueueProcessor
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import RecordingFile, ConvertTask
+from video_grouper.models import RecordingFile
+from .tasks.video import ConvertTask
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ class DownloadProcessor(QueueProcessor):
                 
                 # After successful download, add to video processor queue for conversion
                 if self.video_processor:
-                    await self.video_processor.add_work(ConvertTask(file_path))
+                    await self.video_processor.add_work(ConvertTask(file_path=file_path))
             else:
                 await dir_state.update_file_state(file_path, status="download_failed")
                 logger.error(f"DOWNLOAD: Download failed for {os.path.basename(file_path)}")
@@ -61,18 +64,5 @@ class DownloadProcessor(QueueProcessor):
             logger.error(f"DOWNLOAD: An error occurred during download of {os.path.basename(file_path)}: {e}", exc_info=True)
             await dir_state.update_file_state(file_path, status="download_failed")
     
-    def serialize_item(self, item: RecordingFile) -> Dict[str, Any]:
-        """Serialize a RecordingFile for state persistence."""
-        return item.to_dict()
-    
-    def deserialize_item(self, item_data: Dict[str, Any]) -> Optional[RecordingFile]:
-        """Deserialize a RecordingFile from state data."""
-        try:
-            return RecordingFile.from_dict(item_data)
-        except Exception as e:
-            logger.error(f"DOWNLOAD: Failed to deserialize RecordingFile: {e}")
-            return None
-    
     def get_item_key(self, item: RecordingFile) -> str:
-        """Get unique key for a RecordingFile."""
-        return item.file_path 
+        return f"recording:{item.file_path}:{hash(item.file_path)}"
