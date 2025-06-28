@@ -11,7 +11,7 @@ import pytz
 
 from video_grouper.ffmpeg_utils import async_convert_file, get_video_duration, create_screenshot, trim_video
 from video_grouper.directory_state import DirectoryState
-from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, create_ffmpeg_task, task_from_dict
+from video_grouper.models import RecordingFile, MatchInfo, FFmpegTask, ConvertTask, CombineTask, TrimTask, VideoUploadTask, create_ffmpeg_task, task_from_dict
 from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.api_integrations.ntfy import NtfyAPI
@@ -351,10 +351,7 @@ class VideoGrouperApp:
                 elif task.task_type == "combine":
                     await self._handle_combine_task(task.item_path)
                 elif task.task_type == "trim":
-                    if isinstance(task, TrimTask):
-                        await self._handle_trim_task(task.item_path, task.match_info)
-                    else:
-                        await self._handle_trim_task(task.item_path)
+                    await self._handle_trim_task(task.item_path, task.match_info)
                 elif task.task_type == "youtube_upload":
                     await self._handle_youtube_upload_task(task.item_path)
                 else:
@@ -901,11 +898,11 @@ class VideoGrouperApp:
             else:
                 logger.error(f"Failed to upload videos for {group_dir} to YouTube")
                 # Re-queue the task for later
-                await self._requeue_ffmpeg_task_later(YouTubeUploadTask(group_dir), 300)  # Try again in 5 minutes
+                await self._requeue_ffmpeg_task_later(VideoUploadTask(group_dir), 300)  # Try again in 5 minutes
         except Exception as e:
             logger.error(f"Error during YouTube upload for {group_dir}: {e}")
             # Re-queue the task for later
-            await self._requeue_ffmpeg_task_later(YouTubeUploadTask(group_dir), 300)  # Try again in 5 minutes
+            await self._requeue_ffmpeg_task_later(VideoUploadTask(group_dir), 300)  # Try again in 5 minutes
 
     async def _filter_existing_state_files(self):
         """Filter existing state.json files to remove recordings that overlap with connected timeframes."""
@@ -1501,7 +1498,7 @@ class VideoGrouperApp:
                     if dir_state.status == "autocam_complete":
                         # Check if YouTube upload is enabled in config
                         if self.config.has_section('YOUTUBE') and self.config.getboolean('YOUTUBE', 'enabled', fallback=False):
-                            youtube_task = YouTubeUploadTask(group_dir)
+                            youtube_task = VideoUploadTask(group_dir)
                             if youtube_task not in self.queued_for_ffmpeg:
                                 logger.info(f"AUDIT: Found autocam_complete group in {group_dir}. Queueing for YouTube upload.")
                                 await self.add_to_ffmpeg_queue(youtube_task)
