@@ -373,11 +373,9 @@ class VideoGrouperApp:
                 is_available = await self.camera.check_availability()
                 if is_available:
                     if not self.camera_connected.is_set():
-                        logger.info("Camera is connected. Starting downloads.")
+                        logger.info("Camera is connected. Resuming downloads.")
                         self.camera_connected.set()
-                    
-                    if self.camera.is_connected:
-                        await self.sync_files_from_camera()
+                    await self.sync_files_from_camera()
                 else:
                     if self.camera_connected.is_set():
                         logger.warning("Camera is disconnected. Pausing downloads.")
@@ -430,6 +428,7 @@ class VideoGrouperApp:
     async def process_download_queue(self):
         """Continuously processes files from the download queue."""
         while True:
+            await self.camera_connected.wait()
             recording_file = await self.download_queue.get()
             await self.handle_download_task(recording_file)
             self.download_queue.task_done()
