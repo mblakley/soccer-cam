@@ -4,10 +4,13 @@ Combine task for combining multiple MP4 files into a single video.
 
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
+import aiofiles
 
 from .base_ffmpeg_task import BaseFfmpegTask
+from video_grouper.directory_state import DirectoryState
+from video_grouper.models import MatchInfo
 
 logger = logging.getLogger(__name__)
 
@@ -101,18 +104,16 @@ class CombineTask(BaseFfmpegTask):
             pass
         return mp4_files
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the combine task with proper file list creation and handle post-actions.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if command succeeded, False otherwise
         """
-        import aiofiles
-        
         mp4_files = self.get_mp4_files()
         if not mp4_files:
             await self._handle_task_failure()
@@ -128,10 +129,10 @@ class CombineTask(BaseFfmpegTask):
                     await f.write(f"file '{os.path.basename(mp4_file)}'\n")
             
             # Execute the ffmpeg command
-            success = await super().execute(task_queue_service)
+            success = await super().execute(queue_task)
             
             if success:
-                await self._handle_post_combine_actions(task_queue_service)
+                await self._handle_post_combine_actions(queue_task)
             else:
                 await self._handle_task_failure()
             
@@ -149,12 +150,9 @@ class CombineTask(BaseFfmpegTask):
             except Exception:
                 pass
     
-    async def _handle_post_combine_actions(self, task_queue_service: Optional['TaskQueueService'] = None) -> None:
+    async def _handle_post_combine_actions(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> None:
         """Handle post-combine actions like updating status and checking for trim readiness."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            from video_grouper.models import MatchInfo
-            
             dir_state = DirectoryState(self.group_dir)
             
             logger.info(f"COMBINE: Successfully combined videos in {self.group_dir}")
@@ -166,13 +164,13 @@ class CombineTask(BaseFfmpegTask):
                 match_info = MatchInfo.from_file(match_info_path)
                 if match_info and match_info.is_populated():
                     # Queue trim task if requested
-                    if task_queue_service:
+                    if queue_task:
                         from .trim_task import TrimTask
                         trim_task = TrimTask.from_match_info(self.group_dir, match_info)
-                        await task_queue_service.queue_task(trim_task)
+                        await queue_task(trim_task)
                         logger.info(f"COMBINE: Queued trim task: {trim_task}")
                     else:
-                        logger.warning(f"COMBINE: No task queue service available to queue trim task for {self.group_dir}")
+                        logger.warning(f"COMBINE: No task queue function available to queue trim task for {self.group_dir}")
                     
         except Exception as e:
             logger.error(f"COMBINE: Error in post-combine actions for {self}: {e}")
@@ -180,8 +178,6 @@ class CombineTask(BaseFfmpegTask):
     async def _handle_task_failure(self) -> None:
         """Handle task failure by updating directory state."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            
             dir_state = DirectoryState(self.group_dir)
             await dir_state.update_group_status("combine_failed", error_message="Task execution failed")
         except Exception as e:
@@ -202,6 +198,4 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             CombineTask instance
         """
-        # Handle both 'group_dir' and 'item_path' for backward compatibility
-        group_dir = data.get('group_dir') or data.get('item_path')
-        return cls(group_dir=group_dir) 
+        return cls(group_dir=data['group_dir']) 

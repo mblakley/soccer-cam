@@ -6,7 +6,7 @@ import os
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from ..base_task import BaseTask
@@ -59,12 +59,12 @@ class BaseUploadTask(BaseTask):
         pass
     
     @abstractmethod
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the upload task.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if upload succeeded, False otherwise

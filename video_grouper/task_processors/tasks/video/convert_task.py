@@ -4,10 +4,13 @@ Convert task for converting video files from DAV to MP4 format.
 
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from .base_ffmpeg_task import BaseFfmpegTask
+from video_grouper.models import MatchInfo
+from video_grouper.directory_state import DirectoryState
+from video_grouper.ffmpeg_utils import create_screenshot, get_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -48,33 +51,29 @@ class ConvertTask(BaseFfmpegTask):
             output_path
         ]
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the convert task and handle post-actions.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if command succeeded, False otherwise
         """
         # Execute the FFmpeg command
-        success = await super().execute(task_queue_service)
+        success = await super().execute(queue_task)
         
         if success:
-            await self._handle_post_conversion_actions(task_queue_service)
+            await self._handle_post_conversion_actions(queue_task)
         else:
             await self._handle_task_failure()
         
         return success
     
-    async def _handle_post_conversion_actions(self, task_queue_service: Optional['TaskQueueService'] = None) -> None:
+    async def _handle_post_conversion_actions(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> None:
         """Handle post-conversion actions like creating screenshots and checking for combine readiness."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            from video_grouper.models import MatchInfo
-            from video_grouper.ffmpeg_utils import create_screenshot
-            
             filename = os.path.basename(self.file_path)
             group_dir = os.path.dirname(self.file_path)
             dir_state = DirectoryState(group_dir)
@@ -95,13 +94,13 @@ class ConvertTask(BaseFfmpegTask):
             if dir_state.is_ready_for_combining():
                 logger.info(f"CONVERT: Group {os.path.basename(group_dir)} is ready for combining.")
                 
-                if task_queue_service:
+                if queue_task:
                     from .combine_task import CombineTask
                     combine_task = CombineTask(group_dir=group_dir)
-                    await task_queue_service.queue_task(combine_task)
+                    await queue_task(combine_task)
                     logger.info(f"CONVERT: Queued combine task: {combine_task}")
                 else:
-                    logger.warning(f"CONVERT: No task queue service available to queue combine task for {group_dir}")
+                    logger.warning(f"CONVERT: No task queue function available to queue combine task for {group_dir}")
                 
         except Exception as e:
             logger.error(f"CONVERT: Error in post-conversion actions for {self}: {e}")
@@ -109,8 +108,6 @@ class ConvertTask(BaseFfmpegTask):
     async def _handle_task_failure(self) -> None:
         """Handle task failure by updating directory state."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            
             dir_state = DirectoryState(os.path.dirname(self.file_path))
             await dir_state.update_file_state(self.file_path, status="conversion_failed")
         except Exception as e:
@@ -118,15 +115,12 @@ class ConvertTask(BaseFfmpegTask):
     
     async def _ensure_match_info_exists(self, group_dir: str):
         """Creates match_info.ini in the group directory if it doesn't exist."""
-        from video_grouper.models import MatchInfo
         match_info, config = MatchInfo.get_or_create(group_dir)
     
     async def _cleanup_dav_files(self, directory: str):
         """
         Removes .dav files if a corresponding valid .mp4 file exists in the same directory.
         """
-        from video_grouper.ffmpeg_utils import get_video_duration
-        
         deleted_count = 0
         
         try:

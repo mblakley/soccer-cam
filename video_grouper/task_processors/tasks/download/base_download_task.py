@@ -6,7 +6,7 @@ import os
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from ..base_task import BaseTask
@@ -79,9 +79,12 @@ class BaseDownloadTask(BaseTask):
         pass
     
     @abstractmethod
-    async def execute(self) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the download task.
+        
+        Args:
+            queue_task: Function to queue additional tasks (optional, not typically used for downloads)
         
         Returns:
             True if download succeeded, False otherwise

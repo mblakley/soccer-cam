@@ -4,11 +4,12 @@ Trim task for trimming combined videos based on match information.
 
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
 
 from .base_ffmpeg_task import BaseFfmpegTask
+from video_grouper.directory_state import DirectoryState
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,18 @@ class TrimTask(BaseFfmpegTask):
         
         return cmd
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the trim task and handle post-actions.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if command succeeded, False otherwise
         """
         # Execute the FFmpeg command
-        success = await super().execute(task_queue_service)
+        success = await super().execute(queue_task)
         
         if success:
             await self._handle_post_trim_actions()
@@ -75,8 +76,6 @@ class TrimTask(BaseFfmpegTask):
     async def _handle_post_trim_actions(self) -> None:
         """Handle post-trim actions like updating status."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            
             dir_state = DirectoryState(self.group_dir)
             logger.info(f"TRIM: Successfully trimmed video in {self.group_dir}")
             await dir_state.update_group_status("trimmed")
@@ -87,8 +86,6 @@ class TrimTask(BaseFfmpegTask):
     async def _handle_task_failure(self) -> None:
         """Handle task failure by updating directory state."""
         try:
-            from video_grouper.directory_state import DirectoryState
-            
             dir_state = DirectoryState(self.group_dir)
             await dir_state.update_group_status("trim_failed", error_message="Task execution failed")
         except Exception as e:
