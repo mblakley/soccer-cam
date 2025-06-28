@@ -379,7 +379,7 @@ class TrimTask(FFmpegTask):
         return cls(group_dir, match_info)
 
 @dataclass(frozen=True)
-class YouTubeUploadTask(FFmpegTask):
+class VideoUploadTask(FFmpegTask):
     """Task for uploading videos to YouTube."""
     
     def __init__(self, group_dir: str):
@@ -404,7 +404,7 @@ def create_ffmpeg_task(task_type: str, item_path: str, match_info: Optional[Matc
             return TrimTask.from_path(item_path)
         return TrimTask(item_path, match_info)
     elif task_type == "youtube_upload":
-        return YouTubeUploadTask(item_path)
+        return VideoUploadTask(item_path)
     else:
         logger.warning(f"Unknown task type: {task_type}")
         return None

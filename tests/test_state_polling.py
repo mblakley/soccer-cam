@@ -11,7 +11,7 @@ import pytest_asyncio
 from configparser import ConfigParser
 
 from video_grouper.video_grouper import VideoGrouperApp
-from video_grouper.models import ConvertTask, CombineTask, TrimTask, YouTubeUploadTask, MatchInfo, RecordingFile
+from video_grouper.models import ConvertTask, CombineTask, TrimTask, VideoUploadTask, MatchInfo, RecordingFile
 
 @pytest.fixture
 def temp_storage_path(tmp_path):
@@ -277,7 +277,7 @@ async def test_poll_for_trimming(app_instance: VideoGrouperApp):
 
 @pytest.mark.asyncio
 async def test_poll_for_youtube_upload(app_instance: VideoGrouperApp):
-    """Test that an 'autocam_complete' group gets a YouTubeUploadTask."""
+    """Test that an 'autocam_complete' group gets a VideoUploadTask."""
     group_name = "2023.01.01-15.00.00"  # Use valid group directory format
     group_dir = os.path.join(app_instance.storage_path, group_name)
     state_data = {"status": "autocam_complete", "files": {}}
@@ -286,7 +286,7 @@ async def test_poll_for_youtube_upload(app_instance: VideoGrouperApp):
     await app_instance._audit_storage_directory()
 
     task = await asyncio.wait_for(app_instance.ffmpeg_queue.get(), timeout=1)
-    assert isinstance(task, YouTubeUploadTask)
+    assert isinstance(task, VideoUploadTask)
     assert task.item_path == group_dir
 
 
