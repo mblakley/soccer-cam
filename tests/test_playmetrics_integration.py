@@ -247,23 +247,17 @@ async def test_video_grouper_playmetrics_integration():
     # Create a VideoGrouperApp instance with the mock config
     with patch('video_grouper.video_grouper.PlayMetricsAPI') as mock_playmetrics_class, \
          patch('builtins.open', mock_open()), \
-         patch('os.path.exists', return_value=True), \
-         patch('os.path.join', lambda *args: '/'.join(args)), \
-         patch('os.makedirs'), \
-         patch('video_grouper.video_grouper.create_directory'), \
-         patch('video_grouper.video_grouper.DahuaCamera'):
+         patch('os.path.exists', return_value=True):
         
-        # Set up the mock PlayMetrics API
-        mock_playmetrics = MagicMock()
-        mock_playmetrics.enabled = True
-        mock_playmetrics.login = MagicMock(return_value=True)
-        mock_playmetrics_class.return_value = mock_playmetrics
+        # Mock the PlayMetricsAPI instance
+        mock_playmetrics_api = mock_playmetrics_class.return_value
+        mock_playmetrics_api.enabled = True
         
-        app = VideoGrouperApp(config)
+        # Create a mock camera and pass it to the app
+        mock_camera = MagicMock()
+        app = VideoGrouperApp(config, camera=mock_camera)
         
-        # Manually initialize PlayMetrics
-        app._initialize_playmetrics()
-        
-        # Check that the PlayMetrics API was initialized
+        # Check that the PlayMetricsAPI was initialized
+        mock_playmetrics_class.assert_called_once()
         assert app.playmetrics_api is not None
-        assert app._playmetrics_initialized is True 
+        assert app.playmetrics_api.enabled is True 
