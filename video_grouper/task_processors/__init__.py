@@ -1,6 +1,5 @@
 """Task processors package for video grouper application."""
 
-from .base import TaskProcessor
 from .polling_processor_base import PollingProcessor
 from .queue_processor_base import QueueProcessor
 from .state_auditor import StateAuditor
@@ -10,7 +9,6 @@ from .video_processor import VideoProcessor
 from .upload_processor import UploadProcessor
 
 __all__ = [
-    'TaskProcessor',
     'PollingProcessor',
     'QueueProcessor',
     'StateAuditor',

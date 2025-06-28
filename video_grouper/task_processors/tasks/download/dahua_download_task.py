@@ -4,7 +4,7 @@ Dahua download task for downloading files from Dahua cameras.
 
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -45,6 +45,18 @@ class DahuaDownloadTask(BaseDownloadTask):
         """Return the local file path."""
         return self.local_file_path
     
+    def get_remote_path(self) -> str:
+        """Return the remote file path."""
+        return self.remote_file_path
+    
+    def get_camera_config(self) -> Dict[str, Any]:
+        """Return the camera configuration."""
+        return {
+            "ip": self.camera_ip,
+            "username": self.username,
+            "password": self.password
+        }
+    
     def serialize(self) -> Dict[str, Any]:
         """
         Serialize the task for state persistence.
@@ -65,12 +77,12 @@ class DahuaDownloadTask(BaseDownloadTask):
             "metadata": self.metadata or {}
         }
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the download task.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if download succeeded, False otherwise
@@ -102,10 +114,10 @@ class DahuaDownloadTask(BaseDownloadTask):
                 logger.info(f"DOWNLOAD: Successfully downloaded {self.remote_file_path} to {self.local_file_path}")
                 
                 # Queue conversion task if this is a video file
-                if self.local_file_path.endswith('.dav') and task_queue_service:
+                if self.local_file_path.endswith('.dav') and queue_task:
                     from ..video import ConvertTask
                     convert_task = ConvertTask(file_path=self.local_file_path)
-                    await task_queue_service.queue_task(convert_task)
+                    await queue_task(convert_task)
                     logger.info(f"DOWNLOAD: Queued convert task for {self.local_file_path}")
                 
                 return True

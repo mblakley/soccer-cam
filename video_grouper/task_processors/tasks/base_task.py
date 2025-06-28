@@ -3,7 +3,7 @@ Base class for all tasks.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, Awaitable
 
 from .queue_type import QueueType
 
@@ -38,12 +38,12 @@ class BaseTask(ABC):
         pass
     
     @abstractmethod
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the task.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if task succeeded, False otherwise

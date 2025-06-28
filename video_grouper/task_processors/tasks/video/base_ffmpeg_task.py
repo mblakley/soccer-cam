@@ -5,7 +5,7 @@ Base class for FFmpeg tasks.
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 from ..base_task import BaseTask
 from ..queue_type import QueueType
@@ -31,12 +31,12 @@ class BaseFfmpegTask(BaseTask):
         """Return the FFmpeg command to execute."""
         pass
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the FFmpeg command.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if command succeeded, False otherwise

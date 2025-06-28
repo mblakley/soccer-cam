@@ -3,10 +3,13 @@ YouTube upload task for uploading videos to YouTube.
 """
 
 import os
-from typing import Dict, Any, Optional
+import logging
+from typing import Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from .base_upload_task import BaseUploadTask
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(unsafe_hash=True)
@@ -39,19 +42,16 @@ class YoutubeUploadTask(BaseUploadTask):
             "group_dir": self.group_dir
         }
     
-    async def execute(self, task_queue_service: Optional['TaskQueueService'] = None) -> bool:
+    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
         """
         Execute the YouTube upload task.
         
         Args:
-            task_queue_service: Service for queueing additional tasks
+            queue_task: Function to queue additional tasks
             
         Returns:
             True if upload succeeded, False otherwise
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
         try:
             # Import YouTube upload functionality
             from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
