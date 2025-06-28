@@ -20,8 +20,8 @@ class MatchInfo:
     my_team_name: str
     opponent_team_name: str
     location: str
-    start_time_offset: str = '00:00:00'
-    total_duration: str = '01:30:00'
+    start_time_offset: str = ''
+    total_duration: str = ''
     
     def __hash__(self):
         """Make MatchInfo hashable so it can be used in sets and as dictionary keys."""
@@ -56,8 +56,8 @@ class MatchInfo:
                 my_team_name=config.get('MATCH', 'my_team_name'),
                 opponent_team_name=config.get('MATCH', 'opponent_team_name'),
                 location=config.get('MATCH', 'location'),
-                start_time_offset=config.get('MATCH', 'start_time_offset', fallback='00:00:00'),
-                total_duration=config.get('MATCH', 'total_duration', fallback='01:30:00')
+                start_time_offset=config.get('MATCH', 'start_time_offset', fallback=''),
+                total_duration=config.get('MATCH', 'total_duration', fallback='')
             )
         except (configparser.Error, KeyError) as e:
             logger.error(f"Error creating MatchInfo from config: {e}")
@@ -169,9 +169,9 @@ class MatchInfo:
         if "location" not in config["MATCH"]:
             config["MATCH"]["location"] = "Unknown"
         if "start_time_offset" not in config["MATCH"]:
-            config["MATCH"]["start_time_offset"] = "00:00:00"
+            config["MATCH"]["start_time_offset"] = ""
         if "total_duration" not in config["MATCH"]:
-            config["MATCH"]["total_duration"] = "01:30:00"
+            config["MATCH"]["total_duration"] = ""
         
         # Save the config
         with open(match_info_path, "w") as f:
@@ -216,6 +216,10 @@ class MatchInfo:
             config["MATCH"]["opponent_team_name"] = "Opponent"
         if "location" not in config["MATCH"]:
             config["MATCH"]["location"] = "Unknown"
+        if "start_time_offset" not in config["MATCH"]:
+            config["MATCH"]["start_time_offset"] = ""
+        if "total_duration" not in config["MATCH"]:
+            config["MATCH"]["total_duration"] = ""
             
         # Save the config again with defaults
         with open(match_info_path, "w") as f:
@@ -272,8 +276,7 @@ class MatchInfo:
     def get_start_offset(self) -> str:
         """Get start_time_offset in HH:MM:SS format."""
         if not self.start_time_offset or not self.start_time_offset.strip():
-            logger.warning("Empty start_time_offset, using default of 00:00:00")
-            return "00:00:00"
+            return ""
             
         try:
             parts = self.start_time_offset.split(':')
@@ -285,11 +288,11 @@ class MatchInfo:
                 # Already in HH:MM:SS format
                 return self.start_time_offset
             else:
-                logger.warning(f"Invalid time format: {self.start_time_offset}, using default of 00:00:00")
-                return "00:00:00"
+                logger.warning(f"Invalid time format: {self.start_time_offset}")
+                return ""
         except (ValueError, TypeError) as e:
-            logger.warning(f"Error parsing start offset '{self.start_time_offset}': {e}, using default of 00:00:00")
-            return "00:00:00"
+            logger.warning(f"Error parsing start offset '{self.start_time_offset}': {e}")
+            return ""
     
     def get_sanitized_names(self) -> Tuple[str, str, str]:
         """Get sanitized team and location names for file naming."""
