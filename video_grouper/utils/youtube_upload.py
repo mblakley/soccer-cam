@@ -11,6 +11,10 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+from video_grouper.utils.locking import FileLock
+from video_grouper.models import MatchInfo
+from video_grouper.utils.directory_state import DirectoryState
+import configparser
 
 logger = logging.getLogger(__name__)
 
@@ -199,14 +203,14 @@ class YouTubeUploader:
         
         Args:
             video_path: Path to the video file
-            title: Title of the video
-            description: Description of the video
+            title: Video title
+            description: Video description
             tags: List of tags for the video
-            privacy_status: Privacy status of the video (private, unlisted, public)
-            playlist_id: Optional playlist ID to add the video to
+            privacy_status: Privacy status (private, unlisted, public)
+            playlist_id: ID of playlist to add video to (optional)
             
         Returns:
-            str: YouTube video ID if upload was successful, None otherwise
+            str: Video ID if upload was successful, None otherwise
         """
         if not self.youtube:
             if not self.authenticate():
@@ -217,69 +221,85 @@ class YouTubeUploader:
             logger.error(f"Video file not found: {video_path}")
             return None
         
-        if tags is None:
-            tags = []
-        
-        body = {
-            'snippet': {
-                'title': title,
-                'description': description,
-                'tags': tags,
-                'categoryId': '17'  # Sports category
-            },
-            'status': {
-                'privacyStatus': privacy_status,
-                'selfDeclaredMadeForKids': False
-            }
-        }
+        # Get file size for progress tracking
+        file_size = os.path.getsize(video_path)
+        logger.info(f"Uploading {os.path.basename(video_path)} ({file_size / (1024*1024):.1f} MB)")
         
         try:
-            # Create a MediaFileUpload object for the video file
-            media = MediaFileUpload(
-                video_path, 
-                mimetype='video/mp4', 
-                resumable=True
-            )
+            # Prepare the request body
+            body = {
+                'snippet': {
+                    'title': title,
+                    'description': description,
+                    'tags': tags or [],
+                    'categoryId': '17'  # Sports category
+                },
+                'status': {
+                    'privacyStatus': privacy_status,
+                    'selfDeclaredMadeForKids': False
+                }
+            }
             
-            # Call the API's videos.insert method to upload the video
-            insert_request = self.youtube.videos().insert(
+            # Create the media upload object
+            media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+            
+            # Create the upload request
+            request = self.youtube.videos().insert(
                 part=','.join(body.keys()),
                 body=body,
                 media_body=media
             )
             
-            logger.info(f"Starting upload for {os.path.basename(video_path)}")
-            
-            # Upload the video with progress tracking
+            # Execute the upload with progress tracking
             response = None
+            error = None
+            retry = 0
+            
             while response is None:
-                status, response = insert_request.next_chunk()
-                if status:
-                    percent = int(status.progress() * 100)
-                    logger.info(f"Upload progress: {percent}%")
+                try:
+                    status, response = request.next_chunk()
+                    if status:
+                        progress = int(status.progress() * 100)
+                        logger.info(f"Upload progress: {progress}%")
+                except HttpError as e:
+                    if e.resp.status in [500, 502, 503, 504]:
+                        # Recoverable error, retry
+                        retry += 1
+                        if retry > 5:
+                            logger.error(f"Too many retries, giving up: {e}")
+                            return None
+                        logger.warning(f"Recoverable error {e.resp.status}, retrying ({retry}/5)")
+                        time.sleep(2 ** retry)
+                    else:
+                        # Non-recoverable error
+                        logger.error(f"Upload failed with error: {e}")
+                        return None
+                except Exception as e:
+                    logger.error(f"Unexpected error during upload: {e}")
+                    return None
             
-            logger.info(f"Upload complete for {os.path.basename(video_path)}")
-            video_id = response['id']
-            logger.info(f"Video ID: {video_id}")
-            
-            # Add to playlist if specified
-            if playlist_id and video_id:
-                self.add_video_to_playlist(video_id, playlist_id)
-            
-            return video_id
-            
-        except HttpError as e:
-            logger.error(f"An HTTP error occurred: {e.resp.status} {e.content}")
-            return None
+            if response:
+                video_id = response['id']
+                logger.info(f"Successfully uploaded video: {title} (ID: {video_id})")
+                
+                # Add to playlist if specified
+                if playlist_id:
+                    self.add_video_to_playlist(video_id, playlist_id)
+                
+                return video_id
+            else:
+                logger.error("Upload completed but no response received")
+                return None
+                
         except Exception as e:
-            logger.error(f"An error occurred during upload: {e}")
+            logger.error(f"Error uploading video {video_path}: {e}")
             return None
     
     def find_playlist_by_name(self, name: str) -> Optional[str]:
         """Find a playlist by name.
         
         Args:
-            name: The name of the playlist to find
+            name: Name of the playlist to find
             
         Returns:
             str: Playlist ID if found, None otherwise
@@ -290,7 +310,7 @@ class YouTubeUploader:
                 return None
         
         try:
-            # Get the authenticated user's playlists
+            # Get all playlists for the authenticated user
             request = self.youtube.playlists().list(
                 part="snippet",
                 mine=True,
@@ -300,27 +320,29 @@ class YouTubeUploader:
             while request:
                 response = request.execute()
                 
-                for playlist in response.get('items', []):
+                for playlist in response['items']:
                     if playlist['snippet']['title'] == name:
-                        return playlist['id']
+                        playlist_id = playlist['id']
+                        logger.info(f"Found playlist '{name}' with ID: {playlist_id}")
+                        return playlist_id
                 
-                # Get the next page of results
+                # Check if there are more results
                 request = self.youtube.playlists().list_next(request, response)
             
-            # Playlist not found
+            logger.info(f"Playlist '{name}' not found")
             return None
             
         except Exception as e:
-            logger.error(f"Error finding playlist: {e}")
+            logger.error(f"Error searching for playlist '{name}': {e}")
             return None
     
     def create_playlist(self, name: str, description: str = "", privacy_status: str = "unlisted") -> Optional[str]:
         """Create a new playlist.
         
         Args:
-            name: The name of the playlist
-            description: The description of the playlist
-            privacy_status: The privacy status of the playlist (private, unlisted, public)
+            name: Name of the playlist
+            description: Description of the playlist
+            privacy_status: Privacy status (private, unlisted, public)
             
         Returns:
             str: Playlist ID if created successfully, None otherwise
@@ -331,7 +353,6 @@ class YouTubeUploader:
                 return None
         
         try:
-            # Create the playlist
             request = self.youtube.playlists().insert(
                 part="snippet,status",
                 body={
@@ -347,20 +368,20 @@ class YouTubeUploader:
             
             response = request.execute()
             playlist_id = response['id']
-            logger.info(f"Created playlist: {name} (ID: {playlist_id})")
+            logger.info(f"Created playlist '{name}' with ID: {playlist_id}")
             return playlist_id
             
         except Exception as e:
-            logger.error(f"Error creating playlist: {e}")
+            logger.error(f"Error creating playlist '{name}': {e}")
             return None
     
     def get_or_create_playlist(self, name: str, description: str = "", privacy_status: str = "unlisted") -> Optional[str]:
-        """Get a playlist by name or create it if it doesn't exist.
+        """Get an existing playlist by name or create a new one.
         
         Args:
-            name: The name of the playlist
-            description: The description of the playlist (used if creating)
-            privacy_status: The privacy status of the playlist (used if creating)
+            name: Name of the playlist
+            description: Description for the playlist if it needs to be created
+            privacy_status: Privacy status for the playlist if it needs to be created
             
         Returns:
             str: Playlist ID if found or created successfully, None otherwise
@@ -441,184 +462,100 @@ def format_video_title(match_info, file_path: str, group_dir: str) -> str:
     
     return base_title
 
-def upload_group_videos(group_dir: str, credentials_file: str, token_file: str, 
-                        playlist_config: Optional[Dict[str, Any]] = None) -> bool:
-    """Upload all videos from a group directory to YouTube.
-    
-    Args:
-        group_dir: Path to the group directory
-        credentials_file: Path to the client_secret.json file
-        token_file: Path to store the token.json file
-        playlist_config: Optional configuration for playlists
-        
-    Returns:
-        bool: True if all uploads were successful, False otherwise
+def get_playlist_name_from_mapping(team_name: str, config: configparser.ConfigParser) -> Optional[str]:
     """
-    group_path = Path(group_dir)
+    Get the base playlist name for a team from the config mapping.
+
+    Args:
+        team_name: The name of the team.
+        config: The application config.
+
+    Returns:
+        The base playlist name, or None if not found.
+    """
+    if not config.has_section('YOUTUBE_PLAYLIST_MAPPING'):
+        return None
     
-    # Check if the group directory exists
-    if not group_path.exists() or not group_path.is_dir():
-        logger.error(f"Group directory not found: {group_dir}")
+    mapping = config['YOUTUBE_PLAYLIST_MAPPING']
+    return mapping.get(team_name) or mapping.get('Default')
+
+def upload_group_videos(group_dir: str, credentials_file: str, token_file: str,
+                        processed_playlist_name: Optional[str] = None,
+                        raw_playlist_name: Optional[str] = None,
+                        privacy_status: str = "private") -> bool:
+    """
+    Uploads all videos in a group directory to YouTube.
+    
+    This function only handles the actual YouTube upload process.
+    Playlist coordination and user interaction should be handled by the caller.
+
+    Args:
+        group_dir: The directory containing the videos and match_info.ini.
+        credentials_file: Path to the YouTube API credentials file.
+        token_file: Path to the YouTube API token file.
+        processed_playlist_name: Name of playlist for processed videos (optional).
+        raw_playlist_name: Name of playlist for raw videos (optional).
+        privacy_status: Privacy status for uploaded videos.
+
+    Returns:
+        True if all uploads were successful, False otherwise.
+    """
+    match_info_path = os.path.join(group_dir, "match_info.ini")
+    if not os.path.exists(match_info_path):
+        logger.error(f"match_info.ini not found in {group_dir}")
         return False
-    
-    # Check if state.json exists and status is autocam_complete
-    state_file = group_path / "state.json"
-    if not state_file.exists():
-        logger.error(f"State file not found in group directory: {group_dir}")
+
+    match_info = MatchInfo.from_file(match_info_path)
+    if not match_info:
+        logger.error(f"Could not load match info from {match_info_path}")
         return False
-    
-    try:
-        with open(state_file, 'r') as f:
-            state_data = json.load(f)
-        
-        if state_data.get('status') != 'autocam_complete':
-            logger.error(f"Group status is not autocam_complete: {state_data.get('status')}")
-            return False
-    except Exception as e:
-        logger.error(f"Error reading state file: {e}")
-        return False
-    
-    # Find the raw and processed video files
-    raw_file = None
-    processed_file = None
-    
-    for file in group_path.glob('**/*-raw.mp4'):
-        raw_file = file
-        break
-    
-    if raw_file:
-        # The processed file should have the same name but without the -raw suffix
-        processed_file = raw_file.with_name(raw_file.name.replace('-raw.mp4', '.mp4'))
-        if not processed_file.exists():
-            logger.error(f"Processed file not found: {processed_file}")
-            processed_file = None
-    else:
-        logger.error(f"Raw file not found in group directory: {group_dir}")
-        return False
-    
-    # Get match info for video metadata
-    match_info_file = group_path / "match_info.ini"
-    title_prefix = "Soccer Match"
-    description = "Soccer match recording"
-    
-    if match_info_file.exists():
-        try:
-            import configparser
-            from video_grouper.models import MatchInfo
-            
-            match_info = MatchInfo.from_file(str(match_info_file))
-            if match_info:
-                # Use the match info for video titles and descriptions
-                raw_title = format_video_title(match_info, str(raw_file), str(group_path))
-                processed_title = format_video_title(match_info, str(processed_file), str(group_path))
-                description = f"Soccer match: {match_info.my_team_name} vs {match_info.opponent_team_name} at {match_info.location}"
-            else:
-                # Fallback titles if match info couldn't be parsed
-                raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
-                processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
-        except Exception as e:
-            logger.error(f"Error reading match info: {e}")
-            # Fallback titles if match info couldn't be parsed
-            raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
-            processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
-            match_info = None
-    else:
-        # Fallback titles if match info doesn't exist
-        raw_title = f"Soccer Match - Raw Recording ({os.path.basename(group_dir)})"
-        processed_title = f"Soccer Match - Processed ({os.path.basename(group_dir)})"
-        match_info = None
-    
-    # Create YouTube uploader
+
     uploader = YouTubeUploader(credentials_file, token_file)
-    if not uploader.authenticate():
-        logger.error("Failed to authenticate with YouTube API")
-        return False
-    
-    success = True
-    
-    # Default playlist configuration if none provided
-    if playlist_config is None and match_info:
-        playlist_config = {
-            "processed": {
-                "name_format": "{my_team_name} 2013s",
-                "description": f"Processed videos for {match_info.my_team_name} 2013s team"
-            },
-            "raw": {
-                "name_format": "{my_team_name} 2013s - Full Field",
-                "description": f"Raw full field videos for {match_info.my_team_name} 2013s team"
-            }
-        }
-    
-    # Upload processed video if it exists
-    if processed_file and match_info:
-        # Get or create the playlist for processed videos
-        processed_playlist_id = None
-        if playlist_config and "processed" in playlist_config:
-            playlist_name = playlist_config["processed"]["name_format"].format(
-                my_team_name=match_info.my_team_name,
-                opponent_team_name=match_info.opponent_team_name,
-                location=match_info.location
-            )
-            playlist_desc = playlist_config["processed"].get("description", f"Processed videos for {match_info.my_team_name}")
-            processed_playlist_id = uploader.get_or_create_playlist(playlist_name, playlist_desc)
+
+    # Processed (trimmed) video
+    processed_video_path = os.path.join(group_dir, "combined_trimmed.mp4")
+    if os.path.exists(processed_video_path):
+        logger.info(f"Uploading processed video: {processed_video_path}")
+        title = match_info.get_youtube_title('processed')
+        description = match_info.get_youtube_description('processed')
+        playlist_id = None
         
-        # Upload the processed video
-        processed_id = uploader.upload_video(
-            str(processed_file),
-            title=processed_title,
-            description=f"{description} (Processed with Once Autocam)",
-            tags=["soccer", "autocam"],
-            privacy_status="unlisted",
-            playlist_id=processed_playlist_id
-        )
-        if not processed_id:
-            logger.error(f"Failed to upload processed video: {processed_file}")
-            success = False
-        else:
-            logger.info(f"Successfully uploaded processed video: {processed_file} (ID: {processed_id})")
-    
-    # Upload raw video if it exists
-    if raw_file and match_info:
-        # Get or create the playlist for raw videos
-        raw_playlist_id = None
-        if playlist_config and "raw" in playlist_config:
-            playlist_name = playlist_config["raw"]["name_format"].format(
-                my_team_name=match_info.my_team_name,
-                opponent_team_name=match_info.opponent_team_name,
-                location=match_info.location
-            )
-            playlist_desc = playlist_config["raw"].get("description", f"Raw videos for {match_info.my_team_name}")
-            raw_playlist_id = uploader.get_or_create_playlist(playlist_name, playlist_desc)
+        if processed_playlist_name:
+            playlist_id = uploader.get_or_create_playlist(processed_playlist_name, description)
         
-        # Upload the raw video
-        raw_id = uploader.upload_video(
-            str(raw_file),
-            title=raw_title,
-            description=f"{description} (Raw recording)",
-            tags=["soccer", "raw footage"],
-            privacy_status="unlisted",
-            playlist_id=raw_playlist_id
+        success = uploader.upload_video(
+            processed_video_path,
+            title,
+            description,
+            privacy_status=privacy_status,
+            playlist_id=playlist_id
         )
-        if not raw_id:
-            logger.error(f"Failed to upload raw video: {raw_file}")
-            success = False
-        else:
-            logger.info(f"Successfully uploaded raw video: {raw_file} (ID: {raw_id})")
-    
-    # Update state if all uploads were successful
-    if success:
-        try:
-            with open(state_file, 'r') as f:
-                state_data = json.load(f)
-            
-            state_data['status'] = 'youtube_uploaded'
-            
-            with open(state_file, 'w') as f:
-                json.dump(state_data, f, indent=4)
-            
-            logger.info(f"Updated group status to youtube_uploaded: {group_dir}")
-        except Exception as e:
-            logger.error(f"Error updating state file: {e}")
-            success = False
-    
-    return success 
+        
+        if not success:
+            logger.error(f"Failed to upload processed video: {processed_video_path}")
+            return False
+
+    # Raw (untrimmed) video
+    raw_video_path = os.path.join(group_dir, "combined.mp4")
+    if os.path.exists(raw_video_path):
+        logger.info(f"Uploading raw video: {raw_video_path}")
+        title = match_info.get_youtube_title('raw')
+        description = match_info.get_youtube_description('raw')
+        playlist_id = None
+
+        if raw_playlist_name:
+            playlist_id = uploader.get_or_create_playlist(raw_playlist_name, description)
+
+        success = uploader.upload_video(
+            raw_video_path,
+            title,
+            description,
+            privacy_status=privacy_status,
+            playlist_id=playlist_id
+        )
+        
+        if not success:
+            logger.error(f"Failed to upload raw video: {raw_video_path}")
+            return False
+
+    return True 

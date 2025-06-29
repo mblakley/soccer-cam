@@ -22,6 +22,7 @@ class MatchInfo:
     location: str
     start_time_offset: str = ''
     total_duration: str = ''
+    date: Optional[datetime] = None
     
     def __hash__(self):
         """Make MatchInfo hashable so it can be used in sets and as dictionary keys."""
@@ -301,6 +302,18 @@ class MatchInfo:
         location_sanitized = re.sub(r'[^a-zA-Z0-9]', '', self.location).lower()
         
         return my_team_sanitized, opponent_sanitized, location_sanitized
+
+    def get_youtube_title(self, video_type: str) -> str:
+        """Generate a YouTube title for the video."""
+        date_str = self.date.strftime('%Y-%m-%d') if self.date else ''
+        title = f"{self.my_team_name} vs {self.opponent_team_name} ({date_str})"
+        if video_type == 'raw':
+            title += " - Full Field"
+        return title
+
+    def get_youtube_description(self, video_type: str) -> str:
+        """Generate a YouTube description for the video."""
+        return f"Match played at {self.location} against {self.opponent_team_name}."
 
 # Import task classes from the new task processors module
 # These imports provide backward compatibility for existing code

@@ -62,10 +62,30 @@ server_url = https://ntfy.sh
 topic = your-unique-soccer-cam-topic
 
 [YOUTUBE]
-# Set to true to enable YouTube uploads
+# If you want to upload videos to YouTube, you need to set up a project in the
+# Google Cloud Console and get a client_secrets.json file.
+# See docs/youtube/README.md for more details.
+# To enable, set to true
 enabled = false
-# The privacy status for uploaded videos (private, unlisted, public)
-privacy_status = unlisted
+# The privacy status of the video.
+# Valid values are: public, private, unlisted
+privacy_status = private
+
+[YOUTUBE_PLAYLIST_MAPPING]
+# This section allows you to map a team name (from match_info.ini's my_team_name)
+# to a specific YouTube playlist name.
+#
+# The value on the right is the base playlist name for processed videos.
+# Raw videos will be uploaded to a playlist with " - Full Field" appended.
+#
+# Example:
+# Hilton Heat=Hilton Heat 2012s
+# WNY Flash=WNY Flash 2013s
+#
+# With this config:
+# - Processed videos for "Hilton Heat" go to "Hilton Heat 2012s"
+# - Raw videos for "Hilton Heat" go to "Hilton Heat 2012s - Full Field"
+Default=
 
 [AUTOCAM]
 # Whether to enable autocam processing

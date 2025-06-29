@@ -5,9 +5,11 @@ NTFY service for interactive user notifications and input.
 import json
 import logging
 import os
+import uuid
 from typing import Dict, Optional, Any, Set
 from datetime import datetime
 import configparser
+import asyncio
 
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.models import MatchInfo
@@ -39,6 +41,10 @@ class NtfyService:
         self._processed_dirs: Set[str] = set()
         self._state_file = os.path.join(storage_path, "ntfy_service_state.json")
         
+        # For handling direct responses to prompts
+        self._response_events: Dict[str, asyncio.Event] = {}
+        self._response_data: Dict[str, Optional[str]] = {}
+
         self._initialize_api()
         self._load_state()
     
@@ -299,6 +305,38 @@ class NtfyService:
         
         return team_info_sent or game_times_sent
     
+    async def request_playlist_name(self, group_dir: str, team_name: str) -> bool:
+        """
+        Request the base YouTube playlist name from the user via NTFY.
+
+        Args:
+            group_dir: The directory associated with the request.
+            team_name: The name of the team.
+
+        Returns:
+            True if the request was sent, False otherwise.
+        """
+        if not await self._ensure_initialized():
+            return False
+        
+        if self.is_waiting_for_input(group_dir):
+            logger.debug(f"Already waiting for playlist name for {group_dir}")
+            return False
+
+        try:
+            question = f"Please provide the base YouTube playlist name for the team: '{team_name}'."
+            await self.ntfy_api.send_notification(
+                title="Playlist Name Needed",
+                message=question,
+                tags=['youtube_playlist_name', group_dir]
+            )
+            self.mark_waiting_for_input(group_dir, 'playlist_name', {'team_name': team_name})
+            logger.info(f"Sent playlist name request for {group_dir}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending playlist name request for {group_dir}: {e}")
+            return False
+
     def get_pending_inputs(self) -> Dict[str, Dict[str, Any]]:
         """Get all pending inputs."""
         return self._pending_inputs.copy()
