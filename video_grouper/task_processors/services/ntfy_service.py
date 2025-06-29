@@ -8,11 +8,11 @@ import os
 import uuid
 from typing import Dict, Optional, Any, Set
 from datetime import datetime
-import configparser
 import asyncio
 
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.models import MatchInfo
+from video_grouper.utils.config import NtfyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class NtfyService:
     Handles interactive notifications and tracks pending user inputs.
     """
     
-    def __init__(self, config: configparser.ConfigParser, storage_path: str):
+    def __init__(self, config: NtfyConfig, storage_path: str):
         """
         Initialize NTFY service.
         

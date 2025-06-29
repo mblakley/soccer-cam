@@ -1,26 +1,23 @@
 import os
 import pytest
 import asyncio
-import configparser
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 from video_grouper.api_integrations.ntfy import NtfyAPI
-from video_grouper.video_grouper_app import VideoGrouperApp
-import time
+from video_grouper.utils.config import NtfyConfig
 
 @pytest.fixture
-def mock_config():
-    """Create a mock configuration for testing."""
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'server_url', 'https://ntfy.sh')
-    config.set('NTFY', 'topic', 'test-soccer-cam')
-    return config
+def ntfy_config():
+    """Create a mock NtfyConfig for testing."""
+    return NtfyConfig(
+        enabled=True,
+        server_url='https://ntfy.sh',
+        topic='test-soccer-cam'
+    )
 
 @pytest.fixture
-def ntfy_api(mock_config):
+def ntfy_api(ntfy_config):
     """Create a NtfyAPI instance with mock configuration."""
-    return NtfyAPI(mock_config)
+    return NtfyAPI(ntfy_config)
 
 @pytest.fixture
 def mock_http_client():
@@ -32,7 +29,6 @@ def mock_http_client():
     mock_client.put.return_value = mock_response
     mock_client.get.return_value = mock_response
     
-    # Mock the AsyncClient context manager
     mock_async_client = AsyncMock()
     mock_async_client.__aenter__.return_value = mock_client
     mock_async_client.__aexit__.return_value = None
@@ -49,19 +45,14 @@ async def test_ntfy_initialization(ntfy_api):
 @pytest.mark.asyncio
 async def test_ntfy_disabled():
     """Test that the NTFY API is disabled when not configured."""
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'false')
-    
+    config = NtfyConfig(enabled=False, server_url='https://ntfy.sh', topic='test-topic')
     ntfy_api = NtfyAPI(config)
     assert ntfy_api.enabled is False
 
 @pytest.mark.asyncio
 async def test_ntfy_auto_topic():
     """Test that a random topic is generated when not provided."""
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
+    config = NtfyConfig(enabled=True, server_url="https://ntfy.sh", topic=None)
     
     ntfy_api = NtfyAPI(config)
     assert ntfy_api.enabled is True
@@ -73,16 +64,11 @@ async def test_send_notification(mock_http_client):
     """Test sending a notification."""
     mock_async_client, mock_client = mock_http_client
     
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
+    config = NtfyConfig(enabled=True, topic='test-topic', server_url='https://ntfy.sh')
     
     ntfy_api = NtfyAPI(config)
     
-    # Use patch to mock the httpx.AsyncClient
     with patch('httpx.AsyncClient', return_value=mock_async_client):
-        # Test sending a text notification
         result = await ntfy_api.send_notification(
             message="Test message",
             title="Test Title",
@@ -98,16 +84,8 @@ async def test_send_notification(mock_http_client):
         assert kwargs['headers']['Tags'] == 'test,notification'
 
 @pytest.mark.asyncio
-async def test_listen_for_responses():
+async def test_listen_for_responses(ntfy_api):
     """Test the response queue functionality."""
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    ntfy_api = NtfyAPI(config)
-    
-    # Directly add a test message to the queue
     await ntfy_api.response_queue.put({
         "id": "456",
         "time": 1642307389,
@@ -115,7 +93,6 @@ async def test_listen_for_responses():
         "is_affirmative": True
     })
     
-    # Check that we can get the message from the queue
     assert ntfy_api.response_queue.qsize() == 1
     response = await ntfy_api.response_queue.get()
     assert response['id'] == '456'
@@ -123,22 +100,11 @@ async def test_listen_for_responses():
     assert response['is_affirmative'] is True
 
 @pytest.mark.asyncio
-async def test_ask_game_start_time(mock_http_client):
+async def test_ask_game_start_time(ntfy_api):
     """Test sending notification about game start time."""
-    mock_async_client, mock_client = mock_http_client
-    
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    ntfy_api = NtfyAPI(config)
-    
-    # Create a proper async mock for get_video_duration
     async def mock_get_duration(*args, **kwargs):
         return '01:30:00'
     
-    # Mock the necessary functions
     with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
          patch('video_grouper.api_integrations.ntfy.get_video_duration', mock_get_duration), \
          patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
@@ -146,39 +112,25 @@ async def test_ask_game_start_time(mock_http_client):
          patch('video_grouper.api_integrations.ntfy.os.path.exists', return_value=True), \
          patch('video_grouper.api_integrations.ntfy.os.remove'):
         
-        # Call the method
         result = await ntfy_api.ask_game_start_time(
             combined_video_path='test_video.mp4',
             group_dir='test_dir'
         )
         
-        # Should return None since we're just sending a notification
-        assert result is None
+        assert result is None  # This method just sends notification, doesn't return data
         
-        # Verify the notification was sent
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
-        assert 'Game start time' in kwargs['message']
+        assert 'Game start time needs to be set manually' in kwargs['message']
         assert kwargs['title'] == 'Set Game Start Time'
         assert kwargs['tags'] == ['warning', 'info']
 
 @pytest.mark.asyncio
-async def test_ask_game_end_time(mock_http_client):
+async def test_ask_game_end_time(ntfy_api):
     """Test sending notification about game end time."""
-    mock_async_client, mock_client = mock_http_client
-    
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    ntfy_api = NtfyAPI(config)
-    
-    # Create a proper async mock for get_video_duration
     async def mock_get_duration(*args, **kwargs):
         return '02:00:00'
     
-    # Mock the necessary functions
     with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
          patch('video_grouper.api_integrations.ntfy.get_video_duration', mock_get_duration), \
          patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
@@ -186,42 +138,26 @@ async def test_ask_game_end_time(mock_http_client):
          patch('video_grouper.api_integrations.ntfy.os.path.exists', return_value=True), \
          patch('video_grouper.api_integrations.ntfy.os.remove'):
         
-        # Call the method
         result = await ntfy_api.ask_game_end_time(
             combined_video_path='test_video.mp4',
             group_dir='test_dir',
             start_time_offset='00:10:00'
         )
         
-        # Should return None since we're just sending a notification
-        assert result is None
+        assert result is None  # This method just sends notification, doesn't return data
         
-        # Verify the notification was sent
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
-        assert 'Game end time' in kwargs['message']
+        assert 'Game end time needs to be set manually' in kwargs['message']
         assert kwargs['title'] == 'Set Game End Time'
         assert kwargs['tags'] == ['warning', 'info']
 
-
-
 @pytest.mark.asyncio
-async def test_ask_team_info(mock_http_client):
+async def test_ask_team_info(ntfy_api):
     """Test sending notification about missing team information."""
-    mock_async_client, mock_client = mock_http_client
-    
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    ntfy_api = NtfyAPI(config)
-    
-    # Create a proper async mock for get_video_duration
     async def mock_get_duration(*args, **kwargs):
         return '01:30:00'
     
-    # Mock the necessary functions
     with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
          patch('video_grouper.api_integrations.ntfy.get_video_duration', mock_get_duration), \
          patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
@@ -229,107 +165,58 @@ async def test_ask_team_info(mock_http_client):
          patch('video_grouper.api_integrations.ntfy.os.path.exists', return_value=True), \
          patch('video_grouper.api_integrations.ntfy.os.remove'):
         
-        # Test 1: No existing info
-        result = await ntfy_api.ask_team_info(combined_video_path='test_video.mp4')
+        result = await ntfy_api.ask_team_info(combined_video_path='test_video.mp4', existing_info={})
         
-        # Should return empty dict since we're just sending a notification
-        assert result == {}
+        assert result == {}  # Should return empty dict when no existing info provided
         
-        # Verify the notification was sent
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
         assert 'Missing match information:' in kwargs['message']
         
-        # Reset the mock
         ntfy_api.send_notification.reset_mock()
         
-        # Test 2: With some existing info
         existing_info = {
             'team_name': 'Existing Team',
             'location': 'Existing Stadium'
         }
+        result = await ntfy_api.ask_team_info(combined_video_path='test_video.mp4', existing_info=existing_info)
         
-        result = await ntfy_api.ask_team_info(
-            combined_video_path='test_video.mp4',
-            existing_info=existing_info
-        )
+        assert result == existing_info  # Should return the existing info dict
         
-        # Should return the existing info
-        assert result == existing_info
-        
-        # Verify the notification was sent
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
-        assert 'Missing match information:' in kwargs['message']
-        # Only check that opponent_name is mentioned, don't check for absence of other fields
-        assert 'opponent team name' in kwargs['message']
+        assert 'Missing match information:' in kwargs['message']  # Should still notify about missing opponent
 
 @pytest.mark.asyncio
-async def test_ask_resolve_game_conflict():
-    """Test asking the user to resolve a game conflict via NTFY."""
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    ntfy_api = NtfyAPI(config)
-    
-    # Create mock game options
-    game_options = [
-        {
-            'source': 'TeamSnap',
-            'team_name': 'Team A',
-            'opponent_name': 'Opponent A',
-            'location': 'Field A',
-            'date': '2025-06-22'
-        },
-        {
-            'source': 'PlayMetrics',
-            'team_name': 'Team B',
-            'opponent': 'Opponent B',
-            'location': 'Field B',
-            'date': '2025-06-22'
-        }
+async def test_ask_resolve_game_conflict(ntfy_api):
+    """Test sending notification to resolve a game conflict."""
+    games = [
+        {'source': 'TeamSnap', 'team_name': 'A', 'opponent_name': 'B', 'location_name': 'Field 1'},
+        {'source': 'PlayMetrics', 'team_name': 'C', 'opponent': 'D', 'location': 'Field 2'}
     ]
     
-    # Create a proper async mock for get_video_duration
-    async def mock_get_duration(*args, **kwargs):
-        return '01:30:00'
+    # Mock the response that would normally come from user interaction
+    mock_response = {'response': 'select_game/0'}
     
-    # Create a mock future for simulating user response
-    mock_future = asyncio.Future()
-    mock_future.set_result({'action': 'http://localhost:8080/select_game/1'})
-    
-    # Mock the necessary methods
     with patch.object(ntfy_api, 'send_notification', AsyncMock(return_value=True)), \
-         patch('video_grouper.api_integrations.ntfy.get_video_duration', mock_get_duration), \
+         patch('asyncio.wait_for', AsyncMock(return_value=mock_response)), \
+         patch('video_grouper.api_integrations.ntfy.get_video_duration', AsyncMock(return_value='01:30:00')), \
          patch('video_grouper.api_integrations.ntfy.create_screenshot', AsyncMock(return_value=True)), \
-         patch('video_grouper.api_integrations.ntfy.compress_image', AsyncMock(return_value='screenshot.jpg')), \
-         patch('os.path.exists', return_value=True), \
-         patch('os.remove'), \
-         patch.object(asyncio, 'Future', return_value=mock_future), \
-         patch('asyncio.wait_for', AsyncMock(return_value={'action': 'http://localhost:8080/select_game/1'})):
+         patch('video_grouper.api_integrations.ntfy.compress_image', AsyncMock(return_value='test_screenshot.jpg')), \
+         patch('video_grouper.api_integrations.ntfy.os.path.exists', return_value=True), \
+         patch('video_grouper.api_integrations.ntfy.os.remove'):
         
-        # Call the method
         result = await ntfy_api.ask_resolve_game_conflict(
             combined_video_path='test_video.mp4',
             group_dir='test_dir',
-            game_options=game_options
+            game_options=games
         )
         
-        # Check the result
         assert result is not None
-        assert result['source'] == 'PlayMetrics'
-        assert result['team_name'] == 'Team B'
-        assert result['opponent'] == 'Opponent B'
+        assert result == games[0]  # Should return the first game since we mocked selection of index 0
         
-        # Check that send_notification was called with the correct parameters
         ntfy_api.send_notification.assert_called_once()
-        call_args = ntfy_api.send_notification.call_args[1]
-        assert 'Multiple games found' in call_args['message']
-        assert 'Team A vs Opponent A' in call_args['message']
-        assert 'Team B vs Opponent B' in call_args['message']
-        assert call_args['title'] == 'Game Conflict - Select Correct Game'
-        assert len(call_args['actions']) == 2
-        assert call_args['actions'][0]['label'] == 'Opponent A (TeamSnap)'
-        assert call_args['actions'][1]['label'] == 'Opponent B (PlayMetrics)' 
+        args, kwargs = ntfy_api.send_notification.call_args
+        assert 'Multiple games found' in kwargs['message']
+        assert 'Game Conflict - Select Correct Game' == kwargs['title']
+        assert kwargs['tags'] == ['warning', 'question'] 

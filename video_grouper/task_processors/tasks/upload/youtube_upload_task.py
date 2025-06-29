@@ -4,13 +4,13 @@ YouTube upload task for uploading videos to YouTube.
 
 import os
 import logging
-import configparser
 from typing import Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from .base_upload_task import BaseUploadTask
 from video_grouper.models import MatchInfo
 from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +74,10 @@ class YoutubeUploadTask(BaseUploadTask):
             if not os.path.exists(config_path):
                 logger.error(f"Config file not found: {config_path}")
                 return False
-            config = configparser.ConfigParser()
-            config.read(config_path)
+            config = load_config(config_path)
 
             # Initialize NTFY service if needed
-            ntfy_service = NtfyService(config, storage_path)
+            ntfy_service = NtfyService(config.ntfy, storage_path)
 
             # Get credentials and token file paths
             credentials_file, token_file = get_youtube_paths(storage_path)
@@ -112,8 +111,7 @@ class YoutubeUploadTask(BaseUploadTask):
                 return False  # Will be retried later
             
             # Get privacy status from config
-            youtube_config = config['YOUTUBE']
-            privacy_status = youtube_config.get('privacy_status', 'private')
+            privacy_status = config.youtube.privacy_status
             
             # Initialize YouTube uploader
             uploader = YouTubeUploader(credentials_file, token_file)
@@ -180,7 +178,7 @@ class YoutubeUploadTask(BaseUploadTask):
             logger.error(f"Error during YouTube upload for {self.group_dir}: {e}")
             return False
     
-    async def _get_playlist_names(self, match_info: MatchInfo, config: configparser.ConfigParser, 
+    async def _get_playlist_names(self, match_info: MatchInfo, config, 
                                   ntfy_service, storage_path: str) -> tuple[Optional[str], Optional[str]]:
         """
         Get playlist names for processed and raw videos.
@@ -195,8 +193,9 @@ class YoutubeUploadTask(BaseUploadTask):
         
         # If not in state, check config mapping
         if not base_playlist_name:
-            if config.has_section('YOUTUBE_PLAYLIST_MAPPING') and match_info.my_team_name in config['YOUTUBE_PLAYLIST_MAPPING']:
-                base_playlist_name = config['YOUTUBE_PLAYLIST_MAPPING'][match_info.my_team_name]
+            playlist_mapping = config.youtube.playlist_mapping
+            if match_info.my_team_name in playlist_mapping:
+                base_playlist_name = playlist_mapping[match_info.my_team_name]
                 logger.info(f"Found playlist '{base_playlist_name}' for team '{match_info.my_team_name}' in config.")
         
         # If still no mapping, and no request pending, ask the user
@@ -207,18 +206,6 @@ class YoutubeUploadTask(BaseUploadTask):
         elif base_playlist_name and not dir_state.get_youtube_playlist_name():
             # If we found a name in the config, but not in the state file, update the state file
             dir_state.set_youtube_playlist_name(base_playlist_name)
-            
-            # Also, update the main config to ensure it's persisted
-            config_path = os.path.join(storage_path, 'config.ini')
-            if not config.has_section('YOUTUBE_PLAYLIST_MAPPING'):
-                config.add_section('YOUTUBE_PLAYLIST_MAPPING')
-            config.set('YOUTUBE_PLAYLIST_MAPPING', match_info.my_team_name, base_playlist_name)
-            try:
-                with open(config_path, 'w') as configfile:
-                    config.write(configfile)
-                logger.info(f"Saved new playlist mapping for '{match_info.my_team_name}' to config.")
-            except Exception as e:
-                logger.error(f"Failed to write new playlist mapping to config: {e}")
 
         # Return playlist names
         processed_playlist_name = base_playlist_name

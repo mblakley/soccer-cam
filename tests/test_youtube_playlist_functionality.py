@@ -29,10 +29,10 @@ YT_UPLOAD_TASK_PATH = 'video_grouper.task_processors.tasks.upload.youtube_upload
 @patch('video_grouper.utils.youtube_upload.get_youtube_paths', return_value=('cred.json', 'token.json'))
 @patch('os.path.exists', return_value=True)
 @patch('builtins.open', new_callable=mock_open)
-@patch('configparser.ConfigParser')
+@patch('video_grouper.task_processors.tasks.upload.youtube_upload_task.load_config')
 @patch('video_grouper.models.MatchInfo.from_file')
 async def test_youtube_upload_task_coordination_with_state_playlist(
-    mock_match_info_from_file, mock_config_parser, mock_open, mock_path_exists,
+    mock_match_info_from_file, mock_load_config, mock_open, mock_path_exists,
     mock_get_yt_paths, mock_yt_uploader, mock_ntfy_service, mock_dir_state):
     """Test that the upload task properly coordinates with state-based playlist names."""
     group_dir = "/fake/group_dir"
@@ -47,6 +47,17 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
     # Mock DirectoryState to return playlist name from state
     mock_dir_state_instance = mock_dir_state.return_value
     mock_dir_state_instance.get_youtube_playlist_name.return_value = "State-Playlist"
+    
+    # Mock load_config to return a valid config object
+    from video_grouper.utils.config import Config, YouTubeConfig, NtfyConfig
+    mock_config = MagicMock(spec=Config)
+    mock_config.youtube = MagicMock(spec=YouTubeConfig)
+    mock_config.youtube.enabled = True
+    mock_config.youtube.privacy_status = 'private'
+    mock_config.youtube.playlist_mapping = {}
+    mock_config.ntfy = MagicMock(spec=NtfyConfig)
+    mock_config.ntfy.enabled = True
+    mock_load_config.return_value = mock_config
     
     # Mock NtfyService
     mock_ntfy_instance = mock_ntfy_service.return_value
@@ -80,10 +91,10 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
 @patch('video_grouper.utils.youtube_upload.get_youtube_paths', return_value=('cred.json', 'token.json'))
 @patch('os.path.exists', return_value=True)
 @patch('builtins.open', new_callable=mock_open)
-@patch('configparser.ConfigParser')
+@patch('video_grouper.task_processors.tasks.upload.youtube_upload_task.load_config')
 @patch('video_grouper.models.MatchInfo.from_file')
 async def test_youtube_upload_task_coordination_with_config_mapping(
-    mock_match_info_from_file, mock_config_parser, mock_open, mock_path_exists,
+    mock_match_info_from_file, mock_load_config, mock_open, mock_path_exists,
     mock_get_yt_paths, mock_yt_uploader, mock_ntfy_service, mock_dir_state):
     """Test that the upload task properly uses config-based playlist mappings."""
     group_dir = "/fake/group_dir"
@@ -100,12 +111,15 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     mock_dir_state_instance.get_youtube_playlist_name.return_value = None
     
     # Mock config to have playlist mapping
-    mock_config_instance = mock_config_parser.return_value
-    mock_config_instance.has_section.side_effect = lambda section: section in ['YOUTUBE', 'YOUTUBE_PLAYLIST_MAPPING']
-    mock_config_instance.__getitem__.side_effect = lambda section: {
-        'YOUTUBE': {'privacy_status': 'private'},
-        'YOUTUBE_PLAYLIST_MAPPING': {'Test Team': 'Config-Playlist'}
-    }[section]
+    from video_grouper.utils.config import Config, YouTubeConfig, NtfyConfig
+    mock_config = MagicMock(spec=Config)
+    mock_config.youtube = MagicMock(spec=YouTubeConfig)
+    mock_config.youtube.enabled = True
+    mock_config.youtube.privacy_status = 'private'
+    mock_config.youtube.playlist_mapping = {'Test Team': 'Config-Playlist'}
+    mock_config.ntfy = MagicMock(spec=NtfyConfig)
+    mock_config.ntfy.enabled = True
+    mock_load_config.return_value = mock_config
     
     # Mock NtfyService
     mock_ntfy_instance = mock_ntfy_service.return_value
@@ -139,10 +153,10 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
 @patch('video_grouper.utils.youtube_upload.get_youtube_paths', return_value=('cred.json', 'token.json'))
 @patch('os.path.exists', return_value=True)
 @patch('builtins.open', new_callable=mock_open)
-@patch('configparser.ConfigParser')
+@patch('video_grouper.task_processors.tasks.upload.youtube_upload_task.load_config')
 @patch('video_grouper.models.MatchInfo.from_file')
 async def test_youtube_upload_task_requests_playlist_when_not_found(
-    mock_match_info_from_file, mock_config_parser, mock_open, mock_path_exists,
+    mock_match_info_from_file, mock_load_config, mock_open, mock_path_exists,
     mock_get_yt_paths, mock_yt_uploader, mock_ntfy_service, mock_dir_state):
     """Test that the upload task requests playlist name when no mapping exists."""
     group_dir = "/fake/group_dir"
@@ -157,11 +171,15 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
     mock_dir_state_instance.get_youtube_playlist_name.return_value = None
     
     # Mock config to have no playlist mapping
-    mock_config_instance = mock_config_parser.return_value
-    mock_config_instance.has_section.side_effect = lambda section: section == 'YOUTUBE'
-    mock_config_instance.__getitem__.side_effect = lambda section: {
-        'YOUTUBE': {'privacy_status': 'private'}
-    }[section]
+    from video_grouper.utils.config import Config, YouTubeConfig, NtfyConfig
+    mock_config = MagicMock(spec=Config)
+    mock_config.youtube = MagicMock(spec=YouTubeConfig)
+    mock_config.youtube.enabled = True
+    mock_config.youtube.privacy_status = 'private'
+    mock_config.youtube.playlist_mapping = {}
+    mock_config.ntfy = MagicMock(spec=NtfyConfig)
+    mock_config.ntfy.enabled = True
+    mock_load_config.return_value = mock_config
     
     # Mock NtfyService
     mock_ntfy_instance = mock_ntfy_service.return_value
@@ -186,10 +204,10 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
 @patch('video_grouper.utils.youtube_upload.get_youtube_paths', return_value=('cred.json', 'token.json'))
 @patch('os.path.exists', return_value=True)
 @patch('builtins.open', new_callable=mock_open)
-@patch('configparser.ConfigParser')
+@patch('video_grouper.task_processors.tasks.upload.youtube_upload_task.load_config')
 @patch('video_grouper.models.MatchInfo.from_file')
 async def test_youtube_upload_task_skips_request_if_already_waiting(
-    mock_match_info_from_file, mock_config_parser, mock_open, mock_path_exists,
+    mock_match_info_from_file, mock_load_config, mock_open, mock_path_exists,
     mock_get_yt_paths, mock_yt_uploader, mock_ntfy_service, mock_dir_state):
     """Test that the upload task skips requesting playlist if already waiting for response."""
     group_dir = "/fake/group_dir"
@@ -204,11 +222,15 @@ async def test_youtube_upload_task_skips_request_if_already_waiting(
     mock_dir_state_instance.get_youtube_playlist_name.return_value = None
     
     # Mock config to have no playlist mapping
-    mock_config_instance = mock_config_parser.return_value
-    mock_config_instance.has_section.side_effect = lambda section: section == 'YOUTUBE'
-    mock_config_instance.__getitem__.side_effect = lambda section: {
-        'YOUTUBE': {'privacy_status': 'private'}
-    }[section]
+    from video_grouper.utils.config import Config, YouTubeConfig, NtfyConfig
+    mock_config = MagicMock(spec=Config)
+    mock_config.youtube = MagicMock(spec=YouTubeConfig)
+    mock_config.youtube.enabled = True
+    mock_config.youtube.privacy_status = 'private'
+    mock_config.youtube.playlist_mapping = {}
+    mock_config.ntfy = MagicMock(spec=NtfyConfig)
+    mock_config.ntfy.enabled = True
+    mock_load_config.return_value = mock_config
     
     # Mock NtfyService to indicate already waiting for input
     mock_ntfy_instance = mock_ntfy_service.return_value

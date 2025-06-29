@@ -25,6 +25,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
+from video_grouper.utils.config import PlayMetricsConfig
+
 logger = logging.getLogger(__name__)
 
 class PlayMetricsAPI:
@@ -42,20 +44,19 @@ class PlayMetricsAPI:
     LOGIN_URL = f"{BASE_URL}/login"
     DASHBOARD_URL = f"{BASE_URL}/dashboard"
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config: PlayMetricsConfig):
         """
         Initialize the PlayMetrics API.
         
         Args:
-            config_path: Path to the config.ini file. If None, use the default path.
+            config: PlayMetrics configuration object.
         """
-        self.config_path = config_path or os.path.join("shared_data", "config.ini")
-        self.config = self._load_config()
-        self.enabled = self.config.get('enabled', 'false').lower() == 'true'
-        self.username = self.config.get('username', '')
-        self.password = self.config.get('password', '')
-        self.team_id = self.config.get('team_id', '')
-        self.team_name = self.config.get('team_name', '')
+        self.config = config
+        self.enabled = self.config.enabled
+        self.username = self.config.username
+        self.password = self.config.password
+        self.team_id = self.config.team_id
+        self.team_name = self.config.team_name
         
         # Initialize attributes
         self.driver = None
@@ -66,26 +67,6 @@ class PlayMetricsAPI:
         self.events_cache = []
         self.last_cache_update = None
         self.cache_duration = timedelta(hours=1)  # Cache games for 1 hour
-    
-    def _load_config(self) -> Dict[str, str]:
-        """
-        Load the PlayMetrics configuration from config.ini.
-        
-        Returns:
-            Dictionary with PlayMetrics configuration.
-        """
-        if not os.path.exists(self.config_path):
-            logger.warning(f"PlayMetrics config file not found: {self.config_path}")
-            return {'enabled': 'false'}
-        
-        config = configparser.ConfigParser()
-        config.read(self.config_path)
-        
-        if not config.has_section('PLAYMETRICS'):
-            logger.warning("PlayMetrics section not found in config.ini")
-            return {'enabled': 'false'}
-        
-        return {k: v for k, v in config['PLAYMETRICS'].items()}
     
     def __del__(self):
         """Clean up resources when the object is destroyed."""

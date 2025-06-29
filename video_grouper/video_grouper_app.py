@@ -1,8 +1,9 @@
 import os
 import asyncio
 import logging
-import configparser
+from typing import Optional
 
+from video_grouper.utils.config import Config
 from video_grouper.task_processors import (
     StateAuditor, 
     CameraPoller, 
@@ -30,7 +31,7 @@ class VideoGrouperApp:
     Each task processor is self-contained and manages its own queue and state.
     """
     
-    def __init__(self, config: configparser.ConfigParser, camera=None):
+    def __init__(self, config: Config, camera=None):
         """
         Initialize the VideoGrouperApp with task processors.
         
@@ -39,29 +40,26 @@ class VideoGrouperApp:
             camera: Camera object (optional, will be created if not provided)
         """
         self.config = config
-        self.storage_path = os.path.abspath(config.get('STORAGE', 'path', fallback=DEFAULT_STORAGE_PATH))
+        self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
         
         # Initialize camera
         if camera:
             self.camera = camera
         else:
-            camera_type = config.get('CAMERA', 'type', fallback='dahua')
+            camera_type = config.camera.type
             if camera_type == 'dahua':
                 from video_grouper.cameras.dahua import DahuaCamera
-                camera_config = {
-                    'device_ip': config.get('CAMERA', 'device_ip'),
-                    'username': config.get('CAMERA', 'username'),
-                    'password': config.get('CAMERA', 'password'),
-                    'storage_path': self.storage_path
-                }
-                logger.info(f"Initializing {camera_type} camera with IP: {camera_config['device_ip']}")
-                self.camera = DahuaCamera(**camera_config)
+                logger.info(f"Initializing {camera_type} camera with IP: {config.camera.device_ip}")
+                self.camera = DahuaCamera(
+                    config=config.camera,
+                    storage_path=self.storage_path
+                )
             else:
                 raise ValueError(f"Unsupported camera type: {camera_type}")
         
         # Get poll interval from config
-        self.poll_interval = self.config.getint('APP', 'check_interval_seconds', fallback=60)
+        self.poll_interval = config.app.check_interval_seconds
         
         # Initialize task processors
         self.state_auditor = StateAuditor(

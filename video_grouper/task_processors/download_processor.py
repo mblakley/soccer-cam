@@ -7,6 +7,7 @@ from .queue_processor_base import QueueProcessor
 from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.models import RecordingFile
 from .tasks.video import ConvertTask
+from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class DownloadProcessor(QueueProcessor):
     Processes download queue sequentially, one file at a time.
     """
     
-    def __init__(self, storage_path: str, config: Any, camera: Any):
+    def __init__(self, storage_path: str, config: Config, camera: Any):
         super().__init__(storage_path, config)
         self.camera = camera
         self.video_processor = None
