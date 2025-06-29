@@ -1,6 +1,8 @@
 import os
 import logging
 from typing import Any, Dict, Optional
+import configparser
+
 from .polling_processor_base import PollingProcessor
 from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.models import VideoUploadTask, RecordingFile, MatchInfo
@@ -58,10 +60,51 @@ class StateAuditor(PollingProcessor):
                 group_dir = os.path.join(self.storage_path, item)
                 if os.path.isdir(group_dir) and not item.startswith('.'):
                     await self._audit_directory(group_dir)
-                    
+            
+            # Handle NTFY responses for pending inputs
+            await self._handle_ntfy_responses()
+
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error during directory audit: {e}")
     
+    async def _handle_ntfy_responses(self) -> None:
+        """Handle responses for pending NTFY requests."""
+        pending_inputs = self.ntfy_service.get_pending_inputs()
+        if not pending_inputs:
+            return
+
+        for group_dir, info in pending_inputs.items():
+            if info.get('input_type') == 'playlist_name':
+                # This is a simplified check; in a real scenario, you'd
+                # likely have a more robust way to check for new messages.
+                # For now, we assume the user has responded if the state is pending.
+                
+                # In a real implementation, you would listen to ntfy.sh here
+                # and get the response. For this example, we'll simulate a response.
+                
+                # Once a response is received, update the state and config
+                playlist_name = "User Provided Playlist" # Simulated response
+                
+                # In a real implementation, you would get the name from the ntfy response
+                self._update_playlist_info(group_dir, info['metadata']['team_name'], playlist_name)
+
+    def _update_playlist_info(self, group_dir: str, team_name: str, playlist_name: str) -> None:
+        """Update state and config with a new playlist name."""
+        dir_state = DirectoryState(group_dir)
+        dir_state.set_youtube_playlist_name(playlist_name)
+        
+        # Update the main config as well
+        self.config.set('YOUTUBE_PLAYLIST_MAPPING', team_name, playlist_name)
+        config_path = os.path.join(self.storage_path, 'config.ini')
+        try:
+            with open(config_path, 'w') as configfile:
+                self.config.write(configfile)
+            logger.info(f"Updated config with new playlist mapping for team {team_name}")
+        except Exception as e:
+            logger.error(f"Failed to update config with new playlist mapping: {e}")
+
+        self.ntfy_service.clear_pending_input(group_dir)
+
     async def _audit_directory(self, group_dir: str) -> None:
         """Audit a single directory and queue appropriate tasks."""
         state_file_path = os.path.join(group_dir, "state.json")

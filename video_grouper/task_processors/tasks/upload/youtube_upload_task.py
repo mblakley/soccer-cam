@@ -4,10 +4,13 @@ YouTube upload task for uploading videos to YouTube.
 
 import os
 import logging
+import configparser
 from typing import Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 from .base_upload_task import BaseUploadTask
+from video_grouper.models import MatchInfo
+from video_grouper.utils.directory_state import DirectoryState
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +56,9 @@ class YoutubeUploadTask(BaseUploadTask):
             True if upload succeeded, False otherwise
         """
         try:
-            # Import YouTube upload functionality
-            from video_grouper.utils.youtube_upload import upload_group_videos, get_youtube_paths
+            # Import here to avoid circular import
+            from video_grouper.utils.youtube_upload import YouTubeUploader, get_youtube_paths
+            from video_grouper.task_processors.services.ntfy_service import NtfyService
             
             # Get storage path from group directory
             storage_path = os.path.dirname(self.group_dir)
@@ -65,6 +69,17 @@ class YoutubeUploadTask(BaseUploadTask):
                     break
                 storage_path = parent
             
+            # Load the config
+            config_path = os.path.join(storage_path, 'config.ini')
+            if not os.path.exists(config_path):
+                logger.error(f"Config file not found: {config_path}")
+                return False
+            config = configparser.ConfigParser()
+            config.read(config_path)
+
+            # Initialize NTFY service if needed
+            ntfy_service = NtfyService(config, storage_path)
+
             # Get credentials and token file paths
             credentials_file, token_file = get_youtube_paths(storage_path)
             
@@ -75,8 +90,81 @@ class YoutubeUploadTask(BaseUploadTask):
             
             logger.info(f"Starting YouTube upload for {self.group_dir}")
             
-            # Upload the videos (no playlist config for now - can be added later)
-            success = upload_group_videos(self.group_dir, credentials_file, token_file, None)
+            # Load match info to get team name
+            match_info_path = os.path.join(self.group_dir, "match_info.ini")
+            if not os.path.exists(match_info_path):
+                logger.error(f"match_info.ini not found in {self.group_dir}")
+                return False
+
+            match_info = MatchInfo.from_file(match_info_path)
+            if not match_info:
+                logger.error(f"Could not load match info from {match_info_path}")
+                return False
+
+            # Get playlist names using coordination logic
+            processed_playlist_name, raw_playlist_name = await self._get_playlist_names(
+                match_info, config, ntfy_service, storage_path
+            )
+            
+            # If we don't have playlist names and a request was sent, skip for now
+            if not processed_playlist_name and not raw_playlist_name:
+                logger.info(f"Waiting for playlist name response for {self.group_dir}")
+                return False  # Will be retried later
+            
+            # Get privacy status from config
+            youtube_config = config['YOUTUBE']
+            privacy_status = youtube_config.get('privacy_status', 'private')
+            
+            # Initialize YouTube uploader
+            uploader = YouTubeUploader(credentials_file, token_file)
+            
+            success = True
+            
+            # Upload processed (trimmed) video
+            processed_video_path = os.path.join(self.group_dir, "combined_trimmed.mp4")
+            if os.path.exists(processed_video_path):
+                logger.info(f"Uploading processed video: {processed_video_path}")
+                title = match_info.get_youtube_title('processed')
+                description = match_info.get_youtube_description('processed')
+                playlist_id = None
+                
+                if processed_playlist_name:
+                    playlist_id = uploader.get_or_create_playlist(processed_playlist_name, description)
+                
+                video_id = uploader.upload_video(
+                    processed_video_path,
+                    title,
+                    description,
+                    privacy_status=privacy_status,
+                    playlist_id=playlist_id
+                )
+                
+                if not video_id:
+                    logger.error(f"Failed to upload processed video: {processed_video_path}")
+                    success = False
+
+            # Upload raw (untrimmed) video
+            raw_video_path = os.path.join(self.group_dir, "combined.mp4")
+            if os.path.exists(raw_video_path):
+                logger.info(f"Uploading raw video: {raw_video_path}")
+                title = match_info.get_youtube_title('raw')
+                description = match_info.get_youtube_description('raw')
+                playlist_id = None
+
+                if raw_playlist_name:
+                    playlist_id = uploader.get_or_create_playlist(raw_playlist_name, description)
+
+                video_id = uploader.upload_video(
+                    raw_video_path,
+                    title,
+                    description,
+                    privacy_status=privacy_status,
+                    playlist_id=playlist_id
+                )
+                
+                if not video_id:
+                    logger.error(f"Failed to upload raw video: {raw_video_path}")
+                    success = False
             
             if success:
                 logger.info(f"Successfully uploaded videos for {self.group_dir} to YouTube")
@@ -91,6 +179,52 @@ class YoutubeUploadTask(BaseUploadTask):
         except Exception as e:
             logger.error(f"Error during YouTube upload for {self.group_dir}: {e}")
             return False
+    
+    async def _get_playlist_names(self, match_info: MatchInfo, config: configparser.ConfigParser, 
+                                  ntfy_service, storage_path: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Get playlist names for processed and raw videos.
+        
+        Returns:
+            Tuple of (processed_playlist_name, raw_playlist_name)
+        """
+        dir_state = DirectoryState(self.group_dir)
+        
+        # Check if playlist name is already in state
+        base_playlist_name = dir_state.get_youtube_playlist_name()
+        
+        # If not in state, check config mapping
+        if not base_playlist_name:
+            if config.has_section('YOUTUBE_PLAYLIST_MAPPING') and match_info.my_team_name in config['YOUTUBE_PLAYLIST_MAPPING']:
+                base_playlist_name = config['YOUTUBE_PLAYLIST_MAPPING'][match_info.my_team_name]
+                logger.info(f"Found playlist '{base_playlist_name}' for team '{match_info.my_team_name}' in config.")
+        
+        # If still no mapping, and no request pending, ask the user
+        if not base_playlist_name and not ntfy_service.is_waiting_for_input(self.group_dir):
+            await ntfy_service.request_playlist_name(self.group_dir, match_info.my_team_name)
+            # Return None for now, upload will be retried later when user responds
+            return None, None
+        elif base_playlist_name and not dir_state.get_youtube_playlist_name():
+            # If we found a name in the config, but not in the state file, update the state file
+            dir_state.set_youtube_playlist_name(base_playlist_name)
+            
+            # Also, update the main config to ensure it's persisted
+            config_path = os.path.join(storage_path, 'config.ini')
+            if not config.has_section('YOUTUBE_PLAYLIST_MAPPING'):
+                config.add_section('YOUTUBE_PLAYLIST_MAPPING')
+            config.set('YOUTUBE_PLAYLIST_MAPPING', match_info.my_team_name, base_playlist_name)
+            try:
+                with open(config_path, 'w') as configfile:
+                    config.write(configfile)
+                logger.info(f"Saved new playlist mapping for '{match_info.my_team_name}' to config.")
+            except Exception as e:
+                logger.error(f"Failed to write new playlist mapping to config: {e}")
+
+        # Return playlist names
+        processed_playlist_name = base_playlist_name
+        raw_playlist_name = f"{base_playlist_name} - Full Field" if base_playlist_name else None
+        
+        return processed_playlist_name, raw_playlist_name
     
     def __str__(self) -> str:
         """String representation of the task."""
