@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .base_download_task import BaseDownloadTask
+from video_grouper.utils.config import CameraConfig
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,7 @@ class DahuaDownloadTask(BaseDownloadTask):
     including connection details, file paths, and timing information.
     """
     
-    camera_ip: str
-    username: str
-    password: str
+    config: CameraConfig
     local_file_path: str
     remote_file_path: str
     start_time: datetime
@@ -51,11 +50,7 @@ class DahuaDownloadTask(BaseDownloadTask):
     
     def get_camera_config(self) -> Dict[str, Any]:
         """Return the camera configuration."""
-        return {
-            "ip": self.camera_ip,
-            "username": self.username,
-            "password": self.password
-        }
+        return self.config.dict()
     
     def serialize(self) -> Dict[str, Any]:
         """
@@ -66,9 +61,7 @@ class DahuaDownloadTask(BaseDownloadTask):
         """
         return {
             "task_type": self.task_type,
-            "camera_ip": self.camera_ip,
-            "username": self.username,
-            "password": self.password,
+            "config": self.config.dict(),
             "local_file_path": self.local_file_path,
             "remote_file_path": self.remote_file_path,
             "start_time": self.start_time.isoformat(),
@@ -92,22 +85,19 @@ class DahuaDownloadTask(BaseDownloadTask):
             
             # Create camera instance
             camera = DahuaCamera(
-                ip=self.camera_ip,
-                username=self.username,
-                password=self.password
+                config=self.config,
+                storage_path=os.path.dirname(os.path.dirname(self.local_file_path))
             )
             
             # Ensure local directory exists
             os.makedirs(os.path.dirname(self.local_file_path), exist_ok=True)
             
-            logger.info(f"DOWNLOAD: Starting download from {self.camera_ip}: {self.remote_file_path}")
+            logger.info(f"DOWNLOAD: Starting download from {self.config.device_ip}: {self.remote_file_path}")
             
             # Download the file
             success = await camera.download_file(
-                remote_path=self.remote_file_path,
+                file_path=self.remote_file_path,
                 local_path=self.local_file_path,
-                start_time=self.start_time,
-                end_time=self.end_time
             )
             
             if success:
@@ -145,9 +135,7 @@ class DahuaDownloadTask(BaseDownloadTask):
             DahuaDownloadTask instance
         """
         return cls(
-            camera_ip=data['camera_ip'],
-            username=data['username'],
-            password=data['password'],
+            config=CameraConfig(**data['config']),
             local_file_path=data['local_file_path'],
             remote_file_path=data['remote_file_path'],
             start_time=datetime.fromisoformat(data['start_time']),

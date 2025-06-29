@@ -7,13 +7,14 @@ import sys
 import os
 import logging
 import asyncio
-import configparser
 from pathlib import Path
-from video_grouper import main
+from video_grouper import main as video_grouper_main
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.locking import FileLock
+from video_grouper.utils.config import load_config, Config
+from typing import Optional
 
 # Configure logging
 logging.basicConfig(
@@ -37,19 +38,19 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         self.full_version = get_full_version()
         
         # Load configuration
-        self.config = configparser.ConfigParser()
+        self.config: Optional[Config] = None
         self.config_path = get_shared_data_path() / 'config.ini'
         try:
             with FileLock(self.config_path):
                 if self.config_path.exists():
-                    self.config.read(self.config_path)
+                    self.config = load_config(self.config_path)
         except TimeoutError as e:
             logger.error(f"Could not acquire lock to read config file for service: {e}")
         except Exception as e:
             logger.error(f"Error loading configuration for service: {e}")
             
         # Get update URL from config
-        self.update_url = self.config.get('Updates', 'update_url', fallback='https://updates.videogrouper.com')
+        self.update_url = self.config.app.update_url if self.config else 'https://updates.videogrouper.com'
         
     def SvcStop(self):
         """Stop the service."""
@@ -88,7 +89,7 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
     async def run_main_service(self):
         """Run the main service functionality."""
         try:
-            await main()
+            await video_grouper_main(self.config)
         except Exception as e:
             logger.error(f"Error in main service: {e}")
             raise

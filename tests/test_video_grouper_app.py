@@ -11,6 +11,7 @@ from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
 from video_grouper.task_processors.tasks import ConvertTask, YoutubeUploadTask
 from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.config import Config, CameraConfig, TeamSnapConfig, PlayMetricsConfig, NtfyConfig, YouTubeConfig, AutocamConfig, CloudSyncConfig, AppConfig, StorageConfig, RecordingConfig, ProcessingConfig, LoggingConfig
 
 
 @pytest.fixture
@@ -23,19 +24,22 @@ def temp_storage():
 @pytest.fixture
 def mock_config(temp_storage):
     """Create a mock configuration object."""
-    config = configparser.ConfigParser()
-    config.add_section('STORAGE')
-    config.set('STORAGE', 'path', temp_storage)
-    config.add_section('APP')
-    config.set('APP', 'check_interval_seconds', '1')  # Fast polling for tests
-    config.add_section('CAMERA')
-    config.set('CAMERA', 'type', 'dahua')
-    config.set('CAMERA', 'device_ip', '192.168.1.100')
-    config.set('CAMERA', 'username', 'admin')
-    config.set('CAMERA', 'password', 'password')
-    config.add_section('YOUTUBE')
-    config.set('YOUTUBE', 'enabled', 'true')
-    return config
+    return Config(
+        camera=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="password"),
+        storage=StorageConfig(path=temp_storage),
+        recording=RecordingConfig(),
+        processing=ProcessingConfig(),
+        logging=LoggingConfig(),
+        app=AppConfig(storage_path=temp_storage, check_interval_seconds=1),
+        teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
+        teamsnap_teams=[],
+        playmetrics=PlayMetricsConfig(enabled=False, username="user", password="pass", team_name="Team A"),
+        playmetrics_teams=[],
+        ntfy=NtfyConfig(enabled=False, server_url="http://ntfy.sh", topic="test"),
+        youtube=YouTubeConfig(enabled=True),
+        autocam=AutocamConfig(enabled=False),
+        cloud_sync=CloudSyncConfig(enabled=False)
+    )
 
 
 @pytest.fixture
@@ -225,7 +229,7 @@ class TestVideoGrouperAppRefactored:
     async def test_error_handling_during_initialization(self, mock_config):
         """Test error handling during initialization."""
         # Test with invalid camera configuration
-        mock_config.set('CAMERA', 'type', 'invalid_camera')
+        mock_config.camera.type = 'invalid_camera'
         
         with pytest.raises(ValueError, match="Unsupported camera type"):
             VideoGrouperApp(mock_config)

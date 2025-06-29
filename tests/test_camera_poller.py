@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import configparser
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 import pytest
@@ -10,7 +9,9 @@ import pytz
 
 from video_grouper.task_processors.camera_poller import CameraPoller, find_group_directory
 from video_grouper.models import RecordingFile
+from video_grouper.cameras.base import Camera
 from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.config import Config, CameraConfig, TeamSnapConfig, PlayMetricsConfig, NtfyConfig, YouTubeConfig, AutocamConfig, CloudSyncConfig, AppConfig, StorageConfig, RecordingConfig, ProcessingConfig, LoggingConfig
 
 
 @pytest.fixture
@@ -21,11 +22,24 @@ def temp_storage():
 
 
 @pytest.fixture
-def mock_config():
+def mock_config(temp_storage):
     """Create a mock configuration."""
-    config = configparser.ConfigParser()
-    config['APP'] = {'check_interval_seconds': '60'}
-    return config
+    return Config(
+        camera=CameraConfig(type="dahua", device_ip="127.0.0.1", username="admin", password="password"),
+        storage=StorageConfig(path=temp_storage),
+        recording=RecordingConfig(),
+        processing=ProcessingConfig(),
+        logging=LoggingConfig(),
+        app=AppConfig(storage_path=temp_storage, check_interval_seconds=1),
+        teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
+        teamsnap_teams=[],
+        playmetrics=PlayMetricsConfig(enabled=False, username="user", password="pass", team_name="Team A"),
+        playmetrics_teams=[],
+        ntfy=NtfyConfig(enabled=False, server_url="http://ntfy.sh", topic="test"),
+        youtube=YouTubeConfig(enabled=False),
+        autocam=AutocamConfig(enabled=False),
+        cloud_sync=CloudSyncConfig(enabled=False)
+    )
 
 
 @pytest.fixture

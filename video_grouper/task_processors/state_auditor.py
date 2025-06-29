@@ -5,9 +5,11 @@ import configparser
 
 from .polling_processor_base import PollingProcessor
 from video_grouper.utils.directory_state import DirectoryState
-from video_grouper.models import VideoUploadTask, RecordingFile, MatchInfo
+from video_grouper.models import RecordingFile, MatchInfo
 from .tasks.video import ConvertTask, CombineTask, TrimTask
-from .services import TeamSnapService, PlayMetricsService, NtfyService, MatchInfoService, CleanupService, CloudSyncService
+from .tasks.upload import YoutubeUploadTask
+from .services import TeamSnapService, PlayMetricsService, NtfyService, MatchInfoService, CleanupService
+from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class StateAuditor(PollingProcessor):
     Scans the shared_data directory for state.json files and queues appropriate tasks.
     """
     
-    def __init__(self, storage_path: str, config: Any, poll_interval: int = 60):
+    def __init__(self, storage_path: str, config: Config, poll_interval: int = 60):
         super().__init__(storage_path, config, poll_interval)
         # References to other processors to queue work
         self.download_processor = None
@@ -25,9 +27,19 @@ class StateAuditor(PollingProcessor):
         self.upload_processor = None
         
         # Initialize API services
-        self.teamsnap_service = TeamSnapService(config, storage_path)
-        self.playmetrics_service = PlayMetricsService(config, storage_path)
-        self.ntfy_service = NtfyService(config, storage_path)
+        teamsnap_configs = []
+        if config.teamsnap.enabled:
+            teamsnap_configs.append(config.teamsnap)
+        teamsnap_configs.extend(config.teamsnap_teams)
+        self.teamsnap_service = TeamSnapService(teamsnap_configs)
+        
+        playmetrics_configs = []
+        if config.playmetrics.enabled:
+            playmetrics_configs.append(config.playmetrics)
+        playmetrics_configs.extend(config.playmetrics_teams)
+        
+        self.playmetrics_service = PlayMetricsService(playmetrics_configs)
+        self.ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
             self.teamsnap_service, 
             self.playmetrics_service, 
@@ -36,9 +48,6 @@ class StateAuditor(PollingProcessor):
         
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
-        
-        # Initialize cloud sync service
-        self.cloud_sync_service = CloudSyncService(config, storage_path)
     
     def set_processors(self, download_processor, video_processor, upload_processor):
         """Set references to other processors to queue work."""
@@ -175,24 +184,19 @@ class StateAuditor(PollingProcessor):
             # Check for videos to upload (autocam_complete status)
             if dir_state.status == "autocam_complete":
                 # Check if video upload is enabled
-                if (self.config.has_section('YOUTUBE') and 
-                    self.config.getboolean('YOUTUBE', 'enabled', fallback=False)):
+                if self.config.youtube.enabled:
                     if self.upload_processor:
-                        await self.upload_processor.add_work(VideoUploadTask(group_dir))
+                        await self.upload_processor.add_work(YoutubeUploadTask(group_dir))
             
-            # Handle cleanup and sync tasks
-            await self._handle_cleanup_and_sync(group_dir, dir_state)
+            # Handle cleanup tasks
+            await self._handle_cleanup(group_dir, dir_state)
                         
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
     
-    async def _handle_cleanup_and_sync(self, group_dir: str, dir_state: DirectoryState) -> None:
-        """Handle cleanup and sync tasks for a directory."""
+    async def _handle_cleanup(self, group_dir: str, dir_state: DirectoryState) -> None:
+        """Handle cleanup tasks for a directory."""
         try:
-            # Handle cloud sync first (before cleanup)
-            if self.cloud_sync_service.should_sync_directory(group_dir):
-                self.cloud_sync_service.sync_directory(group_dir)
-            
             # Clean up DAV files if appropriate
             if self.cleanup_service.should_cleanup_dav_files(group_dir):
                 self.cleanup_service.cleanup_dav_files(group_dir)
@@ -201,7 +205,7 @@ class StateAuditor(PollingProcessor):
             self.cleanup_service.cleanup_temporary_files(group_dir)
             
         except Exception as e:
-            logger.error(f"STATE_AUDITOR: Error during cleanup and sync for {group_dir}: {e}")
+            logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
     
     async def stop(self) -> None:
         """Stop the state auditor and clean up services."""

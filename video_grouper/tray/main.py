@@ -17,6 +17,8 @@ from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.utils.config import load_config, Config
+from typing import Optional
 
 # Configure logging
 # log_dir = Path('C:/ProgramData/VideoGrouper')
@@ -120,12 +122,12 @@ class SystemTrayIcon(QSystemTrayIcon):
         
         # Load configuration
         self.config_path = get_shared_data_path() / 'config.ini'
-        self.config = configparser.ConfigParser()
+        self.config: Optional[Config] = None
         if self.config_path.exists():
-            self.config.read(self.config_path)
+            self.config = load_config(self.config_path)
             
         # Get update URL from config
-        self.update_url = self.config.get('Updates', 'update_url', fallback='https://updates.videogrouper.com')
+        self.update_url = self.config.app.update_url if self.config else 'https://updates.videogrouper.com'
         
         # Ensure essential paths are configured
         if not self.config.has_section('paths'):
@@ -205,7 +207,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             
     def show_config(self):
         if not hasattr(self, 'config_window') or self.config_window is None:
-            self.config_window = ConfigWindow(self.config)
+            self.config_window = ConfigWindow()
             self.config_window.config_saved.connect(self.on_config_saved)
         
         self.config_window.show()
@@ -218,8 +220,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.config_window.refresh_autocam_queue_tab()
 
     def on_config_saved(self):
-        self.config = configparser.ConfigParser()
-        self.config.read(self.config_path)
+        self.config = load_config(self.config_path)
         logger.info("Configuration saved.")
 
     def start_service(self):
@@ -272,7 +273,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self._autocam_queue_processing:
             return
 
-        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        groups_dir = Path(self.config.paths.shared_data_path)
         logger.info(f"Scanning for groups in '{groups_dir}'")
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
@@ -333,7 +334,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         logger.info("Autocam queue check finished.")
 
     def _run_autocam_from_queue(self):
-        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        groups_dir = Path(self.config.paths.shared_data_path)
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
         if not autocam_queue_path.exists():
@@ -390,7 +391,7 @@ class SystemTrayIcon(QSystemTrayIcon):
     def on_autocam_runner_finished(self, group_dir, success):
         group_name = group_dir.name
 
-        groups_dir = Path(self.config.get("paths", "shared_data_path"))
+        groups_dir = Path(self.config.paths.shared_data_path)
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
         with open(autocam_queue_path, "r") as f:
@@ -433,7 +434,7 @@ class SystemTrayIcon(QSystemTrayIcon):
                         json.dump(state_data, f, indent=4)
                     
                     # Check if YouTube uploads are enabled
-                    if self.config.has_section("youtube") and self.config.getboolean("youtube", "enabled", fallback=False):
+                    if self.config.youtube.enabled if self.config else False:
                         # Add to YouTube upload queue
                         logger.info(f"YouTube uploads are enabled. Adding group '{group_name}' to YouTube upload queue.")
                         ffmpeg_queue_path = groups_dir / "ffmpeg_queue_state.json"

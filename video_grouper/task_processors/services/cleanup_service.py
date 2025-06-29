@@ -71,6 +71,8 @@ class CleanupService:
             
             if removed_count > 0:
                 logger.info(f"Cleaned up {removed_count} DAV files from {group_dir}")
+                # Update directory state to indicate DAV files have been cleaned up
+                dir_state.update_dir_state({'status': 'autocam_complete_dav_files_deleted'})
             
             return True
             

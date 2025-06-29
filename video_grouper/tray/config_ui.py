@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, 
-                             QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox, QHBoxLayout, QDialog, QScrollArea, QWidget)
+                             QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox, QHBoxLayout, QDialog, QScrollArea, QWidget, QInputDialog)
 from PyQt6.QtCore import QTimer, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QIcon
 from video_grouper.utils.locking import FileLock
@@ -21,6 +21,8 @@ from video_grouper.utils.youtube_upload import authenticate_youtube, get_youtube
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
+from video_grouper.utils.config import load_config, save_config, Config, TeamSnapTeamConfig, PlayMetricsTeamConfig
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +38,11 @@ class ConfigWindow(QWidget):
     # Signal emitted when configuration is saved
     config_saved = Signal()
 
-    def __init__(self, config=None):
+    def __init__(self):
         super().__init__()
         self.config_path = get_shared_data_path() / 'config.ini'
-        self.config = config if config is not None else configparser.ConfigParser()
-        if config is None:
-            self.load_config()
+        self.config: Optional[Config] = None
+        self.load_config()
         
         # Set the window icon
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -55,7 +56,7 @@ class ConfigWindow(QWidget):
         try:
             with FileLock(self.config_path):
                 if self.config_path.exists():
-                    self.config.read(self.config_path)
+                    self.config = load_config(self.config_path)
         except TimeoutError as e:
             logger.error(f"Could not acquire lock to read config file: {e}")
             QMessageBox.critical(self, 'Error', 'Could not load configuration file. It may be in use by another process.')
@@ -484,122 +485,72 @@ class ConfigWindow(QWidget):
         self.refresh_all_displays()
         
     def load_settings_into_ui(self):
-        """Populates the UI fields from the loaded config."""
+        """Load settings from the config object into the UI."""
+        if not self.config:
+            return
+
         # Camera settings
-        self.ip_address.setText(self.config.get('CAMERA', 'device_ip', fallback=''))
-        self.username.setText(self.config.get('CAMERA', 'username', fallback=''))
-        self.password.setText(self.config.get('CAMERA', 'password', fallback=''))
-        
+        self.ip_address.setText(self.config.camera.device_ip)
+        self.username.setText(self.config.camera.username)
+        self.password.setText(self.config.camera.password)
+
         # Storage settings
-        self.storage_path.setText(self.config.get('STORAGE', 'path', fallback=''))
-        
-        # User preferences
-        timezone = self.config.get('APP', 'timezone', fallback='UTC')
-        index = self.timezone_combo.findText(timezone)
-        if index >= 0:
-            self.timezone_combo.setCurrentIndex(index)
-        
+        self.storage_path.setText(self.config.storage.path)
+
         # YouTube settings
-        youtube_enabled = self.config.getboolean('YOUTUBE', 'enabled', fallback=False)
-        self.youtube_enabled.setChecked(youtube_enabled)
-        self.processed_playlist_name.setText(self.config.get('youtube.playlist.processed', 'name_format', fallback='{my_team_name} 2013s'))
-        self.raw_playlist_name.setText(self.config.get('youtube.playlist.raw', 'name_format', fallback='{my_team_name} 2013s - Full Field'))
+        self.youtube_enabled.setChecked(self.config.youtube.enabled)
+        self.processed_playlist_name.setText(self.config.youtube.processed_playlist.name_format)
+        self.raw_playlist_name.setText(self.config.youtube.raw_playlist.name_format)
         
-        # Update UI states
-        self.update_cloud_sync_ui_state()
-        
-        # Check YouTube token status
-        self.refresh_youtube_status()
-        
-        # Load TeamSnap configurations
+        # TeamSnap configurations
         self.teamsnap_configs_list.clear()
-        for section in self.config.sections():
-            if section.startswith('TEAMSNAP.'):
-                config_name = section[len('TEAMSNAP.'):]
-                self.teamsnap_configs_list.addItem(config_name)
-        
-        # Load PlayMetrics configurations
+        if self.config.teamsnap.enabled and not self.config.teamsnap_teams:
+            self.teamsnap_configs_list.addItem("Default")
+        for team in self.config.teamsnap_teams:
+            self.teamsnap_configs_list.addItem(team.team_name)
+
+        # PlayMetrics configurations
         self.playmetrics_configs_list.clear()
-        for section in self.config.sections():
-            if section.startswith('PLAYMETRICS.'):
-                config_name = section[len('PLAYMETRICS.'):]
-                self.playmetrics_configs_list.addItem(config_name)
+        if self.config.playmetrics.enabled and not self.config.playmetrics_teams:
+            self.playmetrics_configs_list.addItem("Default")
+        for team in self.config.playmetrics_teams:
+            self.playmetrics_configs_list.addItem(team.team_name)
+
+        # Cloud Sync settings
+        # This part will be more complex and will be handled separately
         
-        # Load legacy TeamSnap settings into a default configuration if it exists
-        if 'TEAMSNAP' in self.config and not any(s.startswith('TEAMSNAP.') for s in self.config.sections()):
-            # Create a default configuration
-            default_name = "Default"
-            section_name = f"TEAMSNAP.{default_name}"
-            
-            if section_name not in self.config:
-                self.config.add_section(section_name)
-                
-                # Copy settings from the legacy section
-                self.config[section_name]['enabled'] = self.config.get('TEAMSNAP', 'enabled', fallback='false')
-                self.config[section_name]['client_id'] = self.config.get('TEAMSNAP', 'client_id', fallback='')
-                self.config[section_name]['client_secret'] = self.config.get('TEAMSNAP', 'client_secret', fallback='')
-                self.config[section_name]['access_token'] = self.config.get('TEAMSNAP', 'access_token', fallback='')
-                self.config[section_name]['team_id'] = self.config.get('TEAMSNAP', 'team_id', fallback='')
-                self.config[section_name]['team_name'] = self.config.get('TEAMSNAP', 'my_team_name', fallback='')
-                
-                # Add to list
-                self.teamsnap_configs_list.addItem(default_name)
-        
-        # Load legacy PlayMetrics settings into a default configuration if it exists
-        if 'PLAYMETRICS' in self.config and not any(s.startswith('PLAYMETRICS.') for s in self.config.sections()):
-            # Create a default configuration
-            default_name = "Default"
-            section_name = f"PLAYMETRICS.{default_name}"
-            
-            if section_name not in self.config:
-                self.config.add_section(section_name)
-                
-                # Copy settings from the legacy section
-                self.config[section_name]['enabled'] = self.config.get('PLAYMETRICS', 'enabled', fallback='false')
-                self.config[section_name]['username'] = self.config.get('PLAYMETRICS', 'username', fallback='')
-                self.config[section_name]['password'] = self.config.get('PLAYMETRICS', 'password', fallback='')
-                self.config[section_name]['team_id'] = self.config.get('PLAYMETRICS', 'team_id', fallback='')
-                self.config[section_name]['team_name'] = self.config.get('PLAYMETRICS', 'team_name', fallback='')
-                
-                # Add to list
-                self.playmetrics_configs_list.addItem(default_name)
-            
-        # Load playlist configuration
-        if 'youtube.playlist.processed' in self.config:
-            self.processed_playlist_name.setText(self.config.get('youtube.playlist.processed', 'name_format', fallback="{my_team_name} 2013s"))
-        if 'youtube.playlist.raw' in self.config:
-            self.raw_playlist_name.setText(self.config.get('youtube.playlist.raw', 'name_format', fallback="{my_team_name} 2013s - Full Field"))
+        # Refresh the UI state for dynamic elements
+        self.update_cloud_sync_ui_state()
 
     def check_youtube_token_status(self, token_file_path=None):
-        """Check if the YouTube token file exists and update the status label accordingly."""
-        storage_path = self.storage_path.text()
-        if not storage_path:
-            self.youtube_status_label.setText("Storage path not set")
-            return
-        
-        # Get token file path
-        _, token_file = get_youtube_paths(storage_path)
-        
-        if os.path.exists(token_file):
-            try:
-                with open(token_file, 'r') as f:
-                    token_data = json.load(f)
-                    
-                # Check if token has basic required fields
-                if 'token' in token_data and 'refresh_token' in token_data:
-                    self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
-                else:
-                    self.youtube_status_label.setText("Token exists but may be invalid")
-            except Exception:
-                self.youtube_status_label.setText("Token file exists but is not valid JSON")
+        """Check the status of the YouTube token file."""
+        if not token_file_path:
+            storage_path = self.storage_path.text()
+            if not storage_path:
+                self.youtube_status_label.setText("Storage path not set")
+                return
+            
+            # Get token file path
+            _, token_file = get_youtube_paths(storage_path)
+            
+            if os.path.exists(token_file):
+                try:
+                    with open(token_file, 'r') as f:
+                        token_data = json.load(f)
+                        
+                    # Check if token has basic required fields
+                    if 'token' in token_data and 'refresh_token' in token_data:
+                        self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
+                    else:
+                        self.youtube_status_label.setText("Token exists but may be invalid")
+                except Exception:
+                    self.youtube_status_label.setText("Token file exists but is not valid JSON")
+            else:
+                self.youtube_status_label.setText("Not authenticated")
         else:
-            self.youtube_status_label.setText("Not authenticated")
+            # This is a manual check, so we don't need to check the file
+            self.youtube_status_label.setText("Manual check")
 
-    def toggle_password_visibility(self, checked):
-        """Toggles the visibility of the password field."""
-        if checked:
-            self.password.setEchoMode(QLineEdit.EchoMode.Normal)
-        else:
             self.password.setEchoMode(QLineEdit.EchoMode.Password)
             
     def browse_storage_path(self):
@@ -675,48 +626,31 @@ class ConfigWindow(QWidget):
         QTimer.singleShot(30000, check_auth_thread)
 
     def save_settings(self):
-        """Saves all settings from the Settings tab."""
+        """Save all settings from the UI to the config file."""
         try:
-            if 'CAMERA' not in self.config: self.config.add_section('CAMERA')
-            if 'STORAGE' not in self.config: self.config.add_section('STORAGE')
-            if 'APP' not in self.config: self.config.add_section('APP')
-            if 'YOUTUBE' not in self.config: self.config.add_section('YOUTUBE')
-            if 'youtube.playlist.processed' not in self.config: self.config.add_section('youtube.playlist.processed')
-            if 'youtube.playlist.raw' not in self.config: self.config.add_section('youtube.playlist.raw')
-            if 'CLOUD' not in self.config: self.config.add_section('CLOUD')
-                
-            self.config['CAMERA']['device_ip'] = self.ip_address.text()
-            self.config['CAMERA']['username'] = self.username.text()
-            self.config['CAMERA']['password'] = self.password.text()
-            self.config['STORAGE']['path'] = self.storage_path.text()
-            self.config['APP']['timezone'] = self.timezone_combo.currentText()
-            self.config['YOUTUBE']['enabled'] = str(self.youtube_enabled.isChecked())
-            
-            # Save playlist configuration
-            self.config['youtube.playlist.processed']['name_format'] = self.processed_playlist_name.text() or "{my_team_name} 2013s"
-            self.config['youtube.playlist.processed']['description'] = f"Processed videos for {'{my_team_name}'} 2013s team"
-            self.config['youtube.playlist.processed']['privacy_status'] = "unlisted"
-            
-            self.config['youtube.playlist.raw']['name_format'] = self.raw_playlist_name.text() or "{my_team_name} 2013s - Full Field"
-            self.config['youtube.playlist.raw']['description'] = f"Raw full field videos for {'{my_team_name}'} 2013s team"
-            self.config['youtube.playlist.raw']['privacy_status'] = "unlisted"
-            
-            # Make sure the cloud endpoint URL is set with a default value if not present
-            if 'endpoint_url' not in self.config['CLOUD']:
-                self.config['CLOUD']['endpoint_url'] = "https://example.com/api/sync"
-            
             with FileLock(self.config_path):
-                with open(self.config_path, 'w') as f:
-                    self.config.write(f)
-            QMessageBox.information(self, 'Success', 'Settings saved successfully.')
-            self.config_saved.emit()
+                # Update config object from UI
+                self.config.camera.device_ip = self.ip_address.text()
+                self.config.camera.username = self.username.text()
+                self.config.camera.password = self.password.text()
+                self.config.storage.path = self.storage_path.text()
+                self.config.youtube.enabled = self.youtube_enabled.isChecked()
+                self.config.youtube.processed_playlist.name_format = self.processed_playlist_name.text()
+                self.config.youtube.raw_playlist.name_format = self.raw_playlist_name.text()
+                self.config.app.timezone = self.timezone_combo.currentText()
+                
+                # Save the updated config object
+                save_config(self.config, self.config_path)
 
-        except TimeoutError:
-            QMessageBox.critical(self, 'Error', 'Could not save settings: file is locked.')
+            QMessageBox.information(self, 'Success', 'Settings saved successfully!')
+            self.config_saved.emit()
+        except TimeoutError as e:
+            logger.error(f"Could not acquire lock to save config file: {e}")
+            QMessageBox.critical(self, 'Error', 'Could not save configuration file. It may be in use by another process.')
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
-            QMessageBox.critical(self, 'Error', f'Failed to save settings: {str(e)}')
-            
+            QMessageBox.critical(self, 'Error', f'Failed to save settings: {e}')
+
     def refresh_all_displays(self):
         """Refreshes the text in all dynamic display tabs."""
         self.refresh_queue_displays()
@@ -1426,236 +1360,176 @@ class ConfigWindow(QWidget):
     # Methods for managing multiple TeamSnap configurations
     def add_teamsnap_config(self):
         """Add a new TeamSnap configuration."""
-        # Clear form fields
-        self.teamsnap_config_name.clear()
-        self.teamsnap_client_id.clear()
-        self.teamsnap_client_secret.clear()
-        self.teamsnap_access_token.clear()
-        self.teamsnap_team_id.clear()
-        self.teamsnap_team_name.clear()
-        self.teamsnap_enabled.setChecked(True)
-        self.teamsnap_status_label.setText("Not connected")
-        
-        # Deselect any selected item in the list
-        self.teamsnap_configs_list.clearSelection()
-    
+        name, ok = QInputDialog.getText(self, 'Add TeamSnap Config', 'Enter configuration name:')
+        if ok and name:
+            new_config = TeamSnapTeamConfig(team_name=name, enabled=True)
+            self.config.teamsnap_teams.append(new_config)
+            self.teamsnap_configs_list.addItem(name)
+            self.save_settings()
+
     def remove_teamsnap_config(self):
         """Remove the selected TeamSnap configuration."""
         selected_items = self.teamsnap_configs_list.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "No Selection", "Please select a configuration to remove.")
             return
         
-        selected_item = selected_items[0]
-        config_name = selected_item.text()
+        item = selected_items[0]
+        name = item.text()
         
-        # Confirm deletion
-        reply = QMessageBox.question(self, 'Confirm Deletion', 
-                                     f"Are you sure you want to delete the configuration '{config_name}'?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
+        reply = QMessageBox.question(self, 'Remove Config', f"Are you sure you want to remove '{name}'?")
         if reply == QMessageBox.StandardButton.Yes:
-            # Remove from list widget
-            row = self.teamsnap_configs_list.row(selected_item)
-            self.teamsnap_configs_list.takeItem(row)
-            
-            # Remove from config
-            section_name = f"TEAMSNAP.{config_name}"
-            if section_name in self.config:
-                self.config.remove_section(section_name)
-            
-            # Save config
-            try:
-                with FileLock(self.config_path):
-                    with open(self.config_path, 'w') as f:
-                        self.config.write(f)
-            except Exception as e:
-                logger.error(f"Error saving config after removing TeamSnap configuration: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
-    
+            self.config.teamsnap_teams = [t for t in self.config.teamsnap_teams if t.team_name != name]
+            self.teamsnap_configs_list.takeItem(self.teamsnap_configs_list.row(item))
+            self.save_settings()
+
     def load_selected_teamsnap_config(self):
         """Load the selected TeamSnap configuration into the form."""
         selected_items = self.teamsnap_configs_list.selectedItems()
         if not selected_items:
             return
-        
-        config_name = selected_items[0].text()
-        section_name = f"TEAMSNAP.{config_name}"
-        
-        if section_name in self.config:
-            self.teamsnap_config_name.setText(config_name)
-            self.teamsnap_enabled.setChecked(self.config.getboolean(section_name, 'enabled', fallback=True))
-            self.teamsnap_client_id.setText(self.config.get(section_name, 'client_id', fallback=''))
-            self.teamsnap_client_secret.setText(self.config.get(section_name, 'client_secret', fallback=''))
-            self.teamsnap_access_token.setText(self.config.get(section_name, 'access_token', fallback=''))
-            self.teamsnap_team_id.setText(self.config.get(section_name, 'team_id', fallback=''))
-            self.teamsnap_team_name.setText(self.config.get(section_name, 'team_name', fallback=''))
-            
-            # Update status label
-            team_name = self.config.get(section_name, 'team_name', fallback='')
-            if team_name:
-                self.teamsnap_status_label.setText(f"Connected: {team_name}")
-            else:
-                self.teamsnap_status_label.setText("Not connected")
-    
-    def save_teamsnap_config(self):
-        """Save the current TeamSnap configuration."""
-        config_name = self.teamsnap_config_name.text().strip()
-        
-        if not config_name:
-            QMessageBox.warning(self, "Missing Name", "Please enter a name for this configuration.")
-            return
-        
-        # Create or update section
-        section_name = f"TEAMSNAP.{config_name}"
-        if section_name not in self.config:
-            self.config.add_section(section_name)
-        
-        # Save values
-        self.config[section_name]['enabled'] = str(self.teamsnap_enabled.isChecked())
-        self.config[section_name]['client_id'] = self.teamsnap_client_id.text()
-        self.config[section_name]['client_secret'] = self.teamsnap_client_secret.text()
-        self.config[section_name]['access_token'] = self.teamsnap_access_token.text()
-        self.config[section_name]['team_id'] = self.teamsnap_team_id.text()
-        self.config[section_name]['team_name'] = self.teamsnap_team_name.text()
-        
-        # Save config
-        try:
-            with FileLock(self.config_path):
-                with open(self.config_path, 'w') as f:
-                    self.config.write(f)
-            
-            # Update list widget
-            found = False
-            for i in range(self.teamsnap_configs_list.count()):
-                if self.teamsnap_configs_list.item(i).text() == config_name:
-                    found = True
+
+        item = selected_items[0]
+        name = item.text()
+
+        team_config = None
+        if name == "Default":
+            team_config = self.config.teamsnap
+        else:
+            for t in self.config.teamsnap_teams:
+                if t.team_name == name:
+                    team_config = t
                     break
-            
-            if not found:
-                self.teamsnap_configs_list.addItem(config_name)
-            
-            QMessageBox.information(self, "Success", f"Configuration '{config_name}' saved successfully.")
-        except Exception as e:
-            logger.error(f"Error saving TeamSnap configuration: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
-    
+        
+        if team_config:
+            self.teamsnap_config_name.setText(name)
+            self.teamsnap_enabled.setChecked(team_config.enabled)
+            self.teamsnap_client_id.setText(team_config.client_id)
+            self.teamsnap_client_secret.setText(team_config.client_secret)
+            self.teamsnap_access_token.setText(team_config.access_token)
+            self.teamsnap_team_id.setText(team_config.team_id)
+            self.teamsnap_team_name.setText(team_config.my_team_name)
+
+    def save_teamsnap_config(self):
+        """Save the currently edited TeamSnap configuration."""
+        name = self.teamsnap_config_name.text()
+        if not name:
+            QMessageBox.warning(self, 'Warning', 'Configuration name cannot be empty.')
+            return
+
+        team_config = None
+        if name == "Default":
+            team_config = self.config.teamsnap
+        else:
+            for t in self.config.teamsnap_teams:
+                if t.team_name == name:
+                    team_config = t
+                    break
+        
+        if not team_config:
+            # This is a new team, create it
+            team_config = TeamSnapTeamConfig(team_name=name)
+            self.config.teamsnap_teams.append(team_config)
+
+        team_config.enabled = self.teamsnap_enabled.isChecked()
+        team_config.client_id = self.teamsnap_client_id.text()
+        team_config.client_secret = self.teamsnap_client_secret.text()
+        team_config.access_token = self.teamsnap_access_token.text()
+        team_config.team_id = self.teamsnap_team_id.text()
+        team_config.my_team_name = self.teamsnap_team_name.text()
+        
+        self.save_settings()
+        QMessageBox.information(self, 'Success', f"TeamSnap configuration '{name}' saved.")
+
     # Methods for managing multiple PlayMetrics configurations
     def add_playmetrics_config(self):
         """Add a new PlayMetrics configuration."""
-        # Clear form fields
-        self.playmetrics_config_name.clear()
-        self.playmetrics_username.clear()
-        self.playmetrics_password.clear()
-        self.playmetrics_team_id.clear()
-        self.playmetrics_team_name.clear()
-        self.playmetrics_enabled.setChecked(True)
-        self.playmetrics_status_label.setText("Not connected")
-        
-        # Deselect any selected item in the list
-        self.playmetrics_configs_list.clearSelection()
-    
+        name, ok = QInputDialog.getText(self, 'Add PlayMetrics Config', 'Enter configuration name:')
+        if ok and name:
+            new_config = PlayMetricsTeamConfig(team_name=name, enabled=True)
+            self.config.playmetrics_teams.append(new_config)
+            self.playmetrics_configs_list.addItem(name)
+            self.save_settings()
+
     def remove_playmetrics_config(self):
         """Remove the selected PlayMetrics configuration."""
         selected_items = self.playmetrics_configs_list.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "No Selection", "Please select a configuration to remove.")
             return
         
-        selected_item = selected_items[0]
-        config_name = selected_item.text()
+        item = selected_items[0]
+        name = item.text()
         
-        # Confirm deletion
-        reply = QMessageBox.question(self, 'Confirm Deletion', 
-                                     f"Are you sure you want to delete the configuration '{config_name}'?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
+        reply = QMessageBox.question(self, 'Remove Config', f"Are you sure you want to remove '{name}'?")
         if reply == QMessageBox.StandardButton.Yes:
-            # Remove from list widget
-            row = self.playmetrics_configs_list.row(selected_item)
-            self.playmetrics_configs_list.takeItem(row)
-            
-            # Remove from config
-            section_name = f"PLAYMETRICS.{config_name}"
-            if section_name in self.config:
-                self.config.remove_section(section_name)
-            
-            # Save config
-            try:
-                with FileLock(self.config_path):
-                    with open(self.config_path, 'w') as f:
-                        self.config.write(f)
-            except Exception as e:
-                logger.error(f"Error saving config after removing PlayMetrics configuration: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
-    
+            self.config.playmetrics_teams = [t for t in self.config.playmetrics_teams if t.team_name != name]
+            self.playmetrics_configs_list.takeItem(self.playmetrics_configs_list.row(item))
+            self.save_settings()
+
     def load_selected_playmetrics_config(self):
         """Load the selected PlayMetrics configuration into the form."""
         selected_items = self.playmetrics_configs_list.selectedItems()
         if not selected_items:
             return
+
+        item = selected_items[0]
+        name = item.text()
+
+        team_config = None
+        if name == "Default":
+            team_config = self.config.playmetrics
+        else:
+            for t in self.config.playmetrics_teams:
+                if t.team_name == name:
+                    team_config = t
+                    break
         
-        config_name = selected_items[0].text()
-        section_name = f"PLAYMETRICS.{config_name}"
-        
-        if section_name in self.config:
-            self.playmetrics_config_name.setText(config_name)
-            self.playmetrics_enabled.setChecked(self.config.getboolean(section_name, 'enabled', fallback=True))
-            self.playmetrics_username.setText(self.config.get(section_name, 'username', fallback=''))
-            self.playmetrics_password.setText(self.config.get(section_name, 'password', fallback=''))
-            self.playmetrics_team_id.setText(self.config.get(section_name, 'team_id', fallback=''))
-            self.playmetrics_team_name.setText(self.config.get(section_name, 'team_name', fallback=''))
+        if team_config:
+            self.playmetrics_config_name.setText(name)
+            self.playmetrics_enabled.setChecked(team_config.enabled)
+            self.playmetrics_username.setText(team_config.username)
+            self.playmetrics_password.setText(team_config.password)
+            self.playmetrics_team_id.setText(team_config.team_id)
+            self.playmetrics_team_name.setText(team_config.team_name)
             
             # Update status label
-            team_name = self.config.get(section_name, 'team_name', fallback='')
+            team_name = self.config.get(team_config.team_name, 'team_name', fallback='')
             if team_name:
                 self.playmetrics_status_label.setText(f"Connected: {team_name}")
             else:
                 self.playmetrics_status_label.setText("Not connected")
     
     def save_playmetrics_config(self):
-        """Save the current PlayMetrics configuration."""
-        config_name = self.playmetrics_config_name.text().strip()
-        
-        if not config_name:
-            QMessageBox.warning(self, "Missing Name", "Please enter a name for this configuration.")
+        """Save the currently edited PlayMetrics configuration."""
+        name = self.playmetrics_config_name.text()
+        if not name:
+            QMessageBox.warning(self, 'Warning', 'Configuration name cannot be empty.')
             return
-        
-        # Create or update section
-        section_name = f"PLAYMETRICS.{config_name}"
-        if section_name not in self.config:
-            self.config.add_section(section_name)
-        
-        # Save values
-        self.config[section_name]['enabled'] = str(self.playmetrics_enabled.isChecked())
-        self.config[section_name]['username'] = self.playmetrics_username.text()
-        self.config[section_name]['password'] = self.playmetrics_password.text()
-        self.config[section_name]['team_id'] = self.playmetrics_team_id.text()
-        self.config[section_name]['team_name'] = self.playmetrics_team_name.text()
-        
-        # Save config
-        try:
-            with FileLock(self.config_path):
-                with open(self.config_path, 'w') as f:
-                    self.config.write(f)
-            
-            # Update list widget
-            found = False
-            for i in range(self.playmetrics_configs_list.count()):
-                if self.playmetrics_configs_list.item(i).text() == config_name:
-                    found = True
+
+        team_config = None
+        if name == "Default":
+            team_config = self.config.playmetrics
+        else:
+            for t in self.config.playmetrics_teams:
+                if t.team_name == name:
+                    team_config = t
                     break
-            
-            if not found:
-                self.playmetrics_configs_list.addItem(config_name)
-            
-            QMessageBox.information(self, "Success", f"Configuration '{config_name}' saved successfully.")
-        except Exception as e:
-            logger.error(f"Error saving PlayMetrics configuration: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+        
+        if not team_config:
+            # This is a new team, create it
+            team_config = PlayMetricsTeamConfig(team_name=name)
+            self.config.playmetrics_teams.append(team_config)
+
+        team_config.enabled = self.playmetrics_enabled.isChecked()
+        team_config.username = self.playmetrics_username.text()
+        team_config.password = self.playmetrics_password.text()
+        team_config.team_id = self.playmetrics_team_id.text()
+        team_config.team_name = self.playmetrics_team_name.text()
+        
+        self.save_settings()
+        QMessageBox.information(self, 'Success', f"PlayMetrics configuration '{name}' saved.")
 
     def authenticate_with_google(self):
-        """Authenticate with Google for cloud sync."""
+        """Authenticate with Google and save the updated token."""
         def auth_thread():
             try:
                 # This would normally open a browser window for OAuth

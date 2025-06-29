@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 
+from video_grouper.utils.config import TeamSnapConfig
+
 logger = logging.getLogger(__name__)
 
 class TeamSnapAPI:
@@ -19,45 +21,24 @@ class TeamSnapAPI:
     game information and populate match information.
     """
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config: TeamSnapConfig):
         """
         Initialize the TeamSnap API integration.
         
         Args:
-            config_path: Path to the config.ini file. If None, use the default path.
+            config: TeamSnap configuration object.
         """
-        self.config_path = config_path or os.path.join("shared_data", "config.ini")
-        self.config = self._load_config()
-        self.enabled = self.config.get('enabled', 'false').lower() == 'true'
-        self.access_token = self.config.get('access_token', '')
-        self.team_id = self.config.get('team_id', '')
-        self.my_team_name = self.config.get('my_team_name', '')
+        self.config = config
+        self.enabled = self.config.enabled
+        self.access_token = self.config.access_token
+        self.team_id = self.config.team_id
+        self.my_team_name = self.config.my_team_name
         self.api_base_url = "https://api.teamsnap.com/v3"
         self.endpoints = {}
         
         if self.enabled:
             # Discover API endpoints
             self._discover_api_endpoints()
-    
-    def _load_config(self) -> Dict[str, str]:
-        """
-        Load the TeamSnap configuration from config.ini.
-        
-        Returns:
-            Dictionary with TeamSnap configuration.
-        """
-        if not os.path.exists(self.config_path):
-            logger.warning(f"TeamSnap config file not found: {self.config_path}")
-            return {'enabled': 'false'}
-        
-        config = configparser.ConfigParser()
-        config.read(self.config_path)
-        
-        if not config.has_section('TEAMSNAP'):
-            logger.warning("TeamSnap section not found in config.ini")
-            return {'enabled': 'false'}
-        
-        return {k: v for k, v in config['TEAMSNAP'].items()}
     
     def _make_api_request(self, url: str, method: str = "GET", params: Dict = None, json_data: Dict = None) -> Optional[Dict]:
         """
@@ -336,8 +317,8 @@ class TeamSnapAPI:
             logger.warning("TeamSnap API is not enabled")
             return False
             
-        client_id = self.config.get('client_id', '')
-        client_secret = self.config.get('client_secret', '')
+        client_id = self.config.client_id
+        client_secret = self.config.client_secret
         
         if not client_id or not client_secret:
             logger.error("TeamSnap client ID or secret is missing")

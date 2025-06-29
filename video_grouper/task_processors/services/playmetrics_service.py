@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+from video_grouper.utils.config import PlayMetricsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +20,14 @@ class PlayMetricsService:
     Handles multiple team configurations and game lookups.
     """
     
-    def __init__(self, config: configparser.ConfigParser, storage_path: str):
+    def __init__(self, configs: List[PlayMetricsConfig]):
         """
         Initialize PlayMetrics service.
         
         Args:
-            config: Configuration object
-            storage_path: Path to storage directory
+            configs: List of PlayMetrics configuration objects
         """
-        self.config = config
-        self.storage_path = storage_path
+        self.configs = configs
         self.playmetrics_apis = []
         self.enabled = False
         
@@ -36,103 +35,21 @@ class PlayMetricsService:
     
     def _initialize_apis(self) -> None:
         """Initialize PlayMetrics API instances for all configured teams."""
-        # Check for team configurations (PLAYMETRICS.*)
-        team_configs = [section for section in self.config.sections() 
-                       if section.startswith('PLAYMETRICS.') and section != 'PLAYMETRICS']
-        
-        # Process team-specific configurations first
-        if team_configs:
-            for section in team_configs:
-                if self.config.getboolean(section, 'enabled', fallback=False):
-                    logger.info(f"Initializing PlayMetrics team: {section}")
-                    api = self._create_team_api(section)
-                    if api and api.enabled and api.login():
+        for config in self.configs:
+            if config.enabled:
+                try:
+                    logger.info(f"Initializing PlayMetrics team: {config.team_name or 'Default'}")
+                    api = PlayMetricsAPI(config)
+                    if api.login():
                         self.playmetrics_apis.append(api)
                         self.enabled = True
-        
-        # Fallback to legacy configuration if no teams initialized
-        if not self.playmetrics_apis and (self.config.has_section('PLAYMETRICS') and 
-                                         self.config.getboolean('PLAYMETRICS', 'enabled', fallback=False)):
-            logger.info("Using legacy PlayMetrics configuration")
-            api = self._create_legacy_api()
-            if api and api.enabled and api.login():
-                self.playmetrics_apis.append(api)
-                self.enabled = True
-        
+                except Exception as e:
+                    logger.error(f"Error creating PlayMetrics API for {config.team_name or 'Default'}: {e}")
+
         if self.enabled:
             logger.info(f"PlayMetrics service enabled with {len(self.playmetrics_apis)} teams")
         else:
             logger.info("PlayMetrics service disabled - no valid configurations")
-    
-    def _create_team_api(self, section: str) -> Optional[PlayMetricsAPI]:
-        """Create a PlayMetrics API instance for a specific team configuration."""
-        try:
-            # Create temporary config for this team
-            temp_config = configparser.ConfigParser()
-            temp_config.add_section('PLAYMETRICS')
-            
-            # Copy base PlayMetrics settings
-            if self.config.has_section('PLAYMETRICS'):
-                for key, value in self.config['PLAYMETRICS'].items():
-                    if key not in ['team_id', 'team_name', 'username', 'password']:
-                        temp_config['PLAYMETRICS'][key] = value
-            
-            # Copy team-specific settings
-            temp_config['PLAYMETRICS']['enabled'] = 'true'
-            for key, value in self.config[section].items():
-                if key in ['team_id', 'team_name', 'username', 'password']:
-                    temp_config['PLAYMETRICS'][key] = value
-            
-            # Save temporary config
-            temp_config_path = os.path.join(self.storage_path, f"temp_playmetrics_{section}.ini")
-            with open(temp_config_path, 'w') as f:
-                temp_config.write(f)
-            
-            # Create API instance
-            api = PlayMetricsAPI(temp_config_path)
-            
-            # Clean up temp file
-            try:
-                os.remove(temp_config_path)
-            except Exception:
-                pass
-                
-            return api
-            
-        except Exception as e:
-            logger.error(f"Error creating PlayMetrics API for {section}: {e}")
-            return None
-    
-    def _create_legacy_api(self) -> Optional[PlayMetricsAPI]:
-        """Create a PlayMetrics API instance using legacy configuration."""
-        try:
-            # Create temporary config
-            temp_config = configparser.ConfigParser()
-            temp_config.add_section('PLAYMETRICS')
-            
-            # Copy all PlayMetrics settings
-            for key, value in self.config['PLAYMETRICS'].items():
-                temp_config['PLAYMETRICS'][key] = value
-            
-            # Save temporary config
-            temp_config_path = os.path.join(self.storage_path, "temp_playmetrics_legacy.ini")
-            with open(temp_config_path, 'w') as f:
-                temp_config.write(f)
-            
-            # Create API instance
-            api = PlayMetricsAPI(temp_config_path)
-            
-            # Clean up temp file
-            try:
-                os.remove(temp_config_path)
-            except Exception:
-                pass
-                
-            return api
-            
-        except Exception as e:
-            logger.error(f"Error creating legacy PlayMetrics API: {e}")
-            return None
     
     def find_game_for_recording(self, recording_start: datetime, recording_end: datetime) -> Optional[Dict[str, Any]]:
         """

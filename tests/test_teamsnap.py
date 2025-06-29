@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch, mock_open
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
+from video_grouper.utils.config import TeamSnapConfig
 
 class TestTeamSnapAPI(unittest.TestCase):
     """Test the TeamSnap API."""
@@ -21,18 +22,16 @@ class TestTeamSnapAPI(unittest.TestCase):
     def setUp(self):
         """Set up the test."""
         # Create test config data
-        self.config_data = {
-            'enabled': 'true',
-            'client_id': 'test_client_id',
-            'client_secret': 'test_client_secret',
-            'access_token': 'test_access_token',
-            'team_id': 'test_team_id',
-            'my_team_name': 'Test Team'
-        }
+        self.config = TeamSnapConfig(
+            enabled=True,
+            client_id='test_client_id',
+            client_secret='test_client_secret',
+            access_token='test_access_token',
+            team_id='test_team_id',
+            my_team_name='Test Team'
+        )
         
-        # Mock the _load_config method to return our test data
-        with patch.object(TeamSnapAPI, '_load_config', return_value=self.config_data):
-            self.api = TeamSnapAPI('mock_config_path')
+        self.api = TeamSnapAPI(self.config)
         
         # Create mock games
         self.games = [

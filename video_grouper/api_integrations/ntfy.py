@@ -13,9 +13,9 @@ import uuid
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple, Any, Set
-import configparser
 from pathlib import Path
 from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
+from video_grouper.utils.config import NtfyConfig
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -85,16 +85,17 @@ class NtfyAPI:
     """
     NTFY API integration for sending notifications with screenshots and receiving responses.
     """
-    def __init__(self, config: Optional[configparser.ConfigParser] = None):
+    def __init__(self, config: NtfyConfig):
         """
         Initialize the NTFY API client.
         
         Args:
-            config: ConfigParser object containing NTFY settings
+            config: NTFY configuration object
         """
-        self.enabled = False
-        self.base_url = "https://ntfy.sh"
-        self.topic = None
+        self.config = config
+        self.enabled = config.enabled
+        self.base_url = config.server_url
+        self.topic = config.topic
         self.client = None
         self.response_queue = asyncio.Queue()
         self.listener_task = None
@@ -106,42 +107,11 @@ class NtfyAPI:
         self.processed_screenshots = set()  # Set of screenshot paths that have been processed
         self.message_timeout = 300  # seconds (5 minutes)
         
-        if config:
-            self.configure(config)
-    
-    def configure(self, config: configparser.ConfigParser) -> bool:
-        """
-        Configure the NTFY API client from a ConfigParser object.
-        
-        Args:
-            config: ConfigParser object containing NTFY settings
-            
-        Returns:
-            bool: True if configuration was successful, False otherwise
-        """
-        if not config.has_section('NTFY'):
-            logger.warning("No NTFY section in config, NTFY integration disabled")
-            self.enabled = False
-            return False
-        
-        self.enabled = config.getboolean('NTFY', 'enabled', fallback=False)
-        if not self.enabled:
-            logger.info("NTFY integration is disabled in config")
-            return False
-        
-        self.base_url = config.get('NTFY', 'server_url', fallback="https://ntfy.sh")
-        
-        # Get topic name or generate a random one if not provided
-        configured_topic = config.get('NTFY', 'topic', fallback=None)
-        if configured_topic:
-            self.topic = configured_topic
-        else:
-            # Generate a random topic name if not provided
+        if not self.topic:
             self.topic = f"soccer-cam-{self.session_id}"
             logger.info(f"Using auto-generated NTFY topic: {self.topic}")
         
         logger.info(f"NTFY integration configured with topic: {self.topic}")
-        return True
     
     async def initialize(self):
         """Initialize the NTFY API integration."""

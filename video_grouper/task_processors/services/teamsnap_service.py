@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
+from video_grouper.utils.config import TeamSnapConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +20,14 @@ class TeamSnapService:
     Handles multiple team configurations and game lookups.
     """
     
-    def __init__(self, config: configparser.ConfigParser, storage_path: str):
+    def __init__(self, configs: List[TeamSnapConfig]):
         """
         Initialize TeamSnap service.
         
         Args:
-            config: Configuration object
-            storage_path: Path to storage directory
+            configs: List of TeamSnap configuration objects
         """
-        self.config = config
-        self.storage_path = storage_path
+        self.configs = configs
         self.teamsnap_apis = []
         self.enabled = False
         
@@ -36,74 +35,21 @@ class TeamSnapService:
     
     def _initialize_apis(self) -> None:
         """Initialize TeamSnap API instances for all configured teams."""
-        # Check for team configurations (TEAMSNAP.TEAM.*)
-        team_configs = [section for section in self.config.sections() 
-                       if section.startswith('TEAMSNAP.TEAM.')]
-        
-        # If no team configs found, use legacy configuration
-        if not team_configs:
-            if (self.config.has_section('TEAMSNAP') and 
-                self.config.getboolean('TEAMSNAP', 'enabled', fallback=False)):
-                logger.info("Using legacy TeamSnap configuration")
-                config_path = os.path.join(self.storage_path, "config.ini")
-                api = TeamSnapAPI(config_path)
-                if api.enabled:
-                    self.teamsnap_apis.append(api)
-                    self.enabled = True
-            return
-            
-        # Process each enabled team configuration
-        for section in team_configs:
-            if self.config.getboolean(section, 'enabled', fallback=False):
-                logger.info(f"Initializing TeamSnap team: {section}")
-                api = self._create_team_api(section)
-                if api and api.enabled:
-                    self.teamsnap_apis.append(api)
-                    self.enabled = True
-        
+        for config in self.configs:
+            if config.enabled:
+                try:
+                    logger.info(f"Initializing TeamSnap team: {config.my_team_name or 'Default'}")
+                    api = TeamSnapAPI(config)
+                    if api.enabled:
+                        self.teamsnap_apis.append(api)
+                        self.enabled = True
+                except Exception as e:
+                    logger.error(f"Error creating TeamSnap API for {config.my_team_name or 'Default'}: {e}")
+
         if self.enabled:
             logger.info(f"TeamSnap service enabled with {len(self.teamsnap_apis)} teams")
         else:
             logger.info("TeamSnap service disabled - no valid configurations")
-    
-    def _create_team_api(self, section: str) -> Optional[TeamSnapAPI]:
-        """Create a TeamSnap API instance for a specific team configuration."""
-        try:
-            # Create temporary config for this team
-            temp_config = configparser.ConfigParser()
-            temp_config.add_section('TEAMSNAP')
-            
-            # Copy base TeamSnap settings
-            if self.config.has_section('TEAMSNAP'):
-                for key, value in self.config['TEAMSNAP'].items():
-                    if key not in ['team_id', 'team_name']:
-                        temp_config['TEAMSNAP'][key] = value
-            
-            # Copy team-specific settings
-            temp_config['TEAMSNAP']['enabled'] = 'true'
-            for key, value in self.config[section].items():
-                if key in ['team_id', 'team_name']:
-                    temp_config['TEAMSNAP'][key] = value
-            
-            # Save temporary config
-            temp_config_path = os.path.join(self.storage_path, f"temp_teamsnap_{section}.ini")
-            with open(temp_config_path, 'w') as f:
-                temp_config.write(f)
-            
-            # Create API instance
-            api = TeamSnapAPI(temp_config_path)
-            
-            # Clean up temp file
-            try:
-                os.remove(temp_config_path)
-            except Exception:
-                pass
-                
-            return api
-            
-        except Exception as e:
-            logger.error(f"Error creating TeamSnap API for {section}: {e}")
-            return None
     
     def find_game_for_recording(self, recording_start: datetime, recording_end: datetime) -> Optional[Dict[str, Any]]:
         """

@@ -12,17 +12,19 @@ import pytz
 from .base import Camera
 from video_grouper.utils.time_utils import parse_utc_from_string
 from video_grouper.models import ConnectionEvent
+from video_grouper.utils.config import CameraConfig
 
 logger = logging.getLogger(__name__)
 
 class DahuaCamera(Camera):
     """Dahua camera implementation."""
     
-    def __init__(self, device_ip: str, username: str, password: str, storage_path: str, client=None):
+    def __init__(self, config: CameraConfig, storage_path: str, client=None):
         """Initialize the Dahua camera with configuration."""
-        self.ip = device_ip
-        self.username = username
-        self.password = password
+        self.config = config
+        self.ip = self.config.device_ip
+        self.username = self.config.username
+        self.password = self.config.password
         self.storage_path = storage_path
         self._is_connected = False
         self._connection_events = []
