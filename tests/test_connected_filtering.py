@@ -110,7 +110,7 @@ class TestConnectedFiltering(unittest.TestCase):
         self.assertIsNotNone(game)
         self.assertEqual(game['id'], '1')
     
-    @patch('video_grouper.directory_state.DirectoryState')
+    @patch('video_grouper.utils.directory_state.DirectoryState')
     @patch('video_grouper.api_integrations.teamsnap.TeamSnapAPI.get_games')
     def test_video_grouper_filtering(self, mock_get_games, mock_dir_state):
         """Test that VideoGrouperApp respects the connected camera filtering rule."""

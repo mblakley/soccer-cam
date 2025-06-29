@@ -11,13 +11,12 @@ from PyQt6.QtCore import (QRunnable, QThreadPool, QTimer, QObject,
                           pyqtSignal as Signal, pyqtSlot as Slot)
 from PyQt6.QtGui import QIcon, QAction
 import win32serviceutil
-import win32service
-from video_grouper.autocam_automation import run_autocam_on_file
+from video_grouper.tray.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
-from video_grouper.youtube_upload import authenticate_youtube
+from video_grouper.utils.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
-from video_grouper.paths import get_shared_data_path
+from video_grouper.utils.paths import get_shared_data_path
 
 # Configure logging
 # log_dir = Path('C:/ProgramData/VideoGrouper')

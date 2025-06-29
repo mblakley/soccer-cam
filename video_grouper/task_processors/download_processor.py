@@ -4,7 +4,7 @@ from typing import Any
 
 from video_grouper.task_processors.tasks.download import BaseDownloadTask
 from .queue_processor_base import QueueProcessor
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.models import RecordingFile
 from .tasks.video import ConvertTask
 

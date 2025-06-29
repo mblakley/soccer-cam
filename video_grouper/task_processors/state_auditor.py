@@ -2,9 +2,10 @@ import os
 import logging
 from typing import Any, Dict, Optional
 from .polling_processor_base import PollingProcessor
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.models import VideoUploadTask, RecordingFile, MatchInfo
 from .tasks.video import ConvertTask, CombineTask, TrimTask
+from .services import TeamSnapService, PlayMetricsService, NtfyService, MatchInfoService, CleanupService, CloudSyncService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,22 @@ class StateAuditor(PollingProcessor):
         self.download_processor = None
         self.video_processor = None
         self.upload_processor = None
+        
+        # Initialize API services
+        self.teamsnap_service = TeamSnapService(config, storage_path)
+        self.playmetrics_service = PlayMetricsService(config, storage_path)
+        self.ntfy_service = NtfyService(config, storage_path)
+        self.match_info_service = MatchInfoService(
+            self.teamsnap_service, 
+            self.playmetrics_service, 
+            self.ntfy_service
+        )
+        
+        # Initialize cleanup service
+        self.cleanup_service = CleanupService(storage_path)
+        
+        # Initialize cloud sync service
+        self.cloud_sync_service = CloudSyncService(config, storage_path)
     
     def set_processors(self, download_processor, video_processor, upload_processor):
         """Set references to other processors to queue work."""
@@ -89,17 +106,28 @@ class StateAuditor(PollingProcessor):
                     if self.video_processor:
                         await self.video_processor.add_work(CombineTask(group_dir))
             
-            # Check for trimming (combined status with populated match info)
+            # Check for trimming (combined status with match info processing)
             if dir_state.status == "combined":
                 combined_path = os.path.join(group_dir, "combined.mp4")
                 if os.path.exists(combined_path):
-                    # Check if match info is populated
-                    match_info_path = os.path.join(group_dir, "match_info.ini")
-                    if os.path.exists(match_info_path):
-                        match_info = MatchInfo.from_file(match_info_path)
-                        if match_info and match_info.is_populated():
-                            if self.video_processor:
-                                await self.video_processor.add_work(TrimTask.from_match_info(group_dir, match_info))
+                    # Check if we're waiting for user input
+                    if self.match_info_service.is_waiting_for_user_input(group_dir):
+                        logger.debug(f"STATE_AUDITOR: Waiting for user input for {group_dir}")
+                    else:
+                        # Check if match info is populated
+                        match_info_path = os.path.join(group_dir, "match_info.ini")
+                        if os.path.exists(match_info_path):
+                            match_info = MatchInfo.from_file(match_info_path)
+                            if match_info and match_info.is_populated():
+                                # Queue trim task
+                                if self.video_processor:
+                                    await self.video_processor.add_work(TrimTask.from_match_info(group_dir, match_info))
+                            else:
+                                # Try to process match info
+                                await self.match_info_service.process_combined_directory(group_dir, combined_path)
+                        else:
+                            # Try to process match info
+                            await self.match_info_service.process_combined_directory(group_dir, combined_path)
             
             # Check for videos to upload (autocam_complete status)
             if dir_state.status == "autocam_complete":
@@ -108,6 +136,31 @@ class StateAuditor(PollingProcessor):
                     self.config.getboolean('YOUTUBE', 'enabled', fallback=False)):
                     if self.upload_processor:
                         await self.upload_processor.add_work(VideoUploadTask(group_dir))
+            
+            # Handle cleanup and sync tasks
+            await self._handle_cleanup_and_sync(group_dir, dir_state)
                         
         except Exception as e:
-            logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}") 
+            logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
+    
+    async def _handle_cleanup_and_sync(self, group_dir: str, dir_state: DirectoryState) -> None:
+        """Handle cleanup and sync tasks for a directory."""
+        try:
+            # Handle cloud sync first (before cleanup)
+            if self.cloud_sync_service.should_sync_directory(group_dir):
+                self.cloud_sync_service.sync_directory(group_dir)
+            
+            # Clean up DAV files if appropriate
+            if self.cleanup_service.should_cleanup_dav_files(group_dir):
+                self.cleanup_service.cleanup_dav_files(group_dir)
+            
+            # Clean up temporary files
+            self.cleanup_service.cleanup_temporary_files(group_dir)
+            
+        except Exception as e:
+            logger.error(f"STATE_AUDITOR: Error during cleanup and sync for {group_dir}: {e}")
+    
+    async def stop(self) -> None:
+        """Stop the state auditor and clean up services."""
+        await super().stop()
+        await self.match_info_service.shutdown() 

@@ -6,10 +6,10 @@ import json
 import os
 from datetime import datetime
 from .locking import FileLock
-from .models import RecordingFile
+from ..models import RecordingFile
 
 if TYPE_CHECKING:
-    from .models import RecordingFile
+    from ..models import RecordingFile
 
 logger = logging.getLogger(__name__)
 

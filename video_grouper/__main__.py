@@ -6,9 +6,9 @@ import asyncio
 import logging
 import argparse
 import signal
-from video_grouper.video_grouper import VideoGrouperApp
-from video_grouper.paths import get_shared_data_path
-from video_grouper.locking import FileLock
+from video_grouper.video_grouper_app import VideoGrouperApp
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.utils.locking import FileLock
 
 # Configure logging
 logging.basicConfig(

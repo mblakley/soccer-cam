@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple, Any, Set
 import configparser
 from pathlib import Path
-from video_grouper.ffmpeg_utils import create_screenshot, get_video_duration
+from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
 import subprocess
 
 logger = logging.getLogger(__name__)

@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButto
                              QFormLayout, QGridLayout, QScrollArea)
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
-from video_grouper.directory_state import DirectoryState
-from video_grouper.time_utils import parse_utc_from_string, convert_utc_to_local
+from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.time_utils import parse_utc_from_string, convert_utc_to_local
 from .queue_item_widget import ImagePreviewDialog
 
 class MatchInfoItemWidget(QWidget):

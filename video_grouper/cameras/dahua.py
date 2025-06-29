@@ -10,7 +10,7 @@ import asyncio
 import pytz
 
 from .base import Camera
-from video_grouper.time_utils import parse_utc_from_string
+from video_grouper.utils.time_utils import parse_utc_from_string
 from video_grouper.models import ConnectionEvent
 
 logger = logging.getLogger(__name__)

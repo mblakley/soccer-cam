@@ -10,7 +10,7 @@ import pytest
 from video_grouper.task_processors.video_processor import VideoProcessor
 from video_grouper.task_processors.tasks import ConvertTask, CombineTask, TrimTask
 from video_grouper.models import MatchInfo
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 
 
 @pytest.fixture

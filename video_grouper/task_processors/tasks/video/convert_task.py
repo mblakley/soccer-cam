@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import MatchInfo
-from video_grouper.directory_state import DirectoryState
-from video_grouper.ffmpeg_utils import create_screenshot, get_video_duration
+from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
 
 logger = logging.getLogger(__name__)
 

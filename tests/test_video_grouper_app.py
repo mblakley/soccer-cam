@@ -7,10 +7,10 @@ from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 import pytest
 
-from video_grouper.video_grouper_refactored import VideoGrouperApp
+from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
 from video_grouper.task_processors.tasks import ConvertTask, YoutubeUploadTask
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 
 
 @pytest.fixture

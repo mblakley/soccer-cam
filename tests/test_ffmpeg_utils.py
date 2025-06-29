@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock, mock_open
-from video_grouper.ffmpeg_utils import (
+from video_grouper.utils.ffmpeg_utils import (
     async_convert_file, 
     get_video_duration, 
     verify_ffmpeg_install, 
@@ -14,7 +14,7 @@ import tempfile
 @pytest.fixture
 def mock_logger():
     """Mocks the logger used in ffmpeg_utils to prevent console output during tests."""
-    with patch('video_grouper.ffmpeg_utils.logger', MagicMock()) as mock:
+    with patch('video_grouper.utils.ffmpeg_utils.logger', MagicMock()) as mock:
         yield mock
 
 @pytest.fixture
