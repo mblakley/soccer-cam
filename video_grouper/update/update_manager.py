@@ -2,14 +2,10 @@ import os
 import sys
 import json
 import httpx
-import asyncio
 import logging
-import subprocess
 import win32serviceutil
-import win32service
 import tempfile
 import shutil
-from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)

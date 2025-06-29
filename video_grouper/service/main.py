@@ -12,8 +12,8 @@ from pathlib import Path
 from video_grouper import main
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
-from video_grouper.paths import get_shared_data_path
-from video_grouper.locking import FileLock
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.utils.locking import FileLock
 
 # Configure logging
 logging.basicConfig(

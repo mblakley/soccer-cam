@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import aiofiles
 
 from .base_ffmpeg_task import BaseFfmpegTask
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.models import MatchInfo
 
 logger = logging.getLogger(__name__)
@@ -158,20 +158,9 @@ class CombineTask(BaseFfmpegTask):
             logger.info(f"COMBINE: Successfully combined videos in {self.group_dir}")
             await dir_state.update_group_status("combined")
             
-            # Check for match_info.ini and queue trim task if it's populated
-            match_info_path = os.path.join(self.group_dir, "match_info.ini")
-            if os.path.exists(match_info_path):
-                match_info = MatchInfo.from_file(match_info_path)
-                if match_info and match_info.is_populated():
-                    # Queue trim task if requested
-                    if queue_task:
-                        from .trim_task import TrimTask
-                        trim_task = TrimTask.from_match_info(self.group_dir, match_info)
-                        await queue_task(trim_task)
-                        logger.info(f"COMBINE: Queued trim task: {trim_task}")
-                    else:
-                        logger.warning(f"COMBINE: No task queue function available to queue trim task for {self.group_dir}")
-                    
+            # The match info processing will be handled by the StateAuditor
+            # which will detect the "combined" status and process match info appropriately
+            
         except Exception as e:
             logger.error(f"COMBINE: Error in post-combine actions for {self}: {e}")
     

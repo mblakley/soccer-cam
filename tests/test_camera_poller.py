@@ -10,7 +10,7 @@ import pytz
 
 from video_grouper.task_processors.camera_poller import CameraPoller, find_group_directory
 from video_grouper.models import RecordingFile
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 
 
 @pytest.fixture

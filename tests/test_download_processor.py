@@ -11,7 +11,7 @@ import pytest
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.models import RecordingFile
 from video_grouper.task_processors.tasks import ConvertTask
-from video_grouper.directory_state import DirectoryState
+from video_grouper.utils.directory_state import DirectoryState
 
 
 @pytest.fixture

@@ -1,8 +1,10 @@
 import os
+import pytest
 import tempfile
-from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch, MagicMock, mock_open
 from selenium.webdriver.common.by import By
+import configparser
 
 from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
 
@@ -11,21 +13,16 @@ class TestPlayMetricsCalendarIntegration:
     
     def test_initialization(self):
         """Test initialization with config."""
-        # Create a temporary config file
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
-            f.write("""
-[PLAYMETRICS]
-enabled = true
-username = test@example.com
-password = testpassword
-team_id = 123456
-team_name = Test Team
-""")
-            config_path = f.name
+        test_config = {
+            'enabled': 'true',
+            'username': 'test@example.com',
+            'password': 'testpassword',
+            'team_id': '123456',
+            'team_name': 'Test Team'
+        }
         
-        try:
-            # Initialize the API
-            api = PlayMetricsAPI(config_path)
+        with patch.object(PlayMetricsAPI, '_load_config', return_value=test_config):
+            api = PlayMetricsAPI('mock_config_path')
             
             # Check that values were loaded correctly
             assert api.enabled == True
@@ -33,29 +30,15 @@ team_name = Test Team
             assert api.password == "testpassword"
             assert api.team_id == "123456"
             assert api.team_name == "Test Team"
-        finally:
-            # Clean up the temporary file
-            os.unlink(config_path)
     
     def test_disabled_when_not_configured(self):
         """Test that API is disabled when not configured."""
-        # Create a temporary config file without PlayMetrics section
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
-            f.write("""
-[OTHER_SECTION]
-foo = bar
-""")
-            config_path = f.name
-        
-        try:
-            # Initialize the API
-            api = PlayMetricsAPI(config_path)
+        # Mock config without PlayMetrics section
+        with patch.object(PlayMetricsAPI, '_load_config', return_value={}):
+            api = PlayMetricsAPI('mock_config_path')
             
             # Check that API is disabled
             assert api.enabled == False
-        finally:
-            # Clean up the temporary file
-            os.unlink(config_path)
     
     @patch('video_grouper.api_integrations.playmetrics.api.webdriver')
     def test_login(self, mock_webdriver):
@@ -83,21 +66,16 @@ foo = bar
         # Mock successful login redirect
         mock_driver.current_url = "https://playmetrics.com/dashboard"
         
-        # Create a temporary config file
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ini') as f:
-            f.write("""
-[PLAYMETRICS]
-enabled = true
-username = test@example.com
-password = testpassword
-team_id = 123456
-team_name = Test Team
-""")
-            config_path = f.name
+        test_config = {
+            'enabled': 'true',
+            'username': 'test@example.com',
+            'password': 'testpassword',
+            'team_id': '123456',
+            'team_name': 'Test Team'
+        }
         
-        try:
-            # Initialize the API
-            api = PlayMetricsAPI(config_path)
+        with patch.object(PlayMetricsAPI, '_load_config', return_value=test_config):
+            api = PlayMetricsAPI('mock_config_path')
             
             # Call login
             result = api.login()
@@ -108,9 +86,6 @@ team_name = Test Team
             
             # Verify that the driver was called correctly
             mock_driver.get.assert_called_with("https://playmetrics.com/login")
-        finally:
-            # Clean up the temporary file
-            os.unlink(config_path)
     
     @patch('video_grouper.api_integrations.playmetrics.api.requests')
     def test_download_calendar(self, mock_requests):
@@ -129,10 +104,10 @@ team_name = Test Team
         api.logged_in = True  # Set logged_in to True
         api.calendar_url = calendar_url
         
-        # Call download_calendar
+        # Call download_calendar with mocked file operations
         with patch('tempfile.mkstemp', return_value=(1, '/tmp/test.ics')):
             with patch('os.close'):
-                with patch('builtins.open', create=True):
+                with patch('builtins.open', mock_open()):
                     result = api.download_calendar()
         
         # Check that the result is the path to the downloaded file
@@ -143,7 +118,7 @@ team_name = Test Team
     
     def test_parse_calendar(self):
         """Test parsing a calendar file."""
-        # Create a sample calendar file
+        # Create a sample calendar content
         calendar_content = """BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//PlayMetrics//Calendar//EN
@@ -163,38 +138,35 @@ DTEND:20250616T200000Z
 END:VEVENT
 END:VCALENDAR"""
         
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ics') as f:
-            f.write(calendar_content)
-            calendar_path = f.name
+        # Create a properly initialized API instance
+        test_config = {'enabled': 'true'}
         
-        try:
-            # Initialize the API
-            api = PlayMetricsAPI()
+        with patch.object(PlayMetricsAPI, '_load_config', return_value=test_config):
+            api = PlayMetricsAPI('mock_config_path')
             
-            # Call parse_calendar
-            events = api.parse_calendar(calendar_path)
-            
-            # Check that events were parsed correctly
-            assert len(events) == 2
-            
-            # Check the game event
-            game_event = events[0]
-            assert game_event['title'] == "Test Game vs Opponent"
-            assert game_event['description'] == "Game description"
-            assert game_event['location'] == "Test Field"
-            assert game_event['is_game'] == True
-            assert game_event['opponent'] == "opponent"
-            
-            # Check the practice event
-            practice_event = events[1]
-            assert practice_event['title'] == "Test Practice"
-            assert practice_event['description'] == "Practice description"
-            assert practice_event['location'] == "Practice Field"
-            assert practice_event['is_game'] == False
-            assert practice_event['opponent'] is None
-        finally:
-            # Clean up the temporary file
-            os.unlink(calendar_path)
+            # Mock file reading for calendar parsing only
+            with patch('builtins.open', mock_open(read_data=calendar_content)):
+                # Call parse_calendar
+                events = api.parse_calendar('mock_calendar_path')
+                
+                # Check that events were parsed correctly
+                assert len(events) == 2
+                
+                # Check the game event
+                game_event = events[0]
+                assert game_event['title'] == "Test Game vs Opponent"
+                assert game_event['description'] == "Game description"
+                assert game_event['location'] == "Test Field"
+                assert game_event['is_game'] == True
+                assert game_event['opponent'] == "opponent"
+                
+                # Check the practice event
+                practice_event = events[1]
+                assert practice_event['title'] == "Test Practice"
+                assert practice_event['description'] == "Practice description"
+                assert practice_event['location'] == "Practice Field"
+                assert practice_event['is_game'] == False
+                assert practice_event['opponent'] is None
     
     def test_find_game_for_recording(self):
         """Test finding a game for a recording timespan."""

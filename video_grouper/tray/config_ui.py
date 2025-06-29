@@ -12,12 +12,12 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTabWidget, QLa
                              QLineEdit, QPushButton, QFormLayout, QFileDialog, QMessageBox, QCheckBox, QListWidget, QListWidgetItem, QGroupBox, QComboBox, QHBoxLayout, QDialog, QScrollArea, QWidget)
 from PyQt6.QtCore import QTimer, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QIcon
-from video_grouper.locking import FileLock
-from video_grouper.paths import get_shared_data_path
-from video_grouper.directory_state import DirectoryState
-from video_grouper.time_utils import get_all_timezones, convert_utc_to_local
+from video_grouper.utils.locking import FileLock
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.utils.time_utils import get_all_timezones, convert_utc_to_local
 from video_grouper.models import MatchInfo
-from video_grouper.youtube_upload import authenticate_youtube, get_youtube_paths
+from video_grouper.utils.youtube_upload import authenticate_youtube, get_youtube_paths
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget

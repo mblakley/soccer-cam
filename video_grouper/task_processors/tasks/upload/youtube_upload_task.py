@@ -54,7 +54,7 @@ class YoutubeUploadTask(BaseUploadTask):
         """
         try:
             # Import YouTube upload functionality
-            from video_grouper.youtube_upload import upload_group_videos, get_youtube_paths
+            from video_grouper.utils.youtube_upload import upload_group_videos, get_youtube_paths
             
             # Get storage path from group directory
             storage_path = os.path.dirname(self.group_dir)

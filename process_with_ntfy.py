@@ -9,7 +9,7 @@ import configparser
 import os
 import sys
 import logging
-from video_grouper.video_grouper import VideoGrouperApp
+from video_grouper.video_grouper_app import VideoGrouperApp
 
 # Configure logging
 logging.basicConfig(

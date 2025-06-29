@@ -4,7 +4,7 @@ import pytest
 import tempfile
 import configparser
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
 
@@ -12,30 +12,25 @@ from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvi
 @pytest.fixture
 def sample_config():
     """Create a sample config file for testing."""
-    config = configparser.ConfigParser()
-    config.add_section('CAMERA')
-    config.set('CAMERA', 'device_ip', '192.168.1.100')
-    config.set('CAMERA', 'username', 'admin')
-    config.set('CAMERA', 'password', 'password123')
+    # Mock the config file content
+    config_content = """[CAMERA]
+device_ip = 192.168.1.100
+username = admin
+password = password123
+
+[STORAGE]
+path = /path/to/storage
+
+[APP]
+timezone = UTC
+"""
     
-    config.add_section('STORAGE')
-    config.set('STORAGE', 'path', '/path/to/storage')
+    # Mock file path and content
+    mock_path = Path('/mock/config/path.ini')
     
-    config.add_section('APP')
-    config.set('APP', 'timezone', 'UTC')
-    
-    # Create a temporary file to store the config
-    fd, temp_path = tempfile.mkstemp(suffix='.ini')
-    os.close(fd)
-    
-    with open(temp_path, 'w') as f:
-        config.write(f)
-    
-    yield Path(temp_path)
-    
-    # Clean up
-    if os.path.exists(temp_path):
-        os.unlink(temp_path)
+    with patch('builtins.open', mock_open(read_data=config_content)):
+        with patch('pathlib.Path.exists', return_value=True):
+            yield mock_path
 
 
 class TestCloudSync:

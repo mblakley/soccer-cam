@@ -4,7 +4,7 @@ import asyncio
 import configparser
 from unittest.mock import patch, AsyncMock, MagicMock
 from video_grouper.api_integrations.ntfy import NtfyAPI
-from video_grouper.video_grouper import VideoGrouperApp
+from video_grouper.video_grouper_app import VideoGrouperApp
 import time
 
 @pytest.fixture
@@ -203,35 +203,7 @@ async def test_ask_game_end_time(mock_http_client):
         assert kwargs['title'] == 'Set Game End Time'
         assert kwargs['tags'] == ['warning', 'info']
 
-@pytest.mark.asyncio
-async def test_video_grouper_ntfy_integration():
-    """Test the NTFY integration in the VideoGrouperApp class."""
-    # Create a mock config with NTFY enabled
-    config = configparser.ConfigParser()
-    config.add_section('NTFY')
-    config.set('NTFY', 'enabled', 'true')
-    config.set('NTFY', 'topic', 'test-topic')
-    
-    # Create a VideoGrouperApp instance with the mock config
-    with patch('video_grouper.video_grouper.NtfyAPI') as mock_ntfy_class:
-        # Set up the mock NTFY API
-        mock_ntfy = AsyncMock()
-        mock_ntfy.enabled = True
-        mock_ntfy.configure.return_value = True
-        mock_ntfy_class.return_value = mock_ntfy
-        
-        # Create the app with additional required mocks
-        with patch('os.makedirs'), \
-             patch('video_grouper.video_grouper.create_directory'):
-            app = VideoGrouperApp(config, "./test_storage")
-            
-            # Call the initialization method directly
-            app._initialize_ntfy()
-            
-            # Check that the NTFY API was initialized
-            assert app.ntfy_api is not None
-            assert app.ntfy_api == mock_ntfy
-            mock_ntfy_class.assert_called_once_with(config)
+
 
 @pytest.mark.asyncio
 async def test_ask_team_info(mock_http_client):

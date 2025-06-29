@@ -8,7 +8,7 @@ import sys
 import unittest
 import configparser
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 
 # Add the parent directory to the path so we can import the video_grouper package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,26 +16,23 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 
 class TestTeamSnapAPI(unittest.TestCase):
-    """Tests for the TeamSnap API integration."""
+    """Test the TeamSnap API."""
     
     def setUp(self):
         """Set up the test."""
-        # Create a mock config
-        self.config_path = "test_config.ini"
-        config = configparser.ConfigParser()
-        config.add_section('TEAMSNAP')
-        config.set('TEAMSNAP', 'enabled', 'true')
-        config.set('TEAMSNAP', 'client_id', 'test_client_id')
-        config.set('TEAMSNAP', 'client_secret', 'test_client_secret')
-        config.set('TEAMSNAP', 'access_token', 'test_access_token')
-        config.set('TEAMSNAP', 'team_id', 'test_team_id')
-        config.set('TEAMSNAP', 'my_team_name', 'Test Team')
+        # Create test config data
+        self.config_data = {
+            'enabled': 'true',
+            'client_id': 'test_client_id',
+            'client_secret': 'test_client_secret',
+            'access_token': 'test_access_token',
+            'team_id': 'test_team_id',
+            'my_team_name': 'Test Team'
+        }
         
-        with open(self.config_path, 'w') as f:
-            config.write(f)
-        
-        # Create a TeamSnap API instance
-        self.api = TeamSnapAPI(self.config_path)
+        # Mock the _load_config method to return our test data
+        with patch.object(TeamSnapAPI, '_load_config', return_value=self.config_data):
+            self.api = TeamSnapAPI('mock_config_path')
         
         # Create mock games
         self.games = [
@@ -57,8 +54,8 @@ class TestTeamSnapAPI(unittest.TestCase):
     
     def tearDown(self):
         """Clean up after the test."""
-        if os.path.exists(self.config_path):
-            os.remove(self.config_path)
+        # No file cleanup needed since we're using mocks
+        pass
     
     def test_initialization(self):
         """Test that the TeamSnap API initializes correctly."""

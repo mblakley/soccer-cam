@@ -2,7 +2,7 @@ import os
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QDialog)
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtCore import Qt, QSize
-from video_grouper.time_utils import parse_dt_from_string_with_tz, convert_utc_to_local
+from video_grouper.utils.time_utils import parse_dt_from_string_with_tz, convert_utc_to_local
 
 class ImagePreviewDialog(QDialog):
     """A simple dialog to show a larger version of an image."""
