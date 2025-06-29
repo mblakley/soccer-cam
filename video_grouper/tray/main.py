@@ -127,13 +127,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.config = load_config(self.config_path)
             
         # Get update URL from config
-        self.update_url = self.config.app.update_url if self.config else 'https://updates.videogrouper.com'
-        
-        # Ensure essential paths are configured
-        if not self.config.has_section('paths'):
-            self.config.add_section('paths')
-        if not self.config.has_option('paths', 'shared_data_path'):
-            self.config.set('paths', 'shared_data_path', str(get_shared_data_path()))
+        self.update_url = self.config.app.update_url if self.config and self.config.app else 'https://updates.videogrouper.com'
 
         self._is_first_check = True
         self.init_ui()

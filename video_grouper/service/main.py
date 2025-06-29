@@ -8,7 +8,7 @@ import os
 import logging
 import asyncio
 from pathlib import Path
-from video_grouper import main as video_grouper_main
+from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.paths import get_shared_data_path
@@ -89,7 +89,8 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
     async def run_main_service(self):
         """Run the main service functionality."""
         try:
-            await video_grouper_main(self.config)
+            app = VideoGrouperApp(self.config)
+            await app.run()
         except Exception as e:
             logger.error(f"Error in main service: {e}")
             raise

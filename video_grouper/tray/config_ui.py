@@ -18,6 +18,7 @@ from video_grouper.utils.directory_state import DirectoryState
 from video_grouper.utils.time_utils import get_all_timezones, convert_utc_to_local
 from video_grouper.models import MatchInfo
 from video_grouper.utils.youtube_upload import authenticate_youtube, get_youtube_paths
+from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
@@ -1182,7 +1183,7 @@ class ConfigWindow(QWidget):
                 temp_config.set('PLAYMETRICS', 'password', password)
                 
                 # Import here to avoid circular imports
-                from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+                from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
                 
                 # Initialize PlayMetrics API
                 playmetrics_api = PlayMetricsAPI()
