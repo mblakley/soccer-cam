@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock, mock_open
 from selenium.webdriver.common.by import By
 import configparser
 
-from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 from video_grouper.utils.config import PlayMetricsConfig
 
 class TestPlayMetricsCalendarIntegration:
@@ -37,7 +37,7 @@ class TestPlayMetricsCalendarIntegration:
         # Check that API is disabled
         assert api.enabled == False
     
-    @patch('video_grouper.api_integrations.playmetrics.api.webdriver')
+    @patch('video_grouper.api_integrations.playmetrics.webdriver')
     def test_login(self, mock_webdriver):
         """Test login to PlayMetrics."""
         # Mock the webdriver
@@ -82,7 +82,7 @@ class TestPlayMetricsCalendarIntegration:
         # Verify that the driver was called correctly
         mock_driver.get.assert_called_with("https://playmetrics.com/login")
     
-    @patch('video_grouper.api_integrations.playmetrics.api.requests')
+    @patch('video_grouper.api_integrations.playmetrics.requests')
     def test_download_calendar(self, mock_requests):
         """Test downloading the calendar."""
         # Mock the calendar URL

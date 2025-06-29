@@ -6,7 +6,7 @@ import configparser
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, MagicMock, patch, mock_open
 from video_grouper.video_grouper_app import VideoGrouperApp
-from video_grouper.api_integrations.playmetrics.api import PlayMetricsAPI
+from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 from video_grouper.utils.config import PlayMetricsConfig
 
 @pytest.fixture
