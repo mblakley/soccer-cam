@@ -11,45 +11,47 @@ from .queue_type import QueueType
 class BaseTask(ABC):
     """
     Base class for all tasks in the system.
-    
+
     Provides common interface that all tasks must implement.
     """
-    
+
     @property
     @abstractmethod
     def queue_type(self) -> QueueType:
         """Return the queue type for routing this task."""
         pass
-    
+
     @property
     @abstractmethod
     def task_type(self) -> str:
         """Return the specific task type identifier (e.g., 'convert', 'youtube_upload')."""
         pass
-    
+
     @abstractmethod
     def get_item_path(self) -> str:
         """Return the path of the item being processed."""
         pass
-    
+
     @abstractmethod
     def serialize(self) -> Dict[str, Any]:
         """Serialize the task for state persistence."""
         pass
-    
+
     @abstractmethod
-    async def execute(self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None) -> bool:
+    async def execute(
+        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
+    ) -> bool:
         """
         Execute the task.
-        
+
         Args:
             queue_task: Function to queue additional tasks
-            
+
         Returns:
             True if task succeeded, False otherwise
         """
         pass
-    
+
     def get_task_type(self) -> str:
         """Return the specific task type identifier (for backward compatibility)."""
-        return self.task_type 
+        return self.task_type

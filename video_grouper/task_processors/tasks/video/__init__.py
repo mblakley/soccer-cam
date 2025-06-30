@@ -6,8 +6,8 @@ from .combine_task import CombineTask
 from .trim_task import TrimTask
 
 __all__ = [
-    'BaseFfmpegTask',
-    'ConvertTask',
-    'CombineTask', 
-    'TrimTask',
-] 
+    "BaseFfmpegTask",
+    "ConvertTask",
+    "CombineTask",
+    "TrimTask",
+]

@@ -1,43 +1,38 @@
 import os
-import json
 import pytest
 import logging
 from datetime import datetime
-from typing import Dict, Any
 from unittest.mock import AsyncMock, MagicMock
 import httpx
-from pathlib import Path
 from unittest.mock import patch
-import pytz
+from video_grouper.cameras.dahua import DahuaCamera
+from video_grouper.utils.config import CameraConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-from video_grouper.cameras.dahua import DahuaCamera
-from video_grouper.models import RecordingFile
-from video_grouper.utils.config import CameraConfig
 
 # Fixtures
 @pytest.fixture
 def mock_config(tmp_path):
     """Create a mock camera configuration."""
     return CameraConfig(
-        type="dahua",
-        device_ip="192.168.1.100",
-        username="admin",
-        password="admin"
+        type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
     )
+
 
 @pytest.fixture
 def storage_path(tmp_path):
     """Create a temporary storage path."""
     return str(tmp_path)
 
+
 @pytest.fixture
 def mock_state_file(tmp_path) -> str:
     """Create a temporary state file for testing."""
     state_file = tmp_path / "camera_state.json"
     return str(state_file)
+
 
 # Test Cases
 class TestDahuaCameraInitialization:
@@ -51,6 +46,7 @@ class TestDahuaCameraInitialization:
         assert camera.password == mock_config.password
         assert camera.storage_path == storage_path
 
+
 class TestDahuaCameraAvailability:
     """Tests for camera availability checks."""
 
@@ -62,32 +58,40 @@ class TestDahuaCameraAvailability:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
-        
+
         camera._is_connected = False
         camera._connection_events = []
 
         # Test the method
         result = await camera.check_availability()
-        
+
         # Verify the method handled the response correctly
         assert result is True
         assert camera._is_connected is True
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0]['event_type'] == "connected"
-        assert "Successfully connected" in camera._connection_events[0]['message']
-        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
-        
+        assert camera._connection_events[0]["event_type"] == "connected"
+        assert "Successfully connected" in camera._connection_events[0]["message"]
+        assert isinstance(
+            datetime.fromisoformat(camera._connection_events[0]["event_datetime"]),
+            datetime,
+        )
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/recordManager.cgi?action=getCaps",
-            auth=mock_client.get.call_args[1]["auth"]
+            auth=mock_client.get.call_args[1]["auth"],
         )
 
     @pytest.mark.asyncio
@@ -96,32 +100,40 @@ class TestDahuaCameraAvailability:
         # Create a mock client that will raise ConnectError
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.ConnectError("Connection error")
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
-        
+
         camera._is_connected = True
         camera._connection_events = []
 
         # Test the method
         result = await camera.check_availability()
-        
+
         # Verify the method handled the exception correctly
         assert result is False
         assert camera._is_connected is False
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0]['event_type'] == "disconnected"
-        assert "Connection error" in camera._connection_events[0]['message']
-        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
-        
+        assert camera._connection_events[0]["event_type"] == "disconnected"
+        assert "Connection error" in camera._connection_events[0]["message"]
+        assert isinstance(
+            datetime.fromisoformat(camera._connection_events[0]["event_datetime"]),
+            datetime,
+        )
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/recordManager.cgi?action=getCaps",
-            auth=mock_client.get.call_args[1]["auth"]
+            auth=mock_client.get.call_args[1]["auth"],
         )
 
     @pytest.mark.asyncio
@@ -132,30 +144,37 @@ class TestDahuaCameraAvailability:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
-        
+
         # Mock initial state
         camera._is_connected = True
         camera._connection_events = []
 
         # Test the method
         result = await camera.check_availability()
-        
+
         # Verify the method handled the response correctly
         assert result is True
         assert camera._is_connected is True
-        assert len(camera._connection_events) == 0  # No new events since state didn't change
-        
+        assert (
+            len(camera._connection_events) == 0
+        )  # No new events since state didn't change
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/recordManager.cgi?action=getCaps",
-            auth=mock_client.get.call_args[1]["auth"]
+            auth=mock_client.get.call_args[1]["auth"],
         )
 
     @pytest.mark.asyncio
@@ -166,54 +185,65 @@ class TestDahuaCameraAvailability:
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
-        
+
         camera._is_connected = True
         camera._connection_events = []
 
         # Test the method
         result = await camera.check_availability()
-        
+
         # Verify the method handled the response correctly
         assert result is False
         assert camera._is_connected is False
         assert len(camera._connection_events) == 1
-        assert camera._connection_events[0]['event_type'] == "disconnected"
-        assert "404" in camera._connection_events[0]['message']
-        assert isinstance(datetime.fromisoformat(camera._connection_events[0]['event_datetime']), datetime)
-        
+        assert camera._connection_events[0]["event_type"] == "disconnected"
+        assert "404" in camera._connection_events[0]["message"]
+        assert isinstance(
+            datetime.fromisoformat(camera._connection_events[0]["event_datetime"]),
+            datetime,
+        )
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/recordManager.cgi?action=getCaps",
-            auth=mock_client.get.call_args[1]["auth"]
+            auth=mock_client.get.call_args[1]["auth"],
         )
+
 
 class TestDahuaCameraFileOperations:
     """Tests for file operations."""
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_get_file_list_success(self, mock_log_call):
         """Test successful file list retrieval."""
         # Create a mock client that will return a successful response
         mock_client = AsyncMock()
-        
+
         # First response for factory.create
         factory_response = MagicMock()
         factory_response.status_code = 200
         factory_response.text = "result=3039757640"
-        
+
         # Second response for findFile
         find_response = MagicMock()
         find_response.status_code = 200
         find_response.text = "OK"
-        
+
         # Third response for findNextFile
         next_response = MagicMock()
         next_response.status_code = 200
@@ -238,40 +268,50 @@ items[0].VideoStream=Main
 items[0].WorkDir=/mnt/dvr/mmc1p2_0
 items[0].WorkDirSN=0
 """
-        
+
         # Configure the mock to return different responses for different calls
         mock_client.get.side_effect = [factory_response, find_response, next_response]
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         start_time = datetime(2024, 1, 1, 12, 0, 0)
         end_time = datetime(2024, 1, 1, 13, 0, 0)
         files = await camera.get_file_list(start_time, end_time)
         assert len(files) == 1
-        assert files[0]['path'] == '/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav'
-        assert files[0]['startTime'] == '2024-01-01 12:00:00'
-        assert files[0]['endTime'] == '2024-01-01 12:30:00'
-        
+        assert files[0]["path"] == "/mnt/dvr/mmc1p2_0/2024.01.01/0/dav/12/test.dav"
+        assert files[0]["startTime"] == "2024-01-01 12:00:00"
+        assert files[0]["endTime"] == "2024-01-01 12:30:00"
+
         # Verify the mock was called with the correct URLs
         assert mock_client.get.call_count == 3
         mock_client.get.assert_any_call(
             "http://192.168.1.100/cgi-bin/mediaFileFind.cgi?action=factory.create",
-            auth=mock_client.get.call_args_list[0][1]["auth"]
+            auth=mock_client.get.call_args_list[0][1]["auth"],
         )
         # We can't check the exact URL for the second call due to the dynamic date, but we can check it contains the right pattern
-        assert "mediaFileFind.cgi?action=findFile&object=3039757640" in mock_client.get.call_args_list[1][0][0]
+        assert (
+            "mediaFileFind.cgi?action=findFile&object=3039757640"
+            in mock_client.get.call_args_list[1][0][0]
+        )
         mock_client.get.assert_any_call(
             "http://192.168.1.100/cgi-bin/mediaFileFind.cgi?action=findNextFile&object=3039757640&count=100",
-            auth=mock_client.get.call_args_list[2][1]["auth"]
+            auth=mock_client.get.call_args_list[2][1]["auth"],
         )
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_get_file_size_success(self, mock_log_call):
         """Test successful file size retrieval."""
         # Create a mock client that will return a successful response
@@ -280,21 +320,26 @@ items[0].WorkDirSN=0
         mock_response.status_code = 200
         mock_response.headers = {"content-length": "1024"}
         mock_client.head.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         size = await camera.get_file_size("/test.dav")
         assert size == 1024
-        
+
         # Verify the mock was called with the correct URL
         mock_client.head.assert_called_once_with(
             "http://192.168.1.100/cgi-bin/RPC_Loadfile/test.dav",
-            auth=mock_client.head.call_args[1]["auth"]
+            auth=mock_client.head.call_args[1]["auth"],
         )
 
     @pytest.mark.asyncio
@@ -302,45 +347,52 @@ items[0].WorkDirSN=0
         """Test successful file download."""
         # Create test data
         test_data = b"test data"
-        
+
         # Define the path for the test file
         test_file_path = tmp_path / "test.dav"
-        
+
         # Create a mock implementation of download_file
         async def mock_download_impl(server_path, local_path):
             # Write the test data to the file
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            with open(local_path, 'wb') as f:
+            with open(local_path, "wb") as f:
                 f.write(test_data)
             return True
-        
+
         # Create the camera
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
-            storage_path=str(tmp_path)
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
+            storage_path=str(tmp_path),
         )
-        
+
         # Patch the download_file method
         original_method = camera.download_file
         camera.download_file = mock_download_impl
-        
+
         try:
             # Call the method
             success = await camera.download_file("/test.dav", str(test_file_path))
-            
+
             # Verify the result
             assert success is True
-            
+
             # Verify the file was written correctly
             assert os.path.exists(test_file_path)
-            with open(test_file_path, 'rb') as f:
+            with open(test_file_path, "rb") as f:
                 assert f.read() == test_data
         finally:
             # Restore the original method
             camera.download_file = original_method
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_start_recording_success(self, mock_log_call):
         """Test successful recording start."""
         # Create a mock client that will return a successful response
@@ -351,9 +403,14 @@ items[0].WorkDirSN=0
 
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         success = await camera.start_recording()
@@ -362,13 +419,19 @@ items[0].WorkDirSN=0
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
+        )
+
 
 class TestDahuaCameraRecording:
     """Tests for recording operations."""
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_stop_recording_success(self, mock_log_call):
         """Test successful recording stop."""
         # Create a mock client that will return a successful response
@@ -379,9 +442,14 @@ class TestDahuaCameraRecording:
 
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         success = await camera.stop_recording()
@@ -390,10 +458,15 @@ class TestDahuaCameraRecording:
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
+        )
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_get_recording_status_recording(self, mock_log_call):
         """Test recording status when recording is active."""
         # Create a mock client that will return a successful response
@@ -402,20 +475,28 @@ class TestDahuaCameraRecording:
         mock_response.status_code = 200
         mock_response.text = "RecordMode[0].Mode=1"
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         assert await camera.get_recording_status() is True
-        
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
+        )
         assert isinstance(call_args[1]["auth"], httpx.DigestAuth)
 
     @pytest.mark.asyncio
@@ -427,27 +508,38 @@ class TestDahuaCameraRecording:
         mock_response.status_code = 200
         mock_response.text = "RecordMode[0].Mode=0"
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         assert await camera.get_recording_status() is False
-        
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
+        )
         assert isinstance(call_args[1]["auth"], httpx.DigestAuth)
+
 
 class TestDahuaCameraDeviceInfo:
     """Tests for device info operations."""
 
     @pytest.mark.asyncio
-    @patch('video_grouper.cameras.dahua.DahuaCamera._log_http_call', new_callable=AsyncMock)
+    @patch(
+        "video_grouper.cameras.dahua.DahuaCamera._log_http_call", new_callable=AsyncMock
+    )
     async def test_get_device_info_success(self, mock_log_call):
         """Test successful device info retrieval."""
         # Create a mock client that will return a successful response
@@ -458,23 +550,31 @@ class TestDahuaCameraDeviceInfo:
 firmwareVersion=1.0.0
 deviceType=IPC"""
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         info = await camera.get_device_info()
-        assert info['deviceName'] == "Test Camera"
-        assert info['firmwareVersion'] == "1.0.0"
-        assert info['deviceType'] == "IPC"
-        
+        assert info["deviceName"] == "Test Camera"
+        assert info["firmwareVersion"] == "1.0.0"
+        assert info["deviceType"] == "IPC"
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/magicBox.cgi?action=getSystemInfo"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/magicBox.cgi?action=getSystemInfo"
+        )
         assert isinstance(call_args[1]["auth"], httpx.DigestAuth)
 
     @pytest.mark.asyncio
@@ -485,35 +585,49 @@ deviceType=IPC"""
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_client.get.return_value = mock_response
-        
+
         # Create the camera with the mock client
         camera = DahuaCamera(
-            config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
+            config=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
             storage_path="test_path",
-            client=mock_client
+            client=mock_client,
         )
 
         info = await camera.get_device_info()
         assert info == {}
-        
+
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
         call_args = mock_client.get.call_args
-        assert call_args[0][0] == "http://192.168.1.100/cgi-bin/magicBox.cgi?action=getSystemInfo"
+        assert (
+            call_args[0][0]
+            == "http://192.168.1.100/cgi-bin/magicBox.cgi?action=getSystemInfo"
+        )
         assert isinstance(call_args[1]["auth"], httpx.DigestAuth)
+
 
 def test_connection_events_property():
     """Test connection events property."""
     camera = DahuaCamera(
-        config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
-        storage_path="test_path"
+        config=CameraConfig(
+            type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
+        ),
+        storage_path="test_path",
     )
     assert isinstance(camera.connection_events, list)
+
 
 def test_is_connected_property():
     """Test is connected property."""
     camera = DahuaCamera(
-        config=CameraConfig(type="dahua", device_ip="192.168.1.100", username="admin", password="admin"),
-        storage_path="test_path"
+        config=CameraConfig(
+            type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
+        ),
+        storage_path="test_path",
     )
-    assert isinstance(camera.is_connected, bool) 
+    assert isinstance(camera.is_connected, bool)

@@ -1,6 +1,8 @@
-# Soccer Cam
+# soccer-cam
 
-A tool for managing and processing soccer game recordings from IP cameras.
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/mblakley/soccer-cam/main.svg)](https://results.pre-commit.ci/latest/github/mblakley/soccer-cam/main)
+
+A set of tools to automate the process of recording, processing, and uploading soccer games.
 
 ## Features
 

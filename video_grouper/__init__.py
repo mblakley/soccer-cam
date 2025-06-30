@@ -2,6 +2,7 @@
 Video Grouper - A tool for managing and processing soccer game recordings from IP cameras.
 """
 
-__version__ = "0.1.0"
+from .video_grouper_app import VideoGrouperApp
+from .version import __version__, __version_full__
 
-from video_grouper.api_integrations.teamsnap import TeamSnapAPI 
+__all__ = ["VideoGrouperApp", "__version__", "__version_full__"]

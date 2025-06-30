@@ -9,11 +9,11 @@ from .video_processor import VideoProcessor
 from .upload_processor import UploadProcessor
 
 __all__ = [
-    'PollingProcessor',
-    'QueueProcessor',
-    'StateAuditor',
-    'CameraPoller',
-    'DownloadProcessor', 
-    'VideoProcessor',
-    'UploadProcessor'
-] 
+    "PollingProcessor",
+    "QueueProcessor",
+    "StateAuditor",
+    "CameraPoller",
+    "DownloadProcessor",
+    "VideoProcessor",
+    "UploadProcessor",
+]
