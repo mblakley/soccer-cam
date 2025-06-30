@@ -16,38 +16,180 @@ A set of tools to automate the process of recording, processing, and uploading s
 
 ## Installation
 
+### Method 1: Windows Installer (Recommended)
+
+1. Download the latest `VideoGrouperSetup.exe` from the [Releases](https://github.com/mblakley/soccer-cam/releases) page
+2. Run the installer and follow the setup wizard
+3. The installer will:
+   - Install Python 3.9 if not already present
+   - Install all required dependencies
+   - Create a Windows service for background processing
+   - Install a system tray application for configuration and monitoring
+   - Set up the initial configuration
+
+### Method 2: From Source
+
 1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/soccer-cam.git
+   ```bash
+   git clone https://github.com/mblakley/soccer-cam.git
    cd soccer-cam
    ```
 
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
+2. Install uv (Python package manager):
+   ```bash
+   # Windows
+   winget install astral-sh.uv
+   
+   # macOS
+   brew install uv
+   
+   # Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-3. Create a configuration file:
+3. Install dependencies:
+   ```bash
+   uv sync --extra tray --extra service
    ```
-   cp config.ini.example config.ini
+
+4. Create a configuration file:
+   ```bash
+   cp video_grouper/config.ini.dist video_grouper/config.ini
    ```
    Then edit `config.ini` with your camera and storage settings.
 
 ## Usage
 
-Run the application:
+### Windows Service Mode
+If you installed using the Windows installer, the service will start automatically. Use the system tray application to:
+- Configure camera and storage settings
+- Monitor download and processing queues
+- View connection history
+- Add match information for games
 
-```
-python -m video_grouper
+### Command Line Mode
+Run the application directly:
+
+```bash
+# Run the main application
+uv run python -m video_grouper
+
+# Run the tray application for configuration
+uv run python -m video_grouper.tray
+
+# Run the service directly
+uv run python -m video_grouper.service
 ```
 
 ## Development
 
-Run tests:
+### Setting up Development Environment
+
+1. Clone the repository and install dependencies:
+   ```bash
+   git clone https://github.com/mblakley/soccer-cam.git
+   cd soccer-cam
+   uv sync --extra dev --extra tray --extra service
+   ```
+
+2. Install pre-commit hooks for code quality:
+   ```bash
+   uv run pre-commit install
+   ```
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_camera_poller.py
+
+# Run with coverage
+uv run pytest --cov=video_grouper
+```
+
+### Code Quality
+
+The project uses several tools to maintain code quality:
+
+- **Ruff**: For linting and code formatting
+- **Pre-commit**: Automated checks before commits
+- **Pytest**: For testing
+
+```bash
+# Run linting
+uv run ruff check
+
+# Auto-fix linting issues
+uv run ruff check --fix
+
+# Format code
+uv run ruff format
+
+# Run pre-commit hooks manually
+uv run pre-commit run --all-files
+```
+
+### Building Installers
+
+To build Windows installers:
+
+```bash
+# Build service and tray executables, then create installer
+.\build-installer.ps1
+```
+
+This creates:
+- `VideoGrouperService.exe` - Windows service executable
+- `VideoGrouperTray.exe` - System tray application
+- `VideoGrouperSetup.exe` - Complete installer package
+
+### Testing GitHub Actions
+
+You can test GitHub Actions workflows locally using [act](https://github.com/nektos/act):
+
+```bash
+# Install act
+winget install nektos.act
+
+# Test Docker build workflow
+act push -W .github/workflows/build-docker.yml --dryrun
+
+# List all available workflows
+act --list
+```
+
+## Project Structure
 
 ```
-python -m pytest
+soccer-cam/
+├── .github/workflows/          # GitHub Actions CI/CD workflows
+├── tests/                      # Test files
+├── video_grouper/             # Main application package
+│   ├── api_integrations/      # External API integrations (TeamSnap, PlayMetrics, etc.)
+│   ├── cameras/               # Camera interface implementations
+│   ├── service/               # Windows service implementation
+│   ├── task_processors/       # Background task processors
+│   ├── tray/                  # System tray application
+│   ├── utils/                 # Utility modules
+│   └── video_grouper_app.py   # Main application entry point
+├── build-installer.ps1        # Windows installer build script
+├── docker-compose.yaml        # Docker deployment configuration
+└── pyproject.toml            # Project dependencies and configuration
 ```
+
+## CI/CD
+
+The project uses GitHub Actions for continuous integration and deployment:
+
+- **Docker Build**: Automatically builds and pushes Docker images on code changes
+- **Windows Build**: Creates Windows service and tray executables using PyInstaller
+- **Release**: Automatically updates releases with built artifacts when tags are created
+- **Code Quality**: Pre-commit.ci automatically runs linting and formatting checks
+
+All workflows can be tested locally using the `act` tool before pushing to GitHub.
 
 ## License
 

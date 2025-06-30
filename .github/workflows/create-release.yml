@@ -64,7 +64,7 @@ jobs:
       - name: Update Release
         uses: softprops/action-gh-release@v1
         with:
-          release_id: ${{ github.event.release.id }}
+          tag_name: ${{ github.ref_name }}
           body: |
             # VideoGrouper ${{ env.VERSION }}
             
@@ -84,6 +84,6 @@ jobs:
           files: |
             artifacts/VideoGrouperSetup.exe
             artifacts/VideoGrouperService.exe
-            artifacts/tray_agent.exe
+            artifacts/VideoGrouperTray.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

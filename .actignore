@@ -1,0 +1,43 @@
+# Ignore large data directories
+shared_data/
+video_grouper/dist/
+video_grouper/build/
+*.exe
+*.msi
+
+# Ignore Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+
+# Ignore Git and IDE files
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Ignore test artifacts
+.pytest_cache/
+test-results/
+coverage.xml
+
+# Ignore logs
+*.log
+logs/
+
+# Ignore temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Ignore large media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm 

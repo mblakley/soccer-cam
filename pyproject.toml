@@ -38,6 +38,7 @@ dev = [
     "pytest-qt>=4.2.0",
     "ruff>=0.5.5",
     "pre-commit>=3.7.1",
+    "pyinstaller>=6.0.0",
 ]
 
 [build-system]

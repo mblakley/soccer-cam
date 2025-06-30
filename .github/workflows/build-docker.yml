@@ -51,7 +51,8 @@ jobs:
     - name: Build and push
       uses: docker/build-push-action@v4
       with:
-        context: ./video_grouper
+        context: .
+        file: ./video_grouper/Dockerfile
         push: true
         tags: |
           ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:latest
