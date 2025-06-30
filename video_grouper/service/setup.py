@@ -1,13 +1,26 @@
-import sys
 from cx_Freeze import setup, Executable
 
 # Dependencies are automatically detected, but it might need fine tuning.
 build_exe_options = {
-    "packages": ["os", "sys", "win32serviceutil", "win32service", "win32event", 
-                "servicemanager", "socket", "asyncio", "logging", "httpx", 
-                "aiofiles", "configparser", "json", "datetime", "signal"],
+    "packages": [
+        "os",
+        "sys",
+        "win32serviceutil",
+        "win32service",
+        "win32event",
+        "servicemanager",
+        "socket",
+        "asyncio",
+        "logging",
+        "httpx",
+        "aiofiles",
+        "configparser",
+        "json",
+        "datetime",
+        "signal",
+    ],
     "excludes": [],
-    "include_files": []
+    "include_files": [],
 }
 
 base = None
@@ -22,10 +35,7 @@ setup(
     options={"build_exe": build_exe_options},
     executables=[
         Executable(
-            "main.py",
-            base=base,
-            target_name="VideoGrouperService.exe",
-            icon=None
+            "main.py", base=base, target_name="VideoGrouperService.exe", icon=None
         )
-    ]
-) 
+    ],
+)

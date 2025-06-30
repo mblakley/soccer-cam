@@ -97,7 +97,7 @@ class YouTubeConfig(BaseModel):
     playlist_mapping: Dict[str, str] = Field(default_factory=dict)
     processed_playlist: Optional[YouTubePlaylistConfig] = None
     raw_playlist: Optional[YouTubePlaylistConfig] = None
-    
+
     model_config = {"validate_by_name": True}
 
 
@@ -149,7 +149,7 @@ def load_config(config_path: Path) -> Config:
             team_name = section.split(".", 1)[1]
             team_config["team_name"] = team_name
             playmetrics_teams.append(team_config)
-    
+
     config_dict["playmetrics_teams"] = playmetrics_teams
 
     # Handle TeamSnap teams
@@ -160,7 +160,7 @@ def load_config(config_path: Path) -> Config:
             team_name = section.split(".", 1)[1]
             team_config["team_name"] = team_name
             teamsnap_teams.append(team_config)
-            
+
     config_dict["teamsnap_teams"] = teamsnap_teams
 
     return Config.model_validate(config_dict)
@@ -178,7 +178,9 @@ def save_config(config: Config, config_path: Path):
                 section_name = f"PLAYMETRICS.{item.team_name}"
                 item_dict = item.dict()
                 item_dict.pop("team_name")
-                parser[section_name] = {k: str(v) for k, v in item_dict.items() if v is not None}
+                parser[section_name] = {
+                    k: str(v) for k, v in item_dict.items() if v is not None
+                }
             continue
 
         if field_name == "teamsnap_teams":
@@ -186,7 +188,9 @@ def save_config(config: Config, config_path: Path):
                 section_name = f"TEAMSNAP.{item.team_name}"
                 item_dict = item.dict()
                 item_dict.pop("team_name")
-                parser[section_name] = {k: str(v) for k, v in item_dict.items() if v is not None}
+                parser[section_name] = {
+                    k: str(v) for k, v in item_dict.items() if v is not None
+                }
             continue
 
         if isinstance(value, BaseModel):
@@ -197,14 +201,18 @@ def save_config(config: Config, config_path: Path):
 
                 if isinstance(sub_value, BaseModel):
                     nested_section_name = f"{alias}.{sub_alias.upper()}"
-                    parser[nested_section_name] = {k: str(v) for k, v in sub_value.dict().items() if v is not None}
+                    parser[nested_section_name] = {
+                        k: str(v) for k, v in sub_value.dict().items() if v is not None
+                    }
                 elif sub_field_name == "playlist_mapping":
-                    parser["YOUTUBE_PLAYLIST_MAPPING"] = {k: str(v) for k, v in sub_value.items() if v is not None}
+                    parser["YOUTUBE_PLAYLIST_MAPPING"] = {
+                        k: str(v) for k, v in sub_value.items() if v is not None
+                    }
                 elif sub_value is not None:
                     section_items[sub_alias] = str(sub_value)
-            
+
             if section_items:
                 parser[alias] = section_items
-    
+
     with config_path.open("w") as f:
-        parser.write(f) 
+        parser.write(f)

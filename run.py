@@ -2,6 +2,7 @@
 """
 Simple wrapper script to run the video_grouper application.
 """
+
 import os
 import sys
 import asyncio
@@ -14,4 +15,4 @@ from video_grouper.__main__ import main
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())
-    sys.exit(exit_code) 
+    sys.exit(exit_code)

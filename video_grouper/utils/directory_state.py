@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 import logging
 import json
 import os
@@ -13,8 +13,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class DirectoryState:
     """Represents the state of files in a directory with state tracking."""
+
     def __init__(self, directory_path: str):
         self.directory_path = directory_path
         self.state_file_path = os.path.join(directory_path, "state.json")
@@ -32,29 +34,33 @@ class DirectoryState:
             return
 
         self._load_state()
-        
+
     def _load_state(self):
         """Load the state from the JSON file."""
         try:
             with FileLock(self.state_file_path):
                 if os.path.exists(self.state_file_path):
                     logger.debug(f"Loading directory state from {self.state_file_path}")
-                    with open(self.state_file_path, 'r') as f:
+                    with open(self.state_file_path, "r") as f:
                         state_data = json.load(f)
                         self.status = state_data.get("status", "pending")
                         self.error_message = state_data.get("error_message")
-                        
+
                         loaded_files = state_data.get("files", {})
                         for file_path, file_data in loaded_files.items():
                             # Ensure backward compatibility with older state files
-                            file_data.setdefault('total_size', 0)
-                            
+                            file_data.setdefault("total_size", 0)
+
                             self.files[file_path] = RecordingFile.from_dict(file_data)
-                            self.files[file_path].file_path = file_path # Ensure file_path is set
+                            self.files[
+                                file_path
+                            ].file_path = file_path  # Ensure file_path is set
 
                     logger.debug(f"Loaded {len(self.files)} files from directory state")
                 else:
-                    logger.debug(f"No existing state file found at {self.state_file_path}")
+                    logger.debug(
+                        f"No existing state file found at {self.state_file_path}"
+                    )
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Error loading directory state: {e}")
             self.files = {}
@@ -63,39 +69,39 @@ class DirectoryState:
             logger.error(f"Timeout loading state for {self.directory_path}: {e}")
         except Exception as e:
             logger.error(f"Could not load state for {self.directory_path}: {e}")
-            
+
     def _save_state_nolock(self):
         """Saves the current state to the JSON file without acquiring the lock."""
-        files_dict = {
-            fp: fs.to_dict() for fp, fs in self.files.items()
-        }
+        files_dict = {fp: fs.to_dict() for fp, fs in self.files.items()}
         state_data = {
             "status": self.status,
             "error_message": self.error_message,
-            "files": files_dict
+            "files": files_dict,
         }
         try:
             with FileLock(self.state_file_path):
-                with open(self.state_file_path, 'w') as f:
+                with open(self.state_file_path, "w") as f:
                     json.dump(state_data, f, indent=4)
         except TimeoutError as e:
             logger.error(f"Timeout saving state for {self.directory_path}: {e}")
         except Exception as e:
             logger.error(f"Could not save state for {self.directory_path}: {e}")
-        logger.debug(f"Saved directory state with {len(self.files)} files to {self.state_file_path}")
-            
+        logger.debug(
+            f"Saved directory state with {len(self.files)} files to {self.state_file_path}"
+        )
+
     async def save_state(self):
         """Asynchronously saves the current state to the JSON file."""
         async with self._lock:
             self._save_state_nolock()
-            
+
     async def add_file(self, file_path, file_obj: RecordingFile):
         """Adds or updates a file in the directory state."""
         async with self._lock:
             if file_path not in self.files:
                 if isinstance(file_obj, RecordingFile):
                     file_obj.group_dir = self.directory_path
-                
+
                 self.files[file_path] = file_obj
                 self._save_state_nolock()
 
@@ -103,34 +109,40 @@ class DirectoryState:
         """Update the state of a file in the plan."""
         async with self._lock:
             if file_path not in self.files:
-                logger.warning(f"File {os.path.basename(file_path)} not found in directory state")
+                logger.warning(
+                    f"File {os.path.basename(file_path)} not found in directory state"
+                )
                 return
-            
+
             for key, value in kwargs.items():
                 setattr(self.files[file_path], key, value)
-            
+
             # Update last_updated if the file object has this attribute
             file_obj = self.files[file_path]
-            if hasattr(file_obj, 'last_updated'):
+            if hasattr(file_obj, "last_updated"):
                 file_obj.last_updated = datetime.now()
-            
+
             self._save_state_nolock()
             logger.debug(f"Updated state for {os.path.basename(file_path)}")
-        
+
     def get_file_by_path(self, file_path: str) -> Optional[RecordingFile]:
         """Get a file by its full path."""
         return self.files.get(file_path)
 
     def get_file_by_status(self, status: str) -> list[RecordingFile]:
         """Get all files with the specified status."""
-        return [f for f in self.files.values() if hasattr(f, 'status') and f.status == status]
-        
+        return [
+            f
+            for f in self.files.values()
+            if hasattr(f, "status") and f.status == status
+        ]
+
     def get_last_file(self) -> Optional[RecordingFile]:
         """Returns the last file in the group based on end time."""
         if not self.files:
             return None
         return max(self.files.values(), key=lambda f: f.end_time)
-    
+
     def get_first_file(self) -> Optional[RecordingFile]:
         """Returns the first file in the group based on start time."""
         if not self.files:
@@ -146,14 +158,18 @@ class DirectoryState:
         # If this is the only file, it's the last file
         if len(self.files) == 1:
             return True
-            
+
         # If there are any files not yet converted, this is not the last file
         for path, file_obj in self.files.items():
-            if path != file_path and hasattr(file_obj, 'status') and file_obj.status not in ["converted", "skipped"]:
+            if (
+                path != file_path
+                and hasattr(file_obj, "status")
+                and file_obj.status not in ["converted", "skipped"]
+            ):
                 return False
-                
+
         return True
-        
+
     def is_file_in_state(self, file_path: str) -> bool:
         """Check if a file is already in the directory state."""
         return file_path in self.files
@@ -162,21 +178,21 @@ class DirectoryState:
         """Check if all non-skipped files are converted and ready for combining."""
         if not self.files:
             return False
-            
+
         # Filter out any files that are marked to be skipped.
         files_to_consider = [f for f in self.files.values() if not f.skip]
 
         # If there are no files left to consider (e.g., all were skipped), we can't combine.
         if not files_to_consider:
             return False
-            
+
         # All of the remaining files must be in the 'converted' state.
-        return all(f.status == 'converted' for f in files_to_consider)
+        return all(f.status == "converted" for f in files_to_consider)
 
     def is_file_in_queue(self, file_path: str) -> bool:
         """Check if a file is already in the directory state."""
         return file_path in self.files
-        
+
     async def mark_file_as_skipped(self, file_path: str) -> None:
         """Marks a file to be skipped in future processing, without changing its status."""
         async with self._lock:
@@ -190,7 +206,9 @@ class DirectoryState:
                 self.files[file_path].status = status
                 self._save_state_nolock()
 
-    async def update_group_status(self, status: str, error_message: Optional[str] = None):
+    async def update_group_status(
+        self, status: str, error_message: Optional[str] = None
+    ):
         """Update the status of all files in the group."""
         async with self._lock:
             self.status = status
@@ -200,12 +218,12 @@ class DirectoryState:
     def set_youtube_playlist_name(self, playlist_name: str):
         """Set the YouTube playlist name in the state."""
         self._load_state()  # Ensure we have the latest state
-        
+
         # Load existing state data or create a new dictionary
         state_data = {}
         if os.path.exists(self.state_file_path):
             try:
-                with open(self.state_file_path, 'r') as f:
+                with open(self.state_file_path, "r") as f:
                     state_data = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError):
                 # If file is corrupted or doesn't exist, start fresh
@@ -213,16 +231,18 @@ class DirectoryState:
         else:
             # If the file doesn't exist, we'll create it.
             state_data = {"files": {}, "status": "pending", "error_message": None}
-        
-        state_data['youtube_playlist_name'] = playlist_name
-        
+
+        state_data["youtube_playlist_name"] = playlist_name
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
-        
+
         # Save the updated state
-        with open(self.state_file_path, 'w') as f:
+        with open(self.state_file_path, "w") as f:
             json.dump(state_data, f, indent=4)
-        logger.debug(f"Set youtube_playlist_name to '{playlist_name}' in {self.state_file_path}")
+        logger.debug(
+            f"Set youtube_playlist_name to '{playlist_name}' in {self.state_file_path}"
+        )
 
     def get_youtube_playlist_name(self) -> Optional[str]:
         """Get the YouTube playlist name from the state."""
@@ -230,8 +250,8 @@ class DirectoryState:
         state_data = {}
         if os.path.exists(self.state_file_path):
             try:
-                with open(self.state_file_path, 'r') as f:
+                with open(self.state_file_path, "r") as f:
                     state_data = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError):
                 return None
-        return state_data.get('youtube_playlist_name')
+        return state_data.get("youtube_playlist_name")

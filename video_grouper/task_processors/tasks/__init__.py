@@ -10,7 +10,7 @@ from .download import (
     DahuaDownloadTask,
 )
 
-# Upload tasks  
+# Upload tasks
 from .upload import (
     BaseUploadTask,
     YoutubeUploadTask,
@@ -26,32 +26,28 @@ from .video import (
 
 __all__ = [
     # Base classes
-    'BaseTask',
-    'QueueType',
-    
+    "BaseTask",
+    "QueueType",
     # Download tasks
-    'BaseDownloadTask',
-    'DahuaDownloadTask',
-    
+    "BaseDownloadTask",
+    "DahuaDownloadTask",
     # Upload tasks
-    'BaseUploadTask', 
-    'YoutubeUploadTask',
-    
+    "BaseUploadTask",
+    "YoutubeUploadTask",
     # Video tasks
-    'BaseFfmpegTask',
-    'ConvertTask',
-    'CombineTask',
-    'TrimTask',
-    
+    "BaseFfmpegTask",
+    "ConvertTask",
+    "CombineTask",
+    "TrimTask",
     # Utility functions
-    'task_from_dict',
+    "task_from_dict",
 ]
 
 
 def task_from_dict(data: dict):
     """Create a task from a serialized dictionary - supports all task types."""
     task_type = data.get("task_type", "")
-    
+
     # Video tasks
     if task_type == "convert":
         return ConvertTask.from_dict(data)
@@ -59,17 +55,18 @@ def task_from_dict(data: dict):
         return CombineTask.from_dict(data)
     elif task_type == "trim":
         return TrimTask.from_dict(data)
-    
+
     # Upload tasks
     elif task_type == "youtube_upload":
         return YoutubeUploadTask.from_dict(data)
-    
+
     # Download tasks
     elif task_type == "dahua_download":
         return DahuaDownloadTask.from_dict(data)
-    
+
     else:
         import logging
+
         logger = logging.getLogger(__name__)
         logger.warning(f"Unknown task type in task_from_dict: {task_type}")
-        return None 
+        return None
