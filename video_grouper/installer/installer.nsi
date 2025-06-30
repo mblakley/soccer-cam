@@ -180,14 +180,14 @@ Section "Install Service" SecService
     FileClose $0
     
     ; Copy files
-    File "..\dist\service\VideoGrouperService.exe"
-    File "..\dist\tray\VideoGrouperTray.exe"
+    File "..\dist\VideoGrouperService.exe"
+    File "..\dist\VideoGrouperTray.exe"
     File "..\icon.ico"
     File "..\match_info.ini.dist"
-    File "..\requirements.txt"
+    File "..\..\requirements.lock"
     
-    ; Install Python dependencies
-    ExecWait 'pip install -r "$INSTDIR\requirements.txt"'
+    ; Install Python dependencies using uv
+    ExecWait 'uv pip install -r "$INSTDIR\requirements.lock"'
     
     ; Install and start the service
     ExecWait '"$INSTDIR\VideoGrouperService.exe" install'
@@ -221,7 +221,7 @@ Section "Uninstall"
     Delete "$INSTDIR\VideoGrouperTray.exe"
     Delete "$INSTDIR\icon.ico"
     Delete "$INSTDIR\match_info.ini.dist"
-    Delete "$INSTDIR\requirements.txt"
+    Delete "$INSTDIR\requirements.lock"
     Delete "$INSTDIR\config.ini"
     Delete "$INSTDIR\uninstall.exe"
     

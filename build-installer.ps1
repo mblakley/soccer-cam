@@ -5,9 +5,9 @@ $VERSION = "0.1.0"
 $BUILD_NUMBER = "0"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ICON_PATH = Join-Path $SCRIPT_DIR "video_grouper\icon.ico"
-$SERVICE_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\service_wrapper.py"
-$TRAY_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\tray_agent.py"
-$INSTALLER_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\installer.nsi"
+$SERVICE_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\service\main.py"
+$TRAY_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\tray\main.py"
+$INSTALLER_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\installer\installer.nsi"
 $DIST_DIR = Join-Path $SCRIPT_DIR "video_grouper\dist"
 $BUILD_DIR = Join-Path $SCRIPT_DIR "video_grouper\build"
 
@@ -22,11 +22,9 @@ if (-not (Test-Path $BUILD_DIR)) {
     New-Item -ItemType Directory -Path $BUILD_DIR
 }
 
-# Install PyInstaller if not already installed
-if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing PyInstaller..."
-    pip install pyinstaller
-}
+# Install dev dependencies (including PyInstaller) using uv
+Write-Host "Installing dependencies including PyInstaller..."
+uv sync --extra dev
 
 # Check for NSIS installation
 $NSIS_PATH = "C:\Program Files (x86)\NSIS\makensis.exe"
@@ -39,11 +37,11 @@ if (-not (Test-Path $NSIS_PATH)) {
 # Build service executable
 Write-Host "Building service executable..."
 $iconArg = if (Test-Path $ICON_PATH) { "--icon=$ICON_PATH" } else { "" }
-python -m PyInstaller --noconfirm --onefile --windowed $iconArg --name=VideoGrouperService --distpath=$DIST_DIR --workpath=$BUILD_DIR $SERVICE_SCRIPT
+uv run pyinstaller --noconfirm --onefile --windowed $iconArg --name=VideoGrouperService --distpath=$DIST_DIR --workpath=$BUILD_DIR $SERVICE_SCRIPT
 
 # Build tray agent executable
 Write-Host "Building tray agent executable..."
-python -m PyInstaller --noconfirm --onefile --windowed $iconArg --name=tray_agent --distpath=$DIST_DIR --workpath=$BUILD_DIR $TRAY_SCRIPT
+uv run pyinstaller --noconfirm --onefile --windowed $iconArg --name=VideoGrouperTray --distpath=$DIST_DIR --workpath=$BUILD_DIR $TRAY_SCRIPT
 
 # Build installer
 Write-Host "Building installer..."
