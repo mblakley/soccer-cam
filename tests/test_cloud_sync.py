@@ -114,7 +114,7 @@ async def test_upload_config_success(mock_request, cloud_sync, mock_config_file)
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_request.return_value = mock_response
-    
+        
         result = await cloud_sync.upload_config(mock_config_file)
     
         assert result is True
@@ -133,7 +133,7 @@ async def test_upload_config_failure(mock_request, cloud_sync, mock_config_file)
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_request.return_value = mock_response
-    
+        
         result = await cloud_sync.upload_config(mock_config_file)
     
         assert result is False
@@ -160,7 +160,7 @@ async def test_make_async_request(mock_post, cloud_sync):
     )
 
 # --- GoogleAuthProvider Tests ---
-
+    
 @pytest.mark.asyncio
 async def test_google_auth_provider():
     """Test the placeholder GoogleAuthProvider."""

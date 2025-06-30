@@ -262,4 +262,56 @@ class TestCameraPoller:
         
         expected_new_dir = os.path.join(temp_storage, "2023.01.01-10.05.30")
         assert group_dir == expected_new_dir
-        assert os.path.exists(group_dir) 
+        assert os.path.exists(group_dir)
+
+    @pytest.mark.asyncio
+    async def test_filter_file_within_connected_timeframe_poller(self, temp_storage, mock_config, mock_camera):
+        """Test that files completely within a connected timeframe are filtered out."""
+        connected_start = datetime(2023, 1, 1, 10, 0, tzinfo=pytz.utc)
+        connected_end = datetime(2023, 1, 1, 10, 10, tzinfo=pytz.utc)
+        mock_camera.get_connected_timeframes.return_value = [(connected_start, connected_end)]
+
+        mock_files = [
+            {
+                'path': '/test_within.dav',
+                'startTime': '2023-01-01 10:01:00',
+                'endTime': '2023-01-01 10:05:00'
+            }
+        ]
+        mock_camera.get_file_list.return_value = mock_files
+
+        mock_download = Mock()
+        mock_download.add_work = AsyncMock()
+
+        poller = CameraPoller(temp_storage, mock_config, mock_camera)
+        poller.set_download_processor(mock_download)
+
+        await poller._sync_files_from_camera()
+
+        mock_download.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_filter_file_containing_connected_timeframe_poller(self, temp_storage, mock_config, mock_camera):
+        """Test that files containing a connected timeframe are filtered out."""
+        connected_start = datetime(2023, 1, 1, 10, 0, tzinfo=pytz.utc)
+        connected_end = datetime(2023, 1, 1, 10, 10, tzinfo=pytz.utc)
+        mock_camera.get_connected_timeframes.return_value = [(connected_start, connected_end)]
+
+        mock_files = [
+            {
+                'path': '/test_containing.dav',
+                'startTime': '2023-01-01 09:00:00',
+                'endTime': '2023-01-01 11:00:00'
+            }
+        ]
+        mock_camera.get_file_list.return_value = mock_files
+
+        mock_download = Mock()
+        mock_download.add_work = AsyncMock()
+
+        poller = CameraPoller(temp_storage, mock_config, mock_camera)
+        poller.set_download_processor(mock_download)
+
+        await poller._sync_files_from_camera()
+
+        mock_download.add_work.assert_not_called() 

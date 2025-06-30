@@ -284,34 +284,7 @@ class DahuaCamera(Camera):
                         if "path" in file_data and "startTime" in file_data and "endTime" in file_data:
                             raw_files.append(file_data)
                     
-                    # Filter out files that overlap with connected timeframes
-                    connected_timeframes = self.get_connected_timeframes()
-                    if not connected_timeframes:
-                        return raw_files
-
-                    for file_info in raw_files:
-                        try:
-                            file_start_naive = datetime.strptime(file_info['startTime'], '%Y-%m-%d %H:%M:%S')
-                            file_end_naive = datetime.strptime(file_info['endTime'], '%Y-%m-%d %H:%M:%S')
-                            file_start = pytz.utc.localize(file_start_naive)
-                            file_end = pytz.utc.localize(file_end_naive)
-                        except (ValueError, KeyError) as e:
-                            logger.warning(f"Could not parse file time for {file_info}: {e}")
-                            continue
-
-                        is_overlapping = False
-                        for frame_start, frame_end in connected_timeframes:
-                            frame_end_or_now = frame_end or datetime.now(pytz.utc)
-
-                            if file_start < frame_end_or_now and file_end > frame_start:
-                                is_overlapping = True
-                                logger.debug(f"File from {file_start} to {file_end} overlaps with connected timeframe from {frame_start} to {frame_end_or_now}, ignoring.")
-                                break
-                        
-                        if not is_overlapping:
-                            files.append(file_info)
-
-                    return files
+                    return raw_files
                 return []
             finally:
                 if close_client:
