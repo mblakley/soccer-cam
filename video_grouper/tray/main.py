@@ -127,7 +127,12 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.config = load_config(self.config_path)
             
         # Get update URL from config
-        self.update_url = self.config.app.update_url if self.config and self.config.app else 'https://updates.videogrouper.com'
+        self.update_url = self.config.app.update_url if self.config else 'https://updates.videogrouper.com'
+        
+        # Ensure storage path is configured in the config model
+        # Use the typed StorageConfig from the Pydantic model
+        if self.config and getattr(self.config.storage, 'path', None) is None:
+            self.config.storage.path = str(get_shared_data_path())
 
         self._is_first_check = True
         self.init_ui()
@@ -223,7 +228,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.showMessage('Service', 'Service started successfully')
         except Exception as e:
             logger.error(f"Error starting service: {e}")
-            self.showMessage('Service', f'Failed to start service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical)
+            self.showMessage('Service', f'Failed to start service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical.value)
             
     def stop_service(self):
         try:
@@ -231,7 +236,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.showMessage('Service', 'Service stopped successfully')
         except Exception as e:
             logger.error(f"Error stopping service: {e}")
-            self.showMessage('Service', f'Failed to stop service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical)
+            self.showMessage('Service', f'Failed to stop service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical.value)
             
     def restart_service(self):
         try:
@@ -239,7 +244,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.showMessage('Service', 'Service restarted successfully')
         except Exception as e:
             logger.error(f"Error restarting service: {e}")
-            self.showMessage('Service', f'Failed to restart service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical)
+            self.showMessage('Service', f'Failed to restart service: {str(e)}', QSystemTrayIcon.MessageIcon.Critical.value)
             
     async def check_updates(self):
         """Manually check for updates."""
@@ -267,7 +272,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self._autocam_queue_processing:
             return
 
-        groups_dir = Path(self.config.paths.shared_data_path)
+        groups_dir = Path(self.config.storage.path)
         logger.info(f"Scanning for groups in '{groups_dir}'")
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
@@ -328,7 +333,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         logger.info("Autocam queue check finished.")
 
     def _run_autocam_from_queue(self):
-        groups_dir = Path(self.config.paths.shared_data_path)
+        groups_dir = Path(self.config.storage.path)
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
         if not autocam_queue_path.exists():
@@ -385,7 +390,7 @@ class SystemTrayIcon(QSystemTrayIcon):
     def on_autocam_runner_finished(self, group_dir, success):
         group_name = group_dir.name
 
-        groups_dir = Path(self.config.paths.shared_data_path)
+        groups_dir = Path(self.config.storage.path)
         autocam_queue_path = groups_dir / "autocam_queue_state.json"
 
         with open(autocam_queue_path, "r") as f:

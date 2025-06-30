@@ -86,8 +86,8 @@ def test_start_service_failure(mock_start_service):
         tray_icon.start_service()
 
         mock_start_service.assert_called_once_with('VideoGrouperService')
-        tray_icon.showMessage.assert_called_once_with(
+        tray_icon.showMessage.assert_called_with(
             'Service', 
             'Failed to start service: Test Error', 
-            QSystemTrayIcon.MessageIcon.Critical
+            3  # Corresponds to QSystemTrayIcon.MessageIcon.Critical
         ) 

@@ -494,10 +494,10 @@ class ConfigWindow(QWidget):
         self.ip_address.setText(self.config.camera.device_ip)
         self.username.setText(self.config.camera.username)
         self.password.setText(self.config.camera.password)
-
+        
         # Storage settings
         self.storage_path.setText(self.config.storage.path)
-
+        
         # YouTube settings
         self.youtube_enabled.setChecked(self.config.youtube.enabled)
         self.processed_playlist_name.setText(self.config.youtube.processed_playlist.name_format)
@@ -526,32 +526,30 @@ class ConfigWindow(QWidget):
     def check_youtube_token_status(self, token_file_path=None):
         """Check the status of the YouTube token file."""
         if not token_file_path:
-            storage_path = self.storage_path.text()
-            if not storage_path:
-                self.youtube_status_label.setText("Storage path not set")
-                return
-            
-            # Get token file path
-            _, token_file = get_youtube_paths(storage_path)
-            
-            if os.path.exists(token_file):
-                try:
-                    with open(token_file, 'r') as f:
-                        token_data = json.load(f)
-                        
-                    # Check if token has basic required fields
-                    if 'token' in token_data and 'refresh_token' in token_data:
-                        self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
-                    else:
-                        self.youtube_status_label.setText("Token exists but may be invalid")
-                except Exception:
-                    self.youtube_status_label.setText("Token file exists but is not valid JSON")
-            else:
-                self.youtube_status_label.setText("Not authenticated")
-        else:
-            # This is a manual check, so we don't need to check the file
-            self.youtube_status_label.setText("Manual check")
+            return
 
+        storage_path = self.storage_path.text()
+        if not storage_path:
+            self.youtube_status_label.setText("Storage path not set")
+            return
+        
+        # Get token file path
+        _, token_file = get_youtube_paths(storage_path)
+        
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, 'r') as f:
+                    token_data = json.load(f)
+                    
+                # Check if token has basic required fields
+                if 'token' in token_data and 'refresh_token' in token_data:
+                    self.youtube_status_label.setText("Token exists (click Authenticate to verify)")
+                else:
+                    self.youtube_status_label.setText("Token exists but may be invalid")
+            except Exception:
+                self.youtube_status_label.setText("Token file exists but is not valid JSON")
+        else:
+            self.youtube_status_label.setText("Not authenticated")
             self.password.setEchoMode(QLineEdit.EchoMode.Password)
             
     def browse_storage_path(self):
@@ -651,7 +649,7 @@ class ConfigWindow(QWidget):
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
             QMessageBox.critical(self, 'Error', f'Failed to save settings: {e}')
-
+            
     def refresh_all_displays(self):
         """Refreshes the text in all dynamic display tabs."""
         self.refresh_queue_displays()
@@ -1367,7 +1365,7 @@ class ConfigWindow(QWidget):
             self.config.teamsnap_teams.append(new_config)
             self.teamsnap_configs_list.addItem(name)
             self.save_settings()
-
+    
     def remove_teamsnap_config(self):
         """Remove the selected TeamSnap configuration."""
         selected_items = self.teamsnap_configs_list.selectedItems()
@@ -1382,13 +1380,13 @@ class ConfigWindow(QWidget):
             self.config.teamsnap_teams = [t for t in self.config.teamsnap_teams if t.team_name != name]
             self.teamsnap_configs_list.takeItem(self.teamsnap_configs_list.row(item))
             self.save_settings()
-
+    
     def load_selected_teamsnap_config(self):
         """Load the selected TeamSnap configuration into the form."""
         selected_items = self.teamsnap_configs_list.selectedItems()
         if not selected_items:
             return
-
+        
         item = selected_items[0]
         name = item.text()
 
@@ -1416,7 +1414,7 @@ class ConfigWindow(QWidget):
         if not name:
             QMessageBox.warning(self, 'Warning', 'Configuration name cannot be empty.')
             return
-
+        
         team_config = None
         if name == "Default":
             team_config = self.config.teamsnap
@@ -1425,7 +1423,7 @@ class ConfigWindow(QWidget):
                 if t.team_name == name:
                     team_config = t
                     break
-        
+            
         if not team_config:
             # This is a new team, create it
             team_config = TeamSnapTeamConfig(team_name=name)
@@ -1440,7 +1438,7 @@ class ConfigWindow(QWidget):
         
         self.save_settings()
         QMessageBox.information(self, 'Success', f"TeamSnap configuration '{name}' saved.")
-
+    
     # Methods for managing multiple PlayMetrics configurations
     def add_playmetrics_config(self):
         """Add a new PlayMetrics configuration."""
@@ -1450,7 +1448,7 @@ class ConfigWindow(QWidget):
             self.config.playmetrics_teams.append(new_config)
             self.playmetrics_configs_list.addItem(name)
             self.save_settings()
-
+    
     def remove_playmetrics_config(self):
         """Remove the selected PlayMetrics configuration."""
         selected_items = self.playmetrics_configs_list.selectedItems()
@@ -1465,13 +1463,13 @@ class ConfigWindow(QWidget):
             self.config.playmetrics_teams = [t for t in self.config.playmetrics_teams if t.team_name != name]
             self.playmetrics_configs_list.takeItem(self.playmetrics_configs_list.row(item))
             self.save_settings()
-
+    
     def load_selected_playmetrics_config(self):
         """Load the selected PlayMetrics configuration into the form."""
         selected_items = self.playmetrics_configs_list.selectedItems()
         if not selected_items:
             return
-
+        
         item = selected_items[0]
         name = item.text()
 
@@ -1505,7 +1503,7 @@ class ConfigWindow(QWidget):
         if not name:
             QMessageBox.warning(self, 'Warning', 'Configuration name cannot be empty.')
             return
-
+        
         team_config = None
         if name == "Default":
             team_config = self.config.playmetrics
@@ -1514,7 +1512,7 @@ class ConfigWindow(QWidget):
                 if t.team_name == name:
                     team_config = t
                     break
-        
+            
         if not team_config:
             # This is a new team, create it
             team_config = PlayMetricsTeamConfig(team_name=name)
