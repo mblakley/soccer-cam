@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from .base_upload_task import BaseUploadTask
 from video_grouper.models import MatchInfo
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.utils.config import load_config
 
 logger = logging.getLogger(__name__)

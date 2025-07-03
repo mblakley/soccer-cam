@@ -14,7 +14,7 @@ from video_grouper.task_processors.tasks.upload.youtube_upload_task import (
 )
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.models import MatchInfo
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 
 
 # Correct patch targets for dependencies used within YoutubeUploadTask

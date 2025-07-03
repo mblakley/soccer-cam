@@ -1,4 +1,3 @@
-import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, mock_open
 from selenium.webdriver.common.by import By
@@ -273,7 +272,6 @@ END:VCALENDAR"""
         assert not api.enabled
 
     @patch("video_grouper.api_integrations.playmetrics.webdriver")
-    @pytest.mark.asyncio
     def test_login_failed(self, mock_webdriver):
         """Test login to PlayMetrics when login fails."""
         # Mock the webdriver

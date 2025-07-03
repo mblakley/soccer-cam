@@ -11,6 +11,10 @@ BUILD_NUMBER = (
 # Full version string including build number
 FULL_VERSION = f"{VERSION}+{BUILD_NUMBER}"
 
+# Aliases for common Python conventions
+__version__ = VERSION
+__version_full__ = FULL_VERSION
+
 # Version info for Windows executables
 VERSION_INFO = {
     "version": VERSION,

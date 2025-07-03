@@ -5,7 +5,7 @@ Cleanup service for managing file cleanup operations.
 import os
 import logging
 from typing import List, Optional
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 
 logger = logging.getLogger(__name__)
 

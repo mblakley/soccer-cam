@@ -2,7 +2,7 @@ import os
 import logging
 
 from .polling_processor_base import PollingProcessor
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile, MatchInfo
 from .tasks.video import ConvertTask, CombineTask, TrimTask
 from .tasks.upload import YoutubeUploadTask

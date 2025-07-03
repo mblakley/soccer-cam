@@ -888,11 +888,29 @@ class NtfyAPI:
                 # Get video duration
                 duration = await get_video_duration(combined_video_path)
                 if duration:
-                    # Take screenshot at a random point in the middle third of the video
-                    import random
+                    # If duration is a string (e.g., "01:30:00"), convert to seconds
+                    if isinstance(duration, str):
+                        try:
+                            parts = list(map(int, duration.split(":")))
+                            if len(parts) == 3:
+                                duration = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                            elif len(parts) == 2:
+                                duration = parts[0] * 60 + parts[1]
+                            else:
+                                duration = int(duration)
+                        except Exception:
+                            duration = 0
 
-                    start_point = duration // 3
-                    end_point = duration * 2 // 3
+                    # Ensure duration is int seconds
+                    if isinstance(duration, (int, float)) and duration > 0:
+                        import random
+
+                        start_point = int(duration) // 3
+                        end_point = int(duration) * 2 // 3
+                    else:
+                        start_point = 0
+                        end_point = 1
+
                     random_point = random.randint(start_point, end_point)
                     time_str = str(timedelta(seconds=random_point)).split(".")[0]
 
@@ -1019,8 +1037,8 @@ class NtfyAPI:
             if "select_game/" in response_text:
                 # Extract from URL pattern
                 if re.search(r"select_game/(\d+)", response_text):
-                    selected_index = (
-                        int(re.search(r"select_game/(\d+)", response_text).group(1)) - 1
+                    selected_index = int(
+                        re.search(r"select_game/(\d+)", response_text).group(1)
                     )
             elif response_text.isdigit():
                 # Direct numeric response (1-based)

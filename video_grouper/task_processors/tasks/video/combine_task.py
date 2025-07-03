@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import aiofiles
 
 from .base_ffmpeg_task import BaseFfmpegTask
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 
 logger = logging.getLogger(__name__)
 

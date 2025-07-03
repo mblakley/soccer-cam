@@ -10,7 +10,7 @@ from datetime import datetime
 from .teamsnap_service import TeamSnapService
 from .playmetrics_service import PlayMetricsService
 from .ntfy_service import NtfyService
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.models import MatchInfo
 
 logger = logging.getLogger(__name__)

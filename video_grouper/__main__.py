@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 import os
 import sys
-import configparser
 import asyncio
 import logging
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.locking import FileLock
+from video_grouper.utils.config import load_config
 
 # Configure logging
 logging.basicConfig(
@@ -24,9 +24,8 @@ sys.path.insert(0, parent_dir)
 tasks = []
 
 
-def load_config():
+def load_application_config():
     """Loads configuration from the shared data directory."""
-    config = configparser.ConfigParser()
     config_path = get_shared_data_path() / "config.ini"
 
     try:
@@ -36,17 +35,15 @@ def load_config():
                     f"Configuration file not found at {config_path}. Please create it or run the UI first."
                 )
                 return None
-            config.read(config_path)
+            return load_config(config_path)
     except TimeoutError:
         logger.error(f"Could not acquire lock to read config file at {config_path}.")
         return None
 
-    return config
-
 
 async def main():
     """Main entry point for the application."""
-    config = load_config()
+    config = load_application_config()
     if not config:
         logger.error("Failed to load configuration. Exiting.")
         return

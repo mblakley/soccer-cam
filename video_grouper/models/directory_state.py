@@ -1,15 +1,12 @@
 from __future__ import annotations
 import asyncio
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 import logging
 import json
 import os
 from datetime import datetime
-from .locking import FileLock
-from ..models import RecordingFile
-
-if TYPE_CHECKING:
-    from ..models import RecordingFile
+from ..utils.locking import FileLock
+from .recording_file import RecordingFile
 
 logger = logging.getLogger(__name__)
 
