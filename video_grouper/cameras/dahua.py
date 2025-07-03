@@ -149,6 +149,23 @@ class DahuaCamera(Camera):
                 client = httpx.AsyncClient()
                 close_client = True
 
+            # Get timezone from config
+            timezone_str = getattr(self.config, "timezone", None)
+            if not timezone_str and hasattr(self.config, "app"):
+                timezone_str = getattr(self.config.app, "timezone", None)
+            if not timezone_str:
+                timezone_str = "America/New_York"
+            try:
+                local_tz = pytz.timezone(timezone_str)
+            except pytz.UnknownTimeZoneError:
+                logger.warning(
+                    f"Unknown timezone '{timezone_str}', falling back to UTC"
+                )
+                local_tz = pytz.utc
+
+            def now_local_iso():
+                return datetime.now(local_tz).isoformat()
+
             try:
                 logger.debug(f"Making request to: {url}")
                 response = await client.get(url, auth=auth)
@@ -158,7 +175,7 @@ class DahuaCamera(Camera):
                     if not self._is_connected:
                         self._is_connected = True
                         event: ConnectionEvent = {
-                            "event_datetime": datetime.now(pytz.utc).isoformat(),
+                            "event_datetime": now_local_iso(),
                             "event_type": "connected",
                             "message": "Successfully connected to camera.",
                         }
@@ -169,7 +186,7 @@ class DahuaCamera(Camera):
                     if self._is_connected:
                         self._is_connected = False
                         event: ConnectionEvent = {
-                            "event_datetime": datetime.now(pytz.utc).isoformat(),
+                            "event_datetime": now_local_iso(),
                             "event_type": "disconnected",
                             "message": f"Connection failed with status code: {response.status_code}",
                         }
@@ -182,7 +199,7 @@ class DahuaCamera(Camera):
                 if self._is_connected:
                     self._is_connected = False
                     event: ConnectionEvent = {
-                        "event_datetime": datetime.now(pytz.utc).isoformat(),
+                        "event_datetime": now_local_iso(),
                         "event_type": "disconnected",
                         "message": str(e),
                     }
@@ -194,7 +211,7 @@ class DahuaCamera(Camera):
                 if self._is_connected:
                     self._is_connected = False
                     event: ConnectionEvent = {
-                        "event_datetime": datetime.now(pytz.utc).isoformat(),
+                        "event_datetime": now_local_iso(),
                         "event_type": "disconnected",
                         "message": str(e),
                     }
@@ -211,8 +228,21 @@ class DahuaCamera(Camera):
             logger.error(f"Error checking camera availability: {e}", exc_info=True)
             if self._is_connected:
                 self._is_connected = False
+                # Get timezone from config (again, for safety)
+                timezone_str = getattr(self.config, "timezone", None)
+                if not timezone_str and hasattr(self.config, "app"):
+                    timezone_str = getattr(self.config.app, "timezone", None)
+                if not timezone_str:
+                    timezone_str = "America/New_York"
+                try:
+                    local_tz = pytz.timezone(timezone_str)
+                except pytz.UnknownTimeZoneError:
+                    logger.warning(
+                        f"Unknown timezone '{timezone_str}', falling back to UTC"
+                    )
+                    local_tz = pytz.utc
                 event: ConnectionEvent = {
-                    "event_datetime": datetime.now(pytz.utc).isoformat(),
+                    "event_datetime": datetime.now(local_tz).isoformat(),
                     "event_type": "disconnected",
                     "message": str(e),
                 }
