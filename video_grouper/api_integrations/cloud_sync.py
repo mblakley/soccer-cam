@@ -10,7 +10,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import secrets
-from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.padding import PKCS7
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +63,14 @@ class CloudSync:
         # Serialize the config data
         data_bytes = json.dumps(config_data).encode("utf-8")
 
-        # Encrypt the data with AES
-        cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+        # Encrypt the data with AES (Cryptography library)
+        padder = PKCS7(128).padder()
+        padded_data = padder.update(data_bytes) + padder.finalize()
+
+        cipher = Cipher(
+            algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend()
+        )
         encryptor = cipher.encryptor()
-
-        # Apply PKCS7 padding
-        def padder(x):
-            return x + bytes([16 - (len(x) % 16)] * (16 - (len(x) % 16)))
-
-        padded_data = padder(data_bytes)
         encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
 
         # For demo purposes, we'd normally fetch the server's public key

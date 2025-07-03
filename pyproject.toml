@@ -3,7 +3,7 @@ name = "video-grouper"
 version = "0.1.0"
 description = "A tool to automatically group and process video files from a security camera."
 authors = [
-    {name = "Your Name", email = "you@example.com"},
+    {name = "Mark Blakley", email = "mark.blakley@gmail.com"},
 ]
 readme = "README.md"
 requires-python = ">=3.9"
@@ -22,6 +22,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "selenium>=4.15.0",
     "webdriver-manager>=4.0.1",
+    "pycryptodome>=3.20.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,7 @@ service = [
     "pywin32>=306",
 ]
 dev = [
+    "pyqt6>=6.9.1",
     "pytest>=7.4.3",
     "pytest-asyncio>=0.21.1",
     "pytest-qt>=4.2.0",

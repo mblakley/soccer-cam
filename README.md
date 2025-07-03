@@ -68,10 +68,13 @@ If you installed using the Windows installer, the service will start automatical
 - Add match information for games
 
 ### Command Line Mode
-Run the application directly:
+Run the application directly from the project root directory:
 
 ```bash
-# Run the main application
+# Run the main application (recommended)
+uv run python run.py
+
+# Alternative: Run as a module (requires correct working directory)
 uv run python -m video_grouper
 
 # Run the tray application for configuration
@@ -80,6 +83,8 @@ uv run python -m video_grouper.tray
 # Run the service directly
 uv run python -m video_grouper.service
 ```
+
+**Important**: Always run the application from the project root directory (`soccer-cam/`) to ensure proper path resolution for configuration files and shared data.
 
 ## Development
 

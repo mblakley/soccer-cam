@@ -12,7 +12,7 @@ from video_grouper.task_processors.camera_poller import (
     find_group_directory,
 )
 from video_grouper.models import RecordingFile
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.utils.config import (
     Config,
     CameraConfig,

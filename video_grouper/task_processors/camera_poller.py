@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional, List
 import pytz
 from .polling_processor_base import PollingProcessor
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
 
 logger = logging.getLogger(__name__)

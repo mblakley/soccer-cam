@@ -75,6 +75,12 @@ def mock_config(temp_storage):
     config.set("CAMERA", "password", "password")
     config.add_section("YOUTUBE")
     config.set("YOUTUBE", "enabled", "true")
+    config.add_section("PLAYMETRICS")
+    config.set("PLAYMETRICS", "enabled", "true")
+    config.set("PLAYMETRICS", "username", "test@example.com")
+    config.set("PLAYMETRICS", "password", "testpassword")
+    config.set("PLAYMETRICS", "team_id", "123456")
+    config.set("PLAYMETRICS", "team_name", "Test Team")
     return config
 
 

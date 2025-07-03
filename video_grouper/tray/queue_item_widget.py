@@ -14,7 +14,7 @@ from video_grouper.utils.time_utils import (
     convert_utc_to_local,
 )
 from video_grouper.utils.logger import logger
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 
 
 class ImagePreviewDialog(QDialog):

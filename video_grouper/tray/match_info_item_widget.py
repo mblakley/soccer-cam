@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtCore import Qt
-from video_grouper.utils.directory_state import DirectoryState
+from video_grouper.models import DirectoryState
 from video_grouper.utils.time_utils import parse_utc_from_string, convert_utc_to_local
 from .queue_item_widget import ImagePreviewDialog
 

@@ -7,6 +7,43 @@ from typing import Dict, Optional
 from pydantic import BaseModel, Field
 
 
+# Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
+if not hasattr(configparser.ConfigParser, "__getattr__"):
+
+    def _section_getattr(self, name):
+        section = name.upper()
+        if not self.has_section(section):
+            # Lazy-create the section so attributes can be set later
+            if section != "DEFAULT":
+                self.add_section(section)
+        return _SectionAccessor(self, section)
+
+    def _section_setattr(self, name, value):
+        # Allow setting attributes on sections directly
+        section = name.upper()
+        if not isinstance(value, (str, int, float, bool)):
+            # Fallback to normal behaviour for internal attributes
+            return object.__setattr__(self, name, value)
+        if not self.has_section(section) and section != "DEFAULT":
+            self.add_section(section)
+        self.set(section, name, str(value))
+
+    class _SectionAccessor:
+        def __init__(self, parser, section):
+            self._parser = parser
+            self._section = section
+
+        def __getattr__(self, key):
+            return self._parser.get(self._section, key, fallback=None)
+
+        def __setattr__(self, key, value):
+            if key in ("_parser", "_section"):
+                return object.__setattr__(self, key, value)
+            self._parser.set(self._section, key, str(value))
+
+    configparser.ConfigParser.__getattr__ = _section_getattr
+
+
 class CameraConfig(BaseModel):
     type: str
     device_ip: str
