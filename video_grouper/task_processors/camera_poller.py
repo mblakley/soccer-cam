@@ -124,6 +124,18 @@ class CameraPoller(PollingProcessor):
         # Get connected timeframes for filtering
         connected_timeframes = self.camera.get_connected_timeframes()
 
+        # Get timezone from config for proper time conversion
+        timezone_str = (
+            getattr(self.config.app, "timezone", "America/New_York")
+            if hasattr(self.config, "app")
+            else "America/New_York"
+        )
+        try:
+            local_tz = pytz.timezone(timezone_str)
+        except pytz.UnknownTimeZoneError:
+            logger.warning(f"Unknown timezone '{timezone_str}', falling back to UTC")
+            local_tz = pytz.utc
+
         for file_info in files:
             try:
                 filename = os.path.basename(file_info["path"])
@@ -140,28 +152,26 @@ class CameraPoller(PollingProcessor):
                 # Check if the file overlaps with any connected timeframe
                 should_skip = False
                 if connected_timeframes:
-                    # Convert to UTC for comparison with connected timeframes
-                    file_start_utc = (
-                        pytz.utc.localize(file_start_time)
-                        if file_start_time.tzinfo is None
-                        else file_start_time
-                    )
-                    file_end_utc = (
-                        pytz.utc.localize(file_end_time)
-                        if file_end_time.tzinfo is None
-                        else file_end_time
-                    )
+                    # Convert file timestamps from local time to UTC for comparison with connected timeframes
+                    # File timestamps from camera are in local time, connection events are stored in UTC
+                    file_start_local = local_tz.localize(file_start_time)
+                    file_end_local = local_tz.localize(file_end_time)
+                    file_start_utc = file_start_local.astimezone(pytz.utc)
+                    file_end_utc = file_end_local.astimezone(pytz.utc)
 
                     for frame_start, frame_end in connected_timeframes:
                         frame_end_or_now = frame_end or datetime.now(pytz.utc)
 
                         # Check for overlap: if file starts before frame ends AND file ends after frame starts
+                        logger.info(
+                            f"CAMERA_POLLER: Checking if file {filename} with start time {file_start_local} and end time {file_end_local} overlaps with connected timeframe from {frame_start} to {frame_end_or_now.astimezone(local_tz) if frame_end_or_now else 'ongoing'}"
+                        )
                         if (
                             file_start_utc < frame_end_or_now
                             and file_end_utc > frame_start
                         ):
                             logger.info(
-                                f"CAMERA_POLLER: Skipping file {filename} as it overlaps with connected timeframe from {frame_start} to {frame_end_or_now}"
+                                f"CAMERA_POLLER: Skipping file {filename} as it overlaps with connected timeframe from {frame_start} to {frame_end_or_now.astimezone(local_tz) if frame_end_or_now else 'ongoing'}"
                             )
                             should_skip = True
                             break

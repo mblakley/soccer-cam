@@ -40,9 +40,16 @@ class TeamSnapService:
                         f"Initializing TeamSnap team: {config.my_team_name or 'Default'}"
                     )
                     api = TeamSnapAPI(config)
-                    if api.enabled:
+                    if api.enabled and api.access_token:
                         self.teamsnap_apis.append(api)
                         self.enabled = True
+                        logger.info(
+                            f"Successfully initialized TeamSnap API for {config.my_team_name or 'Default'}"
+                        )
+                    else:
+                        logger.warning(
+                            f"TeamSnap API initialization failed for {config.my_team_name or 'Default'} - no valid token"
+                        )
                 except Exception as e:
                     logger.error(
                         f"Error creating TeamSnap API for {config.my_team_name or 'Default'}: {e}"

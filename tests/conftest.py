@@ -84,7 +84,7 @@ def mock_config(temp_storage):
     return config
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function")
 async def cleanup_asyncio_tasks():
     """Automatically cancel all pending asyncio tasks at the end of each test."""
     # Run the test

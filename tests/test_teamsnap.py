@@ -228,6 +228,74 @@ class TestTeamSnapAPI(unittest.TestCase):
         self.assertFalse(success)
         self.assertEqual(match_info, {})
 
+    @patch("video_grouper.api_integrations.teamsnap.requests.get")
+    def test_token_valid(self, mock_get):
+        """Test that a valid token is accepted and not refreshed."""
+        mock_get.return_value.status_code = 200
+        self.api.access_token = "valid_token"
+        self.assertTrue(self.api._ensure_valid_token())
+        mock_get.assert_called_once()
+
+    @patch("video_grouper.api_integrations.teamsnap.requests.get")
+    @patch.object(TeamSnapAPI, "get_access_token")
+    def test_token_invalid_refresh_success(self, mock_get_access_token, mock_get):
+        """Test that an invalid token triggers a refresh and succeeds."""
+        # First call: token invalid (401), then refresh returns True
+        mock_get.return_value.status_code = 401
+        mock_get_access_token.return_value = True
+        self.api.access_token = "expired_token"
+        self.assertTrue(self.api._ensure_valid_token())
+        self.assertEqual(mock_get.call_count, 1)
+        mock_get_access_token.assert_called_once()
+
+    @patch("video_grouper.api_integrations.teamsnap.requests.get")
+    @patch.object(TeamSnapAPI, "get_access_token")
+    def test_token_invalid_refresh_fail(self, mock_get_access_token, mock_get):
+        """Test that an invalid token triggers a refresh and fails if refresh fails."""
+        mock_get.return_value.status_code = 401
+        mock_get_access_token.return_value = False
+        self.api.access_token = "expired_token"
+        self.assertFalse(self.api._ensure_valid_token())
+        self.assertEqual(mock_get.call_count, 1)
+        mock_get_access_token.assert_called_once()
+
+    def test_update_config_token(self):
+        """Test that _update_config_token updates the config object and calls save if available."""
+
+        class DummyConfig:
+            def __init__(self):
+                self.enabled = True
+                self.client_id = "test_id"
+                self.client_secret = "test_secret"
+                self.access_token = None
+                self.team_id = "test_team"
+                self.my_team_name = "Test Team"
+                self.save_called = False
+
+            def save(self):
+                self.save_called = True
+
+        dummy = DummyConfig()
+        api = TeamSnapAPI(dummy)
+        api.access_token = "new_token"
+        api._update_config_token()
+        self.assertEqual(dummy.access_token, "new_token")
+        self.assertTrue(dummy.save_called)
+
+    @patch.object(TeamSnapAPI, "_ensure_valid_token", return_value=True)
+    @patch.object(TeamSnapAPI, "get_teams", return_value=[{"id": "1", "name": "Team1"}])
+    def test_test_connection_success(self, mock_get_teams, mock_ensure):
+        """Test test_connection returns True when teams are fetched."""
+        self.assertTrue(self.api.test_connection())
+        mock_ensure.assert_called_once()
+        mock_get_teams.assert_called_once()
+
+    @patch.object(TeamSnapAPI, "_ensure_valid_token", return_value=False)
+    def test_test_connection_fail(self, mock_ensure):
+        """Test test_connection returns False if token is not valid."""
+        self.assertFalse(self.api.test_connection())
+        mock_ensure.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

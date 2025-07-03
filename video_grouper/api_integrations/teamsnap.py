@@ -36,8 +36,66 @@ class TeamSnapAPI:
         self.endpoints = {}
 
         if self.enabled:
+            # Validate and refresh token if needed
+            self._ensure_valid_token()
             # Discover API endpoints
             self._discover_api_endpoints()
+
+    def _ensure_valid_token(self) -> bool:
+        """
+        Ensure we have a valid access token, refreshing if necessary.
+
+        Returns:
+            bool: True if we have a valid token, False otherwise
+        """
+        if not self.enabled:
+            return False
+
+        # If we have a token, test it first
+        if self.access_token:
+            if self._test_token():
+                logger.debug("Existing TeamSnap access token is valid")
+                return True
+            else:
+                logger.info(
+                    "TeamSnap access token is expired or invalid, refreshing..."
+                )
+
+        # Get a new token
+        return self.get_access_token()
+
+    def _test_token(self) -> bool:
+        """
+        Test if the current access token is valid by making a simple API call.
+
+        Returns:
+            bool: True if token is valid, False otherwise
+        """
+        if not self.access_token:
+            return False
+
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self.access_token}",
+            }
+
+            # Make a simple request to test the token
+            response = requests.get(self.api_base_url, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                return True
+            elif response.status_code == 401:
+                logger.debug("TeamSnap token test returned 401 - token is invalid")
+                return False
+            else:
+                logger.warning(f"TeamSnap token test returned {response.status_code}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error testing TeamSnap token: {e}")
+            return False
 
     def _make_api_request(
         self, url: str, method: str = "GET", params: Dict = None, json_data: Dict = None
@@ -54,8 +112,15 @@ class TeamSnapAPI:
         Returns:
             Response JSON or None if request failed
         """
-        if not self.enabled or not self.access_token:
-            logger.warning("TeamSnap API is not enabled or access token is missing")
+        if not self.enabled:
+            logger.warning("TeamSnap API is not enabled")
+            return None
+
+        # Ensure we have a valid token before making the request
+        if not self._ensure_valid_token():
+            logger.error(
+                "TeamSnap API is not enabled or cannot obtain valid access token"
+            )
             return None
 
         headers = {
@@ -68,30 +133,72 @@ class TeamSnapAPI:
 
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers, params=params)
+                response = requests.get(url, headers=headers, params=params, timeout=30)
             elif method == "POST":
                 response = requests.post(
-                    url, headers=headers, params=params, json=json_data
+                    url, headers=headers, params=params, json=json_data, timeout=30
                 )
             elif method == "PATCH":
                 response = requests.patch(
-                    url, headers=headers, params=params, json=json_data
+                    url, headers=headers, params=params, json=json_data, timeout=30
                 )
             elif method == "DELETE":
-                response = requests.delete(url, headers=headers, params=params)
+                response = requests.delete(
+                    url, headers=headers, params=params, timeout=30
+                )
             else:
                 logger.error(f"Unsupported method: {method}")
                 return None
 
             if response.status_code == 200:
                 return response.json()
+            elif response.status_code == 401:
+                logger.warning(
+                    "TeamSnap API returned 401 - token may be expired, attempting refresh"
+                )
+                # Try to refresh the token and retry the request once
+                if self.get_access_token():
+                    # Retry the request with the new token
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    if method == "GET":
+                        response = requests.get(
+                            url, headers=headers, params=params, timeout=30
+                        )
+                    elif method == "POST":
+                        response = requests.post(
+                            url,
+                            headers=headers,
+                            params=params,
+                            json=json_data,
+                            timeout=30,
+                        )
+                    elif method == "PATCH":
+                        response = requests.patch(
+                            url,
+                            headers=headers,
+                            params=params,
+                            json=json_data,
+                            timeout=30,
+                        )
+                    elif method == "DELETE":
+                        response = requests.delete(
+                            url, headers=headers, params=params, timeout=30
+                        )
+
+                    if response.status_code == 200:
+                        return response.json()
+
+                logger.error(
+                    f"TeamSnap API request failed after token refresh: {response.status_code} - {response.text}"
+                )
+                return None
             else:
                 logger.error(
-                    f"API request failed: {response.status_code} - {response.text}"
+                    f"TeamSnap API request failed: {response.status_code} - {response.text}"
                 )
                 return None
         except Exception as e:
-            logger.error(f"API request exception: {e}")
+            logger.error(f"TeamSnap API request exception: {e}")
             return None
 
     def _discover_api_endpoints(self) -> None:
@@ -364,23 +471,102 @@ class TeamSnapAPI:
 
         try:
             logger.info("Requesting TeamSnap access token")
-            response = requests.post(token_url, data=data, headers=headers)
-            response.raise_for_status()
+            response = requests.post(token_url, data=data, headers=headers, timeout=30)
 
-            token_data = response.json()
-            self.access_token = token_data.get("access_token", "")
+            if response.status_code == 200:
+                token_data = response.json()
+                self.access_token = token_data.get("access_token", "")
 
-            if self.access_token:
-                logger.info("Successfully obtained TeamSnap access token")
-                # Discover API endpoints with the new token
-                self._discover_api_endpoints()
-                return True
+                # Store refresh token if provided (for future use)
+                refresh_token = token_data.get("refresh_token")
+                if refresh_token:
+                    logger.debug("TeamSnap refresh token received")
+                    # Note: We could store this in config for future refresh operations
+
+                # Log token expiration if provided
+                expires_in = token_data.get("expires_in")
+                if expires_in:
+                    logger.info(
+                        f"TeamSnap access token expires in {expires_in} seconds"
+                    )
+
+                if self.access_token:
+                    logger.info("Successfully obtained TeamSnap access token")
+                    # Update the config with the new token
+                    self._update_config_token()
+                    # Discover API endpoints with the new token
+                    self._discover_api_endpoints()
+                    return True
+                else:
+                    logger.error("No access token in response")
+                    return False
             else:
-                logger.error("No access token in response")
+                logger.error(
+                    f"TeamSnap token request failed: {response.status_code} - {response.text}"
+                )
                 return False
 
+        except requests.exceptions.Timeout:
+            logger.error("TeamSnap token request timed out")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"TeamSnap token request failed: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Error getting TeamSnap access token: {e}")
+            logger.error(f"Unexpected error getting TeamSnap access token: {e}")
+            return False
+
+    def _update_config_token(self) -> None:
+        """
+        Update the configuration with the new access token.
+        This allows the token to persist across application restarts.
+        """
+        try:
+            # Update the config object
+            self.config.access_token = self.access_token
+
+            # If the config has a method to save itself, call it
+            if hasattr(self.config, "save"):
+                self.config.save()
+                logger.debug("TeamSnap access token saved to configuration")
+            else:
+                logger.debug(
+                    "TeamSnap access token updated in memory (config save not available)"
+                )
+
+        except Exception as e:
+            logger.warning(
+                f"Could not save TeamSnap access token to configuration: {e}"
+            )
+
+    def test_connection(self) -> bool:
+        """
+        Test the TeamSnap connection and token validity.
+
+        Returns:
+            bool: True if connection is successful, False otherwise
+        """
+        if not self.enabled:
+            logger.warning("TeamSnap API is not enabled")
+            return False
+
+        if not self._ensure_valid_token():
+            logger.error("TeamSnap connection test failed - cannot obtain valid token")
+            return False
+
+        try:
+            # Try to get teams as a connection test
+            teams = self.get_teams()
+            if teams is not None:
+                logger.info(
+                    f"TeamSnap connection test successful - found {len(teams)} teams"
+                )
+                return True
+            else:
+                logger.error("TeamSnap connection test failed - could not fetch teams")
+                return False
+        except Exception as e:
+            logger.error(f"TeamSnap connection test failed with exception: {e}")
             return False
 
     def get_teams(self) -> List[Dict]:

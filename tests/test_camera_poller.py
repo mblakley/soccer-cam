@@ -48,7 +48,11 @@ def mock_config(temp_storage):
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
         logging=LoggingConfig(),
-        app=AppConfig(storage_path=temp_storage, check_interval_seconds=1),
+        app=AppConfig(
+            storage_path=temp_storage,
+            check_interval_seconds=1,
+            timezone="America/New_York",
+        ),
         teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
         teamsnap_teams=[],
         playmetrics=PlayMetricsConfig(
@@ -163,24 +167,26 @@ class TestCameraPoller:
         self, temp_storage, mock_config, mock_camera
     ):
         """Test that files overlapping with connected timeframes are filtered out."""
-        # Mock connected timeframes (camera was connected from 10:00 to 10:10)
+        # Mock connected timeframes (camera was connected from 10:00 to 10:10 UTC)
         connected_start = datetime(2023, 1, 1, 10, 0, 0, tzinfo=pytz.utc)
         connected_end = datetime(2023, 1, 1, 10, 10, 0, tzinfo=pytz.utc)
         mock_camera.get_connected_timeframes.return_value = [
             (connected_start, connected_end)
         ]
 
-        # Mock file that overlaps with connected timeframe
+        # Mock files - timestamps are in local time (America/New_York)
+        # For files to overlap with UTC 10:00-10:10, they need to be in local time
+        # America/New_York is UTC-5 in January, so local 05:00-05:10 corresponds to UTC 10:00-10:10
         mock_files = [
             {
                 "path": "/test_overlapping.dav",
-                "startTime": "2023-01-01 10:05:00",  # Overlaps with connected time
-                "endTime": "2023-01-01 10:15:00",
+                "startTime": "2023-01-01 05:05:00",  # Local time, converts to UTC 10:05:00 (overlaps)
+                "endTime": "2023-01-01 05:15:00",  # Local time, converts to UTC 10:15:00
             },
             {
                 "path": "/test_valid.dav",
-                "startTime": "2023-01-01 11:00:00",  # After connected time
-                "endTime": "2023-01-01 11:05:00",
+                "startTime": "2023-01-01 06:00:00",  # Local time, converts to UTC 11:00:00 (after connected time)
+                "endTime": "2023-01-01 06:05:00",  # Local time, converts to UTC 11:05:00
             },
         ]
         mock_camera.get_file_list.return_value = mock_files
@@ -321,11 +327,13 @@ class TestCameraPoller:
             (connected_start, connected_end)
         ]
 
+        # File completely within connected timeframe
+        # Local time 05:01-05:05 converts to UTC 10:01-10:05 (within 10:00-10:10)
         mock_files = [
             {
                 "path": "/test_within.dav",
-                "startTime": "2023-01-01 10:01:00",
-                "endTime": "2023-01-01 10:05:00",
+                "startTime": "2023-01-01 05:01:00",  # Local time, converts to UTC 10:01:00
+                "endTime": "2023-01-01 05:05:00",  # Local time, converts to UTC 10:05:00
             }
         ]
         mock_camera.get_file_list.return_value = mock_files
@@ -351,11 +359,13 @@ class TestCameraPoller:
             (connected_start, connected_end)
         ]
 
+        # File containing the connected timeframe
+        # Local time 04:00-06:00 converts to UTC 09:00-11:00 (contains 10:00-10:10)
         mock_files = [
             {
                 "path": "/test_containing.dav",
-                "startTime": "2023-01-01 09:00:00",
-                "endTime": "2023-01-01 11:00:00",
+                "startTime": "2023-01-01 04:00:00",  # Local time, converts to UTC 09:00:00
+                "endTime": "2023-01-01 06:00:00",  # Local time, converts to UTC 11:00:00
             }
         ]
         mock_camera.get_file_list.return_value = mock_files

@@ -118,66 +118,56 @@ class QueueProcessor(ABC):
 
     async def _run(self) -> None:
         """Main processing loop."""
+        logger.info(f"{self.__class__.__name__}: Starting processing loop")
+
         while not self._shutdown_event.is_set():
             try:
-                # Create tasks for both waiting for queue items and shutdown
-                queue_task = asyncio.create_task(self._queue.get())
-                shutdown_task = asyncio.create_task(self._shutdown_event.wait())
-
-                # Wait for either a queue item or shutdown signal
-                done, pending = await asyncio.wait(
-                    {queue_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-
-                # Cancel any pending tasks
-                for task in pending:
-                    task.cancel()
+                # Wait for an item to be available
+                if self._queue is not None and self._queue.empty():
+                    logger.info(
+                        f"{self.__class__.__name__}: Queue is empty, waiting for new items"
+                    )
+                    # Wait for either shutdown signal or a new item
                     try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-
-                # Check if shutdown was signaled
-                if shutdown_task in done:
-                    # Put the item back if we got one but are shutting down
-                    if queue_task in done and not queue_task.cancelled():
-                        try:
-                            item = queue_task.result()
-                            await self._queue.put(item)
-                        except Exception:
-                            pass
-                    break
-
-                # Process the queue item
-                if queue_task in done and not queue_task.cancelled():
-                    try:
-                        item = queue_task.result()
-
-                        # Check for sentinel value (None) to exit cleanly
-                        if item is None:
-                            logger.debug(
-                                f"{self.__class__.__name__}: Received sentinel value, exiting"
+                        item = await asyncio.wait_for(self._queue.get(), timeout=60.0)
+                    except asyncio.TimeoutError:
+                        # Timeout - check if we should continue or exit
+                        if self._shutdown_event.is_set():
+                            logger.info(
+                                f"{self.__class__.__name__}: Shutdown signaled, exiting processing loop"
                             )
                             break
+                        continue
+                else:
+                    # Get the next item
+                    item = await self._queue.get()
 
-                        await self.process_item(item)
+                # Check for sentinel value (None) to exit cleanly
+                if item is None:
+                    logger.debug(
+                        f"{self.__class__.__name__}: Received sentinel value, exiting"
+                    )
+                    break
 
-                        # Mark as done and remove from queued items
-                        self._queue.task_done()
-                        item_key = self.get_item_key(item)
-                        self._queued_items.discard(item_key)
-                        await self.save_state()
-                    except Exception as e:
-                        logger.error(
-                            f"{self.__class__.__name__}: Error processing item: {e}"
-                        )
-                        await asyncio.sleep(5)
+                logger.info(f"{self.__class__.__name__}: Processing item: {item}")
+                await self.process_item(item)
+
+                # Mark as done and remove from queued items
+                self._queue.task_done()
+                item_key = self.get_item_key(item)
+                self._queued_items.discard(item_key)
+                await self.save_state()
+                logger.info(
+                    f"{self.__class__.__name__}: Completed processing item: {item}"
+                )
 
             except Exception as e:
                 logger.error(
                     f"{self.__class__.__name__}: Error in processing loop: {e}"
                 )
                 await asyncio.sleep(5)
+
+        logger.info(f"{self.__class__.__name__}: Processing loop ended")
 
     async def save_state(self) -> None:
         """Save the current queue state to disk."""
