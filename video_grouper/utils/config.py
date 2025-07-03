@@ -81,17 +81,19 @@ class AppConfig(BaseModel):
     storage_path: Optional[str] = None
 
 
+class TeamSnapTeamConfig(BaseModel):
+    enabled: bool = False
+    team_id: Optional[str] = None
+    team_name: str
+
+
 class TeamSnapConfig(BaseModel):
     enabled: bool = False
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     access_token: Optional[str] = None
-    team_id: Optional[str] = None
-    my_team_name: Optional[str] = None
-
-
-class TeamSnapTeamConfig(TeamSnapConfig):
-    team_name: str
+    refresh_token: Optional[str] = None
+    teams: list[TeamSnapTeamConfig] = Field(default_factory=list)
 
 
 class PlayMetricsConfig(BaseModel):
@@ -146,7 +148,6 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(alias="LOGGING")
     app: AppConfig = Field(alias="APP")
     teamsnap: TeamSnapConfig = Field(alias="TEAMSNAP")
-    teamsnap_teams: list[TeamSnapTeamConfig] = Field(default_factory=list)
     playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
     playmetrics_teams: list[PlayMetricsTeamConfig] = Field(default_factory=list)
     ntfy: NtfyConfig = Field(alias="NTFY")
@@ -198,7 +199,9 @@ def load_config(config_path: Path) -> Config:
             team_config["team_name"] = team_name
             teamsnap_teams.append(team_config)
 
-    config_dict["teamsnap_teams"] = teamsnap_teams
+    # Add teams to the main teamsnap config
+    if "TEAMSNAP" in config_dict:
+        config_dict["TEAMSNAP"]["teams"] = teamsnap_teams
 
     return Config.model_validate(config_dict)
 
@@ -220,14 +223,21 @@ def save_config(config: Config, config_path: Path):
                 }
             continue
 
-        if field_name == "teamsnap_teams":
-            for item in value:
+        if field_name == "teamsnap" and hasattr(value, "teams"):
+            # Handle teamsnap teams
+            for item in value.teams:
                 section_name = f"TEAMSNAP.{item.team_name}"
                 item_dict = item.dict()
                 item_dict.pop("team_name")
                 parser[section_name] = {
                     k: str(v) for k, v in item_dict.items() if v is not None
                 }
+            # Add main teamsnap config without teams
+            teamsnap_dict = value.dict()
+            teamsnap_dict.pop("teams")
+            parser["TEAMSNAP"] = {
+                k: str(v) for k, v in teamsnap_dict.items() if v is not None
+            }
             continue
 
         if isinstance(value, BaseModel):

@@ -3,7 +3,7 @@ TeamSnap service for match information lookup.
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
 
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
@@ -18,14 +18,14 @@ class TeamSnapService:
     Handles multiple team configurations and game lookups.
     """
 
-    def __init__(self, configs: List[TeamSnapConfig]):
+    def __init__(self, teamsnap_config: TeamSnapConfig):
         """
         Initialize TeamSnap service.
 
         Args:
-            configs: List of TeamSnap configuration objects
+            teamsnap_config: TeamSnap configuration with OAuth credentials and teams
         """
-        self.configs = configs
+        self.teamsnap_config = teamsnap_config
         self.teamsnap_apis = []
         self.enabled = False
 
@@ -33,26 +33,31 @@ class TeamSnapService:
 
     def _initialize_apis(self) -> None:
         """Initialize TeamSnap API instances for all configured teams."""
-        for config in self.configs:
-            if config.enabled:
+        if not self.teamsnap_config.enabled:
+            logger.info("TeamSnap service disabled - main config not enabled")
+            return
+
+        for team_config in self.teamsnap_config.teams:
+            if team_config.enabled:
                 try:
                     logger.info(
-                        f"Initializing TeamSnap team: {config.my_team_name or 'Default'}"
+                        f"Initializing TeamSnap team: {team_config.team_name or 'Default'}"
                     )
-                    api = TeamSnapAPI(config)
+
+                    api = TeamSnapAPI(self.teamsnap_config, team_config)
                     if api.enabled and api.access_token:
                         self.teamsnap_apis.append(api)
                         self.enabled = True
                         logger.info(
-                            f"Successfully initialized TeamSnap API for {config.my_team_name or 'Default'}"
+                            f"Successfully initialized TeamSnap API for {team_config.team_name or 'Default'}"
                         )
                     else:
                         logger.warning(
-                            f"TeamSnap API initialization failed for {config.my_team_name or 'Default'} - no valid token"
+                            f"TeamSnap API initialization failed for {team_config.team_name or 'Default'} - no valid token"
                         )
                 except Exception as e:
                     logger.error(
-                        f"Error creating TeamSnap API for {config.my_team_name or 'Default'}: {e}"
+                        f"Error creating TeamSnap API for {team_config.team_name or 'Default'}: {e}"
                     )
 
         if self.enabled:
@@ -84,9 +89,9 @@ class TeamSnapService:
                 if game:
                     # Add source and team info
                     game["source"] = "TeamSnap"
-                    game["team_name"] = api.my_team_name
+                    game["team_name"] = api.team_name
                     logger.info(
-                        f"Found TeamSnap game for team {api.my_team_name}: "
+                        f"Found TeamSnap game for team {api.team_name}: "
                         f"{game.get('team_name', 'Unknown')} vs {game.get('opponent_name', 'Unknown')}"
                     )
                     return game

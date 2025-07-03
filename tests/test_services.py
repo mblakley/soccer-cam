@@ -15,7 +15,12 @@ from video_grouper.task_processors.services import (
     MatchInfoService,
     CleanupService,
 )
-from video_grouper.utils.config import TeamSnapConfig, PlayMetricsConfig, NtfyConfig
+from video_grouper.utils.config import (
+    TeamSnapConfig,
+    TeamSnapTeamConfig,
+    PlayMetricsConfig,
+    NtfyConfig,
+)
 
 
 # Configure pytest for async tests
@@ -28,8 +33,17 @@ class TestTeamSnapService:
     @pytest.fixture
     def teamsnap_config(self):
         """Create test configuration."""
+        team = TeamSnapTeamConfig(
+            enabled=True,
+            team_id="test_team_id",
+            team_name="Test Team",
+        )
         return TeamSnapConfig(
-            enabled=True, team_id="test_team_id", my_team_name="Test Team"
+            enabled=True,
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+            access_token="test_access_token",
+            teams=[team],
         )
 
     @pytest.fixture
@@ -40,10 +54,16 @@ class TestTeamSnapService:
 
     def test_init_disabled(self):
         """Test service initialization when disabled."""
-        config = TeamSnapConfig(
-            enabled=False, team_id="test_team_id", my_team_name="Test Team"
+        team = TeamSnapTeamConfig(
+            enabled=True,
+            team_id="test_team_id",
+            team_name="Test Team",
         )
-        service = TeamSnapService([config])
+        config = TeamSnapConfig(
+            enabled=False,
+            teams=[team],
+        )
+        service = TeamSnapService(config)
         assert not service.enabled
         assert service.teamsnap_apis == []
 
@@ -54,7 +74,7 @@ class TestTeamSnapService:
         mock_api.enabled = True
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService([teamsnap_config])
+        service = TeamSnapService(teamsnap_config)
         assert service.enabled
         assert len(service.teamsnap_apis) == 1
 
@@ -63,7 +83,7 @@ class TestTeamSnapService:
         """Test finding game for recording."""
         mock_api = Mock()
         mock_api.enabled = True
-        mock_api.my_team_name = "Test Team"
+        mock_api.team_name = "Test Team"
         mock_api.find_game_for_recording.return_value = {
             "team_name": "Test Team",
             "opponent_name": "Opponent Team",
@@ -71,7 +91,7 @@ class TestTeamSnapService:
         }
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService([teamsnap_config])
+        service = TeamSnapService(teamsnap_config)
 
         start_time = datetime.now()
         end_time = start_time + timedelta(hours=2)
@@ -96,7 +116,7 @@ class TestTeamSnapService:
         }
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService([teamsnap_config])
+        service = TeamSnapService(teamsnap_config)
 
         start_time = datetime.now()
         end_time = start_time + timedelta(hours=2)
@@ -314,11 +334,10 @@ class TestMatchInfoService:
         mock_file2.end_time = datetime.now() + timedelta(minutes=90)
 
         mock_state = Mock()
-        mock_state.get_files.return_value = [mock_file1, mock_file2]
+        mock_state.files = {"file1": mock_file1, "file2": mock_file2}
         mock_dir_state.return_value = mock_state
 
         start_time, end_time = service._get_recording_timespan("/test/dir")
-
         assert start_time == mock_file1.start_time
         assert end_time == mock_file2.end_time
 

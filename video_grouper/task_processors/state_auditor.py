@@ -32,11 +32,7 @@ class StateAuditor(PollingProcessor):
         self.upload_processor = None
 
         # Initialize API services
-        teamsnap_configs = []
-        if config.teamsnap.enabled:
-            teamsnap_configs.append(config.teamsnap)
-        teamsnap_configs.extend(config.teamsnap_teams)
-        self.teamsnap_service = TeamSnapService(teamsnap_configs)
+        self.teamsnap_service = TeamSnapService(config.teamsnap)
 
         playmetrics_configs = []
         if config.playmetrics.enabled:

@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
-from video_grouper.utils.config import TeamSnapConfig
+from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
 
 class TestTeamSnapAPI(unittest.TestCase):
@@ -27,11 +27,13 @@ class TestTeamSnapAPI(unittest.TestCase):
             client_id="test_client_id",
             client_secret="test_client_secret",
             access_token="test_access_token",
-            team_id="test_team_id",
-            my_team_name="Test Team",
         )
-
-        self.api = TeamSnapAPI(self.config)
+        self.team_config = TeamSnapTeamConfig(
+            enabled=True,
+            team_id="test_team_id",
+            team_name="Test Team",
+        )
+        self.api = TeamSnapAPI(self.config, self.team_config)
 
         # Create mock games
         self.games = [
@@ -60,7 +62,7 @@ class TestTeamSnapAPI(unittest.TestCase):
         """Test that the TeamSnap API initializes correctly."""
         self.assertTrue(self.api.enabled)
         self.assertEqual(self.api.team_id, "test_team_id")
-        self.assertEqual(self.api.my_team_name, "Test Team")
+        self.assertEqual(self.api.team_name, "Test Team")
 
     @patch("video_grouper.api_integrations.teamsnap.TeamSnapAPI._make_api_request")
     def test_discover_api_endpoints(self, mock_make_api_request):
@@ -269,14 +271,14 @@ class TestTeamSnapAPI(unittest.TestCase):
                 self.client_secret = "test_secret"
                 self.access_token = None
                 self.team_id = "test_team"
-                self.my_team_name = "Test Team"
+                self.team_name = "Test Team"
                 self.save_called = False
 
             def save(self):
                 self.save_called = True
 
         dummy = DummyConfig()
-        api = TeamSnapAPI(dummy)
+        api = TeamSnapAPI(dummy, self.team_config)
         api.access_token = "new_token"
         api._update_config_token()
         self.assertEqual(dummy.access_token, "new_token")

@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
-from video_grouper.utils.config import TeamSnapConfig
+from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
 
 class TestConnectedFiltering(unittest.TestCase):
@@ -27,12 +27,14 @@ class TestConnectedFiltering(unittest.TestCase):
             client_id="test_client_id",
             client_secret="test_client_secret",
             access_token="test_access_token",
-            team_id="test_team_id",
-            my_team_name="Test Team",
         )
-
+        self.team_config = TeamSnapTeamConfig(
+            enabled=True,
+            team_id="test_team_id",
+            team_name="Test Team",
+        )
         # Create a mock TeamSnap API
-        self.api = TeamSnapAPI(self.config)
+        self.api = TeamSnapAPI(self.config, self.team_config)
         self.api.enabled = True
 
         # Create mock games
