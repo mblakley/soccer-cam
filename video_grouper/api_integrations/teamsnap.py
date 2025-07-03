@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Dict, List, Optional, Any
 
-from video_grouper.utils.config import TeamSnapConfig
+from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +20,20 @@ class TeamSnapAPI:
     game information and populate match information.
     """
 
-    def __init__(self, config: TeamSnapConfig):
+    def __init__(self, config: TeamSnapConfig, team_config: TeamSnapTeamConfig):
         """
         Initialize the TeamSnap API integration.
 
         Args:
-            config: TeamSnap configuration object.
+            config: TeamSnap configuration object with OAuth credentials
+            team_config: Team-specific configuration object
         """
         self.config = config
-        self.enabled = self.config.enabled
+        self.team_config = team_config
+        self.enabled = self.config.enabled and self.team_config.enabled
         self.access_token = self.config.access_token
-        self.team_id = self.config.team_id
-        self.my_team_name = self.config.my_team_name
+        self.team_id = self.team_config.team_id
+        self.team_name = self.team_config.team_name
         self.api_base_url = "https://api.teamsnap.com/v3"
         self.endpoints = {}
 
@@ -419,7 +421,7 @@ class TeamSnapAPI:
             return False
 
         # Populate match info
-        match_info["home_team"] = self.my_team_name
+        match_info["home_team"] = self.team_name
         match_info["away_team"] = game.get("opponent_name", "")
         match_info["location"] = game.get("location_name", "")
 

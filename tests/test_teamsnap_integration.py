@@ -6,7 +6,7 @@ Test script for the TeamSnap API integration.
 import unittest
 from datetime import datetime, timedelta, timezone
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
-from video_grouper.utils.config import TeamSnapConfig
+from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
 
 class TestTeamSnapIntegration(unittest.TestCase):
@@ -15,8 +15,13 @@ class TestTeamSnapIntegration(unittest.TestCase):
     def setUp(self):
         """Set up the test."""
         # Create a mock TeamSnap API instance
-        self.config = TeamSnapConfig(enabled=True, my_team_name="Test Team")
-        self.api = TeamSnapAPI(self.config)
+        self.config = TeamSnapConfig(enabled=True)
+        self.team_config = TeamSnapTeamConfig(
+            enabled=True,
+            team_id="test_team_id",
+            team_name="Test Team",
+        )
+        self.api = TeamSnapAPI(self.config, self.team_config)
 
         # Create a sample game for testing
         self.sample_game = {

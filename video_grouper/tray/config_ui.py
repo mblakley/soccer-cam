@@ -59,7 +59,7 @@ def all_fields_filled(match_info):
         return False
 
     required_fields = [
-        match_info.my_team_name,
+        match_info.team_name,
         match_info.opponent_team_name,
         match_info.location,
         match_info.start_time_offset,
@@ -221,11 +221,11 @@ class ConfigWindow(QWidget):
 
         # Processed videos playlist
         self.processed_playlist_name = QLineEdit()
-        self.processed_playlist_name.setPlaceholderText("{my_team_name} 2013s")
+        self.processed_playlist_name.setPlaceholderText("{team_name} 2013s")
 
         # Raw videos playlist
         self.raw_playlist_name = QLineEdit()
-        self.raw_playlist_name.setPlaceholderText("{my_team_name} 2013s - Full Field")
+        self.raw_playlist_name.setPlaceholderText("{team_name} 2013s - Full Field")
 
         playlist_layout.addRow(
             "Processed Videos Playlist:", self.processed_playlist_name
@@ -570,16 +570,16 @@ class ConfigWindow(QWidget):
 
         # TeamSnap configurations
         self.teamsnap_configs_list.clear()
-        if self.config.teamsnap.enabled and not self.config.teamsnap_teams:
+        if self.config.teamsnap.enabled and not self.config.teamsnap.teams:
             self.teamsnap_configs_list.addItem("Default")
-        for team in self.config.teamsnap_teams:
+        for team in self.config.teamsnap.teams:
             self.teamsnap_configs_list.addItem(team.team_name)
 
         # PlayMetrics configurations
         self.playmetrics_configs_list.clear()
-        if self.config.playmetrics.enabled and not self.config.playmetrics_teams:
+        if self.config.playmetrics.enabled and not self.config.playmetrics.teams:
             self.playmetrics_configs_list.addItem("Default")
-        for team in self.config.playmetrics_teams:
+        for team in self.config.playmetrics.teams:
             self.playmetrics_configs_list.addItem(team.team_name)
 
         # Cloud Sync settings
@@ -964,7 +964,7 @@ class ConfigWindow(QWidget):
 
             # Create a MatchInfo object with the provided data
             match_info = MatchInfo(
-                my_team_name=info_dict["my_team_name"],
+                team_name=info_dict["team_name"],
                 opponent_team_name=info_dict["opponent_team_name"],
                 location=info_dict["location"],
                 start_time_offset=info_dict["start_time_offset"],
@@ -980,7 +980,7 @@ class ConfigWindow(QWidget):
                     config.add_section("MATCH")
 
                 config["MATCH"]["start_time_offset"] = match_info.start_time_offset
-                config["MATCH"]["my_team_name"] = match_info.my_team_name
+                config["MATCH"]["team_name"] = match_info.team_name
                 config["MATCH"]["opponent_team_name"] = match_info.opponent_team_name
                 config["MATCH"]["location"] = match_info.location
                 # Preserve total_duration if it exists
@@ -1574,7 +1574,7 @@ class ConfigWindow(QWidget):
         )
         if ok and name:
             new_config = TeamSnapTeamConfig(team_name=name, enabled=True)
-            self.config.teamsnap_teams.append(new_config)
+            self.config.teamsnap.teams.append(new_config)
             self.teamsnap_configs_list.addItem(name)
             self.save_settings()
 
@@ -1591,8 +1591,8 @@ class ConfigWindow(QWidget):
             self, "Remove Config", f"Are you sure you want to remove '{name}'?"
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.config.teamsnap_teams = [
-                t for t in self.config.teamsnap_teams if t.team_name != name
+            self.config.teamsnap.teams = [
+                t for t in self.config.teamsnap.teams if t.team_name != name
             ]
             self.teamsnap_configs_list.takeItem(self.teamsnap_configs_list.row(item))
             self.save_settings()
@@ -1610,7 +1610,7 @@ class ConfigWindow(QWidget):
         if name == "Default":
             team_config = self.config.teamsnap
         else:
-            for t in self.config.teamsnap_teams:
+            for t in self.config.teamsnap.teams:
                 if t.team_name == name:
                     team_config = t
                     break
@@ -1622,7 +1622,7 @@ class ConfigWindow(QWidget):
             self.teamsnap_client_secret.setText(team_config.client_secret)
             self.teamsnap_access_token.setText(team_config.access_token)
             self.teamsnap_team_id.setText(team_config.team_id)
-            self.teamsnap_team_name.setText(team_config.my_team_name)
+            self.teamsnap_team_name.setText(team_config.team_name)
 
     def save_teamsnap_config(self):
         """Save the currently edited TeamSnap configuration."""
@@ -1635,7 +1635,7 @@ class ConfigWindow(QWidget):
         if name == "Default":
             team_config = self.config.teamsnap
         else:
-            for t in self.config.teamsnap_teams:
+            for t in self.config.teamsnap.teams:
                 if t.team_name == name:
                     team_config = t
                     break
@@ -1643,14 +1643,14 @@ class ConfigWindow(QWidget):
         if not team_config:
             # This is a new team, create it
             team_config = TeamSnapTeamConfig(team_name=name)
-            self.config.teamsnap_teams.append(team_config)
+            self.config.teamsnap.teams.append(team_config)
 
         team_config.enabled = self.teamsnap_enabled.isChecked()
         team_config.client_id = self.teamsnap_client_id.text()
         team_config.client_secret = self.teamsnap_client_secret.text()
         team_config.access_token = self.teamsnap_access_token.text()
         team_config.team_id = self.teamsnap_team_id.text()
-        team_config.my_team_name = self.teamsnap_team_name.text()
+        team_config.team_name = self.teamsnap_team_name.text()
 
         self.save_settings()
         QMessageBox.information(
@@ -1665,7 +1665,7 @@ class ConfigWindow(QWidget):
         )
         if ok and name:
             new_config = PlayMetricsTeamConfig(team_name=name, enabled=True)
-            self.config.playmetrics_teams.append(new_config)
+            self.config.playmetrics.teams.append(new_config)
             self.playmetrics_configs_list.addItem(name)
             self.save_settings()
 
@@ -1682,8 +1682,8 @@ class ConfigWindow(QWidget):
             self, "Remove Config", f"Are you sure you want to remove '{name}'?"
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.config.playmetrics_teams = [
-                t for t in self.config.playmetrics_teams if t.team_name != name
+            self.config.playmetrics.teams = [
+                t for t in self.config.playmetrics.teams if t.team_name != name
             ]
             self.playmetrics_configs_list.takeItem(
                 self.playmetrics_configs_list.row(item)
@@ -1703,7 +1703,7 @@ class ConfigWindow(QWidget):
         if name == "Default":
             team_config = self.config.playmetrics
         else:
-            for t in self.config.playmetrics_teams:
+            for t in self.config.playmetrics.teams:
                 if t.team_name == name:
                     team_config = t
                     break
@@ -1734,7 +1734,7 @@ class ConfigWindow(QWidget):
         if name == "Default":
             team_config = self.config.playmetrics
         else:
-            for t in self.config.playmetrics_teams:
+            for t in self.config.playmetrics.teams:
                 if t.team_name == name:
                     team_config = t
                     break
@@ -1742,7 +1742,7 @@ class ConfigWindow(QWidget):
         if not team_config:
             # This is a new team, create it
             team_config = PlayMetricsTeamConfig(team_name=name)
-            self.config.playmetrics_teams.append(team_config)
+            self.config.playmetrics.teams.append(team_config)
 
         team_config.enabled = self.playmetrics_enabled.isChecked()
         team_config.username = self.playmetrics_username.text()
