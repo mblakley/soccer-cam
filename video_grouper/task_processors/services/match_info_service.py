@@ -192,13 +192,16 @@ class MatchInfoService:
         logger.info(f"Game source: {source}")
 
         if source == "TeamSnap":
-            team_info = {
-                "my_team_name": game.get("team_name", ""),
+            # Prefer the team_name field that TeamSnapService added
+            my_team = game.get("team_name", "")
+
+            match_info = {
+                "my_team_name": my_team,
                 "opponent_team_name": game.get("opponent_name", ""),
                 "location": game.get("location_name", ""),
             }
-            logger.info(f"TeamSnap conversion result: {team_info}")
-            return team_info
+            logger.info(f"TeamSnap conversion result: {match_info}")
+            return match_info
         elif source == "PlayMetrics":
             match_info = {
                 "my_team_name": game.get("team_name", ""),

@@ -50,7 +50,9 @@ class TeamInfoTask(BaseNtfyTask):
 
     def get_task_type(self) -> str:
         """Get the task type identifier."""
-        return "team_info"
+        from .enums import NtfyInputType
+
+        return NtfyInputType.TEAM_INFO.value
 
     async def create_question(self) -> Dict[str, Any]:
         """

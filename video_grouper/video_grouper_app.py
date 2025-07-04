@@ -94,10 +94,15 @@ class VideoGrouperApp:
         # Initialize NTFY queue processor (only if NTFY is enabled)
         self.ntfy_queue_processor = None
         if self.config.ntfy.enabled:
+            # Create NTFY service for the queue processor
+            from video_grouper.task_processors.services.ntfy_service import NtfyService
+
+            ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
+
             self.ntfy_queue_processor = NtfyQueueProcessor(
                 storage_path=self.storage_path,
                 config=self.config,
-                ntfy_service=self.state_auditor.ntfy_service,
+                ntfy_service=ntfy_service,
                 poll_interval=30,  # Check every 30 seconds
             )
 

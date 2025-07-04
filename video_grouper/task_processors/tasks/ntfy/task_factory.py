@@ -46,7 +46,9 @@ class NtfyTaskFactory:
         """
         metadata = metadata or {}
 
-        if task_type == "game_start_time":
+        from .enums import NtfyInputType
+
+        if task_type == NtfyInputType.GAME_START_TIME.value:
             combined_video_path = metadata.get("combined_video_path")
             time_offset = metadata.get("time_offset", "00:00")
             time_seconds = metadata.get("time_seconds", 0)
@@ -63,7 +65,7 @@ class NtfyTaskFactory:
                 time_seconds=time_seconds,
             )
 
-        elif task_type == "game_end_time":
+        elif task_type == NtfyInputType.GAME_END_TIME.value:
             combined_video_path = metadata.get("combined_video_path")
             start_time_offset = metadata.get("start_time_offset")
             time_offset = metadata.get("time_offset")
@@ -86,7 +88,7 @@ class NtfyTaskFactory:
                 time_seconds=time_seconds,
             )
 
-        elif task_type == "team_info":
+        elif task_type == NtfyInputType.TEAM_INFO.value:
             combined_video_path = metadata.get("combined_video_path")
             existing_info = metadata.get("existing_info", {})
 
