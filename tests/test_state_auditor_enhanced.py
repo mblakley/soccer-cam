@@ -86,7 +86,6 @@ class TestStateAuditorEnhanced:
         # Check that all services are initialized
         assert auditor.teamsnap_service is not None
         assert auditor.playmetrics_service is not None
-        assert auditor.ntfy_service is not None
         assert auditor.match_info_service is not None
         assert auditor.cleanup_service is not None
 
@@ -211,8 +210,14 @@ class TestStateAuditorEnhanced:
         # Create auditor
         auditor = StateAuditor(str(tmp_path), mock_config)
 
-        # Mock match info service - waiting for input
-        auditor.match_info_service.is_waiting_for_user_input = Mock(return_value=True)
+        # Mock NTFY queue processor - waiting for input
+        auditor.ntfy_queue_processor = Mock()
+        auditor.ntfy_queue_processor.ntfy_service = Mock()
+        auditor.ntfy_queue_processor.ntfy_service.is_waiting_for_input = Mock(
+            return_value=True
+        )
+
+        # Mock match info service
         auditor.match_info_service.process_combined_directory = AsyncMock()
 
         # Mock file system
