@@ -100,13 +100,14 @@ class TestNtfyQueueProcessor:
         """Test startup when there are pending requests."""
         pending_inputs = {
             "/test/dir1": {
-                "input_type": "team_info_queued",
-                "metadata": {"status": "queued", "task_type": "team_info"},
+                "input_type": "team_info",
+                "status": "queued",
+                "metadata": {"task_type": "team_info"},
             },
             "/test/dir2": {
-                "input_type": "playlist_name_sent",
+                "input_type": "playlist_name",
+                "status": "in_progress",
                 "metadata": {
-                    "status": "sent",
                     "task_type": "playlist_name",
                     "team_name": "Test Team",
                 },
@@ -126,21 +127,14 @@ class TestNtfyQueueProcessor:
                     PollingProcessor, "start", new_callable=AsyncMock
                 ) as mock_parent_start:
                     await processor.start()
-                    # Should recreate both types of tasks
+                    # Should recreate queued task only
                     mock_recreate_queued.assert_called_once_with(
                         "/test/dir1",
                         "team_info",
-                        {"status": "queued", "task_type": "team_info"},
+                        {"task_type": "team_info"},
                     )
-                    mock_recreate_sent.assert_called_once_with(
-                        "/test/dir2",
-                        "playlist_name",
-                        {
-                            "status": "sent",
-                            "task_type": "playlist_name",
-                            "team_name": "Test Team",
-                        },
-                    )
+                    # In-progress tasks are not recreated, just logged
+                    mock_recreate_sent.assert_not_called()
                     # Should call parent start method
                     mock_parent_start.assert_called_once_with()
 

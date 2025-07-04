@@ -77,8 +77,8 @@ class TestMatchInfo:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Update team info
             team_info = {
-                "team_name": "Team A",
-                "opponent_name": "Team B",
+                "my_team_name": "Team A",
+                "opponent_team_name": "Team B",
                 "location": "Stadium",
             }
             match_info = MatchInfo.update_team_info(temp_dir, team_info)
