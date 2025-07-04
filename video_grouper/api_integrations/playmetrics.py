@@ -41,14 +41,16 @@ class PlayMetricsAPI:
     LOGIN_URL = f"{BASE_URL}/login"
     DASHBOARD_URL = f"{BASE_URL}/dashboard"
 
-    def __init__(self, config):
+    def __init__(self, config, app_config=None):
         """
         Initialize the PlayMetrics API.
 
         Args:
             config: PlayMetrics configuration object.
+            app_config: Application configuration object containing timezone settings
         """
         self.config = config
+        self.app_config = app_config
 
         if isinstance(config, PlayMetricsConfig):
             self.enabled = config.enabled
@@ -76,6 +78,26 @@ class PlayMetricsAPI:
         self.events_cache = []
         self.last_cache_update = None
         self.cache_duration = timedelta(hours=1)  # Cache games for 1 hour
+
+    def _get_configured_timezone(self) -> pytz.timezone:
+        """
+        Get the configured timezone from the application config.
+
+        Returns:
+            Configured timezone object, defaults to America/New_York if not found
+        """
+        timezone_str = "America/New_York"  # Default fallback
+
+        if self.app_config and hasattr(self.app_config, "timezone"):
+            timezone_str = self.app_config.timezone
+
+        try:
+            return pytz.timezone(timezone_str)
+        except pytz.UnknownTimeZoneError:
+            logger.warning(
+                f"Unknown timezone '{timezone_str}', falling back to America/New_York"
+            )
+            return pytz.timezone("America/New_York")
 
     def __del__(self):
         """Clean up resources when the object is destroyed."""
@@ -490,25 +512,13 @@ class PlayMetricsAPI:
                     try:
                         # Extract event details - decode vText objects to strings
                         summary_raw = component.get("summary", "No Title")
-                        summary = (
-                            summary_raw.to_ical().decode("utf-8")
-                            if hasattr(summary_raw, "to_ical")
-                            else str(summary_raw)
-                        )
+                        summary = str(summary_raw)
 
                         description_raw = component.get("description", "")
-                        description = (
-                            description_raw.to_ical().decode("utf-8")
-                            if hasattr(description_raw, "to_ical")
-                            else str(description_raw)
-                        )
+                        description = str(description_raw)
 
                         location_raw = component.get("location", "")
-                        location = (
-                            location_raw.to_ical().decode("utf-8")
-                            if hasattr(location_raw, "to_ical")
-                            else str(location_raw)
-                        )
+                        location = str(location_raw)
 
                         # Extract start and end times
                         start = component.get("dtstart").dt
@@ -543,6 +553,7 @@ class PlayMetricsAPI:
                         # Try to extract opponent name
                         opponent = None
                         if is_game:
+                            # First try to extract from title using common keywords
                             for keyword in ["vs", "versus", "against", "@"]:
                                 if keyword.lower() in summary.lower():
                                     parts = summary.lower().split(keyword.lower(), 1)
@@ -550,9 +561,21 @@ class PlayMetricsAPI:
                                         opponent = parts[1].strip()
                                         break
 
-                            # If we couldn't extract opponent from the title, use the whole title
+                            # If no opponent found in title, try to extract from description using team name
+                            if not opponent and description and self.team_name:
+                                opponent = self._extract_opponent_from_description(
+                                    description, self.team_name
+                                )
+
+                            # If still no opponent, try to extract from location
+                            if not opponent and location:
+                                opponent = self._extract_opponent_from_location(
+                                    location
+                                )
+
+                            # If we still couldn't extract opponent, use a generic name
                             if not opponent:
-                                opponent = summary
+                                opponent = "Unknown Opponent"
 
                         # Create event dictionary
                         event = {
@@ -567,9 +590,8 @@ class PlayMetricsAPI:
                             "my_team_name": self.team_name or "Test Team",
                         }
 
-                        # Determine display time in America/New_York
-                        # Use UTC-4 for Eastern Time (simplified for tests)
-                        local_tz = timezone(timedelta(hours=-4))
+                        # Determine display time in configured timezone
+                        local_tz = self._get_configured_timezone()
                         chosen_dt = end if (not is_game and end) else start
                         if chosen_dt.tzinfo is None:
                             chosen_dt = chosen_dt.replace(tzinfo=pytz.UTC)
@@ -578,8 +600,6 @@ class PlayMetricsAPI:
                         events.append(event)
                     except Exception as e:
                         logger.error(f"Error parsing event: {e}")
-                continue
-
             logger.info(f"Found {len(events)} events in calendar")
             return events
         except Exception as e:
@@ -733,3 +753,34 @@ class PlayMetricsAPI:
             os.remove(calendar_path)
         except Exception:
             pass
+
+    def _extract_opponent_from_description(
+        self, description: str, team_name: str
+    ) -> Optional[str]:
+        """
+        Extract the opponent name from the description field using the team name and 'at' pattern.
+        """
+        import re
+
+        if not description or not team_name:
+            return None
+
+        desc = description.strip().replace("\n", " ")
+        # Look for 'team_name at OPPONENT' or 'OPPONENT at team_name'
+        pattern1 = re.escape(team_name) + r" at ([^\(\n]+)"
+        pattern2 = r"([^-@\n]+) at " + re.escape(team_name)
+        match = re.search(pattern1, desc, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        match = re.search(pattern2, desc, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return None
+
+    def _extract_opponent_from_location(self, location: str) -> str:
+        """
+        Extract opponent name from location if possible.
+        This is a fallback method - most opponent info should come from description.
+        """
+        # For now, return None as the primary source should be description
+        return None

@@ -201,20 +201,28 @@ class NtfyService:
         Returns:
             True if request was sent, False otherwise
         """
+        logger.info(f"NTFY: Attempting to request team info for {group_dir}")
+        logger.info(f"NTFY: Force mode: {force}")
+        logger.info(f"NTFY: Service enabled: {self.enabled}")
+
         if not await self._ensure_initialized():
+            logger.error(f"NTFY: Failed to initialize API for {group_dir}")
             return False
 
         # Check if already processed or waiting
         if not force:
             if self.has_been_processed(group_dir):
-                logger.debug(f"Directory {group_dir} already processed with NTFY")
+                logger.info(f"NTFY: Directory {group_dir} already processed, skipping")
                 return False
 
             if self.is_waiting_for_input(group_dir):
-                logger.debug(f"Already waiting for input for {group_dir}")
+                logger.info(
+                    f"NTFY: Already waiting for input for {group_dir}, skipping"
+                )
                 return False
 
         try:
+            logger.info(f"NTFY: Sending team info request for {group_dir}")
             # Send team info request
             await self.ntfy_api.ask_team_info(combined_video_path, existing_info or {})
 
@@ -228,11 +236,11 @@ class NtfyService:
                 },
             )
 
-            logger.info(f"Sent team info request for {group_dir}")
+            logger.info(f"NTFY: Successfully sent team info request for {group_dir}")
             return True
 
         except Exception as e:
-            logger.error(f"Error sending team info request for {group_dir}: {e}")
+            logger.error(f"NTFY: Error sending team info request for {group_dir}: {e}")
             return False
 
     async def request_game_times(
@@ -249,26 +257,35 @@ class NtfyService:
         Returns:
             True if request was sent, False otherwise
         """
+        logger.info(f"NTFY: Attempting to request game times for {group_dir}")
+        logger.info(f"NTFY: Force mode: {force}")
+        logger.info(f"NTFY: Service enabled: {self.enabled}")
+
         if not await self._ensure_initialized():
+            logger.error(f"NTFY: Failed to initialize API for {group_dir}")
             return False
 
         # Check if already processed or waiting
         if not force:
             if self.has_been_processed(group_dir):
-                logger.debug(f"Directory {group_dir} already processed with NTFY")
+                logger.info(f"NTFY: Directory {group_dir} already processed, skipping")
                 return False
 
             if self.is_waiting_for_input(group_dir):
-                logger.debug(f"Already waiting for input for {group_dir}")
+                logger.info(
+                    f"NTFY: Already waiting for input for {group_dir}, skipping"
+                )
                 return False
 
         try:
+            logger.info(f"NTFY: Sending game start time request for {group_dir}")
             # Send game start time request
             await self.ntfy_api.ask_game_start_time(combined_video_path, group_dir)
 
             # Check if we should also ask for end time
             match_info, _ = MatchInfo.get_or_create(group_dir)
             if match_info and match_info.start_time_offset:
+                logger.info(f"NTFY: Sending game end time request for {group_dir}")
                 await self.ntfy_api.ask_game_end_time(
                     combined_video_path, group_dir, match_info.start_time_offset
                 )
@@ -278,11 +295,11 @@ class NtfyService:
                 group_dir, "game_times", {"combined_video_path": combined_video_path}
             )
 
-            logger.info(f"Sent game times request for {group_dir}")
+            logger.info(f"NTFY: Successfully sent game times request for {group_dir}")
             return True
 
         except Exception as e:
-            logger.error(f"Error sending game times request for {group_dir}: {e}")
+            logger.error(f"NTFY: Error sending game times request for {group_dir}: {e}")
             return False
 
     async def process_combined_directory(

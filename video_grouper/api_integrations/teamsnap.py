@@ -6,6 +6,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Dict, List, Optional, Any
+import pytz
 
 from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
@@ -20,16 +21,20 @@ class TeamSnapAPI:
     game information and populate match information.
     """
 
-    def __init__(self, config: TeamSnapConfig, team_config: TeamSnapTeamConfig):
+    def __init__(
+        self, config: TeamSnapConfig, team_config: TeamSnapTeamConfig, app_config=None
+    ):
         """
         Initialize the TeamSnap API integration.
 
         Args:
             config: TeamSnap configuration object with OAuth credentials
             team_config: Team-specific configuration object
+            app_config: Application configuration object containing timezone settings
         """
         self.config = config
         self.team_config = team_config
+        self.app_config = app_config
         self.enabled = self.config.enabled and self.team_config.enabled
         self.access_token = self.config.access_token
         self.team_id = self.team_config.team_id
@@ -42,6 +47,26 @@ class TeamSnapAPI:
             self._ensure_valid_token()
             # Discover API endpoints
             self._discover_api_endpoints()
+
+    def _get_configured_timezone(self) -> pytz.timezone:
+        """
+        Get the configured timezone from the application config.
+
+        Returns:
+            Configured timezone object, defaults to America/New_York if not found
+        """
+        timezone_str = "America/New_York"  # Default fallback
+
+        if self.app_config:
+            timezone_str = self.app_config.timezone
+
+        try:
+            return pytz.timezone(timezone_str)
+        except pytz.UnknownTimeZoneError:
+            logger.warning(
+                f"Unknown timezone '{timezone_str}', falling back to America/New_York"
+            )
+            return pytz.timezone("America/New_York")
 
     def _ensure_valid_token(self) -> bool:
         """
@@ -366,6 +391,9 @@ class TeamSnapAPI:
         if recording_end.tzinfo is None:
             recording_end = recording_end.replace(tzinfo=timezone.utc)
 
+        # Get configured timezone for conversion
+        local_tz = self._get_configured_timezone()
+
         # Look for games that overlap with the recording timespan
         for game in games:
             # Parse game start and end times
@@ -375,21 +403,31 @@ class TeamSnapAPI:
 
             try:
                 # TeamSnap dates are in ISO format with Z for UTC
-                game_start = datetime.fromisoformat(
+                game_start_utc = datetime.fromisoformat(
                     game_start_str.replace("Z", "+00:00")
                 )
+
+                # Convert game start time from UTC to local timezone
+                game_start_local = game_start_utc.astimezone(local_tz)
 
                 # Calculate game end time based on duration (default to 2 hours if not specified)
                 duration_minutes = game.get("duration_in_minutes", 120)
                 if isinstance(duration_minutes, str):
                     duration_minutes = int(duration_minutes)
-                game_end = game_start + timedelta(minutes=duration_minutes)
+                game_end_local = game_start_local + timedelta(minutes=duration_minutes)
+
+                # Convert local game times back to UTC for comparison with recording times
+                game_start_utc_for_comparison = game_start_local.astimezone(pytz.utc)
+                game_end_utc_for_comparison = game_end_local.astimezone(pytz.utc)
 
                 # Check if the recording overlaps with the game
                 # (recording starts before game ends AND recording ends after game starts)
-                if recording_start <= game_end and recording_end >= game_start:
+                if (
+                    recording_start <= game_end_utc_for_comparison
+                    and recording_end >= game_start_utc_for_comparison
+                ):
                     logger.info(
-                        f"Found matching game: {game.get('opponent_name')} at {game_start_str}"
+                        f"Found matching game: {game.get('opponent_name')} at {game_start_local.strftime('%Y-%m-%d %H:%M %Z')} (local time)"
                     )
                     return game
             except (ValueError, TypeError) as e:
@@ -429,11 +467,17 @@ class TeamSnapAPI:
         game_start_str = game.get("start_date")
         if game_start_str:
             try:
-                game_start = datetime.fromisoformat(
+                # Parse UTC time from TeamSnap
+                game_start_utc = datetime.fromisoformat(
                     game_start_str.replace("Z", "+00:00")
                 )
-                match_info["date"] = game_start.strftime("%Y-%m-%d")
-                match_info["time"] = game_start.strftime("%H:%M")
+
+                # Convert to local timezone for display
+                local_tz = self._get_configured_timezone()
+                game_start_local = game_start_utc.astimezone(local_tz)
+
+                match_info["date"] = game_start_local.strftime("%Y-%m-%d")
+                match_info["time"] = game_start_local.strftime("%H:%M")
             except (ValueError, TypeError) as e:
                 logger.error(f"Error parsing game date: {e}")
 

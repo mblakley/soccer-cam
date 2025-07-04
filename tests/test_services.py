@@ -63,7 +63,11 @@ class TestTeamSnapService:
             enabled=False,
             teams=[team],
         )
-        service = TeamSnapService(config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        service = TeamSnapService(config, app_config)
         assert not service.enabled
         assert service.teamsnap_apis == []
 
@@ -74,7 +78,11 @@ class TestTeamSnapService:
         mock_api.enabled = True
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService(teamsnap_config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        service = TeamSnapService(teamsnap_config, app_config)
         assert service.enabled
         assert len(service.teamsnap_apis) == 1
 
@@ -91,7 +99,11 @@ class TestTeamSnapService:
         }
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService(teamsnap_config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        service = TeamSnapService(teamsnap_config, app_config)
 
         start_time = datetime.now()
         end_time = start_time + timedelta(hours=2)
@@ -116,7 +128,11 @@ class TestTeamSnapService:
         }
         mock_api_class.return_value = mock_api
 
-        service = TeamSnapService(teamsnap_config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        service = TeamSnapService(teamsnap_config, app_config)
 
         start_time = datetime.now()
         end_time = start_time + timedelta(hours=2)

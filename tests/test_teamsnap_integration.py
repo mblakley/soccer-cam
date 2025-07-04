@@ -21,7 +21,11 @@ class TestTeamSnapIntegration(unittest.TestCase):
             team_id="test_team_id",
             team_name="Test Team",
         )
-        self.api = TeamSnapAPI(self.config, self.team_config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        self.app_config = AppConfig(timezone="America/New_York")
+        self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
 
         # Create a sample game for testing
         self.sample_game = {

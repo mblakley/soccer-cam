@@ -18,7 +18,10 @@ class TestPlayMetricsCalendarIntegration:
             team_id="123456",
             team_name="Test Team",
         )
-        api = PlayMetricsAPI(test_config)
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(test_config, app_config)
 
         # Check that values were loaded correctly
         assert api.enabled
@@ -29,10 +32,14 @@ class TestPlayMetricsCalendarIntegration:
 
     def test_disabled_when_not_configured(self):
         """Test that API is disabled when not configured."""
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
         api = PlayMetricsAPI(
             PlayMetricsConfig(
                 enabled=False, username="user", password="password", team_name="Team A"
-            )
+            ),
+            app_config,
         )
 
         # Check that API is disabled
@@ -71,7 +78,10 @@ class TestPlayMetricsCalendarIntegration:
             team_id="123456",
             team_name="Test Team",
         )
-        api = PlayMetricsAPI(test_config)
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(test_config, app_config)
 
         # Call login
         result = api.login()
@@ -95,7 +105,10 @@ class TestPlayMetricsCalendarIntegration:
         mock_requests.get.return_value = mock_response
 
         # Create a PlayMetrics API instance with mocked calendar URL
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True))
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
         api.logged_in = True  # Set logged_in to True
         api.calendar_url = calendar_url
 
@@ -118,14 +131,14 @@ class TestPlayMetricsCalendarIntegration:
 VERSION:2.0
 PRODID:-//PlayMetrics//Calendar//EN
 BEGIN:VEVENT
-SUMMARY:Test Game vs Opponent
-DESCRIPTION:Game description
+SUMMARY:Test Team - Game
+DESCRIPTION:Test Team at Opponent (League)
 LOCATION:Test Field
 DTSTART:20250615T140000Z
 DTEND:20250615T160000Z
 END:VEVENT
 BEGIN:VEVENT
-SUMMARY:Test Practice
+SUMMARY:Test Team - Practice
 DESCRIPTION:Practice description
 LOCATION:Practice Field
 DTSTART:20250616T180000Z
@@ -134,36 +147,55 @@ END:VEVENT
 END:VCALENDAR"""
 
         # Create a properly initialized API instance
-        test_config = PlayMetricsConfig(enabled=True)
-        api = PlayMetricsAPI(test_config)
+        test_config = PlayMetricsConfig(enabled=True, team_name="Test Team")
+        from video_grouper.utils.config import AppConfig
 
-        # Mock file reading for calendar parsing only
-        with patch("builtins.open", mock_open(read_data=calendar_content)):
-            # Call parse_calendar
-            events = api.parse_calendar("mock_calendar_path")
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(test_config, app_config)
+
+        # Use a temporary file instead of mock_open
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as temp_file:
+            temp_file.write(calendar_content.encode("utf-8"))
+            temp_file_path = temp_file.name
+
+        try:
+            # Call parse_calendar with the temporary file
+            events = api.parse_calendar(temp_file_path)
 
             # Check that events were parsed correctly
             assert len(events) == 2
 
             # Check the game event
             game_event = events[0]
-            assert game_event["title"] == "Test Game vs Opponent"
-            assert game_event["description"] == "Game description"
+            assert game_event["title"] == "Test Team - Game"
+            assert game_event["description"] == "Test Team at Opponent (League)"
             assert game_event["location"] == "Test Field"
             assert game_event["is_game"]
-            assert game_event["opponent"] == "opponent"
+            assert game_event["opponent"] == "Opponent"
             assert game_event["my_team_name"] == "Test Team"
 
             # Check the practice event
             practice_event = events[1]
             assert not practice_event["is_game"]
-            assert practice_event["title"] == "Test Practice"
-            assert practice_event["time"] == "16:00"
+            assert practice_event["title"] == "Test Team - Practice"
+            assert (
+                practice_event["time"] == "16:00"
+            )  # End time in EDT (20:00 UTC - 4 hours)
+
+        finally:
+            # Clean up the temporary file
+            os.unlink(temp_file_path)
 
     def test_find_game_for_recording(self):
         """Test finding a game for a recording timespan."""
         # Create a PlayMetrics API instance
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True))
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
 
         # Create some sample events
         game_time = datetime(2025, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
@@ -216,7 +248,10 @@ END:VCALENDAR"""
     def test_populate_match_info(self):
         """Test populating match info from a game."""
         # Create a PlayMetrics API instance
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True))
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
 
         # Create a sample game
         game_time = datetime(2025, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
@@ -256,7 +291,10 @@ END:VCALENDAR"""
 
     def test_playmetrics_api_init(self, mock_config):
         """Test PlayMetricsAPI initialization from config."""
-        api = PlayMetricsAPI(config=mock_config.playmetrics)
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(config=mock_config.playmetrics, app_config=app_config)
 
         # Check that values were loaded correctly
         assert api.enabled
@@ -266,7 +304,10 @@ END:VCALENDAR"""
     def test_playmetrics_api_disabled(self, mock_config):
         """Test PlayMetricsAPI when disabled in config."""
         mock_config.playmetrics.enabled = False
-        api = PlayMetricsAPI(config=mock_config.playmetrics)
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(config=mock_config.playmetrics, app_config=app_config)
 
         # Check that API is disabled
         assert not api.enabled
@@ -304,7 +345,10 @@ END:VCALENDAR"""
             team_id="123456",
             team_name="Test Team",
         )
-        api = PlayMetricsAPI(test_config)
+        from video_grouper.utils.config import AppConfig
+
+        app_config = AppConfig(timezone="America/New_York")
+        api = PlayMetricsAPI(test_config, app_config)
 
         # Call login
         result = api.login()

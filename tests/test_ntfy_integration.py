@@ -79,10 +79,11 @@ async def test_send_notification(mock_http_client):
         assert result is True
         mock_client.post.assert_called_once()
         args, kwargs = mock_client.post.call_args
-        assert args[0] == "https://ntfy.sh/test-topic"
-        assert kwargs["data"] == "Test message"
-        assert kwargs["headers"]["Title"] == "Test Title"
-        assert kwargs["headers"]["Tags"] == "test,notification"
+        assert args[0] == "https://ntfy.sh"
+        assert kwargs["json"]["topic"] == "test-topic"
+        assert kwargs["json"]["message"] == "Test message"
+        assert kwargs["json"]["title"] == "Test Title"
+        assert kwargs["json"]["tags"] == ["test", "notification"]
 
 
 @pytest.mark.asyncio

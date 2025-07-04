@@ -18,14 +18,16 @@ class TeamSnapService:
     Handles multiple team configurations and game lookups.
     """
 
-    def __init__(self, teamsnap_config: TeamSnapConfig):
+    def __init__(self, teamsnap_config: TeamSnapConfig, app_config=None):
         """
         Initialize TeamSnap service.
 
         Args:
             teamsnap_config: TeamSnap configuration with OAuth credentials and teams
+            app_config: Application configuration object containing timezone settings
         """
         self.teamsnap_config = teamsnap_config
+        self.app_config = app_config
         self.teamsnap_apis = []
         self.enabled = False
 
@@ -44,7 +46,9 @@ class TeamSnapService:
                         f"Initializing TeamSnap team: {team_config.team_name or 'Default'}"
                     )
 
-                    api = TeamSnapAPI(self.teamsnap_config, team_config)
+                    api = TeamSnapAPI(
+                        self.teamsnap_config, team_config, self.app_config
+                    )
                     if api.enabled and api.access_token:
                         self.teamsnap_apis.append(api)
                         self.enabled = True

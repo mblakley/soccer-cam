@@ -33,7 +33,11 @@ class TestTeamSnapAPI(unittest.TestCase):
             team_id="test_team_id",
             team_name="Test Team",
         )
-        self.api = TeamSnapAPI(self.config, self.team_config)
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        self.app_config = AppConfig(timezone="America/New_York")
+        self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
 
         # Create mock games
         self.games = [
@@ -213,7 +217,9 @@ class TestTeamSnapAPI(unittest.TestCase):
         self.assertEqual(match_info["away_team"], "Opponent 1")
         self.assertEqual(match_info["location"], "Location 1")
         self.assertEqual(match_info["date"], "2025-03-08")
-        self.assertEqual(match_info["time"], "17:10")
+        # The time should be converted to local timezone (America/New_York)
+        # 17:10 UTC = 12:10 EST (UTC-5)
+        self.assertEqual(match_info["time"], "12:10")
 
         # Test case 2: No game found
         mock_find_game.return_value = None
@@ -278,7 +284,7 @@ class TestTeamSnapAPI(unittest.TestCase):
                 self.save_called = True
 
         dummy = DummyConfig()
-        api = TeamSnapAPI(dummy, self.team_config)
+        api = TeamSnapAPI(dummy, self.team_config, self.app_config)
         api.access_token = "new_token"
         api._update_config_token()
         self.assertEqual(dummy.access_token, "new_token")
