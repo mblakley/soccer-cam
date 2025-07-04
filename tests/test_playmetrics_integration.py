@@ -20,7 +20,10 @@ def mock_config():
 @pytest.fixture
 def playmetrics_api(mock_config):
     """Create a PlayMetricsAPI instance with mock configuration."""
-    return PlayMetricsAPI(mock_config)
+    from video_grouper.utils.config import AppConfig
+
+    app_config = AppConfig(timezone="America/New_York")
+    return PlayMetricsAPI(mock_config, app_config)
 
 
 @pytest.mark.asyncio
@@ -37,14 +40,20 @@ async def test_playmetrics_initialization(playmetrics_api):
 async def test_playmetrics_disabled():
     """Test that the PlayMetrics API is disabled when not configured."""
     disabled_config = PlayMetricsConfig(enabled=False)
-    api = PlayMetricsAPI(disabled_config)
+    from video_grouper.utils.config import AppConfig
+
+    app_config = AppConfig(timezone="America/New_York")
+    api = PlayMetricsAPI(disabled_config, app_config)
     assert api.enabled is False
 
 
 @pytest.mark.asyncio
 async def test_get_team_events(mock_config):
     """Test getting team events from PlayMetrics."""
-    api = PlayMetricsAPI(mock_config)
+    from video_grouper.utils.config import AppConfig
+
+    app_config = AppConfig(timezone="America/New_York")
+    api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock event data
     game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
@@ -78,7 +87,10 @@ async def test_get_team_events(mock_config):
 @pytest.mark.asyncio
 async def test_find_game_for_recording(mock_config):
     """Test finding a game for a recording timespan."""
-    api = PlayMetricsAPI(mock_config)
+    from video_grouper.utils.config import AppConfig
+
+    app_config = AppConfig(timezone="America/New_York")
+    api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock event data
     game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
@@ -132,7 +144,10 @@ async def test_find_game_for_recording(mock_config):
 @pytest.mark.asyncio
 async def test_populate_match_info(mock_config):
     """Test populating match info with PlayMetrics data."""
-    api = PlayMetricsAPI(mock_config)
+    from video_grouper.utils.config import AppConfig
+
+    app_config = AppConfig(timezone="America/New_York")
+    api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock game data
     game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)

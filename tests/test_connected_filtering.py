@@ -33,8 +33,12 @@ class TestConnectedFiltering(unittest.TestCase):
             team_id="test_team_id",
             team_name="Test Team",
         )
+        # Create a mock app config for timezone
+        from video_grouper.utils.config import AppConfig
+
+        self.app_config = AppConfig(timezone="America/New_York")
         # Create a mock TeamSnap API
-        self.api = TeamSnapAPI(self.config, self.team_config)
+        self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
         self.api.enabled = True
 
         # Create mock games

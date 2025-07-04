@@ -7,6 +7,7 @@ from .camera_poller import CameraPoller
 from .download_processor import DownloadProcessor
 from .video_processor import VideoProcessor
 from .upload_processor import UploadProcessor
+from .ntfy_queue_processor import NtfyQueueProcessor
 
 __all__ = [
     "PollingProcessor",
@@ -16,4 +17,5 @@ __all__ = [
     "DownloadProcessor",
     "VideoProcessor",
     "UploadProcessor",
+    "NtfyQueueProcessor",
 ]

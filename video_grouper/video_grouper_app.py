@@ -9,6 +9,7 @@ from video_grouper.task_processors import (
     DownloadProcessor,
     VideoProcessor,
     UploadProcessor,
+    NtfyQueueProcessor,
 )
 
 # Configure logging
@@ -90,6 +91,16 @@ class VideoGrouperApp:
             storage_path=self.storage_path, config=self.config
         )
 
+        # Initialize NTFY queue processor (only if NTFY is enabled)
+        self.ntfy_queue_processor = None
+        if self.config.ntfy.enabled:
+            self.ntfy_queue_processor = NtfyQueueProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                ntfy_service=self.state_auditor.ntfy_service,
+                poll_interval=30,  # Check every 30 seconds
+            )
+
         # Wire up processor dependencies
         self._wire_processors()
 
@@ -101,6 +112,10 @@ class VideoGrouperApp:
             self.video_processor,
             self.upload_processor,
         ]
+
+        # Add NTFY queue processor if enabled
+        if self.ntfy_queue_processor:
+            self.processors.append(self.ntfy_queue_processor)
 
         # Shutdown event for clean shutdown coordination
         self._shutdown_event = asyncio.Event()
@@ -114,6 +129,7 @@ class VideoGrouperApp:
             download_processor=self.download_processor,
             video_processor=self.video_processor,
             upload_processor=self.upload_processor,
+            ntfy_queue_processor=self.ntfy_queue_processor,
         )
 
         # Camera poller queues work on download processor
@@ -124,6 +140,10 @@ class VideoGrouperApp:
 
         # Video processor queues work on YouTube processor
         self.video_processor.set_upload_processor(self.upload_processor)
+
+        # NTFY queue processor needs reference to video processor
+        if self.ntfy_queue_processor:
+            self.ntfy_queue_processor.set_video_processor(self.video_processor)
 
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
@@ -187,6 +207,9 @@ class VideoGrouperApp:
             "download": self.download_processor.get_queue_size(),
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
+            "ntfy": self.ntfy_queue_processor.get_queue_size()
+            if self.ntfy_queue_processor
+            else -1,
         }
 
     def get_processor_status(self):
@@ -211,5 +234,10 @@ class VideoGrouperApp:
             "upload_processor": "running"
             if self.upload_processor._processor_task
             and not self.upload_processor._processor_task.done()
+            else "stopped",
+            "ntfy_queue_processor": "running"
+            if self.ntfy_queue_processor
+            and self.ntfy_queue_processor._processor_task
+            and not self.ntfy_queue_processor._processor_task.done()
             else "stopped",
         }

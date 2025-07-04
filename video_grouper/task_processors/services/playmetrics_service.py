@@ -18,14 +18,16 @@ class PlayMetricsService:
     Handles multiple team configurations and game lookups.
     """
 
-    def __init__(self, configs: List[PlayMetricsConfig]):
+    def __init__(self, configs: List[PlayMetricsConfig], app_config=None):
         """
         Initialize PlayMetrics service.
 
         Args:
             configs: List of PlayMetrics configuration objects
+            app_config: Application configuration object containing timezone settings
         """
         self.configs = configs
+        self.app_config = app_config
         self.playmetrics_apis = []
         self.enabled = False
 
@@ -39,7 +41,7 @@ class PlayMetricsService:
                     logger.info(
                         f"Initializing PlayMetrics team: {config.team_name or 'Default'}"
                     )
-                    api = PlayMetricsAPI(config)
+                    api = PlayMetricsAPI(config, self.app_config)
                     if api.login():
                         self.playmetrics_apis.append(api)
                         self.enabled = True

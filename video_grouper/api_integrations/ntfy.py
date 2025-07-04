@@ -650,48 +650,69 @@ class NtfyAPI:
             tags: Optional list of tags for the notification
             priority: Optional priority (1-5)
             image_path: Optional path to an image to attach
-            actions: Optional list of action buttons
+            actions: Optional list of action buttons (can be dict or string format)
 
         Returns:
             bool: True if sent successfully, False otherwise
         """
+        logger.info(f"NTFY API: Attempting to send notification to topic: {self.topic}")
+        logger.info(f"NTFY API: Message: {message}")
+        logger.info(f"NTFY API: Title: {title}")
+        logger.info(f"NTFY API: Enabled: {self.enabled}")
+
         if not self.enabled or not self.topic:
             logger.warning("Cannot send NTFY notification - integration not enabled")
             return False
 
-        headers = {}
+        # Build the JSON payload according to NTFY docs
+        payload = {"topic": self.topic, "message": message}
+
         if title:
-            headers["Title"] = title
+            payload["title"] = title
         if tags:
-            headers["Tags"] = ",".join(tags)
+            payload["tags"] = tags
         if priority:
-            headers["Priority"] = str(priority)
+            payload["priority"] = priority
         if actions:
-            headers["Actions"] = json.dumps(actions)
+            payload["actions"] = actions
+
+        logger.info(f"NTFY API: Payload: {payload}")
+        logger.info(f"NTFY API: Base URL: {self.base_url}")
 
         try:
             # Create a new client for each request to avoid connection issues
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if image_path and os.path.exists(image_path):
-                    # Use PUT method with the file data as the request body
-                    with open(image_path, "rb") as file:
-                        # Add the filename header
-                        headers["Filename"] = os.path.basename(image_path)
+                    logger.info(
+                        f"NTFY API: Sending notification with image: {image_path}"
+                    )
+                    # For images, we need to use PUT method with the file as the body
+                    # and add the JSON payload as headers
+                    headers = {}
+                    headers["Message"] = payload.get("message", "")
+                    headers["Title"] = payload.get("title", "")
+                    headers["Tags"] = ",".join(payload.get("tags", []))
+                    headers["Priority"] = str(payload.get("priority", 4))
+                    headers["Actions"] = json.dumps(payload.get("actions", []))
+                    headers["Filename"] = os.path.basename(image_path)
 
-                        # Send the request with the file data
+                    with open(image_path, "rb") as file:
                         response = await client.put(
                             f"{self.base_url}/{self.topic}",
                             content=file.read(),
                             headers=headers,
                         )
                 else:
-                    # Regular text notification
-                    response = await client.post(
-                        f"{self.base_url}/{self.topic}", data=message, headers=headers
+                    logger.info(
+                        f"NTFY API: Sending text notification to {self.base_url}"
                     )
+                    # Regular JSON notification
+                    response = await client.post(f"{self.base_url}", json=payload)
 
             # Check response status code safely (works with both real responses and mocks)
             status_code = getattr(response, "status_code", 200)
+            logger.info(f"NTFY API: Response status code: {status_code}")
+
             if status_code >= 400:
                 logger.error(f"Failed to send NTFY notification: {status_code}")
                 return False

@@ -6,6 +6,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
+from datetime import datetime
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
@@ -38,7 +39,9 @@ class TrimTask(BaseFfmpegTask):
             FFmpeg command as list of strings
         """
         combined_path = os.path.join(self.group_dir, "combined.mp4")
-        trimmed_path = os.path.join(self.group_dir, "trimmed.mp4")
+
+        # Create the subdirectory and get the trimmed file path
+        trimmed_path = self._get_trimmed_file_path()
 
         cmd = [
             "ffmpeg",
@@ -55,6 +58,48 @@ class TrimTask(BaseFfmpegTask):
         ]
 
         return cmd
+
+    def _get_trimmed_file_path(self) -> str:
+        """
+        Create the subdirectory structure and return the path for the trimmed file.
+
+        Returns:
+            Path where the trimmed file should be created
+        """
+        from video_grouper.models import MatchInfo
+
+        # Get match info to extract team names and location
+        match_info, _ = MatchInfo.get_or_create(self.group_dir)
+
+        # Extract date from directory name (format: YYYY.MM.DD-HH.MM.SS)
+        dir_name = os.path.basename(self.group_dir)
+        try:
+            date_part = dir_name.split("-")[0]  # YYYY.MM.DD
+            date_obj = datetime.strptime(date_part, "%Y.%m.%d")
+            formatted_date = date_obj.strftime("%m-%d-%Y")
+        except Exception:
+            # Fallback to current date if parsing fails
+            formatted_date = datetime.now().strftime("%m-%d-%Y")
+
+        # Get sanitized team names and location
+        my_team, opponent_team, location = match_info.get_sanitized_names()
+
+        # Create subdirectory name: "YYYY.MM.DD - My Team vs Opponent Team (location)"
+        subdir_name = f"{date_part} - {my_team} vs {opponent_team} ({location})"
+        subdir_path = os.path.join(self.group_dir, subdir_name)
+
+        # Create the subdirectory if it doesn't exist
+        os.makedirs(subdir_path, exist_ok=True)
+
+        # Create filename: "myteam-opponent-location-MM-DD-YYYY-raw.mp4"
+        # Convert team names to lowercase and replace spaces with hyphens
+        my_team_slug = my_team.lower().replace(" ", "-")
+        opponent_team_slug = opponent_team.lower().replace(" ", "-")
+        location_slug = location.lower().replace(" ", "-")
+
+        filename = f"{my_team_slug}-{opponent_team_slug}-{location_slug}-{formatted_date}-raw.mp4"
+
+        return os.path.join(subdir_path, filename)
 
     async def execute(
         self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
@@ -121,9 +166,9 @@ class TrimTask(BaseFfmpegTask):
         Get the expected output path for the trimmed file.
 
         Returns:
-            Path where the trimmed.mp4 file will be created
+            Path where the trimmed file will be created
         """
-        return os.path.join(self.group_dir, "trimmed.mp4")
+        return self._get_trimmed_file_path()
 
     def __str__(self) -> str:
         """String representation of the task."""

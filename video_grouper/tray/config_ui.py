@@ -1143,9 +1143,16 @@ class ConfigWindow(QWidget):
 
                 # Import here to avoid circular imports
                 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
+                from video_grouper.utils.config import AppConfig
 
-                # Initialize TeamSnap API
-                teamsnap_api = TeamSnapAPI(temp_config)
+                # Create a temporary app config for timezone
+                app_config = AppConfig(timezone="America/New_York")
+
+                # Initialize TeamSnap API with a dummy team config for testing
+                from video_grouper.utils.config import TeamSnapTeamConfig
+
+                dummy_team_config = TeamSnapTeamConfig(enabled=True, team_name="Test")
+                teamsnap_api = TeamSnapAPI(temp_config, dummy_team_config, app_config)
 
                 # Get access token
                 success = teamsnap_api.get_access_token()
@@ -1367,7 +1374,10 @@ class ConfigWindow(QWidget):
                 from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 
                 # Initialize PlayMetrics API
-                playmetrics_api = PlayMetricsAPI()
+                from video_grouper.utils.config import AppConfig
+
+                app_config = AppConfig(timezone="America/New_York")
+                playmetrics_api = PlayMetricsAPI(app_config=app_config)
                 playmetrics_api.enabled = True
                 playmetrics_api.username = username
                 playmetrics_api.password = password
