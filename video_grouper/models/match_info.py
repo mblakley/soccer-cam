@@ -13,7 +13,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)  # frozen=True makes the dataclass immutable and hashable
+@dataclass  # Removed frozen=True to allow direct field assignment
 class MatchInfo:
     """Represents match information from match_info.ini file."""
 
@@ -169,16 +169,16 @@ class MatchInfo:
 
         # Update the config with team information
         if team_info:
-            if "team_name" in team_info:
-                config["MATCH"]["my_team_name"] = team_info["team_name"]
+            if "my_team_name" in team_info:
+                config["MATCH"]["my_team_name"] = team_info["my_team_name"]
                 logger.info(
-                    f"Updated match_info.ini with team_name: {team_info['team_name']}"
+                    f"Updated match_info.ini with my_team_name: {team_info['my_team_name']}"
                 )
 
-            if "opponent_name" in team_info:
-                config["MATCH"]["opponent_team_name"] = team_info["opponent_name"]
+            if "opponent_team_name" in team_info:
+                config["MATCH"]["opponent_team_name"] = team_info["opponent_team_name"]
                 logger.info(
-                    f"Updated match_info.ini with opponent_name: {team_info['opponent_name']}"
+                    f"Updated match_info.ini with opponent_team_name: {team_info['opponent_team_name']}"
                 )
 
             if "location" in team_info:
@@ -350,3 +350,31 @@ class MatchInfo:
             description_parts.append("Processed with automated camera tracking")
 
         return "\n".join(description_parts)
+
+    def save(self) -> None:
+        """Save the current state back to the match_info.ini file."""
+        match_info_path = (
+            os.path.join(self.group_dir, "match_info.ini")
+            if hasattr(self, "group_dir")
+            else None
+        )
+        if not match_info_path:
+            # If we don't have group_dir, we can't save
+            logger.warning("Cannot save MatchInfo: no group_dir available")
+            return
+
+        config = configparser.ConfigParser()
+        config["MATCH"] = {
+            "my_team_name": self.my_team_name,
+            "opponent_team_name": self.opponent_team_name,
+            "location": self.location,
+            "start_time_offset": self.start_time_offset,
+            "total_duration": self.total_duration,
+        }
+
+        with open(match_info_path, "w") as f:
+            config.write(f)
+
+        logger.info(
+            f"Saved match_info.ini with start_time_offset: {self.start_time_offset}"
+        )

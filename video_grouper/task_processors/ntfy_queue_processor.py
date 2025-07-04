@@ -19,7 +19,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 
 from .services.ntfy_service import NtfyService
-from .ntfy import BaseNtfyTask, NtfyTaskFactory
+from .tasks.ntfy import BaseNtfyTask, NtfyTaskFactory
 from video_grouper.models import MatchInfo, DirectoryState
 from .polling_processor_base import PollingProcessor
 from video_grouper.utils.config import Config
@@ -140,14 +140,15 @@ class NtfyQueueProcessor(PollingProcessor):
         self._task_queue.append(task_wrapper)
 
         # Mark as waiting for input in the NTFY service (this saves state to file)
+        from .tasks.ntfy.enums import NtfyStatus
+
         self.ntfy_service.mark_waiting_for_input(
             task.group_dir,
-            f"{task.get_task_type()}_queued",
+            task.get_task_type(),
             {
                 "task_id": task_id,
-                "task_type": task.get_task_type(),
                 "metadata": task.metadata,
-                "status": "queued",
+                "status": NtfyStatus.QUEUED.value,
             },
         )
 
@@ -198,15 +199,16 @@ class NtfyQueueProcessor(PollingProcessor):
                 task_wrapper.sent_at = datetime.now()
                 self._sent_tasks[task_wrapper.task_id] = task_wrapper
 
-                # Update the state to "sent" (this saves state to file)
+                # Update the state to "in_progress" (this saves state to file)
+                from .tasks.ntfy.enums import NtfyStatus
+
                 self.ntfy_service.mark_waiting_for_input(
                     task_wrapper.task.group_dir,
                     task_wrapper.task.get_task_type(),
                     {
                         "task_id": task_wrapper.task_id,
-                        "task_type": task_wrapper.task.get_task_type(),
                         "metadata": task_wrapper.task.metadata,
-                        "status": "sent",
+                        "status": NtfyStatus.IN_PROGRESS.value,
                         "sent_at": task_wrapper.sent_at.isoformat(),
                         "image_path": question_data.get("image_path"),
                     },
@@ -255,13 +257,18 @@ class NtfyQueueProcessor(PollingProcessor):
 
                     # If the task should continue, create a new task for the next iteration
                     if result.should_continue and result.metadata:
-                        if task_wrapper.task.get_task_type() == "game_start_time":
+                        from .tasks.ntfy.enums import NtfyInputType
+
+                        if (
+                            task_wrapper.task.get_task_type()
+                            == NtfyInputType.GAME_START_TIME.value
+                        ):
                             # For game start tasks, create the next task in the sequence
                             next_time_offset = result.metadata.get("next_time_offset")
                             next_time_seconds = result.metadata.get("next_time_seconds")
 
                             if next_time_offset and next_time_seconds is not None:
-                                from .ntfy import GameStartTask
+                                from .tasks.ntfy import GameStartTask
 
                                 next_task = GameStartTask.create_next_task(
                                     task_wrapper.task,
@@ -273,6 +280,17 @@ class NtfyQueueProcessor(PollingProcessor):
                                     f"Created next game start task for {next_time_offset}"
                                 )
 
+                # Mark task as completed and remove from pending inputs
+                if not result.should_continue:
+                    # Task is complete, remove from pending inputs
+                    self.ntfy_service.clear_pending_input(task_wrapper.task.group_dir)
+                    logger.info(
+                        f"Task {task_wrapper.task_id} completed and removed from pending inputs"
+                    )
+
+                    # Check if match info is now complete and queue trim task if needed
+                    await self._check_match_info_completion(task_wrapper.task.group_dir)
+
                 # Remove from sent tasks
                 del self._sent_tasks[task_wrapper.task_id]
 
@@ -283,6 +301,8 @@ class NtfyQueueProcessor(PollingProcessor):
 
     async def _process_pending_requests_on_startup(self) -> None:
         """Process any pending NTFY requests on startup."""
+        from .tasks.ntfy.enums import NtfyStatus
+
         pending_inputs = self.ntfy_service.get_pending_inputs()
 
         if not pending_inputs:
@@ -293,22 +313,22 @@ class NtfyQueueProcessor(PollingProcessor):
 
         for group_dir, input_data in pending_inputs.items():
             input_type = input_data.get("input_type")
+            status = input_data.get("status", "unknown")
             metadata = input_data.get("metadata", {})
-            status = metadata.get("status", "unknown")
 
             logger.info(
                 f"Processing pending {input_type} request for {group_dir} (status: {status})"
             )
 
-            if status == "queued":
+            if status == NtfyStatus.QUEUED.value:
                 # Task was queued but not sent yet, recreate it
-                task_type_str = input_type.replace("_queued", "")
-                await self._recreate_queued_task(group_dir, task_type_str, metadata)
+                await self._recreate_queued_task(group_dir, input_type, metadata)
 
-            elif status == "sent":
-                # Task was sent but no response received, recreate it
-                task_type_str = input_type.replace("_sent", "")
-                await self._recreate_sent_task(group_dir, task_type_str, metadata)
+            elif status == NtfyStatus.IN_PROGRESS.value:
+                # Task is in progress, waiting for user response
+                logger.info(
+                    f"Task {input_type} is in progress for {group_dir}, waiting for response"
+                )
 
             else:
                 # New format required - fail if not in expected format
@@ -316,7 +336,7 @@ class NtfyQueueProcessor(PollingProcessor):
                     f"Invalid pending input format for {group_dir}: status={status}, input_type={input_type}"
                 )
                 logger.error(
-                    f"Expected status to be 'queued' or 'sent', got '{status}'"
+                    f"Expected status to be '{NtfyStatus.QUEUED.value}' or '{NtfyStatus.IN_PROGRESS.value}', got '{status}'"
                 )
                 # Clear the invalid pending input
                 self.ntfy_service.clear_pending_input(group_dir)
@@ -328,9 +348,7 @@ class NtfyQueueProcessor(PollingProcessor):
         logger.info(f"Recreating queued task for {group_dir}: {task_type}")
 
         # Recreate the task using the task factory
-        task = NtfyTaskFactory.create_task(
-            task_type, group_dir, metadata.get("metadata", {})
-        )
+        task = NtfyTaskFactory.create_task(task_type, group_dir, self.config, metadata)
         if task:
             await self.add_task(task)
         else:
@@ -343,9 +361,7 @@ class NtfyQueueProcessor(PollingProcessor):
         logger.info(f"Recreating sent task for {group_dir}: {task_type}")
 
         # Recreate the task and mark it as sent
-        task = NtfyTaskFactory.create_task(
-            task_type, group_dir, metadata.get("metadata", {})
-        )
+        task = NtfyTaskFactory.create_task(task_type, group_dir, self.config, metadata)
         if task:
             task_id = metadata.get("task_id")
             if task_id:
@@ -371,25 +387,50 @@ class NtfyQueueProcessor(PollingProcessor):
 
     async def _check_match_info_completion(self, group_dir: str) -> None:
         """Check if match info has been populated for a directory."""
+        logger.info(f"NTFY_QUEUE: Checking match info completion for {group_dir}")
+
         match_info_path = os.path.join(group_dir, "match_info.ini")
         if not os.path.exists(match_info_path):
+            logger.info(f"NTFY_QUEUE: No match_info.ini found at {match_info_path}")
             return
 
         match_info = MatchInfo.from_file(match_info_path)
+        logger.info(f"NTFY_QUEUE: Loaded match_info: {match_info}")
+
         if match_info and match_info.is_populated():
+            logger.info(f"NTFY_QUEUE: Match info is populated for {group_dir}")
             # User has populated the match info, mark as processed
             logger.info(f"Match info populated for {group_dir}, marking as processed")
             self.ntfy_service.mark_as_processed(group_dir)
 
             # Queue trim task if we have a combined video
             combined_path = os.path.join(group_dir, "combined.mp4")
+            logger.info(f"NTFY_QUEUE: Checking for combined video at {combined_path}")
+            logger.info(
+                f"NTFY_QUEUE: Combined video exists: {os.path.exists(combined_path)}"
+            )
+            logger.info(
+                f"NTFY_QUEUE: Video processor available: {self.video_processor is not None}"
+            )
+
             if os.path.exists(combined_path) and self.video_processor:
                 from .tasks.video import TrimTask
 
-                await self.video_processor.add_work(
-                    TrimTask.from_match_info(group_dir, match_info)
-                )
+                trim_task = TrimTask.from_match_info(group_dir, match_info)
+                logger.info(f"NTFY_QUEUE: Created trim task: {trim_task}")
+
+                await self.video_processor.add_work(trim_task)
                 logger.info(f"Queued trim task for {group_dir}")
+            else:
+                logger.warning(
+                    f"NTFY_QUEUE: Cannot queue trim task - combined video exists: {os.path.exists(combined_path)}, video processor available: {self.video_processor is not None}"
+                )
+        else:
+            logger.info(f"NTFY_QUEUE: Match info is not populated for {group_dir}")
+            if match_info:
+                logger.info(
+                    f"NTFY_QUEUE: Match info fields - my_team_name: '{match_info.my_team_name}', opponent_team_name: '{match_info.opponent_team_name}', location: '{match_info.location}', start_time_offset: '{match_info.start_time_offset}'"
+                )
 
     async def _check_playlist_name_completion(
         self, group_dir: str, info: Dict[str, Any]
@@ -482,26 +523,33 @@ class NtfyQueueProcessor(PollingProcessor):
 
         # Add team info task if needed
         if missing_fields:
-            from .ntfy import TeamInfoTask
+            from .tasks.ntfy import TeamInfoTask
 
-            task = TeamInfoTask(group_dir, combined_video_path, existing_info)
+            task = TeamInfoTask(
+                group_dir, self.config, combined_video_path, existing_info
+            )
             await self.add_task(task)
             tasks_added = True
             logger.info(f"Added team info task for {group_dir}")
 
         # Add game start time task
-        from .ntfy import GameStartTask
+        from .tasks.ntfy import GameStartTask
 
-        start_task = GameStartTask(group_dir, combined_video_path, 0, "00:00")
+        start_task = GameStartTask(
+            group_dir, self.config, combined_video_path, "00:00", 0
+        )
         await self.add_task(start_task)
         tasks_added = True
 
         # Check if we should also ask for end time
         if match_info and match_info.start_time_offset:
-            from .ntfy import GameEndTask
+            from .tasks.ntfy import GameEndTask
 
             end_task = GameEndTask(
-                group_dir, combined_video_path, match_info.start_time_offset
+                group_dir,
+                self.config,
+                combined_video_path,
+                match_info.start_time_offset,
             )
             await self.add_task(end_task)
             tasks_added = True
@@ -871,6 +919,8 @@ class NtfyQueueProcessor(PollingProcessor):
 
     async def _handle_response(self, response: str) -> None:
         """Handle a response to a message."""
+        from .tasks.ntfy.enums import NtfyInputType
+
         logger.info(f"Handling response: {response}")
 
         # Extract message ID from the response if present
@@ -894,7 +944,10 @@ class NtfyQueueProcessor(PollingProcessor):
         # If no message ID or no match found, try to find by response content
         for task_id, task_wrapper in list(self._sent_tasks.items()):
             task_type = task_wrapper.task.get_task_type()
-            if task_type in ["game_start_time", "game_end_time"]:
+            if task_type in [
+                NtfyInputType.GAME_START_TIME.value,
+                NtfyInputType.GAME_END_TIME.value,
+            ]:
                 # Check if this response matches the task
                 if self._response_matches_task(response, task_wrapper.task):
                     logger.info(f"Found matching task by content: {task_id}")
@@ -905,6 +958,8 @@ class NtfyQueueProcessor(PollingProcessor):
 
     def _response_matches_task(self, response: str, task: BaseNtfyTask) -> bool:
         """Check if a response matches a specific task."""
+        from .tasks.ntfy.enums import NtfyInputType
+
         response_lower = response.lower()
 
         # Check for time information in the response
@@ -913,9 +968,9 @@ class NtfyQueueProcessor(PollingProcessor):
             return True
 
         # Check for question type in response
-        if task.get_task_type() == "game_start_time":
+        if task.get_task_type() == NtfyInputType.GAME_START_TIME.value:
             return "start" in response_lower or "00:00" in response
-        elif task.get_task_type() == "game_end_time":
+        elif task.get_task_type() == NtfyInputType.GAME_END_TIME.value:
             return "end" in response_lower
 
         return False

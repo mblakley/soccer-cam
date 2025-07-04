@@ -265,4 +265,8 @@ class BaseNtfyTask(ABC):
         Returns:
             MatchInfo object
         """
-        return MatchInfo.get_or_create(self.group_dir)[0]
+        match_info = MatchInfo.get_or_create(self.group_dir)[0]
+        if match_info:
+            # Add group_dir to the match_info object so it can be saved
+            match_info.group_dir = self.group_dir
+        return match_info

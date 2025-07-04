@@ -195,7 +195,8 @@ def load_config(config_path: Path) -> Config:
     for section in list(config_dict.keys()):
         if section.startswith("TEAMSNAP."):
             team_config = config_dict.pop(section)
-            team_name = section.split(".", 1)[1]
+            # Use the team_name from the config, not the section name
+            team_name = team_config.get("team_name", section.split(".", 1)[1])
             team_config["team_name"] = team_name
             teamsnap_teams.append(team_config)
 

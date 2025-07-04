@@ -67,9 +67,20 @@ class ConvertTask(BaseFfmpegTask):
         Returns:
             True if command succeeded, False otherwise
         """
-        # Execute the FFmpeg command
+        # 0. Short-circuit if an MP4 already exists (duplicate task)
+        output_path = self.get_output_path()
+        if os.path.exists(output_path):
+            logger.info(
+                f"CONVERT: {output_path} already exists – skipping reconversion for {self.file_path}"
+            )
+            # Treat as success so downstream actions (screenshot, combine check) still occur
+            await self._handle_post_conversion_actions(queue_task)
+            return True
+
+        # 1. Execute the FFmpeg command
         success = await super().execute(queue_task)
 
+        # 2. Post-processing
         if success:
             await self._handle_post_conversion_actions(queue_task)
         else:

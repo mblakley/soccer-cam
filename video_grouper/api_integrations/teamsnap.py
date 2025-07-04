@@ -3,7 +3,7 @@ TeamSnap API integration for video_grouper.
 """
 
 import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 from typing import Dict, List, Optional, Any
 import pytz
@@ -385,14 +385,17 @@ class TeamSnapAPI:
 
         games = self.get_games()
 
-        # Ensure recording times are timezone-aware
-        if recording_start.tzinfo is None:
-            recording_start = recording_start.replace(tzinfo=timezone.utc)
-        if recording_end.tzinfo is None:
-            recording_end = recording_end.replace(tzinfo=timezone.utc)
-
-        # Get configured timezone for conversion
+        # If times are naive, interpret them in the configured local timezone
         local_tz = self._get_configured_timezone()
+
+        if recording_start.tzinfo is None:
+            recording_start = recording_start.replace(tzinfo=local_tz)
+        if recording_end.tzinfo is None:
+            recording_end = recording_end.replace(tzinfo=local_tz)
+
+        # Work internally in UTC for comparison consistency
+        recording_start = recording_start.astimezone(pytz.utc)
+        recording_end = recording_end.astimezone(pytz.utc)
 
         # Look for games that overlap with the recording timespan
         for game in games:
@@ -434,6 +437,27 @@ class TeamSnapAPI:
                 logger.error(f"Error parsing game date: {e}")
 
         logger.info("No matching game found for recording")
+        # Additional diagnostic logging: list all games on the same calendar day
+        try:
+            rec_local = recording_start.astimezone(self._get_configured_timezone())
+            rec_date = rec_local.date()
+            same_day_games = []
+            for game in games:
+                g_start_str = game.get("start_date")
+                if not g_start_str:
+                    continue
+                g_start = datetime.fromisoformat(
+                    g_start_str.replace("Z", "+00:00")
+                ).astimezone(self._get_configured_timezone())
+                if g_start.date() == rec_date:
+                    same_day_games.append(
+                        f"{g_start.strftime('%H:%M')} - {game.get('opponent_name', '')} ({game.get('location_name', '')})"
+                    )
+            if same_day_games:
+                logger.info("TeamSnap games on same day: " + "; ".join(same_day_games))
+        except Exception as e:
+            logger.warning(f"Diagnostic game-day logging failed: {e}")
+
         return None
 
     def populate_match_info(

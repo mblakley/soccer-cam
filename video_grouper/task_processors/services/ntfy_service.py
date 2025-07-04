@@ -12,6 +12,7 @@ import asyncio
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.models import MatchInfo
 from video_grouper.utils.config import NtfyConfig
+from ..tasks.ntfy.enums import NtfyInputType, NtfyStatus
 
 logger = logging.getLogger(__name__)
 
@@ -227,12 +228,15 @@ class NtfyService:
             await self.ntfy_api.ask_team_info(combined_video_path, existing_info or {})
 
             # Mark as waiting for input
+            from ..tasks.ntfy.enums import NtfyInputType, NtfyStatus
+
             self.mark_waiting_for_input(
                 group_dir,
-                "team_info",
+                NtfyInputType.TEAM_INFO.value,
                 {
                     "combined_video_path": combined_video_path,
                     "existing_info": existing_info,
+                    "status": NtfyStatus.IN_PROGRESS.value,
                 },
             )
 
@@ -292,7 +296,12 @@ class NtfyService:
 
             # Mark as waiting for input
             self.mark_waiting_for_input(
-                group_dir, "game_times", {"combined_video_path": combined_video_path}
+                group_dir,
+                NtfyInputType.GAME_START_TIME.value,
+                {
+                    "combined_video_path": combined_video_path,
+                    "status": NtfyStatus.IN_PROGRESS.value,
+                },
             )
 
             logger.info(f"NTFY: Successfully sent game times request for {group_dir}")
@@ -370,7 +379,12 @@ class NtfyService:
                 tags=["youtube_playlist_name", group_dir],
             )
             self.mark_waiting_for_input(
-                group_dir, "playlist_name", {"team_name": team_name}
+                group_dir,
+                NtfyInputType.PLAYLIST_NAME.value,
+                {
+                    "team_name": team_name,
+                    "status": NtfyStatus.IN_PROGRESS.value,
+                },
             )
             logger.info(f"Sent playlist name request for {group_dir}")
             return True

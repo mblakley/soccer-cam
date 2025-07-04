@@ -682,10 +682,15 @@ class PlayMetricsAPI:
             return None
 
         # Convert recording times to UTC if they don't have timezone info
+        local_tz = self._get_configured_timezone()
+
         if recording_start.tzinfo is None:
-            recording_start = recording_start.replace(tzinfo=timezone.utc)
+            recording_start = recording_start.replace(tzinfo=local_tz)
         if recording_end.tzinfo is None:
-            recording_end = recording_end.replace(tzinfo=timezone.utc)
+            recording_end = recording_end.replace(tzinfo=local_tz)
+
+        recording_start = recording_start.astimezone(timezone.utc)
+        recording_end = recording_end.astimezone(timezone.utc)
 
         # Define the time window for matching (3 hours before and after the game)
         time_window = timedelta(hours=3)
@@ -711,6 +716,28 @@ class PlayMetricsAPI:
                 return game
 
         logger.info("No matching game found for the recording time")
+        # Diagnostic: list all games on the same date as the recording
+        try:
+            local_tz = self._get_configured_timezone()
+            rec_local = recording_start.astimezone(local_tz)
+            rec_date = rec_local.date()
+            same_day = []
+            for game in games:
+                g_start = game.get("start_time")
+                if not g_start:
+                    continue
+                if g_start.tzinfo is None:
+                    g_start = g_start.replace(tzinfo=timezone.utc)
+                g_local = g_start.astimezone(local_tz)
+                if g_local.date() == rec_date:
+                    same_day.append(
+                        f"{g_local.strftime('%H:%M')} - {game.get('title', '')} ({game.get('location', '')})"
+                    )
+            if same_day:
+                logger.info("PlayMetrics games on same day: " + "; ".join(same_day))
+        except Exception as e:
+            logger.warning(f"Diagnostic same-day logging failed: {e}")
+
         return None
 
     def populate_match_info(

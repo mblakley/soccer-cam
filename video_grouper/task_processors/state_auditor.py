@@ -41,9 +41,11 @@ class StateAuditor(PollingProcessor):
         playmetrics_configs.extend(config.playmetrics_teams)
 
         self.playmetrics_service = PlayMetricsService(playmetrics_configs, config.app)
-        self.ntfy_service = NtfyService(config.ntfy, storage_path)
+        # Create a temporary NTFY service for the match info service
+        # The actual NTFY requests will be handled by the NTFY queue processor
+        temp_ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
-            self.teamsnap_service, self.playmetrics_service, self.ntfy_service
+            self.teamsnap_service, self.playmetrics_service, temp_ntfy_service
         )
 
         # Initialize cleanup service
@@ -107,19 +109,21 @@ class StateAuditor(PollingProcessor):
                         )
                         await self.download_processor.add_work(recording_file)
 
-                # Queue convert tasks for downloaded files
-                elif file_obj.status == "downloaded":
-                    if self.video_processor:
-                        await self.video_processor.add_work(
-                            ConvertTask(file_obj.file_path)
+                # Auto-fix: if mp4 exists mark as converted
+                elif file_obj.status in ["downloaded", "conversion_failed"]:
+                    mp4_path = file_obj.file_path.replace(".dav", ".mp4")
+                    if os.path.exists(mp4_path):
+                        logger.info(
+                            f"STATE_AUDITOR: Detected existing MP4 for {os.path.basename(file_obj.file_path)} – marking as converted"
                         )
-
-                # Queue convert tasks for failed conversions
-                elif file_obj.status == "conversion_failed":
-                    if self.video_processor:
-                        await self.video_processor.add_work(
-                            ConvertTask(file_obj.file_path)
+                        await dir_state.update_file_state(
+                            file_obj.file_path, status="converted"
                         )
+                    elif os.path.exists(file_obj.file_path):
+                        if self.video_processor:
+                            await self.video_processor.add_work(
+                                ConvertTask(file_obj.file_path)
+                            )
 
             # Check if ready for combining
             if dir_state.is_ready_for_combining():
@@ -134,8 +138,16 @@ class StateAuditor(PollingProcessor):
                 if os.path.exists(combined_path):
                     logger.info(f"STATE_AUDITOR: Found combined directory: {group_dir}")
 
-                    # Check if we're waiting for user input
-                    if self.match_info_service.is_waiting_for_user_input(group_dir):
+                    # Check if we're waiting for user input via NTFY queue processor
+                    is_waiting = False
+                    if self.ntfy_queue_processor:
+                        is_waiting = (
+                            self.ntfy_queue_processor.ntfy_service.is_waiting_for_input(
+                                group_dir
+                            )
+                        )
+
+                    if is_waiting:
                         logger.info(
                             f"STATE_AUDITOR: Waiting for user input for {group_dir}"
                         )
@@ -158,15 +170,35 @@ class StateAuditor(PollingProcessor):
                                         TrimTask.from_match_info(group_dir, match_info)
                                     )
                             else:
-                                logger.info(
-                                    f"STATE_AUDITOR: Match info exists but not populated for {group_dir}, processing via service"
+                                # Check if we have team info but are missing timing info
+                                has_team_info = (
+                                    match_info
+                                    and match_info.my_team_name.strip()
+                                    and match_info.opponent_team_name.strip()
+                                    and match_info.location.strip()
                                 )
-                                # Use the match info service to process this directory
-                                await (
-                                    self.match_info_service.process_combined_directory(
+                                missing_timing = (
+                                    not match_info
+                                    or not match_info.start_time_offset.strip()
+                                )
+
+                                if has_team_info and missing_timing:
+                                    logger.info(
+                                        f"STATE_AUDITOR: Team info populated but timing info missing for {group_dir}, queuing NTFY request"
+                                    )
+                                    # Queue NTFY request for timing information
+                                    if self.ntfy_queue_processor:
+                                        await self.ntfy_queue_processor.request_match_info_for_directory(
+                                            group_dir, combined_path, force=False
+                                        )
+                                else:
+                                    logger.info(
+                                        f"STATE_AUDITOR: Match info exists but not populated for {group_dir}, processing via service"
+                                    )
+                                    # Use the match info service to process this directory
+                                    await self.match_info_service.process_combined_directory(
                                         group_dir, combined_path
                                     )
-                                )
                         else:
                             logger.info(
                                 f"STATE_AUDITOR: No match_info.ini found for {group_dir}, processing via service"

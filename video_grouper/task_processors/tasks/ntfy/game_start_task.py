@@ -56,7 +56,9 @@ class GameStartTask(BaseNtfyTask):
 
     def get_task_type(self) -> str:
         """Get the task type identifier."""
-        return "game_start_time"
+        from .enums import NtfyInputType
+
+        return NtfyInputType.GAME_START_TIME.value
 
     async def create_question(self) -> Dict[str, Any]:
         """
