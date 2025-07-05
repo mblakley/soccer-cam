@@ -3,11 +3,13 @@
 import os
 import tempfile
 import configparser
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import pytest
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.task_processors.tasks import YoutubeUploadTask
+from video_grouper.utils.config import YouTubeConfig
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 
 @pytest.fixture
@@ -38,6 +40,21 @@ def mock_config():
     return config
 
 
+def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
+    """Create a mock YoutubeUploadTask with required dependencies."""
+    mock_youtube_config = MagicMock(spec=YouTubeConfig)
+    mock_youtube_config.enabled = True
+    mock_youtube_config.privacy_status = "private"
+
+    mock_ntfy_service = MagicMock(spec=NtfyService)
+
+    return YoutubeUploadTask(
+        group_dir=group_dir,
+        youtube_config=mock_youtube_config,
+        ntfy_service=mock_ntfy_service,
+    )
+
+
 class TestUploadProcessor:
     """Test the UploadProcessor."""
 
@@ -58,7 +75,7 @@ class TestUploadProcessor:
 
         processor = UploadProcessor(temp_storage, mock_config)
 
-        upload_task = YoutubeUploadTask(group_dir)
+        upload_task = create_mock_youtube_upload_task(group_dir)
         await processor.process_item(upload_task)
 
         # Should complete without error (credentials check is logged but doesn't fail)
@@ -74,7 +91,7 @@ class TestUploadProcessor:
         with patch.object(YoutubeUploadTask, "execute") as mock_execute:
             mock_execute.return_value = True
 
-            upload_task = YoutubeUploadTask(group_dir)
+            upload_task = create_mock_youtube_upload_task(group_dir)
             await processor.process_item(upload_task)
 
             mock_execute.assert_called_once()
@@ -90,7 +107,7 @@ class TestUploadProcessor:
         with patch.object(YoutubeUploadTask, "execute") as mock_execute:
             mock_execute.return_value = False
 
-            upload_task = YoutubeUploadTask(group_dir)
+            upload_task = create_mock_youtube_upload_task(group_dir)
             await processor.process_item(upload_task)
 
             mock_execute.assert_called_once()
@@ -106,7 +123,7 @@ class TestUploadProcessor:
         with patch.object(YoutubeUploadTask, "execute") as mock_execute:
             mock_execute.side_effect = Exception("Upload error")
 
-            upload_task = YoutubeUploadTask(group_dir)
+            upload_task = create_mock_youtube_upload_task(group_dir)
             await processor.process_item(upload_task)
 
             # Should complete without raising the exception
@@ -127,7 +144,7 @@ class TestUploadProcessor:
         with patch.object(YoutubeUploadTask, "execute") as mock_execute:
             mock_execute.return_value = True
 
-            upload_task = YoutubeUploadTask(group_dir)
+            upload_task = create_mock_youtube_upload_task(group_dir)
             await processor.process_item(upload_task)
 
             mock_execute.assert_called_once()
@@ -137,7 +154,7 @@ class TestUploadProcessor:
         processor = UploadProcessor(temp_storage, mock_config)
 
         # Test YouTube upload task
-        youtube_task = YoutubeUploadTask(group_dir="/test/path/group")
+        youtube_task = create_mock_youtube_upload_task("/test/path/group")
         key = processor.get_item_key(youtube_task)
         assert key.startswith("youtube_upload:/test/path/group:")
 

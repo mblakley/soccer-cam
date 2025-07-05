@@ -2,13 +2,14 @@
 
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime
 import pytest
 
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
 from video_grouper.task_processors.tasks import ConvertTask, YoutubeUploadTask
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import (
     Config,
     CameraConfig,
@@ -71,6 +72,21 @@ def mock_camera():
     camera.download_file = AsyncMock(return_value=True)
     camera.close = AsyncMock()
     return camera
+
+
+def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
+    """Create a mock YoutubeUploadTask with required dependencies."""
+    mock_youtube_config = MagicMock(spec=YouTubeConfig)
+    mock_youtube_config.enabled = True
+    mock_youtube_config.privacy_status = "private"
+
+    mock_ntfy_service = MagicMock(spec=NtfyService)
+
+    return YoutubeUploadTask(
+        group_dir=group_dir,
+        youtube_config=mock_youtube_config,
+        ntfy_service=mock_ntfy_service,
+    )
 
 
 class TestVideoGrouperAppRefactored:
@@ -171,7 +187,7 @@ class TestVideoGrouperAppRefactored:
         app = VideoGrouperApp(mock_config, camera=mock_camera)
 
         try:
-            upload_task = YoutubeUploadTask(group_dir="/test/path/group")
+            upload_task = create_mock_youtube_upload_task("/test/path/group")
 
             await app.add_youtube_task(upload_task)
 
@@ -228,7 +244,7 @@ class TestVideoGrouperAppRefactored:
             )
 
             convert_task = ConvertTask(file_path=test_file)
-            upload_task = YoutubeUploadTask(group_dir=group_dir)
+            upload_task = create_mock_youtube_upload_task(group_dir)
 
             # Add tasks to queues
             await app.add_download_task(recording_file)
