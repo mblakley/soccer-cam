@@ -4,7 +4,7 @@ import configparser
 from pathlib import Path
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 # Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
@@ -130,14 +130,34 @@ class YouTubePlaylistConfig(BaseModel):
     privacy_status: str
 
 
+class YouTubePlaylistMapConfig(RootModel[Dict[str, str]]):
+    def get(self, team_name: str) -> Optional[str]:
+        # First try exact match
+        if team_name in self.root:
+            return self.root[team_name]
+
+        # Then try case-insensitive match
+        team_name_lower = team_name.lower()
+        for key, value in self.root.items():
+            if key.lower() == team_name_lower:
+                return value
+
+        return None
+
+
 class YouTubeConfig(BaseModel):
     enabled: bool = False
     privacy_status: str = "private"
     playlist_mapping: Dict[str, str] = Field(default_factory=dict)
     processed_playlist: Optional[YouTubePlaylistConfig] = None
     raw_playlist: Optional[YouTubePlaylistConfig] = None
+    playlist_map: Optional[YouTubePlaylistMapConfig] = None
 
     model_config = {"validate_by_name": True}
+
+    @property
+    def playlist_map_dict(self) -> Dict[str, str]:
+        return self.playlist_map.root if self.playlist_map else {}
 
 
 class Config(BaseModel):
@@ -178,6 +198,11 @@ def load_config(config_path: Path) -> Config:
         config_dict.setdefault("YOUTUBE", {})["playlist_mapping"] = config_dict.pop(
             "YOUTUBE_PLAYLIST_MAPPING"
         )
+    # Add support for YOUTUBE.PLAYLIST_MAP
+    if "YOUTUBE.PLAYLIST_MAP" in config_dict:
+        config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
+            YouTubePlaylistMapConfig(config_dict.pop("YOUTUBE.PLAYLIST_MAP"))
+        )
 
     # Handle PlayMetrics teams
     playmetrics_teams = []
@@ -210,14 +235,14 @@ def load_config(config_path: Path) -> Config:
 def save_config(config: Config, config_path: Path):
     parser = configparser.ConfigParser()
 
-    for field_name, field in config.model_fields.items():
+    for field_name, field in Config.model_fields.items():
         alias = field.alias if field.alias else field_name
         value = getattr(config, field_name)
 
         if field_name == "playmetrics_teams":
             for item in value:
                 section_name = f"PLAYMETRICS.{item.team_name}"
-                item_dict = item.dict()
+                item_dict = item.model_dump()
                 item_dict.pop("team_name")
                 parser[section_name] = {
                     k: str(v) for k, v in item_dict.items() if v is not None
@@ -228,13 +253,13 @@ def save_config(config: Config, config_path: Path):
             # Handle teamsnap teams
             for item in value.teams:
                 section_name = f"TEAMSNAP.{item.team_name}"
-                item_dict = item.dict()
+                item_dict = item.model_dump()
                 item_dict.pop("team_name")
                 parser[section_name] = {
                     k: str(v) for k, v in item_dict.items() if v is not None
                 }
             # Add main teamsnap config without teams
-            teamsnap_dict = value.dict()
+            teamsnap_dict = value.model_dump()
             teamsnap_dict.pop("teams")
             parser["TEAMSNAP"] = {
                 k: str(v) for k, v in teamsnap_dict.items() if v is not None
@@ -243,14 +268,16 @@ def save_config(config: Config, config_path: Path):
 
         if isinstance(value, BaseModel):
             section_items = {}
-            for sub_field_name, sub_field in value.model_fields.items():
+            for sub_field_name, sub_field in type(value).model_fields.items():
                 sub_alias = sub_field.alias if sub_field.alias else sub_field_name
                 sub_value = getattr(value, sub_field_name)
 
                 if isinstance(sub_value, BaseModel):
                     nested_section_name = f"{alias}.{sub_alias.upper()}"
                     parser[nested_section_name] = {
-                        k: str(v) for k, v in sub_value.dict().items() if v is not None
+                        k: str(v)
+                        for k, v in sub_value.model_dump().items()
+                        if v is not None
                     }
                 elif sub_field_name == "playlist_mapping":
                     parser["YOUTUBE_PLAYLIST_MAPPING"] = {

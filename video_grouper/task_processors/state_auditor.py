@@ -41,11 +41,10 @@ class StateAuditor(PollingProcessor):
         playmetrics_configs.extend(config.playmetrics_teams)
 
         self.playmetrics_service = PlayMetricsService(playmetrics_configs, config.app)
-        # Create a temporary NTFY service for the match info service
-        # The actual NTFY requests will be handled by the NTFY queue processor
-        temp_ntfy_service = NtfyService(config.ntfy, storage_path)
+        # Create NTFY service for the match info service and general use
+        self.ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
-            self.teamsnap_service, self.playmetrics_service, temp_ntfy_service
+            self.teamsnap_service, self.playmetrics_service, self.ntfy_service
         )
 
         # Initialize cleanup service
@@ -214,7 +213,9 @@ class StateAuditor(PollingProcessor):
                 if self.config.youtube.enabled:
                     if self.upload_processor:
                         await self.upload_processor.add_work(
-                            YoutubeUploadTask(group_dir)
+                            YoutubeUploadTask(
+                                group_dir, self.config.youtube, self.ntfy_service
+                            )
                         )
 
             # Handle cleanup tasks
