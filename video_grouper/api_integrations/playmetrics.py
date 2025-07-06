@@ -8,7 +8,7 @@ import os
 import logging
 from datetime import datetime, timedelta, timezone
 import tempfile
-from typing import Dict, List, Optional
+from typing import List, Optional, TypedDict, Union
 import time
 import re
 
@@ -20,10 +20,44 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
+import httpx
 
 from video_grouper.utils.config import PlayMetricsConfig
+from .base import ApiResponse
+from ..models.match_info import MatchInfo
 
 logger = logging.getLogger(__name__)
+
+
+class TeamInfo(TypedDict, total=False):
+    """Represents team information from PlayMetrics."""
+
+    id: str
+    name: str
+    calendar_url: Optional[str]
+
+
+class GameInfo(TypedDict, total=False):
+    """Represents game information from PlayMetrics calendar."""
+
+    # Basic game info
+    title: str
+    description: str
+    location: str
+    start_time: datetime
+    end_time: datetime
+
+    # Team info
+    home_team: str
+    away_team: str
+    opponent: str
+
+    # Calendar info
+    calendar_url: str
+    event_id: str
+
+    # Custom fields
+    custom_fields: dict[str, Union[str, int, float, bool]]
 
 
 class PlayMetricsAPI:
@@ -218,20 +252,12 @@ class PlayMetricsAPI:
             self.logged_in = False
             return False
 
-    def get_available_teams(self) -> List[Dict[str, str]]:
+    def get_available_teams(self) -> List[TeamInfo]:
         """
         Get all available teams for the logged-in user.
 
         Returns:
-            List of dictionaries containing team information:
-            [
-                {
-                    'id': '12345',
-                    'name': 'Team Name',
-                    'calendar_url': 'https://...'
-                },
-                ...
-            ]
+            List of TeamInfo dictionaries containing team information
         """
         if not self.enabled:
             logger.warning("PlayMetrics integration not enabled")
@@ -488,7 +514,7 @@ class PlayMetricsAPI:
             logger.error(f"Failed to download calendar: {e}")
             return None
 
-    def parse_calendar(self, calendar_path: str) -> List[Dict]:
+    def parse_calendar(self, calendar_path: str) -> List[GameInfo]:
         """
         Parse the PlayMetrics calendar file.
 
@@ -606,7 +632,7 @@ class PlayMetricsAPI:
             logger.error(f"Failed to parse calendar: {e}")
             return []
 
-    def get_events(self) -> List[Dict]:
+    def get_events(self) -> List[GameInfo]:
         """
         Get all events from the PlayMetrics calendar.
 
@@ -647,7 +673,7 @@ class PlayMetricsAPI:
 
         return events
 
-    def get_games(self) -> List[Dict]:
+    def get_games(self) -> List[GameInfo]:
         """
         Get games from the PlayMetrics calendar.
 
@@ -661,7 +687,7 @@ class PlayMetricsAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict]:
+    ) -> Optional[GameInfo]:
         """
         Find a game that corresponds to a recording timespan.
 
@@ -741,7 +767,7 @@ class PlayMetricsAPI:
         return None
 
     def populate_match_info(
-        self, match_info: Dict, recording_start: datetime, recording_end: datetime
+        self, match_info: GameInfo, recording_start: datetime, recording_end: datetime
     ) -> bool:
         """
         Populate match information from PlayMetrics.
@@ -811,3 +837,65 @@ class PlayMetricsAPI:
         """
         # For now, return None as the primary source should be description
         return None
+
+    async def get_calendar_events(
+        self, start_date: datetime, end_date: datetime
+    ) -> List[ApiResponse]:
+        """Get calendar events for the specified date range."""
+        try:
+            url = f"{self.BASE_URL}/teams/{self.team_id}/calendar"
+            params = {
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "end_date": end_date.strftime("%Y-%m-%d"),
+                "api_key": self.api_key,
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+
+                data = response.json()
+                return data.get("events", [])
+
+        except Exception as e:
+            logger.error(f"Error fetching calendar events: {e}")
+            return []
+
+    async def get_team_info(self) -> Optional[ApiResponse]:
+        """Get team information."""
+        try:
+            url = f"{self.BASE_URL}/teams/{self.team_id}"
+            params = {"api_key": self.api_key}
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+
+                return response.json()
+
+        except Exception as e:
+            logger.error(f"Error fetching team info: {e}")
+            return None
+
+    async def create_match_info(self, match_info: MatchInfo) -> Optional[ApiResponse]:
+        """Create a new match in PlayMetrics."""
+        try:
+            url = f"{self.BASE_URL}/teams/{self.team_id}/matches"
+            params = {"api_key": self.api_key}
+            data = {
+                "opponent": match_info.opponent,
+                "date": match_info.date.strftime("%Y-%m-%d"),
+                "time": match_info.time.strftime("%H:%M"),
+                "location": match_info.location,
+                "home_away": match_info.home_away,
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, params=params, json=data)
+                response.raise_for_status()
+
+                return response.json()
+
+        except Exception as e:
+            logger.error(f"Error creating match: {e}")
+            return None

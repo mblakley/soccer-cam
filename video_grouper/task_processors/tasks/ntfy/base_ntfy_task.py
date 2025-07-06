@@ -7,7 +7,7 @@ This provides the common interface and functionality for all NTFY tasks.
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TypedDict, Union
 from datetime import datetime
 from dataclasses import dataclass, field
 
@@ -17,6 +17,27 @@ from video_grouper.utils.config import Config
 logger = logging.getLogger(__name__)
 
 
+class TaskMetadata(TypedDict, total=False):
+    """Represents metadata for NTFY tasks."""
+
+    # Task-specific metadata
+    task_id: str
+    created_at: str
+    expires_at: str
+    priority: str
+
+    # Question-specific metadata
+    question_type: str  # "team_info", "game_start", "game_end", etc.
+    required_fields: list[str]
+
+    # Response metadata
+    response_count: int
+    last_response: str
+
+    # Custom metadata fields
+    custom_fields: dict[str, Union[str, int, float, bool]]
+
+
 @dataclass
 class NtfyTaskResult:
     """Result of processing an NTFY task."""
@@ -24,7 +45,7 @@ class NtfyTaskResult:
     success: bool
     should_continue: bool = False
     message: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: TaskMetadata = field(default_factory=dict)
 
 
 class BaseNtfyTask(ABC):
@@ -36,7 +57,7 @@ class BaseNtfyTask(ABC):
     """
 
     def __init__(
-        self, group_dir: str, config: Config, metadata: Optional[Dict[str, Any]] = None
+        self, group_dir: str, config: Config, metadata: Optional[TaskMetadata] = None
     ):
         """
         Initialize the base NTFY task.

@@ -564,9 +564,9 @@ deviceType=IPC"""
         )
 
         info = await camera.get_device_info()
-        assert info["deviceName"] == "Test Camera"
-        assert info["firmwareVersion"] == "1.0.0"
-        assert info["deviceType"] == "IPC"
+        assert info["device_name"] == "Test Camera"
+        assert info["firmware_version"] == "1.0.0"
+        assert info["device_type"] == "IPC"
 
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()
@@ -599,7 +599,12 @@ deviceType=IPC"""
         )
 
         info = await camera.get_device_info()
-        assert info == {}
+        # Should return empty DeviceInfo with available data
+        assert info["device_name"] == ""
+        assert info["device_type"] == ""
+        assert info["firmware_version"] == ""
+        assert info["ip_address"] == "192.168.1.100"
+        assert info["manufacturer"] == "Dahua"
 
         # Verify the mock was called with the correct URL
         mock_client.get.assert_called_once()

@@ -9,7 +9,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import asyncio
 import pytz
 
-from .base import Camera
+from .base import Camera, DeviceInfo
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
@@ -28,7 +28,7 @@ class DahuaCamera(Camera):
         self.username = config.username
         self.password = config.password
         self._state_file = get_camera_state_path(storage_path)
-        self._connection_events: List[Dict[str, Any]] = []
+        self._connection_events: List[ConnectionEvent] = []
         self._is_connected = False
         self._log_dir = os.path.join(self.storage_path, "camera_http_logs")
         os.makedirs(self._log_dir, exist_ok=True)
@@ -537,31 +537,66 @@ class DahuaCamera(Camera):
             logger.error(f"Error getting recording status: {e}")
             return False
 
-    async def get_device_info(self) -> Dict[str, Any]:
+    async def get_device_info(self) -> DeviceInfo:
         """Get device information from the camera."""
         try:
             url = f"http://{self.device_ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
             client = self._client or httpx.AsyncClient()
             try:
-                response = await client.get(
-                    url, auth=httpx.DigestAuth(self.username, self.password)
-                )
+                auth = httpx.DigestAuth(self.username, self.password)
+                response = await client.get(url, auth=auth)
                 await self._log_http_call("get_device_info", response.request, response)
+
                 if response.status_code == 200:
+                    # Parse the response text to extract device info
                     lines = response.text.strip().split("\n")
-                    info = {}
+                    device_info = {}
+
                     for line in lines:
                         if "=" in line:
                             key, value = line.split("=", 1)
-                            info[key.strip()] = value.strip()
-                    return info
-                return {}
+                            device_info[key.strip()] = value.strip()
+
+                    # Map the parsed data to our DeviceInfo structure
+                    return DeviceInfo(
+                        device_name=device_info.get("deviceName", ""),
+                        device_type=device_info.get("deviceType", ""),
+                        firmware_version=device_info.get("firmwareVersion", ""),
+                        serial_number=device_info.get("serialNumber", ""),
+                        ip_address=self.device_ip,
+                        mac_address=device_info.get("macAddress", ""),
+                        model=device_info.get("model", ""),
+                        manufacturer=device_info.get("manufacturer", "Dahua"),
+                    )
+                else:
+                    logger.error(f"Failed to get device info: {response.status_code}")
+                    # Return empty DeviceInfo with available data
+                    return DeviceInfo(
+                        device_name="",
+                        device_type="",
+                        firmware_version="",
+                        serial_number="",
+                        ip_address=self.device_ip,
+                        mac_address="",
+                        model="",
+                        manufacturer="Dahua",
+                    )
             finally:
                 if not self._client:
                     await client.aclose()
         except Exception as e:
             logger.error(f"Error getting device info: {e}")
-            return {}
+            # Return empty DeviceInfo with available data
+            return DeviceInfo(
+                device_name="",
+                device_type="",
+                firmware_version="",
+                serial_number="",
+                ip_address=self.device_ip,
+                mac_address="",
+                model="",
+                manufacturer="Dahua",
+            )
 
     @property
     def connection_events(self) -> List[Tuple[datetime, str]]:

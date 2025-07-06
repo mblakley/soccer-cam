@@ -1,6 +1,19 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, TypedDict
 from datetime import datetime
+
+
+class DeviceInfo(TypedDict):
+    """Represents device information from a camera."""
+
+    device_name: str
+    device_type: str
+    firmware_version: str
+    serial_number: str
+    ip_address: str
+    mac_address: str
+    model: str
+    manufacturer: str
 
 
 class Camera(ABC):
@@ -37,7 +50,7 @@ class Camera(ABC):
         pass
 
     @abstractmethod
-    async def get_device_info(self) -> Dict[str, Any]:
+    async def get_device_info(self) -> DeviceInfo:
         """Get device information from the camera."""
         pass
 

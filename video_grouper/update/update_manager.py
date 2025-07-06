@@ -6,9 +6,31 @@ import logging
 import win32serviceutil
 import tempfile
 import shutil
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, TypedDict, Union
 
 logger = logging.getLogger(__name__)
+
+
+class VersionInfo(TypedDict, total=False):
+    """Represents version information from the update server."""
+
+    # Version info
+    version: str
+    build_number: int
+    release_date: str
+
+    # Download info
+    download_url: str
+    file_size: int
+    checksum: str
+
+    # Release info
+    release_notes: str
+    changelog: list[str]
+    is_mandatory: bool
+
+    # Custom fields
+    custom_fields: dict[str, Union[str, int, float, bool]]
 
 
 class UpdateError(Exception):
@@ -56,7 +78,7 @@ class UpdateManager:
             10.0, connect=5.0
         )  # 10 second timeout, 5 second connect timeout
 
-    async def check_for_updates(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    async def check_for_updates(self) -> Tuple[bool, Optional[VersionInfo]]:
         """
         Check if a new version is available.
         Returns a tuple of (has_update, version_info).
@@ -132,7 +154,7 @@ class UpdateManager:
                 raise UpdateDownloadError(f"Failed to download file: {e}")
             raise
 
-    async def download_update(self, version_info: Dict[str, Any]) -> bool:
+    async def download_update(self, version_info: VersionInfo) -> bool:
         """Download the new version with error handling."""
         try:
             # Download service executable

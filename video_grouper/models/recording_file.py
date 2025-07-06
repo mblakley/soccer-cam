@@ -4,9 +4,24 @@ Recording file model for camera file tracking.
 
 import logging
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, TypedDict, Union
 
 logger = logging.getLogger(__name__)
+
+
+class Metadata(TypedDict, total=False):
+    """Represents metadata for a recording file."""
+
+    # Camera-specific metadata
+    channel: str
+    stream_type: str  # "Main" or "Sub"
+    file_size: int
+    duration: str
+    frame_rate: str
+    resolution: str
+
+    # Custom metadata fields
+    custom_fields: dict[str, Union[str, int, float, bool]]
 
 
 class RecordingFile:
@@ -18,7 +33,7 @@ class RecordingFile:
         end_time: datetime,
         file_path: str,
         status: str = "pending",
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: Optional[Metadata] = None,
         skip: bool = False,
     ):
         """Initialize a recording file.
@@ -59,7 +74,7 @@ class RecordingFile:
         """Returns the expected path for the MP4 file."""
         return self.file_path.replace(".dav", ".mp4")
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Union[str, int, bool, Metadata, None]]:
         """Convert the recording file to a dictionary for serialization."""
         return {
             "file_path": self.file_path,
@@ -75,7 +90,9 @@ class RecordingFile:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RecordingFile":
+    def from_dict(
+        cls, data: dict[str, Union[str, int, bool, Metadata, None]]
+    ) -> "RecordingFile":
         """Create a RecordingFile from a dictionary."""
         start_time = (
             datetime.fromisoformat(data["start_time"])
