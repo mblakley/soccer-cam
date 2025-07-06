@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 from ..utils.locking import FileLock
+from ..utils.paths import get_state_file_path
 from .recording_file import RecordingFile
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ class DirectoryState:
 
     def __init__(self, directory_path: str):
         self.directory_path = directory_path
-        self.state_file_path = os.path.join(directory_path, "state.json")
+        self.state_file_path = get_state_file_path(directory_path)
         self.files: dict[str, RecordingFile] = {}
         self._lock = asyncio.Lock()
         self.status: str = "pending"

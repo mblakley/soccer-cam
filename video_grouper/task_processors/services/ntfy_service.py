@@ -13,6 +13,7 @@ from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.models import MatchInfo
 from video_grouper.utils.config import NtfyConfig
 from ..tasks.ntfy.enums import NtfyInputType, NtfyStatus
+from ...utils.paths import get_ntfy_service_state_path
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,15 @@ class NtfyService:
         # State tracking for pending user inputs
         self._pending_inputs: Dict[str, Dict[str, Any]] = {}
         self._processed_dirs: Set[str] = set()
-        self._state_file = os.path.join(storage_path, "ntfy_service_state.json")
+        self._state_file = get_ntfy_service_state_path(storage_path)
 
         # For handling direct responses to prompts
         self._response_events: Dict[str, asyncio.Event] = {}
         self._response_data: Dict[str, Optional[str]] = {}
+
+        self._state: Dict[str, Any] = {}
+        self._lock = asyncio.Lock()
+        self._initialized = False
 
         self._initialize_api()
         self._load_state()

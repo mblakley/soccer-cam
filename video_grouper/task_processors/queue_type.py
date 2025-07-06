@@ -15,6 +15,7 @@ class QueueType(Enum):
     DOWNLOAD = "download"
     VIDEO = "video"
     UPLOAD = "upload"
+    NTFY = "ntfy"
 
     def __str__(self) -> str:
         """String representation of the queue type."""

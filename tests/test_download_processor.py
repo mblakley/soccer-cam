@@ -8,7 +8,7 @@ import os
 
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.models import RecordingFile
-from video_grouper.task_processors.tasks import CombineTask
+from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.utils.config import (
     Config,
     CameraConfig,
@@ -74,22 +74,15 @@ class TestDownloadProcessor:
         self, temp_storage, mock_config, mock_camera
     ):
         """Test DownloadProcessor initialization."""
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        mock_video_processor = Mock()
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         assert processor.storage_path == temp_storage
         assert processor.config == mock_config
         assert processor.camera == mock_camera
-        assert processor.video_processor is None
-
-    @pytest.mark.asyncio
-    async def test_set_video_processor(self, temp_storage, mock_config, mock_camera):
-        """Test setting video processor reference."""
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
-        mock_video = Mock()
-
-        processor.set_video_processor(mock_video)
-
-        assert processor.video_processor == mock_video
+        assert processor.video_processor == mock_video_processor
 
     @pytest.mark.asyncio
     @patch("video_grouper.task_processors.download_processor.DirectoryState")
@@ -115,11 +108,12 @@ class TestDownloadProcessor:
         mock_camera.download_file.return_value = True
 
         # Create mock video processor
-        mock_video = Mock()
-        mock_video.add_work = AsyncMock()
+        mock_video_processor = Mock()
+        mock_video_processor.add_work = AsyncMock()
 
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
-        processor.set_video_processor(mock_video)
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         # Process the download
         await processor.process_item(recording_file)
@@ -127,10 +121,10 @@ class TestDownloadProcessor:
         mock_camera.download_file.assert_called_once_with(
             file_path="/test.dav", local_path="/test/group/test.dav"
         )
-        mock_video.add_work.assert_called_once()
+        mock_video_processor.add_work.assert_called_once()
 
         # Verify combine task was queued
-        queued_task = mock_video.add_work.call_args[0][0]
+        queued_task = mock_video_processor.add_work.call_args[0][0]
         assert isinstance(queued_task, CombineTask)
         assert queued_task.group_dir == os.path.dirname(recording_file.file_path)
 
@@ -166,11 +160,12 @@ class TestDownloadProcessor:
         mock_camera.download_file.return_value = True
 
         # Create mock video processor
-        mock_video = Mock()
-        mock_video.add_work = AsyncMock()
+        mock_video_processor = Mock()
+        mock_video_processor.add_work = AsyncMock()
 
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
-        processor.set_video_processor(mock_video)
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         # Process the download
         await processor.process_item(recording_file)
@@ -180,7 +175,7 @@ class TestDownloadProcessor:
         )
 
         # Verify no combine task was queued since group is not ready
-        mock_video.add_work.assert_not_called()
+        mock_video_processor.add_work.assert_not_called()
 
         # Verify file status was updated
         mock_dir_state_instance.update_file_state.assert_any_call(
@@ -211,7 +206,10 @@ class TestDownloadProcessor:
         # Mock failed download
         mock_camera.download_file.return_value = False
 
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        mock_video_processor = Mock()
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         # Process the download
         await processor.process_item(recording_file)
@@ -247,7 +245,10 @@ class TestDownloadProcessor:
         # Mock download raising exception
         mock_camera.download_file.side_effect = Exception("Download error")
 
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        mock_video_processor = Mock()
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         # Process the download - should handle exception gracefully
         await processor.process_item(recording_file)
@@ -281,7 +282,10 @@ class TestDownloadProcessor:
         # Mock successful download
         mock_camera.download_file.return_value = True
 
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        mock_video_processor = Mock()
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
         # Don't set video processor
 
         # Process the download
@@ -299,7 +303,10 @@ class TestDownloadProcessor:
 
     def test_get_item_key_recording_file(self, temp_storage, mock_config, mock_camera):
         """Test getting unique key for RecordingFile."""
-        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        mock_video_processor = Mock()
+        processor = DownloadProcessor(
+            temp_storage, mock_config, mock_camera, mock_video_processor
+        )
 
         recording_file = RecordingFile(
             start_time=datetime(2023, 1, 1, 10, 0, 0),

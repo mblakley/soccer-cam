@@ -86,7 +86,9 @@ class AutocamRunner(QRunnable):
     def run(self):
         try:
             # Assuming run_autocam_on_file returns True on success, False on failure
-            success = run_autocam_on_file(self.input_path, self.output_path)
+            success = run_autocam_on_file(
+                self.config.autocam, self.input_path, self.output_path
+            )
             self.signals.finished.emit(self.group_dir, success)
         except Exception as e:
             logger.error(f"An error occurred during Once Autocam automation: {e}")

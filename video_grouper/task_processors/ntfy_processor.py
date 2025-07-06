@@ -21,9 +21,10 @@ from dataclasses import dataclass, field
 from .services.ntfy_service import NtfyService
 from .tasks.ntfy import BaseNtfyTask, NtfyTaskFactory
 from video_grouper.models import MatchInfo, DirectoryState
-from .polling_processor_base import PollingProcessor
+from .base_queue_processor import QueueProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.youtube_upload import get_playlist_name_from_mapping
+from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class NtfyTaskWrapper:
     response_at: Optional[datetime] = None
 
 
-class NtfyQueueProcessor(PollingProcessor):
+class NtfyProcessor(QueueProcessor):
     """
     Central coordinator for NTFY questions and responses.
 
@@ -57,6 +58,7 @@ class NtfyQueueProcessor(PollingProcessor):
         config: Config,
         ntfy_service: NtfyService,
         poll_interval: int = 30,
+        video_processor: Optional[Any] = None,
     ):
         """
         Initialize the NTFY queue processor.
@@ -66,14 +68,14 @@ class NtfyQueueProcessor(PollingProcessor):
             config: Configuration object
             ntfy_service: NTFY service instance
             poll_interval: How often to check for responses (in seconds)
+            video_processor: Reference to video processor (default None)
         """
-        super().__init__(storage_path, config, poll_interval)
+        super().__init__(storage_path, config)
         self.ntfy_service = ntfy_service
+        self.poll_interval = poll_interval
+        self.video_processor = video_processor
 
-        # References to other processors to queue work
-        self.video_processor = None
-
-        # Task queue and tracking
+        # Task queue and tracking (separate from the QueueProcessor queue)
         self._task_queue: List[NtfyTaskWrapper] = []
         self._sent_tasks: Dict[str, NtfyTaskWrapper] = {}
         self._pending_responses: Dict[str, asyncio.Event] = {}
@@ -88,9 +90,10 @@ class NtfyQueueProcessor(PollingProcessor):
         # State tracking
         self._stopping = False
 
-    def set_video_processor(self, video_processor):
-        """Set reference to video processor to queue work."""
-        self.video_processor = video_processor
+    @property
+    def queue_type(self) -> QueueType:
+        """Return the queue type for this processor."""
+        return QueueType.NTFY
 
     async def start(self) -> None:
         """Start the NTFY queue processor."""
@@ -102,29 +105,34 @@ class NtfyQueueProcessor(PollingProcessor):
         # Process any pending requests from startup
         await self._process_pending_requests_on_startup()
 
-        # Start the main polling loop
+        # Start the main queue processing loop
         await super().start()
 
-    async def discover_work(self) -> None:
+    async def process_item(self, item: BaseNtfyTask) -> None:
         """
-        Check for new tasks to send and process any completed tasks.
-        This is the main work of the NTFY queue processor.
-        """
-        logger.debug("NTFY_QUEUE: Checking for new tasks to send")
+        Process a single NTFY task.
 
+        Args:
+            item: BaseNtfyTask to process
+        """
         try:
-            # Send any pending tasks
-            await self._send_pending_tasks()
+            logger.info(f"NTFY: Processing task: {item}")
 
-            # Check for completed tasks and process them
-            await self._process_completed_tasks()
+            # Add the task to our internal queue for NTFY processing
+            await self.add_task(item)
+
+            logger.info(f"NTFY: Successfully queued task: {item}")
 
         except Exception as e:
-            logger.error(f"NTFY_QUEUE: Error during work discovery: {e}")
+            logger.error(f"NTFY: Error processing task {item}: {e}")
+
+    def get_item_key(self, item: BaseNtfyTask) -> str:
+        """Get unique key for a BaseNtfyTask."""
+        return f"{item.get_task_type()}:{item.group_dir}:{hash(item)}"
 
     async def add_task(self, task: BaseNtfyTask) -> str:
         """
-        Add a task to the queue.
+        Add a task to the NTFY queue.
 
         Args:
             task: The NTFY task to add
@@ -299,6 +307,50 @@ class NtfyQueueProcessor(PollingProcessor):
                     f"Error processing completed task {task_wrapper.task_id}: {e}"
                 )
 
+    async def _run(self) -> None:
+        """Main processing loop - override to handle NTFY-specific polling."""
+        logger.info(f"{self.__class__.__name__}: Starting NTFY processing loop")
+
+        while not self._shutdown_event.is_set():
+            try:
+                # Process any items from the QueueProcessor queue
+                if self._queue is not None and not self._queue.empty():
+                    item = await self._queue.get()
+
+                    # Check for sentinel value (None) to exit cleanly
+                    if item is None:
+                        logger.debug(
+                            f"{self.__class__.__name__}: Received sentinel value, exiting"
+                        )
+                        break
+
+                    logger.info(f"{self.__class__.__name__}: Processing item: {item}")
+                    await self.process_item(item)
+
+                    # Mark as done and remove from queued items
+                    self._queue.task_done()
+                    item_key = self.get_item_key(item)
+                    self._queued_items.discard(item_key)
+                    await self.save_state()
+                    logger.info(
+                        f"{self.__class__.__name__}: Completed processing item: {item}"
+                    )
+
+                # Handle NTFY-specific work (send pending tasks, process responses)
+                await self._send_pending_tasks()
+                await self._process_completed_tasks()
+
+                # Wait before next iteration
+                await asyncio.sleep(self.poll_interval)
+
+            except Exception as e:
+                logger.error(
+                    f"{self.__class__.__name__}: Error in NTFY processing loop: {e}"
+                )
+                await asyncio.sleep(5)
+
+        logger.info(f"{self.__class__.__name__}: NTFY processing loop ended")
+
     async def _process_pending_requests_on_startup(self) -> None:
         """Process any pending NTFY requests on startup."""
         from .tasks.ntfy.enums import NtfyStatus
@@ -461,7 +513,7 @@ class NtfyQueueProcessor(PollingProcessor):
         # Stop the response listener
         await self._stop_response_listener()
 
-        # Stop the main polling loop
+        # Stop the main queue processing loop
         await super().stop()
 
     async def request_match_info_for_directory(

@@ -4,12 +4,14 @@ Combine task for combining multiple DAV files into a single MP4 video.
 
 import os
 import logging
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import List, Dict, Any
 from dataclasses import dataclass
 import aiofiles
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
+from video_grouper.utils.ffmpeg_utils import combine_videos
+from video_grouper.utils.paths import get_combined_video_path, get_file_list_path
 
 logger = logging.getLogger(__name__)
 
@@ -28,38 +30,6 @@ class CombineTask(BaseFfmpegTask):
     def task_type(self) -> str:
         """Return the specific task type identifier."""
         return "combine"
-
-    def get_command(self) -> List[str]:
-        """
-        Return the FFmpeg command to combine the DAV files.
-
-        Note: This method returns the basic command structure, but the actual
-        execution requires creating a filelist.txt file first. The execute()
-        method should be overridden to handle this.
-
-        Returns:
-            FFmpeg command as list of strings
-        """
-        combined_path = os.path.join(self.group_dir, "combined.mp4")
-        file_list_path = os.path.join(self.group_dir, "filelist.txt")
-
-        return [
-            "ffmpeg",
-            "-y",  # Overwrite output file
-            "-f",
-            "concat",  # Use concat demuxer
-            "-safe",
-            "0",  # Allow unsafe file names
-            "-i",
-            file_list_path,  # Input file list
-            "-c:v",
-            "copy",  # Copy video stream
-            "-c:a",
-            "aac",  # Re-encode audio to AAC
-            "-b:a",
-            "192k",  # Audio bitrate
-            combined_path,
-        ]
 
     def get_item_path(self) -> str:
         """Return the group directory path."""
@@ -81,16 +51,7 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             Path where the combined.mp4 file will be created
         """
-        return os.path.join(self.group_dir, "combined.mp4")
-
-    def get_file_list_path(self) -> str:
-        """
-        Get the path for the temporary filelist.txt file.
-
-        Returns:
-            Path for the filelist.txt file
-        """
-        return os.path.join(self.group_dir, "filelist.txt")
+        return get_combined_video_path(self.group_dir)
 
     def get_dav_files(self) -> List[str]:
         """
@@ -108,14 +69,9 @@ class CombineTask(BaseFfmpegTask):
             pass
         return dav_files
 
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
+    async def execute(self) -> bool:
         """
         Execute the combine task with proper file list creation and handle post-actions.
-
-        Args:
-            queue_task: Function to queue additional tasks
 
         Returns:
             True if command succeeded, False otherwise
@@ -125,7 +81,8 @@ class CombineTask(BaseFfmpegTask):
             await self._handle_task_failure()
             return False
 
-        file_list_path = self.get_file_list_path()
+        file_list_path = get_file_list_path(self.group_dir)
+        output_path = self.get_output_path()
 
         try:
             # Create the file list for ffmpeg concat
@@ -134,11 +91,11 @@ class CombineTask(BaseFfmpegTask):
                     # Use relative paths for the concat file
                     await f.write(f"file '{os.path.basename(dav_file)}'\n")
 
-            # Execute the ffmpeg command
-            success = await super().execute(queue_task)
+            # Execute the ffmpeg command using the utility function
+            success = await combine_videos(file_list_path, output_path)
 
             if success:
-                await self._handle_post_combine_actions(queue_task)
+                await self._handle_post_combine_actions()
             else:
                 await self._handle_task_failure()
 
@@ -156,9 +113,7 @@ class CombineTask(BaseFfmpegTask):
             except Exception:
                 pass
 
-    async def _handle_post_combine_actions(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> None:
+    async def _handle_post_combine_actions(self) -> None:
         """Handle post-combine actions like updating status and checking for trim readiness."""
         try:
             dir_state = DirectoryState(self.group_dir)

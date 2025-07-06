@@ -1,11 +1,19 @@
 import os
 import logging
 
-from .polling_processor_base import PollingProcessor
-from video_grouper.models import DirectoryState
-from video_grouper.models import RecordingFile, MatchInfo
-from .tasks.video import CombineTask, TrimTask
-from .tasks.upload import YoutubeUploadTask
+from .base_polling_processor import PollingProcessor
+from .download_processor import DownloadProcessor
+from .video_processor import VideoProcessor
+from .upload_processor import UploadProcessor
+from ..models import DirectoryState, RecordingFile
+from ..models.match_info import MatchInfo
+from ..task_processors.tasks.video import CombineTask, TrimTask
+from ..task_processors.tasks.upload import YoutubeUploadTask
+from ..utils.paths import (
+    get_state_file_path,
+    get_combined_video_path,
+    get_match_info_path,
+)
 from .services import (
     TeamSnapService,
     PlayMetricsService,
@@ -24,13 +32,21 @@ class StateAuditor(PollingProcessor):
     Scans the shared_data directory for state.json files and queues appropriate tasks.
     """
 
-    def __init__(self, storage_path: str, config: Config, poll_interval: int = 60):
+    def __init__(
+        self,
+        storage_path: str,
+        config: Config,
+        download_processor: DownloadProcessor,
+        video_processor: VideoProcessor,
+        upload_processor: UploadProcessor,
+        poll_interval: int = 60,
+        ntfy_processor=None,
+    ):
         super().__init__(storage_path, config, poll_interval)
-        # References to other processors to queue work
-        self.download_processor = None
-        self.video_processor = None
-        self.upload_processor = None
-        self.ntfy_queue_processor = None
+        self.download_processor = download_processor
+        self.video_processor = video_processor
+        self.upload_processor = upload_processor
+        self.ntfy_processor = ntfy_processor
 
         # Initialize API services
         self.teamsnap_service = TeamSnapService(config.teamsnap, config.app)
@@ -49,19 +65,6 @@ class StateAuditor(PollingProcessor):
 
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
-
-    def set_processors(
-        self,
-        download_processor,
-        video_processor,
-        upload_processor,
-        ntfy_queue_processor=None,
-    ):
-        """Set references to other processors to queue work."""
-        self.download_processor = download_processor
-        self.video_processor = video_processor
-        self.upload_processor = upload_processor
-        self.ntfy_queue_processor = ntfy_queue_processor
 
     async def discover_work(self) -> None:
         """
@@ -83,7 +86,7 @@ class StateAuditor(PollingProcessor):
 
     async def _audit_directory(self, group_dir: str) -> None:
         """Audit a single directory and queue appropriate tasks."""
-        state_file_path = os.path.join(group_dir, "state.json")
+        state_file_path = get_state_file_path(group_dir)
         if not os.path.exists(state_file_path):
             return
 
@@ -110,22 +113,22 @@ class StateAuditor(PollingProcessor):
 
             # Check if ready for combining
             if dir_state.is_ready_for_combining():
-                combined_path = os.path.join(group_dir, "combined.mp4")
+                combined_path = get_combined_video_path(group_dir)
                 if not os.path.exists(combined_path):
                     if self.video_processor:
                         await self.video_processor.add_work(CombineTask(group_dir))
 
             # Check for trimming (combined status with match info processing)
             if dir_state.status == "combined":
-                combined_path = os.path.join(group_dir, "combined.mp4")
+                combined_path = get_combined_video_path(group_dir)
                 if os.path.exists(combined_path):
                     logger.info(f"STATE_AUDITOR: Found combined directory: {group_dir}")
 
                     # Check if we're waiting for user input via NTFY queue processor
                     is_waiting = False
-                    if self.ntfy_queue_processor:
+                    if self.ntfy_processor:
                         is_waiting = (
-                            self.ntfy_queue_processor.ntfy_service.is_waiting_for_input(
+                            self.ntfy_processor.ntfy_service.is_waiting_for_input(
                                 group_dir
                             )
                         )
@@ -140,7 +143,7 @@ class StateAuditor(PollingProcessor):
                         )
 
                         # Check if match info is populated
-                        match_info_path = os.path.join(group_dir, "match_info.ini")
+                        match_info_path = get_match_info_path(group_dir)
                         if os.path.exists(match_info_path):
                             match_info = MatchInfo.from_file(match_info_path)
                             if match_info and match_info.is_populated():
@@ -170,8 +173,8 @@ class StateAuditor(PollingProcessor):
                                         f"STATE_AUDITOR: Team info populated but timing info missing for {group_dir}, queuing NTFY request"
                                     )
                                     # Queue NTFY request for timing information
-                                    if self.ntfy_queue_processor:
-                                        await self.ntfy_queue_processor.request_match_info_for_directory(
+                                    if self.ntfy_processor:
+                                        await self.ntfy_processor.request_match_info_for_directory(
                                             group_dir, combined_path, force=False
                                         )
                                 else:
@@ -203,10 +206,18 @@ class StateAuditor(PollingProcessor):
                         )
 
             # Handle cleanup tasks
-            await self._handle_cleanup(group_dir, dir_state)
+            await self._handle_cleanup(group_dir)
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
+
+    async def _handle_cleanup(self, group_dir: str) -> None:
+        """Handle cleanup tasks for a directory."""
+        try:
+            # Let the cleanup service handle any cleanup tasks
+            await self.cleanup_service.process_directory(group_dir)
+        except Exception as e:
+            logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
 
     async def stop(self) -> None:
         """Stop the state auditor and clean up services."""

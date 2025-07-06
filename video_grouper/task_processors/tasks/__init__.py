@@ -2,7 +2,7 @@
 
 # Base classes
 from .base_task import BaseTask
-from .queue_type import QueueType
+from ..queue_type import QueueType
 
 # Download tasks
 from .download import (

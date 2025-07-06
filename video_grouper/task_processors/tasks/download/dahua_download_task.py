@@ -4,7 +4,7 @@ Dahua download task for downloading files from Dahua cameras.
 
 import os
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -70,14 +70,9 @@ class DahuaDownloadTask(BaseDownloadTask):
             "metadata": self.metadata or {},
         }
 
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
+    async def execute(self) -> bool:
         """
         Execute the download task.
-
-        Args:
-            queue_task: Function to queue additional tasks
 
         Returns:
             True if download succeeded, False otherwise
@@ -108,15 +103,6 @@ class DahuaDownloadTask(BaseDownloadTask):
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {self.remote_file_path} to {self.local_file_path}"
                 )
-
-                # Queue combine task if this is a video file and we have a queue function
-                if self.local_file_path.endswith(".dav") and queue_task:
-                    from ..video import CombineTask
-
-                    group_dir = os.path.dirname(self.local_file_path)
-                    combine_task = CombineTask(group_dir=group_dir)
-                    await queue_task(combine_task)
-                    logger.info(f"DOWNLOAD: Queued combine task for {group_dir}")
 
                 return True
             else:

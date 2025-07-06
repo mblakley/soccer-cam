@@ -12,6 +12,7 @@ import pytz
 from .base import Camera
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
+from video_grouper.utils.paths import get_camera_state_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +23,13 @@ class DahuaCamera(Camera):
     def __init__(self, config: CameraConfig, storage_path: str, client=None):
         """Initialize the Dahua camera with configuration."""
         self.config = config
-        self.ip = self.config.device_ip
-        self.username = self.config.username
-        self.password = self.config.password
         self.storage_path = storage_path
+        self.device_ip = config.device_ip
+        self.username = config.username
+        self.password = config.password
+        self._state_file = get_camera_state_path(storage_path)
+        self._connection_events: List[Dict[str, Any]] = []
         self._is_connected = False
-        self._connection_events = []
-        self._state_file = os.path.join(self.storage_path, "camera_state.json")
         self._log_dir = os.path.join(self.storage_path, "camera_http_logs")
         os.makedirs(self._log_dir, exist_ok=True)
         self._client = client
@@ -138,8 +139,8 @@ class DahuaCamera(Camera):
         """Check if the camera is available."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/recordManager.cgi?action=getCaps"
-            logger.info(f"Checking availability of camera at {self.ip}")
+            url = f"http://{self.device_ip}/cgi-bin/recordManager.cgi?action=getCaps"
+            logger.info(f"Checking availability of camera at {self.device_ip}")
 
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -191,11 +192,11 @@ class DahuaCamera(Camera):
                             "message": f"Connection failed with status code: {response.status_code}",
                         }
                         self._connection_events.append(event)
-                        logger.info(f"Camera is not available at {self.ip}")
+                        logger.info(f"Camera is not available at {self.device_ip}")
                         self._save_state()
                     return False
             except httpx.ConnectError as e:
-                logger.info(f"Unable to connect to camera at {self.ip}: {e}")
+                logger.info(f"Unable to connect to camera at {self.device_ip}: {e}")
                 if self._is_connected:
                     self._is_connected = False
                     event: ConnectionEvent = {
@@ -207,7 +208,7 @@ class DahuaCamera(Camera):
                     self._save_state()
                 return False
             except httpx.RequestError as e:
-                logger.info(f"Request to camera at {self.ip} failed")
+                logger.info(f"Request to camera at {self.device_ip} failed")
                 if self._is_connected:
                     self._is_connected = False
                     event: ConnectionEvent = {
@@ -256,7 +257,7 @@ class DahuaCamera(Camera):
         """Get list of recording files from the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=factory.create"
+            url = f"http://{self.device_ip}/cgi-bin/mediaFileFind.cgi?action=factory.create"
 
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -285,7 +286,7 @@ class DahuaCamera(Camera):
                 start_time_str = start_time.strftime("%Y-%m-%d%%20%H:%M:%S")
                 end_time_str = end_time.strftime("%Y-%m-%d%%20%H:%M:%S")
 
-                findfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_str}&condition.EndTime={end_time_str}&condition.VideoStream=Main"
+                findfile_url = f"http://{self.device_ip}/cgi-bin/mediaFileFind.cgi?action=findFile&object={object_id}&condition.Channel=1&condition.Types[0]=dav&condition.StartTime={start_time_str}&condition.EndTime={end_time_str}&condition.VideoStream=Main"
                 response = await client.get(findfile_url, auth=auth)
                 await self._log_http_call(
                     "get_file_list_find", response.request, response
@@ -296,7 +297,7 @@ class DahuaCamera(Camera):
                     return []
 
                 # Get the next files
-                nextfile_url = f"http://{self.ip}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100"
+                nextfile_url = f"http://{self.device_ip}/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={object_id}&count=100"
                 response = await client.get(nextfile_url, auth=auth)
                 await self._log_http_call(
                     "get_file_list_next", response.request, response
@@ -352,7 +353,7 @@ class DahuaCamera(Camera):
         """Get size of a file on the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{file_path}"
+            url = f"http://{self.device_ip}/cgi-bin/RPC_Loadfile{file_path}"
 
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -396,7 +397,7 @@ class DahuaCamera(Camera):
             )
 
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{file_path}"
+            url = f"http://{self.device_ip}/cgi-bin/RPC_Loadfile{file_path}"
 
             # Use the provided client if available, otherwise create a new one
             if self._client:
@@ -481,7 +482,7 @@ class DahuaCamera(Camera):
     async def start_recording(self):
         """Starts video recording on the camera."""
         try:
-            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
+            url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
             client = self._client or httpx.AsyncClient()
             try:
                 response = await client.get(
@@ -499,7 +500,7 @@ class DahuaCamera(Camera):
     async def stop_recording(self):
         """Stops video recording on the camera."""
         try:
-            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
+            url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
             client = self._client or httpx.AsyncClient()
             try:
                 response = await client.get(
@@ -517,7 +518,7 @@ class DahuaCamera(Camera):
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""
         try:
-            url = f"http://{self.ip}/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
+            url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
             client = self._client or httpx.AsyncClient()
             try:
                 response = await client.get(
@@ -539,7 +540,7 @@ class DahuaCamera(Camera):
     async def get_device_info(self) -> Dict[str, Any]:
         """Get device information from the camera."""
         try:
-            url = f"http://{self.ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
+            url = f"http://{self.device_ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
             client = self._client or httpx.AsyncClient()
             try:
                 response = await client.get(
@@ -607,7 +608,7 @@ class DahuaCamera(Camera):
             )
 
             auth = httpx.DigestAuth(self.username, self.password)
-            url = f"http://{self.ip}/cgi-bin/RPC_Loadfile{server_path}"
+            url = f"http://{self.device_ip}/cgi-bin/RPC_Loadfile{server_path}"
 
             # Use the provided client if available, otherwise create a new one
             if self._client:

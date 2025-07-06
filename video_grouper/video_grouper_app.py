@@ -9,7 +9,7 @@ from video_grouper.task_processors import (
     DownloadProcessor,
     VideoProcessor,
     UploadProcessor,
-    NtfyQueueProcessor,
+    NtfyProcessor,
 )
 
 # Configure logging
@@ -65,51 +65,50 @@ class VideoGrouperApp:
         # Get poll interval from config
         self.poll_interval = config.app.check_interval_seconds
 
-        # Initialize task processors
+        # Instantiate processors in dependency order
+        self.upload_processor = UploadProcessor(
+            storage_path=self.storage_path, config=self.config
+        )
+        self.video_processor = VideoProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            upload_processor=self.upload_processor,
+        )
+        self.download_processor = DownloadProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            camera=self.camera,
+            video_processor=self.video_processor,
+        )
+        self.ntfy_processor = None
+        if self.config.ntfy.enabled:
+            from video_grouper.task_processors.services.ntfy_service import NtfyService
+
+            ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
+            self.ntfy_processor = NtfyProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                ntfy_service=ntfy_service,
+                poll_interval=30,
+                video_processor=self.video_processor,
+            )
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
+            download_processor=self.download_processor,
+            video_processor=self.video_processor,
+            upload_processor=self.upload_processor,
             poll_interval=self.poll_interval,
+            ntfy_processor=self.ntfy_processor,
         )
-
         self.camera_poller = CameraPoller(
             storage_path=self.storage_path,
             config=self.config,
             camera=self.camera,
+            download_processor=self.download_processor,
             poll_interval=self.poll_interval,
         )
 
-        self.download_processor = DownloadProcessor(
-            storage_path=self.storage_path, config=self.config, camera=self.camera
-        )
-
-        self.video_processor = VideoProcessor(
-            storage_path=self.storage_path, config=self.config
-        )
-
-        self.upload_processor = UploadProcessor(
-            storage_path=self.storage_path, config=self.config
-        )
-
-        # Initialize NTFY queue processor (only if NTFY is enabled)
-        self.ntfy_queue_processor = None
-        if self.config.ntfy.enabled:
-            # Create NTFY service for the queue processor
-            from video_grouper.task_processors.services.ntfy_service import NtfyService
-
-            ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
-
-            self.ntfy_queue_processor = NtfyQueueProcessor(
-                storage_path=self.storage_path,
-                config=self.config,
-                ntfy_service=ntfy_service,
-                poll_interval=30,  # Check every 30 seconds
-            )
-
-        # Wire up processor dependencies
-        self._wire_processors()
-
-        # Track all processors for lifecycle management
         self.processors = [
             self.state_auditor,
             self.camera_poller,
@@ -117,38 +116,11 @@ class VideoGrouperApp:
             self.video_processor,
             self.upload_processor,
         ]
+        if self.ntfy_processor:
+            self.processors.append(self.ntfy_processor)
 
-        # Add NTFY queue processor if enabled
-        if self.ntfy_queue_processor:
-            self.processors.append(self.ntfy_queue_processor)
-
-        # Shutdown event for clean shutdown coordination
         self._shutdown_event = asyncio.Event()
-
         logger.info("VideoGrouperApp initialized with task processors")
-
-    def _wire_processors(self):
-        """Wire up the dependencies between processors."""
-        # State auditor needs references to queue work on other processors
-        self.state_auditor.set_processors(
-            download_processor=self.download_processor,
-            video_processor=self.video_processor,
-            upload_processor=self.upload_processor,
-            ntfy_queue_processor=self.ntfy_queue_processor,
-        )
-
-        # Camera poller queues work on download processor
-        self.camera_poller.set_download_processor(self.download_processor)
-
-        # Download processor queues work on video processor
-        self.download_processor.set_video_processor(self.video_processor)
-
-        # Video processor queues work on YouTube processor
-        self.video_processor.set_upload_processor(self.upload_processor)
-
-        # NTFY queue processor needs reference to video processor
-        if self.ntfy_queue_processor:
-            self.ntfy_queue_processor.set_video_processor(self.video_processor)
 
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
@@ -212,9 +184,7 @@ class VideoGrouperApp:
             "download": self.download_processor.get_queue_size(),
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
-            "ntfy": self.ntfy_queue_processor.get_queue_size()
-            if self.ntfy_queue_processor
-            else -1,
+            "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
         }
 
     def get_processor_status(self):
@@ -240,9 +210,9 @@ class VideoGrouperApp:
             if self.upload_processor._processor_task
             and not self.upload_processor._processor_task.done()
             else "stopped",
-            "ntfy_queue_processor": "running"
-            if self.ntfy_queue_processor
-            and self.ntfy_queue_processor._processor_task
-            and not self.ntfy_queue_processor._processor_task.done()
+            "ntfy_processor": "running"
+            if self.ntfy_processor
+            and self.ntfy_processor._processor_task
+            and not self.ntfy_processor._processor_task.done()
             else "stopped",
         }

@@ -41,7 +41,7 @@ class TestDahuaCameraInitialization:
     def test_init_with_config(self, mock_config, storage_path):
         """Test camera initialization with valid config."""
         camera = DahuaCamera(config=mock_config, storage_path=storage_path)
-        assert camera.ip == mock_config.device_ip
+        assert camera.device_ip == mock_config.device_ip
         assert camera.username == mock_config.username
         assert camera.password == mock_config.password
         assert camera.storage_path == storage_path

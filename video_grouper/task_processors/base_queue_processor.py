@@ -5,7 +5,11 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Dict
+
+from .queue_type import QueueType
+from video_grouper.utils.config import Config
+from video_grouper.task_processors.tasks.base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +20,7 @@ class QueueProcessor(ABC):
     Provides common functionality for queue management and state persistence.
     """
 
-    def __init__(self, storage_path: str, config: Any):
+    def __init__(self, storage_path: str, config: Config):
         """
         Initialize the queue processor.
 
@@ -34,21 +38,26 @@ class QueueProcessor(ABC):
 
         logger.info(f"Initialized {self.__class__.__name__}")
 
+    @property
     @abstractmethod
-    def get_state_file_name(self) -> str:
-        """Get the name of the state file for this processor."""
+    def queue_type(self) -> QueueType:
+        """Return the queue type for this processor."""
         pass
 
+    def get_state_file_name(self) -> str:
+        """Get the name of the state file for this processor."""
+        return f"{self.queue_type.value}_queue_state.json"
+
     @abstractmethod
-    async def process_item(self, item: Any) -> None:
+    async def process_item(self, item: BaseTask) -> None:
         """Process a single work item."""
         pass
 
-    def get_item_key(self, item: Any) -> str:
+    def get_item_key(self, item: BaseTask) -> str:
         """Get a unique key for an item to prevent duplicates."""
         return str(item)
 
-    async def add_work(self, item: Any) -> None:
+    async def add_work(self, item: BaseTask) -> None:
         """Add work to the processor's queue."""
         # Create queue if it doesn't exist
         if self._queue is None:
@@ -236,7 +245,7 @@ class QueueProcessor(ABC):
             return 0
         return self._queue.qsize()
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> Dict[str, object]:
         """Get processor status information."""
         return {
             "queue_size": self.get_queue_size(),
