@@ -5,7 +5,7 @@ from unittest.mock import Mock, AsyncMock, patch
 import pytest
 
 from video_grouper.task_processors.video_processor import VideoProcessor
-from video_grouper.task_processors.tasks import ConvertTask, CombineTask, TrimTask
+from video_grouper.task_processors.tasks import CombineTask, TrimTask
 
 
 @pytest.fixture
@@ -17,10 +17,8 @@ def temp_storage():
 
 @pytest.fixture
 def mock_config():
-    """Create a mock configuration object."""
+    """Create a mock config for testing."""
     config = Mock()
-    config.get.return_value = "10"
-    config.has_section.return_value = False
     return config
 
 
@@ -46,45 +44,6 @@ class TestVideoProcessor:
         assert processor.upload_processor == mock_upload
 
     @pytest.mark.asyncio
-    async def test_convert_task_processing(self, temp_storage, mock_config):
-        """Test processing a convert task."""
-        test_file = "/test/group/test.dav"
-
-        processor = VideoProcessor(temp_storage, mock_config)
-
-        # Create convert task and mock its execute method
-        convert_task = ConvertTask(file_path=test_file)
-
-        # Mock the task's execute method
-        with patch.object(
-            convert_task, "execute", new_callable=AsyncMock
-        ) as mock_execute:
-            mock_execute.return_value = True
-
-            await processor.process_item(convert_task)
-
-            mock_execute.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_convert_task_skipped_file(self, temp_storage, mock_config):
-        """Test processing a convert task for a skipped file."""
-        test_file = "/test/group/test.dav"
-
-        processor = VideoProcessor(temp_storage, mock_config)
-
-        convert_task = ConvertTask(file_path=test_file)
-
-        # Mock the task's execute method to return False (failed)
-        with patch.object(
-            convert_task, "execute", new_callable=AsyncMock
-        ) as mock_execute:
-            mock_execute.return_value = False
-
-            await processor.process_item(convert_task)
-
-            mock_execute.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_combine_task_processing(self, temp_storage, mock_config):
         """Test processing a combine task."""
         group_dir = "/test/group"
@@ -99,6 +58,25 @@ class TestVideoProcessor:
             combine_task, "execute", new_callable=AsyncMock
         ) as mock_execute:
             mock_execute.return_value = True
+
+            await processor.process_item(combine_task)
+
+            mock_execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_combine_task_failed(self, temp_storage, mock_config):
+        """Test processing a combine task that fails."""
+        group_dir = "/test/group"
+
+        processor = VideoProcessor(temp_storage, mock_config)
+
+        combine_task = CombineTask(group_dir=group_dir)
+
+        # Mock the task's execute method to return False (failed)
+        with patch.object(
+            combine_task, "execute", new_callable=AsyncMock
+        ) as mock_execute:
+            mock_execute.return_value = False
 
             await processor.process_item(combine_task)
 
@@ -159,10 +137,10 @@ class TestVideoProcessor:
         """Test getting unique key for FFmpegTask."""
         processor = VideoProcessor(temp_storage, mock_config)
 
-        # Test convert task
-        convert_task = ConvertTask(file_path="/test/path/test.dav")
-        key = processor.get_item_key(convert_task)
-        assert key.startswith("convert:/test/path/test.dav:")
+        # Test combine task
+        combine_task = CombineTask(group_dir="/test/group")
+        key = processor.get_item_key(combine_task)
+        assert key.startswith("combine:/test/group:")
 
         # Test trim task with new constructor
         trim_task = TrimTask(

@@ -172,7 +172,7 @@ class DirectoryState:
         return file_path in self.files
 
     def is_ready_for_combining(self) -> bool:
-        """Check if all non-skipped files are converted and ready for combining."""
+        """Check if all non-skipped files are downloaded and ready for combining."""
         if not self.files:
             return False
 
@@ -183,8 +183,8 @@ class DirectoryState:
         if not files_to_consider:
             return False
 
-        # All of the remaining files must be in the 'converted' state.
-        return all(f.status == "converted" for f in files_to_consider)
+        # All of the remaining files must be in the 'downloaded' state.
+        return all(f.status == "downloaded" for f in files_to_consider)
 
     def is_file_in_queue(self, file_path: str) -> bool:
         """Check if a file is already in the directory state."""

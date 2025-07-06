@@ -45,15 +45,34 @@ class TrimTask(BaseFfmpegTask):
 
         cmd = [
             "ffmpeg",
-            "-y",  # Overwrite output file
+            "-y",
+            "--%",
+            "-fflags",
+            "+discardcorrupt",
+            "-err_detect",
+            "ignore_err",
             "-i",
-            combined_path,  # Input file
+            combined_path,
             "-ss",
-            self.start_time,  # Start time
+            self.start_time,
             "-to",
-            self.end_time,  # End time
-            "-c",
-            "copy",  # Copy streams without re-encoding
+            self.end_time,
+            "-filter_complex",
+            "[0:v]freezedetect=n=0.003:d=1[fd];[0:v][fd]freezeframes[fr];[fr]mpdecimate,setpts=N/25/TB[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            "-r",
+            "25",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-preset",
+            "slow",
+            "-c:a",
+            "copy",
             trimmed_path,
         ]
 

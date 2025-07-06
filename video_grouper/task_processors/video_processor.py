@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class VideoProcessor(QueueProcessor):
     """
-    Task processor for video operations (convert, combine, trim).
+    Task processor for video operations (combine, trim).
     Processes FFmpeg tasks sequentially.
     """
 
@@ -30,7 +30,7 @@ class VideoProcessor(QueueProcessor):
 
     async def process_item(self, item: BaseFfmpegTask) -> None:
         """
-        Process a video task (convert, combine, or trim).
+        Process a video task (combine or trim).
 
         Args:
             item: BaseFfmpegTask to process

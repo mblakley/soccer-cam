@@ -109,15 +109,14 @@ class DahuaDownloadTask(BaseDownloadTask):
                     f"DOWNLOAD: Successfully downloaded {self.remote_file_path} to {self.local_file_path}"
                 )
 
-                # Queue conversion task if this is a video file
+                # Queue combine task if this is a video file and we have a queue function
                 if self.local_file_path.endswith(".dav") and queue_task:
-                    from ..video import ConvertTask
+                    from ..video import CombineTask
 
-                    convert_task = ConvertTask(file_path=self.local_file_path)
-                    await queue_task(convert_task)
-                    logger.info(
-                        f"DOWNLOAD: Queued convert task for {self.local_file_path}"
-                    )
+                    group_dir = os.path.dirname(self.local_file_path)
+                    combine_task = CombineTask(group_dir=group_dir)
+                    await queue_task(combine_task)
+                    logger.info(f"DOWNLOAD: Queued combine task for {group_dir}")
 
                 return True
             else:
