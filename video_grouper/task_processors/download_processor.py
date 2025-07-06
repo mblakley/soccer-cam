@@ -5,7 +5,7 @@ from typing import Any
 from .queue_processor_base import QueueProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
-from .tasks.video import ConvertTask
+from .tasks.video import CombineTask
 from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -55,11 +55,20 @@ class DownloadProcessor(QueueProcessor):
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
                 )
 
-                # After successful download, add to video processor queue for conversion
-                if self.video_processor:
-                    await self.video_processor.add_work(
-                        ConvertTask(file_path=file_path)
+                # Check if all files in the group are downloaded and ready for combining
+                if dir_state.is_ready_for_combining():
+                    logger.info(
+                        f"DOWNLOAD: Group {os.path.basename(group_dir)} is ready for combining."
                     )
+                    if self.video_processor:
+                        await self.video_processor.add_work(
+                            CombineTask(group_dir=group_dir)
+                        )
+                        logger.info(f"DOWNLOAD: Queued combine task for {group_dir}")
+                    else:
+                        logger.warning(
+                            f"DOWNLOAD: No video processor available to queue combine task for {group_dir}"
+                        )
             else:
                 await dir_state.update_file_state(file_path, status="download_failed")
                 logger.error(

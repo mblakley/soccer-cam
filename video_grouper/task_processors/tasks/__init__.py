@@ -19,7 +19,6 @@ from .upload import (
 # Video tasks
 from .video import (
     BaseFfmpegTask,
-    ConvertTask,
     CombineTask,
     TrimTask,
 )
@@ -36,7 +35,6 @@ __all__ = [
     "YoutubeUploadTask",
     # Video tasks
     "BaseFfmpegTask",
-    "ConvertTask",
     "CombineTask",
     "TrimTask",
     # Utility functions
@@ -49,9 +47,7 @@ def task_from_dict(data: dict):
     task_type = data.get("task_type", "")
 
     # Video tasks
-    if task_type == "convert":
-        return ConvertTask.from_dict(data)
-    elif task_type == "combine":
+    if task_type == "combine":
         return CombineTask.from_dict(data)
     elif task_type == "trim":
         return TrimTask.from_dict(data)

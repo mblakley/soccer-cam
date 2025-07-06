@@ -249,62 +249,6 @@ class TestStateAuditorEnhanced:
     @patch("video_grouper.task_processors.state_auditor.DirectoryState")
     @patch("os.path.exists")
     @pytest.mark.asyncio
-    async def test_cleanup_and_sync_handling(
-        self,
-        mock_exists,
-        mock_dir_state,
-        mock_ntfy,
-        mock_playmetrics,
-        mock_teamsnap,
-        test_dir,
-        mock_config,
-        tmp_path,
-    ):
-        """Test cleanup and sync handling."""
-        # Mock all the APIs
-        mock_teamsnap.return_value.enabled = True
-        mock_playmetrics.return_value.enabled = True
-        mock_playmetrics.return_value.login.return_value = True
-        mock_ntfy.return_value.enabled = True
-        mock_ntfy.return_value.initialize = AsyncMock()
-
-        # Mock directory state
-        mock_state = Mock()
-        mock_state.status = "autocam_complete"
-        # Create a mock that behaves like a dict with empty values
-        mock_files = Mock()
-        mock_files.values.return_value = []
-        mock_state.files = mock_files
-        mock_state.is_ready_for_combining.return_value = False
-        mock_dir_state.return_value = mock_state
-
-        # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
-
-        # Mock services
-        auditor.cleanup_service.should_cleanup_dav_files = Mock(return_value=True)
-        auditor.cleanup_service.cleanup_dav_files = Mock()
-
-        def mock_exists_side_effect(path):
-            return True
-
-        mock_exists.side_effect = mock_exists_side_effect
-
-        # Run audit
-        await auditor._audit_directory(str(test_dir))
-
-        # Verify cleanup was called
-        auditor.cleanup_service.should_cleanup_dav_files.assert_called_once_with(
-            str(test_dir)
-        )
-        auditor.cleanup_service.cleanup_dav_files.assert_called_once_with(str(test_dir))
-
-    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
-    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
-    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
-    @patch("video_grouper.task_processors.state_auditor.DirectoryState")
-    @patch("os.path.exists")
-    @pytest.mark.asyncio
     async def test_youtube_upload_queuing(
         self,
         mock_exists,

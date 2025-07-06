@@ -13,7 +13,6 @@ from .directory_state import DirectoryState
 # Task classes from task processors
 from video_grouper.task_processors.tasks.video import (
     BaseFfmpegTask,
-    ConvertTask,
     CombineTask,
     TrimTask,
 )
@@ -39,7 +38,6 @@ __all__ = [
     # Task classes
     "BaseFfmpegTask",
     "FFmpegTask",  # alias
-    "ConvertTask",
     "CombineTask",
     "TrimTask",
     "BaseUploadTask",

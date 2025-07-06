@@ -1,5 +1,5 @@
 """
-Combine task for combining multiple MP4 files into a single video.
+Combine task for combining multiple DAV files into a single MP4 video.
 """
 
 import os
@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 @dataclass(unsafe_hash=True)
 class CombineTask(BaseFfmpegTask):
     """
-    Task for combining multiple MP4 files in a directory into a single combined video.
+    Task for combining multiple DAV files in a directory into a single combined MP4 video.
 
-    Uses FFmpeg concat demuxer to combine files without re-encoding.
+    Uses FFmpeg concat demuxer to combine files and convert to MP4 in one step.
     """
 
     group_dir: str
@@ -31,7 +31,7 @@ class CombineTask(BaseFfmpegTask):
 
     def get_command(self) -> List[str]:
         """
-        Return the FFmpeg command to combine the MP4 files.
+        Return the FFmpeg command to combine the DAV files.
 
         Note: This method returns the basic command structure, but the actual
         execution requires creating a filelist.txt file first. The execute()
@@ -52,8 +52,12 @@ class CombineTask(BaseFfmpegTask):
             "0",  # Allow unsafe file names
             "-i",
             file_list_path,  # Input file list
-            "-c",
-            "copy",  # Copy streams without re-encoding
+            "-c:v",
+            "copy",  # Copy video stream
+            "-c:a",
+            "aac",  # Re-encode audio to AAC
+            "-b:a",
+            "192k",  # Audio bitrate
             combined_path,
         ]
 
@@ -88,21 +92,21 @@ class CombineTask(BaseFfmpegTask):
         """
         return os.path.join(self.group_dir, "filelist.txt")
 
-    def get_mp4_files(self) -> List[str]:
+    def get_dav_files(self) -> List[str]:
         """
-        Get the list of MP4 files to combine from the group directory.
+        Get the list of DAV files to combine from the group directory.
 
         Returns:
-            Sorted list of MP4 file paths
+            Sorted list of DAV file paths
         """
-        mp4_files = []
+        dav_files = []
         try:
             for filename in sorted(os.listdir(self.group_dir)):
-                if filename.endswith(".mp4") and filename != "combined.mp4":
-                    mp4_files.append(os.path.join(self.group_dir, filename))
+                if filename.endswith(".dav"):
+                    dav_files.append(os.path.join(self.group_dir, filename))
         except FileNotFoundError:
             pass
-        return mp4_files
+        return dav_files
 
     async def execute(
         self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
@@ -116,8 +120,8 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             True if command succeeded, False otherwise
         """
-        mp4_files = self.get_mp4_files()
-        if not mp4_files:
+        dav_files = self.get_dav_files()
+        if not dav_files:
             await self._handle_task_failure()
             return False
 
@@ -126,9 +130,9 @@ class CombineTask(BaseFfmpegTask):
         try:
             # Create the file list for ffmpeg concat
             async with aiofiles.open(file_list_path, "w") as f:
-                for mp4_file in mp4_files:
+                for dav_file in dav_files:
                     # Use relative paths for the concat file
-                    await f.write(f"file '{os.path.basename(mp4_file)}'\n")
+                    await f.write(f"file '{os.path.basename(dav_file)}'\n")
 
             # Execute the ffmpeg command
             success = await super().execute(queue_task)

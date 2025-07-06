@@ -4,7 +4,7 @@ import logging
 from .polling_processor_base import PollingProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile, MatchInfo
-from .tasks.video import ConvertTask, CombineTask, TrimTask
+from .tasks.video import CombineTask, TrimTask
 from .tasks.upload import YoutubeUploadTask
 from .services import (
     TeamSnapService,
@@ -108,22 +108,6 @@ class StateAuditor(PollingProcessor):
                         )
                         await self.download_processor.add_work(recording_file)
 
-                # Auto-fix: if mp4 exists mark as converted
-                elif file_obj.status in ["downloaded", "conversion_failed"]:
-                    mp4_path = file_obj.file_path.replace(".dav", ".mp4")
-                    if os.path.exists(mp4_path):
-                        logger.info(
-                            f"STATE_AUDITOR: Detected existing MP4 for {os.path.basename(file_obj.file_path)} – marking as converted"
-                        )
-                        await dir_state.update_file_state(
-                            file_obj.file_path, status="converted"
-                        )
-                    elif os.path.exists(file_obj.file_path):
-                        if self.video_processor:
-                            await self.video_processor.add_work(
-                                ConvertTask(file_obj.file_path)
-                            )
-
             # Check if ready for combining
             if dir_state.is_ready_for_combining():
                 combined_path = os.path.join(group_dir, "combined.mp4")
@@ -223,19 +207,6 @@ class StateAuditor(PollingProcessor):
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
-
-    async def _handle_cleanup(self, group_dir: str, dir_state: DirectoryState) -> None:
-        """Handle cleanup tasks for a directory."""
-        try:
-            # Clean up DAV files if appropriate
-            if self.cleanup_service.should_cleanup_dav_files(group_dir):
-                self.cleanup_service.cleanup_dav_files(group_dir)
-
-            # Clean up temporary files
-            self.cleanup_service.cleanup_temporary_files(group_dir)
-
-        except Exception as e:
-            logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
 
     async def stop(self) -> None:
         """Stop the state auditor and clean up services."""

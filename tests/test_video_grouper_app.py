@@ -8,7 +8,7 @@ import pytest
 
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
-from video_grouper.task_processors.tasks import ConvertTask, YoutubeUploadTask
+from video_grouper.task_processors.tasks import CombineTask, YoutubeUploadTask
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import (
     Config,
@@ -172,13 +172,14 @@ class TestVideoGrouperAppRefactored:
         app = VideoGrouperApp(mock_config, camera=mock_camera)
 
         try:
-            convert_task = ConvertTask(file_path="/test/path/test.dav")
+            combine_task = CombineTask(group_dir="/test/path")
 
-            await app.add_video_task(convert_task)
+            await app.add_video_task(combine_task)
 
+            # Verify the task was added to the video processor
             assert app.video_processor.get_queue_size() == 1
+
         finally:
-            # Ensure proper cleanup to prevent asyncio warnings
             await app.shutdown()
 
     @pytest.mark.asyncio
@@ -243,12 +244,12 @@ class TestVideoGrouperAppRefactored:
                 metadata={"path": "/test.dav"},
             )
 
-            convert_task = ConvertTask(file_path=test_file)
+            combine_task = CombineTask(group_dir=group_dir)
             upload_task = create_mock_youtube_upload_task(group_dir)
 
             # Add tasks to queues
             await app.add_download_task(recording_file)
-            await app.add_video_task(convert_task)
+            await app.add_video_task(combine_task)
             await app.add_youtube_task(upload_task)
 
             # Verify tasks were added

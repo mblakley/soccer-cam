@@ -4,10 +4,11 @@ import tempfile
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 import pytest
+import os
 
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.models import RecordingFile
-from video_grouper.task_processors.tasks import ConvertTask
+from video_grouper.task_processors.tasks import CombineTask
 from video_grouper.utils.config import (
     Config,
     CameraConfig,
@@ -107,6 +108,7 @@ class TestDownloadProcessor:
         # Mock DirectoryState
         mock_dir_state_instance = Mock()
         mock_dir_state_instance.update_file_state = AsyncMock()
+        mock_dir_state_instance.is_ready_for_combining = Mock(return_value=True)
         mock_directory_state.return_value = mock_dir_state_instance
 
         # Mock successful download
@@ -127,10 +129,58 @@ class TestDownloadProcessor:
         )
         mock_video.add_work.assert_called_once()
 
-        # Verify convert task was queued
+        # Verify combine task was queued
         queued_task = mock_video.add_work.call_args[0][0]
-        assert isinstance(queued_task, ConvertTask)
-        assert queued_task.file_path == recording_file.file_path
+        assert isinstance(queued_task, CombineTask)
+        assert queued_task.group_dir == os.path.dirname(recording_file.file_path)
+
+        # Verify file status was updated
+        mock_dir_state_instance.update_file_state.assert_any_call(
+            "/test/group/test.dav", status="downloading"
+        )
+        mock_dir_state_instance.update_file_state.assert_any_call(
+            "/test/group/test.dav", status="downloaded"
+        )
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.task_processors.download_processor.DirectoryState")
+    async def test_successful_download_not_ready_for_combining(
+        self, mock_directory_state, temp_storage, mock_config, mock_camera
+    ):
+        """Test successful file download when group is not ready for combining."""
+        # Create recording file
+        recording_file = RecordingFile(
+            start_time=datetime(2023, 1, 1, 10, 0, 0),
+            end_time=datetime(2023, 1, 1, 10, 5, 0),
+            file_path="/test/group/test.dav",
+            metadata={"path": "/test.dav"},
+        )
+
+        # Mock DirectoryState
+        mock_dir_state_instance = Mock()
+        mock_dir_state_instance.update_file_state = AsyncMock()
+        mock_dir_state_instance.is_ready_for_combining = Mock(return_value=False)
+        mock_directory_state.return_value = mock_dir_state_instance
+
+        # Mock successful download
+        mock_camera.download_file.return_value = True
+
+        # Create mock video processor
+        mock_video = Mock()
+        mock_video.add_work = AsyncMock()
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera)
+        processor.set_video_processor(mock_video)
+
+        # Process the download
+        await processor.process_item(recording_file)
+
+        mock_camera.download_file.assert_called_once_with(
+            file_path="/test.dav", local_path="/test/group/test.dav"
+        )
+
+        # Verify no combine task was queued since group is not ready
+        mock_video.add_work.assert_not_called()
 
         # Verify file status was updated
         mock_dir_state_instance.update_file_state.assert_any_call(
