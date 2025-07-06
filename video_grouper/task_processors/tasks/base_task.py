@@ -3,9 +3,9 @@ Base class for all tasks.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict
 
-from .queue_type import QueueType
+from ..queue_type import QueueType
 
 
 class BaseTask(ABC):
@@ -33,19 +33,14 @@ class BaseTask(ABC):
         pass
 
     @abstractmethod
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> Dict[str, object]:
         """Serialize the task for state persistence."""
         pass
 
     @abstractmethod
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
+    async def execute(self) -> bool:
         """
         Execute the task.
-
-        Args:
-            queue_task: Function to queue additional tasks
 
         Returns:
             True if task succeeded, False otherwise

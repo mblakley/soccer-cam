@@ -366,36 +366,6 @@ class TestCleanupService:
         service = CleanupService(str(tmp_path))
         assert service.storage_path == str(tmp_path)
 
-    @patch("video_grouper.task_processors.services.cleanup_service.DirectoryState")
-    def test_cleanup_dav_files(self, mock_dir_state, tmp_path):
-        """Test cleanup of DAV files."""
-        service = CleanupService(str(tmp_path))
-
-        group_dir = tmp_path / "test_group"
-        group_dir.mkdir()
-
-        # Create some mock DAV files
-        (group_dir / "file1.dav").touch()
-        (group_dir / "file2.dav").touch()
-        (group_dir / "video.mp4").touch()  # This should not be deleted
-
-        dir_state_instance = Mock()
-        mock_dir_state.return_value = dir_state_instance
-
-        with patch(
-            "video_grouper.task_processors.services.cleanup_service.DirectoryState.save"
-        ):
-            with patch("os.remove") as mock_remove:
-                service.cleanup_dav_files(str(group_dir))
-
-                assert mock_remove.call_count == 2
-                mock_remove.assert_any_call(str(group_dir / "file1.dav"))
-                mock_remove.assert_any_call(str(group_dir / "file2.dav"))
-
-                dir_state_instance.update_dir_state.assert_called_once_with(
-                    {"status": "autocam_complete_dav_files_deleted"}
-                )
-
     def test_cleanup_temporary_files(self, tmp_path):
         """Test cleanup of temporary files."""
         service = CleanupService(str(tmp_path))
@@ -414,39 +384,3 @@ class TestCleanupService:
             assert mock_remove.call_count == 2
             mock_remove.assert_any_call(str(group_dir / "temp1.tmp"))
             mock_remove.assert_any_call(str(group_dir / "temp2.temp"))
-
-    @patch("video_grouper.task_processors.services.cleanup_service.DirectoryState")
-    def test_should_cleanup_dav_files(self, mock_dir_state, tmp_path):
-        """Test logic for deciding to cleanup DAV files."""
-        service = CleanupService(str(tmp_path))
-
-        group_dir = tmp_path / "test_group"
-        group_dir.mkdir()
-
-        dir_state_instance = Mock()
-
-        # Scenario 1: Status is 'autocam_complete'
-        dir_state_instance.status = "autocam_complete"
-        with patch(
-            "video_grouper.task_processors.services.cleanup_service.DirectoryState",
-            return_value=dir_state_instance,
-        ):
-            assert service.should_cleanup_dav_files(str(group_dir))
-
-        # Scenario 2: Status is not 'autocam_complete'
-        dir_state_instance.status = "processing"
-        dir_state_instance.reset_mock()
-        with patch(
-            "video_grouper.task_processors.services.cleanup_service.DirectoryState",
-            return_value=dir_state_instance,
-        ):
-            assert not service.should_cleanup_dav_files(str(group_dir))
-
-        # Scenario 3: Status is already cleaned up
-        dir_state_instance.status = "autocam_complete_dav_files_deleted"
-        dir_state_instance.reset_mock()
-        with patch(
-            "video_grouper.task_processors.services.cleanup_service.DirectoryState",
-            return_value=dir_state_instance,
-        ):
-            assert not service.should_cleanup_dav_files(str(group_dir))

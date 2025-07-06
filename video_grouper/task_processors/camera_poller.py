@@ -1,9 +1,13 @@
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional, List
+from typing import Optional, List
 import pytz
-from .polling_processor_base import PollingProcessor
+
+from video_grouper.cameras.base import Camera
+from video_grouper.task_processors.download_processor import DownloadProcessor
+from video_grouper.utils.config import Config
+from .base_polling_processor import PollingProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
 
@@ -63,16 +67,17 @@ class CameraPoller(PollingProcessor):
     """
 
     def __init__(
-        self, storage_path: str, config: Any, camera: Any, poll_interval: int = 60
+        self,
+        storage_path: str,
+        config: Config,
+        camera: Camera,
+        download_processor: DownloadProcessor,
+        poll_interval: int = 60,
     ):
         super().__init__(storage_path, config, poll_interval)
         self.camera = camera
-        self.download_processor = None
-        self._last_processed_time = None
-
-    def set_download_processor(self, download_processor):
-        """Set reference to download processor to queue work."""
         self.download_processor = download_processor
+        self._last_processed_time = None
 
     async def discover_work(self) -> None:
         """

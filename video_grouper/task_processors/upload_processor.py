@@ -1,8 +1,8 @@
 import logging
-from typing import Any
-from .queue_processor_base import QueueProcessor
+
+from .base_queue_processor import QueueProcessor
 from .tasks.upload import BaseUploadTask
-from .task_queue_service import get_task_queue_service
+from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +13,10 @@ class UploadProcessor(QueueProcessor):
     Processes upload tasks sequentially.
     """
 
-    def __init__(self, storage_path: str, config: Any):
-        super().__init__(storage_path, config)
-
-        # Register this processor with the task queue service
-        task_queue_service = get_task_queue_service()
-        task_queue_service.set_upload_processor(self)
-
-    def get_state_file_name(self) -> str:
-        return "upload_queue_state.json"
+    @property
+    def queue_type(self) -> QueueType:
+        """Return the queue type for this processor."""
+        return QueueType.UPLOAD
 
     async def process_item(self, item: BaseUploadTask) -> None:
         """
@@ -33,11 +28,8 @@ class UploadProcessor(QueueProcessor):
         try:
             logger.info(f"UPLOAD: Processing task: {item}")
 
-            # Get the task queue service to pass to the task
-            task_queue_service = get_task_queue_service()
-
             # Execute the task using its own execute method
-            success = await item.execute(task_queue_service)
+            success = await item.execute()
 
             if success:
                 logger.info(f"UPLOAD: Successfully completed task: {item}")

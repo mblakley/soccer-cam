@@ -1,12 +1,14 @@
 import os
 import logging
-from typing import Any
 
-from .queue_processor_base import QueueProcessor
+from video_grouper.cameras.base import Camera
+from video_grouper.task_processors.video_processor import VideoProcessor
+from .base_queue_processor import QueueProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
 from .tasks.video import CombineTask
 from video_grouper.utils.config import Config
+from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +19,21 @@ class DownloadProcessor(QueueProcessor):
     Processes download queue sequentially, one file at a time.
     """
 
-    def __init__(self, storage_path: str, config: Config, camera: Any):
+    def __init__(
+        self,
+        storage_path: str,
+        config: Config,
+        camera: Camera,
+        video_processor: VideoProcessor,
+    ):
         super().__init__(storage_path, config)
         self.camera = camera
-        self.video_processor = None
-
-    def set_video_processor(self, video_processor):
-        """Set reference to video processor to queue work."""
         self.video_processor = video_processor
 
-    def get_state_file_name(self) -> str:
-        return "download_queue_state.json"
+    @property
+    def queue_type(self) -> QueueType:
+        """Return the queue type for this processor."""
+        return QueueType.DOWNLOAD
 
     async def process_item(self, item: RecordingFile) -> None:
         """

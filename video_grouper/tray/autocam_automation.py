@@ -4,14 +4,14 @@ import os
 from pywinauto.application import Application
 import datetime
 
+from video_grouper.utils.config import AutocamConfig
+
 logger = logging.getLogger(__name__)
 
-AUTOCAM_EXE_PATH = (
-    r"C:\Users\markb\AppData\Local\Programs\Once.Autocam\Once.Autocam.exe"
-)
 
-
-def run_autocam_on_file(input_path: str, output_path: str) -> bool:
+def run_autocam_on_file(
+    autocam_config: AutocamConfig, input_path: str, output_path: str
+) -> bool:
     """
     Automates the Once Autocam GUI to process a video file.
 
@@ -30,7 +30,7 @@ def run_autocam_on_file(input_path: str, output_path: str) -> bool:
     logger.info(f"Output path will be {abs_output_path}")
 
     try:
-        app = Application(backend="uia").start(AUTOCAM_EXE_PATH)
+        app = Application(backend="uia").start(autocam_config.executable)
 
         # Connect to the main window
         main_window = app.window(title_re="Once Autocam GUI.*")

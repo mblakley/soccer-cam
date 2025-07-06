@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
+from ..utils.paths import get_match_info_path, get_match_info_dist_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -113,7 +115,7 @@ class MatchInfo:
         Returns:
             A tuple of (MatchInfo object or None, ConfigParser object)
         """
-        match_info_path = os.path.join(group_dir, "match_info.ini")
+        match_info_path = get_match_info_path(group_dir)
         config = configparser.ConfigParser()
 
         # Create the file if it doesn't exist
@@ -122,10 +124,7 @@ class MatchInfo:
                 os.makedirs(group_dir)
 
             # Try to copy from dist file if available
-            source_dist_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "match_info.ini.dist",
-            )
+            source_dist_path = get_match_info_dist_path()
             if os.path.exists(source_dist_path):
                 try:
                     with (
@@ -164,7 +163,7 @@ class MatchInfo:
         Returns:
             Updated MatchInfo object or None if the update failed
         """
-        match_info_path = os.path.join(group_dir, "match_info.ini")
+        match_info_path = get_match_info_path(group_dir)
         match_info, config = cls.get_or_create(group_dir)
 
         # Update the config with team information
@@ -219,7 +218,7 @@ class MatchInfo:
         Returns:
             Updated MatchInfo object or None if the update failed
         """
-        match_info_path = os.path.join(group_dir, "match_info.ini")
+        match_info_path = get_match_info_path(group_dir)
         match_info, config = cls.get_or_create(group_dir)
 
         # Update the config with timing information
@@ -354,9 +353,7 @@ class MatchInfo:
     def save(self) -> None:
         """Save the current state back to the match_info.ini file."""
         match_info_path = (
-            os.path.join(self.group_dir, "match_info.ini")
-            if hasattr(self, "group_dir")
-            else None
+            get_match_info_path(self.group_dir) if hasattr(self, "group_dir") else None
         )
         if not match_info_path:
             # If we don't have group_dir, we can't save

@@ -224,3 +224,128 @@ async def trim_video(
     else:
         logger.error(f"Failed to trim {os.path.basename(input_path)}")
         return False
+
+
+async def combine_videos(file_list_path: str, output_path: str) -> bool:
+    """
+    Combines multiple video files into a single MP4 using FFmpeg concat demuxer.
+
+    Args:
+        file_list_path: Path to the filelist.txt containing the list of video files to combine.
+        output_path: Path where the combined video will be saved.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",  # Overwrite output file
+        "-f",
+        "concat",  # Use concat demuxer
+        "-safe",
+        "0",  # Allow unsafe file names
+        "-i",
+        file_list_path,  # Input file list
+        "-c:v",
+        "copy",  # Copy video stream
+        "-c:a",
+        "aac",  # Re-encode audio to AAC
+        "-b:a",
+        "192k",  # Audio bitrate
+        output_path,
+    ]
+
+    logger.info(f"Running ffmpeg combine command: {' '.join(cmd)}")
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            logger.info(
+                f"Successfully combined videos to {os.path.basename(output_path)}"
+            )
+            return True
+        else:
+            logger.error(f"Failed to combine videos: {stderr.decode()}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error combining videos: {e}")
+        return False
+
+
+async def trim_video_advanced(
+    input_path: str, output_path: str, start_time: str, end_time: str
+) -> bool:
+    """
+    Advanced video trimming with freeze detection and frame rate optimization.
+
+    Args:
+        input_path: Path to the input video file.
+        output_path: Path to save the output trimmed video.
+        start_time: The start time for the trim (e.g., "00:00:10").
+        end_time: The end time for the trim (e.g., "00:05:00").
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "--%",
+        "-fflags",
+        "+discardcorrupt",
+        "-err_detect",
+        "ignore_err",
+        "-i",
+        input_path,
+        "-ss",
+        start_time,
+        "-to",
+        end_time,
+        "-filter_complex",
+        "[0:v]freezedetect=n=0.003:d=1[fd];[0:v][fd]freezeframes[fr];[fr]mpdecimate,setpts=N/25/TB[v]",
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-r",
+        "25",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "slow",
+        "-c:a",
+        "copy",
+        output_path,
+    ]
+
+    logger.info(f"Running advanced ffmpeg trim command: {' '.join(cmd)}")
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            logger.info(
+                f"Successfully trimmed video with advanced processing to {os.path.basename(output_path)}"
+            )
+            return True
+        else:
+            logger.error(
+                f"Failed to trim video with advanced processing: {stderr.decode()}"
+            )
+            return False
+
+    except Exception as e:
+        logger.error(f"Error trimming video with advanced processing: {e}")
+        return False

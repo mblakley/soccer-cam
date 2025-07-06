@@ -28,27 +28,19 @@ class TestVideoProcessor:
     @pytest.mark.asyncio
     async def test_video_processor_initialization(self, temp_storage, mock_config):
         """Test VideoProcessor initialization."""
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         assert processor.storage_path == temp_storage
         assert processor.config == mock_config
-
-    @pytest.mark.asyncio
-    async def test_set_upload_processor(self, temp_storage, mock_config):
-        """Test setting upload processor reference."""
-        processor = VideoProcessor(temp_storage, mock_config)
-        mock_upload = Mock()
-
-        processor.set_upload_processor(mock_upload)
-
-        assert processor.upload_processor == mock_upload
 
     @pytest.mark.asyncio
     async def test_combine_task_processing(self, temp_storage, mock_config):
         """Test processing a combine task."""
         group_dir = "/test/group"
 
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         # Create combine task and mock its execute method
         combine_task = CombineTask(group_dir=group_dir)
@@ -68,7 +60,8 @@ class TestVideoProcessor:
         """Test processing a combine task that fails."""
         group_dir = "/test/group"
 
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         combine_task = CombineTask(group_dir=group_dir)
 
@@ -87,7 +80,8 @@ class TestVideoProcessor:
         """Test processing a trim task."""
         group_dir = "/test/group"
 
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         # Create trim task using the new interface
         trim_task = TrimTask(
@@ -104,7 +98,8 @@ class TestVideoProcessor:
         """Test trim task when combined file is missing."""
         group_dir = "/test/group"
 
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         try:
             # Create trim task using the new interface
@@ -123,7 +118,8 @@ class TestVideoProcessor:
     @pytest.mark.asyncio
     async def test_unknown_task_type(self, temp_storage, mock_config):
         """Test processing an unknown task type."""
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         # Create a mock task with unknown type
         unknown_task = Mock()
@@ -135,7 +131,8 @@ class TestVideoProcessor:
 
     def test_get_item_key(self, temp_storage, mock_config):
         """Test getting unique key for FFmpegTask."""
-        processor = VideoProcessor(temp_storage, mock_config)
+        mock_upload_processor = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload_processor)
 
         # Test combine task
         combine_task = CombineTask(group_dir="/test/group")

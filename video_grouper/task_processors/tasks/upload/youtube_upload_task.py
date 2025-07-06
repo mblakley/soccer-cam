@@ -4,7 +4,7 @@ YouTube upload task for uploading videos to YouTube.
 
 import os
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
 from video_grouper.task_processors.services.ntfy_service import NtfyService
@@ -46,14 +46,9 @@ class YoutubeUploadTask(BaseUploadTask):
         """
         return {"task_type": self.task_type, "group_dir": self.group_dir}
 
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
+    async def execute(self) -> bool:
         """
         Execute the YouTube upload task.
-
-        Args:
-            queue_task: Function to queue additional tasks
 
         Returns:
             True if upload succeeded, False otherwise

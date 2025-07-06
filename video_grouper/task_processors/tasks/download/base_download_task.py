@@ -5,11 +5,11 @@ Base class for download tasks.
 import os
 import logging
 from abc import abstractmethod
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict
 from dataclasses import dataclass
 
 from ..base_task import BaseTask
-from ..queue_type import QueueType
+from ...queue_type import QueueType
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class BaseDownloadTask(BaseTask):
         pass
 
     @abstractmethod
-    def get_camera_config(self) -> Dict[str, Any]:
+    def get_camera_config(self) -> Dict[str, object]:
         """
         Return the camera configuration needed for download.
 
@@ -68,7 +68,7 @@ class BaseDownloadTask(BaseTask):
         pass
 
     @abstractmethod
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> Dict[str, object]:
         """
         Serialize the task to a dictionary for state persistence.
 
@@ -78,21 +78,16 @@ class BaseDownloadTask(BaseTask):
         pass
 
     @abstractmethod
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
+    async def execute(self) -> bool:
         """
         Execute the download task.
-
-        Args:
-            queue_task: Function to queue additional tasks (optional, not typically used for downloads)
 
         Returns:
             True if download succeeded, False otherwise
         """
         pass
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, object]:
         """
         Convert task to dictionary format (alias for serialize for backward compatibility).
 

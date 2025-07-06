@@ -1,8 +1,10 @@
 import logging
-from typing import Any
-from .queue_processor_base import QueueProcessor
+
+from video_grouper.task_processors.upload_processor import UploadProcessor
+from video_grouper.utils.config import Config
+from .base_queue_processor import QueueProcessor
 from .tasks.video import BaseFfmpegTask
-from .task_queue_service import get_task_queue_service
+from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
 
@@ -13,20 +15,16 @@ class VideoProcessor(QueueProcessor):
     Processes FFmpeg tasks sequentially.
     """
 
-    def __init__(self, storage_path: str, config: Any):
+    def __init__(
+        self, storage_path: str, config: Config, upload_processor: UploadProcessor
+    ):
         super().__init__(storage_path, config)
-        self.upload_processor = None
-
-        # Register this processor with the task queue service
-        task_queue_service = get_task_queue_service()
-        task_queue_service.set_video_processor(self)
-
-    def set_upload_processor(self, upload_processor):
-        """Set reference to upload processor to queue work."""
         self.upload_processor = upload_processor
 
-    def get_state_file_name(self) -> str:
-        return "ffmpeg_queue_state.json"
+    @property
+    def queue_type(self) -> QueueType:
+        """Return the queue type for this processor."""
+        return QueueType.VIDEO
 
     async def process_item(self, item: BaseFfmpegTask) -> None:
         """
@@ -38,11 +36,8 @@ class VideoProcessor(QueueProcessor):
         try:
             logger.info(f"VIDEO: Processing task: {item}")
 
-            # Get the task queue service to pass to the task
-            task_queue_service = get_task_queue_service()
-
             # Execute the task using its own execute method
-            success = await item.execute(task_queue_service)
+            success = await item.execute()
 
             if success:
                 logger.info(f"VIDEO: Successfully completed task: {item}")

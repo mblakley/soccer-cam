@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
-from video_grouper.task_processors.tasks import YoutubeUploadTask
+from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
 from video_grouper.utils.config import YouTubeConfig
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 

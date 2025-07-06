@@ -86,23 +86,30 @@ class TestCameraPoller:
         self, temp_storage, mock_config, mock_camera
     ):
         """Test CameraPoller initialization."""
-        poller = CameraPoller(temp_storage, mock_config, mock_camera, poll_interval=5)
+        mock_download_processor = Mock()
+        poller = CameraPoller(
+            temp_storage,
+            mock_config,
+            mock_camera,
+            mock_download_processor,
+            poll_interval=5,
+        )
 
         assert poller.storage_path == temp_storage
         assert poller.config == mock_config
         assert poller.camera == mock_camera
-        assert poller.download_processor is None
+        assert poller.download_processor == mock_download_processor
         assert poller.poll_interval == 5
 
     @pytest.mark.asyncio
     async def test_set_download_processor(self, temp_storage, mock_config, mock_camera):
         """Test setting download processor reference."""
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        mock_download = Mock()
+        mock_download_processor = Mock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
-        poller.set_download_processor(mock_download)
-
-        assert poller.download_processor == mock_download
+        assert poller.download_processor == mock_download_processor
 
     @pytest.mark.asyncio
     async def test_discover_work_camera_unavailable(
@@ -111,7 +118,10 @@ class TestCameraPoller:
         """Test discover_work when camera is unavailable."""
         mock_camera.check_availability.return_value = False
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
+        mock_download_processor = Mock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         # Should handle unavailable camera gracefully
         await poller.discover_work()
@@ -126,7 +136,10 @@ class TestCameraPoller:
         """Test syncing when no files are found."""
         mock_camera.get_file_list.return_value = []
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
+        mock_download_processor = Mock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
@@ -148,17 +161,18 @@ class TestCameraPoller:
         mock_camera.get_file_list.return_value = mock_files
 
         # Create mock download processor
-        mock_download = Mock()
-        mock_download.add_work = AsyncMock()
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        poller.set_download_processor(mock_download)
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
         # Verify file was processed and queued for download
-        mock_download.add_work.assert_called_once()
-        queued_file = mock_download.add_work.call_args[0][0]
+        mock_download_processor.add_work.assert_called_once()
+        queued_file = mock_download_processor.add_work.call_args[0][0]
         assert isinstance(queued_file, RecordingFile)
         assert queued_file.file_path.endswith("test1.dav")
 
@@ -191,17 +205,18 @@ class TestCameraPoller:
         ]
         mock_camera.get_file_list.return_value = mock_files
 
-        mock_download = Mock()
-        mock_download.add_work = AsyncMock()
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        poller.set_download_processor(mock_download)
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
         # Only the non-overlapping file should be queued
-        mock_download.add_work.assert_called_once()
-        queued_file = mock_download.add_work.call_args[0][0]
+        mock_download_processor.add_work.assert_called_once()
+        queued_file = mock_download_processor.add_work.call_args[0][0]
         assert "test_valid.dav" in queued_file.file_path
 
     @pytest.mark.asyncio
@@ -238,16 +253,17 @@ class TestCameraPoller:
         ]
         mock_camera.get_file_list.return_value = mock_files
 
-        mock_download = Mock()
-        mock_download.add_work = AsyncMock()
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        poller.set_download_processor(mock_download)
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
         # File should not be queued again
-        mock_download.add_work.assert_not_called()
+        mock_download_processor.add_work.assert_not_called()
 
     def test_find_group_directory_new_group(self, temp_storage):
         """Test finding group directory when creating a new group."""
@@ -338,15 +354,16 @@ class TestCameraPoller:
         ]
         mock_camera.get_file_list.return_value = mock_files
 
-        mock_download = Mock()
-        mock_download.add_work = AsyncMock()
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        poller.set_download_processor(mock_download)
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
-        mock_download.add_work.assert_not_called()
+        mock_download_processor.add_work.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_filter_file_containing_connected_timeframe_poller(
@@ -370,12 +387,13 @@ class TestCameraPoller:
         ]
         mock_camera.get_file_list.return_value = mock_files
 
-        mock_download = Mock()
-        mock_download.add_work = AsyncMock()
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
 
-        poller = CameraPoller(temp_storage, mock_config, mock_camera)
-        poller.set_download_processor(mock_download)
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
 
         await poller._sync_files_from_camera()
 
-        mock_download.add_work.assert_not_called()
+        mock_download_processor.add_work.assert_not_called()

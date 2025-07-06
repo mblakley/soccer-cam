@@ -4,12 +4,13 @@ Trim task for trimming combined videos based on match information.
 
 import os
 import logging
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any
 from dataclasses import dataclass
-from datetime import datetime
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
+from video_grouper.utils.ffmpeg_utils import trim_video_advanced
+from video_grouper.utils.paths import get_combined_video_path, get_trimmed_video_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,109 +32,25 @@ class TrimTask(BaseFfmpegTask):
         """Return the specific task type identifier."""
         return "trim"
 
-    def get_command(self) -> List[str]:
+    async def execute(self) -> bool:
         """
-        Return the FFmpeg command to trim the video.
+        Execute the trim task and handle post-actions.
 
         Returns:
-            FFmpeg command as list of strings
-        """
-        combined_path = os.path.join(self.group_dir, "combined.mp4")
-
-        # Create the subdirectory and get the trimmed file path
-        trimmed_path = self._get_trimmed_file_path()
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "--%",
-            "-fflags",
-            "+discardcorrupt",
-            "-err_detect",
-            "ignore_err",
-            "-i",
-            combined_path,
-            "-ss",
-            self.start_time,
-            "-to",
-            self.end_time,
-            "-filter_complex",
-            "[0:v]freezedetect=n=0.003:d=1[fd];[0:v][fd]freezeframes[fr];[fr]mpdecimate,setpts=N/25/TB[v]",
-            "-map",
-            "[v]",
-            "-map",
-            "0:a?",
-            "-r",
-            "25",
-            "-c:v",
-            "libx264",
-            "-crf",
-            "18",
-            "-preset",
-            "slow",
-            "-c:a",
-            "copy",
-            trimmed_path,
-        ]
-
-        return cmd
-
-    def _get_trimmed_file_path(self) -> str:
-        """
-        Create the subdirectory structure and return the path for the trimmed file.
-
-        Returns:
-            Path where the trimmed file should be created
+            True if command succeeded, False otherwise
         """
         from video_grouper.models import MatchInfo
 
         # Get match info to extract team names and location
         match_info, _ = MatchInfo.get_or_create(self.group_dir)
 
-        # Extract date from directory name (format: YYYY.MM.DD-HH.MM.SS)
-        dir_name = os.path.basename(self.group_dir)
-        try:
-            date_part = dir_name.split("-")[0]  # YYYY.MM.DD
-            date_obj = datetime.strptime(date_part, "%Y.%m.%d")
-            formatted_date = date_obj.strftime("%m-%d-%Y")
-        except Exception:
-            # Fallback to current date if parsing fails
-            formatted_date = datetime.now().strftime("%m-%d-%Y")
+        input_path = get_combined_video_path(self.group_dir)
+        output_path = get_trimmed_video_path(self.group_dir, match_info)
 
-        # Get sanitized team names and location
-        my_team, opponent_team, location = match_info.get_sanitized_names()
-
-        # Create subdirectory name: "YYYY.MM.DD - My Team vs Opponent Team (location)"
-        subdir_name = f"{date_part} - {my_team} vs {opponent_team} ({location})"
-        subdir_path = os.path.join(self.group_dir, subdir_name)
-
-        # Create the subdirectory if it doesn't exist
-        os.makedirs(subdir_path, exist_ok=True)
-
-        # Create filename: "myteam-opponent-location-MM-DD-YYYY-raw.mp4"
-        # Convert team names to lowercase and replace spaces with hyphens
-        my_team_slug = my_team.lower().replace(" ", "-")
-        opponent_team_slug = opponent_team.lower().replace(" ", "-")
-        location_slug = location.lower().replace(" ", "-")
-
-        filename = f"{my_team_slug}-{opponent_team_slug}-{location_slug}-{formatted_date}-raw.mp4"
-
-        return os.path.join(subdir_path, filename)
-
-    async def execute(
-        self, queue_task: Optional[Callable[[Any], Awaitable[None]]] = None
-    ) -> bool:
-        """
-        Execute the trim task and handle post-actions.
-
-        Args:
-            queue_task: Function to queue additional tasks
-
-        Returns:
-            True if command succeeded, False otherwise
-        """
-        # Execute the FFmpeg command
-        success = await super().execute(queue_task)
+        # Execute the FFmpeg command using the utility function
+        success = await trim_video_advanced(
+            input_path, output_path, self.start_time, self.end_time
+        )
 
         if success:
             await self._handle_post_trim_actions()
@@ -187,7 +104,10 @@ class TrimTask(BaseFfmpegTask):
         Returns:
             Path where the trimmed file will be created
         """
-        return self._get_trimmed_file_path()
+        from video_grouper.models import MatchInfo
+
+        match_info, _ = MatchInfo.get_or_create(self.group_dir)
+        return get_trimmed_video_path(self.group_dir, match_info)
 
     def __str__(self) -> str:
         """String representation of the task."""

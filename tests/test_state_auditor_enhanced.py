@@ -81,7 +81,18 @@ class TestStateAuditorEnhanced:
         mock_playmetrics.return_value.login.return_value = True
         mock_ntfy.return_value.enabled = True
 
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        from unittest.mock import Mock
+
+        mock_download_processor = Mock()
+        mock_video_processor = Mock()
+        mock_upload_processor = Mock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Check that all services are initialized
         assert auditor.teamsnap_service is not None
@@ -133,14 +144,23 @@ class TestStateAuditorEnhanced:
         state_file.write_text('{"status": "combined"}')
 
         # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        mock_download_processor = AsyncMock()
+        mock_video_processor = AsyncMock()
+        mock_upload_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Mock processors
         auditor.video_processor = Mock()
         auditor.video_processor.add_work = AsyncMock()
 
         # Mock match info service
-        auditor.match_info_service.is_waiting_for_user_input = Mock(return_value=False)
+        auditor.match_info_service = AsyncMock()
         auditor.match_info_service.process_combined_directory = AsyncMock(
             return_value=True
         )
@@ -208,16 +228,26 @@ class TestStateAuditorEnhanced:
         mock_dir_state.return_value = mock_state
 
         # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        mock_download_processor = AsyncMock()
+        mock_video_processor = AsyncMock()
+        mock_upload_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Mock NTFY queue processor - waiting for input
-        auditor.ntfy_queue_processor = Mock()
-        auditor.ntfy_queue_processor.ntfy_service = Mock()
-        auditor.ntfy_queue_processor.ntfy_service.is_waiting_for_input = Mock(
+        auditor.ntfy_processor = Mock()
+        auditor.ntfy_processor.ntfy_service = Mock()
+        auditor.ntfy_processor.ntfy_service.is_waiting_for_input = Mock(
             return_value=True
         )
 
         # Mock match info service
+        auditor.match_info_service = AsyncMock()
         auditor.match_info_service.process_combined_directory = AsyncMock()
 
         # Mock file system
@@ -243,6 +273,7 @@ class TestStateAuditorEnhanced:
         # Verify match info processing was NOT called
         auditor.match_info_service.process_combined_directory.assert_not_called()
 
+    @patch("video_grouper.task_processors.state_auditor.YoutubeUploadTask")
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
     @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
@@ -256,6 +287,7 @@ class TestStateAuditorEnhanced:
         mock_ntfy,
         mock_playmetrics,
         mock_teamsnap,
+        mock_youtube_task,
         test_dir,
         mock_config,
         tmp_path,
@@ -277,15 +309,41 @@ class TestStateAuditorEnhanced:
         mock_state.files = mock_files
         mock_dir_state.return_value = mock_state
 
+        # Mock YoutubeUploadTask creation
+        mock_task_instance = Mock()
+        mock_youtube_task.return_value = mock_task_instance
+
         # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        mock_download_processor = AsyncMock()
+        mock_video_processor = AsyncMock()
+        mock_upload_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Mock processors
-        auditor.upload_processor = Mock()
+        auditor.upload_processor = AsyncMock()
         auditor.upload_processor.add_work = AsyncMock()
+
+        # Mock match info service to prevent async calls
+        auditor.match_info_service = AsyncMock()
+        auditor.match_info_service.process_combined_directory = AsyncMock()
+
+        # Mock cleanup service to prevent async calls
+        auditor.cleanup_service = AsyncMock()
+        auditor.cleanup_service.process_directory = AsyncMock()
+
+        # Mock NTFY service to prevent async calls
+        auditor.ntfy_service._ensure_initialized = AsyncMock(return_value=True)
 
         # Mock file system
         state_path = str(test_dir / "state.json")
+        # Ensure state.json exists
+        (test_dir / "state.json").write_text('{"status": "autocam_complete"}')
 
         def mock_exists_side_effect(path):
             path_str = str(path)
@@ -298,8 +356,13 @@ class TestStateAuditorEnhanced:
         # Run audit
         await auditor._audit_directory(str(test_dir))
 
-        # Verify YouTube upload was queued
-        auditor.upload_processor.add_work.assert_called_once()
+        # Verify YoutubeUploadTask was created with the correct parameters
+        mock_youtube_task.assert_called_once_with(
+            str(test_dir), auditor.config.youtube, auditor.ntfy_service
+        )
+
+        # Verify the task was added to the upload processor
+        auditor.upload_processor.add_work.assert_called_once_with(mock_task_instance)
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
@@ -351,13 +414,23 @@ class TestStateAuditorEnhanced:
         mock_trim_task.from_match_info.return_value = mock_trim_task_instance
 
         # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        mock_download_processor = AsyncMock()
+        mock_video_processor = AsyncMock()
+        mock_upload_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Mock processors
         auditor.video_processor = Mock()
         auditor.video_processor.add_work = AsyncMock()
 
         # Mock match info service to not be waiting for input
+        auditor.match_info_service = AsyncMock()
         auditor.match_info_service.is_waiting_for_user_input = Mock(return_value=False)
 
         # Mock file system
@@ -402,8 +475,17 @@ class TestStateAuditorEnhanced:
         mock_playmetrics_api.return_value.enabled = True
         mock_playmetrics_api.return_value.login.return_value = True
 
+        from unittest.mock import Mock
+
+        mock_download_processor = Mock()
+        mock_video_processor = Mock()
+        mock_upload_processor = Mock()
         auditor = StateAuditor(
-            storage_path=mock_config.storage.path, config=mock_config
+            storage_path=mock_config.storage.path,
+            config=mock_config,
+            download_processor=mock_download_processor,
+            video_processor=mock_video_processor,
+            upload_processor=mock_upload_processor,
         )
 
         # Test that shutdown doesn't raise an exception
@@ -424,7 +506,18 @@ class TestStateAuditorEnhanced:
         ):
             mock_ntfy.return_value.enabled = True
 
-            auditor = StateAuditor(str(tmp_path), mock_config)
+            from unittest.mock import Mock
+
+            mock_download_processor = Mock()
+            mock_video_processor = Mock()
+            mock_upload_processor = Mock()
+            auditor = StateAuditor(
+                str(tmp_path),
+                mock_config,
+                mock_download_processor,
+                mock_video_processor,
+                mock_upload_processor,
+            )
 
             # Verify that ntfy_service attribute exists and is properly initialized
             assert hasattr(auditor, "ntfy_service")
@@ -473,11 +566,31 @@ class TestStateAuditorEnhanced:
         mock_youtube_task.return_value = mock_task_instance
 
         # Create auditor
-        auditor = StateAuditor(str(tmp_path), mock_config)
+        mock_download_processor = AsyncMock()
+        mock_video_processor = AsyncMock()
+        mock_upload_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path),
+            mock_config,
+            mock_download_processor,
+            mock_video_processor,
+            mock_upload_processor,
+        )
 
         # Mock processors
-        auditor.upload_processor = Mock()
+        auditor.upload_processor = AsyncMock()
         auditor.upload_processor.add_work = AsyncMock()
+
+        # Mock match info service to prevent async calls
+        auditor.match_info_service = AsyncMock()
+        auditor.match_info_service.process_combined_directory = AsyncMock()
+
+        # Mock cleanup service to prevent async calls
+        auditor.cleanup_service = AsyncMock()
+        auditor.cleanup_service.process_directory = AsyncMock()
+
+        # Mock NTFY service to prevent async calls
+        auditor.ntfy_service._ensure_initialized = AsyncMock(return_value=True)
 
         # Mock file system
         state_path = str(test_dir / "state.json")

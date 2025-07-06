@@ -7,10 +7,10 @@ import pytest
 import tempfile
 from unittest.mock import Mock, patch, AsyncMock
 
-from video_grouper.task_processors.ntfy_queue_processor import NtfyQueueProcessor
+from video_grouper.task_processors.ntfy_processor import NtfyProcessor
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import Config
-from video_grouper.task_processors.polling_processor_base import PollingProcessor
+from video_grouper.task_processors.base_queue_processor import QueueProcessor
 
 
 @pytest.fixture
@@ -38,12 +38,12 @@ def storage_path():
         yield tmpdir
 
 
-class TestNtfyQueueProcessor:
+class TestNtfyProcessor:
     """Test NTFY queue processor functionality."""
 
     def test_init(self, mock_config, mock_ntfy_service, storage_path):
         """Test processor initialization."""
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
@@ -53,19 +53,6 @@ class TestNtfyQueueProcessor:
         assert processor.ntfy_service == mock_ntfy_service
         assert processor.video_processor is None
 
-    def test_set_video_processor(self, mock_config, mock_ntfy_service, storage_path):
-        """Test setting video processor reference."""
-        processor = NtfyQueueProcessor(
-            storage_path=storage_path,
-            config=mock_config,
-            ntfy_service=mock_ntfy_service,
-        )
-
-        mock_video_processor = Mock()
-        processor.set_video_processor(mock_video_processor)
-
-        assert processor.video_processor == mock_video_processor
-
     @pytest.mark.asyncio
     async def test_startup_with_no_pending_requests(
         self, mock_config, mock_ntfy_service, storage_path
@@ -73,7 +60,7 @@ class TestNtfyQueueProcessor:
         """Test startup when there are no pending requests."""
         mock_ntfy_service.get_pending_inputs.return_value = {}
 
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
@@ -85,7 +72,7 @@ class TestNtfyQueueProcessor:
             wraps=processor._process_pending_requests_on_startup,
         ) as mock_startup:
             with patch.object(
-                PollingProcessor, "start", new_callable=AsyncMock
+                QueueProcessor, "start", new_callable=AsyncMock
             ) as mock_parent_start:
                 await processor.start()
                 # Should call startup processing
@@ -115,7 +102,7 @@ class TestNtfyQueueProcessor:
         }
         mock_ntfy_service.get_pending_inputs.return_value = pending_inputs
 
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
@@ -124,7 +111,7 @@ class TestNtfyQueueProcessor:
         with patch.object(processor, "_recreate_queued_task") as mock_recreate_queued:
             with patch.object(processor, "_recreate_sent_task") as mock_recreate_sent:
                 with patch.object(
-                    PollingProcessor, "start", new_callable=AsyncMock
+                    QueueProcessor, "start", new_callable=AsyncMock
                 ) as mock_parent_start:
                     await processor.start()
                     # Should recreate queued task only
@@ -153,14 +140,14 @@ class TestNtfyQueueProcessor:
         }
         mock_ntfy_service.get_pending_inputs.return_value = pending_inputs
 
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
         )
 
         with patch.object(
-            PollingProcessor, "start", new_callable=AsyncMock
+            QueueProcessor, "start", new_callable=AsyncMock
         ) as mock_parent_start:
             await processor.start()
 
@@ -184,7 +171,7 @@ class TestNtfyQueueProcessor:
         with open(match_info_path, "w") as f:
             f.write("[MATCH_INFO]\nmy_team_name = Test Team\n")
 
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
@@ -207,7 +194,7 @@ class TestNtfyQueueProcessor:
         """Test checking match info completion when not populated."""
         group_dir = "/test/dir"
 
-        processor = NtfyQueueProcessor(
+        processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
@@ -222,20 +209,3 @@ class TestNtfyQueueProcessor:
 
             # Should not mark as processed
             mock_ntfy_service.mark_as_processed.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_discover_work(self, mock_config, mock_ntfy_service, storage_path):
-        """Test the main work discovery method."""
-        processor = NtfyQueueProcessor(
-            storage_path=storage_path,
-            config=mock_config,
-            ntfy_service=mock_ntfy_service,
-        )
-
-        with patch.object(processor, "_send_pending_tasks") as mock_send:
-            with patch.object(processor, "_process_completed_tasks") as mock_process:
-                await processor.discover_work()
-
-                # Should call both processing methods
-                mock_send.assert_called_once()
-                mock_process.assert_called_once()
