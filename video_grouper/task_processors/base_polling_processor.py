@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Any
+
+from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class PollingProcessor(ABC):
     They don't need to track individual state or maintain queues.
     """
 
-    def __init__(self, storage_path: str, config: Any, poll_interval: int = 60):
+    def __init__(self, storage_path: str, config: Config, poll_interval: int = 60):
         """
         Initialize the polling processor.
 

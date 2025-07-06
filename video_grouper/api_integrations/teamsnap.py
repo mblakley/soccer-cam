@@ -5,12 +5,55 @@ TeamSnap API integration for video_grouper.
 import requests
 from datetime import datetime, timedelta
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, TypedDict, Union
 import pytz
 
 from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
 logger = logging.getLogger(__name__)
+
+
+class TeamSnapEvent(TypedDict, total=False):
+    """Represents an event from TeamSnap."""
+
+    # Basic event info
+    id: str
+    name: str
+    description: str
+    start_date: str
+    end_date: str
+    duration_in_minutes: int
+
+    # Event type
+    event_type: str  # "game", "practice", "meeting", etc.
+    is_game: bool
+
+    # Location
+    location_name: str
+    location_address: str
+
+    # Team info
+    team_id: str
+    team_name: str
+
+    # Custom fields
+    custom_fields: dict[str, Union[str, int, float, bool]]
+
+
+class TeamSnapGame(TeamSnapEvent):
+    """Represents a game from TeamSnap."""
+
+    # Game-specific fields
+    opponent_name: str
+    opponent_team_id: str
+    home_away: str  # "home" or "away"
+    score: str
+    result: str  # "win", "loss", "tie", "scheduled"
+
+    # Game metadata
+    game_type: str  # "regular", "playoff", "tournament", etc.
+    division: str
+    league: str
 
 
 class TeamSnapAPI:
@@ -286,7 +329,7 @@ class TeamSnapAPI:
 
         return None
 
-    def _extract_data_from_item(self, item: Dict) -> Dict[str, Any]:
+    def _extract_data_from_item(self, item: Dict) -> TeamSnapEvent:
         """
         Extract data fields from a Collection+JSON item.
 
@@ -307,7 +350,7 @@ class TeamSnapAPI:
 
         return result
 
-    def get_team_events(self) -> List[Dict]:
+    def get_team_events(self) -> List[TeamSnapEvent]:
         """
         Get events for the configured team.
 
@@ -348,7 +391,7 @@ class TeamSnapAPI:
         logger.info(f"Found {len(events)} team events")
         return events
 
-    def get_games(self) -> List[Dict]:
+    def get_games(self) -> List[TeamSnapGame]:
         """
         Get games for the configured team.
 
@@ -369,7 +412,7 @@ class TeamSnapAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict]:
+    ) -> Optional[TeamSnapGame]:
         """
         Find a game that corresponds to a recording timespan.
 
@@ -461,7 +504,10 @@ class TeamSnapAPI:
         return None
 
     def populate_match_info(
-        self, match_info: Dict, recording_start: datetime, recording_end: datetime
+        self,
+        match_info: TeamSnapGame,
+        recording_start: datetime,
+        recording_end: datetime,
     ) -> bool:
         """
         Populate match information based on TeamSnap game data.
@@ -639,7 +685,7 @@ class TeamSnapAPI:
             logger.error(f"TeamSnap connection test failed with exception: {e}")
             return False
 
-    def get_teams(self) -> List[Dict]:
+    def get_teams(self) -> List[TeamSnapEvent]:
         """
         Get all teams accessible to the user.
 
