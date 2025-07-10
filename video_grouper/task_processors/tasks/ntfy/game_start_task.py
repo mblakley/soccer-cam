@@ -10,6 +10,7 @@ from typing import Dict, Any
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
 from video_grouper.utils.config import Config
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class GameStartTask(BaseNtfyTask):
         self,
         group_dir: str,
         config: Config,
+        ntfy_service: NtfyService,
         combined_video_path: str,
         time_offset: str = "00:00",
         time_seconds: int = 0,
@@ -37,19 +39,24 @@ class GameStartTask(BaseNtfyTask):
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service for sending notifications
             combined_video_path: Path to the combined video file
             time_offset: Current time offset to ask about (e.g., "05:00")
             time_seconds: Current time in seconds
         """
-        super().__init__(
-            group_dir,
-            config,
-            {
-                "combined_video_path": combined_video_path,
-                "time_offset": time_offset,
-                "time_seconds": time_seconds,
+        metadata = {
+            "combined_video_path": combined_video_path,
+            "time_offset": time_offset,
+            "time_seconds": time_seconds,
+            "config": {
+                "ntfy": {
+                    "topic": config.ntfy.topic,
+                    "server_url": config.ntfy.server_url,
+                    "enabled": config.ntfy.enabled,
+                }
             },
-        )
+        }
+        super().__init__(group_dir, config, ntfy_service, metadata)
         self.combined_video_path = combined_video_path
         self.time_offset = time_offset
         self.time_seconds = time_seconds
@@ -74,12 +81,16 @@ class GameStartTask(BaseNtfyTask):
                 self.combined_video_path, self.time_seconds
             )
 
+        # Get NTFY config from metadata
+        ntfy_config = self.metadata.get("config", {}).get("ntfy", {})
+        topic = ntfy_config.get("topic", "")
+
         # Create action buttons
         actions = [
             {
                 "action": "http",
                 "label": "Yes",
-                "url": f"https://ntfy.sh/{self.config.ntfy.topic}",
+                "url": f"https://ntfy.sh/{topic}",
                 "method": "POST",
                 "headers": {"Content-Type": "text/plain"},
                 "body": f"Yes, game started at {self.time_offset}",
@@ -88,7 +99,7 @@ class GameStartTask(BaseNtfyTask):
             {
                 "action": "http",
                 "label": "No",
-                "url": f"https://ntfy.sh/{self.config.ntfy.topic}",
+                "url": f"https://ntfy.sh/{topic}",
                 "method": "POST",
                 "headers": {"Content-Type": "text/plain"},
                 "body": f"No, not yet at {self.time_offset}",
@@ -97,7 +108,7 @@ class GameStartTask(BaseNtfyTask):
             {
                 "action": "http",
                 "label": "Not a Game",
-                "url": f"https://ntfy.sh/{self.config.ntfy.topic}",
+                "url": f"https://ntfy.sh/{topic}",
                 "method": "POST",
                 "headers": {"Content-Type": "text/plain"},
                 "body": f"Not a game at {self.time_offset}",
@@ -231,6 +242,7 @@ class GameStartTask(BaseNtfyTask):
         return cls(
             group_dir=current_task.group_dir,
             config=current_task.config,
+            ntfy_service=current_task.ntfy_service,
             combined_video_path=current_task.combined_video_path,
             time_offset=next_time_offset,
             time_seconds=next_time_seconds,

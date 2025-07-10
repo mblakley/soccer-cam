@@ -433,7 +433,7 @@ class DahuaCamera(Camera):
 
                             # Update progress every second
                             current_time = time.time()
-                            if current_time - last_update >= 1.0:
+                            if current_time - last_update >= 10.0:
                                 speed = (downloaded - last_downloaded) / (
                                     current_time - last_update
                                 )

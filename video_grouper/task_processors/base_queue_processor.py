@@ -253,3 +253,18 @@ class QueueProcessor(ABC):
             "running": self._processor_task is not None
             and not self._processor_task.done(),
         }
+
+    def update_in_place(self, item_key: str, new_task: BaseTask) -> None:
+        """Update a queued item in place, preserving its position in the queue."""
+        if self._queue is None:
+            return
+        # Access the underlying deque of the asyncio.Queue
+        queue_list = list(self._queue._queue)
+        for idx, item in enumerate(queue_list):
+            if self.get_item_key(item) == item_key:
+                queue_list[idx] = new_task
+                break
+        # Rebuild the queue
+        self._queue._queue.clear()
+        for item in queue_list:
+            self._queue._queue.append(item)

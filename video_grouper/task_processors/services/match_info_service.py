@@ -386,9 +386,30 @@ class MatchInfoService:
         """
         return self.ntfy_service.is_waiting_for_input(group_dir)
 
-    def get_pending_inputs(self) -> Dict[str, Dict[str, Any]]:
-        """Get all pending user inputs."""
-        return self.ntfy_service.get_pending_inputs()
+    def get_pending_tasks(self) -> Dict[str, Dict[str, Any]]:
+        """Get all pending tasks."""
+        return self.ntfy_service.get_pending_tasks()
+
+    async def is_match_info_complete(self, group_dir: str) -> bool:
+        """
+        Check if match info is complete for a directory.
+
+        Args:
+            group_dir: Directory path
+
+        Returns:
+            True if match info is complete, False otherwise
+        """
+        try:
+            match_info_path = os.path.join(group_dir, "match_info.ini")
+            if not os.path.exists(match_info_path):
+                return False
+
+            match_info = MatchInfo.from_file(match_info_path)
+            return match_info and match_info.is_populated()
+        except Exception as e:
+            logger.error(f"Error checking match info completion for {group_dir}: {e}")
+            return False
 
     async def shutdown(self) -> None:
         """Shutdown all services."""

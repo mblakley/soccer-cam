@@ -80,15 +80,41 @@ class VideoGrouperApp:
             camera=self.camera,
             video_processor=self.video_processor,
         )
+        self.camera_poller = CameraPoller(
+            storage_path=self.storage_path,
+            config=self.config,
+            camera=self.camera,
+            download_processor=self.download_processor,
+            poll_interval=self.poll_interval,
+        )
         self.ntfy_processor = None
         if self.config.ntfy.enabled:
             from video_grouper.task_processors.services.ntfy_service import NtfyService
+            from video_grouper.task_processors.services.match_info_service import (
+                MatchInfoService,
+            )
+            from video_grouper.task_processors.services.teamsnap_service import (
+                TeamSnapService,
+            )
+            from video_grouper.task_processors.services.playmetrics_service import (
+                PlayMetricsService,
+            )
 
             ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
+            teamsnap_service = TeamSnapService(self.config.teamsnap, self.config.app)
+            playmetrics_service = PlayMetricsService(
+                self.config.playmetrics_teams, self.config.app
+            )
+            match_info_service = MatchInfoService(
+                teamsnap_service=teamsnap_service,
+                playmetrics_service=playmetrics_service,
+                ntfy_service=ntfy_service,
+            )
             self.ntfy_processor = NtfyProcessor(
                 storage_path=self.storage_path,
                 config=self.config,
                 ntfy_service=ntfy_service,
+                match_info_service=match_info_service,
                 poll_interval=30,
                 video_processor=self.video_processor,
             )
@@ -100,13 +126,6 @@ class VideoGrouperApp:
             upload_processor=self.upload_processor,
             poll_interval=self.poll_interval,
             ntfy_processor=self.ntfy_processor,
-        )
-        self.camera_poller = CameraPoller(
-            storage_path=self.storage_path,
-            config=self.config,
-            camera=self.camera,
-            download_processor=self.download_processor,
-            poll_interval=self.poll_interval,
         )
 
         self.processors = [
