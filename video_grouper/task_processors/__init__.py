@@ -8,6 +8,7 @@ from .download_processor import DownloadProcessor
 from .video_processor import VideoProcessor
 from .upload_processor import UploadProcessor
 from .ntfy_processor import NtfyProcessor
+from .autocam_processor import AutocamProcessor
 
 __all__ = [
     "PollingProcessor",
@@ -18,4 +19,5 @@ __all__ = [
     "VideoProcessor",
     "UploadProcessor",
     "NtfyProcessor",
+    "AutocamProcessor",
 ]

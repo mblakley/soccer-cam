@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 
 from video_grouper.models import MatchInfo
 from video_grouper.utils.config import Config
+from video_grouper.task_processors.tasks.base_task import BaseTask
+from video_grouper.task_processors.queue_type import QueueType
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,7 @@ class NtfyTaskResult:
     metadata: TaskMetadata = field(default_factory=dict)
 
 
-class BaseNtfyTask(ABC):
+class BaseNtfyTask(BaseTask, ABC):
     """
     Base class for all NTFY tasks.
 
@@ -57,7 +60,11 @@ class BaseNtfyTask(ABC):
     """
 
     def __init__(
-        self, group_dir: str, config: Config, metadata: Optional[TaskMetadata] = None
+        self,
+        group_dir: str,
+        config: Config,
+        ntfy_service: NtfyService,
+        metadata: Optional[TaskMetadata] = None,
     ):
         """
         Initialize the base NTFY task.
@@ -65,12 +72,89 @@ class BaseNtfyTask(ABC):
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service for sending notifications and managing state
             metadata: Additional metadata for the task
         """
         self.group_dir = group_dir
         self.config = config
+        self.ntfy_service = ntfy_service
         self.metadata = metadata or {}
         self.created_at = datetime.now()
+
+    @property
+    def queue_type(self) -> QueueType:
+        """Return the queue type for routing this task."""
+        return QueueType.NTFY
+
+    @property
+    def task_type(self) -> str:
+        """Return the specific task type identifier."""
+        return self.get_task_type()
+
+    def get_item_path(self) -> str:
+        """Return the path of the item being processed."""
+        return self.group_dir
+
+    def serialize(self) -> Dict[str, object]:
+        """Serialize the task for state persistence."""
+        return {
+            "task_type": self.get_task_type(),
+            "group_dir": self.group_dir,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+        }
+
+    async def execute(self) -> bool:
+        """
+        Execute the NTFY task.
+
+        This method:
+        1. Creates the question data
+        2. Sends the notification via NTFY
+        3. Marks the task as waiting for input
+        4. Returns True if the notification was sent successfully
+
+        Returns:
+            True if the notification was sent successfully, False otherwise
+        """
+        try:
+            logger.info(f"NTFY: Executing task: {self}")
+
+            # Create the question data from the task
+            question_data = await self.create_question()
+
+            if not question_data:
+                logger.warning(f"Task {self} returned empty question data")
+                return False
+
+            # Send the notification via NTFY
+            success = await self.ntfy_service.ntfy_api.send_notification(
+                message=question_data["message"],
+                title=question_data["title"],
+                tags=question_data["tags"],
+                priority=question_data["priority"],
+                image_path=question_data.get("image_path"),
+                actions=question_data.get("actions", []),
+            )
+
+            if success:
+                # Mark as waiting for input in the NTFY service (this saves state to file)
+
+                self.ntfy_service.mark_waiting_for_input(
+                    self.group_dir,
+                    self.get_task_type(),
+                    self.metadata,  # Pass metadata directly as task_metadata
+                )
+
+                logger.info(f"NTFY: Successfully sent notification for task: {self}")
+                return True
+            else:
+                logger.error(f"NTFY: Failed to send notification for task: {self}")
+                return False
+
+        except Exception as e:
+            logger.error(f"NTFY: Error executing task {self}: {e}")
+            return False
 
     @abstractmethod
     async def create_question(self) -> Dict[str, Any]:

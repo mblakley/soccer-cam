@@ -92,8 +92,15 @@ async def cleanup_asyncio_tasks():
 
     # Get all pending tasks
     try:
+        # Check if we're in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running, nothing to clean up
+            return
+
         current_task = asyncio.current_task()
-        all_tasks = asyncio.all_tasks()
+        all_tasks = asyncio.all_tasks(loop)
 
         # Filter out the current task to avoid cancelling ourselves
         pending_tasks = [
@@ -103,7 +110,8 @@ async def cleanup_asyncio_tasks():
         if pending_tasks:
             # Cancel all pending tasks
             for task in pending_tasks:
-                task.cancel()
+                if not task.done():
+                    task.cancel()
 
             # Wait for all tasks to complete (with cancellation)
             try:
@@ -112,6 +120,6 @@ async def cleanup_asyncio_tasks():
                 # Ignore exceptions during cleanup
                 pass
 
-    except RuntimeError:
-        # Event loop might already be closed
+    except (RuntimeError, AttributeError):
+        # Event loop might already be closed or no tasks available
         pass

@@ -9,18 +9,77 @@ from video_grouper.utils.config import AutocamConfig
 logger = logging.getLogger(__name__)
 
 
-def run_autocam_on_file(
+def _validate_autocam_inputs(
     autocam_config: AutocamConfig, input_path: str, output_path: str
 ) -> bool:
     """
-    Automates the Once Autocam GUI to process a video file.
+    Validate autocam inputs before processing.
 
     Args:
-        input_path: The path to the trimmed video file.
-        output_path: The path to save the processed video file.
+        autocam_config: Autocam configuration
+        input_path: Path to input video file
+        output_path: Path for output video file
 
     Returns:
-        bool: True if processing was successful, False otherwise.
+        bool: True if inputs are valid, False otherwise
+    """
+    # Check if autocam is enabled
+    if not autocam_config.enabled:
+        logger.warning("Autocam is disabled in configuration")
+        return False
+
+    # Check if executable path is provided
+    if not autocam_config.executable:
+        logger.error("Autocam executable path is not configured")
+        return False
+
+    # Check if input path is provided
+    if not input_path:
+        logger.error("Input path is required")
+        return False
+
+    # Check if output path is provided
+    if not output_path:
+        logger.error("Output path is required")
+        return False
+
+    # Convert to absolute paths for validation
+    try:
+        abs_input_path = os.path.abspath(input_path)
+        abs_output_path = os.path.abspath(output_path)
+    except (TypeError, OSError) as e:
+        logger.error(f"Invalid path provided: {e}")
+        return False
+
+    # Check if input file exists
+    if not os.path.isfile(abs_input_path):
+        logger.error(f"Input file does not exist: {abs_input_path}")
+        return False
+
+    # Check if autocam executable exists
+    if not os.path.isfile(autocam_config.executable):
+        logger.error(f"Autocam executable not found: {autocam_config.executable}")
+        return False
+
+    logger.info(
+        f"Input validation passed. Input: {abs_input_path}, Output: {abs_output_path}"
+    )
+    return True
+
+
+def _execute_autocam_gui_automation(
+    executable_path: str, input_path: str, output_path: str
+) -> bool:
+    """
+    Execute the autocam GUI automation process.
+
+    Args:
+        executable_path: Path to the autocam executable
+        input_path: Path to input video file
+        output_path: Path for output video file
+
+    Returns:
+        bool: True if automation was successful, False otherwise
     """
     # Convert paths to absolute paths
     abs_input_path = os.path.abspath(input_path)
@@ -29,8 +88,9 @@ def run_autocam_on_file(
     logger.info(f"Starting Once Autocam automation for {abs_input_path}")
     logger.info(f"Output path will be {abs_output_path}")
 
+    app = None
     try:
-        app = Application(backend="uia").start(autocam_config.executable)
+        app = Application(backend="uia").start(executable_path)
 
         # Connect to the main window
         main_window = app.window(title_re="Once Autocam GUI.*")
@@ -111,8 +171,36 @@ def run_autocam_on_file(
     except Exception as e:
         logger.error(f"An error occurred during Once Autocam automation: {e}")
         # Ensure the app is killed even if there's an error
-        if "app" in locals() and app.is_process_running():
+        if app and app.is_process_running():
             app.kill()
+        return False
+
+
+def run_autocam_on_file(
+    autocam_config: AutocamConfig, input_path: str, output_path: str
+) -> bool:
+    """
+    Automates the Once Autocam GUI to process a video file.
+
+    Args:
+        autocam_config: Autocam configuration
+        input_path: The path to the trimmed video file.
+        output_path: The path to save the processed video file.
+
+    Returns:
+        bool: True if processing was successful, False otherwise.
+    """
+    try:
+        # Validate inputs
+        if not _validate_autocam_inputs(autocam_config, input_path, output_path):
+            return False
+
+        # Execute GUI automation
+        return _execute_autocam_gui_automation(
+            autocam_config.executable, input_path, output_path
+        )
+    except Exception as e:
+        logger.error(f"Error running autocam: {e}")
         return False
 
 

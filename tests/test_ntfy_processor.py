@@ -2,7 +2,6 @@
 Tests for NTFY Queue Processor.
 """
 
-import os
 import pytest
 import tempfile
 from unittest.mock import Mock, patch, AsyncMock
@@ -24,10 +23,23 @@ def mock_config():
 
 
 @pytest.fixture
+def mock_match_info_service():
+    """Create a mock match info service."""
+    service = Mock()
+    service.is_match_info_complete = AsyncMock(return_value=False)
+    return service
+
+
+@pytest.fixture
 def mock_ntfy_service():
     """Create a mock NTFY service."""
     service = Mock(spec=NtfyService)
-    service.get_pending_inputs.return_value = {}
+    service.get_pending_tasks.return_value = {}
+    # Mock the ntfy_api attribute
+    service.ntfy_api = Mock()
+    service.ntfy_api.topic = "test-topic"
+    service.ntfy_api.base_url = "http://localhost:8080"
+    service.ntfy_api.enabled = True
     return service
 
 
@@ -41,12 +53,15 @@ def storage_path():
 class TestNtfyProcessor:
     """Test NTFY queue processor functionality."""
 
-    def test_init(self, mock_config, mock_ntfy_service, storage_path):
+    def test_init(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
         """Test processor initialization."""
         processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
             poll_interval=30,
         )
 
@@ -55,15 +70,16 @@ class TestNtfyProcessor:
 
     @pytest.mark.asyncio
     async def test_startup_with_no_pending_requests(
-        self, mock_config, mock_ntfy_service, storage_path
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
         """Test startup when there are no pending requests."""
-        mock_ntfy_service.get_pending_inputs.return_value = {}
+        mock_ntfy_service.get_pending_tasks.return_value = {}
 
         processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
         )
 
         with patch.object(
@@ -82,68 +98,67 @@ class TestNtfyProcessor:
 
     @pytest.mark.asyncio
     async def test_startup_with_pending_requests(
-        self, mock_config, mock_ntfy_service, storage_path
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
         """Test startup when there are pending requests."""
-        pending_inputs = {
+        pending_tasks = {
             "/test/dir1": {
-                "input_type": "team_info",
+                "task_type": "team_info",
                 "status": "queued",
-                "metadata": {"task_type": "team_info"},
+                "task_metadata": {"task_type": "team_info"},
             },
             "/test/dir2": {
-                "input_type": "playlist_name",
+                "task_type": "playlist_name",
                 "status": "in_progress",
-                "metadata": {
+                "task_metadata": {
                     "task_type": "playlist_name",
                     "team_name": "Test Team",
                 },
             },
         }
-        mock_ntfy_service.get_pending_inputs.return_value = pending_inputs
+        mock_ntfy_service.get_pending_tasks.return_value = pending_tasks
 
         processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
         )
 
         with patch.object(processor, "_recreate_queued_task") as mock_recreate_queued:
-            with patch.object(processor, "_recreate_sent_task") as mock_recreate_sent:
-                with patch.object(
-                    QueueProcessor, "start", new_callable=AsyncMock
-                ) as mock_parent_start:
-                    await processor.start()
-                    # Should recreate queued task only
-                    mock_recreate_queued.assert_called_once_with(
-                        "/test/dir1",
-                        "team_info",
-                        {"task_type": "team_info"},
-                    )
-                    # In-progress tasks are not recreated, just logged
-                    mock_recreate_sent.assert_not_called()
-                    # Should call parent start method
-                    mock_parent_start.assert_called_once_with()
+            with patch.object(
+                QueueProcessor, "start", new_callable=AsyncMock
+            ) as mock_parent_start:
+                await processor.start()
+                # Should recreate queued task only
+                mock_recreate_queued.assert_called_once_with(
+                    "/test/dir1",
+                    "team_info",
+                    {"task_type": "team_info"},
+                )
+                # Should call parent start method
+                mock_parent_start.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_startup_with_invalid_format_clears_inputs(
-        self, mock_config, mock_ntfy_service, storage_path
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
         """Test startup with invalid format inputs clears them."""
         # Legacy format without proper status
-        pending_inputs = {
-            "/test/dir1": {"input_type": "team_info", "metadata": {}},
+        pending_tasks = {
+            "/test/dir1": {"task_type": "team_info", "task_metadata": {}},
             "/test/dir2": {
-                "input_type": "playlist_name",
-                "metadata": {"team_name": "Test Team"},
+                "task_type": "playlist_name",
+                "task_metadata": {"team_name": "Test Team"},
             },
         }
-        mock_ntfy_service.get_pending_inputs.return_value = pending_inputs
+        mock_ntfy_service.get_pending_tasks.return_value = pending_tasks
 
         processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
         )
 
         with patch.object(
@@ -152,35 +167,36 @@ class TestNtfyProcessor:
             await processor.start()
 
             # Should clear both invalid inputs
-            assert mock_ntfy_service.clear_pending_input.call_count == 2
-            mock_ntfy_service.clear_pending_input.assert_any_call("/test/dir1")
-            mock_ntfy_service.clear_pending_input.assert_any_call("/test/dir2")
+            assert mock_ntfy_service.clear_pending_task.call_count == 2
+            mock_ntfy_service.clear_pending_task.assert_any_call("/test/dir1")
+            mock_ntfy_service.clear_pending_task.assert_any_call("/test/dir2")
 
             # Should call parent start method
             mock_parent_start.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_check_match_info_completion_populated(
-        self, mock_config, mock_ntfy_service, storage_path
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
         """Test checking match info completion when populated."""
         group_dir = "/test/dir"
-        match_info_path = os.path.join(storage_path, "match_info.ini")
 
-        # Create a mock match info file
-        with open(match_info_path, "w") as f:
-            f.write("[MATCH_INFO]\nmy_team_name = Test Team\n")
+        # Mock the match info service to return True for populated match info
+        mock_match_info_service.is_match_info_complete.return_value = True
 
         processor = NtfyProcessor(
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
         )
 
-        with patch("video_grouper.models.MatchInfo.from_file") as mock_from_file:
+        with patch(
+            "video_grouper.models.MatchInfo.get_or_create"
+        ) as mock_get_or_create:
             mock_match_info = Mock()
             mock_match_info.is_populated.return_value = True
-            mock_from_file.return_value = mock_match_info
+            mock_get_or_create.return_value = (mock_match_info, Mock())
 
             await processor._check_match_info_completion(group_dir)
 
@@ -189,7 +205,7 @@ class TestNtfyProcessor:
 
     @pytest.mark.asyncio
     async def test_check_match_info_completion_not_populated(
-        self, mock_config, mock_ntfy_service, storage_path
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
         """Test checking match info completion when not populated."""
         group_dir = "/test/dir"
@@ -198,12 +214,15 @@ class TestNtfyProcessor:
             storage_path=storage_path,
             config=mock_config,
             ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
         )
 
-        with patch("video_grouper.models.MatchInfo.from_file") as mock_from_file:
+        with patch(
+            "video_grouper.models.MatchInfo.get_or_create"
+        ) as mock_get_or_create:
             mock_match_info = Mock()
             mock_match_info.is_populated.return_value = False
-            mock_from_file.return_value = mock_match_info
+            mock_get_or_create.return_value = (mock_match_info, Mock())
 
             await processor._check_match_info_completion(group_dir)
 

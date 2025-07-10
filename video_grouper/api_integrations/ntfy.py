@@ -98,12 +98,13 @@ class NtfyAPI:
     NTFY API integration for sending notifications with screenshots and receiving responses.
     """
 
-    def __init__(self, config: NtfyConfig):
+    def __init__(self, config: NtfyConfig, service_callback=None):
         """
         Initialize the NTFY API client.
 
         Args:
             config: NTFY configuration object
+            service_callback: Optional callback to NtfyService for processing responses
         """
         self.config = config
         self.enabled = config.enabled
@@ -113,6 +114,7 @@ class NtfyAPI:
         self.response_queue = asyncio.Queue()
         self.listener_task = None
         self.session_id = str(uuid.uuid4())[:8]  # Create a unique session ID
+        self.service_callback = service_callback
 
         # Track sent messages and their responses
         self.pending_messages = {}  # message_id -> future
@@ -197,7 +199,7 @@ class NtfyAPI:
                         # Process the stream line by line
                         async for line in response.aiter_lines():
                             # Log every line received, even empty ones
-                            logger.info(f"NTFY stream raw line: {line}")
+                            logger.debug(f"NTFY stream raw line: {line}")
 
                             if not line.strip():
                                 logger.debug("Empty line received from NTFY stream")
@@ -273,15 +275,6 @@ class NtfyAPI:
             # Extract event type and message
             event_type = response_data.get("event")
             message = response_data.get("message", "")
-            title = response_data.get("title", "")
-
-            logger.info(
-                f"NTFY RESPONSE DETAILS - Event: {event_type}, Title: {title}, Message: {message}"
-            )
-
-            # Log all fields in the response for debugging
-            for key, value in response_data.items():
-                logger.info(f"NTFY FIELD: {key} = {value}")
 
             # For message events (regular messages)
             if event_type == "message":
@@ -387,6 +380,9 @@ class NtfyAPI:
                     logger.info(f"Detected NO in action event: {response_data}")
                     self._handle_response("No")
 
+            elif event_type == "keepalive":
+                logger.debug(f"Received keepalive event: {response_data}")
+
             # For any other event type
             else:
                 logger.info(f"Received unhandled event type: {event_type}")
@@ -413,29 +409,40 @@ class NtfyAPI:
 
     def _handle_response(self, response: str):
         """Handle a response to a message."""
-        if not self.pending_messages:
-            logger.warning(f"Received response but no pending messages: {response}")
-            return
+        # First, try to handle as a pending message (for legacy compatibility)
+        if self.pending_messages:
+            # Find the most recent message
+            most_recent_id = max(
+                self.pending_messages.keys(),
+                key=lambda msg_id: self.message_timestamps.get(msg_id, 0),
+            )
 
-        # Find the most recent message
-        most_recent_id = max(
-            self.pending_messages.keys(),
-            key=lambda msg_id: self.message_timestamps.get(msg_id, 0),
-        )
+            # Complete the future with the response
+            future = self.pending_messages.get(most_recent_id)
+            if future and not future.done():
+                future.set_result(response)
 
-        # Complete the future with the response
-        future = self.pending_messages.get(most_recent_id)
-        if future and not future.done():
-            future.set_result(response)
+                # Clean up
+                del self.pending_messages[most_recent_id]
+                del self.message_timestamps[most_recent_id]
 
-            # Clean up
-            del self.pending_messages[most_recent_id]
-            del self.message_timestamps[most_recent_id]
+                logger.info(
+                    f"Processed response for message {most_recent_id}: {response}"
+                )
+                return
+            else:
+                logger.warning(
+                    f"Future for message {most_recent_id} already completed or missing"
+                )
 
-            logger.info(f"Processed response for message {most_recent_id}: {response}")
+        # If no pending messages or they're already handled, route to service callback
+        if self.service_callback:
+            logger.info(f"Routing response to service callback: {response}")
+            # Use asyncio.create_task to avoid blocking
+            asyncio.create_task(self.service_callback.process_response(response))
         else:
             logger.warning(
-                f"Future for message {most_recent_id} already completed or missing"
+                f"Received response but no pending messages and no service callback: {response}"
             )
 
     def _handle_specific_response(self, message_id: str, response: str):

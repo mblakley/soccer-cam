@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
 from video_grouper.utils.config import Config
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class TeamInfoTask(BaseNtfyTask):
         self,
         group_dir: str,
         config: Config,
+        ntfy_service: NtfyService,
         combined_video_path: str,
         existing_info: Optional[Dict[str, str]] = None,
     ):
@@ -34,17 +36,22 @@ class TeamInfoTask(BaseNtfyTask):
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service for sending notifications
             combined_video_path: Path to the combined video file
             existing_info: Existing team information if any
         """
-        super().__init__(
-            group_dir,
-            config,
-            {
-                "combined_video_path": combined_video_path,
-                "existing_info": existing_info or {},
+        metadata = {
+            "combined_video_path": combined_video_path,
+            "existing_info": existing_info or {},
+            "config": {
+                "ntfy": {
+                    "topic": config.ntfy.topic,
+                    "server_url": config.ntfy.server_url,
+                    "enabled": config.ntfy.enabled,
+                }
             },
-        )
+        }
+        super().__init__(group_dir, config, ntfy_service, metadata)
         self.combined_video_path = combined_video_path
         self.existing_info = existing_info or {}
 

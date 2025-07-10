@@ -9,6 +9,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from video_grouper.utils.config import Config
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 from .base_ntfy_task import BaseNtfyTask
 from .game_start_task import GameStartTask
 from .game_end_task import GameEndTask
@@ -30,6 +31,7 @@ class NtfyTaskFactory:
         task_type: str,
         group_dir: str,
         config: Config,
+        ntfy_service: NtfyService,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[BaseNtfyTask]:
         """
@@ -38,7 +40,8 @@ class NtfyTaskFactory:
         Args:
             task_type: Type of task to create
             group_dir: Directory associated with the task
-            config: Configuration object
+            config: Configuration object (can be None if using metadata-based config)
+            ntfy_service: NTFY service instance
             metadata: Additional metadata for the task
 
         Returns:
@@ -46,7 +49,21 @@ class NtfyTaskFactory:
         """
         metadata = metadata or {}
 
-        from .enums import NtfyInputType
+        # If no config provided, try to create one from metadata
+        if not config and "config" in metadata:
+            from video_grouper.utils.config import NtfyConfig
+
+            ntfy_config_data = metadata["config"].get("ntfy", {})
+            ntfy_config = NtfyConfig(**ntfy_config_data)
+
+            # Create a minimal config with just the NTFY section
+            class MinimalConfig:
+                def __init__(self, ntfy_config):
+                    self.ntfy = ntfy_config
+
+            config = MinimalConfig(ntfy_config)
+
+        from ..ntfy_enums import NtfyInputType
 
         if task_type == NtfyInputType.GAME_START_TIME.value:
             combined_video_path = metadata.get("combined_video_path")
@@ -60,6 +77,7 @@ class NtfyTaskFactory:
             return GameStartTask(
                 group_dir=group_dir,
                 config=config,
+                ntfy_service=ntfy_service,
                 combined_video_path=combined_video_path,
                 time_offset=time_offset,
                 time_seconds=time_seconds,
@@ -82,6 +100,7 @@ class NtfyTaskFactory:
             return GameEndTask(
                 group_dir=group_dir,
                 config=config,
+                ntfy_service=ntfy_service,
                 combined_video_path=combined_video_path,
                 start_time_offset=start_time_offset,
                 time_offset=time_offset,
@@ -99,6 +118,7 @@ class NtfyTaskFactory:
             return TeamInfoTask(
                 group_dir=group_dir,
                 config=config,
+                ntfy_service=ntfy_service,
                 combined_video_path=combined_video_path,
                 existing_info=existing_info,
             )
@@ -109,7 +129,10 @@ class NtfyTaskFactory:
 
     @staticmethod
     def create_game_start_task(
-        group_dir: str, config: Config, combined_video_path: str
+        group_dir: str,
+        config: Config,
+        ntfy_service: NtfyService,
+        combined_video_path: str,
     ) -> GameStartTask:
         """
         Create a game start task.
@@ -117,18 +140,26 @@ class NtfyTaskFactory:
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service instance
             combined_video_path: Path to the combined video file
 
         Returns:
             GameStartTask instance
         """
         return GameStartTask(
-            group_dir=group_dir, config=config, combined_video_path=combined_video_path
+            group_dir=group_dir,
+            config=config,
+            ntfy_service=ntfy_service,
+            combined_video_path=combined_video_path,
         )
 
     @staticmethod
     def create_game_end_task(
-        group_dir: str, config: Config, combined_video_path: str, start_time_offset: str
+        group_dir: str,
+        config: Config,
+        ntfy_service: NtfyService,
+        combined_video_path: str,
+        start_time_offset: str,
     ) -> GameEndTask:
         """
         Create a game end task.
@@ -136,6 +167,7 @@ class NtfyTaskFactory:
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service instance
             combined_video_path: Path to the combined video file
             start_time_offset: The game start time offset
 
@@ -145,6 +177,7 @@ class NtfyTaskFactory:
         return GameEndTask(
             group_dir=group_dir,
             config=config,
+            ntfy_service=ntfy_service,
             combined_video_path=combined_video_path,
             start_time_offset=start_time_offset,
         )
@@ -153,6 +186,7 @@ class NtfyTaskFactory:
     def create_team_info_task(
         group_dir: str,
         config: Config,
+        ntfy_service: NtfyService,
         combined_video_path: str,
         existing_info: Optional[Dict[str, str]] = None,
     ) -> TeamInfoTask:
@@ -162,6 +196,7 @@ class NtfyTaskFactory:
         Args:
             group_dir: Directory associated with the task
             config: Configuration object
+            ntfy_service: NTFY service instance
             combined_video_path: Path to the combined video file
             existing_info: Existing team information if any
 
@@ -171,6 +206,7 @@ class NtfyTaskFactory:
         return TeamInfoTask(
             group_dir=group_dir,
             config=config,
+            ntfy_service=ntfy_service,
             combined_video_path=combined_video_path,
             existing_info=existing_info,
         )

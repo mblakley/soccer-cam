@@ -1,6 +1,5 @@
 import sys
 import os
-import json
 import logging
 import asyncio
 import threading
@@ -9,7 +8,6 @@ from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import (
     QRunnable,
     QThreadPool,
-    QTimer,
     QObject,
     pyqtSignal as Signal,
     pyqtSlot as Slot,
@@ -23,6 +21,7 @@ from video_grouper.utils.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.config import load_config, Config
+from video_grouper.task_processors import AutocamProcessor
 from typing import Optional
 
 # Configure logging
@@ -75,11 +74,14 @@ class RunnerSignals(QObject):
 
 
 class AutocamRunner(QRunnable):
-    def __init__(self, input_path: str, output_path: str, group_dir: Path):
+    def __init__(
+        self, input_path: str, output_path: str, group_dir: Path, autocam_config
+    ):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
         self.group_dir = group_dir
+        self.autocam_config = autocam_config
         self.signals = RunnerSignals()
 
     @Slot()
@@ -87,7 +89,7 @@ class AutocamRunner(QRunnable):
         try:
             # Assuming run_autocam_on_file returns True on success, False on failure
             success = run_autocam_on_file(
-                self.config.autocam, self.input_path, self.output_path
+                self.autocam_config, self.input_path, self.output_path
             )
             self.signals.finished.emit(self.group_dir, success)
         except Exception as e:
@@ -117,18 +119,6 @@ class YouTubeAuthRunner(QRunnable):
             self.signals.finished.emit(False, f"Authentication error: {str(e)}")
 
 
-def get_autocam_input_output_paths(group_dir: Path):
-    for root, _, files in os.walk(group_dir):
-        for file in files:
-            if file.endswith("-raw.mp4"):
-                input_path = Path(root) / file
-                output_path = input_path.with_name(
-                    input_path.name.replace("-raw.mp4", ".mp4")
-                )
-                return str(input_path), str(output_path)
-    raise FileNotFoundError(f"No '-raw.mp4' file found in {group_dir}")
-
-
 class SystemTrayIcon(QSystemTrayIcon):
     update_available = Signal(str)
 
@@ -155,7 +145,6 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self.config and getattr(self.config.storage, "path", None) is None:
             self.config.storage.path = str(get_shared_data_path())
 
-        self._is_first_check = True
         self.init_ui()
         self.start_update_checker()
 
@@ -164,11 +153,23 @@ class SystemTrayIcon(QSystemTrayIcon):
             f"Using a thread pool with {self.threadpool.maxThreadCount()} threads."
         )
 
-        self._autocam_queue_timer = QTimer()
-        self._autocam_queue_processing = False
-        self._autocam_queue_timer.timeout.connect(self._check_autocam_queue)
-        self._autocam_queue_timer.start(10000)
-        self._check_autocam_queue()
+        # Initialize AutocamProcessor
+        self.autocam_processor = AutocamProcessor(
+            storage_path=self.config.storage.path, config=self.config
+        )
+
+    async def initialize(self):
+        """Initialize the tray app asynchronously."""
+        logger.info("Initializing SystemTrayIcon...")
+        await self.autocam_processor.start()
+        logger.info("SystemTrayIcon initialization complete")
+
+    async def shutdown(self):
+        """Shutdown the tray app asynchronously."""
+        logger.info("Shutting down SystemTrayIcon...")
+        if hasattr(self, "autocam_processor") and self.autocam_processor:
+            await self.autocam_processor.stop()
+        logger.info("SystemTrayIcon shutdown complete")
 
     def init_ui(self):
         # Create tray icon
@@ -307,256 +308,28 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.showMessage("Updates", message)
 
     def exit_app(self):
+        """Exit the application."""
         if hasattr(self, "config_window") and self.config_window:
             self.config_window.close()
+
+        # Schedule shutdown in the event loop
+        asyncio.create_task(self.shutdown())
         QApplication.quit()
 
-    def _check_autocam_queue(self):
-        logger.info("Checking Autocam queue...")
-        if self._autocam_queue_processing:
-            return
 
-        groups_dir = Path(self.config.storage.path)
-        logger.info(f"Scanning for groups in '{groups_dir}'")
-        autocam_queue_path = groups_dir / "autocam_queue_state.json"
-
-        queue = []
-        if autocam_queue_path.exists():
-            try:
-                with open(autocam_queue_path, "r") as f:
-                    queue = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
-                logger.warning("Could not read autocam queue file. Starting fresh.")
-                queue = []
-
-        queue_changed = False
-
-        # On first run, reset 'processing' items to 'queued'
-        if self._is_first_check:
-            for item in queue:
-                if item["status"] == "processing":
-                    item["status"] = "queued"
-                    logger.warning(
-                        f"Found job in 'processing' state from previous run. Re-queueing group '{item['group_name']}'."
-                    )
-                    queue_changed = True
-            self._is_first_check = False
-
-        existing_group_names = {item["group_name"] for item in queue}
-
-        for group_dir in groups_dir.iterdir():
-            if group_dir.is_dir() and group_dir.name not in existing_group_names:
-                state_file = group_dir / "state.json"
-                if state_file.exists():
-                    try:
-                        with open(state_file, "r") as f:
-                            state_data = json.load(f)
-                        status = state_data.get("status")
-                        if status == "trimmed":
-                            group_name = group_dir.name
-                            queue.append({"group_name": group_name, "status": "queued"})
-                            logger.info(
-                                f"Found new trimmed group '{group_name}'. Adding to Autocam queue."
-                            )
-                            queue_changed = True
-                    except (json.JSONDecodeError, IOError) as e:
-                        logger.error(
-                            f"Error processing state.json for group {group_dir.name}: {e}"
-                        )
-
-        for item in queue:
-            if item["status"] == "autocam_failed":
-                item["status"] = "queued"
-                logger.info(
-                    f"Re-queueing failed Autocam job for group '{item['group_name']}'."
-                )
-                queue_changed = True
-
-        if queue_changed:
-            with open(autocam_queue_path, "w") as f:
-                json.dump(queue, f, indent=4)
-            self.refresh_autocam_queue_ui()
-
-        if any(item["status"] == "queued" for item in queue):
-            self._autocam_queue_processing = True
-            logger.info("Found items in autocam queue. Starting runner.")
-            self._run_autocam_from_queue()
-
-        logger.info("Autocam queue check finished.")
-
-    def _run_autocam_from_queue(self):
-        groups_dir = Path(self.config.storage.path)
-        autocam_queue_path = groups_dir / "autocam_queue_state.json"
-
-        if not autocam_queue_path.exists():
-            self._autocam_queue_processing = False
-            return
-
-        try:
-            with open(autocam_queue_path, "r") as f:
-                queue = json.load(f)
-        except json.JSONDecodeError:
-            logger.error("Could not decode autocam queue. Resetting.")
-            os.remove(autocam_queue_path)
-            self._autocam_queue_processing = False
-            return
-
-        item_to_process = None
-        for item in queue:
-            if item["status"] == "queued":
-                item_to_process = item
-                break
-
-        if not item_to_process:
-            logger.info("No queued items found in autocam queue.")
-            self._autocam_queue_processing = False
-            return
-
-        group_name = item_to_process["group_name"]
-        group_dir = groups_dir / group_name
-
-        try:
-            input_path, output_path = get_autocam_input_output_paths(group_dir)
-        except (FileNotFoundError, ValueError) as e:
-            logger.error(f"Could not find video file for group {group_name}: {e}")
-            item_to_process["status"] = "autocam_failed"
-            with open(autocam_queue_path, "w") as f:
-                json.dump(queue, f, indent=4)
-            self._autocam_queue_processing = False
-            QTimer.singleShot(0, self._check_autocam_queue)
-            return
-
-        item_to_process["status"] = "processing"
-        with open(autocam_queue_path, "w") as f:
-            json.dump(queue, f, indent=4)
-
-        self.refresh_autocam_queue_ui()
-
-        logger.info(f"Starting Autocam process for group {group_name}...")
-        self._autocam_queue_timer.stop()
-        logger.info("Autocam queue timer stopped while processing.")
-        runner = AutocamRunner(input_path, output_path, group_dir)
-        runner.signals.finished.connect(self.on_autocam_runner_finished)
-        self.threadpool.start(runner)
-
-    def on_autocam_runner_finished(self, group_dir, success):
-        group_name = group_dir.name
-
-        groups_dir = Path(self.config.storage.path)
-        autocam_queue_path = groups_dir / "autocam_queue_state.json"
-
-        with open(autocam_queue_path, "r") as f:
-            queue = json.load(f)
-
-        item_found = False
-        if success:
-            # On success, remove the item from the queue
-            original_length = len(queue)
-            queue = [item for item in queue if item["group_name"] != group_name]
-            if len(queue) < original_length:
-                item_found = True
-                logger.info(
-                    f"Successfully processed and removed group '{group_name}' from Autocam queue."
-                )
-        else:
-            # On failure, mark as failed to be retried later
-            for item in queue:
-                if item["group_name"] == group_name:
-                    item["status"] = "autocam_failed"
-                    item_found = True
-                    break
-
-        if not item_found:
-            logger.error(
-                f"Finished job for group {group_name}, but it was not found in the queue."
-            )
-            self._autocam_queue_processing = False
-            return
-
-        with open(autocam_queue_path, "w") as f:
-            json.dump(queue, f, indent=4)
-
-        # Update the group's main state file on success
-        if success:
-            logger.info(f"Updating group '{group_name}' status to autocam_complete.")
-            state_file = group_dir / "state.json"
-            if state_file.exists():
-                try:
-                    with open(state_file, "r") as f:
-                        state_data = json.load(f)
-                    state_data["status"] = "autocam_complete"
-                    with open(state_file, "w") as f:
-                        json.dump(state_data, f, indent=4)
-
-                    # Check if YouTube uploads are enabled
-                    if self.config.youtube.enabled if self.config else False:
-                        # Add to YouTube upload queue
-                        logger.info(
-                            f"YouTube uploads are enabled. Adding group '{group_name}' to YouTube upload queue."
-                        )
-                        ffmpeg_queue_path = groups_dir / "ffmpeg_queue_state.json"
-
-                        youtube_task = {
-                            "task_type": "youtube_upload",
-                            "item_path": str(group_dir),
-                        }
-
-                        try:
-                            # Load existing queue
-                            queue = []
-                            if ffmpeg_queue_path.exists():
-                                with open(ffmpeg_queue_path, "r") as f:
-                                    queue = json.load(f)
-
-                            # Check if this task is already in the queue
-                            if not any(
-                                task.get("task_type") == "youtube_upload"
-                                and task.get("item_path") == str(group_dir)
-                                for task in queue
-                            ):
-                                queue.append(youtube_task)
-                                with open(ffmpeg_queue_path, "w") as f:
-                                    json.dump(queue, f, indent=4)
-                                logger.info(
-                                    f"Added group '{group_name}' to YouTube upload queue."
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"Error adding group '{group_name}' to YouTube upload queue: {e}"
-                            )
-                    else:
-                        logger.info(
-                            f"YouTube uploads are not enabled. Skipping upload for group '{group_name}'."
-                        )
-                except (json.JSONDecodeError, IOError) as e:
-                    logger.error(
-                        f"Could not update status to autocam_complete for group {group_name}: {e}"
-                    )
-            else:
-                logger.warning(
-                    f"state.json not found for group {group_name} on successful completion."
-                )
-        else:
-            logger.error(
-                f"AUTOCAM_RUNNER: Failed to process video for group {group_name}."
-            )
-
-        self.refresh_autocam_queue_ui()
-
-        self._autocam_queue_processing = False
-        self._autocam_queue_timer.start()
-        logger.info("Autocam queue timer restarted.")
-
-
-def main():
+async def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
     tray = SystemTrayIcon()
+    await tray.initialize()
     tray.show()
 
-    sys.exit(app.exec())
+    # Keep the event loop running
+    while True:
+        await asyncio.sleep(0.1)
+        app.processEvents()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
