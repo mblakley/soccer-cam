@@ -35,6 +35,8 @@ class QueueProcessor(ABC):
         self._queued_items = set()
         self._processor_task = None
         self._shutdown_event = asyncio.Event()
+        self._max_retries = 3  # Maximum number of retry attempts
+        self._retry_counts = {}  # Track retry counts for each item
 
         logger.info(f"Initialized {self.__class__.__name__}")
 
@@ -68,7 +70,12 @@ class QueueProcessor(ABC):
         if item_key not in self._queued_items:
             await self._queue.put(item)
             self._queued_items.add(item_key)
-            logger.info(f"{self.__class__.__name__}: Added item to queue: {item}")
+            queue_size = self._queue.qsize()
+            logger.info(
+                f"{self.__class__.__name__}: Added item to queue: {item} (queue size: {queue_size})"
+            )
+
+            # Always persist state immediately
             await self.save_state()
         else:
             logger.debug(f"{self.__class__.__name__}: Item already queued: {item}")
@@ -91,13 +98,6 @@ class QueueProcessor(ABC):
         """Stop the queue processor."""
         logger.info(f"Stopping {self.__class__.__name__}")
         self._shutdown_event.set()
-
-        # Signal queue consumer to exit by putting a sentinel value
-        if self._queue is not None:
-            try:
-                await self._queue.put(None)  # Sentinel value
-            except Exception:
-                pass  # Ignore errors during shutdown
 
         if self._processor_task:
             # Cancel the processor task
@@ -131,44 +131,73 @@ class QueueProcessor(ABC):
 
         while not self._shutdown_event.is_set():
             try:
-                # Wait for an item to be available
-                if self._queue is not None and self._queue.empty():
-                    logger.info(
-                        f"{self.__class__.__name__}: Queue is empty, waiting for new items"
-                    )
-                    # Wait for either shutdown signal or a new item
-                    try:
-                        item = await asyncio.wait_for(self._queue.get(), timeout=60.0)
-                    except asyncio.TimeoutError:
-                        # Timeout - check if we should continue or exit
-                        if self._shutdown_event.is_set():
-                            logger.info(
-                                f"{self.__class__.__name__}: Shutdown signaled, exiting processing loop"
-                            )
-                            break
-                        continue
-                else:
-                    # Get the next item
-                    item = await self._queue.get()
+                # Get the next item from the queue
+                try:
+                    item = await asyncio.wait_for(self._queue.get(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    # Timeout - check if we should continue or exit
+                    if self._shutdown_event.is_set():
+                        logger.info(
+                            f"{self.__class__.__name__}: Shutdown signaled, exiting processing loop"
+                        )
+                        break
+                    continue
 
-                # Check for sentinel value (None) to exit cleanly
-                if item is None:
-                    logger.debug(
-                        f"{self.__class__.__name__}: Received sentinel value, exiting"
-                    )
-                    break
+                # Generate a unique trace ID for this processing attempt
+                import uuid
 
-                logger.info(f"{self.__class__.__name__}: Processing item: {item}")
-                await self.process_item(item)
-
-                # Mark as done and remove from queued items
-                self._queue.task_done()
-                item_key = self.get_item_key(item)
-                self._queued_items.discard(item_key)
-                await self.save_state()
+                trace_id = str(uuid.uuid4())[:8]
                 logger.info(
-                    f"{self.__class__.__name__}: Completed processing item: {item}"
+                    f"{self.__class__.__name__}: Processing item: {item} [trace_id: {trace_id}]"
                 )
+
+                try:
+                    # Process the item
+                    await self.process_item(item)
+                    logger.info(
+                        f"{self.__class__.__name__}: Successfully completed processing item: {item} [trace_id: {trace_id}]"
+                    )
+                    # Task succeeded - remove from queue
+                    self._queue.task_done()
+                    item_key = self.get_item_key(item)
+                    self._queued_items.discard(item_key)
+                    self._retry_counts.pop(
+                        item_key, None
+                    )  # Clear retry count on success
+                    queue_size = self._queue.qsize()
+                    await self.save_state()
+                    logger.info(
+                        f"{self.__class__.__name__}: Removed completed item from queue: {item} (queue size: {queue_size})"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"{self.__class__.__name__}: Failed to process item {item}: {e} [trace_id: {trace_id}]"
+                    )
+
+                    # Check retry count
+                    item_key = self.get_item_key(item)
+                    retry_count = self._retry_counts.get(item_key, 0)
+
+                    if retry_count < self._max_retries:
+                        # Task failed but can be retried - requeue at the end
+                        self._queue.task_done()  # Mark current item as done
+                        await self._queue.put(item)  # Requeue at the end
+                        self._retry_counts[item_key] = retry_count + 1
+                        queue_size = self._queue.qsize()
+                        logger.info(
+                            f"{self.__class__.__name__}: Requeued failed item at end of queue (attempt {retry_count + 1}/{self._max_retries}): {item} (queue size: {queue_size})"
+                        )
+                        await self.save_state()
+                    else:
+                        # Task failed and exceeded max retries - remove from queue
+                        self._queue.task_done()
+                        self._queued_items.discard(item_key)
+                        self._retry_counts.pop(item_key, None)
+                        queue_size = self._queue.qsize()
+                        logger.error(
+                            f"{self.__class__.__name__}: Item exceeded max retries ({self._max_retries}), removing from queue: {item} (queue size: {queue_size})"
+                        )
+                        await self.save_state()
 
             except Exception as e:
                 logger.error(
@@ -210,8 +239,8 @@ class QueueProcessor(ABC):
             with open(state_file, "w") as f:
                 json.dump(serialized_items, f, indent=2)
 
-            logger.debug(
-                f"{self.__class__.__name__}: Saved state with {len(serialized_items)} items"
+            logger.info(
+                f"{self.__class__.__name__}: Saved state with {len(serialized_items)} items to {state_file}"
             )
 
         except Exception as e:
@@ -227,17 +256,45 @@ class QueueProcessor(ABC):
             )
             return
 
-        # For now, we skip loading state since we don't have proper deserialization
-        # State files will be cleaned up on next save
-        logger.debug(
-            f"{self.__class__.__name__}: Skipping state loading - starting with empty queue"
-        )
-
-        # Clean up old state file
         try:
-            os.remove(state_file)
-        except Exception:
-            pass  # Ignore errors during cleanup
+            with open(state_file, "r") as f:
+                serialized_items = json.load(f)
+
+            logger.info(
+                f"{self.__class__.__name__}: Loading {len(serialized_items)} items from state"
+            )
+
+            # Restore items to the queue
+            restored_count = 0
+            for item_data in serialized_items:
+                try:
+                    # Skip legacy format items
+                    if "item" in item_data and item_data["item"] == "None":
+                        continue
+
+                    # Deserialize the task
+                    task = self._deserialize_task(item_data)
+                    if task:
+                        # Add to queue and track
+                        await self._queue.put(task)
+                        item_key = self.get_item_key(task)
+                        self._queued_items.add(item_key)
+                        restored_count += 1
+                        logger.debug(
+                            f"{self.__class__.__name__}: Restored task to queue: {task}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"{self.__class__.__name__}: Failed to deserialize task {item_data}: {e}"
+                    )
+
+            logger.info(
+                f"{self.__class__.__name__}: Successfully restored {restored_count} items to queue"
+            )
+
+        except Exception as e:
+            logger.error(f"{self.__class__.__name__}: Error loading state: {e}")
+            # Don't delete the state file on error - let the user decide what to do
 
     def get_queue_size(self) -> int:
         """Get the current queue size."""
@@ -268,3 +325,83 @@ class QueueProcessor(ABC):
         self._queue._queue.clear()
         for item in queue_list:
             self._queue._queue.append(item)
+
+    def _deserialize_task(self, item_data: Dict[str, object]) -> BaseTask:
+        """
+        Deserialize a task from its serialized data.
+
+        Args:
+            item_data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized task instance, or None if deserialization failed
+        """
+        try:
+            task_type = item_data.get("task_type")
+            if not task_type:
+                logger.error(f"No task_type found in item_data: {item_data}")
+                return None
+
+            # Import task classes based on queue type
+            if self.queue_type == QueueType.DOWNLOAD:
+                from video_grouper.task_processors.tasks.download.dahua_download_task import (
+                    DahuaDownloadTask,
+                )
+                from video_grouper.models import RecordingFile
+                from datetime import datetime
+
+                # Handle both DahuaDownloadTask and RecordingFile formats
+                if task_type == "dahua_download":
+                    return DahuaDownloadTask.from_dict(item_data)
+                elif task_type == "recording_file":
+                    # Convert RecordingFile format to DahuaDownloadTask
+                    return RecordingFile(
+                        start_time=datetime.fromisoformat(item_data["start_time"]),
+                        end_time=datetime.fromisoformat(item_data["end_time"]),
+                        file_path=item_data["file_path"],
+                        metadata=item_data.get("metadata", {}),
+                    )
+
+            elif self.queue_type == QueueType.VIDEO:
+                from video_grouper.task_processors.tasks.video.combine_task import (
+                    CombineTask,
+                )
+                from video_grouper.task_processors.tasks.video.trim_task import TrimTask
+
+                if task_type == "combine":
+                    return CombineTask.from_dict(item_data)
+                elif task_type == "trim":
+                    return TrimTask.from_dict(item_data)
+
+            elif self.queue_type == QueueType.AUTOCAM:
+                from video_grouper.task_processors.tasks.autocam.autocam_task import (
+                    AutocamTask,
+                )
+
+                if task_type == "autocam_process":
+                    return AutocamTask.from_dict(item_data)
+
+            elif self.queue_type == QueueType.UPLOAD:
+                from video_grouper.task_processors.tasks.upload.youtube_upload_task import (
+                    YoutubeUploadTask,
+                )
+                from video_grouper.task_processors.services.ntfy_service import (
+                    NtfyService,
+                )
+
+                if task_type == "youtube_upload":
+                    # Recreate the task with required dependencies
+                    task = YoutubeUploadTask.from_dict(item_data)
+                    # Re-inject dependencies that can't be serialized
+                    task.youtube_config = self.config.youtube
+                    task.ntfy_service = NtfyService(self.storage_path, self.config)
+                    return task
+
+            logger.error(
+                f"Unknown task type '{task_type}' for queue type {self.queue_type}"
+            )
+            return None
+
+        except Exception as e:
+            logger.error(f"Error deserializing task {item_data}: {e}")
+            return None

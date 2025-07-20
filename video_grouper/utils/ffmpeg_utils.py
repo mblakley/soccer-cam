@@ -46,7 +46,7 @@ async def get_video_duration(file_path: str) -> Optional[float]:
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = await process.communicate()
+        stdout, stderr = process.communicate()
 
         if process.returncode != 0:
             logger.error(f"Error getting video duration: {stderr.decode()}")
@@ -262,7 +262,7 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = await process.communicate()
+        stdout, stderr = process.communicate()
 
         if process.returncode == 0:
             logger.info(
@@ -333,7 +333,7 @@ async def trim_video_advanced(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = await process.communicate()
+        stdout, stderr = process.communicate()
 
         if process.returncode == 0:
             logger.info(
