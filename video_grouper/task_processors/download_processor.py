@@ -67,10 +67,11 @@ class DownloadProcessor(QueueProcessor):
                         f"DOWNLOAD: Group {os.path.basename(group_dir)} is ready for combining."
                     )
                     if self.video_processor:
-                        await self.video_processor.add_work(
-                            CombineTask(group_dir=group_dir)
+                        combine_task = CombineTask(group_dir=group_dir)
+                        await self.video_processor.add_work(combine_task)
+                        logger.info(
+                            f"DOWNLOAD: Handed off combine task to video processor: {combine_task}"
                         )
-                        logger.info(f"DOWNLOAD: Queued combine task for {group_dir}")
                     else:
                         logger.warning(
                             f"DOWNLOAD: No video processor available to queue combine task for {group_dir}"
@@ -80,6 +81,8 @@ class DownloadProcessor(QueueProcessor):
                 logger.error(
                     f"DOWNLOAD: Download failed for {os.path.basename(file_path)}"
                 )
+                # Raise an exception to signal failure so the task gets requeued
+                raise Exception(f"Download failed for {os.path.basename(file_path)}")
 
         except Exception as e:
             logger.error(
@@ -87,6 +90,8 @@ class DownloadProcessor(QueueProcessor):
                 exc_info=True,
             )
             await dir_state.update_file_state(file_path, status="download_failed")
+            # Re-raise the exception so the queue processor can handle it
+            raise
 
     def get_item_key(self, item: RecordingFile) -> str:
         return f"recording:{item.file_path}:{hash(item.file_path)}"

@@ -157,6 +157,9 @@ class VideoGrouperApp:
         logger.info("Running VideoGrouperApp")
         await self.initialize()
 
+        # Start periodic status reporting
+        status_task = asyncio.create_task(self._periodic_status_report())
+
         # All processors are already running their own loops
         # Just wait for shutdown event
         try:
@@ -164,7 +167,25 @@ class VideoGrouperApp:
         except KeyboardInterrupt:
             logger.info("Received shutdown signal")
         finally:
+            status_task.cancel()
             await self.shutdown()
+
+    async def _periodic_status_report(self):
+        """Report queue status every 5 minutes."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                if not self._shutdown_event.is_set():
+                    self._log_queue_status()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in status report: {e}")
+
+    def _log_queue_status(self):
+        """Log current queue status for all processors."""
+        status = self.get_queue_sizes()
+        logger.info(f"QUEUE_STATUS: {status}")
 
     async def shutdown(self):
         """Shut down the application."""

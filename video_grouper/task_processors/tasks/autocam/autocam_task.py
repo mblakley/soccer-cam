@@ -119,3 +119,28 @@ class AutocamTask(BaseTask):
                 getattr(self.autocam_config, "enabled", None),
             )
         )
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "AutocamTask":
+        """
+        Create an AutocamTask from serialized data.
+
+        Args:
+            data: Dictionary containing task data
+
+        Returns:
+            AutocamTask instance
+        """
+        from video_grouper.utils.config import AutocamConfig
+
+        autocam_config = AutocamConfig(
+            executable=data["autocam_config"]["executable"],
+            enabled=data["autocam_config"]["enabled"],
+        )
+
+        return cls(
+            group_dir=Path(data["group_dir"]),
+            input_path=data["input_path"],
+            output_path=data["output_path"],
+            autocam_config=autocam_config,
+        )
