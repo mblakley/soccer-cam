@@ -6,8 +6,8 @@ from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 from video_grouper.utils.config import PlayMetricsConfig
 
 
-class TestPlayMetricsCalendarIntegration:
-    """Test PlayMetrics API calendar integration."""
+class TestPlayMetricsCalendar:
+    """Test PlayMetrics API calendar functionality."""
 
     def test_initialization(self):
         """Test initialization with config."""
@@ -45,9 +45,14 @@ class TestPlayMetricsCalendarIntegration:
         # Check that API is disabled
         assert not api.enabled
 
+    @patch("video_grouper.api_integrations.playmetrics.time.sleep")
+    @patch("video_grouper.api_integrations.playmetrics.ChromeDriverManager")
     @patch("video_grouper.api_integrations.playmetrics.webdriver")
-    def test_login(self, mock_webdriver):
+    def test_login(self, mock_webdriver, mock_chrome_driver_manager, mock_sleep):
         """Test login to PlayMetrics."""
+        # Mock ChromeDriverManager
+        mock_chrome_driver_manager.return_value.install.return_value = "/fake/chromedriver"
+        
         # Mock the webdriver
         mock_driver = MagicMock()
         mock_webdriver.Chrome.return_value = mock_driver
@@ -92,6 +97,9 @@ class TestPlayMetricsCalendarIntegration:
 
         # Verify that the driver was called correctly
         mock_driver.get.assert_called_with("https://playmetrics.com/login")
+        
+        # Verify time.sleep was called (but mocked)
+        assert mock_sleep.call_count >= 2  # At least 2 sleep calls in login
 
     @patch("video_grouper.api_integrations.playmetrics.requests")
     def test_download_calendar(self, mock_requests):
@@ -312,9 +320,14 @@ END:VCALENDAR"""
         # Check that API is disabled
         assert not api.enabled
 
+    @patch("video_grouper.api_integrations.playmetrics.time.sleep")
+    @patch("video_grouper.api_integrations.playmetrics.ChromeDriverManager")
     @patch("video_grouper.api_integrations.playmetrics.webdriver")
-    def test_login_failed(self, mock_webdriver):
+    def test_login_failed(self, mock_webdriver, mock_chrome_driver_manager, mock_sleep):
         """Test login to PlayMetrics when login fails."""
+        # Mock ChromeDriverManager
+        mock_chrome_driver_manager.return_value.install.return_value = "/fake/chromedriver"
+        
         # Mock the webdriver
         mock_driver = MagicMock()
         mock_webdriver.Chrome.return_value = mock_driver
@@ -359,3 +372,6 @@ END:VCALENDAR"""
 
         # Verify that the driver was called correctly
         mock_driver.get.assert_called_with("https://playmetrics.com/login")
+        
+        # Verify time.sleep was called (but mocked)
+        assert mock_sleep.call_count >= 2  # At least 2 sleep calls in login

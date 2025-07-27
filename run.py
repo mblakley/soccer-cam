@@ -14,5 +14,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from video_grouper.__main__ import main
 
 if __name__ == "__main__":
+    # Pass through command line arguments
     exit_code = asyncio.run(main())
     sys.exit(exit_code)

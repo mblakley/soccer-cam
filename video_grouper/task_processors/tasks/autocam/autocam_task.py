@@ -40,9 +40,8 @@ class AutocamTask(BaseTask):
         self.output_path = output_path
         self.autocam_config = autocam_config
 
-    @property
-    def queue_type(self) -> QueueType:
-        """Return the queue type for routing this task."""
+    @classmethod
+    def queue_type(cls) -> QueueType:
         return QueueType.AUTOCAM
 
     @property
@@ -144,3 +143,16 @@ class AutocamTask(BaseTask):
             output_path=data["output_path"],
             autocam_config=autocam_config,
         )
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "AutocamTask":
+        """
+        Deserialize an AutocamTask from its serialized data.
+
+        Args:
+            data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized AutocamTask instance
+        """
+        return cls.from_dict(data)

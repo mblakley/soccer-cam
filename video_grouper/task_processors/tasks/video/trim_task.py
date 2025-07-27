@@ -133,6 +133,19 @@ class TrimTask(BaseFfmpegTask):
         )
 
     @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "TrimTask":
+        """
+        Deserialize a TrimTask from its serialized data.
+
+        Args:
+            data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized TrimTask instance
+        """
+        return cls.from_dict(data)
+
+    @classmethod
     def from_match_info(cls, group_dir: str, match_info) -> "TrimTask":
         """
         Create a TrimTask from match information.

@@ -18,15 +18,22 @@ class PlayMetricsService:
     Handles multiple team configurations and game lookups.
     """
 
-    def __init__(self, configs: List[PlayMetricsConfig], app_config=None):
+    def __init__(self, config, app_config=None):
         """
         Initialize PlayMetrics service.
 
         Args:
-            configs: List of PlayMetrics configuration objects
+            config: PlayMetrics configuration object containing credentials and teams
             app_config: Application configuration object containing timezone settings
         """
-        self.configs = configs
+        # Accept either a single PlayMetricsConfig or a list for backward compatibility
+        if isinstance(config, list):
+            self.configs = config
+        else:
+            self.configs = [config]
+
+        # Use the first config as canonical for credentials if needed
+        self.config = self.configs[0] if self.configs else None
         self.app_config = app_config
         self.playmetrics_apis = []
         self.enabled = False
@@ -34,28 +41,57 @@ class PlayMetricsService:
         self._initialize_apis()
 
     def _initialize_apis(self) -> None:
-        """Initialize PlayMetrics API instances for all configured teams."""
-        for config in self.configs:
-            if config.enabled:
+        """Initialize PlayMetrics API instances for all configured teams. No fallback logic."""
+        errors = []
+        for cfg in self.configs:
+            if not cfg or not hasattr(cfg, 'teams'):
+                logger.warning("No PlayMetrics teams found in config.")
+                continue
+
+            for team in cfg.teams:
+                if not team.enabled:
+                    continue
                 try:
-                    logger.info(
-                        f"Initializing PlayMetrics team: {config.team_name or 'Default'}"
+                    logger.info(f"Initializing PlayMetrics team: {team.team_name or 'Unknown'}")
+                    # Create a config for this team using main credentials and team info
+                    # We need to create a config object that has team_id and team_name as attributes
+                    # Since PlayMetricsConfig doesn't have these fields, we'll create a simple object
+                    class TeamConfig:
+                        def __init__(self, enabled, username, password, team_id, team_name):
+                            self.enabled = enabled
+                            self.username = username
+                            self.password = password
+                            self.team_id = team_id
+                            self.team_name = team_name
+                    
+                    team_config = TeamConfig(
+                        enabled=cfg.enabled,
+                        username=cfg.username,
+                        password=cfg.password,
+                        team_id=team.team_id,
+                        team_name=team.team_name
                     )
-                    api = PlayMetricsAPI(config, self.app_config)
+                    api = PlayMetricsAPI(team_config, self.app_config)
                     if api.login():
                         self.playmetrics_apis.append(api)
-                        self.enabled = True
+                        logger.info(f"Successfully initialized PlayMetrics API for {team.team_name or 'Unknown'}")
+                    else:
+                        error_msg = f"Failed to log in to PlayMetrics for team {team.team_name or 'Unknown'}"
+                        logger.error(error_msg)
+                        errors.append(error_msg)
                 except Exception as e:
-                    logger.error(
-                        f"Error creating PlayMetrics API for {config.team_name or 'Default'}: {e}"
-                    )
-
-        if self.enabled:
+                    error_msg = f"Error creating PlayMetrics API for {team.team_name or 'Unknown'}: {e}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+        if not self.playmetrics_apis:
+            error_summary = "\n".join(errors) if errors else "No valid PlayMetrics team configurations found."
+            logger.warning(f"PlayMetrics service unavailable. Errors:\n{error_summary}")
+            self.enabled = False
+        else:
+            self.enabled = True
             logger.info(
                 f"PlayMetrics service enabled with {len(self.playmetrics_apis)} teams"
             )
-        else:
-            logger.info("PlayMetrics service disabled - no valid configurations")
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime

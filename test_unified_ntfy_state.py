@@ -15,9 +15,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import NtfyConfig
 
+from video_grouper.utils.logger import setup_logging, get_logger
+
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+setup_logging(level="DEBUG", app_name="test_ntfy")
+logger = get_logger(__name__)
 
 
 async def test_unified_state():

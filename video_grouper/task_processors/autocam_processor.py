@@ -179,12 +179,8 @@ class AutocamProcessor(QueueProcessor):
             # Create NTFY service for the upload task
             ntfy_service = NtfyService(self.storage_path, self.config)
 
-            # Create YouTube upload task
-            youtube_task = YoutubeUploadTask(
-                group_dir=str(group_dir),
-                youtube_config=self.config.youtube,
-                ntfy_service=ntfy_service,
-            )
+            # Create the upload task with the minimal required argument.
+            youtube_task = YoutubeUploadTask(group_dir=str(group_dir))
 
             # Add to the upload processor queue if available
             if self.upload_processor:

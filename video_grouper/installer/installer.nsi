@@ -174,9 +174,9 @@ Section "Install Service" SecService
     FileWrite $0 "$\r$\n"
     FileWrite $0 "[LOGGING]$\r$\n"
     FileWrite $0 "level = INFO$\r$\n"
-    FileWrite $0 "log_file = logs\video_grouper.log$\r$\n"
-    FileWrite $0 "max_log_size = 10485760$\r$\n"
-    FileWrite $0 "backup_count = 5$\r$\n"
+    FileWrite $0 "log_dir = logs$\r$\n"
+    FileWrite $0 "app_name = video_grouper$\r$\n"
+    FileWrite $0 "backup_count = 30$\r$\n"
     FileClose $0
     
     ; Copy files

@@ -81,8 +81,8 @@ class BaseNtfyTask(BaseTask, ABC):
         self.metadata = metadata or {}
         self.created_at = datetime.now()
 
-    @property
-    def queue_type(self) -> QueueType:
+    @classmethod
+    def queue_type(cls) -> QueueType:
         """Return the queue type for routing this task."""
         return QueueType.NTFY
 

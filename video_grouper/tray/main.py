@@ -24,17 +24,11 @@ from video_grouper.utils.config import load_config, Config
 from video_grouper.task_processors import AutocamProcessor
 from typing import Optional
 
+from video_grouper.utils.logger import setup_logging, get_logger
+
 # Configure logging
-# log_dir = Path('C:/ProgramData/VideoGrouper')
-# log_dir.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    # filename=log_dir / 'tray_agent.log',
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
+setup_logging(level="INFO", app_name="video_grouper_tray")
+logger = get_logger(__name__)
 
 
 class UpdateChecker(threading.Thread):

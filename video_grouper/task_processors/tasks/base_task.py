@@ -15,9 +15,9 @@ class BaseTask(ABC):
     Provides common interface that all tasks must implement.
     """
 
-    @property
+    @classmethod
     @abstractmethod
-    def queue_type(self) -> QueueType:
+    def queue_type(cls) -> QueueType:
         """Return the queue type for routing this task."""
         pass
 
@@ -35,6 +35,12 @@ class BaseTask(ABC):
     @abstractmethod
     def serialize(self) -> Dict[str, object]:
         """Serialize the task for state persistence."""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def deserialize(cls, data: Dict[str, object]) -> "BaseTask":
+        """Deserialize a task from its serialized data."""
         pass
 
     @abstractmethod

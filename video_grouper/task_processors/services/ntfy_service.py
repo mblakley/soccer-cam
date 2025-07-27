@@ -182,6 +182,72 @@ class NtfyService:
         if self.ntfy_api:
             await self.ntfy_api.shutdown()
 
+    async def request_team_info(self, group_dir: str, video_file: str) -> bool:
+        """
+        Request team information for a video file.
+
+        Args:
+            group_dir: Directory containing the video group
+            video_file: Name of the video file
+
+        Returns:
+            True if the request was successful, False otherwise
+        """
+        if not await self._ensure_initialized():
+            logger.error("NTFY service not initialized")
+            return False
+
+        try:
+            result = await self.ntfy_api.ask_team_info(group_dir, video_file)
+            if result:
+                logger.info(f"Team info request successful for {group_dir}")
+                return True
+            else:
+                logger.warning(f"Team info request failed for {group_dir}")
+                return False
+        except Exception as e:
+            logger.error(f"Error requesting team info for {group_dir}: {e}")
+            return False
+
+    async def request_playlist_name(self, group_dir: str, team_name: str) -> bool:
+        """
+        Request playlist name for a team.
+
+        Args:
+            group_dir: Directory containing the video group
+            team_name: Name of the team
+
+        Returns:
+            True if the request was successful, False otherwise
+        """
+        if not await self._ensure_initialized():
+            logger.error("NTFY service not initialized")
+            return False
+
+        try:
+            # Mark as waiting for input
+            self.mark_waiting_for_input(
+                group_dir, 
+                "playlist_name", 
+                {"team_name": team_name}
+            )
+            
+            # Send notification requesting playlist name
+            result = await self.ntfy_api.send_notification(
+                f"Please provide YouTube playlist name for {team_name}",
+                title="YouTube Playlist Request"
+            )
+            
+            if result:
+                logger.info(f"Playlist name request sent for {group_dir}")
+                return True
+            else:
+                logger.warning(f"Playlist name request failed for {group_dir}")
+                return False
+        except Exception as e:
+            logger.error(f"Error requesting playlist name for {group_dir}: {e}")
+            return False
+
     async def process_response(self, response: str) -> None:
         """
         Process a response from NTFY and route it to the appropriate pending task.

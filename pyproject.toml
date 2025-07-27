@@ -78,3 +78,19 @@ line-ending = "auto"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/test_service.py" = ["E402"] 
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--disable-warnings",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+asyncio_mode = "strict" 

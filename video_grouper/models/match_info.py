@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
-from ..utils.paths import get_match_info_path, get_match_info_dist_path
+from video_grouper.utils.paths import get_match_info_path, get_match_info_dist_path, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -105,23 +105,29 @@ class MatchInfo:
 
     @classmethod
     def get_or_create(
-        cls, group_dir: str
+        cls,
+        group_dir: str,
+        storage_path: Optional[str] = None,
     ) -> Tuple[Optional["MatchInfo"], configparser.ConfigParser]:
         """Get an existing MatchInfo object or create a new one with default values.
 
         Args:
             group_dir: The group directory path
+            storage_path: The storage path
 
         Returns:
             A tuple of (MatchInfo object or None, ConfigParser object)
         """
-        match_info_path = get_match_info_path(group_dir)
+        if storage_path is None:
+            storage_path = os.path.dirname(os.path.abspath(group_dir))
+
+        match_info_path = get_match_info_path(group_dir, storage_path)
         config = configparser.ConfigParser()
 
         # Create the file if it doesn't exist
         if not os.path.exists(match_info_path):
-            if not os.path.exists(group_dir):
-                os.makedirs(group_dir)
+            if not os.path.exists(resolve_path(group_dir, storage_path)):
+                os.makedirs(resolve_path(group_dir, storage_path))
 
             # Try to copy from dist file if available
             source_dist_path = get_match_info_dist_path()
@@ -153,7 +159,9 @@ class MatchInfo:
         return match_info, config
 
     @classmethod
-    def update_team_info(cls, group_dir: str, team_info: dict) -> Optional["MatchInfo"]:
+    def update_team_info(
+        cls, group_dir: str, team_info: dict, storage_path: Optional[str] = None
+    ) -> Optional["MatchInfo"]:
         """Update team information in the match_info.ini file.
 
         Args:
@@ -163,8 +171,11 @@ class MatchInfo:
         Returns:
             Updated MatchInfo object or None if the update failed
         """
-        match_info_path = get_match_info_path(group_dir)
-        match_info, config = cls.get_or_create(group_dir)
+        if storage_path is None:
+            storage_path = os.path.dirname(os.path.abspath(group_dir))
+
+        match_info_path = get_match_info_path(group_dir, storage_path)
+        match_info, config = cls.get_or_create(group_dir, storage_path)
 
         # Update the config with team information
         if team_info:
@@ -207,6 +218,7 @@ class MatchInfo:
         group_dir: str,
         start_time_offset: Optional[str] = None,
         total_duration: Optional[str] = None,
+        storage_path: Optional[str] = None,
     ) -> Optional["MatchInfo"]:
         """Update game timing information in the match_info.ini file.
 
@@ -218,8 +230,11 @@ class MatchInfo:
         Returns:
             Updated MatchInfo object or None if the update failed
         """
-        match_info_path = get_match_info_path(group_dir)
-        match_info, config = cls.get_or_create(group_dir)
+        if storage_path is None:
+            storage_path = os.path.dirname(os.path.abspath(group_dir))
+
+        match_info_path = get_match_info_path(group_dir, storage_path)
+        match_info, config = cls.get_or_create(group_dir, storage_path)
 
         # Update the config with timing information
         if start_time_offset is not None:
@@ -353,7 +368,9 @@ class MatchInfo:
     def save(self) -> None:
         """Save the current state back to the match_info.ini file."""
         match_info_path = (
-            get_match_info_path(self.group_dir) if hasattr(self, "group_dir") else None
+            get_match_info_path(self.group_dir, os.path.dirname(os.path.abspath(self.group_dir)))
+            if hasattr(self, "group_dir")
+            else None
         )
         if not match_info_path:
             # If we don't have group_dir, we can't save

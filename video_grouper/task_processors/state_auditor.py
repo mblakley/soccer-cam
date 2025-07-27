@@ -51,12 +51,7 @@ class StateAuditor(PollingProcessor):
         # Initialize API services
         self.teamsnap_service = TeamSnapService(config.teamsnap, config.app)
 
-        playmetrics_configs = []
-        if config.playmetrics.enabled:
-            playmetrics_configs.append(config.playmetrics)
-        playmetrics_configs.extend(config.playmetrics_teams)
-
-        self.playmetrics_service = PlayMetricsService(playmetrics_configs, config.app)
+        self.playmetrics_service = PlayMetricsService(config.playmetrics, config.app)
         # Create NTFY service for the match info service and general use
         self.ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
@@ -86,12 +81,13 @@ class StateAuditor(PollingProcessor):
 
     async def _audit_directory(self, group_dir: str) -> None:
         """Audit a single directory and queue appropriate tasks."""
-        state_file_path = get_state_file_path(group_dir)
+        state_file_path = get_state_file_path(group_dir, self.storage_path)
+        logger.debug(f"STATE_AUDITOR: Resolved state_file_path for group_dir={group_dir}, storage_path={self.storage_path}: {state_file_path}")
         if not os.path.exists(state_file_path):
             return
 
         try:
-            dir_state = DirectoryState(group_dir)
+            dir_state = DirectoryState(group_dir, self.storage_path)
 
             # Audit individual files
             for file_obj in dir_state.files.values():
@@ -113,14 +109,15 @@ class StateAuditor(PollingProcessor):
 
             # Check if ready for combining
             if dir_state.is_ready_for_combining():
-                combined_path = get_combined_video_path(group_dir)
+                combined_path = get_combined_video_path(group_dir, self.storage_path)
+                logger.debug(f"STATE_AUDITOR: Resolved combined_path for group_dir={group_dir}, storage_path={self.storage_path}: {combined_path}")
                 if not os.path.exists(combined_path):
                     if self.video_processor:
                         await self.video_processor.add_work(CombineTask(group_dir))
 
             # Check for trimming (combined status with match info processing)
             if dir_state.status == "combined":
-                combined_path = get_combined_video_path(group_dir)
+                combined_path = get_combined_video_path(group_dir, self.storage_path)
                 if os.path.exists(combined_path):
                     logger.info(f"STATE_AUDITOR: Found combined directory: {group_dir}")
 
@@ -143,7 +140,7 @@ class StateAuditor(PollingProcessor):
                         )
 
                         # Check if match info is populated
-                        match_info_path = get_match_info_path(group_dir)
+                        match_info_path = get_match_info_path(group_dir, self.storage_path)
                         if os.path.exists(match_info_path):
                             match_info = MatchInfo.from_file(match_info_path)
                             if match_info and match_info.is_populated():

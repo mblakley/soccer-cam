@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from video_grouper.utils.config import Config
+from video_grouper.utils.logger import setup_logging_from_config, get_logger
 from video_grouper.task_processors import (
     StateAuditor,
     CameraPoller,
@@ -11,13 +12,10 @@ from video_grouper.task_processors import (
     UploadProcessor,
     NtfyProcessor,
 )
+from video_grouper.task_processors.register_tasks import register_all_tasks
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
-)
-logger = logging.getLogger(__name__)
+# Configure logging will be done after config is loaded
+logger = get_logger(__name__)
 
 DEFAULT_STORAGE_PATH = "./shared_data"
 
@@ -41,6 +39,9 @@ class VideoGrouperApp:
             config: Configuration object
             camera: Camera object (optional, will be created if not provided)
         """
+        # Setup logging from config
+        setup_logging_from_config(config)
+        
         self.config = config
         self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
@@ -102,9 +103,15 @@ class VideoGrouperApp:
 
             ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
             teamsnap_service = TeamSnapService(self.config.teamsnap, self.config.app)
-            playmetrics_service = PlayMetricsService(
-                self.config.playmetrics_teams, self.config.app
-            )
+            try:
+                playmetrics_service = PlayMetricsService(
+                    self.config.playmetrics, self.config.app
+                )
+            except RuntimeError as e:
+                logger.critical(f"PlayMetricsService failed to initialize: {e}")
+                # Optionally, you can use sys.exit(1) to exit the app immediately
+                import sys
+                sys.exit(1)
             match_info_service = MatchInfoService(
                 teamsnap_service=teamsnap_service,
                 playmetrics_service=playmetrics_service,
@@ -139,6 +146,10 @@ class VideoGrouperApp:
             self.processors.append(self.ntfy_processor)
 
         self._shutdown_event = asyncio.Event()
+        
+        # Register all task types with the task registry
+        register_all_tasks()
+        
         logger.info("VideoGrouperApp initialized with task processors")
 
     async def initialize(self):
@@ -201,6 +212,10 @@ class VideoGrouperApp:
         # Close camera connection if open
         if self.camera:
             await self.camera.close()
+
+        # Close all loggers to release file handles
+        from video_grouper.utils.logger import close_loggers
+        close_loggers()
 
         logger.info("VideoGrouperApp shutdown complete")
 

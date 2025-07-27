@@ -1969,11 +1969,10 @@ class ConfigWindow(QWidget):
 
 def main():
     """Main entry point for the standalone configuration UI."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
-    )
+    from video_grouper.utils.logger import setup_logging, get_logger
+    
+    setup_logging(level="INFO", app_name="video_grouper_config")
+    logger = get_logger(__name__)
     logger.info("Running Configuration UI in standalone mode")
 
     app = QApplication(sys.argv)

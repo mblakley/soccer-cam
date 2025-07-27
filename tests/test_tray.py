@@ -12,13 +12,21 @@ from video_grouper.utils.config import Config, AppConfig, StorageConfig
 
 
 # We need a QApplication instance to test PyQt components
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def qapp():
-    """Session-wide QApplication instance."""
+    """Function-scoped QApplication instance with proper cleanup."""
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-    return app
+    
+    yield app
+    
+    # Clean up the application
+    try:
+        app.quit()
+        app.deleteLater()
+    except:
+        pass
 
 
 @pytest.fixture
@@ -77,8 +85,10 @@ def test_system_tray_icon_initialization(
     mock_start_update_checker.assert_called_once()
 
 
-@patch("win32serviceutil.StartService")
-def test_start_service_success(mock_start_service):
+@patch("video_grouper.tray.main.win32serviceutil.StartService")
+@patch("video_grouper.tray.main.win32serviceutil.StopService")
+@patch("video_grouper.tray.main.win32serviceutil.RestartService")
+def test_start_service_success(mock_restart_service, mock_stop_service, mock_start_service):
     """Test the start_service method for success."""
     with patch("video_grouper.tray.main.SystemTrayIcon.__init__", lambda x: None):
         tray_icon = SystemTrayIcon()
@@ -90,8 +100,10 @@ def test_start_service_success(mock_start_service):
         )
 
 
-@patch("win32serviceutil.StartService", side_effect=Exception("Test Error"))
-def test_start_service_failure(mock_start_service):
+@patch("video_grouper.tray.main.win32serviceutil.StartService", side_effect=Exception("Test Error"))
+@patch("video_grouper.tray.main.win32serviceutil.StopService")
+@patch("video_grouper.tray.main.win32serviceutil.RestartService")
+def test_start_service_failure(mock_restart_service, mock_stop_service, mock_start_service):
     """Test the start_service method for failure."""
     with patch("video_grouper.tray.main.SystemTrayIcon.__init__", lambda x: None):
         tray_icon = SystemTrayIcon()
