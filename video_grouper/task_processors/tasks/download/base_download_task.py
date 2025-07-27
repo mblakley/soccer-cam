@@ -22,8 +22,8 @@ class BaseDownloadTask(BaseTask):
     Provides common interface for downloading videos from various camera types.
     """
 
-    @property
-    def queue_type(self) -> QueueType:
+    @classmethod
+    def queue_type(cls) -> QueueType:
         """Return the queue type for routing this task."""
         return QueueType.DOWNLOAD
 

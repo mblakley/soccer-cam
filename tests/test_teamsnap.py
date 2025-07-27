@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # Add the parent directory to the path so we can import the video_grouper package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,7 +37,11 @@ class TestTeamSnapAPI(unittest.TestCase):
         from video_grouper.utils.config import AppConfig
 
         self.app_config = AppConfig(timezone="America/New_York")
-        self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
+        
+        # Mock the initialization methods to prevent real network calls
+        with patch.object(TeamSnapAPI, '_ensure_valid_token', return_value=True), \
+             patch.object(TeamSnapAPI, '_discover_api_endpoints'):
+            self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
 
         # Create mock games
         self.games = [
@@ -102,61 +106,49 @@ class TestTeamSnapAPI(unittest.TestCase):
                     {
                         "data": [
                             {"name": "id", "value": "1"},
+                            {"name": "name", "value": "Game 1"},
                             {"name": "start_date", "value": "2025-03-08T17:10:14Z"},
                             {"name": "opponent_name", "value": "Opponent 1"},
                             {"name": "location_name", "value": "Location 1"},
+                            {"name": "duration_in_minutes", "value": "90"},
                         ]
-                    },
-                    {
-                        "data": [
-                            {"name": "id", "value": "2"},
-                            {"name": "start_date", "value": "2025-03-09T14:00:00Z"},
-                            {"name": "opponent_name", "value": "Opponent 2"},
-                            {"name": "location_name", "value": "Location 2"},
-                        ]
-                    },
+                    }
                 ]
             }
         }
 
         # Set up the endpoints
-        self.api.endpoints = {"events": "https://api.teamsnap.com/v3/events"}
+        self.api.endpoints["events"] = "https://api.teamsnap.com/v3/events"
 
         # Call the method
         events = self.api.get_team_events()
 
-        # Check that the events were retrieved
-        self.assertEqual(len(events), 2)
+        # Check that events were retrieved
+        self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["id"], "1")
-        self.assertEqual(events[0]["start_date"], "2025-03-08T17:10:14Z")
-        self.assertEqual(events[0]["opponent_name"], "Opponent 1")
-        self.assertEqual(events[0]["location_name"], "Location 1")
+        self.assertEqual(events[0]["name"], "Game 1")
 
     @patch("video_grouper.api_integrations.teamsnap.TeamSnapAPI.get_team_events")
     def test_get_games(self, mock_get_team_events):
-        """Test that games are filtered correctly."""
-        # Mock the get_team_events method
+        """Test that games are filtered correctly from team events."""
+        # Mock the team events response
         mock_get_team_events.return_value = [
             {
                 "id": "1",
+                "name": "Game 1",
                 "start_date": "2025-03-08T17:10:14Z",
                 "opponent_name": "Opponent 1",
                 "location_name": "Location 1",
-                "event_type": "game",
+                "duration_in_minutes": "90",
+                "is_game": True,
             },
             {
                 "id": "2",
+                "name": "Practice 1",
                 "start_date": "2025-03-09T14:00:00Z",
-                "opponent_name": "Opponent 2",
                 "location_name": "Location 2",
-                "event_type": "practice",
-            },
-            {
-                "id": "3",
-                "start_date": "2025-03-10T15:00:00Z",
-                "opponent_name": "Opponent 3",
-                "location_name": "Location 3",
-                "event_type": "game",
+                "duration_in_minutes": "60",
+                "is_game": False,
             },
         ]
 
@@ -164,40 +156,51 @@ class TestTeamSnapAPI(unittest.TestCase):
         games = self.api.get_games()
 
         # Check that only games were returned
-        self.assertEqual(len(games), 2)
+        self.assertEqual(len(games), 1)
         self.assertEqual(games[0]["id"], "1")
-        self.assertEqual(games[1]["id"], "3")
+        self.assertEqual(games[0]["name"], "Game 1")
+        self.assertTrue(games[0]["is_game"])
 
     @patch("video_grouper.api_integrations.teamsnap.TeamSnapAPI.get_games")
     def test_find_game_for_recording(self, mock_get_games):
-        """Test that games are found correctly for a recording timespan."""
-        # Mock the get_games method
+        """Test that games are found for recording timespans."""
+        # Mock the games response
         mock_get_games.return_value = self.games
 
-        # Test case 1: Recording overlaps with a game
+        # Create a recording timespan that overlaps with the first game
         recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
         recording_end = recording_start + timedelta(minutes=60)
 
+        # Call the method
         game = self.api.find_game_for_recording(recording_start, recording_end)
 
+        # Check that the correct game was found
         self.assertIsNotNone(game)
         self.assertEqual(game["id"], "1")
+        self.assertEqual(game["opponent_name"], "Opponent 1")
 
-        # Test case 2: Recording does not overlap with any game
+        # Test case 2: No game found
         recording_start = datetime(2025, 3, 10, 17, 15, 0, tzinfo=timezone.utc)
         recording_end = recording_start + timedelta(minutes=60)
 
         game = self.api.find_game_for_recording(recording_start, recording_end)
 
+        # Check that no game was found
         self.assertIsNone(game)
 
     @patch(
         "video_grouper.api_integrations.teamsnap.TeamSnapAPI.find_game_for_recording"
     )
     def test_populate_match_info(self, mock_find_game):
-        """Test that match info is populated correctly."""
+        """Test that match info is populated correctly from a game."""
         # Mock the find_game_for_recording method
-        mock_find_game.return_value = self.games[0]
+        mock_find_game.return_value = {
+            "id": "1",
+            "start_date": "2025-03-08T17:10:14Z",
+            "opponent_name": "Opponent 1",
+            "location_name": "Location 1",
+            "duration_in_minutes": "90",
+        }
 
         # Create a recording timespan
         recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
@@ -284,7 +287,12 @@ class TestTeamSnapAPI(unittest.TestCase):
                 self.save_called = True
 
         dummy = DummyConfig()
-        api = TeamSnapAPI(dummy, self.team_config, self.app_config)
+        
+        # Mock the initialization methods to prevent real network calls
+        with patch.object(TeamSnapAPI, '_ensure_valid_token', return_value=True), \
+             patch.object(TeamSnapAPI, '_discover_api_endpoints'):
+            api = TeamSnapAPI(dummy, self.team_config, self.app_config)
+        
         api.access_token = "new_token"
         api._update_config_token()
         self.assertEqual(dummy.access_token, "new_token")

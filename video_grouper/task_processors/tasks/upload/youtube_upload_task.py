@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
 from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
 from video_grouper.models import MatchInfo
@@ -26,8 +27,6 @@ class YoutubeUploadTask(BaseUploadTask):
     """
 
     group_dir: str
-    youtube_config: YouTubeConfig = field(compare=False, hash=False)
-    ntfy_service: NtfyService = field(compare=False, hash=False)
 
     def get_platform(self) -> str:
         """Return the platform identifier."""
@@ -46,33 +45,27 @@ class YoutubeUploadTask(BaseUploadTask):
         """
         return {"task_type": self.task_type, "group_dir": self.group_dir}
 
-    async def execute(self) -> bool:
+    async def execute(self, youtube_config=None, ntfy_service=None) -> bool:
         """
         Execute the YouTube upload task.
+
+        Args:
+            youtube_config: YouTube configuration (provided by processor)
+            ntfy_service: NTFY service (provided by processor)
 
         Returns:
             True if upload succeeded, False otherwise
         """
         try:
-            # Import here to avoid circular import
             from video_grouper.utils.youtube_upload import (
                 YouTubeUploader,
                 get_youtube_paths,
             )
-            # from video_grouper.task_processors.services.ntfy_service import NtfyService
 
             # Get storage path from group directory
-            storage_path = os.path.dirname(self.group_dir)
-            while storage_path and not os.path.exists(
-                os.path.join(storage_path, "config.ini")
-            ):
-                parent = os.path.dirname(storage_path)
-                if parent == storage_path:  # Reached root
-                    storage_path = os.path.dirname(self.group_dir)
-                    break
-                storage_path = parent
+            storage_path = self.storage_path
 
-            if self.ntfy_service is None:
+            if ntfy_service is None:
                 raise ValueError("ntfy_service must be provided to YoutubeUploadTask")
 
             # Get credentials and token file paths
@@ -86,7 +79,7 @@ class YoutubeUploadTask(BaseUploadTask):
             logger.info(f"Starting YouTube upload for {self.group_dir}")
 
             # Load match info to get team name
-            match_info_path = os.path.join(self.group_dir, "match_info.ini")
+            match_info_path = resolve_path(os.path.join(self.group_dir, "match_info.ini"), storage_path)
             if not os.path.exists(match_info_path):
                 logger.error(f"match_info.ini not found in {self.group_dir}")
                 return False
@@ -98,7 +91,7 @@ class YoutubeUploadTask(BaseUploadTask):
 
             # Get playlist names using coordination logic
             processed_playlist_name, raw_playlist_name = await self._get_playlist_names(
-                match_info, self.youtube_config, self.ntfy_service, storage_path
+                match_info, youtube_config, ntfy_service, storage_path
             )
 
             # If we don't have playlist names and a request was sent, skip for now
@@ -107,7 +100,7 @@ class YoutubeUploadTask(BaseUploadTask):
                 return False  # Will be retried later
 
             # Get privacy status from config
-            privacy_status = self.youtube_config.privacy_status
+            privacy_status = youtube_config.privacy_status
 
             # Initialize YouTube uploader
             uploader = YouTubeUploader(credentials_file, token_file)
@@ -294,3 +287,16 @@ class YoutubeUploadTask(BaseUploadTask):
         # Handle both 'group_dir' and 'item_path' for backward compatibility
         group_dir = data.get("group_dir") or data.get("item_path")
         return cls(group_dir=group_dir)
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "YoutubeUploadTask":
+        """
+        Deserialize a YoutubeUploadTask from its serialized data.
+
+        Args:
+            data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized YoutubeUploadTask instance
+        """
+        return cls.from_dict(data)

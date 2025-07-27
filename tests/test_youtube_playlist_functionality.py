@@ -21,6 +21,14 @@ from video_grouper.models import DirectoryState
 YT_UPLOAD_TASK_PATH = "video_grouper.task_processors.tasks.upload.youtube_upload_task"
 
 
+def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
+    """Create a mock YoutubeUploadTask with required dependencies."""
+    task = YoutubeUploadTask(group_dir=group_dir)
+    # Set storage_path as the processor would do
+    task.storage_path = "/fake/storage/path"
+    return task
+
+
 @pytest.mark.asyncio
 @patch(f"{YT_UPLOAD_TASK_PATH}.DirectoryState")
 @patch("video_grouper.task_processors.services.ntfy_service.NtfyService")
@@ -98,12 +106,11 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
     mock_uploader_instance.get_or_create_playlist.return_value = "playlist_id_123"
 
     # Execute the task
-    task = YoutubeUploadTask(
-        group_dir=group_dir,
+    task = create_mock_youtube_upload_task(group_dir)
+    result = await task.execute(
         youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance,
+        ntfy_service=mock_ntfy_instance
     )
-    result = await task.execute()
 
     # Verify success
     assert result is True
@@ -194,12 +201,11 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     mock_uploader_instance.get_or_create_playlist.return_value = "playlist_id_123"
 
     # Execute the task
-    task = YoutubeUploadTask(
-        group_dir=group_dir,
+    task = create_mock_youtube_upload_task(group_dir)
+    result = await task.execute(
         youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance,
+        ntfy_service=mock_ntfy_instance
     )
-    result = await task.execute()
 
     # Verify success
     assert result is True
@@ -270,12 +276,11 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
     mock_ntfy_instance.request_playlist_name = AsyncMock(return_value=True)
 
     # Execute the task
-    task = YoutubeUploadTask(
-        group_dir=group_dir,
+    task = create_mock_youtube_upload_task(group_dir)
+    result = await task.execute(
         youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance,
+        ntfy_service=mock_ntfy_instance
     )
-    result = await task.execute()
 
     # Should return False because no playlist name is available
     assert result is False
@@ -343,12 +348,11 @@ async def test_youtube_upload_task_skips_request_if_already_waiting(
     mock_ntfy_instance.request_playlist_name = AsyncMock()
 
     # Execute the task
-    task = YoutubeUploadTask(
-        group_dir=group_dir,
+    task = create_mock_youtube_upload_task(group_dir)
+    result = await task.execute(
         youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance,
+        ntfy_service=mock_ntfy_instance
     )
-    result = await task.execute()
 
     # Should return False because waiting for input
     assert result is False

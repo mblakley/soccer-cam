@@ -11,16 +11,12 @@ from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.locking import FileLock
 from video_grouper.utils.config import load_config, Config
+from video_grouper.utils.logger import setup_logging, get_logger
 from typing import Optional
 
 # Configure logging
-logging.basicConfig(
-    filename="C:\\ProgramData\\VideoGrouper\\service.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
+setup_logging(level="INFO", app_name="video_grouper_service")
+logger = get_logger(__name__)
 
 
 class VideoGrouperService(win32serviceutil.ServiceFramework):

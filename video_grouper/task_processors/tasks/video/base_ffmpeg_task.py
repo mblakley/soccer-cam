@@ -19,8 +19,8 @@ class BaseFfmpegTask(BaseTask):
     Provides common functionality for task identification and routing.
     """
 
-    @property
-    def queue_type(self) -> QueueType:
+    @classmethod
+    def queue_type(cls) -> QueueType:
         """Return the queue type for routing this task."""
         return QueueType.VIDEO
 
@@ -41,7 +41,7 @@ class BaseFfmpegTask(BaseTask):
     @property
     def task_type(self) -> str:
         """Backward compatibility property for task_type."""
-        return self.queue_type.value
+        return self.queue_type().value
 
     @property
     def item_path(self) -> str:

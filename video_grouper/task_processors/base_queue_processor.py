@@ -10,6 +10,7 @@ from typing import Dict
 from .queue_type import QueueType
 from video_grouper.utils.config import Config
 from video_grouper.task_processors.tasks.base_task import BaseTask
+from .task_registry import task_registry
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,12 @@ class QueueProcessor(ABC):
         item_key = self.get_item_key(item)
 
         if item_key not in self._queued_items:
+            # Ensure the task knows the storage path for later execution.
+            # Many task classes rely on `self.storage_path` being set at runtime
+            # rather than during construction.
+            if not hasattr(item, "storage_path"):
+                setattr(item, "storage_path", self.storage_path)
+
             await self._queue.put(item)
             self._queued_items.add(item_key)
             queue_size = self._queue.qsize()
@@ -77,6 +84,8 @@ class QueueProcessor(ABC):
 
             # Always persist state immediately
             await self.save_state()
+            
+
         else:
             logger.debug(f"{self.__class__.__name__}: Item already queued: {item}")
 
@@ -133,7 +142,7 @@ class QueueProcessor(ABC):
             try:
                 # Get the next item from the queue
                 try:
-                    item = await asyncio.wait_for(self._queue.get(), timeout=60.0)
+                    item = await asyncio.wait_for(self._queue.get(), timeout=5.0)
                 except asyncio.TimeoutError:
                     # Timeout - check if we should continue or exit
                     if self._shutdown_event.is_set():
@@ -266,10 +275,12 @@ class QueueProcessor(ABC):
 
             # Restore items to the queue
             restored_count = 0
+            skipped_count = 0
             for item_data in serialized_items:
                 try:
                     # Skip legacy format items
                     if "item" in item_data and item_data["item"] == "None":
+                        skipped_count += 1
                         continue
 
                     # Deserialize the task
@@ -283,13 +294,20 @@ class QueueProcessor(ABC):
                         logger.debug(
                             f"{self.__class__.__name__}: Restored task to queue: {task}"
                         )
+                    else:
+                        # Task deserialization returned None (e.g., missing task_type)
+                        skipped_count += 1
+                        logger.debug(
+                            f"{self.__class__.__name__}: Skipped invalid task data: {item_data}"
+                        )
                 except Exception as e:
                     logger.error(
                         f"{self.__class__.__name__}: Failed to deserialize task {item_data}: {e}"
                     )
+                    skipped_count += 1
 
             logger.info(
-                f"{self.__class__.__name__}: Successfully restored {restored_count} items to queue"
+                f"{self.__class__.__name__}: Successfully restored {restored_count} items to queue, skipped {skipped_count} invalid items"
             )
 
         except Exception as e:
@@ -336,72 +354,5 @@ class QueueProcessor(ABC):
         Returns:
             Deserialized task instance, or None if deserialization failed
         """
-        try:
-            task_type = item_data.get("task_type")
-            if not task_type:
-                logger.error(f"No task_type found in item_data: {item_data}")
-                return None
-
-            # Import task classes based on queue type
-            if self.queue_type == QueueType.DOWNLOAD:
-                from video_grouper.task_processors.tasks.download.dahua_download_task import (
-                    DahuaDownloadTask,
-                )
-                from video_grouper.models import RecordingFile
-                from datetime import datetime
-
-                # Handle both DahuaDownloadTask and RecordingFile formats
-                if task_type == "dahua_download":
-                    return DahuaDownloadTask.from_dict(item_data)
-                elif task_type == "recording_file":
-                    # Convert RecordingFile format to DahuaDownloadTask
-                    return RecordingFile(
-                        start_time=datetime.fromisoformat(item_data["start_time"]),
-                        end_time=datetime.fromisoformat(item_data["end_time"]),
-                        file_path=item_data["file_path"],
-                        metadata=item_data.get("metadata", {}),
-                    )
-
-            elif self.queue_type == QueueType.VIDEO:
-                from video_grouper.task_processors.tasks.video.combine_task import (
-                    CombineTask,
-                )
-                from video_grouper.task_processors.tasks.video.trim_task import TrimTask
-
-                if task_type == "combine":
-                    return CombineTask.from_dict(item_data)
-                elif task_type == "trim":
-                    return TrimTask.from_dict(item_data)
-
-            elif self.queue_type == QueueType.AUTOCAM:
-                from video_grouper.task_processors.tasks.autocam.autocam_task import (
-                    AutocamTask,
-                )
-
-                if task_type == "autocam_process":
-                    return AutocamTask.from_dict(item_data)
-
-            elif self.queue_type == QueueType.UPLOAD:
-                from video_grouper.task_processors.tasks.upload.youtube_upload_task import (
-                    YoutubeUploadTask,
-                )
-                from video_grouper.task_processors.services.ntfy_service import (
-                    NtfyService,
-                )
-
-                if task_type == "youtube_upload":
-                    # Recreate the task with required dependencies
-                    task = YoutubeUploadTask.from_dict(item_data)
-                    # Re-inject dependencies that can't be serialized
-                    task.youtube_config = self.config.youtube
-                    task.ntfy_service = NtfyService(self.storage_path, self.config)
-                    return task
-
-            logger.error(
-                f"Unknown task type '{task_type}' for queue type {self.queue_type}"
-            )
-            return None
-
-        except Exception as e:
-            logger.error(f"Error deserializing task {item_data}: {e}")
-            return None
+        # Use the task registry to deserialize the task
+        return task_registry.deserialize_task(item_data, self.queue_type)

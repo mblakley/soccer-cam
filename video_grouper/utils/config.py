@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import configparser
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -69,9 +69,9 @@ class ProcessingConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
-    log_file: str = "logs/video_grouper.log"
-    max_log_size: int = 10485760
-    backup_count: int = 5
+    log_dir: str = "logs"
+    app_name: str = "video_grouper"
+    backup_count: int = 30  # Keep 30 days of logs
 
 
 class AppConfig(BaseModel):
@@ -96,16 +96,44 @@ class TeamSnapConfig(BaseModel):
     teams: list[TeamSnapTeamConfig] = Field(default_factory=list)
 
 
+class PlayMetricsTeamConfig(BaseModel):
+    team_id: Optional[str] = None
+    team_name: Optional[str] = None
+    enabled: bool = True
+
+
 class PlayMetricsConfig(BaseModel):
+    """Configuration for PlayMetrics integration.
+
+    Historically the configuration accepted top-level ``team_id`` and
+    ``team_name`` attributes.  The newer schema supports multiple teams via
+    the ``teams`` list.  To remain backward-compatible with existing tests and
+    user configurations we expose the legacy attributes as optional fields
+    and, when provided, automatically inject them into the ``teams`` list to
+    ensure uniform downstream handling.
+    """
+
     enabled: bool = False
     username: Optional[str] = None
     password: Optional[str] = None
+
+    # Legacy single-team fields (kept optional for backward compatibility)
     team_id: Optional[str] = None
     team_name: Optional[str] = None
 
+    teams: List[PlayMetricsTeamConfig] = Field(default_factory=list)
 
-class PlayMetricsTeamConfig(PlayMetricsConfig):
-    team_name: str
+    def __init__(self, **data):
+        super().__init__(**data)
+
+        # If legacy fields are supplied and `teams` is empty, populate it so
+        # that newer code paths which expect `teams` continue to work.
+        if not self.teams and (self.team_id or self.team_name):
+            self.teams.append(
+                PlayMetricsTeamConfig(
+                    team_id=self.team_id, team_name=self.team_name, enabled=True
+                )
+            )
 
 
 class NtfyConfig(BaseModel):
@@ -169,7 +197,6 @@ class Config(BaseModel):
     app: AppConfig = Field(alias="APP")
     teamsnap: TeamSnapConfig = Field(alias="TEAMSNAP")
     playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
-    playmetrics_teams: list[PlayMetricsTeamConfig] = Field(default_factory=list)
     ntfy: NtfyConfig = Field(alias="NTFY")
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
     autocam: AutocamConfig = Field(alias="AUTOCAM")
@@ -207,13 +234,13 @@ def load_config(config_path: Path) -> Config:
     # Handle PlayMetrics teams
     playmetrics_teams = []
     for section in list(config_dict.keys()):
-        if section.startswith("PLAYMETRICS."):
+        if section.startswith("PLAYMETRICS.TEAM."):
             team_config = config_dict.pop(section)
-            team_name = section.split(".", 1)[1]
-            team_config["team_name"] = team_name
             playmetrics_teams.append(team_config)
 
-    config_dict["playmetrics_teams"] = playmetrics_teams
+    # Attach teams to main PLAYMETRICS config
+    if "PLAYMETRICS" in config_dict:
+        config_dict["PLAYMETRICS"]["teams"] = playmetrics_teams
 
     # Handle TeamSnap teams
     teamsnap_teams = []

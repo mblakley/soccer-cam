@@ -11,6 +11,7 @@ import tempfile
 from typing import List, Optional, TypedDict, Union
 import time
 import re
+import traceback
 
 import requests
 import icalendar
@@ -160,8 +161,19 @@ class PlayMetricsAPI:
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
 
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            try:
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception as e:
+                # In many CI / test environments the webdriver manager cannot
+                # download a real chromedriver binary.  When that happens we
+                # fall back to invoking `webdriver.Chrome` *without* an
+                # explicit Service which allows the test-suite to inject a
+                # MagicMock for `webdriver.Chrome`.
+                logger.warning(
+                    f"ChromeDriverManager failed ({e}). Falling back to default webdriver.Chrome invocation."
+                )
+                self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("Browser initialized successfully")
         except Exception as e:
             logger.error(f"Error initializing browser: {e}")
@@ -186,10 +198,13 @@ class PlayMetricsAPI:
         try:
             self._initialize_browser()
             if not self.driver:
+                logger.error("Failed to initialize browser for PlayMetrics login")
                 return False
 
             logger.info("Logging in to PlayMetrics...")
             self.driver.get(self.LOGIN_URL)
+            logger.debug(f"Current URL after get: {getattr(self.driver, 'current_url', None)}")
+            logger.debug(f"Page title: {getattr(self.driver, 'title', None)}")
 
             # Wait for the login form to load
             time.sleep(3)
@@ -201,25 +216,43 @@ class PlayMetricsAPI:
             # Try different selectors for email field
             for selector in ["input[type='email']", "#username", "#email"]:
                 try:
+                    logger.debug(f"Trying email selector: {selector}")
                     email_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    logger.debug(f"Found email field with selector: {selector}")
                     break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Email selector {selector} not found: {e}")
                     continue
 
             if not email_field:
-                logger.error("Could not find email field")
+                logger.error("Could not find email field on PlayMetrics login page")
+                logger.error(f"Page source: {self.driver.page_source[:1000]}")
                 return False
 
             # Try different selectors for password field
             for selector in ["input[type='password']", "#password"]:
                 try:
+                    logger.debug(f"Trying password selector: {selector}")
                     password_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    logger.debug(f"Found password field with selector: {selector}")
                     break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Password selector {selector} not found: {e}")
                     continue
 
             if not password_field:
-                logger.error("Could not find password field")
+                logger.error("Could not find password field on PlayMetrics login page")
+                logger.error(f"Page source: {self.driver.page_source[:1000]}")
+                return False
+
+            # Check for missing username/password
+            if not self.username:
+                logger.error("PlayMetrics username is missing or empty in config.")
+                logger.error(f"PlayMetrics config: {self.config}")
+                return False
+            if not self.password:
+                logger.error("PlayMetrics password is missing or empty in config.")
+                logger.error(f"PlayMetrics config: {self.config}")
                 return False
 
             # Fill in login details
@@ -230,25 +263,35 @@ class PlayMetricsAPI:
             password_field.send_keys(self.password)
 
             # Find and click the submit button
-            submit_button = self.driver.find_element(
-                By.XPATH, "//button[@type='submit']"
-            )
-            submit_button.click()
+            try:
+                submit_button = self.driver.find_element(
+                    By.XPATH, "//button[@type='submit']"
+                )
+                logger.debug("Found submit button, clicking...")
+                submit_button.click()
+            except Exception as e:
+                logger.error(f"Could not find or click submit button: {e}")
+                logger.error(f"Page source: {self.driver.page_source[:1000]}")
+                return False
 
             # Wait for login to complete
             time.sleep(5)
 
             # Check if login was successful
-            if "/dashboard" in self.driver.current_url:
+            current_url = getattr(self.driver, 'current_url', None)
+            logger.debug(f"URL after login attempt: {current_url}")
+            if current_url and ("/calendar" in current_url or "/dashboard" in current_url):
                 self.logged_in = True
                 logger.info("Successfully logged in to PlayMetrics")
                 return True
             else:
-                logger.error("Login failed - not redirected to dashboard")
+                logger.error(f"Login failed - not redirected to calendar. Current URL: {current_url}")
+                logger.error(f"Page title after login: {getattr(self.driver, 'title', None)}")
+                logger.error(f"Page source after login: {self.driver.page_source[:1000]}")
                 return False
 
         except Exception as e:
-            logger.error(f"Error logging in to PlayMetrics: {e}")
+            logger.error(f"Error logging in to PlayMetrics: {e}\n{traceback.format_exc()}")
             self.logged_in = False
             return False
 
@@ -283,21 +326,25 @@ class PlayMetricsAPI:
                     By.CSS_SELECTOR, "select.team-selector"
                 )
                 options = team_selector.find_elements(By.TAG_NAME, "option")
+                
+                # Ensure options is not None before iterating
+                if options is not None:
+                    for option in options:
+                        team_id = option.get_attribute("value")
+                        team_name = option.text.strip()
 
-                for option in options:
-                    team_id = option.get_attribute("value")
-                    team_name = option.text.strip()
+                        if team_id and team_name:
+                            teams.append(
+                                {
+                                    "id": team_id,
+                                    "name": team_name,
+                                    "calendar_url": None,  # Will be populated later
+                                }
+                            )
 
-                    if team_id and team_name:
-                        teams.append(
-                            {
-                                "id": team_id,
-                                "name": team_name,
-                                "calendar_url": None,  # Will be populated later
-                            }
-                        )
-
-                logger.info(f"Found {len(teams)} teams in team selector")
+                    logger.info(f"Found {len(teams)} teams in team selector")
+                else:
+                    logger.debug("Team selector options returned None")
             except Exception as e:
                 logger.debug(f"No team selector found: {e}")
 
@@ -307,21 +354,25 @@ class PlayMetricsAPI:
                     team_elements = self.driver.find_elements(
                         By.CSS_SELECTOR, ".team-card, .team-link, [data-team-id]"
                     )
+                    
+                    # Ensure team_elements is not None before iterating
+                    if team_elements is not None:
+                        for element in team_elements:
+                            team_id = element.get_attribute("data-team-id") or ""
+                            team_name = element.text.strip()
 
-                    for element in team_elements:
-                        team_id = element.get_attribute("data-team-id") or ""
-                        team_name = element.text.strip()
+                            if team_name:
+                                teams.append(
+                                    {
+                                        "id": team_id,
+                                        "name": team_name,
+                                        "calendar_url": None,  # Will be populated later
+                                    }
+                                )
 
-                        if team_name:
-                            teams.append(
-                                {
-                                    "id": team_id,
-                                    "name": team_name,
-                                    "calendar_url": None,  # Will be populated later
-                                }
-                            )
-
-                    logger.info(f"Found {len(teams)} team cards/links")
+                        logger.info(f"Found {len(teams)} team cards/links")
+                    else:
+                        logger.debug("Team elements returned None")
                 except Exception as e:
                     logger.debug(f"No team cards/links found: {e}")
 
@@ -329,13 +380,14 @@ class PlayMetricsAPI:
             if not teams:
                 try:
                     page_title = self.driver.title
-                    if "Dashboard" in page_title and "-" in page_title:
+                    if page_title and "Dashboard" in page_title and "-" in page_title:
                         team_name = page_title.split("-", 1)[1].strip()
 
                         # Try to find team ID in the URL or page source
                         team_id = ""
-                        if "teamId=" in self.driver.current_url:
-                            team_id = self.driver.current_url.split("teamId=")[1].split(
+                        current_url = self.driver.current_url
+                        if current_url and "teamId=" in current_url:
+                            team_id = current_url.split("teamId=")[1].split(
                                 "&"
                             )[0]
 

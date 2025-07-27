@@ -6,18 +6,31 @@ import json
 import os
 from datetime import datetime
 from ..utils.locking import FileLock
-from ..utils.paths import get_state_file_path
+from ..utils.paths import get_state_file_path, resolve_path
 from .recording_file import RecordingFile
 
 logger = logging.getLogger(__name__)
 
 
 class DirectoryState:
-    """Represents the state of files in a directory with state tracking."""
+    """Represents the state of files in a directory with state tracking.
 
-    def __init__(self, directory_path: str):
+    The `storage_path` argument was introduced recently to support relative path
+    resolution utilities. Unfortunately, many existing call-sites across the
+    code-base (including unit-tests) still instantiate `DirectoryState` with a
+    single argument.  In order to maintain backward compatibility while the
+    migration is completed we make `storage_path` optional – when it is not
+    provided we derive it from the parent folder of `directory_path`.
+    """
+
+    def __init__(self, directory_path: str, storage_path: str | None = None):
+        # Derive storage_path from directory_path if it was omitted.
+        if storage_path is None:
+            storage_path = os.path.dirname(os.path.abspath(directory_path))
+
         self.directory_path = directory_path
-        self.state_file_path = get_state_file_path(directory_path)
+        self.storage_path = storage_path
+        self.state_file_path = get_state_file_path(directory_path, storage_path)
         self.files: dict[str, RecordingFile] = {}
         self._lock = asyncio.Lock()
         self.status: str = "pending"

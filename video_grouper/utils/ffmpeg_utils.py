@@ -46,7 +46,11 @@ async def get_video_duration(file_path: str) -> Optional[float]:
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = process.communicate()
+        # `process.communicate` is an *awaitable* coroutine. Failure to await
+        # it results in an unresolved coroutine object being returned which
+        # breaks downstream logic and tests. Ensure we await it here.
+
+        stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
             logger.error(f"Error getting video duration: {stderr.decode()}")

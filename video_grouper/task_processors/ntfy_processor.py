@@ -162,7 +162,7 @@ class NtfyProcessor(QueueProcessor):
             logger.info(f"NTFY_QUEUE: Match info is populated for {group_dir}")
             self.ntfy_service.mark_as_processed(group_dir)
             # Queue trim task if we have a combined video
-            combined_path = get_combined_video_path(group_dir)
+            combined_path = get_combined_video_path(group_dir, self.storage_path)
             logger.info(f"NTFY_QUEUE: Checking for combined video at {combined_path}")
             logger.info(
                 f"NTFY_QUEUE: Combined video exists: {os.path.exists(combined_path)}"
@@ -174,7 +174,7 @@ class NtfyProcessor(QueueProcessor):
             if os.path.exists(combined_path) and self.video_processor:
                 from .tasks.video import TrimTask
 
-                match_info, _ = MatchInfo.get_or_create(group_dir)
+                match_info, _ = MatchInfo.get_or_create(group_dir, self.storage_path)
                 trim_task = TrimTask.from_match_info(group_dir, match_info)
                 logger.info(f"NTFY_QUEUE: Created trim task: {trim_task}")
 
@@ -187,7 +187,7 @@ class NtfyProcessor(QueueProcessor):
         else:
             logger.info(f"NTFY_QUEUE: Match info is not populated for {group_dir}")
             # Get match info for logging purposes
-            match_info, _ = MatchInfo.get_or_create(group_dir)
+            match_info, _ = MatchInfo.get_or_create(group_dir, self.storage_path)
             if match_info:
                 logger.info(
                     f"NTFY_QUEUE: Match info fields - my_team_name: '{match_info.my_team_name}', opponent_team_name: '{match_info.opponent_team_name}', location: '{match_info.location}', start_time_offset: '{match_info.start_time_offset}'"

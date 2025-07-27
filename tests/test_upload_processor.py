@@ -42,17 +42,7 @@ def mock_config():
 
 def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
     """Create a mock YoutubeUploadTask with required dependencies."""
-    mock_youtube_config = MagicMock(spec=YouTubeConfig)
-    mock_youtube_config.enabled = True
-    mock_youtube_config.privacy_status = "private"
-
-    mock_ntfy_service = MagicMock(spec=NtfyService)
-
-    return YoutubeUploadTask(
-        group_dir=group_dir,
-        youtube_config=mock_youtube_config,
-        ntfy_service=mock_ntfy_service,
-    )
+    return YoutubeUploadTask(group_dir=group_dir)
 
 
 class TestUploadProcessor:

@@ -6,6 +6,25 @@ import tempfile
 import configparser
 
 
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+@pytest.fixture(autouse=True)
+def cleanup_after_test():
+    """Cleanup fixture that runs after every test."""
+    yield
+    # Force cleanup of any remaining resources
+    import gc
+    gc.collect()
+    
+    # Close any remaining loggers
+    try:
+        from video_grouper.utils.logger import close_loggers
+        close_loggers()
+    except:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def mock_ffmpeg():
     """Mock ffmpeg command for all tests."""

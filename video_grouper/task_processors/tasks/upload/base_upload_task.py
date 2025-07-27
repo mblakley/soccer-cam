@@ -22,8 +22,8 @@ class BaseUploadTask(BaseTask):
     Provides common interface for uploading videos to various platforms.
     """
 
-    @property
-    def queue_type(self) -> QueueType:
+    @classmethod
+    def queue_type(cls) -> QueueType:
         """Return the queue type for routing this task."""
         return QueueType.UPLOAD
 

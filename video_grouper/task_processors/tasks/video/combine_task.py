@@ -11,7 +11,7 @@ import aiofiles
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
 from video_grouper.utils.ffmpeg_utils import combine_videos
-from video_grouper.utils.paths import get_combined_video_path, get_file_list_path
+from video_grouper.utils.paths import get_combined_video_path, get_file_list_path, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +61,11 @@ class CombineTask(BaseFfmpegTask):
             Sorted list of DAV file paths
         """
         dav_files = []
+        group_dir_abs = resolve_path(self.group_dir, self.storage_path)
         try:
-            for filename in sorted(os.listdir(self.group_dir)):
+            for filename in sorted(os.listdir(group_dir_abs)):
                 if filename.endswith(".dav"):
-                    dav_files.append(os.path.join(self.group_dir, filename))
+                    dav_files.append(os.path.join(group_dir_abs, filename))
         except FileNotFoundError:
             pass
         return dav_files
@@ -81,7 +82,7 @@ class CombineTask(BaseFfmpegTask):
             await self._handle_task_failure()
             return False
 
-        file_list_path = get_file_list_path(self.group_dir)
+        file_list_path = get_file_list_path(self.group_dir, self.storage_path)
         output_path = self.get_output_path()
 
         try:
@@ -153,3 +154,16 @@ class CombineTask(BaseFfmpegTask):
             CombineTask instance
         """
         return cls(group_dir=data["group_dir"])
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "CombineTask":
+        """
+        Deserialize a CombineTask from its serialized data.
+
+        Args:
+            data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized CombineTask instance
+        """
+        return cls.from_dict(data)

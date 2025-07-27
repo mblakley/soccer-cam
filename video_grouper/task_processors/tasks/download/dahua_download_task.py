@@ -137,3 +137,16 @@ class DahuaDownloadTask(BaseDownloadTask):
             file_size=data.get("file_size", 0),
             metadata=data.get("metadata", {}),
         )
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "DahuaDownloadTask":
+        """
+        Deserialize a DahuaDownloadTask from its serialized data.
+
+        Args:
+            data: Dictionary containing serialized task data
+
+        Returns:
+            Deserialized DahuaDownloadTask instance
+        """
+        return cls.from_dict(data)

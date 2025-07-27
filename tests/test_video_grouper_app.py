@@ -26,13 +26,32 @@ from video_grouper.utils.config import (
     ProcessingConfig,
     LoggingConfig,
 )
+from video_grouper.utils.logger import close_loggers
+
+
+@pytest.fixture(autouse=True)
+def cleanup_loggers():
+    """Clean up loggers after each test to prevent file handle issues."""
+    yield
+    # Close all loggers to release file handles
+    close_loggers()
 
 
 @pytest.fixture
 def temp_storage():
     """Create a temporary storage directory for testing."""
+    import time
+    import shutil
+    
     with tempfile.TemporaryDirectory() as temp_dir:
         yield temp_dir
+        # Add a small delay to allow file handles to be released
+        time.sleep(0.1)
+        # Force cleanup of any remaining files
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except:
+            pass
 
 
 @pytest.fixture
@@ -77,17 +96,27 @@ def mock_camera():
 
 def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
     """Create a mock YoutubeUploadTask with required dependencies."""
-    mock_youtube_config = MagicMock(spec=YouTubeConfig)
-    mock_youtube_config.enabled = True
-    mock_youtube_config.privacy_status = "private"
+    return YoutubeUploadTask(group_dir=group_dir)
 
-    mock_ntfy_service = MagicMock(spec=NtfyService)
 
-    return YoutubeUploadTask(
-        group_dir=group_dir,
-        youtube_config=mock_youtube_config,
-        ntfy_service=mock_ntfy_service,
-    )
+def shutdown_app(app):
+    """Helper function to properly shutdown a VideoGrouperApp instance."""
+    import asyncio
+    try:
+        # Check if we're already in an event loop
+        current_loop = asyncio.get_running_loop()
+        # If we're in a loop, we can't use run_until_complete
+        # Instead, we'll just close the loggers directly
+        from video_grouper.utils.logger import close_loggers
+        close_loggers()
+    except RuntimeError:
+        # No loop running, use asyncio.run
+        try:
+            asyncio.run(app.shutdown())
+        except RuntimeError:
+            # If that fails too, just close loggers
+            from video_grouper.utils.logger import close_loggers
+            close_loggers()
 
 
 class TestVideoGrouperAppRefactored:
@@ -116,16 +145,23 @@ class TestVideoGrouperAppRefactored:
         assert app.download_processor.video_processor == app.video_processor
         assert app.video_processor.upload_processor == app.upload_processor
 
+        # Clean up to prevent file handle issues
+        shutdown_app(app)
+
     def test_initialization_with_camera_creation(self, mock_config):
         """Test VideoGrouperApp initialization with automatic camera creation."""
         with patch("video_grouper.cameras.dahua.DahuaCamera") as mock_dahua:
             mock_camera_instance = Mock()
+            mock_camera_instance.close = AsyncMock()
             mock_dahua.return_value = mock_camera_instance
 
             app = VideoGrouperApp(mock_config)
 
             assert app.camera == mock_camera_instance
             mock_dahua.assert_called_once()
+
+            # Clean up to prevent file handle issues
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_processor_lifecycle(self, mock_config, mock_camera):
@@ -165,7 +201,7 @@ class TestVideoGrouperAppRefactored:
             assert app.download_processor.get_queue_size() == 1
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
-            await app.shutdown()
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_add_video_task(self, mock_config, mock_camera):
@@ -181,7 +217,7 @@ class TestVideoGrouperAppRefactored:
             assert app.video_processor.get_queue_size() == 1
 
         finally:
-            await app.shutdown()
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_add_youtube_task(self, mock_config, mock_camera):
@@ -196,36 +232,48 @@ class TestVideoGrouperAppRefactored:
             assert app.upload_processor.get_queue_size() == 1
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
-            await app.shutdown()
+            shutdown_app(app)
 
     def test_get_queue_sizes(self, mock_config, mock_camera):
         """Test getting queue sizes."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
 
-        queue_sizes = app.get_queue_sizes()
+        try:
+            sizes = app.get_queue_sizes()
 
-        assert "download" in queue_sizes
-        assert "video" in queue_sizes
-        assert "youtube" in queue_sizes
-        assert queue_sizes["download"] == 0
-        assert queue_sizes["video"] == 0
-        assert queue_sizes["youtube"] == 0
+            assert "download" in sizes
+            assert "video" in sizes
+            assert "youtube" in sizes
+            assert "ntfy" in sizes
+
+            # All queues should be empty initially
+            assert sizes["download"] == 0
+            assert sizes["video"] == 0
+            assert sizes["youtube"] == 0
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            shutdown_app(app)
 
     def test_get_processor_status(self, mock_config, mock_camera):
         """Test getting processor status."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
 
-        status = app.get_processor_status()
+        try:
+            status = app.get_processor_status()
 
-        assert "state_auditor" in status
-        assert "camera_poller" in status
-        assert "download_processor" in status
-        assert "video_processor" in status
-        assert "upload_processor" in status
+            assert "state_auditor" in status
+            assert "camera_poller" in status
+            assert "download_processor" in status
+            assert "video_processor" in status
+            assert "upload_processor" in status
+            assert "ntfy_processor" in status
 
-        # All should be stopped initially
-        for processor_status in status.values():
-            assert processor_status == "stopped"
+            # All processors should be stopped initially
+            for processor_status in status.values():
+                assert processor_status == "stopped"
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_integration_workflow(self, mock_config, mock_camera, temp_storage):
@@ -260,7 +308,7 @@ class TestVideoGrouperAppRefactored:
             assert queue_sizes["youtube"] == 1
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
-            await app.shutdown()
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_error_handling_during_initialization(self, mock_config):
@@ -268,18 +316,27 @@ class TestVideoGrouperAppRefactored:
         # Test with invalid camera configuration
         mock_config.camera.type = "invalid_camera"
 
-        with pytest.raises(ValueError, match="Unsupported camera type"):
-            VideoGrouperApp(mock_config)
+        try:
+            with pytest.raises(ValueError, match="Unsupported camera type"):
+                VideoGrouperApp(mock_config)
+        finally:
+            # Ensure loggers are closed even if exception occurs
+            from video_grouper.utils.logger import close_loggers
+            close_loggers()
 
     @pytest.mark.asyncio
     async def test_camera_close_on_shutdown(self, mock_config, mock_camera):
         """Test that camera is properly closed on shutdown."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)
 
-        await app.initialize()
-        await app.shutdown()
+        try:
+            await app.initialize()
+            await app.shutdown()
 
-        mock_camera.close.assert_called_once()
+            mock_camera.close.assert_called_once()
+        finally:
+            # Ensure proper cleanup to prevent asyncio warnings
+            shutdown_app(app)
 
     @pytest.mark.asyncio
     async def test_storage_path_handling(self, mock_config, mock_camera):
@@ -295,4 +352,4 @@ class TestVideoGrouperAppRefactored:
                 assert processor.storage_path == app.storage_path
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
-            await app.shutdown()
+            shutdown_app(app)
