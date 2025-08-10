@@ -83,7 +83,9 @@ class DownloadProcessor(QueueProcessor):
 
                         # Support both synchronous and asynchronous `add_work` implementations.
                         add_work_result = self.video_processor.add_work(combine_task)
-                        import inspect, asyncio
+                        import inspect
+                        import asyncio
+
                         if inspect.isawaitable(add_work_result):
                             await add_work_result
 

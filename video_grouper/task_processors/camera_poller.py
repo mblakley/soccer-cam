@@ -44,7 +44,7 @@ def find_group_directory(
                     ).total_seconds()
                     if 0 <= time_difference <= 15:
                         logger.info(
-                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}"
+                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}, with time matching file end time {last_file.end_time}"
                         )
                         return group_dir_path
             except Exception as e:

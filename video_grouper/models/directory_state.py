@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime
 from ..utils.locking import FileLock
-from ..utils.paths import get_state_file_path, resolve_path
+from ..utils.paths import get_state_file_path
 from .recording_file import RecordingFile
 
 logger = logging.getLogger(__name__)

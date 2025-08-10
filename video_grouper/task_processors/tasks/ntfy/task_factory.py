@@ -14,6 +14,7 @@ from .base_ntfy_task import BaseNtfyTask
 from .game_start_task import GameStartTask
 from .game_end_task import GameEndTask
 from .team_info_task import TeamInfoTask
+from .was_there_a_match_task import WasThereAMatchTask
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class NtfyTaskFactory:
 
             config = MinimalConfig(ntfy_config)
 
-        from ..ntfy_enums import NtfyInputType
+        from .enums import NtfyInputType
 
         if task_type == NtfyInputType.GAME_START_TIME.value:
             combined_video_path = metadata.get("combined_video_path")
@@ -121,6 +122,20 @@ class NtfyTaskFactory:
                 ntfy_service=ntfy_service,
                 combined_video_path=combined_video_path,
                 existing_info=existing_info,
+            )
+
+        elif task_type == NtfyInputType.WAS_THERE_A_MATCH.value:
+            combined_video_path = metadata.get("combined_video_path")
+
+            if not combined_video_path:
+                logger.error("Missing combined_video_path for was there a match task")
+                return None
+
+            return WasThereAMatchTask(
+                group_dir=group_dir,
+                config=config,
+                ntfy_service=ntfy_service,
+                combined_video_path=combined_video_path,
             )
 
         else:
@@ -209,4 +224,30 @@ class NtfyTaskFactory:
             ntfy_service=ntfy_service,
             combined_video_path=combined_video_path,
             existing_info=existing_info,
+        )
+
+    @staticmethod
+    def create_was_there_a_match_task(
+        group_dir: str,
+        config: Config,
+        ntfy_service: NtfyService,
+        combined_video_path: str,
+    ) -> WasThereAMatchTask:
+        """
+        Create a was there a match task.
+
+        Args:
+            group_dir: Directory associated with the task
+            config: Configuration object
+            ntfy_service: NTFY service instance
+            combined_video_path: Path to the combined video file
+
+        Returns:
+            WasThereAMatchTask instance
+        """
+        return WasThereAMatchTask(
+            group_dir=group_dir,
+            config=config,
+            ntfy_service=ntfy_service,
+            combined_video_path=combined_video_path,
         )

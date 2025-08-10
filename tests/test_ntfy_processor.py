@@ -207,8 +207,8 @@ class TestNtfyProcessor:
     async def test_check_match_info_completion_not_populated(
         self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
     ):
-        """Test checking match info completion when not populated."""
-        group_dir = "/test/dir"
+        """Test match info completion check when not populated."""
+        mock_match_info_service.is_match_info_complete.return_value = False
 
         processor = NtfyProcessor(
             storage_path=storage_path,
@@ -217,14 +217,42 @@ class TestNtfyProcessor:
             match_info_service=mock_match_info_service,
         )
 
-        with patch(
-            "video_grouper.models.MatchInfo.get_or_create"
-        ) as mock_get_or_create:
-            mock_match_info = Mock()
-            mock_match_info.is_populated.return_value = False
-            mock_get_or_create.return_value = (mock_match_info, Mock())
+        group_dir = storage_path  # Use the temp directory instead of "/test/path"
+        await processor._check_match_info_completion(group_dir)
 
-            await processor._check_match_info_completion(group_dir)
+        # Should not mark as processed since match info is not complete
+        mock_ntfy_service.mark_as_processed.assert_not_called()
 
-            # Should not mark as processed
-            mock_ntfy_service.mark_as_processed.assert_not_called()
+    @pytest.mark.asyncio
+    async def test_remove_completed_task_from_queue(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """Test that completed tasks are properly removed from the queue."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        # Initialize the queue
+        processor._queue = Mock()
+        processor._queued_items = {
+            "game_start_time:/test/path:123",
+            "team_info:/test/path:456",
+        }
+
+        # Mock save_state to avoid file operations
+        with patch.object(processor, "save_state", new_callable=AsyncMock) as mock_save:
+            await processor.remove_completed_task_from_queue(
+                "/test/path", "game_start_time"
+            )
+
+            # Should remove the task from _queued_items
+            assert "game_start_time:/test/path:123" not in processor._queued_items
+            assert (
+                "team_info:/test/path:456" in processor._queued_items
+            )  # Other task should remain
+
+            # Should save state
+            mock_save.assert_called_once()

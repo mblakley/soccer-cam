@@ -203,7 +203,9 @@ class PlayMetricsAPI:
 
             logger.info("Logging in to PlayMetrics...")
             self.driver.get(self.LOGIN_URL)
-            logger.debug(f"Current URL after get: {getattr(self.driver, 'current_url', None)}")
+            logger.debug(
+                f"Current URL after get: {getattr(self.driver, 'current_url', None)}"
+            )
             logger.debug(f"Page title: {getattr(self.driver, 'title', None)}")
 
             # Wait for the login form to load
@@ -278,20 +280,30 @@ class PlayMetricsAPI:
             time.sleep(5)
 
             # Check if login was successful
-            current_url = getattr(self.driver, 'current_url', None)
+            current_url = getattr(self.driver, "current_url", None)
             logger.debug(f"URL after login attempt: {current_url}")
-            if current_url and ("/calendar" in current_url or "/dashboard" in current_url):
+            if current_url and (
+                "/calendar" in current_url or "/dashboard" in current_url
+            ):
                 self.logged_in = True
                 logger.info("Successfully logged in to PlayMetrics")
                 return True
             else:
-                logger.error(f"Login failed - not redirected to calendar. Current URL: {current_url}")
-                logger.error(f"Page title after login: {getattr(self.driver, 'title', None)}")
-                logger.error(f"Page source after login: {self.driver.page_source[:1000]}")
+                logger.error(
+                    f"Login failed - not redirected to calendar. Current URL: {current_url}"
+                )
+                logger.error(
+                    f"Page title after login: {getattr(self.driver, 'title', None)}"
+                )
+                logger.error(
+                    f"Page source after login: {self.driver.page_source[:1000]}"
+                )
                 return False
 
         except Exception as e:
-            logger.error(f"Error logging in to PlayMetrics: {e}\n{traceback.format_exc()}")
+            logger.error(
+                f"Error logging in to PlayMetrics: {e}\n{traceback.format_exc()}"
+            )
             self.logged_in = False
             return False
 
@@ -326,7 +338,7 @@ class PlayMetricsAPI:
                     By.CSS_SELECTOR, "select.team-selector"
                 )
                 options = team_selector.find_elements(By.TAG_NAME, "option")
-                
+
                 # Ensure options is not None before iterating
                 if options is not None:
                     for option in options:
@@ -354,7 +366,7 @@ class PlayMetricsAPI:
                     team_elements = self.driver.find_elements(
                         By.CSS_SELECTOR, ".team-card, .team-link, [data-team-id]"
                     )
-                    
+
                     # Ensure team_elements is not None before iterating
                     if team_elements is not None:
                         for element in team_elements:
@@ -387,9 +399,7 @@ class PlayMetricsAPI:
                         team_id = ""
                         current_url = self.driver.current_url
                         if current_url and "teamId=" in current_url:
-                            team_id = current_url.split("teamId=")[1].split(
-                                "&"
-                            )[0]
+                            team_id = current_url.split("teamId=")[1].split("&")[0]
 
                         teams.append(
                             {

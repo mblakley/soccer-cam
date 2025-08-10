@@ -1,6 +1,7 @@
 import sys
 import os
-import logging
+import time
+import atexit
 import asyncio
 import threading
 from pathlib import Path
@@ -14,6 +15,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QIcon, QAction
 import win32serviceutil
+
 from video_grouper.tray.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
@@ -27,7 +29,7 @@ from typing import Optional
 from video_grouper.utils.logger import setup_logging, get_logger
 
 # Configure logging
-setup_logging(level="INFO", app_name="video_grouper_tray")
+setup_logging(level="DEBUG", app_name="video_grouper_tray")
 logger = get_logger(__name__)
 
 
@@ -113,16 +115,97 @@ class YouTubeAuthRunner(QRunnable):
             self.signals.finished.emit(False, f"Authentication error: {str(e)}")
 
 
+class TrayAgentLock:
+    """File-based lock to ensure only one tray agent runs at a time."""
+
+    def __init__(self, lock_file_path: str):
+        self.lock_file_path = Path(lock_file_path)
+        self.lock_acquired = False
+
+    def acquire(self, timeout_seconds: int = 30) -> bool:
+        """Acquire the lock, waiting up to timeout_seconds."""
+        start_time = time.time()
+
+        while time.time() - start_time < timeout_seconds:
+            try:
+                # Try to create the lock file
+                with open(self.lock_file_path, "x") as f:
+                    f.write(f"{os.getpid()}\n")
+                self.lock_acquired = True
+                logger.info(f"Tray agent lock acquired: {self.lock_file_path}")
+                return True
+            except FileExistsError:
+                # Lock file exists, check if the process is still running
+                try:
+                    with open(self.lock_file_path, "r") as f:
+                        pid_str = f.read().strip()
+                        if pid_str:
+                            pid = int(pid_str)
+                            # Check if process is still running
+                            try:
+                                os.kill(
+                                    pid, 0
+                                )  # Signal 0 just checks if process exists
+                                logger.info(
+                                    f"Tray agent already running (PID: {pid}), waiting..."
+                                )
+                                time.sleep(1)
+                                continue
+                            except OSError:
+                                # Process is dead, remove stale lock
+                                logger.info(
+                                    f"Removing stale lock file (PID {pid} not running)"
+                                )
+                                try:
+                                    self.lock_file_path.unlink()
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Could not remove stale lock file: {e}"
+                                    )
+                                continue
+                except (ValueError, IOError) as e:
+                    # Invalid lock file, remove it
+                    logger.info(f"Invalid lock file, removing: {e}")
+                    try:
+                        self.lock_file_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Could not remove invalid lock file: {e}")
+                    continue
+            except Exception as e:
+                logger.error(f"Error acquiring lock: {e}")
+                time.sleep(1)
+                continue
+
+        logger.error(
+            f"Could not acquire tray agent lock after {timeout_seconds} seconds"
+        )
+        return False
+
+    def release(self):
+        """Release the lock."""
+        if self.lock_acquired:
+            try:
+                self.lock_file_path.unlink()
+                logger.info(f"Tray agent lock released: {self.lock_file_path}")
+            except Exception as e:
+                logger.warning(f"Error releasing lock: {e}")
+            self.lock_acquired = False
+
+
 class SystemTrayIcon(QSystemTrayIcon):
     update_available = Signal(str)
 
-    def __init__(self):
+    def __init__(self, config_path=None):
         super().__init__()
         self.version = get_version()
         self.full_version = get_full_version()
 
         # Load configuration
-        self.config_path = get_shared_data_path() / "config.ini"
+        if config_path:
+            self.config_path = Path(config_path)
+        else:
+            self.config_path = get_shared_data_path() / "config.ini"
+
         self.config: Optional[Config] = None
         if self.config_path.exists():
             self.config = load_config(self.config_path)
@@ -147,22 +230,52 @@ class SystemTrayIcon(QSystemTrayIcon):
             f"Using a thread pool with {self.threadpool.maxThreadCount()} threads."
         )
 
-        # Initialize AutocamProcessor
-        self.autocam_processor = AutocamProcessor(
+        # Initialize UploadProcessor for YouTube uploads
+        from video_grouper.task_processors.upload_processor import UploadProcessor
+
+        self.upload_processor = UploadProcessor(
             storage_path=self.config.storage.path, config=self.config
+        )
+
+        # Initialize AutocamProcessor and AutocamDiscoveryProcessor
+        self.autocam_processor = AutocamProcessor(
+            storage_path=self.config.storage.path,
+            config=self.config,
+            upload_processor=self.upload_processor,
+        )
+
+        # Create discovery processor that will poll for new trimmed directories
+        from video_grouper.task_processors.autocam_discovery_processor import (
+            AutocamDiscoveryProcessor,
+        )
+
+        self.autocam_discovery_processor = AutocamDiscoveryProcessor(
+            storage_path=self.config.storage.path,
+            config=self.config,
+            autocam_processor=self.autocam_processor,
+            poll_interval=30,  # Check every 30 seconds
         )
 
     async def initialize(self):
         """Initialize the tray app asynchronously."""
         logger.info("Initializing SystemTrayIcon...")
+        await self.upload_processor.start()
         await self.autocam_processor.start()
+        await self.autocam_discovery_processor.start()
         logger.info("SystemTrayIcon initialization complete")
 
     async def shutdown(self):
         """Shutdown the tray app asynchronously."""
         logger.info("Shutting down SystemTrayIcon...")
+        if (
+            hasattr(self, "autocam_discovery_processor")
+            and self.autocam_discovery_processor
+        ):
+            await self.autocam_discovery_processor.stop()
         if hasattr(self, "autocam_processor") and self.autocam_processor:
             await self.autocam_processor.stop()
+        if hasattr(self, "upload_processor") and self.upload_processor:
+            await self.upload_processor.stop()
         logger.info("SystemTrayIcon shutdown complete")
 
     def init_ui(self):
@@ -312,17 +425,46 @@ class SystemTrayIcon(QSystemTrayIcon):
 
 
 async def main():
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)
+    """Main entry point for the tray application."""
+    if len(sys.argv) != 2:
+        print("Usage: python -m video_grouper.tray.main <config_file>")
+        sys.exit(1)
 
-    tray = SystemTrayIcon()
-    await tray.initialize()
-    tray.show()
+    config_path = sys.argv[1]
 
-    # Keep the event loop running
-    while True:
-        await asyncio.sleep(0.1)
-        app.processEvents()
+    # Create lock file path in the same directory as the config
+    config_dir = Path(config_path).parent
+    lock_file_path = config_dir / "tray_agent.lock"
+
+    # Create and acquire lock
+    lock = TrayAgentLock(str(lock_file_path))
+    if not lock.acquire():
+        logger.error("Another tray agent is already running. Exiting.")
+        sys.exit(1)
+
+    # Register cleanup function
+    atexit.register(lock.release)
+
+    try:
+        app = QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(False)
+
+        # Initialize the tray application
+        tray_app = SystemTrayIcon(config_path)
+        await tray_app.initialize()
+        tray_app.show()
+
+        # Keep the event loop running
+        while True:
+            await asyncio.sleep(0.1)
+            app.processEvents()
+
+    except Exception as e:
+        logger.error(f"Error in tray application: {e}")
+        sys.exit(1)
+    finally:
+        # Ensure lock is released
+        lock.release()
 
 
 if __name__ == "__main__":

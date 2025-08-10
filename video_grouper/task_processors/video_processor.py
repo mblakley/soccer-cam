@@ -42,15 +42,9 @@ class VideoProcessor(QueueProcessor):
             if success:
                 logger.info(f"VIDEO: Successfully completed task: {item}")
 
-                # Check if this task should trigger autocam processing
-                if hasattr(item, "group_dir") and self.upload_processor:
-                    from video_grouper.task_processors.tasks.autocam import AutocamTask
-
-                    autocam_task = AutocamTask(group_dir=item.group_dir)
-                    await self.upload_processor.add_work(autocam_task)
-                    logger.info(
-                        f"VIDEO: Handed off autocam task to upload processor: {autocam_task}"
-                    )
+                # Note: Autocam tasks are created by AutocamDiscoveryProcessor, not here
+                # The AutocamDiscoveryProcessor will scan for directories with "trimmed" status
+                # and create appropriate AutocamTask instances
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
 

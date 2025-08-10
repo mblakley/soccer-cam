@@ -97,11 +97,34 @@ class NtfyProcessor(QueueProcessor):
 
             if success:
                 logger.info(f"NTFY: Successfully sent notification for task: {item}")
+                # For NTFY tasks, we don't remove them from the queue here
+                # because they need to wait for a response. The task will be removed
+                # from the queue when the response is processed by the NTFY service.
+                # We mark the task as done in the queue but keep it in _queued_items
+                # until the response is received.
+                self._queue.task_done()
+                # Don't remove from _queued_items - it will be removed when response is processed
             else:
                 logger.error(f"NTFY: Failed to send notification for task: {item}")
+                # Mark as failed to send to prevent duplicate tasks and enable retry
+                self.ntfy_service.mark_failed_to_send(
+                    item.group_dir, item.get_task_type(), item.metadata
+                )
+                # For failed tasks, remove from queue normally
+                self._queue.task_done()
+                item_key = self.get_item_key(item)
+                self._queued_items.discard(item_key)
 
         except Exception as e:
             logger.error(f"NTFY: Error processing task {item}: {e}")
+            # Mark as failed to send to prevent duplicate tasks and enable retry
+            self.ntfy_service.mark_failed_to_send(
+                item.group_dir, item.get_task_type(), item.metadata
+            )
+            # For failed tasks, remove from queue normally
+            self._queue.task_done()
+            item_key = self.get_item_key(item)
+            self._queued_items.discard(item_key)
 
     def get_item_key(self, item: BaseNtfyTask) -> str:
         """Get unique key for a BaseNtfyTask."""
@@ -109,7 +132,7 @@ class NtfyProcessor(QueueProcessor):
 
     async def _process_pending_requests_on_startup(self) -> None:
         """Process any pending NTFY requests on startup."""
-        from .ntfy_enums import NtfyStatus
+        from .tasks.ntfy.enums import NtfyStatus
 
         pending_tasks = self.ntfy_service.get_pending_tasks()
         if not pending_tasks:
@@ -146,21 +169,68 @@ class NtfyProcessor(QueueProcessor):
         """Recreate a task that was queued but not sent."""
         logger.info(f"Recreating queued task for {group_dir}: {task_type}")
 
+        # Reconstruct the full metadata structure that the task factory expects
+        full_metadata = {
+            "combined_video_path": metadata.get("combined_video_path"),
+            "config": {
+                "ntfy": {
+                    "topic": self.config.ntfy.topic,
+                    "server_url": self.config.ntfy.server_url,
+                    "enabled": self.config.ntfy.enabled,
+                }
+            },
+        }
+
+        # Add any additional metadata fields
+        for key, value in metadata.items():
+            if key not in ["combined_video_path"]:
+                full_metadata[key] = value
+
         # Recreate the task using the task factory
         task = NtfyTaskFactory.create_task(
-            task_type, group_dir, self.config, self.ntfy_service, metadata
+            task_type, group_dir, self.config, self.ntfy_service, full_metadata
         )
         if task:
             await self.add_work(task)
+            logger.info(
+                f"Successfully recreated task of type: {task_type} for {group_dir}"
+            )
         else:
-            logger.warning(f"Could not recreate task of type: {task_type}")
+            logger.warning(
+                f"Could not recreate task of type: {task_type} for {group_dir}"
+            )
 
-    async def _check_match_info_completion(self, group_dir: str) -> None:
-        """Check if match info has been populated for a directory."""
+    async def _check_match_info_completion(
+        self, group_dir: str, task_type: str = None, task_completed: bool = False
+    ) -> None:
+        """
+        Check if match info has been populated for a directory or handle task completion.
+
+        Args:
+            group_dir: Directory to check
+            task_type: Type of task that was completed (if task_completed=True)
+            task_completed: Whether this is a task completion callback
+        """
+        if task_completed:
+            # Handle task completion - remove from queue
+            await self.remove_completed_task_from_queue(group_dir, task_type)
+            return
+
+        # Handle match info completion (original behavior)
         logger.info(f"NTFY_QUEUE: Checking match info completion for {group_dir}")
+
+        # Safety check for services
+        if not self.match_info_service:
+            logger.warning(
+                f"NTFY_QUEUE: Match info service not available for {group_dir}"
+            )
+            return
+
         if await self.match_info_service.is_match_info_complete(group_dir):
             logger.info(f"NTFY_QUEUE: Match info is populated for {group_dir}")
-            self.ntfy_service.mark_as_processed(group_dir)
+            # Mark as processed in the NTFY service
+            if self.ntfy_service:
+                self.ntfy_service.mark_as_processed(group_dir)
             # Queue trim task if we have a combined video
             combined_path = get_combined_video_path(group_dir, self.storage_path)
             logger.info(f"NTFY_QUEUE: Checking for combined video at {combined_path}")
@@ -239,6 +309,37 @@ class NtfyProcessor(QueueProcessor):
                 )
                 return False
 
+            # Check if task failed to send and should be retried
+            if self.ntfy_service.is_failed_to_send(group_dir):
+                pending_task = self.ntfy_service.get_pending_tasks().get(group_dir, {})
+                retry_count = pending_task.get("retry_count", 0)
+                failed_at = pending_task.get("failed_at")
+
+                # Retry after 30 seconds (for testing - could be configurable)
+                if failed_at:
+                    from datetime import datetime, timedelta
+
+                    failed_time = datetime.fromisoformat(failed_at)
+                    retry_after = failed_time + timedelta(seconds=30)
+
+                    if datetime.now() < retry_after:
+                        logger.info(
+                            f"NTFY_QUEUE: Task failed to send for {group_dir}, retry in {retry_after - datetime.now()}"
+                        )
+                        return False
+                    elif retry_count >= 5:  # Max 5 retries
+                        logger.error(
+                            f"NTFY_QUEUE: Task failed to send for {group_dir} after {retry_count} attempts, giving up"
+                        )
+                        self.ntfy_service.clear_pending_task(group_dir)
+                        return False
+                    else:
+                        logger.info(
+                            f"NTFY_QUEUE: Retrying failed task for {group_dir} (attempt {retry_count + 1})"
+                        )
+                        # Clear the failed status so we can recreate the task
+                        self.ntfy_service.clear_pending_task(group_dir)
+
         # Check if match info is already populated
         match_info, _ = MatchInfo.get_or_create(group_dir)
 
@@ -305,3 +406,38 @@ class NtfyProcessor(QueueProcessor):
             tasks_added = True
 
         return tasks_added
+
+    async def remove_completed_task_from_queue(
+        self, group_dir: str, task_type: str
+    ) -> None:
+        """
+        Remove a completed task from the queue when a response is received.
+
+        This method is called by the NTFY service when a task response is processed.
+
+        Args:
+            group_dir: Directory associated with the task
+            task_type: Type of task that was completed
+        """
+        # Find the task in the queue by matching task_type and group_dir
+        # We need to find the exact key that includes the hash
+        item_key_to_remove = None
+        for item_key in list(self._queued_items):
+            if item_key.startswith(f"{task_type}:{group_dir}:"):
+                item_key_to_remove = item_key
+                break
+
+        if item_key_to_remove:
+            # Remove from _queued_items set
+            self._queued_items.discard(item_key_to_remove)
+            logger.info(
+                f"NTFY: Removed completed task from queue: {item_key_to_remove}"
+            )
+        else:
+            logger.warning(
+                f"NTFY: Could not find task to remove from queue: {task_type} for {group_dir}"
+            )
+            logger.debug(f"NTFY: Current queued items: {self._queued_items}")
+
+        # Save state to persist the queue change
+        await self.save_state()

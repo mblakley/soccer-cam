@@ -84,7 +84,6 @@ class QueueProcessor(ABC):
 
             # Always persist state immediately
             await self.save_state()
-            
 
         else:
             logger.debug(f"{self.__class__.__name__}: Item already queued: {item}")

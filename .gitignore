@@ -166,3 +166,7 @@ cython_debug/
 
 /shared_data/*
 !/shared_data/.gitkeep
+
+tests/e2e/test_data/*
+tests/e2e/test_logs/*
+tests/e2e/test_pids.json

@@ -127,8 +127,8 @@ class BaseNtfyTask(BaseTask, ABC):
                 logger.warning(f"Task {self} returned empty question data")
                 return False
 
-            # Send the notification via NTFY
-            success = await self.ntfy_service.ntfy_api.send_notification(
+            # Send the notification via NTFY service (which ensures API is initialized)
+            success = await self.ntfy_service.send_notification(
                 message=question_data["message"],
                 title=question_data["title"],
                 tags=question_data["tags"],

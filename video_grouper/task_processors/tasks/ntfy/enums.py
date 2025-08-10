@@ -12,6 +12,7 @@ class NtfyInputType(Enum):
     GAME_START_TIME = "game_start_time"
     GAME_END_TIME = "game_end_time"
     PLAYLIST_NAME = "playlist_name"
+    WAS_THERE_A_MATCH = "was_there_a_match"
 
 
 class NtfyStatus(Enum):
@@ -21,4 +22,5 @@ class NtfyStatus(Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+    FAILED_TO_SEND = "failed_to_send"
     CANCELLED = "cancelled"

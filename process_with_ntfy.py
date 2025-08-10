@@ -5,9 +5,7 @@ Script to manually trigger NTFY processing for a specific directory.
 
 import asyncio
 import argparse
-import os
 import sys
-import logging
 from pathlib import Path
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.utils.paths import get_shared_data_path
@@ -54,7 +52,7 @@ async def main():
     parser.add_argument(
         "--config",
         type=str,
-        help="Path to configuration file (default: shared_data/config.ini)"
+        help="Path to configuration file (default: shared_data/config.ini)",
     )
     args = parser.parse_args()
 

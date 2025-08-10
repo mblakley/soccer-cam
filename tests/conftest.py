@@ -15,13 +15,15 @@ def cleanup_after_test():
     yield
     # Force cleanup of any remaining resources
     import gc
+
     gc.collect()
-    
+
     # Close any remaining loggers
     try:
         from video_grouper.utils.logger import close_loggers
+
         close_loggers()
-    except:
+    except Exception:
         pass
 
 

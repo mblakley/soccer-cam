@@ -3,13 +3,11 @@
 import os
 import tempfile
 import configparser
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import pytest
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
-from video_grouper.utils.config import YouTubeConfig
-from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 
 @pytest.fixture

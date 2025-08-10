@@ -2,22 +2,24 @@
 
 from .base_polling_processor import PollingProcessor
 from .base_queue_processor import QueueProcessor
-from .state_auditor import StateAuditor
 from .camera_poller import CameraPoller
 from .download_processor import DownloadProcessor
-from .video_processor import VideoProcessor
-from .upload_processor import UploadProcessor
 from .ntfy_processor import NtfyProcessor
+from .state_auditor import StateAuditor
+from .upload_processor import UploadProcessor
+from .video_processor import VideoProcessor
 from .autocam_processor import AutocamProcessor
+from .autocam_discovery_processor import AutocamDiscoveryProcessor
 
 __all__ = [
     "PollingProcessor",
     "QueueProcessor",
-    "StateAuditor",
     "CameraPoller",
     "DownloadProcessor",
-    "VideoProcessor",
-    "UploadProcessor",
     "NtfyProcessor",
+    "StateAuditor",
+    "UploadProcessor",
+    "VideoProcessor",
     "AutocamProcessor",
+    "AutocamDiscoveryProcessor",
 ]

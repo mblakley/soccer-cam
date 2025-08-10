@@ -159,4 +159,5 @@ def resolve_path(path: str, storage_path: str) -> Path:
         return p
     return Path(storage_path) / p
 
+
 # WARNING: All path utilities now require storage_path as an argument. If you see a missing argument error, update the call site to pass storage_path from config.
