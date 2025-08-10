@@ -11,7 +11,11 @@ import aiofiles
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
 from video_grouper.utils.ffmpeg_utils import combine_videos
-from video_grouper.utils.paths import get_combined_video_path, get_file_list_path, resolve_path
+from video_grouper.utils.paths import (
+    get_combined_video_path,
+    get_file_list_path,
+    resolve_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             Path where the combined.mp4 file will be created
         """
-        return get_combined_video_path(self.group_dir)
+        return get_combined_video_path(self.group_dir, self.storage_path)
 
     def get_dav_files(self) -> List[str]:
         """

@@ -222,6 +222,41 @@ class GameStartTask(BaseNtfyTask):
             )
 
     @classmethod
+    def deserialize(cls, data: Dict[str, object]) -> "GameStartTask":
+        """
+        Deserialize a GameStartTask from its serialized data.
+
+        Args:
+            data: Serialized task data
+
+        Returns:
+            Deserialized GameStartTask instance
+        """
+        # Extract required fields
+        group_dir = data.get("group_dir", "")
+        combined_video_path = data.get("combined_video_path", "")
+        time_offset = data.get("time_offset", "00:00")
+        time_seconds = data.get("time_seconds", 0)
+
+        # Create a minimal config and ntfy_service for deserialization
+        # These will be properly initialized when the task is executed
+        from video_grouper.utils.config import Config
+        from video_grouper.task_processors.services.ntfy_service import NtfyService
+
+        # Create minimal config with required fields
+        config = Config()
+        ntfy_service = NtfyService(config.ntfy, group_dir)
+
+        return cls(
+            group_dir=group_dir,
+            config=config,
+            ntfy_service=ntfy_service,
+            combined_video_path=combined_video_path,
+            time_offset=time_offset,
+            time_seconds=time_seconds,
+        )
+
+    @classmethod
     def create_next_task(
         cls,
         current_task: "GameStartTask",

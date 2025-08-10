@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Add the parent directory to the path so we can import the video_grouper package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,10 +37,12 @@ class TestTeamSnapAPI(unittest.TestCase):
         from video_grouper.utils.config import AppConfig
 
         self.app_config = AppConfig(timezone="America/New_York")
-        
+
         # Mock the initialization methods to prevent real network calls
-        with patch.object(TeamSnapAPI, '_ensure_valid_token', return_value=True), \
-             patch.object(TeamSnapAPI, '_discover_api_endpoints'):
+        with (
+            patch.object(TeamSnapAPI, "_ensure_valid_token", return_value=True),
+            patch.object(TeamSnapAPI, "_discover_api_endpoints"),
+        ):
             self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
 
         # Create mock games
@@ -287,12 +289,14 @@ class TestTeamSnapAPI(unittest.TestCase):
                 self.save_called = True
 
         dummy = DummyConfig()
-        
+
         # Mock the initialization methods to prevent real network calls
-        with patch.object(TeamSnapAPI, '_ensure_valid_token', return_value=True), \
-             patch.object(TeamSnapAPI, '_discover_api_endpoints'):
+        with (
+            patch.object(TeamSnapAPI, "_ensure_valid_token", return_value=True),
+            patch.object(TeamSnapAPI, "_discover_api_endpoints"),
+        ):
             api = TeamSnapAPI(dummy, self.team_config, self.app_config)
-        
+
         api.access_token = "new_token"
         api._update_config_token()
         self.assertEqual(dummy.access_token, "new_token")

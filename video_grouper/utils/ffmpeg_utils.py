@@ -266,7 +266,7 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = process.communicate()
+        stdout, stderr = await process.communicate()
 
         if process.returncode == 0:
             logger.info(
@@ -337,7 +337,7 @@ async def trim_video_advanced(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = process.communicate()
+        stdout, stderr = await process.communicate()
 
         if process.returncode == 0:
             logger.info(

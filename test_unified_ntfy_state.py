@@ -4,7 +4,6 @@ Test script to verify unified NTFY state management.
 """
 
 import asyncio
-import logging
 import sys
 import os
 import json

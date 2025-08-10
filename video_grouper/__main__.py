@@ -2,7 +2,6 @@
 import os
 import sys
 import asyncio
-import logging
 import argparse
 from pathlib import Path
 from video_grouper.video_grouper_app import VideoGrouperApp
@@ -32,12 +31,12 @@ def parse_arguments():
 Examples:
   %(prog)s                           # Use default config from shared_data/config.ini
   %(prog)s --config /path/to/config.ini  # Use custom config file
-        """
+        """,
     )
     parser.add_argument(
         "--config",
         type=str,
-        help="Path to configuration file (default: shared_data/config.ini)"
+        help="Path to configuration file (default: shared_data/config.ini)",
     )
     return parser.parse_args()
 
@@ -63,7 +62,7 @@ def load_application_config(config_path: Path = None):
 async def main():
     """Main entry point for the application."""
     args = parse_arguments()
-    
+
     # Determine config path
     config_path = None
     if args.config:
@@ -74,7 +73,7 @@ async def main():
         logger.info(f"Using custom config file: {config_path}")
     else:
         logger.info("Using default config file from shared_data directory")
-    
+
     config = load_application_config(config_path)
     if not config:
         logger.error("Failed to load configuration. Exiting.")

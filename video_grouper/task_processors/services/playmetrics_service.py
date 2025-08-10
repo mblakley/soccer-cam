@@ -3,11 +3,10 @@ PlayMetrics service for match information lookup.
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
 
 from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
-from video_grouper.utils.config import PlayMetricsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ class PlayMetricsService:
         """Initialize PlayMetrics API instances for all configured teams. No fallback logic."""
         errors = []
         for cfg in self.configs:
-            if not cfg or not hasattr(cfg, 'teams'):
+            if not cfg or not hasattr(cfg, "teams"):
                 logger.warning("No PlayMetrics teams found in config.")
                 continue
 
@@ -52,29 +51,36 @@ class PlayMetricsService:
                 if not team.enabled:
                     continue
                 try:
-                    logger.info(f"Initializing PlayMetrics team: {team.team_name or 'Unknown'}")
+                    logger.info(
+                        f"Initializing PlayMetrics team: {team.team_name or 'Unknown'}"
+                    )
+
                     # Create a config for this team using main credentials and team info
                     # We need to create a config object that has team_id and team_name as attributes
                     # Since PlayMetricsConfig doesn't have these fields, we'll create a simple object
                     class TeamConfig:
-                        def __init__(self, enabled, username, password, team_id, team_name):
+                        def __init__(
+                            self, enabled, username, password, team_id, team_name
+                        ):
                             self.enabled = enabled
                             self.username = username
                             self.password = password
                             self.team_id = team_id
                             self.team_name = team_name
-                    
+
                     team_config = TeamConfig(
                         enabled=cfg.enabled,
                         username=cfg.username,
                         password=cfg.password,
                         team_id=team.team_id,
-                        team_name=team.team_name
+                        team_name=team.team_name,
                     )
                     api = PlayMetricsAPI(team_config, self.app_config)
                     if api.login():
                         self.playmetrics_apis.append(api)
-                        logger.info(f"Successfully initialized PlayMetrics API for {team.team_name or 'Unknown'}")
+                        logger.info(
+                            f"Successfully initialized PlayMetrics API for {team.team_name or 'Unknown'}"
+                        )
                     else:
                         error_msg = f"Failed to log in to PlayMetrics for team {team.team_name or 'Unknown'}"
                         logger.error(error_msg)
@@ -84,7 +90,11 @@ class PlayMetricsService:
                     logger.error(error_msg)
                     errors.append(error_msg)
         if not self.playmetrics_apis:
-            error_summary = "\n".join(errors) if errors else "No valid PlayMetrics team configurations found."
+            error_summary = (
+                "\n".join(errors)
+                if errors
+                else "No valid PlayMetrics team configurations found."
+            )
             logger.warning(f"PlayMetrics service unavailable. Errors:\n{error_summary}")
             self.enabled = False
         else:

@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Add the parent directory to the path so we can import the video_grouper package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,10 +37,12 @@ class TestConnectedFiltering(unittest.TestCase):
         from video_grouper.utils.config import AppConfig
 
         self.app_config = AppConfig(timezone="America/New_York")
-        
+
         # Mock the initialization methods to prevent real network calls
-        with patch.object(TeamSnapAPI, '_ensure_valid_token', return_value=True), \
-             patch.object(TeamSnapAPI, '_discover_api_endpoints'):
+        with (
+            patch.object(TeamSnapAPI, "_ensure_valid_token", return_value=True),
+            patch.object(TeamSnapAPI, "_discover_api_endpoints"),
+        ):
             # Create a mock TeamSnap API
             self.api = TeamSnapAPI(self.config, self.team_config, self.app_config)
             self.api.enabled = True

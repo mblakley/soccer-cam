@@ -5,14 +5,12 @@ YouTube upload task for uploading videos to YouTube.
 import os
 import logging
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
 from video_grouper.models import MatchInfo
-from video_grouper.models import DirectoryState
 from video_grouper.utils.config import YouTubeConfig
 
 logger = logging.getLogger(__name__)
@@ -76,12 +74,18 @@ class YoutubeUploadTask(BaseUploadTask):
                 logger.error(f"YouTube credentials file not found: {credentials_file}")
                 return False
 
-            logger.info(f"Starting YouTube upload for {self.group_dir}")
+            # Resolve the group directory path
+            resolved_group_dir = resolve_path(self.group_dir, storage_path)
+            logger.info(
+                f"Starting YouTube upload for {self.group_dir} (resolved: {resolved_group_dir})"
+            )
 
             # Load match info to get team name
-            match_info_path = resolve_path(os.path.join(self.group_dir, "match_info.ini"), storage_path)
+            match_info_path = resolve_path(
+                os.path.join(self.group_dir, "match_info.ini"), storage_path
+            )
             if not os.path.exists(match_info_path):
-                logger.error(f"match_info.ini not found in {self.group_dir}")
+                logger.error(f"match_info.ini not found in {resolved_group_dir}")
                 return False
 
             match_info = MatchInfo.from_file(match_info_path)
@@ -96,7 +100,9 @@ class YoutubeUploadTask(BaseUploadTask):
 
             # If we don't have playlist names and a request was sent, skip for now
             if not processed_playlist_name and not raw_playlist_name:
-                logger.info(f"Waiting for playlist name response for {self.group_dir}")
+                logger.info(
+                    f"Waiting for playlist name response for {resolved_group_dir}"
+                )
                 return False  # Will be retried later
 
             # Get privacy status from config
@@ -110,14 +116,14 @@ class YoutubeUploadTask(BaseUploadTask):
             # Find the subdirectory containing the videos
             subdirs = [
                 d
-                for d in os.listdir(self.group_dir)
-                if os.path.isdir(os.path.join(self.group_dir, d))
+                for d in os.listdir(resolved_group_dir)
+                if os.path.isdir(os.path.join(resolved_group_dir, d))
             ]
             if len(subdirs) == 1:
-                video_dir = os.path.join(self.group_dir, subdirs[0])
+                video_dir = os.path.join(resolved_group_dir, subdirs[0])
             else:
                 logger.error(
-                    f"Expected exactly one subdirectory in {self.group_dir}, found {len(subdirs)}. Cannot locate video files."
+                    f"Expected exactly one subdirectory in {resolved_group_dir}, found {len(subdirs)}. Cannot locate video files."
                 )
                 return False
 
@@ -192,9 +198,19 @@ class YoutubeUploadTask(BaseUploadTask):
                 logger.info(
                     f"Successfully uploaded videos for {self.group_dir} to YouTube"
                 )
+                # Force flush the log to ensure the message is written
+                for handler in logger.handlers:
+                    handler.flush()
+                logger.info(
+                    f"YOUTUBE_UPLOAD: Task completed successfully for {self.group_dir}"
+                )
                 return True
             else:
                 logger.error(f"Failed to upload videos for {self.group_dir} to YouTube")
+                # Force flush the log to ensure the message is written
+                for handler in logger.handlers:
+                    handler.flush()
+                logger.error(f"YOUTUBE_UPLOAD: Task failed for {self.group_dir}")
                 return False
 
         except ImportError as e:
@@ -217,55 +233,52 @@ class YoutubeUploadTask(BaseUploadTask):
         Returns:
             Tuple of (processed_playlist_name, raw_playlist_name)
         """
-        dir_state = DirectoryState(self.group_dir)
-
         # Log the team name being searched for
         logger.info(f"Looking up playlist for team: '{match_info.my_team_name}'")
 
-        # Log the available mappings
-        if hasattr(config, "playlist_map") and config.playlist_map:
-            logger.info(f"YOUTUBE.PLAYLIST_MAP: {config.playlist_map.root}")
-        else:
-            logger.info("YOUTUBE.PLAYLIST_MAP is not set or empty.")
+        # Check for playlist configurations
+        processed_playlist_name = None
+        raw_playlist_name = None
 
-        # Check if playlist name is already in state
-        base_playlist_name = dir_state.get_youtube_playlist_name()
+        # Try to get playlist names from YOUTUBE.PLAYLIST.PROCESSED and YOUTUBE.PLAYLIST.RAW
+        if hasattr(config, "processed_playlist") and config.processed_playlist:
+            try:
+                processed_playlist_name = config.processed_playlist.name_format.format(
+                    my_team_name=match_info.my_team_name,
+                    opponent_team_name=match_info.opponent_team_name,
+                    location=match_info.location,
+                )
+                logger.info(
+                    f"Using processed playlist from config: {processed_playlist_name}"
+                )
+            except Exception as e:
+                logger.warning(f"Error formatting processed playlist name: {e}")
 
-        # Only use the strongly-typed playlist_map
-        mapped = config.playlist_map.get(match_info.my_team_name)
-        logger.info(f"Result of playlist_map lookup: {mapped}")
-        if mapped:
-            base_playlist_name = mapped
-            logger.info(
-                f"Found playlist '{base_playlist_name}' for team '{match_info.my_team_name}' in YOUTUBE.PLAYLIST_MAP section."
-            )
+        if hasattr(config, "raw_playlist") and config.raw_playlist:
+            try:
+                raw_playlist_name = config.raw_playlist.name_format.format(
+                    my_team_name=match_info.my_team_name,
+                    opponent_team_name=match_info.opponent_team_name,
+                    location=match_info.location,
+                )
+                logger.info(f"Using raw playlist from config: {raw_playlist_name}")
+            except Exception as e:
+                logger.warning(f"Error formatting raw playlist name: {e}")
 
-        # Log the final result before requesting via NTFY
-        if not base_playlist_name:
+        # If still no mapping, and no request pending, ask the user
+        if (
+            not processed_playlist_name
+            and not raw_playlist_name
+            and not ntfy_service.is_waiting_for_input(self.group_dir)
+        ):
             logger.warning(
                 f"No playlist mapping found for team '{match_info.my_team_name}'. Sending NTFY request."
             )
-        else:
-            logger.info(f"Final playlist name to use: {base_playlist_name}")
-
-        # If still no mapping, and no request pending, ask the user
-        if not base_playlist_name and not ntfy_service.is_waiting_for_input(
-            self.group_dir
-        ):
             await ntfy_service.request_playlist_name(
                 self.group_dir, match_info.my_team_name
             )
             # Return None for now, upload will be retried later when user responds
             return None, None
-        elif base_playlist_name and not dir_state.get_youtube_playlist_name():
-            # If we found a name in the config, but not in the state file, update the state file
-            dir_state.set_youtube_playlist_name(base_playlist_name)
-
-        # Return playlist names
-        processed_playlist_name = base_playlist_name
-        raw_playlist_name = (
-            f"{base_playlist_name} - Full Field" if base_playlist_name else None
-        )
 
         return processed_playlist_name, raw_playlist_name
 

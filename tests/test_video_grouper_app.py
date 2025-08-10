@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 import pytest
 
@@ -10,7 +10,6 @@ from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
 from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
-from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import (
     Config,
     CameraConfig,
@@ -42,7 +41,7 @@ def temp_storage():
     """Create a temporary storage directory for testing."""
     import time
     import shutil
-    
+
     with tempfile.TemporaryDirectory() as temp_dir:
         yield temp_dir
         # Add a small delay to allow file handles to be released
@@ -50,7 +49,7 @@ def temp_storage():
         # Force cleanup of any remaining files
         try:
             shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
+        except Exception:
             pass
 
 
@@ -102,12 +101,14 @@ def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
 def shutdown_app(app):
     """Helper function to properly shutdown a VideoGrouperApp instance."""
     import asyncio
+
     try:
         # Check if we're already in an event loop
-        current_loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         # If we're in a loop, we can't use run_until_complete
         # Instead, we'll just close the loggers directly
         from video_grouper.utils.logger import close_loggers
+
         close_loggers()
     except RuntimeError:
         # No loop running, use asyncio.run
@@ -116,6 +117,7 @@ def shutdown_app(app):
         except RuntimeError:
             # If that fails too, just close loggers
             from video_grouper.utils.logger import close_loggers
+
             close_loggers()
 
 
@@ -140,7 +142,7 @@ class TestVideoGrouperAppRefactored:
         # Verify processors are wired correctly
         assert app.state_auditor.download_processor == app.download_processor
         assert app.state_auditor.video_processor == app.video_processor
-        assert app.state_auditor.upload_processor == app.upload_processor
+        # Note: StateAuditor no longer has upload_processor - uploads are handled by tray agent
         assert app.camera_poller.download_processor == app.download_processor
         assert app.download_processor.video_processor == app.video_processor
         assert app.video_processor.upload_processor == app.upload_processor
@@ -268,9 +270,13 @@ class TestVideoGrouperAppRefactored:
             assert "upload_processor" in status
             assert "ntfy_processor" in status
 
-            # All processors should be stopped initially
-            for processor_status in status.values():
-                assert processor_status == "stopped"
+            # All processors should be stopped initially (except NTFY which may be disabled)
+            for processor_name, processor_status in status.items():
+                if processor_name == "ntfy_processor":
+                    # NTFY processor can be "stopped" or "disabled" depending on config
+                    assert processor_status in ["stopped", "disabled"]
+                else:
+                    assert processor_status == "stopped"
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
             shutdown_app(app)
@@ -322,6 +328,7 @@ class TestVideoGrouperAppRefactored:
         finally:
             # Ensure loggers are closed even if exception occurs
             from video_grouper.utils.logger import close_loggers
+
             close_loggers()
 
     @pytest.mark.asyncio

@@ -95,6 +95,24 @@ class TeamSnapConfig(BaseModel):
     refresh_token: Optional[str] = None
     teams: list[TeamSnapTeamConfig] = Field(default_factory=list)
 
+    # Legacy single-team fields (kept optional for backward compatibility)
+    team_id: Optional[str] = None
+    team_name: Optional[str] = None
+    my_team_name: Optional[str] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+
+        # If legacy fields are supplied and `teams` is empty, populate it so
+        # that newer code paths which expect `teams` continue to work.
+        if not self.teams and (self.team_id or self.team_name or self.my_team_name):
+            team_name = self.team_name or self.my_team_name or "Default"
+            self.teams.append(
+                TeamSnapTeamConfig(
+                    team_id=self.team_id, team_name=team_name, enabled=True
+                )
+            )
+
 
 class PlayMetricsTeamConfig(BaseModel):
     team_id: Optional[str] = None
@@ -140,6 +158,7 @@ class NtfyConfig(BaseModel):
     enabled: bool = False
     server_url: str = "https://ntfy.sh"
     topic: Optional[str] = None
+    response_service: bool = False
 
 
 class AutocamConfig(BaseModel):
@@ -176,7 +195,6 @@ class YouTubePlaylistMapConfig(RootModel[Dict[str, str]]):
 class YouTubeConfig(BaseModel):
     enabled: bool = False
     privacy_status: str = "private"
-    playlist_mapping: Dict[str, str] = Field(default_factory=dict)
     processed_playlist: Optional[YouTubePlaylistConfig] = None
     raw_playlist: Optional[YouTubePlaylistConfig] = None
     playlist_map: Optional[YouTubePlaylistMapConfig] = None
@@ -221,10 +239,7 @@ def load_config(config_path: Path) -> Config:
         config_dict.setdefault("YOUTUBE", {})["raw_playlist"] = config_dict.pop(
             "YOUTUBE.PLAYLIST.RAW"
         )
-    if "YOUTUBE_PLAYLIST_MAPPING" in config_dict:
-        config_dict.setdefault("YOUTUBE", {})["playlist_mapping"] = config_dict.pop(
-            "YOUTUBE_PLAYLIST_MAPPING"
-        )
+
     # Add support for YOUTUBE.PLAYLIST_MAP
     if "YOUTUBE.PLAYLIST_MAP" in config_dict:
         config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
@@ -306,10 +321,7 @@ def save_config(config: Config, config_path: Path):
                         for k, v in sub_value.model_dump().items()
                         if v is not None
                     }
-                elif sub_field_name == "playlist_mapping":
-                    parser["YOUTUBE_PLAYLIST_MAPPING"] = {
-                        k: str(v) for k, v in sub_value.items() if v is not None
-                    }
+
                 elif sub_value is not None:
                     section_items[sub_alias] = str(sub_value)
 

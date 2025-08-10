@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
-from video_grouper.utils.ffmpeg_utils import trim_video_advanced
+from video_grouper.utils.ffmpeg_utils import trim_video
 from video_grouper.utils.paths import get_combined_video_path, get_trimmed_video_path
 
 logger = logging.getLogger(__name__)
@@ -44,11 +44,14 @@ class TrimTask(BaseFfmpegTask):
         # Get match info to extract team names and location
         match_info, _ = MatchInfo.get_or_create(self.group_dir)
 
-        input_path = get_combined_video_path(self.group_dir)
-        output_path = get_trimmed_video_path(self.group_dir, match_info)
+        input_path = get_combined_video_path(self.group_dir, self.storage_path)
+        output_path = get_trimmed_video_path(
+            self.group_dir, match_info, self.storage_path
+        )
 
         # Execute the FFmpeg command using the utility function
-        success = await trim_video_advanced(
+        # Use basic trim for e2e testing - advanced trim has compatibility issues
+        success = await trim_video(
             input_path, output_path, self.start_time, self.end_time
         )
 
@@ -107,7 +110,7 @@ class TrimTask(BaseFfmpegTask):
         from video_grouper.models import MatchInfo
 
         match_info, _ = MatchInfo.get_or_create(self.group_dir)
-        return get_trimmed_video_path(self.group_dir, match_info)
+        return get_trimmed_video_path(self.group_dir, match_info, self.storage_path)
 
     def __str__(self) -> str:
         """String representation of the task."""

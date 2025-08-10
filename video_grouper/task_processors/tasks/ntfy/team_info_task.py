@@ -89,8 +89,16 @@ class TeamInfoTask(BaseNtfyTask):
 
         missing_fields_str = ", ".join(missing_fields)
 
+        # Get the directory information from the group directory
+        directory_info = ""
+        if self.group_dir:
+            import os
+
+            directory_name = os.path.basename(self.group_dir)
+            directory_info = f" in directory: {directory_name}"
+
         return {
-            "message": f"Missing match information: {missing_fields_str}. Please update match_info.ini manually.",
+            "message": f"Missing match information{directory_info}: {missing_fields_str}. Please update match_info.ini manually.",
             "title": "Missing Match Information",
             "tags": ["warning", "info"],
             "priority": 4,

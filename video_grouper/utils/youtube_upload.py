@@ -98,7 +98,9 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
                     )
                     # Use explicit redirect URI configuration with trailing slash
                     flow.redirect_uri = "http://localhost:8080/"
-                    creds = flow.run_local_server(port=8080)
+                    creds = flow.run_local_server(
+                        port=8080, access_type="offline", prompt="consent"
+                    )
                 except Exception as first_error:
                     logger.error(
                         f"First OAuth attempt failed with trailing slash: {first_error}"
@@ -111,7 +113,9 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
                         )
                         # Use explicit redirect URI configuration without trailing slash
                         flow.redirect_uri = "http://localhost:8080"
-                        creds = flow.run_local_server(port=8080)
+                        creds = flow.run_local_server(
+                            port=8080, access_type="offline", prompt="consent"
+                        )
                     except Exception as second_error:
                         error_msg = str(second_error)
                         logger.error(
@@ -262,45 +266,40 @@ class YouTubeUploader:
                 },
             }
 
-            # Create the media upload object
-            media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+            # Use simple upload for all files - much cleaner and faster
+            logger.info("Using simple upload for all files")
+            media = MediaFileUpload(video_path, resumable=False)
 
             # Create the upload request
             request = self.youtube.videos().insert(
                 part=",".join(body.keys()), body=body, media_body=media
             )
+            logger.info(f"Created upload request for video: {title}")
+            logger.debug(f"Upload parts: {list(body.keys())}")
+            logger.debug(f"Media file: {video_path}")
 
-            # Execute the upload with progress tracking
-            status = None
-            retry = 0
-            while status is None:
-                try:
-                    status, response = request.next_chunk()
-                    if status:
-                        progress = int(status.progress() * 100)
-                        logger.info(f"Upload progress: {progress}%")
-                except HttpError as e:
-                    if e.resp.status in [500, 502, 503, 504]:
-                        logger.error(
-                            f"A retriable HTTP error {e.resp.status} occurred: {e}"
-                        )
-                        retry += 1
-                        if retry > MAX_RETRIES:
-                            logger.error("Exceeded maximum retries. Aborting upload.")
-                            return None
-                        logger.warning(f"Retrying ({retry}/5) in {2**retry} seconds...")
-                        time.sleep(2**retry)
-                    else:
-                        # Non-recoverable error
-                        logger.error(f"Upload failed with error: {e}")
-                        return None
-                except Exception as e:
-                    logger.error(f"Unexpected error during upload: {e}")
-                    return None
+            # Execute the upload
+            start_time = time.time()
+            logger.info(
+                f"Starting upload... (file: {file_size / (1024 * 1024):.1f} MB)"
+            )
 
+            try:
+                response = request.execute()
+                logger.info("Upload completed successfully")
+            except HttpError as e:
+                logger.error(f"Upload failed with error: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Unexpected error during upload: {e}")
+                return None
+
+            total_time = time.time() - start_time
+            logger.info("Upload completed")
             if response:
                 video_id = response["id"]
                 logger.info(f"Successfully uploaded video: {title} (ID: {video_id})")
+                logger.info(f"Upload completed in {total_time:.1f}s")
 
                 # Add to playlist if specified
                 if playlist_id:

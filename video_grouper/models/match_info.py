@@ -10,7 +10,11 @@ from datetime import datetime
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
-from video_grouper.utils.paths import get_match_info_path, get_match_info_dist_path, resolve_path
+from video_grouper.utils.paths import (
+    get_match_info_path,
+    get_match_info_dist_path,
+    resolve_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -368,7 +372,9 @@ class MatchInfo:
     def save(self) -> None:
         """Save the current state back to the match_info.ini file."""
         match_info_path = (
-            get_match_info_path(self.group_dir, os.path.dirname(os.path.abspath(self.group_dir)))
+            get_match_info_path(
+                self.group_dir, os.path.dirname(os.path.abspath(self.group_dir))
+            )
             if hasattr(self, "group_dir")
             else None
         )

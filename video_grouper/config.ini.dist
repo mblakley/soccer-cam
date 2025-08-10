@@ -71,21 +71,7 @@ enabled = false
 # Valid values are: public, private, unlisted
 privacy_status = private
 
-[YOUTUBE_PLAYLIST_MAPPING]
-# This section allows you to map a team name (from match_info.ini's my_team_name)
-# to a specific YouTube playlist name.
-#
-# The value on the right is the base playlist name for processed videos.
-# Raw videos will be uploaded to a playlist with " - Full Field" appended.
-#
-# Example:
-# Hilton Heat=Hilton Heat 2012s
-# WNY Flash=WNY Flash 2013s
-#
-# With this config:
-# - Processed videos for "Hilton Heat" go to "Hilton Heat 2012s"
-# - Raw videos for "Hilton Heat" go to "Hilton Heat 2012s - Full Field"
-Default=
+
 
 [AUTOCAM]
 # Whether to enable autocam processing

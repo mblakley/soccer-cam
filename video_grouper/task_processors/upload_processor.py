@@ -36,17 +36,21 @@ class UploadProcessor(QueueProcessor):
 
             # Create dependencies for the task
             from video_grouper.task_processors.services.ntfy_service import NtfyService
+
             ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
 
             # Execute the task using its own execute method with dependencies
-            if hasattr(item, 'execute') and callable(getattr(item, 'execute')):
+            if hasattr(item, "execute") and callable(getattr(item, "execute")):
                 # Check if the task accepts dependencies
                 import inspect
+
                 sig = inspect.signature(item.execute)
-                if 'youtube_config' in sig.parameters or 'ntfy_service' in sig.parameters:
+                if (
+                    "youtube_config" in sig.parameters
+                    or "ntfy_service" in sig.parameters
+                ):
                     success = await item.execute(
-                        youtube_config=self.config.youtube,
-                        ntfy_service=ntfy_service
+                        youtube_config=self.config.youtube, ntfy_service=ntfy_service
                     )
                 else:
                     success = await item.execute()
@@ -55,8 +59,14 @@ class UploadProcessor(QueueProcessor):
 
             if success:
                 logger.info(f"UPLOAD: Successfully completed task: {item}")
+                # Force flush the log to ensure the message is written immediately
+                for handler in logger.handlers:
+                    handler.flush()
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
+                # Force flush the log to ensure the message is written immediately
+                for handler in logger.handlers:
+                    handler.flush()
 
         except Exception as e:
             logger.error(f"UPLOAD: Error processing task {item}: {e}")

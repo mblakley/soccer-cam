@@ -108,8 +108,7 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
     # Execute the task
     task = create_mock_youtube_upload_task(group_dir)
     result = await task.execute(
-        youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance
+        youtube_config=mock_config.youtube, ntfy_service=mock_ntfy_instance
     )
 
     # Verify success
@@ -203,8 +202,7 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     # Execute the task
     task = create_mock_youtube_upload_task(group_dir)
     result = await task.execute(
-        youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance
+        youtube_config=mock_config.youtube, ntfy_service=mock_ntfy_instance
     )
 
     # Verify success
@@ -278,8 +276,7 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
     # Execute the task
     task = create_mock_youtube_upload_task(group_dir)
     result = await task.execute(
-        youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance
+        youtube_config=mock_config.youtube, ntfy_service=mock_ntfy_instance
     )
 
     # Should return False because no playlist name is available
@@ -350,8 +347,7 @@ async def test_youtube_upload_task_skips_request_if_already_waiting(
     # Execute the task
     task = create_mock_youtube_upload_task(group_dir)
     result = await task.execute(
-        youtube_config=mock_config.youtube,
-        ntfy_service=mock_ntfy_instance
+        youtube_config=mock_config.youtube, ntfy_service=mock_ntfy_instance
     )
 
     # Should return False because waiting for input

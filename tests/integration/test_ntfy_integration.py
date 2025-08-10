@@ -202,20 +202,24 @@ async def test_ask_team_info(ntfy_api):
         patch("video_grouper.api_integrations.ntfy.os.remove"),
     ):
         result = await ntfy_api.ask_team_info(
-            combined_video_path="test_video.mp4", existing_info={}
+            group_dir="test_group_dir",
+            combined_video_path="test_video.mp4",
+            existing_info={},
         )
 
         assert result == {}  # Should return empty dict when no existing info provided
 
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
-        assert "Missing match information:" in kwargs["message"]
+        assert "Missing match information" in kwargs["message"]
 
         ntfy_api.send_notification.reset_mock()
 
         existing_info = {"team_name": "Existing Team", "location": "Existing Stadium"}
         result = await ntfy_api.ask_team_info(
-            combined_video_path="test_video.mp4", existing_info=existing_info
+            group_dir="test_group_dir",
+            combined_video_path="test_video.mp4",
+            existing_info=existing_info,
         )
 
         assert result == existing_info  # Should return the existing info dict
@@ -223,7 +227,7 @@ async def test_ask_team_info(ntfy_api):
         ntfy_api.send_notification.assert_called_once()
         args, kwargs = ntfy_api.send_notification.call_args
         assert (
-            "Missing match information:" in kwargs["message"]
+            "Missing match information" in kwargs["message"]
         )  # Should still notify about missing opponent
 
 

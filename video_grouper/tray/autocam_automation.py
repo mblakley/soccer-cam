@@ -106,6 +106,8 @@ def _execute_autocam_gui_automation(
         )
         logger.info("Set source and destination paths.")
 
+        time.sleep(5)
+
         # Handle Zoom Settings
         main_window.child_window(
             title="Zoom Settings", control_type="Pane"

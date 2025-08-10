@@ -781,12 +781,16 @@ class NtfyAPI:
             return {"is_affirmative": False, "message": "No pending message"}
 
     async def ask_team_info(
-        self, combined_video_path: str, existing_info: Dict[str, str] = None
+        self,
+        group_dir: str,
+        combined_video_path: str,
+        existing_info: Dict[str, str] = None,
     ) -> Dict[str, str]:
         """
         Send notifications about missing team information fields.
 
         Args:
+            group_dir: Directory containing the match_info.ini file
             combined_video_path: Path to the combined video file
             existing_info: Dictionary with existing team info fields
 
@@ -815,6 +819,12 @@ class NtfyAPI:
         if missing_fields:
             missing_fields_str = ", ".join(missing_fields)
 
+            # Get the directory information from the group directory
+            directory_info = ""
+            if group_dir:
+                directory_name = os.path.basename(group_dir)
+                directory_info = f" in directory: {directory_name}"
+
             # Create a screenshot if video path provided
             screenshot_path = None
             if combined_video_path and os.path.exists(combined_video_path):
@@ -823,7 +833,7 @@ class NtfyAPI:
                     duration = await get_video_duration(combined_video_path)
                     if duration:
                         # Take screenshot at the middle
-                        mid_point = duration // 2
+                        mid_point = int(duration) // 2
                         time_str = str(timedelta(seconds=mid_point)).split(".")[0]
 
                         # Create temporary screenshot
@@ -850,7 +860,7 @@ class NtfyAPI:
 
             # Send the notification
             await self.send_notification(
-                message=f"Missing match information: {missing_fields_str}. Please update match_info.ini manually.",
+                message=f"Missing match information{directory_info}: {missing_fields_str}. Please update match_info.ini manually.",
                 title="Missing Match Information",
                 tags=["warning", "info"],
                 priority=4,

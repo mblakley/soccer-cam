@@ -3,7 +3,6 @@ import win32service
 import win32event
 import servicemanager
 import sys
-import logging
 import asyncio
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.update.update_manager import check_and_update

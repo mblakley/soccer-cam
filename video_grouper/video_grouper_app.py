@@ -1,7 +1,7 @@
 import os
 import asyncio
-import logging
 
+from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.utils.config import Config
 from video_grouper.utils.logger import setup_logging_from_config, get_logger
 from video_grouper.task_processors import (
@@ -41,7 +41,17 @@ class VideoGrouperApp:
         """
         # Setup logging from config
         setup_logging_from_config(config)
-        
+
+        # Initialize mock services if environment variables are set
+        try:
+            from video_grouper.task_processors.services.mock_services import (
+                initialize_mock_services,
+            )
+
+            initialize_mock_services()
+        except ImportError:
+            pass  # Mock services not available, continue with real services
+
         self.config = config
         self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
@@ -58,6 +68,13 @@ class VideoGrouperApp:
                     f"Initializing {camera_type} camera with IP: {config.camera.device_ip}"
                 )
                 self.camera = DahuaCamera(
+                    config=config.camera, storage_path=self.storage_path
+                )
+            elif camera_type == "simulator":
+                from video_grouper.cameras.simulator import SimulatorCamera
+
+                logger.info(f"Initializing {camera_type} camera for testing")
+                self.camera = SimulatorCamera(
                     config=config.camera, storage_path=self.storage_path
                 )
             else:
@@ -94,43 +111,56 @@ class VideoGrouperApp:
             from video_grouper.task_processors.services.match_info_service import (
                 MatchInfoService,
             )
-            from video_grouper.task_processors.services.teamsnap_service import (
-                TeamSnapService,
-            )
-            from video_grouper.task_processors.services.playmetrics_service import (
-                PlayMetricsService,
+            from video_grouper.task_processors.services.mock_services import (
+                create_teamsnap_service,
+                create_playmetrics_service,
             )
 
-            ntfy_service = NtfyService(self.config.ntfy, self.storage_path)
-            teamsnap_service = TeamSnapService(self.config.teamsnap, self.config.app)
+            # Create services first
+            teamsnap_service = create_teamsnap_service(self.config.teamsnap)
             try:
-                playmetrics_service = PlayMetricsService(
-                    self.config.playmetrics, self.config.app
+                playmetrics_service = create_playmetrics_service(
+                    self.config.playmetrics
                 )
             except RuntimeError as e:
                 logger.critical(f"PlayMetricsService failed to initialize: {e}")
                 # Optionally, you can use sys.exit(1) to exit the app immediately
                 import sys
+
                 sys.exit(1)
+
+            # Create NTFY processor first (without service)
+            self.ntfy_processor = NtfyProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                ntfy_service=None,  # Will be set after creation
+                match_info_service=None,  # Will be set after creation
+                poll_interval=30,
+                video_processor=self.video_processor,
+            )
+
+            # Create NTFY service with callback to processor
+            ntfy_service = NtfyService(
+                self.config.ntfy,
+                self.storage_path,
+                completion_callback=self.ntfy_processor._check_match_info_completion,
+            )
+
+            # Create match info service
             match_info_service = MatchInfoService(
                 teamsnap_service=teamsnap_service,
                 playmetrics_service=playmetrics_service,
                 ntfy_service=ntfy_service,
             )
-            self.ntfy_processor = NtfyProcessor(
-                storage_path=self.storage_path,
-                config=self.config,
-                ntfy_service=ntfy_service,
-                match_info_service=match_info_service,
-                poll_interval=30,
-                video_processor=self.video_processor,
-            )
+
+            # Set the services in the processor
+            self.ntfy_processor.ntfy_service = ntfy_service
+            self.ntfy_processor.match_info_service = match_info_service
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
             download_processor=self.download_processor,
             video_processor=self.video_processor,
-            upload_processor=self.upload_processor,
             poll_interval=self.poll_interval,
             ntfy_processor=self.ntfy_processor,
         )
@@ -146,10 +176,10 @@ class VideoGrouperApp:
             self.processors.append(self.ntfy_processor)
 
         self._shutdown_event = asyncio.Event()
-        
+
         # Register all task types with the task registry
         register_all_tasks()
-        
+
         logger.info("VideoGrouperApp initialized with task processors")
 
     async def initialize(self):
@@ -168,6 +198,21 @@ class VideoGrouperApp:
         logger.info("Running VideoGrouperApp")
         await self.initialize()
 
+        # Start NTFY response service if enabled
+        ntfy_response_service = None
+        if (
+            hasattr(self.config.ntfy, "response_service")
+            and self.config.ntfy.response_service
+        ):
+            try:
+                ntfy_response_service = create_ntfy_response_service(self.config.ntfy)
+                await ntfy_response_service.start()
+                logger.info("✓ NTFY response service started in VideoGrouperApp")
+            except Exception as e:
+                logger.error(f"Failed to start NTFY response service: {e}")
+        else:
+            logger.info("NTFY response service disabled in configuration")
+
         # Start periodic status reporting
         status_task = asyncio.create_task(self._periodic_status_report())
 
@@ -179,6 +224,15 @@ class VideoGrouperApp:
             logger.info("Received shutdown signal")
         finally:
             status_task.cancel()
+
+            # Stop NTFY response service if it was started
+            if ntfy_response_service:
+                try:
+                    await ntfy_response_service.stop()
+                    logger.info("✓ NTFY response service stopped")
+                except Exception as e:
+                    logger.error(f"Error stopping NTFY response service: {e}")
+
             await self.shutdown()
 
     async def _periodic_status_report(self):
@@ -215,6 +269,7 @@ class VideoGrouperApp:
 
         # Close all loggers to release file handles
         from video_grouper.utils.logger import close_loggers
+
         close_loggers()
 
         logger.info("VideoGrouperApp shutdown complete")
@@ -269,5 +324,7 @@ class VideoGrouperApp:
             if self.ntfy_processor
             and self.ntfy_processor._processor_task
             and not self.ntfy_processor._processor_task.done()
-            else "stopped",
+            else "stopped"
+            if self.ntfy_processor
+            else "disabled",
         }
