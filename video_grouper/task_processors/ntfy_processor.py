@@ -82,49 +82,32 @@ class NtfyProcessor(QueueProcessor):
         """
         Process a single NTFY task.
 
+        Note: task_done() is called by the base class _run() loop — do NOT
+        call it here to avoid driving the internal counter negative.
+
         Args:
             item: BaseNtfyTask to process
         """
-        try:
-            logger.info(f"NTFY: Processing task: {item}")
+        logger.info(f"NTFY: Processing task: {item}")
 
-            # Store the config in the task metadata for response processing
-            if not item.metadata.get("config"):
-                item.metadata["config"] = self.config
+        # Store the config in the task metadata for response processing
+        if not item.metadata.get("config"):
+            item.metadata["config"] = self.config
 
-            # Execute the task using its own execute method
-            success = await item.execute()
+        # Execute the task using its own execute method
+        success = await item.execute()
 
-            if success:
-                logger.info(f"NTFY: Successfully sent notification for task: {item}")
-                # For NTFY tasks, we don't remove them from the queue here
-                # because they need to wait for a response. The task will be removed
-                # from the queue when the response is processed by the NTFY service.
-                # We mark the task as done in the queue but keep it in _queued_items
-                # until the response is received.
-                self._queue.task_done()
-                # Don't remove from _queued_items - it will be removed when response is processed
-            else:
-                logger.error(f"NTFY: Failed to send notification for task: {item}")
-                # Mark as failed to send to prevent duplicate tasks and enable retry
-                self.ntfy_service.mark_failed_to_send(
-                    item.group_dir, item.get_task_type(), item.metadata
-                )
-                # For failed tasks, remove from queue normally
-                self._queue.task_done()
-                item_key = self.get_item_key(item)
-                self._queued_items.discard(item_key)
-
-        except Exception as e:
-            logger.error(f"NTFY: Error processing task {item}: {e}")
+        if success:
+            logger.info(f"NTFY: Successfully sent notification for task: {item}")
+            # Don't remove from _queued_items — it will be removed when response is processed
+        else:
+            logger.error(f"NTFY: Failed to send notification for task: {item}")
             # Mark as failed to send to prevent duplicate tasks and enable retry
             self.ntfy_service.mark_failed_to_send(
                 item.group_dir, item.get_task_type(), item.metadata
             )
-            # For failed tasks, remove from queue normally
-            self._queue.task_done()
-            item_key = self.get_item_key(item)
-            self._queued_items.discard(item_key)
+            # Raise so the base class retry logic handles re-queuing or removal
+            raise RuntimeError(f"Failed to send NTFY notification for {item}")
 
     def get_item_key(self, item: BaseNtfyTask) -> str:
         """Get unique key for a BaseNtfyTask."""

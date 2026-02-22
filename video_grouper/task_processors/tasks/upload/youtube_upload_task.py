@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
-from video_grouper.models import MatchInfo
+from video_grouper.models import MatchInfo, DirectoryState
 from video_grouper.utils.config import YouTubeConfig
 
 logger = logging.getLogger(__name__)
@@ -75,14 +75,16 @@ class YoutubeUploadTask(BaseUploadTask):
                 return False
 
             # Resolve the group directory path
-            resolved_group_dir = resolve_path(self.group_dir, storage_path)
+            resolved_group_dir = str(resolve_path(self.group_dir, storage_path))
             logger.info(
                 f"Starting YouTube upload for {self.group_dir} (resolved: {resolved_group_dir})"
             )
 
             # Load match info to get team name
-            match_info_path = resolve_path(
-                os.path.join(self.group_dir, "match_info.ini"), storage_path
+            match_info_path = str(
+                resolve_path(
+                    os.path.join(self.group_dir, "match_info.ini"), storage_path
+                )
             )
             if not os.path.exists(match_info_path):
                 logger.error(f"match_info.ini not found in {resolved_group_dir}")
@@ -230,17 +232,52 @@ class YoutubeUploadTask(BaseUploadTask):
         """
         Get playlist names for processed and raw videos.
 
+        Lookup order:
+        1. DirectoryState (playlist name stored in state.json)
+        2. config.playlist_map (team name → playlist name mapping)
+        3. config.processed_playlist / config.raw_playlist (format strings)
+        4. Fall back to ntfy request if nothing found
+
         Returns:
             Tuple of (processed_playlist_name, raw_playlist_name)
         """
-        # Log the team name being searched for
         logger.info(f"Looking up playlist for team: '{match_info.my_team_name}'")
 
-        # Check for playlist configurations
+        base_playlist_name = None
+
+        # 1. Check DirectoryState for a stored playlist name
+        try:
+            dir_state = DirectoryState(self.group_dir, storage_path)
+            state_playlist = dir_state.get_youtube_playlist_name()
+            if state_playlist:
+                base_playlist_name = state_playlist
+                logger.info(
+                    f"Using playlist from directory state: {base_playlist_name}"
+                )
+        except Exception as e:
+            logger.warning(f"Error reading playlist from directory state: {e}")
+
+        # 2. Check config.playlist_map for team-based mapping
+        if not base_playlist_name:
+            if hasattr(config, "playlist_map") and config.playlist_map:
+                try:
+                    mapped_name = config.playlist_map.get(match_info.my_team_name)
+                    if mapped_name:
+                        base_playlist_name = mapped_name
+                        logger.info(
+                            f"Using playlist from config map: {base_playlist_name}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Error looking up playlist in config map: {e}")
+
+        # 3. If we have a base playlist name, derive processed and raw names
+        if base_playlist_name:
+            return base_playlist_name, base_playlist_name + " - Full Field"
+
+        # 4. Try format-string based playlist configs
         processed_playlist_name = None
         raw_playlist_name = None
 
-        # Try to get playlist names from YOUTUBE.PLAYLIST.PROCESSED and YOUTUBE.PLAYLIST.RAW
         if hasattr(config, "processed_playlist") and config.processed_playlist:
             try:
                 processed_playlist_name = config.processed_playlist.name_format.format(
@@ -265,22 +302,19 @@ class YoutubeUploadTask(BaseUploadTask):
             except Exception as e:
                 logger.warning(f"Error formatting raw playlist name: {e}")
 
-        # If still no mapping, and no request pending, ask the user
-        if (
-            not processed_playlist_name
-            and not raw_playlist_name
-            and not ntfy_service.is_waiting_for_input(self.group_dir)
-        ):
+        if processed_playlist_name or raw_playlist_name:
+            return processed_playlist_name, raw_playlist_name
+
+        # 5. No mapping found — request via ntfy if not already waiting
+        if not ntfy_service.is_waiting_for_input(self.group_dir):
             logger.warning(
                 f"No playlist mapping found for team '{match_info.my_team_name}'. Sending NTFY request."
             )
             await ntfy_service.request_playlist_name(
                 self.group_dir, match_info.my_team_name
             )
-            # Return None for now, upload will be retried later when user responds
-            return None, None
 
-        return processed_playlist_name, raw_playlist_name
+        return None, None
 
     def __str__(self) -> str:
         """String representation of the task."""

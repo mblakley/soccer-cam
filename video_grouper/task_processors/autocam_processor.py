@@ -112,6 +112,70 @@ class AutocamProcessor(QueueProcessor):
                 f"AUTOCAM: state.json not found for group {group_name} on successful completion."
             )
 
+    def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:
+        """
+        Find the raw video file and determine the autocam output path.
+
+        Args:
+            group_dir: Directory containing the video group
+
+        Returns:
+            Tuple of (input_path, output_path)
+
+        Raises:
+            FileNotFoundError: If no raw video file is found
+        """
+        video_dir = group_dir / "videos"
+        if video_dir.exists():
+            for f in video_dir.iterdir():
+                if f.name.endswith("-raw.mp4"):
+                    input_path = str(f)
+                    output_path = str(f.with_name(f.name.replace("-raw.mp4", ".mp4")))
+                    return input_path, output_path
+
+        raise FileNotFoundError(
+            f"No raw video file ending with '-raw.mp4' found in {group_dir}"
+        )
+
+    async def discover_work(self) -> None:
+        """
+        Scan storage path for group directories with 'trimmed' status
+        and create autocam tasks for them.
+        """
+        storage = Path(self.storage_path)
+        if not storage.exists():
+            return
+
+        for entry in storage.iterdir():
+            if not entry.is_dir():
+                continue
+
+            state_file = entry / "state.json"
+            if not state_file.exists():
+                continue
+
+            try:
+                with open(state_file, "r") as f:
+                    state_data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+            if state_data.get("status") != "trimmed":
+                continue
+
+            try:
+                input_path, output_path = self._get_autocam_input_output_paths(entry)
+            except FileNotFoundError:
+                continue
+
+            task = AutocamTask(
+                group_dir=entry,
+                input_path=input_path,
+                output_path=output_path,
+                autocam_config=self.config.autocam,
+            )
+            await self.add_work(task)
+
     async def _add_to_youtube_queue(self, group_dir: Path) -> None:
         """
         Add a group to the YouTube upload queue.

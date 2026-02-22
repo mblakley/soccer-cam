@@ -91,8 +91,11 @@ class DirectoryState:
         }
         try:
             with FileLock(self.state_file_path):
-                with open(self.state_file_path, "w") as f:
+                # Atomic write: temp file then rename to prevent corruption on crash
+                temp_path = self.state_file_path + ".tmp"
+                with open(temp_path, "w") as f:
                     json.dump(state_data, f, indent=4)
+                os.replace(temp_path, self.state_file_path)
         except TimeoutError as e:
             logger.error(f"Timeout saving state for {self.directory_path}: {e}")
         except Exception as e:
@@ -228,41 +231,43 @@ class DirectoryState:
 
     def set_youtube_playlist_name(self, playlist_name: str):
         """Set the YouTube playlist name in the state."""
-        self._load_state()  # Ensure we have the latest state
-
-        # Load existing state data or create a new dictionary
-        state_data = {}
-        if os.path.exists(self.state_file_path):
-            try:
-                with open(self.state_file_path, "r") as f:
-                    state_data = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
-                # If file is corrupted or doesn't exist, start fresh
+        try:
+            with FileLock(self.state_file_path):
+                # Read current state under lock
                 state_data = {"files": {}, "status": "pending", "error_message": None}
-        else:
-            # If the file doesn't exist, we'll create it.
-            state_data = {"files": {}, "status": "pending", "error_message": None}
+                if os.path.exists(self.state_file_path):
+                    try:
+                        with open(self.state_file_path, "r") as f:
+                            state_data = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        pass
 
-        state_data["youtube_playlist_name"] = playlist_name
+                state_data["youtube_playlist_name"] = playlist_name
 
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
 
-        # Save the updated state
-        with open(self.state_file_path, "w") as f:
-            json.dump(state_data, f, indent=4)
+                # Atomic write
+                temp_path = self.state_file_path + ".tmp"
+                with open(temp_path, "w") as f:
+                    json.dump(state_data, f, indent=4)
+                os.replace(temp_path, self.state_file_path)
+        except TimeoutError as e:
+            logger.error(
+                f"Timeout setting playlist name for {self.directory_path}: {e}"
+            )
         logger.debug(
             f"Set youtube_playlist_name to '{playlist_name}' in {self.state_file_path}"
         )
 
     def get_youtube_playlist_name(self) -> Optional[str]:
         """Get the YouTube playlist name from the state."""
-        self._load_state()
-        state_data = {}
-        if os.path.exists(self.state_file_path):
-            try:
-                with open(self.state_file_path, "r") as f:
-                    state_data = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
-                return None
-        return state_data.get("youtube_playlist_name")
+        try:
+            with FileLock(self.state_file_path):
+                if os.path.exists(self.state_file_path):
+                    with open(self.state_file_path, "r") as f:
+                        state_data = json.load(f)
+                    return state_data.get("youtube_playlist_name")
+        except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
+            pass
+        return None

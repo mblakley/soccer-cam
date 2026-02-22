@@ -14,6 +14,9 @@ from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
 
+# Default timeout for camera HTTP requests (30 seconds connect, 60 seconds read)
+CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,7 +150,7 @@ class DahuaCamera(Camera):
                 client = self._client
                 close_client = False
             else:
-                client = httpx.AsyncClient()
+                client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
             # Get timezone from config
@@ -264,7 +267,7 @@ class DahuaCamera(Camera):
                 client = self._client
                 close_client = False
             else:
-                client = httpx.AsyncClient()
+                client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
             try:
@@ -360,7 +363,7 @@ class DahuaCamera(Camera):
                 client = self._client
                 close_client = False
             else:
-                client = httpx.AsyncClient()
+                client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
             try:
@@ -404,7 +407,7 @@ class DahuaCamera(Camera):
                 client = self._client
                 close_client = False
             else:
-                client = httpx.AsyncClient()
+                client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
             try:
@@ -483,7 +486,7 @@ class DahuaCamera(Camera):
         """Starts video recording on the camera."""
         try:
             url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=setConfig&ManualRec.Enable=true"
-            client = self._client or httpx.AsyncClient()
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
             try:
                 response = await client.get(
                     url, auth=httpx.DigestAuth(self.username, self.password)
@@ -501,7 +504,7 @@ class DahuaCamera(Camera):
         """Stops video recording on the camera."""
         try:
             url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=setConfig&RecordMode[0].Mode=2"
-            client = self._client or httpx.AsyncClient()
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
             try:
                 response = await client.get(
                     url, auth=httpx.DigestAuth(self.username, self.password)
@@ -519,7 +522,7 @@ class DahuaCamera(Camera):
         """Get recording status from the camera."""
         try:
             url = f"http://{self.device_ip}/cgi-bin/configManager.cgi?action=getConfig&name=RecordMode"
-            client = self._client or httpx.AsyncClient()
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
             try:
                 response = await client.get(
                     url, auth=httpx.DigestAuth(self.username, self.password)
@@ -541,7 +544,7 @@ class DahuaCamera(Camera):
         """Get device information from the camera."""
         try:
             url = f"http://{self.device_ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
-            client = self._client or httpx.AsyncClient()
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
             try:
                 auth = httpx.DigestAuth(self.username, self.password)
                 response = await client.get(url, auth=auth)
@@ -650,7 +653,7 @@ class DahuaCamera(Camera):
                 client = self._client
                 close_client = False
             else:
-                client = httpx.AsyncClient()
+                client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
             try:

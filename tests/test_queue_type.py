@@ -26,12 +26,13 @@ class TestQueueType:
             assert getattr(QueueType, name).value == value
 
     def test_string_representation(self):
-        """Test string representation of queue types."""
-        assert str(QueueType.AUTOCAM) == "autocam"
-        assert str(QueueType.DOWNLOAD) == "download"
-        assert str(QueueType.VIDEO) == "video"
-        assert str(QueueType.UPLOAD) == "upload"
-        assert str(QueueType.NTFY) == "ntfy"
+        """Test value representation of queue types."""
+        assert QueueType.AUTOCAM.value == "autocam"
+        assert QueueType.DOWNLOAD.value == "download"
+        assert QueueType.VIDEO.value == "video"
+        assert QueueType.UPLOAD.value == "upload"
+        assert QueueType.NTFY.value == "ntfy"
+        assert QueueType.YOUTUBE.value == "youtube"
 
     def test_enum_comparison(self):
         """Test enum comparison."""
@@ -58,5 +59,6 @@ class TestQueueType:
     def test_enum_iteration(self):
         """Test enum iteration."""
         all_types = list(QueueType)
-        assert len(all_types) == 5
+        assert len(all_types) == 6
         assert QueueType.AUTOCAM in all_types
+        assert QueueType.YOUTUBE in all_types

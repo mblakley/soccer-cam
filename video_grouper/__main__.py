@@ -85,7 +85,9 @@ async def main():
         await app.run()
     except asyncio.CancelledError:
         logger.info("Application is shutting down.")
-    finally:
+        # app.run() already calls shutdown() in its finally block,
+        # so we only need to call it explicitly on CancelledError
+        # which may bypass the finally block in run().
         await app.shutdown()
 
 

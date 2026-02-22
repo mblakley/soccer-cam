@@ -42,7 +42,9 @@ def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
 @patch("os.path.exists", return_value=True)
 @patch("builtins.open", new_callable=mock_open)
 @patch("video_grouper.models.MatchInfo.from_file")
+@patch(f"{YT_UPLOAD_TASK_PATH}.resolve_path", side_effect=lambda p, s: p)
 async def test_youtube_upload_task_coordination_with_state_playlist(
+    mock_resolve_path,
     mock_match_info_from_file,
     mock_open,
     mock_path_exists,
@@ -136,7 +138,9 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
 @patch("os.path.exists", return_value=True)
 @patch("builtins.open", new_callable=mock_open)
 @patch("video_grouper.models.MatchInfo.from_file")
+@patch(f"{YT_UPLOAD_TASK_PATH}.resolve_path", side_effect=lambda p, s: p)
 async def test_youtube_upload_task_coordination_with_config_mapping(
+    mock_resolve_path,
     mock_match_info_from_file,
     mock_open,
     mock_path_exists,

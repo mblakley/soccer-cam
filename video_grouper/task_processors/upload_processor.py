@@ -73,4 +73,4 @@ class UploadProcessor(QueueProcessor):
 
     def get_item_key(self, item: BaseUploadTask) -> str:
         """Get unique key for a BaseUploadTask."""
-        return f"{item.task_type}:{item.get_item_path()}:{hash(item)}"
+        return f"{item.task_type}:{item.get_item_path()}"

@@ -53,4 +53,4 @@ class VideoProcessor(QueueProcessor):
 
     def get_item_key(self, item: BaseFfmpegTask) -> str:
         """Get unique key for a BaseFfmpegTask."""
-        return f"{item.task_type}:{item.get_item_path()}:{hash(item)}"
+        return f"{item.task_type}:{item.get_item_path()}"

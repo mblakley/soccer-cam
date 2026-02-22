@@ -220,17 +220,10 @@ class QueueProcessor(ABC):
         state_file = os.path.join(self.storage_path, self.get_state_file_name())
 
         try:
-            # Get all items currently in the queue
-            items = []
-            temp_queue = asyncio.Queue()
-
-            while not self._queue.empty():
-                item = await self._queue.get()
-                items.append(item)
-                await temp_queue.put(item)
-
-            # Restore the queue
-            self._queue = temp_queue
+            # Snapshot the queue's internal deque without draining it.
+            # This avoids the race condition where draining and replacing
+            # the queue could lose items or strand the processing loop.
+            items = list(self._queue._queue) if self._queue else []
 
             # Serialize items - call serialize() directly on each item
             serialized_items = []
@@ -243,9 +236,11 @@ class QueueProcessor(ABC):
                     # Fallback for simple items
                     serialized_items.append({"item": str(item)})
 
-            # Write to file
-            with open(state_file, "w") as f:
+            # Atomic write: write to temp file then rename
+            temp_file = state_file + ".tmp"
+            with open(temp_file, "w") as f:
                 json.dump(serialized_items, f, indent=2)
+            os.replace(temp_file, state_file)
 
             logger.info(
                 f"{self.__class__.__name__}: Saved state with {len(serialized_items)} items to {state_file}"
@@ -329,19 +324,19 @@ class QueueProcessor(ABC):
         }
 
     def update_in_place(self, item_key: str, new_task: BaseTask) -> None:
-        """Update a queued item in place, preserving its position in the queue."""
+        """Update a queued item in place, preserving its position in the queue.
+
+        Directly mutates the internal deque. This is safe because asyncio is
+        single-threaded and this method is only called from coroutines that
+        are not currently yielded inside Queue.get/put.
+        """
         if self._queue is None:
             return
-        # Access the underlying deque of the asyncio.Queue
-        queue_list = list(self._queue._queue)
-        for idx, item in enumerate(queue_list):
+        deque = self._queue._queue
+        for idx, item in enumerate(deque):
             if self.get_item_key(item) == item_key:
-                queue_list[idx] = new_task
+                deque[idx] = new_task
                 break
-        # Rebuild the queue
-        self._queue._queue.clear()
-        for item in queue_list:
-            self._queue._queue.append(item)
 
     def _deserialize_task(self, item_data: Dict[str, object]) -> BaseTask:
         """

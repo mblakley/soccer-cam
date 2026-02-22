@@ -113,4 +113,4 @@ class DownloadProcessor(QueueProcessor):
             return
 
     def get_item_key(self, item: RecordingFile) -> str:
-        return f"recording:{item.file_path}:{hash(item.file_path)}"
+        return f"recording:{item.file_path}"

@@ -5,20 +5,38 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-ffmpeg_lock = asyncio.Lock()
+# Default timeout for FFmpeg operations (30 minutes).
+# Long videos (2+ hours of 180-degree footage) can take a while to process.
+FFMPEG_TIMEOUT = 1800
+
+
+async def _run_ffmpeg_with_timeout(
+    cmd: list[str], timeout: int = FFMPEG_TIMEOUT
+) -> tuple[int, bytes, bytes]:
+    """Run an FFmpeg command with a timeout, capturing stderr for diagnostics.
+
+    Returns (returncode, stdout_bytes, stderr_bytes).
+    Kills the process on timeout or cancellation to avoid zombies.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        return process.returncode, stdout, stderr
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        process.kill()
+        await process.wait()
+        raise
 
 
 async def verify_ffmpeg_install() -> bool:
     """Verify that FFmpeg is installed and accessible."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        returncode, _, _ = await _run_ffmpeg_with_timeout(
+            ["ffmpeg", "-version"], timeout=10
         )
-        await process.communicate()
-        return process.returncode == 0
+        return returncode == 0
     except Exception as e:
         logger.error(f"Error verifying FFmpeg installation: {e}")
         return False
@@ -42,17 +60,9 @@ async def get_video_duration(file_path: str) -> Optional[float]:
             file_path,
         ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        returncode, stdout, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=60)
 
-        # `process.communicate` is an *awaitable* coroutine. Failure to await
-        # it results in an unresolved coroutine object being returned which
-        # breaks downstream logic and tests. Ensure we await it here.
-
-        stdout, stderr = await process.communicate()
-
-        if process.returncode != 0:
+        if returncode != 0:
             logger.error(f"Error getting video duration: {stderr.decode()}")
             return None
 
@@ -87,15 +97,19 @@ async def verify_mp4_duration(
 
 
 async def run_ffmpeg(command):
+    """Run an FFmpeg command. Returns True on success, False on failure."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await process.wait()
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(command)
+        if returncode != 0:
+            logger.error(f"FFmpeg command failed (rc={returncode}): {stderr.decode()}")
+            return False
+        return True
+    except asyncio.TimeoutError:
+        logger.error(f"FFmpeg command timed out after {FFMPEG_TIMEOUT}s")
+        return False
     except Exception as e:
         logger.error(f"FFmpeg command failed: {e}")
+        return False
 
 
 async def async_convert_file(file_path: str) -> Optional[str]:
@@ -110,7 +124,9 @@ async def async_convert_file(file_path: str) -> Optional[str]:
         logger.error(f"Input file not found: {file_path}")
         return None
 
-    output_path = file_path.replace(".dav", ".mp4")
+    # Use pathlib-style suffix replacement to handle .dav anywhere in the path
+    base, ext = os.path.splitext(file_path)
+    output_path = base + ".mp4" if ext.lower() == ".dav" else file_path + ".mp4"
 
     cmd = [
         "ffmpeg",
@@ -128,19 +144,23 @@ async def async_convert_file(file_path: str) -> Optional[str]:
 
     logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-    )
+    try:
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
 
-    await process.wait()
-
-    if process.returncode == 0:
-        logger.info(
-            f"Successfully converted {os.path.basename(file_path)} to {os.path.basename(output_path)}"
+        if returncode == 0:
+            logger.info(
+                f"Successfully converted {os.path.basename(file_path)} to {os.path.basename(output_path)}"
+            )
+            return output_path
+        else:
+            logger.error(
+                f"Failed to convert {os.path.basename(file_path)}: {stderr.decode()}"
+            )
+            return None
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Conversion timed out for {os.path.basename(file_path)} after {FFMPEG_TIMEOUT}s"
         )
-        return output_path
-    else:
-        logger.error(f"Failed to convert {os.path.basename(file_path)}")
         return None
 
 
@@ -171,17 +191,20 @@ async def create_screenshot(
         output_path,
         "-y",
     ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-    )
-    await process.wait()
-    if process.returncode == 0:
-        logger.info(
-            f"Successfully created screenshot for {os.path.basename(video_path)}"
-        )
-        return True
-    else:
-        logger.error(f"Failed to create screenshot for {os.path.basename(video_path)}")
+    try:
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=60)
+        if returncode == 0:
+            logger.info(
+                f"Successfully created screenshot for {os.path.basename(video_path)}"
+            )
+            return True
+        else:
+            logger.error(
+                f"Failed to create screenshot for {os.path.basename(video_path)}: {stderr.decode()}"
+            )
+            return False
+    except asyncio.TimeoutError:
+        logger.error(f"Screenshot timed out for {os.path.basename(video_path)}")
         return False
 
 
@@ -215,18 +238,23 @@ async def trim_video(
     cmd.extend(["-c", "copy", output_path])
 
     logger.info(f"Running ffmpeg trim command: {' '.join(cmd)}")
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-    )
-    await process.wait()
+    try:
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
 
-    if process.returncode == 0:
-        logger.info(
-            f"Successfully trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}"
+        if returncode == 0:
+            logger.info(
+                f"Successfully trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}"
+            )
+            return True
+        else:
+            logger.error(
+                f"Failed to trim {os.path.basename(input_path)}: {stderr.decode()}"
+            )
+            return False
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Trim timed out for {os.path.basename(input_path)} after {FFMPEG_TIMEOUT}s"
         )
-        return True
-    else:
-        logger.error(f"Failed to trim {os.path.basename(input_path)}")
         return False
 
 
@@ -262,13 +290,9 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
     logger.info(f"Running ffmpeg combine command: {' '.join(cmd)}")
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
 
-        stdout, stderr = await process.communicate()
-
-        if process.returncode == 0:
+        if returncode == 0:
             logger.info(
                 f"Successfully combined videos to {os.path.basename(output_path)}"
             )
@@ -277,6 +301,9 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
             logger.error(f"Failed to combine videos: {stderr.decode()}")
             return False
 
+    except asyncio.TimeoutError:
+        logger.error(f"Combine timed out after {FFMPEG_TIMEOUT}s")
+        return False
     except Exception as e:
         logger.error(f"Error combining videos: {e}")
         return False
@@ -286,7 +313,7 @@ async def trim_video_advanced(
     input_path: str, output_path: str, start_time: str, end_time: str
 ) -> bool:
     """
-    Advanced video trimming with freeze detection and frame rate optimization.
+    Advanced video trimming with frame-drop removal and re-encoding.
 
     Args:
         input_path: Path to the input video file.
@@ -300,7 +327,6 @@ async def trim_video_advanced(
     cmd = [
         "ffmpeg",
         "-y",
-        "--%",
         "-fflags",
         "+discardcorrupt",
         "-err_detect",
@@ -311,12 +337,8 @@ async def trim_video_advanced(
         start_time,
         "-to",
         end_time,
-        "-filter_complex",
-        "[0:v]freezedetect=n=0.003:d=1[fd];[0:v][fd]freezeframes[fr];[fr]mpdecimate,setpts=N/25/TB[v]",
-        "-map",
-        "[v]",
-        "-map",
-        "0:a?",
+        "-vf",
+        "mpdecimate,setpts=N/25/TB",
         "-r",
         "25",
         "-c:v",
@@ -333,13 +355,9 @@ async def trim_video_advanced(
     logger.info(f"Running advanced ffmpeg trim command: {' '.join(cmd)}")
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
 
-        stdout, stderr = await process.communicate()
-
-        if process.returncode == 0:
+        if returncode == 0:
             logger.info(
                 f"Successfully trimmed video with advanced processing to {os.path.basename(output_path)}"
             )
@@ -350,6 +368,11 @@ async def trim_video_advanced(
             )
             return False
 
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Advanced trim timed out for {os.path.basename(input_path)} after {FFMPEG_TIMEOUT}s"
+        )
+        return False
     except Exception as e:
         logger.error(f"Error trimming video with advanced processing: {e}")
         return False

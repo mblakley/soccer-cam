@@ -137,11 +137,11 @@ class TestVideoProcessor:
         # Test combine task
         combine_task = CombineTask(group_dir="/test/group")
         key = processor.get_item_key(combine_task)
-        assert key.startswith("combine:/test/group:")
+        assert key == "combine:/test/group"
 
         # Test trim task with new constructor
         trim_task = TrimTask(
             group_dir="/test/group", start_time="00:05:00", end_time="01:35:00"
         )
         key = processor.get_item_key(trim_task)
-        assert key.startswith("trim:/test/group:")
+        assert key == "trim:/test/group"

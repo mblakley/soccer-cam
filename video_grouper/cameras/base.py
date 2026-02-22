@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Tuple, TypedDict
+from typing import Any, List, Dict, Optional, Tuple, TypedDict
 from datetime import datetime
 
 
@@ -25,7 +25,9 @@ class Camera(ABC):
         pass
 
     @abstractmethod
-    async def get_file_list(self) -> List[Dict[str, str]]:
+    async def get_file_list(
+        self, start_time: datetime = None, end_time: datetime = None
+    ) -> List[Dict[str, Any]]:
         """Get list of recording files from the camera."""
         pass
 

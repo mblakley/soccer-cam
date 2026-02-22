@@ -17,7 +17,6 @@ from typing import Dict, Optional, List, Any
 from pathlib import Path
 from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
 from video_grouper.utils.config import NtfyConfig
-import subprocess
 import re
 
 logger = logging.getLogger(__name__)
@@ -64,9 +63,11 @@ async def compress_image(
             output_path,
         ]
 
-        # Run the command
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
+        # Run the command asynchronously to avoid blocking the event loop
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
             logger.error(f"Error compressing image: {stderr.decode()}")
@@ -143,20 +144,20 @@ class NtfyAPI:
             self.client = httpx.AsyncClient(timeout=None)
 
         # Start the response listener task
-        self._response_listener_task = asyncio.create_task(self._listen_for_responses())
+        self.listener_task = asyncio.create_task(self._listen_for_responses())
 
     async def close(self):
         """Close the NTFY API integration."""
         logger.info("Closing NTFY API integration")
 
         # Cancel the response listener task
-        if self._response_listener_task:
-            self._response_listener_task.cancel()
+        if self.listener_task:
+            self.listener_task.cancel()
             try:
-                await self._response_listener_task
+                await self.listener_task
             except asyncio.CancelledError:
                 pass
-            self._response_listener_task = None
+            self.listener_task = None
 
         # Close the HTTP client
         if self.client:
@@ -734,14 +735,14 @@ class NtfyAPI:
     async def shutdown(self):
         """Properly close the NTFY connection and cleanup resources."""
         logger.info("Shutting down NTFY API connection")
-        if hasattr(self, "_client") and self._client:
-            await self._client.aclose()
+        if hasattr(self, "client") and self.client:
+            await self.client.aclose()
 
-        if hasattr(self, "_response_listener_task") and self._response_listener_task:
-            if not self._response_listener_task.done():
-                self._response_listener_task.cancel()
+        if hasattr(self, "listener_task") and self.listener_task:
+            if not self.listener_task.done():
+                self.listener_task.cancel()
                 try:
-                    await self._response_listener_task
+                    await self.listener_task
                 except asyncio.CancelledError:
                     logger.info("NTFY response listener task cancelled")
 
