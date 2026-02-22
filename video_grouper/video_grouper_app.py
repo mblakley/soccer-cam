@@ -220,8 +220,6 @@ class VideoGrouperApp:
         # Just wait for shutdown event
         try:
             await self._shutdown_event.wait()
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal")
         finally:
             status_task.cancel()
 

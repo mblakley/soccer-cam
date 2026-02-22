@@ -112,7 +112,8 @@ class TestMainFunction:
         mock_load_config.assert_called_once_with(Path("C:/custom/config.ini"))
         mock_app_class.assert_called_once_with(mock_config)
         mock_app.run.assert_called_once()
-        mock_app.shutdown.assert_called_once()
+        # shutdown is called by app.run()'s finally block, not by main()
+        mock_app.shutdown.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("video_grouper.__main__.VideoGrouperApp")
@@ -145,7 +146,8 @@ class TestMainFunction:
         mock_load_config.assert_called_once_with(None)
         mock_app_class.assert_called_once_with(mock_config)
         mock_app.run.assert_called_once()
-        mock_app.shutdown.assert_called_once()
+        # shutdown is called by app.run()'s finally block, not by main()
+        mock_app.shutdown.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("video_grouper.__main__.load_application_config")

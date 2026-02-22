@@ -316,4 +316,4 @@ class TestDownloadProcessor:
         )
 
         key = processor.get_item_key(recording_file)
-        assert key.startswith("recording:/test/path/test.dav:")
+        assert key == "recording:/test/path/test.dav"

@@ -144,7 +144,7 @@ class TestUploadProcessor:
         # Test YouTube upload task
         youtube_task = create_mock_youtube_upload_task("/test/path/group")
         key = processor.get_item_key(youtube_task)
-        assert key.startswith("youtube_upload:/test/path/group:")
+        assert key == "youtube_upload:/test/path/group"
 
     def test_get_state_file_name(self, temp_storage, mock_config):
         """Test getting state file name."""

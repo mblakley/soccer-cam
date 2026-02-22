@@ -305,6 +305,8 @@ class PlayMetricsAPI:
                 f"Error logging in to PlayMetrics: {e}\n{traceback.format_exc()}"
             )
             self.logged_in = False
+            # Close browser to prevent process leak on login failure
+            self.close()
             return False
 
     def get_available_teams(self) -> List[TeamInfo]:
@@ -773,9 +775,9 @@ class PlayMetricsAPI:
         local_tz = self._get_configured_timezone()
 
         if recording_start.tzinfo is None:
-            recording_start = recording_start.replace(tzinfo=local_tz)
+            recording_start = local_tz.localize(recording_start)
         if recording_end.tzinfo is None:
-            recording_end = recording_end.replace(tzinfo=local_tz)
+            recording_end = local_tz.localize(recording_end)
 
         recording_start = recording_start.astimezone(timezone.utc)
         recording_end = recording_end.astimezone(timezone.utc)

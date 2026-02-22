@@ -513,19 +513,17 @@ class NtfyService:
             )
             return matches
         elif input_type == NtfyInputType.TEAM_INFO.value:
-            # Check for team info patterns
-            valid_patterns = ["hawks", "eagles", "central park soccer fields"]
-            matches = any(pattern in response_lower for pattern in valid_patterns)
+            # Accept any non-empty text as valid team info
+            matches = len(response.strip()) > 0
             logger.debug(
-                f"Team info check: valid_patterns={valid_patterns}, response_lower={response_lower}, matches={matches}"
+                f"Team info check: response_lower={response_lower}, matches={matches}"
             )
             return matches
         elif input_type == NtfyInputType.PLAYLIST_NAME.value:
-            # Check for playlist name patterns
-            valid_patterns = ["hawks soccer 2024"]
-            matches = any(pattern in response_lower for pattern in valid_patterns)
+            # Accept any non-empty text as valid playlist name
+            matches = len(response.strip()) > 0
             logger.debug(
-                f"Playlist name check: valid_patterns={valid_patterns}, response_lower={response_lower}, matches={matches}"
+                f"Playlist name check: response_lower={response_lower}, matches={matches}"
             )
             return matches
         elif input_type == NtfyInputType.WAS_THERE_A_MATCH.value:

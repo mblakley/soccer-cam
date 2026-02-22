@@ -85,7 +85,7 @@ class TestYouTubeConfig:
 
         assert config.enabled is False
         assert config.privacy_status == "private"
-        assert config.playlist_mapping == {}
+        assert config.playlist_map_dict == {}
         assert config.processed_playlist is None
         assert config.raw_playlist is None
         assert config.playlist_map is None

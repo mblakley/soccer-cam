@@ -3,6 +3,7 @@ Recording file model for camera file tracking.
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Optional, TypedDict, Union
 
@@ -72,11 +73,13 @@ class RecordingFile:
     @property
     def mp4_path(self) -> str:
         """Returns the expected path for the MP4 file."""
-        return self.file_path.replace(".dav", ".mp4")
+        base, ext = os.path.splitext(self.file_path)
+        return base + ".mp4" if ext.lower() == ".dav" else self.file_path + ".mp4"
 
     def to_dict(self) -> dict[str, Union[str, int, bool, Metadata, None]]:
         """Convert the recording file to a dictionary for serialization."""
         return {
+            "task_type": "recording_file",
             "file_path": self.file_path,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "end_time": self.end_time.isoformat() if self.end_time else None,
