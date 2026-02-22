@@ -95,8 +95,8 @@ class MatchInfoItemWidget(QWidget):
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
-            thumb_label.mousePressEvent = (
-                lambda event, p=pixmap: self.show_image_preview(p)
+            thumb_label.mousePressEvent = lambda event, p=pixmap: (
+                self.show_image_preview(p)
             )
 
             self.thumbnail_grid.addWidget(thumb_label, row, col)
