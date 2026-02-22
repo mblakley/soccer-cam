@@ -1,21 +1,14 @@
-FROM python:3.9-slim
+FROM python:3.13-slim
 
 # Build arguments for versioning
 ARG VERSION=0.0.0
 ARG BUILD_NUMBER=0
 
-# Install latest ffmpeg from Debian Unstable (Sid)
+# Install ffmpeg
 RUN apt-get update && \
-    # Add unstable repo and create pinning preferences
-    echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/sid.list && \
-    printf "Package: *\\nPin: release a=bullseye\\nPin-Priority: 500\\n" > /etc/apt/preferences.d/pinning && \
-    printf "\\nPackage: ffmpeg\\nPin: release a=sid\\nPin-Priority: 1000\\n" >> /etc/apt/preferences.d/pinning && \
-    # Update and install the pinned ffmpeg
-    apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
-    # Clean up to keep image size down
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/sid.list /etc/apt/preferences.d/pinning
+    rm -rf /var/lib/apt/lists/*
 
 # Set up working directory
 WORKDIR /app
