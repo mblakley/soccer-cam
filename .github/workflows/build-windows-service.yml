@@ -57,6 +57,9 @@ jobs:
       run: |
         uv run pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperTray --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray/main.py
 
+    - name: Install NSIS
+      run: choco install nsis -y
+
     - name: Build installer
       uses: joncloud/makensis-action@v4.1
       with:
