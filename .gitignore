@@ -170,3 +170,6 @@ cython_debug/
 tests/e2e/test_data/*
 tests/e2e/test_logs/*
 tests/e2e/test_pids.json
+
+# Ralph Wiggum loop state (temporary)
+.claude/ralph-state.json

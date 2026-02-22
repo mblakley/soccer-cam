@@ -1,17 +1,4 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run ruff check --fix \"$CLAUDE_FILE_PATH\" 2>/dev/null; uv run ruff format \"$CLAUDE_FILE_PATH\" 2>/dev/null; true"
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(uv run pytest*)",
@@ -30,7 +17,32 @@
       "Bash(git push*)",
       "Bash(git checkout*)",
       "Bash(uv sync*)",
-      "Bash(docker compose*)"
+      "Bash(docker compose*)",
+      "Bash(git push:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ruff check --fix \"$CLAUDE_FILE_PATH\" 2>/dev/null; uv run ruff format \"$CLAUDE_FILE_PATH\" 2>/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-hook.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
