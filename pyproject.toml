@@ -6,7 +6,7 @@ authors = [
     {name = "Mark Blakley", email = "mark.blakley@gmail.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.25.0",
     "aiofiles>=23.2.1",
