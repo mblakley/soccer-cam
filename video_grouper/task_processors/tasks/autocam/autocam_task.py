@@ -3,6 +3,8 @@ Autocam task for processing videos through Once Autocam GUI.
 """
 
 import logging
+import os
+import subprocess
 from pathlib import Path
 from typing import Dict
 
@@ -66,9 +68,79 @@ class AutocamTask(BaseTask):
             },
         }
 
+    def _validate_video_file(self, path: str) -> bool:
+        """
+        Use ffprobe to verify that the file is a valid video with non-zero duration.
+
+        Args:
+            path: Path to the video file
+
+        Returns:
+            True if the file is a valid video, False otherwise
+        """
+        if not os.path.isfile(path):
+            logger.error(f"AUTOCAM: Input file does not exist: {path}")
+            return False
+
+        file_size = os.path.getsize(path)
+        if file_size < 10_000:  # Less than 10KB is clearly invalid
+            logger.error(
+                f"AUTOCAM: Input file is too small to be a valid video "
+                f"({file_size} bytes): {path}"
+            )
+            return False
+
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
+                    path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    f"AUTOCAM: ffprobe failed on input file: {result.stderr.strip()}"
+                )
+                return False
+
+            duration_str = result.stdout.strip()
+            if not duration_str:
+                logger.error(f"AUTOCAM: ffprobe returned no duration for: {path}")
+                return False
+
+            duration = float(duration_str)
+            if duration <= 0:
+                logger.error(
+                    f"AUTOCAM: Input file has zero duration ({duration}s): {path}"
+                )
+                return False
+
+            logger.info(
+                f"AUTOCAM: Input file validated OK - duration={duration:.1f}s, "
+                f"size={file_size / (1024 * 1024):.1f}MB: {path}"
+            )
+            return True
+
+        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+            logger.error(f"AUTOCAM: Error validating input file: {e}")
+            return False
+
     async def execute(self) -> bool:
         """
         Execute the autocam task.
+
+        Autocam 3.x outputs .mkv files. After processing, the .mkv is remuxed
+        to .mp4 (stream copy, no re-encoding) so the rest of the pipeline
+        (upload, etc.) works with .mp4 files.
 
         Returns:
             True if task succeeded, False otherwise
@@ -76,22 +148,79 @@ class AutocamTask(BaseTask):
         try:
             logger.info(f"AUTOCAM: Processing group {self.group_dir.name}")
 
-            # Run the autocam automation
+            # Validate the input file before running Autocam
+            if not self._validate_video_file(self.input_path):
+                logger.error(
+                    f"AUTOCAM: Input file is invalid, skipping group {self.group_dir.name}"
+                )
+                return False
+
+            # Run the autocam automation (outputs .mkv)
             success = run_autocam_on_file(
                 self.autocam_config, self.input_path, self.output_path
             )
 
-            if success:
-                logger.info(
-                    f"AUTOCAM: Successfully processed group {self.group_dir.name}"
-                )
-            else:
+            if not success:
                 logger.error(f"AUTOCAM: Failed to process group {self.group_dir.name}")
+                return False
 
-            return success
+            # Remux .mkv to .mp4 if autocam output is .mkv
+            if self.output_path.endswith(".mkv"):
+                mp4_path = self.output_path[:-4] + ".mp4"
+                success = self._remux_mkv_to_mp4(self.output_path, mp4_path)
+                if not success:
+                    return False
+
+            logger.info(f"AUTOCAM: Successfully processed group {self.group_dir.name}")
+            return True
 
         except Exception as e:
             logger.error(f"AUTOCAM: Error processing group {self.group_dir.name}: {e}")
+            return False
+
+    def _remux_mkv_to_mp4(self, mkv_path: str, mp4_path: str) -> bool:
+        """
+        Remux an MKV file to MP4 by copying streams without re-encoding.
+
+        Args:
+            mkv_path: Path to the input .mkv file
+            mp4_path: Path for the output .mp4 file
+
+        Returns:
+            True if remux succeeded, False otherwise
+        """
+        try:
+            logger.info(f"AUTOCAM: Remuxing {mkv_path} -> {mp4_path}")
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-i",
+                    mkv_path,
+                    "-c",
+                    "copy",
+                    "-y",
+                    mp4_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"AUTOCAM: FFmpeg remux failed: {result.stderr}")
+                return False
+
+            # Remove the original .mkv file
+            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+                os.remove(mkv_path)
+                logger.info(f"AUTOCAM: Remux complete, removed {mkv_path}")
+            else:
+                logger.error(f"AUTOCAM: Remux output missing or empty: {mp4_path}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"AUTOCAM: Error remuxing {mkv_path}: {e}")
             return False
 
     def __str__(self):

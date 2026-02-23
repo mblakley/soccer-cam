@@ -205,7 +205,9 @@ class TestCameraPollerIntegration:
             with open(state_file, "r") as f:
                 state_data = json.load(f)
                 # State should be empty after processing is complete
-                assert len(state_data) == 0, "State should be empty after processing"
+                assert len(state_data["queue"]) == 0, (
+                    "State should be empty after processing"
+                )
 
         finally:
             await real_download_processor.stop()
@@ -491,9 +493,9 @@ class TestCameraPollerIntegration:
                 state_data = json.load(f)
 
                 # State should contain the queued item
-                if len(state_data) > 0:
+                if len(state_data["queue"]) > 0:
                     # Verify state contains the correct task information
-                    task_data = state_data[0]
+                    task_data = state_data["queue"][0]
                     assert "task_type" in task_data or "item" in task_data, (
                         "State should contain task information"
                     )
@@ -504,7 +506,9 @@ class TestCameraPollerIntegration:
             # Verify state is empty after processing
             with open(state_file, "r") as f:
                 final_state = json.load(f)
-                assert len(final_state) == 0, "State should be empty after processing"
+                assert len(final_state["queue"]) == 0, (
+                    "State should be empty after processing"
+                )
 
         finally:
             await real_download_processor.stop()
@@ -808,7 +812,7 @@ class TestCameraPollerIntegration:
 
             with open(state_file, "r") as f:
                 state_data = json.load(f)
-                assert len(state_data) == 0, (
+                assert len(state_data["queue"]) == 0, (
                     "State should be empty after all processing"
                 )
 

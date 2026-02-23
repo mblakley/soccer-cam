@@ -2,6 +2,7 @@
 Tests for NTFY Queue Processor.
 """
 
+import asyncio
 import pytest
 import tempfile
 from unittest.mock import Mock, patch, AsyncMock
@@ -256,3 +257,194 @@ class TestNtfyProcessor:
 
             # Should save state
             mock_save.assert_called_once()
+
+
+class TestNtfyProcessorBlocking:
+    """Tests for process_item blocking until user responds."""
+
+    @pytest.mark.asyncio
+    async def test_process_item_blocks_until_response_event(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """process_item should block after sending notification until the response event is set."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        # Create a mock NTFY task whose execute succeeds
+        mock_task = Mock()
+        mock_task.execute = AsyncMock(return_value=True)
+        mock_task.group_dir = "/test/dir"
+        mock_task.metadata = {}
+        mock_task.get_task_type.return_value = "game_start_time"
+
+        completed = False
+
+        async def run_process_item():
+            nonlocal completed
+            await processor.process_item(mock_task)
+            completed = True
+
+        task = asyncio.create_task(run_process_item())
+
+        # Give process_item a chance to run and block
+        await asyncio.sleep(0.05)
+        assert not completed, "process_item should be blocked waiting for response"
+        assert "/test/dir" in processor._response_events
+
+        # Simulate response by setting the event
+        processor._response_events["/test/dir"].set()
+
+        await asyncio.wait_for(task, timeout=2.0)
+        assert completed, "process_item should have completed after event was set"
+
+    @pytest.mark.asyncio
+    async def test_process_item_unblocks_via_check_match_info_completion(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """process_item should unblock when _check_match_info_completion is called with task_completed=False."""
+        mock_match_info_service.is_match_info_complete.return_value = False
+
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        mock_task = Mock()
+        mock_task.execute = AsyncMock(return_value=True)
+        mock_task.group_dir = storage_path  # Use real path for MatchInfo access
+        mock_task.metadata = {}
+        mock_task.get_task_type.return_value = "team_info"
+
+        completed = False
+
+        async def run_process_item():
+            nonlocal completed
+            await processor.process_item(mock_task)
+            completed = True
+
+        task = asyncio.create_task(run_process_item())
+
+        # Give process_item a chance to block
+        await asyncio.sleep(0.05)
+        assert not completed
+
+        # Simulate the completion callback (task_completed=False triggers event)
+        await processor._check_match_info_completion(
+            storage_path, task_type=None, task_completed=False
+        )
+
+        await asyncio.wait_for(task, timeout=2.0)
+        assert completed
+
+    @pytest.mark.asyncio
+    async def test_process_item_does_not_block_on_failure(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """process_item should raise immediately when execute fails, without blocking."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        mock_task = Mock()
+        mock_task.execute = AsyncMock(return_value=False)
+        mock_task.group_dir = "/test/dir"
+        mock_task.metadata = {}
+        mock_task.get_task_type.return_value = "game_start_time"
+
+        with pytest.raises(RuntimeError, match="Failed to send NTFY notification"):
+            await processor.process_item(mock_task)
+
+        # No event should be registered
+        assert "/test/dir" not in processor._response_events
+
+    @pytest.mark.asyncio
+    async def test_process_item_unblocks_on_shutdown(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """process_item should return when _stopping is set during wait."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        mock_task = Mock()
+        mock_task.execute = AsyncMock(return_value=True)
+        mock_task.group_dir = "/test/dir"
+        mock_task.metadata = {}
+        mock_task.get_task_type.return_value = "game_start_time"
+
+        completed = False
+
+        async def run_process_item():
+            nonlocal completed
+            await processor.process_item(mock_task)
+            completed = True
+
+        task = asyncio.create_task(run_process_item())
+
+        # Give process_item a chance to block
+        await asyncio.sleep(0.05)
+        assert not completed
+
+        # Signal shutdown
+        processor._stopping = True
+
+        await asyncio.wait_for(
+            task, timeout=35.0
+        )  # Must wait for one 30s timeout cycle
+        assert completed
+
+    @pytest.mark.asyncio
+    async def test_response_event_cleaned_up_after_completion(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """_response_events entry should be cleaned up after process_item returns."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        mock_task = Mock()
+        mock_task.execute = AsyncMock(return_value=True)
+        mock_task.group_dir = "/test/dir"
+        mock_task.metadata = {}
+        mock_task.get_task_type.return_value = "team_info"
+
+        async def set_event_later():
+            await asyncio.sleep(0.05)
+            processor._signal_response_event("/test/dir")
+
+        asyncio.create_task(set_event_later())
+        await processor.process_item(mock_task)
+
+        # Event should be cleaned up
+        assert "/test/dir" not in processor._response_events
+
+    @pytest.mark.asyncio
+    async def test_signal_response_event_no_registered_event(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """_signal_response_event should be a no-op when no event is registered."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        # Should not raise
+        processor._signal_response_event("/nonexistent/dir")
+        assert len(processor._response_events) == 0

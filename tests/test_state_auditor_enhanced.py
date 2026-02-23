@@ -424,5 +424,70 @@ class TestStateAuditorEnhanced:
             assert auditor.match_info_service.ntfy_service == auditor.ntfy_service
 
 
+class TestStateAuditorStartupOnly:
+    """Tests that StateAuditor is startup-only (not continuous polling)."""
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_start_runs_discover_work_once(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """start() should call discover_work() once and return."""
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+
+        with patch.object(auditor, "discover_work", new_callable=AsyncMock) as mock_dw:
+            await auditor.start()
+            mock_dw.assert_called_once()
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_start_does_not_create_polling_loop(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """start() should NOT create a persistent _processor_task (no polling loop)."""
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+
+        with patch.object(auditor, "discover_work", new_callable=AsyncMock):
+            await auditor.start()
+
+        # _processor_task should remain None (no background loop created)
+        assert auditor._processor_task is None
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_stop_cleans_up_services(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """stop() should shutdown services without errors."""
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+        mock_ntfy.return_value.shutdown = AsyncMock()
+
+        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+        auditor.match_info_service = Mock()
+        auditor.match_info_service.shutdown = AsyncMock()
+
+        await auditor.stop()
+        auditor.match_info_service.shutdown.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

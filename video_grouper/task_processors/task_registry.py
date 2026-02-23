@@ -32,6 +32,17 @@ class TaskRegistry:
         task_type = getattr(task_class, "task_type", None)
         queue_type = getattr(task_class, "queue_type", None)
 
+        # Resolve property descriptors to their actual string values
+        if isinstance(task_type, property):
+            try:
+                dummy = object.__new__(task_class)
+                task_type = task_type.fget(dummy)
+            except Exception:
+                logger.error(
+                    f"Task class {task_class.__name__}: could not resolve task_type property"
+                )
+                return
+
         # Enforce queue_type must be a class attribute or classmethod, not a property
         if isinstance(queue_type, property):
             logger.error(

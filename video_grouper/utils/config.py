@@ -65,6 +65,7 @@ class ProcessingConfig(BaseModel):
     max_concurrent_conversions: int = 1
     retry_attempts: int = 3
     retry_delay: int = 60
+    trim_end_enabled: bool = False
 
 
 class LoggingConfig(BaseModel):
@@ -195,6 +196,7 @@ class YouTubePlaylistMapConfig(RootModel[Dict[str, str]]):
 class YouTubeConfig(BaseModel):
     enabled: bool = False
     privacy_status: str = "private"
+    use_mock: bool = False
     processed_playlist: Optional[YouTubePlaylistConfig] = None
     raw_playlist: Optional[YouTubePlaylistConfig] = None
     playlist_map: Optional[YouTubePlaylistMapConfig] = None

@@ -106,10 +106,13 @@ class TestAutocamTask:
             autocam_config=mock_autocam_config,
         )
 
-        # Mock the autocam automation function
-        with patch(
-            "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
-        ) as mock_run:
+        # Mock the autocam automation function and file validation
+        with (
+            patch(
+                "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
+            ) as mock_run,
+            patch.object(task, "_validate_video_file", return_value=True),
+        ):
             mock_run.return_value = True
 
             result = await task.execute()
@@ -130,9 +133,12 @@ class TestAutocamTask:
         )
 
         # Mock the autocam automation function to return False
-        with patch(
-            "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
-        ) as mock_run:
+        with (
+            patch(
+                "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
+            ) as mock_run,
+            patch.object(task, "_validate_video_file", return_value=True),
+        ):
             mock_run.return_value = False
 
             result = await task.execute()
@@ -153,9 +159,12 @@ class TestAutocamTask:
         )
 
         # Mock the autocam automation function to raise an exception
-        with patch(
-            "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
-        ) as mock_run:
+        with (
+            patch(
+                "video_grouper.task_processors.tasks.autocam.autocam_task.run_autocam_on_file"
+            ) as mock_run,
+            patch.object(task, "_validate_video_file", return_value=True),
+        ):
             mock_run.side_effect = Exception("Autocam automation failed")
 
             result = await task.execute()

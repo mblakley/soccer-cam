@@ -2,8 +2,7 @@
 
 import os
 import tempfile
-import configparser
-from unittest.mock import patch
+from unittest.mock import Mock, AsyncMock, patch
 import pytest
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
@@ -20,21 +19,13 @@ def temp_storage():
 @pytest.fixture
 def mock_config():
     """Create a mock configuration object."""
-    config = configparser.ConfigParser()
-    config.add_section("APP")
-    config.set("APP", "check_interval_seconds", "10")
-    config.add_section("YOUTUBE")
-    config.set("YOUTUBE", "enabled", "true")
-    config.add_section("youtube.playlist.processed")
-    config.set("youtube.playlist.processed", "name_format", "{my_team_name} 2023s")
-    config.set("youtube.playlist.processed", "description", "Processed videos")
-    config.set("youtube.playlist.processed", "privacy_status", "unlisted")
-    config.add_section("youtube.playlist.raw")
-    config.set(
-        "youtube.playlist.raw", "name_format", "{my_team_name} 2023s - Full Field"
-    )
-    config.set("youtube.playlist.raw", "description", "Raw videos")
-    config.set("youtube.playlist.raw", "privacy_status", "unlisted")
+    config = Mock()
+    config.youtube = Mock()
+    config.youtube.enabled = True
+    config.youtube.privacy_status = "unlisted"
+    config.youtube.use_mock = False
+    config.ntfy = Mock()
+    config.ntfy.enabled = False
     return config
 
 
@@ -53,20 +44,31 @@ class TestUploadProcessor:
 
         assert processor.storage_path == temp_storage
         assert processor.config == mock_config
+        assert processor.ntfy_service is None
 
     @pytest.mark.asyncio
-    async def test_upload_task_processing_no_credentials(
+    async def test_upload_processor_initialization_with_ntfy_service(
         self, temp_storage, mock_config
     ):
-        """Test upload task when credentials file doesn't exist."""
+        """Test UploadProcessor initialization with ntfy_service."""
+        mock_ntfy = Mock()
+        processor = UploadProcessor(temp_storage, mock_config, ntfy_service=mock_ntfy)
+
+        assert processor.ntfy_service is mock_ntfy
+
+    @pytest.mark.asyncio
+    async def test_upload_task_auth_failure_no_token(self, temp_storage, mock_config):
+        """Test upload task when token file doesn't exist (auth check fails)."""
         group_dir = os.path.join(temp_storage, "2023.01.01-10.00.00")
 
         processor = UploadProcessor(temp_storage, mock_config)
 
         upload_task = create_mock_youtube_upload_task(group_dir)
+        # ensure_valid_token will fail because no credentials/token files exist
+        # process_item catches the RuntimeError internally
         await processor.process_item(upload_task)
 
-        # Should complete without error (credentials check is logged but doesn't fail)
+        # Should complete without raising (error is caught and logged)
 
     @pytest.mark.asyncio
     async def test_upload_task_processing_success(self, temp_storage, mock_config):
@@ -75,14 +77,24 @@ class TestUploadProcessor:
 
         processor = UploadProcessor(temp_storage, mock_config)
 
-        # Mock the upload functionality at the task level
-        with patch.object(YoutubeUploadTask, "execute") as mock_execute:
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
             mock_execute.return_value = True
 
             upload_task = create_mock_youtube_upload_task(group_dir)
             await processor.process_item(upload_task)
 
-            mock_execute.assert_called_once()
+            mock_execute.assert_called_once_with(
+                youtube_config=mock_config.youtube,
+                ntfy_service=None,
+            )
 
     @pytest.mark.asyncio
     async def test_upload_task_processing_failure(self, temp_storage, mock_config):
@@ -91,8 +103,15 @@ class TestUploadProcessor:
 
         processor = UploadProcessor(temp_storage, mock_config)
 
-        # Mock the upload functionality at the task level
-        with patch.object(YoutubeUploadTask, "execute") as mock_execute:
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
             mock_execute.return_value = False
 
             upload_task = create_mock_youtube_upload_task(group_dir)
@@ -107,8 +126,15 @@ class TestUploadProcessor:
 
         processor = UploadProcessor(temp_storage, mock_config)
 
-        # Mock the upload functionality at the task level
-        with patch.object(YoutubeUploadTask, "execute") as mock_execute:
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
             mock_execute.side_effect = Exception("Upload error")
 
             upload_task = create_mock_youtube_upload_task(group_dir)
@@ -119,17 +145,26 @@ class TestUploadProcessor:
     @pytest.mark.asyncio
     async def test_upload_task_no_playlist_config(self, temp_storage):
         """Test upload task when no playlist configuration is available."""
-        # Create config without playlist sections
-        config = configparser.ConfigParser()
-        config.add_section("APP")
-        config.set("APP", "check_interval_seconds", "10")
+        config = Mock()
+        config.youtube = Mock()
+        config.youtube.enabled = True
+        config.youtube.use_mock = False
+        config.ntfy = Mock()
+        config.ntfy.enabled = False
 
         group_dir = "/test/group"
 
         processor = UploadProcessor(temp_storage, config)
 
-        # Mock the upload functionality at the task level
-        with patch.object(YoutubeUploadTask, "execute") as mock_execute:
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
             mock_execute.return_value = True
 
             upload_task = create_mock_youtube_upload_task(group_dir)
@@ -153,3 +188,106 @@ class TestUploadProcessor:
         state_file_name = processor.get_state_file_name()
 
         assert state_file_name == "upload_queue_state.json"
+
+
+class TestUploadProcessorAuthCheck:
+    """Tests for YouTube token validation in UploadProcessor."""
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_sends_ntfy_notification(
+        self, temp_storage, mock_config
+    ):
+        """When token validation fails and ntfy_service is set, send notification."""
+        mock_ntfy = Mock()
+        mock_ntfy.send_notification = AsyncMock(return_value=True)
+
+        processor = UploadProcessor(temp_storage, mock_config, ntfy_service=mock_ntfy)
+
+        with patch(
+            "video_grouper.utils.youtube_upload.ensure_valid_token",
+            return_value=(False, "Token expired. Please re-authenticate via tray."),
+        ):
+            upload_task = create_mock_youtube_upload_task("/test/group")
+            await processor.process_item(upload_task)
+
+            # NTFY notification should have been sent
+            mock_ntfy.send_notification.assert_called_once_with(
+                title="YouTube Authentication Required",
+                message="Token expired. Please re-authenticate via tray.",
+            )
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_no_ntfy_service(self, temp_storage, mock_config):
+        """When token validation fails and no ntfy_service, just log error."""
+        processor = UploadProcessor(temp_storage, mock_config)
+        assert processor.ntfy_service is None
+
+        with patch(
+            "video_grouper.utils.youtube_upload.ensure_valid_token",
+            return_value=(False, "No token found."),
+        ):
+            upload_task = create_mock_youtube_upload_task("/test/group")
+            # Should not raise even without ntfy_service
+            await processor.process_item(upload_task)
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_ntfy_send_fails(self, temp_storage, mock_config):
+        """When NTFY notification itself fails, process_item still handles it."""
+        mock_ntfy = Mock()
+        mock_ntfy.send_notification = AsyncMock(
+            side_effect=Exception("NTFY send failed")
+        )
+
+        processor = UploadProcessor(temp_storage, mock_config, ntfy_service=mock_ntfy)
+
+        with patch(
+            "video_grouper.utils.youtube_upload.ensure_valid_token",
+            return_value=(False, "Token expired."),
+        ):
+            upload_task = create_mock_youtube_upload_task("/test/group")
+            # Should not raise even when NTFY fails
+            await processor.process_item(upload_task)
+
+    @pytest.mark.asyncio
+    async def test_auth_success_proceeds_to_execute(self, temp_storage, mock_config):
+        """When token is valid, task execute is called with correct args."""
+        mock_ntfy = Mock()
+        processor = UploadProcessor(temp_storage, mock_config, ntfy_service=mock_ntfy)
+
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
+            mock_execute.return_value = True
+
+            upload_task = create_mock_youtube_upload_task("/test/group")
+            await processor.process_item(upload_task)
+
+            mock_execute.assert_called_once_with(
+                youtube_config=mock_config.youtube,
+                ntfy_service=mock_ntfy,
+            )
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_skips_execute(self, temp_storage, mock_config):
+        """When token validation fails, execute is NOT called."""
+        processor = UploadProcessor(temp_storage, mock_config)
+
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(False, "Token expired."),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
+            upload_task = create_mock_youtube_upload_task("/test/group")
+            await processor.process_item(upload_task)
+
+            mock_execute.assert_not_called()

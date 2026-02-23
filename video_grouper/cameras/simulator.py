@@ -78,13 +78,15 @@ class SimulatorCamera(Camera):
         utc_now = datetime.now(pytz.utc)
         base_time = utc_now - timedelta(hours=12)
 
-        # Generate 5 video files, each exactly 5 minutes long, consecutive (no gaps)
-        file_duration_minutes = 5
+        # Generate 3 video files, each exactly 1 minute long, consecutive (no gaps).
+        # 3 x 1min = 3 minutes combined, sufficient for NTFY to scan game start.
+        # Using 1-minute clips keeps autocam processing time short (~8 min vs 44 min).
+        file_duration_seconds = 60
         current_time = base_time
 
-        for i in range(5):
+        for i in range(3):
             start_time = current_time
-            end_time = current_time + timedelta(minutes=file_duration_minutes)
+            end_time = current_time + timedelta(seconds=file_duration_seconds)
 
             # Format filename to match Dahua camera format
             start_str = start_time.strftime("%H.%M.%S")
@@ -92,16 +94,17 @@ class SimulatorCamera(Camera):
             filename = f"{start_str}-{end_str}[F][0@0][{134510 + i}].dav"
 
             # Create file metadata matching real camera format
+            # File size reflects the real 1-minute fisheye clips (~119MB each)
             file_data = {
                 "path": filename,
                 "startTime": start_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "endTime": end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "Length": 1024 * 1024 * 50,  # 50MB file size
+                "Length": 1024 * 1024 * 119,  # ~119MB per clip (real fisheye footage)
                 "FilePath": filename,
                 "StartTime": start_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "EndTime": end_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "UTCOffset": -14400,  # EST timezone offset
-                "size": 1024 * 1024 * 50,  # 50MB file size
+                "size": 1024 * 1024 * 119,  # ~119MB per clip
             }
 
             files.append(file_data)
@@ -109,98 +112,87 @@ class SimulatorCamera(Camera):
 
         return files
 
+    def _find_test_clips_dir(self) -> Optional[str]:
+        """Find the pre-extracted test clips directory."""
+        clips_dir = os.path.abspath("tests/e2e/test_clips")
+        if os.path.isdir(clips_dir):
+            clips = [f for f in os.listdir(clips_dir) if f.endswith(".mp4")]
+            if clips:
+                logger.info(
+                    f"Found {len(clips)} pre-extracted test clips in {clips_dir}"
+                )
+                return clips_dir
+        return None
+
     def _create_test_video_files(self) -> None:
-        """Create small test video files that can be downloaded."""
+        """Create test video files by copying pre-extracted clips or generating them."""
+        import shutil
+
         self._temp_dir = tempfile.mkdtemp(prefix="camera_sim_")
         self._test_file_paths = {}
 
-        # Find the screenshot.jpg file
-        screenshot_path = None
-        possible_paths = [
-            "screenshot.jpg",
-            "tests/e2e/screenshot.jpg",
-            "shared_data/screenshot.jpg",
-            "../screenshot.jpg",
-            "../../screenshot.jpg",
-        ]
-
-        for path in possible_paths:
-            if os.path.exists(path):
-                screenshot_path = os.path.abspath(path)
-                break
-
-        if not screenshot_path:
-            logger.warning("screenshot.jpg not found, falling back to test pattern")
+        # Look for pre-extracted real soccer clips first
+        clips_dir = self._find_test_clips_dir()
+        clip_files = []
+        if clips_dir:
+            clip_files = sorted(
+                [
+                    os.path.join(clips_dir, f)
+                    for f in os.listdir(clips_dir)
+                    if f.endswith(".mp4")
+                ]
+            )
 
         for i, file_data in enumerate(self._test_files):
-            # Create a Windows-safe filename
             start_time = datetime.strptime(file_data["startTime"], "%Y-%m-%d %H:%M:%S")
             end_time = datetime.strptime(file_data["endTime"], "%Y-%m-%d %H:%M:%S")
 
-            # Use a safe filename format for Windows
             safe_filename = f"test_video_{i + 1:02d}_{start_time.strftime('%Y%m%d_%H%M%S')}_{end_time.strftime('%H%M%S')}.dav"
             local_path = os.path.join(self._temp_dir, safe_filename)
 
-            # Create a small video file using ffmpeg if available, otherwise a placeholder
-            try:
-                # Try to create a real small video file
-                import subprocess
-
-                temp_mp4_path = local_path.replace(".dav", ".mp4")
-
-                if screenshot_path:
-                    # Use screenshot.jpg to create a video
-                    cmd = [
-                        "ffmpeg",
-                        "-loop",
-                        "1",
-                        "-i",
-                        screenshot_path,
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "ultrafast",
-                        "-t",
-                        "5",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-y",
-                        temp_mp4_path,
-                    ]
-                    logger.info(f"Creating video from screenshot: {screenshot_path}")
-                else:
-                    # Fallback to test pattern
-                    cmd = [
-                        "ffmpeg",
-                        "-f",
-                        "lavfi",
-                        "-i",
-                        "testsrc2=duration=5:size=320x240:rate=1",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "ultrafast",
-                        "-y",
-                        temp_mp4_path,
-                    ]
-
-                subprocess.run(cmd, capture_output=True, check=True, timeout=30)
-                # Rename to .dav to match expected format
-                os.rename(temp_mp4_path, local_path)
-                logger.info(f"Created test video file: {local_path}")
-            except (
-                subprocess.CalledProcessError,
-                FileNotFoundError,
-                subprocess.TimeoutExpired,
-            ) as e:
-                logger.warning(f"Failed to create video with ffmpeg: {e}")
-                # Fallback: create a dummy binary file
-                with open(local_path, "wb") as f:
-                    # Write some dummy data that looks like a video file
-                    f.write(b"\x00\x00\x00\x20ftypmp42" + b"\x00" * 1000)
-                logger.info(f"Created dummy test file: {local_path}")
+            if i < len(clip_files):
+                # Use pre-extracted clip (copy .mp4 as .dav)
+                shutil.copy2(clip_files[i], local_path)
+                logger.info(
+                    f"Copied pre-extracted clip {clip_files[i]} -> {local_path}"
+                )
+            else:
+                # Fallback: generate with ffmpeg
+                self._generate_fallback_video(local_path)
 
             self._test_file_paths[file_data["path"]] = local_path
+
+    def _generate_fallback_video(self, local_path: str) -> None:
+        """Generate a fallback test video file using ffmpeg or dummy data."""
+        import subprocess
+
+        temp_mp4_path = local_path.replace(".dav", ".mp4")
+        try:
+            cmd = [
+                "ffmpeg",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=duration=5:size=320x240:rate=1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-y",
+                temp_mp4_path,
+            ]
+            subprocess.run(cmd, capture_output=True, check=True, timeout=30)
+            os.rename(temp_mp4_path, local_path)
+            logger.info(f"Created fallback test video: {local_path}")
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ) as e:
+            logger.warning(f"Failed to create video with ffmpeg: {e}")
+            with open(local_path, "wb") as f:
+                f.write(b"\x00\x00\x00\x20ftypmp42" + b"\x00" * 1000)
+            logger.info(f"Created dummy test file: {local_path}")
 
     async def check_availability(self) -> bool:
         """Check if the camera is available."""
@@ -220,7 +212,7 @@ class SimulatorCamera(Camera):
         """Get list of recording files from the camera."""
         await asyncio.sleep(0.2)  # Simulate network delay
 
-        # For E2E testing, always return the same 5 test files every time
+        # For E2E testing, always return the same 3 test files every time
         # This simulates finding the same historical files that need to be processed
         logger.info(
             f"Camera simulator returning {len(self._test_files)} files for time range {start_time} to {end_time} (E2E mode)"

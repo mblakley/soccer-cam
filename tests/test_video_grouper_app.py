@@ -173,16 +173,22 @@ class TestVideoGrouperAppRefactored:
         # Initialize should start all processors
         await app.initialize()
 
-        # All processors should be running
+        # All processors except StateAuditor (startup-only) should be running
         for processor in app.processors:
-            assert processor._processor_task is not None
-            assert not processor._processor_task.done()
+            if processor is app.state_auditor:
+                # StateAuditor is startup-only: runs discover_work() once, no loop
+                assert processor._processor_task is None
+            else:
+                assert processor._processor_task is not None
+                assert not processor._processor_task.done()
 
         # Shutdown should stop all processors
         await app.shutdown()
 
-        # All processors should be stopped
+        # All processors with tasks should be stopped
         for processor in app.processors:
+            if processor is app.state_auditor:
+                continue  # No task to check
             assert processor._processor_task.done()
 
     @pytest.mark.asyncio
@@ -270,11 +276,14 @@ class TestVideoGrouperAppRefactored:
             assert "upload_processor" in status
             assert "ntfy_processor" in status
 
-            # All processors should be stopped initially (except NTFY which may be disabled)
+            # All processors should be stopped initially (except NTFY which may be disabled
+            # and StateAuditor which is startup-only)
             for processor_name, processor_status in status.items():
                 if processor_name == "ntfy_processor":
                     # NTFY processor can be "stopped" or "disabled" depending on config
                     assert processor_status in ["stopped", "disabled"]
+                elif processor_name == "state_auditor":
+                    assert processor_status == "startup_only"
                 else:
                     assert processor_status == "stopped"
         finally:
@@ -359,4 +368,102 @@ class TestVideoGrouperAppRefactored:
                 assert processor.storage_path == app.storage_path
         finally:
             # Ensure proper cleanup to prevent asyncio warnings
+            shutdown_app(app)
+
+    def test_video_processor_wired_with_ntfy_services(self, temp_storage, mock_camera):
+        """When NTFY is enabled, VideoProcessor should be wired with match_info_service and ntfy_processor."""
+        ntfy_config = Config(
+            camera=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="password",
+            ),
+            storage=StorageConfig(path=temp_storage),
+            recording=RecordingConfig(),
+            processing=ProcessingConfig(),
+            logging=LoggingConfig(),
+            app=AppConfig(storage_path=temp_storage, check_interval_seconds=1),
+            teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
+            teamsnap_teams=[],
+            playmetrics=PlayMetricsConfig(
+                enabled=False,
+                username="user",
+                password="pass",
+                team_name="Team A",
+            ),
+            playmetrics_teams=[],
+            ntfy=NtfyConfig(enabled=True, server_url="http://ntfy.sh", topic="test"),
+            youtube=YouTubeConfig(enabled=True),
+            autocam=AutocamConfig(enabled=False),
+            cloud_sync=CloudSyncConfig(enabled=False),
+        )
+
+        try:
+            app = VideoGrouperApp(ntfy_config, camera=mock_camera)
+
+            # VideoProcessor should have match_info_service and ntfy_processor wired
+            assert app.video_processor.match_info_service is not None
+            assert app.video_processor.ntfy_processor is app.ntfy_processor
+        finally:
+            shutdown_app(app)
+
+    def test_video_processor_no_ntfy_services_when_disabled(
+        self, mock_config, mock_camera
+    ):
+        """When NTFY is disabled, VideoProcessor should have None for services."""
+        app = VideoGrouperApp(mock_config, camera=mock_camera)
+
+        try:
+            assert app.video_processor.match_info_service is None
+            assert app.video_processor.ntfy_processor is None
+        finally:
+            shutdown_app(app)
+
+    def test_upload_processor_wired_with_ntfy_service(self, temp_storage, mock_camera):
+        """When NTFY is enabled, UploadProcessor should have ntfy_service wired."""
+        ntfy_config = Config(
+            camera=CameraConfig(
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="password",
+            ),
+            storage=StorageConfig(path=temp_storage),
+            recording=RecordingConfig(),
+            processing=ProcessingConfig(),
+            logging=LoggingConfig(),
+            app=AppConfig(storage_path=temp_storage, check_interval_seconds=1),
+            teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
+            teamsnap_teams=[],
+            playmetrics=PlayMetricsConfig(
+                enabled=False,
+                username="user",
+                password="pass",
+                team_name="Team A",
+            ),
+            playmetrics_teams=[],
+            ntfy=NtfyConfig(enabled=True, server_url="http://ntfy.sh", topic="test"),
+            youtube=YouTubeConfig(enabled=True),
+            autocam=AutocamConfig(enabled=False),
+            cloud_sync=CloudSyncConfig(enabled=False),
+        )
+
+        try:
+            app = VideoGrouperApp(ntfy_config, camera=mock_camera)
+
+            # UploadProcessor should have ntfy_service wired
+            assert app.upload_processor.ntfy_service is not None
+        finally:
+            shutdown_app(app)
+
+    def test_upload_processor_no_ntfy_service_when_disabled(
+        self, mock_config, mock_camera
+    ):
+        """When NTFY is disabled, UploadProcessor should have None for ntfy_service."""
+        app = VideoGrouperApp(mock_config, camera=mock_camera)
+
+        try:
+            assert app.upload_processor.ntfy_service is None
+        finally:
             shutdown_app(app)

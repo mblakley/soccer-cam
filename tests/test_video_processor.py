@@ -1,5 +1,6 @@
 """Tests for the VideoProcessor."""
 
+import asyncio
 import tempfile
 from unittest.mock import Mock, AsyncMock, patch
 import pytest
@@ -145,3 +146,163 @@ class TestVideoProcessor:
         )
         key = processor.get_item_key(trim_task)
         assert key == "trim:/test/group"
+
+    @pytest.mark.asyncio
+    async def test_init_with_optional_services(self, temp_storage, mock_config):
+        """Test VideoProcessor init with optional match_info_service and ntfy_processor."""
+        mock_upload = Mock()
+        mock_mis = Mock()
+        mock_ntfy = Mock()
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            mock_upload,
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+        assert processor.match_info_service is mock_mis
+        assert processor.ntfy_processor is mock_ntfy
+
+    @pytest.mark.asyncio
+    async def test_init_optional_services_default_none(self, temp_storage, mock_config):
+        """Test VideoProcessor defaults optional services to None."""
+        mock_upload = Mock()
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload)
+        assert processor.match_info_service is None
+        assert processor.ntfy_processor is None
+
+
+class TestVideoProcessorTransitions:
+    """Tests for event-driven transitions after task completion."""
+
+    @pytest.mark.asyncio
+    async def test_combine_success_triggers_match_info_service(
+        self, temp_storage, mock_config
+    ):
+        """After CombineTask succeeds, populate_match_info_from_apis is called."""
+        mock_mis = Mock()
+        mock_mis.populate_match_info_from_apis = AsyncMock(return_value=True)
+        mock_ntfy = Mock()
+        mock_ntfy.request_match_info_for_directory = AsyncMock(return_value=True)
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            Mock(),
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+        with patch.object(
+            combine_task, "execute", new_callable=AsyncMock, return_value=True
+        ):
+            await processor.process_item(combine_task)
+
+        # Allow the fire-and-forget task to run
+        await asyncio.sleep(0.05)
+
+        mock_mis.populate_match_info_from_apis.assert_called_once_with("/test/group")
+
+    @pytest.mark.asyncio
+    async def test_combine_success_triggers_ntfy_request(
+        self, temp_storage, mock_config
+    ):
+        """After CombineTask succeeds, request_match_info_for_directory is called."""
+        mock_mis = Mock()
+        mock_mis.populate_match_info_from_apis = AsyncMock(return_value=False)
+        mock_ntfy = Mock()
+        mock_ntfy.request_match_info_for_directory = AsyncMock(return_value=True)
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            Mock(),
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+        with patch.object(
+            combine_task, "execute", new_callable=AsyncMock, return_value=True
+        ):
+            await processor.process_item(combine_task)
+
+        await asyncio.sleep(0.05)
+
+        mock_ntfy.request_match_info_for_directory.assert_called_once()
+        call_args = mock_ntfy.request_match_info_for_directory.call_args
+        assert call_args[0][0] == "/test/group"
+
+    @pytest.mark.asyncio
+    async def test_combine_failure_does_not_trigger_transitions(
+        self, temp_storage, mock_config
+    ):
+        """When CombineTask fails, no transitions are triggered."""
+        mock_mis = Mock()
+        mock_mis.populate_match_info_from_apis = AsyncMock()
+        mock_ntfy = Mock()
+        mock_ntfy.request_match_info_for_directory = AsyncMock()
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            Mock(),
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+        with patch.object(
+            combine_task, "execute", new_callable=AsyncMock, return_value=False
+        ):
+            await processor.process_item(combine_task)
+
+        await asyncio.sleep(0.05)
+
+        mock_mis.populate_match_info_from_apis.assert_not_called()
+        mock_ntfy.request_match_info_for_directory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trim_success_does_not_trigger_combine_transitions(
+        self, temp_storage, mock_config
+    ):
+        """TrimTask success should NOT trigger match info transitions."""
+        mock_mis = Mock()
+        mock_mis.populate_match_info_from_apis = AsyncMock()
+        mock_ntfy = Mock()
+        mock_ntfy.request_match_info_for_directory = AsyncMock()
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            Mock(),
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+
+        trim_task = TrimTask(group_dir="/test/group", start_time="00:05:00")
+        with patch.object(
+            trim_task, "execute", new_callable=AsyncMock, return_value=True
+        ):
+            await processor.process_item(trim_task)
+
+        await asyncio.sleep(0.05)
+
+        mock_mis.populate_match_info_from_apis.assert_not_called()
+        mock_ntfy.request_match_info_for_directory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_combine_transition_without_services(self, temp_storage, mock_config):
+        """CombineTask success should not error when services are None."""
+        processor = VideoProcessor(temp_storage, mock_config, Mock())
+
+        combine_task = CombineTask(group_dir="/test/group")
+        with patch.object(
+            combine_task, "execute", new_callable=AsyncMock, return_value=True
+        ):
+            # Should not raise even with no services
+            await processor.process_item(combine_task)
+
+        await asyncio.sleep(0.05)
+        # No assertions needed - just verify no exception

@@ -156,6 +156,14 @@ class VideoGrouperApp:
             # Set the services in the processor
             self.ntfy_processor.ntfy_service = ntfy_service
             self.ntfy_processor.match_info_service = match_info_service
+
+            # Wire event-driven transitions into VideoProcessor
+            self.video_processor.match_info_service = match_info_service
+            self.video_processor.ntfy_processor = self.ntfy_processor
+
+            # Wire ntfy_service into UploadProcessor for auth failure notifications
+            # and playlist name requests
+            self.upload_processor.ntfy_service = ntfy_service
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
@@ -298,10 +306,7 @@ class VideoGrouperApp:
     def get_processor_status(self):
         """Get status of all processors."""
         return {
-            "state_auditor": "running"
-            if self.state_auditor._processor_task
-            and not self.state_auditor._processor_task.done()
-            else "stopped",
+            "state_auditor": "startup_only",
             "camera_poller": "running"
             if self.camera_poller._processor_task
             and not self.camera_poller._processor_task.done()
