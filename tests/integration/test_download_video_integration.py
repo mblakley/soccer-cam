@@ -192,7 +192,7 @@ class TestDownloadVideoIntegration:
             # Check state file contents
             with open(download_state_file, "r") as f:
                 download_state = json.load(f)
-                assert len(download_state) == 0, (
+                assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
                 )
 
@@ -352,7 +352,7 @@ class TestDownloadVideoIntegration:
 
             with open(download_state_file, "r") as f:
                 download_state = json.load(f)
-                assert len(download_state) == 0, (
+                assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
                 )
 
@@ -471,9 +471,9 @@ class TestDownloadVideoIntegration:
                 download_state = json.load(f)
 
                 # State should contain the queued item
-                if len(download_state) > 0:
+                if len(download_state["queue"]) > 0:
                     # Verify state contains the correct task information
-                    task_data = download_state[0]
+                    task_data = download_state["queue"][0]
                     assert "task_type" in task_data or "item" in task_data, (
                         "Download state should contain task information"
                     )
@@ -484,7 +484,7 @@ class TestDownloadVideoIntegration:
             # Verify state is empty after processing
             with open(download_state_file, "r") as f:
                 final_download_state = json.load(f)
-                assert len(final_download_state) == 0, (
+                assert len(final_download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
                 )
 
@@ -570,7 +570,7 @@ class TestDownloadVideoIntegration:
 
             with open(download_state_file, "r") as f:
                 download_state = json.load(f)
-                assert len(download_state) == 0, (
+                assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after all processing"
                 )
 

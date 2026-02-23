@@ -28,7 +28,7 @@ def find_group_directory(
 ) -> str:
     """
     Finds or creates a group directory for a video file based on its start time.
-    A new group is created if the file's start time is more than 15 seconds after the previous file's end time.
+    A new group is created if the file's start time is more than 5 seconds after the previous file's end time.
     """
     # Check existing directories to find a match
     for group_dir_path in sorted(existing_dirs, reverse=True):
@@ -42,7 +42,7 @@ def find_group_directory(
                     time_difference = (
                         file_start_time - last_file.end_time
                     ).total_seconds()
-                    if 0 <= time_difference <= 15:
+                    if 0 <= time_difference <= 5:
                         logger.info(
                             f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}, with time matching file end time {last_file.end_time}"
                         )

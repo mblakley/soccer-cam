@@ -129,7 +129,9 @@ class E2ETestRunner:
             "files_discovered": [
                 "Found new recording files",
                 "Camera simulator returning 5 files",
-                "Queuing download task",
+                "Camera simulator returning 3 files",
+                "new files to process",
+                "CAMERA_POLLER: Found",
             ],
             "downloads_started": [
                 "Starting download task",
@@ -146,17 +148,22 @@ class E2ETestRunner:
                 "Combining video files",
                 "Queuing combine task",
                 "Running ffmpeg combine command",
+                "VIDEO: Processing task: CombineTask",
             ],
             "combining_completed": [
                 "Combine completed",
                 "Successfully combined",
                 "Combined video created",
+                "VIDEO: Successfully completed task: CombineTask",
+                "VIDEO: Triggering API-based match info",
             ],
             "match_info_queried": [
                 "Mock TeamSnap: Looking for games",
                 "Mock PlayMetrics: Looking for games",
                 "Querying TeamSnap for games",
                 "Querying PlayMetrics for games",
+                "Triggering API-based match info",
+                "populate_match_info_from_apis",
             ],
             "team_info_populated": [
                 "Successfully updated match_info.ini with TeamSnap data",
@@ -171,17 +178,23 @@ class E2ETestRunner:
                 "waiting_for_input",
                 "NTFY: Successfully sent notification for task",
                 "Mark as waiting for input in the NTFY service",
+                "NTFY: Processing task",
             ],
             "ntfy_prompted": [
                 "NTFY: Prompting user",
                 "Sending NTFY notification",
                 "Game start time detection",
                 "Mock NTFY API: Notification sent successfully",
+                "NTFY API: Attempting to send notification",
+                "Successfully sent NTFY notification",
+                "Game Start Time",
             ],
             "timing_info_populated": [
                 "Updated match_info.ini with game_start_time",
                 "Updated match_info.ini with game_end_time",
                 "Match info complete with timing information",
+                "Game start time set to",
+                "start_time_offset",
             ],
             "trimming_started": [
                 "Starting trim task",
@@ -190,11 +203,13 @@ class E2ETestRunner:
                 "NTFY_QUEUE: Queued trim task",
                 "Created trim task",
                 "NTFY_QUEUE: Created trim task",
+                "VIDEO: Processing task: TrimTask",
             ],
             "trimming_completed": [
                 "Trim completed",
                 "Successfully trimmed",
                 "Trimmed video created",
+                "VIDEO: Successfully completed task: TrimTask",
             ],
             "autocam_started": [
                 "Starting Once Autocam automation",
@@ -457,6 +472,22 @@ class E2ETestRunner:
         except Exception as e:
             logger.warning(f"Error in fallback process killing: {e}")
 
+    def _kill_autocam_gui_process(self):
+        """Kill any running Autocam GUI.exe process from previous test runs."""
+        try:
+            result = subprocess.run(
+                ["taskkill", "/F", "/IM", "GUI.exe"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                logger.info("Killed Autocam GUI.exe process")
+                time.sleep(2)
+            else:
+                logger.debug("No Autocam GUI.exe process found to kill")
+        except Exception as e:
+            logger.warning(f"Error killing Autocam GUI.exe: {e}")
+
     def setup_test_environment(self) -> bool:
         """Set up the test environment."""
         try:
@@ -466,6 +497,7 @@ class E2ETestRunner:
             logger.info("Cleaning up any existing processes from previous test runs...")
             self._kill_pids_from_file()
             self._kill_existing_python_processes()
+            self._kill_autocam_gui_process()
 
             # Create test logs directory first
             self.test_logs_path.mkdir(parents=True, exist_ok=True)
@@ -562,6 +594,9 @@ class E2ETestRunner:
                 "ntfy_service_state.json",
                 "download_queue_state.json",
                 "video_queue_state.json",
+                "upload_queue_state.json",
+                "autocam_queue_state.json",
+                "youtube_queue_state.json",
             ]
 
             for state_file in state_files:
@@ -576,7 +611,7 @@ class E2ETestRunner:
             # Set environment variables for mock services
             setup_e2e_environment(self.project_root)
 
-            logger.info("✓ Test environment set up")
+            logger.info("[OK] Test environment set up")
             logger.info(f"  - Test data path: {self.test_data_path}")
             logger.info(f"  - Test logs path: {self.test_logs_path}")
             logger.info(f"  - Video grouper log: {self.video_grouper_log_path}")
@@ -632,9 +667,9 @@ class E2ETestRunner:
                 return False
 
             logger.info(
-                f"✓ Video Grouper application started (PID: {self.video_grouper_process.pid})"
+                f"[OK] Video Grouper application started (PID: {self.video_grouper_process.pid})"
             )
-            logger.info(f"✓ Logging to: {subprocess_log_path}")
+            logger.info(f"[OK] Logging to: {subprocess_log_path}")
             return True
 
         except Exception as e:
@@ -688,28 +723,29 @@ class E2ETestRunner:
             self.processes_to_cleanup.append(self.tray_process)
             self._add_process_to_pid_file("tray", self.tray_process)
 
-            # Give it a moment to start and acquire the lock
-            time.sleep(10)
-
-            # Check if process is still running
-            if self.tray_process.poll() is not None:
-                logger.error("Tray agent process failed to start")
-                self._cleanup_tray_lock_file()
-                return False
-
-            # Verify the tray agent is actually running by checking the lock file
+            # Wait for the tray agent to acquire its lock file (up to 60 seconds)
             config_dir = Path(self.config_path).parent
             lock_file_path = config_dir / "tray_agent.lock"
+            tray_start_deadline = time.time() + 60
+            while time.time() < tray_start_deadline:
+                # Check if process crashed
+                if self.tray_process.poll() is not None:
+                    logger.error("Tray agent process failed to start")
+                    self._cleanup_tray_lock_file()
+                    return False
+                if lock_file_path.exists():
+                    break
+                time.sleep(2)
 
             if not lock_file_path.exists():
                 logger.error(
-                    "Tray agent lock file not found - tray agent may not be running properly"
+                    "Tray agent lock file not found after 60s - tray agent may not be running properly"
                 )
                 return False
 
-            logger.info(f"✓ Tray agent started (PID: {self.tray_process.pid})")
-            logger.info(f"✓ Logging to: {subprocess_log_path}")
-            logger.info(f"✓ Tray agent lock file created: {lock_file_path}")
+            logger.info(f"[OK] Tray agent started (PID: {self.tray_process.pid})")
+            logger.info(f"[OK] Logging to: {subprocess_log_path}")
+            logger.info(f"[OK] Tray agent lock file created: {lock_file_path}")
             return True
 
         except Exception as e:
@@ -996,8 +1032,11 @@ class E2ETestRunner:
                     # Check actual match_info.ini files in test data directories
                     stage_completed = self._check_match_info_files(stage)
                 elif stage == "ntfy_queued":
-                    # Check NTFY service state for queued tasks
-                    stage_completed = self._check_ntfy_service_state()
+                    # Check NTFY service state for queued tasks, or fall back to log patterns
+                    stage_completed = (
+                        self._check_ntfy_service_state()
+                        or self._check_stage_completion(stage, combined_log_content)
+                    )
                 else:
                     # Check log patterns for other stages
                     stage_completed = self._check_stage_completion(
@@ -1008,7 +1047,7 @@ class E2ETestRunner:
                     self.pipeline_stages[stage] = True
                     self.stage_timestamps[stage] = datetime.now()
                     updated_stages[stage] = True
-                    logger.info(f"🎯 Pipeline stage completed: {stage}")
+                    logger.info(f"Pipeline stage completed: {stage}")
 
         return updated_stages
 
@@ -1094,7 +1133,7 @@ class E2ETestRunner:
             current_log_size = len(combined_log_content)
             if current_log_size > last_log_size:
                 logger.info(
-                    f"📝 New log content detected ({current_log_size - last_log_size} bytes)"
+                    f"New log content detected ({current_log_size - last_log_size} bytes)"
                 )
                 last_log_size = current_log_size
 
@@ -1102,9 +1141,7 @@ class E2ETestRunner:
             updated_stages = self._update_pipeline_progress(combined_log_content)
             if updated_stages:
                 last_pipeline_change_time = datetime.now()
-                logger.info(
-                    f"🔄 Pipeline stages updated: {list(updated_stages.keys())}"
-                )
+                logger.info(f"Pipeline stages updated: {list(updated_stages.keys())}")
 
             # Determine timeout based on current stage
             # If autocam has started but not completed, use 5-minute timeout
@@ -1115,18 +1152,39 @@ class E2ETestRunner:
             upload_started = self.pipeline_stages.get("upload_started", False)
             upload_completed = self.pipeline_stages.get("upload_completed", False)
 
+            # Check NTFY conversation stage (real NTFY has network latency + response delay)
+            ntfy_queued = self.pipeline_stages.get("ntfy_queued", False)
+            timing_populated = self.pipeline_stages.get("timing_info_populated", False)
+
+            combining_started = self.pipeline_stages.get("combining_started", False)
+            combining_completed = self.pipeline_stages.get("combining_completed", False)
+            trimming_started = self.pipeline_stages.get("trimming_started", False)
+            trimming_completed = self.pipeline_stages.get("trimming_completed", False)
+
             if autocam_started and not autocam_completed:
-                # Autocam is running - give it 5 minutes
-                timeout_seconds = 300  # 5 minutes
-                timeout_description = "5 minutes (autocam processing)"
+                # Autocam is running - heavy AI processing takes up to 90 minutes
+                timeout_seconds = 5400  # 90 minutes
+                timeout_description = "90 minutes (autocam processing)"
             elif upload_started and not upload_completed:
-                # Upload is running - give it 5 minutes
-                timeout_seconds = 300  # 5 minutes
-                timeout_description = "5 minutes (YouTube upload processing)"
+                # Upload is running - give it 10 minutes for large files
+                timeout_seconds = 600  # 10 minutes
+                timeout_description = "10 minutes (YouTube upload processing)"
+            elif ntfy_queued and not timing_populated:
+                # NTFY conversation in progress - give 3 minutes for multiple rounds
+                timeout_seconds = 180  # 3 minutes
+                timeout_description = "3 minutes (NTFY conversation)"
+            elif combining_started and not combining_completed:
+                # FFmpeg combining large files (stream copy + audio encode) - give 10 minutes
+                timeout_seconds = 600  # 10 minutes
+                timeout_description = "10 minutes (FFmpeg combining)"
+            elif trimming_started and not trimming_completed:
+                # FFmpeg trimming large video - give 10 minutes
+                timeout_seconds = 600  # 10 minutes
+                timeout_description = "10 minutes (FFmpeg trimming)"
             else:
-                # Other stages - use 65 seconds
-                timeout_seconds = 65
-                timeout_description = "65 seconds"
+                # Other stages - use 90 seconds (includes real FFmpeg processing)
+                timeout_seconds = 90
+                timeout_description = "90 seconds"
 
             # Check for timeout since last pipeline change
             if self._check_timeout(
@@ -1137,14 +1195,14 @@ class E2ETestRunner:
                 )
                 logger.error("Current pipeline status:")
                 for stage, completed in self.pipeline_stages.items():
-                    status = "✅" if completed else "❌"
+                    status = "DONE" if completed else "PENDING"
                     logger.error(f"  {status} {stage}")
                 return False
 
             # Check if all stages are complete
             all_complete = all(self.pipeline_stages.values())
             if all_complete:
-                logger.info("🎉 All pipeline stages completed successfully!")
+                logger.info("All pipeline stages completed successfully!")
                 return True
 
             # Log current progress
@@ -1191,6 +1249,7 @@ class E2ETestRunner:
         # Ensure all tray agent processes are killed
         logger.info("Ensuring all tray agent processes are terminated...")
         self._kill_existing_tray_agents()
+        self._kill_autocam_gui_process()
 
         # Kill any processes from PID file
         logger.info("Killing any remaining processes from PID file...")
@@ -1213,7 +1272,7 @@ class E2ETestRunner:
     async def run_e2e_test(self) -> bool:
         """Run the complete end-to-end test."""
         try:
-            logger.info("🚀 Starting End-to-End Test")
+            logger.info("Starting End-to-End Test")
 
             # Set up test environment
             if not self.setup_test_environment():
@@ -1230,7 +1289,7 @@ class E2ETestRunner:
             # when USE_MOCK_NTFY environment variable is set
 
             # Monitor pipeline progress
-            success = self.monitor_pipeline_progress(max_wait_minutes=10)
+            success = self.monitor_pipeline_progress(max_wait_minutes=120)
 
             return success
 
@@ -1243,6 +1302,7 @@ class E2ETestRunner:
             logger.info("Final cleanup: ensuring no test processes remain...")
             self._kill_pids_from_file()
             self._kill_existing_tray_agents()
+            self._kill_autocam_gui_process()
             self._kill_existing_python_processes()
             time.sleep(1)  # Brief wait for processes to terminate
             self._cleanup_tray_lock_file()
@@ -1273,6 +1333,7 @@ async def main():
         asyncio.create_task(runner.cleanup_test_environment())
         runner._kill_pids_from_file()
         runner._kill_existing_tray_agents()
+        runner._kill_autocam_gui_process()
         runner._kill_existing_python_processes()
         runner._cleanup_tray_lock_file()
         sys.exit(1)
@@ -1285,10 +1346,10 @@ async def main():
         success = await runner.run_e2e_test()
 
         if success:
-            logger.info("🎉 E2E Test PASSED!")
+            logger.info("E2E Test PASSED!")
             return 0
         else:
-            logger.error("❌ E2E Test FAILED!")
+            logger.error("E2E Test FAILED!")
             return 1
     except KeyboardInterrupt:
         logger.info("Test interrupted by user")

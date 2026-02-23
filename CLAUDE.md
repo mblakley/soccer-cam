@@ -53,7 +53,7 @@ uv run ruff format          # format
 uv run pre-commit run --all-files  # run all pre-commit hooks
 ```
 
-Ruff config: double quotes, spaces, target Python 3.9.
+Ruff config: double quotes, spaces, target Python 3.13.
 
 ## Architecture
 

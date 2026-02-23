@@ -50,6 +50,61 @@ def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
     return credentials_file, token_file
 
 
+def ensure_valid_token(credentials_file: str, token_file: str) -> Tuple[bool, str]:
+    """Check if YouTube token is valid, refreshing if needed. No interactive auth.
+
+    This is used by the main pipeline (service) which runs headless.
+    If the token is missing, expired, or cannot be refreshed, it returns failure
+    so the caller can notify the user to re-authenticate via the tray app.
+
+    Args:
+        credentials_file: Path to the client_secret.json file
+        token_file: Path to the token.json file
+
+    Returns:
+        Tuple[bool, str]: (success, message)
+    """
+    if not os.path.exists(credentials_file):
+        return False, f"YouTube credentials file not found: {credentials_file}"
+
+    if not os.path.exists(token_file):
+        return (
+            False,
+            "No YouTube token found. Please authenticate via the tray app.",
+        )
+
+    try:
+        with open(token_file, "r") as f:
+            creds_data = json.load(f)
+            creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
+                creds_data, SCOPES
+            )
+    except Exception as e:
+        return False, f"Error loading YouTube token: {e}"
+
+    if creds.valid:
+        return True, "Token is valid"
+
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            # Save refreshed token
+            with open(token_file, "w") as f:
+                f.write(creds.to_json())
+            return True, "Token refreshed successfully"
+        except Exception as e:
+            return (
+                False,
+                f"Token refresh failed: {e}. Please re-authenticate via the tray app.",
+            )
+
+    return (
+        False,
+        "YouTube token expired and cannot be refreshed. "
+        "Please re-authenticate via the tray app.",
+    )
+
+
 def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, str]:
     """Authenticate with YouTube API.
 

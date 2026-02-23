@@ -23,7 +23,7 @@ def setup_test_environment():
             "PYTHONPATH": f"{os.environ.get('PYTHONPATH', '')}:{project_root}",
         }
     )
-    print("✅ Test environment configured")
+    print("Test environment configured")
     print("  - USE_MOCK_NTFY: false (using real NTFY API)")
     print("  - USE_MOCK_TEAMSNAP: true")
     print("  - USE_MOCK_PLAYMETRICS: true")
@@ -49,7 +49,7 @@ def run_with_pytest():
 
 
 def run_standalone():
-    print("🚀 Running E2E test as standalone script")
+    print("Running E2E test as standalone script")
     # Use uv run to ensure correct environment
     import subprocess
 
@@ -59,7 +59,7 @@ def run_standalone():
 
 
 def main():
-    print("🎬 Video Grouper End-to-End Test Runner")
+    print("Video Grouper End-to-End Test Runner")
     setup_test_environment()
     mode = sys.argv[1].lower() if len(sys.argv) > 1 else "standalone"
     success = False
@@ -68,14 +68,14 @@ def main():
     elif mode == "standalone":
         success = run_standalone()
     else:
-        print(f"❌ Unknown mode: {mode}")
+        print(f"Unknown mode: {mode}")
         return 1
     print("=" * 50)
     if success:
-        print("🎉 E2E Test PASSED!")
+        print("E2E Test PASSED!")
         return 0
     else:
-        print("❌ E2E Test FAILED!")
+        print("E2E Test FAILED!")
         return 1
 
 

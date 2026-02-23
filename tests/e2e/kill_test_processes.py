@@ -8,6 +8,7 @@ left running from previous test runs.
 
 import json
 import logging
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -245,6 +246,23 @@ def cleanup_tray_lock_file():
         logger.warning(f"Error in tray agent lock file cleanup: {e}")
 
 
+def kill_autocam_gui_process():
+    """Kill any running Autocam GUI.exe process."""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/IM", "GUI.exe"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            logger.info("Killed Autocam GUI.exe process")
+            time.sleep(2)
+        else:
+            logger.debug("No Autocam GUI.exe process found to kill")
+    except Exception as e:
+        logger.warning(f"Error killing Autocam GUI.exe: {e}")
+
+
 def main():
     """Main function to kill all test processes."""
     setup_logging()
@@ -256,6 +274,9 @@ def main():
 
     # Kill any remaining Python processes
     kill_existing_python_processes()
+
+    # Kill any Autocam GUI.exe processes
+    kill_autocam_gui_process()
 
     # Clean up lock files
     cleanup_tray_lock_file()

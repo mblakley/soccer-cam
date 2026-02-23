@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, Optional
 
 from .queue_type import QueueType
 from video_grouper.utils.config import Config
@@ -38,6 +38,7 @@ class QueueProcessor(ABC):
         self._shutdown_event = asyncio.Event()
         self._max_retries = 3  # Maximum number of retry attempts
         self._retry_counts = {}  # Track retry counts for each item
+        self._in_progress_item: Optional[BaseTask] = None  # Currently processing item
 
         logger.info(f"Initialized {self.__class__.__name__}")
 
@@ -159,6 +160,10 @@ class QueueProcessor(ABC):
                     f"{self.__class__.__name__}: Processing item: {item} [trace_id: {trace_id}]"
                 )
 
+                # Track in-progress item so it's persisted if we crash
+                self._in_progress_item = item
+                await self.save_state()
+
                 try:
                     # Process the item
                     await self.process_item(item)
@@ -172,6 +177,7 @@ class QueueProcessor(ABC):
                     self._retry_counts.pop(
                         item_key, None
                     )  # Clear retry count on success
+                    self._in_progress_item = None
                     queue_size = self._queue.qsize()
                     await self.save_state()
                     logger.info(
@@ -189,6 +195,7 @@ class QueueProcessor(ABC):
                     if retry_count < self._max_retries:
                         # Task failed but can be retried - requeue at the end
                         self._queue.task_done()  # Mark current item as done
+                        self._in_progress_item = None
                         await self._queue.put(item)  # Requeue at the end
                         self._retry_counts[item_key] = retry_count + 1
                         queue_size = self._queue.qsize()
@@ -199,6 +206,7 @@ class QueueProcessor(ABC):
                     else:
                         # Task failed and exceeded max retries - remove from queue
                         self._queue.task_done()
+                        self._in_progress_item = None
                         self._queued_items.discard(item_key)
                         self._retry_counts.pop(item_key, None)
                         queue_size = self._queue.qsize()
@@ -215,8 +223,17 @@ class QueueProcessor(ABC):
 
         logger.info(f"{self.__class__.__name__}: Processing loop ended")
 
+    def _serialize_item(self, item: BaseTask) -> dict:
+        """Serialize a single task item to a dictionary."""
+        if hasattr(item, "serialize"):
+            return item.serialize()
+        elif hasattr(item, "to_dict"):
+            return item.to_dict()
+        else:
+            return {"item": str(item)}
+
     async def save_state(self) -> None:
-        """Save the current queue state to disk."""
+        """Save the current queue state to disk, including any in-progress item."""
         state_file = os.path.join(self.storage_path, self.get_state_file_name())
 
         try:
@@ -225,32 +242,32 @@ class QueueProcessor(ABC):
             # the queue could lose items or strand the processing loop.
             items = list(self._queue._queue) if self._queue else []
 
-            # Serialize items - call serialize() directly on each item
-            serialized_items = []
-            for item in items:
-                if hasattr(item, "serialize"):
-                    serialized_items.append(item.serialize())
-                elif hasattr(item, "to_dict"):
-                    serialized_items.append(item.to_dict())
-                else:
-                    # Fallback for simple items
-                    serialized_items.append({"item": str(item)})
+            # Serialize items
+            serialized_items = [self._serialize_item(item) for item in items]
+
+            # Build state with in-progress item tracking
+            state = {
+                "queue": serialized_items,
+            }
+            if self._in_progress_item is not None:
+                state["in_progress"] = self._serialize_item(self._in_progress_item)
 
             # Atomic write: write to temp file then rename
             temp_file = state_file + ".tmp"
             with open(temp_file, "w") as f:
-                json.dump(serialized_items, f, indent=2)
+                json.dump(state, f, indent=2)
             os.replace(temp_file, state_file)
 
+            total_items = len(serialized_items) + (1 if self._in_progress_item else 0)
             logger.info(
-                f"{self.__class__.__name__}: Saved state with {len(serialized_items)} items to {state_file}"
+                f"{self.__class__.__name__}: Saved state with {total_items} items ({len(serialized_items)} queued, {'1 in-progress' if self._in_progress_item else '0 in-progress'}) to {state_file}"
             )
 
         except Exception as e:
             logger.error(f"{self.__class__.__name__}: Error saving state: {e}")
 
     async def load_state(self) -> None:
-        """Load queue state from disk."""
+        """Load queue state from disk, including any in-progress item."""
         state_file = os.path.join(self.storage_path, self.get_state_file_name())
 
         if not os.path.exists(state_file):
@@ -261,15 +278,41 @@ class QueueProcessor(ABC):
 
         try:
             with open(state_file, "r") as f:
-                serialized_items = json.load(f)
+                raw_state = json.load(f)
+
+            # Support both new format (dict with "queue" key) and legacy format (plain list)
+            if isinstance(raw_state, dict):
+                serialized_items = raw_state.get("queue", [])
+                in_progress_data = raw_state.get("in_progress")
+            else:
+                serialized_items = raw_state
+                in_progress_data = None
 
             logger.info(
-                f"{self.__class__.__name__}: Loading {len(serialized_items)} items from state"
+                f"{self.__class__.__name__}: Loading {len(serialized_items)} queued items from state"
+                + (", plus 1 in-progress item" if in_progress_data else "")
             )
 
-            # Restore items to the queue
+            # Restore in-progress item first (at front of queue for re-processing)
             restored_count = 0
             skipped_count = 0
+            if in_progress_data:
+                try:
+                    task = self._deserialize_task(in_progress_data)
+                    if task:
+                        await self._queue.put(task)
+                        item_key = self.get_item_key(task)
+                        self._queued_items.add(item_key)
+                        restored_count += 1
+                        logger.info(
+                            f"{self.__class__.__name__}: Restored in-progress task to front of queue: {task}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"{self.__class__.__name__}: Failed to restore in-progress task: {e}"
+                    )
+
+            # Restore queued items
             for item_data in serialized_items:
                 try:
                     # Skip legacy format items
@@ -289,7 +332,6 @@ class QueueProcessor(ABC):
                             f"{self.__class__.__name__}: Restored task to queue: {task}"
                         )
                     else:
-                        # Task deserialization returned None (e.g., missing task_type)
                         skipped_count += 1
                         logger.debug(
                             f"{self.__class__.__name__}: Skipped invalid task data: {item_data}"
@@ -306,7 +348,6 @@ class QueueProcessor(ABC):
 
         except Exception as e:
             logger.error(f"{self.__class__.__name__}: Error loading state: {e}")
-            # Don't delete the state file on error - let the user decide what to do
 
     def get_queue_size(self) -> int:
         """Get the current queue size."""

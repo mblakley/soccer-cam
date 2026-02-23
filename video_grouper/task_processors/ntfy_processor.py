@@ -9,6 +9,7 @@ This processor acts as the central coordinator for NTFY interactions:
 5. Listens for responses via NTFY subscription API
 """
 
+import asyncio
 import os
 import logging
 from typing import Dict, Any, Optional
@@ -62,6 +63,7 @@ class NtfyProcessor(QueueProcessor):
         self.poll_interval = poll_interval
         self.video_processor = video_processor
         self._stopping = False
+        self._response_events: Dict[str, asyncio.Event] = {}
 
     @property
     def queue_type(self) -> QueueType:
@@ -82,6 +84,10 @@ class NtfyProcessor(QueueProcessor):
         """
         Process a single NTFY task.
 
+        Sends the notification, then blocks until the user responds. This
+        ensures one video's questions are fully resolved before the next
+        video's questions start.
+
         Note: task_done() is called by the base class _run() loop — do NOT
         call it here to avoid driving the internal counter negative.
 
@@ -98,8 +104,30 @@ class NtfyProcessor(QueueProcessor):
         success = await item.execute()
 
         if success:
-            logger.info(f"NTFY: Successfully sent notification for task: {item}")
-            # Don't remove from _queued_items — it will be removed when response is processed
+            logger.info(
+                f"NTFY: Successfully sent notification for task: {item}, waiting for response"
+            )
+
+            # Block until user responds to this task
+            event = asyncio.Event()
+            self._response_events[item.group_dir] = event
+
+            try:
+                while not event.is_set():
+                    if self._stopping:
+                        logger.info(
+                            f"NTFY: Shutdown during wait for response to {item}"
+                        )
+                        return
+                    try:
+                        await asyncio.wait_for(event.wait(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        logger.debug(f"NTFY: Still waiting for response to {item}")
+                        continue
+            finally:
+                self._response_events.pop(item.group_dir, None)
+
+            logger.info(f"NTFY: Response received and processed for task: {item}")
         else:
             logger.error(f"NTFY: Failed to send notification for task: {item}")
             # Mark as failed to send to prevent duplicate tasks and enable retry
@@ -207,6 +235,7 @@ class NtfyProcessor(QueueProcessor):
             logger.warning(
                 f"NTFY_QUEUE: Match info service not available for {group_dir}"
             )
+            self._signal_response_event(group_dir)
             return
 
         if await self.match_info_service.is_match_info_complete(group_dir):
@@ -228,7 +257,10 @@ class NtfyProcessor(QueueProcessor):
                 from .tasks.video import TrimTask
 
                 match_info, _ = MatchInfo.get_or_create(group_dir, self.storage_path)
-                trim_task = TrimTask.from_match_info(group_dir, match_info)
+                trim_end = getattr(self.config.processing, "trim_end_enabled", False)
+                trim_task = TrimTask.from_match_info(
+                    group_dir, match_info, trim_end_enabled=trim_end
+                )
                 logger.info(f"NTFY_QUEUE: Created trim task: {trim_task}")
 
                 await self.video_processor.add_work(trim_task)
@@ -245,6 +277,20 @@ class NtfyProcessor(QueueProcessor):
                 logger.info(
                     f"NTFY_QUEUE: Match info fields - my_team_name: '{match_info.my_team_name}', opponent_team_name: '{match_info.opponent_team_name}', location: '{match_info.location}', start_time_offset: '{match_info.start_time_offset}'"
                 )
+
+        # Signal that the task response has been fully processed.
+        # This unblocks process_item() which is waiting for the response.
+        self._signal_response_event(group_dir)
+
+    def _signal_response_event(self, group_dir: str) -> None:
+        """Signal that a response has been fully processed for a group directory.
+
+        This unblocks process_item() which is awaiting the response event.
+        """
+        event = self._response_events.get(group_dir)
+        if event:
+            event.set()
+            logger.info(f"NTFY: Signaled response event for {group_dir}")
 
     async def save_state(self) -> None:
         # No-op: state is managed by NtfyService
@@ -374,8 +420,9 @@ class NtfyProcessor(QueueProcessor):
         await self.add_work(start_task)
         tasks_added = True
 
-        # Check if we should also ask for end time
-        if match_info and match_info.start_time_offset:
+        # Check if we should also ask for end time (only when trim_end_enabled)
+        trim_end_enabled = getattr(self.config.processing, "trim_end_enabled", False)
+        if trim_end_enabled and match_info and match_info.start_time_offset:
             from .tasks.ntfy import GameEndTask
 
             end_task = GameEndTask(

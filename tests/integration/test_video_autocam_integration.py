@@ -184,7 +184,7 @@ class TestVideoAutocamIntegration:
             # Check state file contents
             with open(video_state_file, "r") as f:
                 video_state = json.load(f)
-                assert len(video_state) == 0, (
+                assert len(video_state["queue"]) == 0, (
                     "Video state should be empty after processing"
                 )
 
@@ -350,7 +350,7 @@ class TestVideoAutocamIntegration:
 
             with open(video_state_file, "r") as f:
                 video_state = json.load(f)
-                assert len(video_state) == 0, (
+                assert len(video_state["queue"]) == 0, (
                     "Video state should be empty after processing"
                 )
 
@@ -465,9 +465,9 @@ class TestVideoAutocamIntegration:
                 video_state = json.load(f)
 
                 # State should contain the queued item
-                if len(video_state) > 0:
+                if len(video_state["queue"]) > 0:
                     # Verify state contains the correct task information
-                    task_data = video_state[0]
+                    task_data = video_state["queue"][0]
                     assert "task_type" in task_data or "item" in task_data, (
                         "Video state should contain task information"
                     )
@@ -478,7 +478,7 @@ class TestVideoAutocamIntegration:
             # Verify state is empty after processing
             with open(video_state_file, "r") as f:
                 final_video_state = json.load(f)
-                assert len(final_video_state) == 0, (
+                assert len(final_video_state["queue"]) == 0, (
                     "Video state should be empty after processing"
                 )
 
@@ -552,7 +552,7 @@ class TestVideoAutocamIntegration:
 
             with open(video_state_file, "r") as f:
                 video_state = json.load(f)
-                assert len(video_state) == 0, (
+                assert len(video_state["queue"]) == 0, (
                     "Video state should be empty after all processing"
                 )
 

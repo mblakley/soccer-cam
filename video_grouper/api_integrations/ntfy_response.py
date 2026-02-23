@@ -7,7 +7,7 @@ controlled inputs to simulate user interaction during E2E testing.
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from video_grouper.api_integrations.mock_ntfy_communication import mock_ntfy_comm
 
 logger = logging.getLogger(__name__)
@@ -34,21 +34,16 @@ class NtfyResponseService:
         self.subscription_url = f"{server_url}/{topic}/json"
         self.response_url = f"{server_url}/{topic}"
 
-        # Track message count for controlled responses
-        self.message_count = 0
+        # Per-type message counters for controlled responses
+        self.message_counts: Dict[str, int] = {
+            "game_start": 0,
+            "game_end": 0,
+            "team_info": 0,
+            "playlist": 0,
+        }
 
-        # Define response sequence for E2E testing
-        self.response_sequence = [
-            # First message: "No, not yet at 00:00"
-            "No, not yet at 00:00",
-            # Second message: "No, not yet at 05:00"
-            "No, not yet at 05:00",
-            # Third message: "Yes, game started at 10:00"
-            "Yes, game started at 10:00",
-        ]
-
-        # Track processed messages to avoid duplicates
-        self.processed_messages = set()
+        # Track processed NTFY message IDs to avoid duplicates
+        self._processed_message_ids: set = set()
 
         logger.info(f"NTFY response service initialized for topic: {topic}")
 
@@ -78,7 +73,7 @@ class NtfyResponseService:
         """Subscribe to NTFY topic and respond to messages."""
         logger.info(f"Subscribing to NTFY topic: {self.topic}")
 
-        # Register callback to receive messages from the communication system
+        # Register callback to receive messages from the mock communication system
         mock_ntfy_comm.register_response_callback(self._handle_new_message)
 
         # Also subscribe to real NTFY topic to respond to real requests
@@ -92,7 +87,7 @@ class NtfyResponseService:
             await asyncio.sleep(1)
 
     def _handle_new_message(self, message):
-        """Handle new messages from the communication system."""
+        """Handle new messages from the mock communication system."""
         logger.info(
             f"NTFY response service: Received message: {message.message[:50]}..."
         )
@@ -101,12 +96,12 @@ class NtfyResponseService:
         asyncio.create_task(self._process_message_from_comm(message))
 
     async def _process_message_from_comm(self, message):
-        """Process a message from the communication system."""
+        """Process a message from the mock communication system."""
         try:
             # Check if we should respond to this message
             if self._should_respond_to_message(message.title, message.message):
-                # Add a small delay to ensure the task is properly registered
-                await asyncio.sleep(5)
+                # Add a delay to ensure the task is properly registered
+                await asyncio.sleep(3)
 
                 response = self._get_response_for_message(
                     message.title, message.message
@@ -131,25 +126,27 @@ class NtfyResponseService:
         subscription_url = f"{self.server_url}/{self.topic}/json"
         response_url = f"{self.server_url}/{self.topic}"
 
-        print(f"NTFY response service: Subscribing to real NTFY topic: {self.topic}")
-        print(f"Subscription URL: {subscription_url}")
+        logger.info(
+            f"NTFY response service: Subscribing to real NTFY topic: {self.topic}"
+        )
+        logger.info(f"NTFY response service: Subscription URL: {subscription_url}")
 
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                print(
+                logger.info(
                     f"NTFY response service: Making GET request to {subscription_url}"
                 )
                 async with client.stream("GET", subscription_url) as response:
-                    print(
+                    logger.info(
                         f"NTFY response service: Response status: {response.status_code}"
                     )
                     if response.status_code != 200:
-                        print(
-                            f"NTFY response service: Failed to subscribe to real NTFY topic: {response.status_code}"
+                        logger.error(
+                            f"NTFY response service: Failed to subscribe: {response.status_code}"
                         )
                         return
 
-                    print(
+                    logger.info(
                         f"NTFY response service: Successfully subscribed to real NTFY topic: {self.topic}"
                     )
 
@@ -157,135 +154,161 @@ class NtfyResponseService:
                         if line.strip():
                             try:
                                 data = json.loads(line)
-                                print(f"NTFY response service: Received data: {data}")
+                                logger.debug(
+                                    f"NTFY response service: Received data: {data}"
+                                )
 
                                 # Skip non-message events
                                 if data.get("event") != "message":
-                                    print(
-                                        f"NTFY response service: Skipping non-message event: {data.get('event')}"
+                                    continue
+
+                                # Deduplicate by NTFY message ID
+                                msg_id = data.get("id", "")
+                                if msg_id in self._processed_message_ids:
+                                    logger.debug(
+                                        f"NTFY response service: Skipping already-processed message: {msg_id}"
                                     )
                                     continue
+                                self._processed_message_ids.add(msg_id)
 
                                 message_content = data.get("message", "")
                                 title = data.get("title", "")
 
-                                print(
-                                    f"NTFY response service: Received real NTFY message: {title} - {message_content[:50]}..."
+                                logger.info(
+                                    f"NTFY response service: Received real NTFY message: "
+                                    f"title='{title}', message='{message_content[:80]}...'"
                                 )
 
                                 # Check if we should respond to this message
                                 if self._should_respond_to_message(
                                     title, message_content
                                 ):
-                                    print(
-                                        "NTFY response service: Should respond to message"
-                                    )
-                                    # Add a small delay to ensure the task is properly registered
-                                    await asyncio.sleep(0.5)
+                                    # Wait for the app to register the task as waiting_for_input
+                                    await asyncio.sleep(3)
 
                                     response_text = self._get_response_for_message(
                                         title, message_content
                                     )
                                     if response_text:
-                                        print(
+                                        logger.info(
                                             f"NTFY response service: Sending response: {response_text}"
                                         )
-                                        # Send response to real NTFY topic
                                         try:
                                             resp = await client.post(
                                                 response_url,
                                                 data=response_text.encode("utf-8"),
                                             )
                                             if resp.status_code == 200:
-                                                print(
+                                                logger.info(
                                                     f"NTFY response service: Sent real NTFY response: {response_text}"
                                                 )
                                             else:
-                                                print(
-                                                    f"NTFY response service: Failed to send real NTFY response: {resp.status_code}"
+                                                logger.error(
+                                                    f"NTFY response service: Failed to send response: {resp.status_code}"
                                                 )
                                         except Exception as e:
-                                            print(
+                                            logger.error(
                                                 f"NTFY response service: Error sending response: {e}"
                                             )
 
                             except json.JSONDecodeError as e:
-                                print(f"NTFY response service: JSON decode error: {e}")
+                                logger.warning(
+                                    f"NTFY response service: JSON decode error: {e}"
+                                )
                                 continue
                             except Exception as e:
-                                print(
+                                logger.error(
                                     f"NTFY response service: Error processing real NTFY message: {e}"
                                 )
 
         except Exception as e:
-            print(f"NTFY response service: Error subscribing to real NTFY topic: {e}")
+            logger.error(
+                f"NTFY response service: Error subscribing to real NTFY topic: {e}"
+            )
 
     def _should_respond_to_message(self, title: str, message: str) -> bool:
         """Determine if we should respond to this message."""
+        title_lower = title.lower()
+        message_lower = message.lower()
+
         # Respond to game start/end detection messages
-        if "game start" in title.lower() or "game end" in title.lower():
+        if "game start" in title_lower or "game end" in title_lower:
             return True
 
         # Respond to team info requests
-        if "missing match information" in message.lower():
+        if "missing match information" in message_lower:
+            return True
+
+        # Respond to "set game start time" messages
+        if "set game start time" in title_lower or "set game end time" in title_lower:
             return True
 
         # Respond to playlist name requests
-        if "youtube playlist request" in title.lower():
+        if "youtube playlist request" in title_lower:
             return True
 
         return False
 
     def _get_response_for_message(self, title: str, message: str) -> Optional[str]:
-        """Get the appropriate response for the message."""
+        """Get the appropriate response for the message based on per-type counters."""
+        title_lower = title.lower()
+        message_lower = message.lower()
+
         logger.info(
-            f"NTFY response service: Getting response for title='{title}', message='{message[:100]}...'"
+            f"NTFY response service: Getting response for title='{title}', "
+            f"message='{message[:100]}...'"
         )
 
-        # For team info requests, provide structured data
-        if "missing match information" in message.lower():
-            if self.message_count == 0:
-                response = "Hawks"  # Team name
-                logger.info(
-                    f"NTFY response service: Responding with team name: {response}"
-                )
-            elif self.message_count == 1:
-                response = "Eagles"  # Opponent name
-                logger.info(
-                    f"NTFY response service: Responding with opponent name: {response}"
-                )
-            elif self.message_count == 2:
-                response = "Central Park Soccer Fields"  # Location
-                logger.info(
-                    f"NTFY response service: Responding with location: {response}"
-                )
-            else:
-                response = "No"  # Default response for game start/end questions
-                logger.info(
-                    f"NTFY response service: Responding with default: {response}"
-                )
+        # Handle team info requests
+        if "missing match information" in message_lower:
+            count = self.message_counts["team_info"]
+            self.message_counts["team_info"] += 1
 
-            self.message_count += 1
+            if count == 0:
+                response = "Hawks"
+            elif count == 1:
+                response = "Eagles"
+            elif count == 2:
+                response = "Central Park Soccer Fields"
+            else:
+                response = "Unknown"
+
+            logger.info(
+                f"NTFY response service: Responding with team info [{count}]: {response}"
+            )
             return response
 
-        # For playlist name requests
-        if "youtube playlist request" in title.lower():
+        # Handle playlist name requests
+        if "youtube playlist request" in title_lower:
+            self.message_counts["playlist"] += 1
             response = "Hawks Soccer 2024"
             logger.info(
                 f"NTFY response service: Responding with playlist name: {response}"
             )
-            self.message_count += 1
             return response
 
-        # For game start/end detection messages
-        if "game start" in title.lower() or "game end" in title.lower():
-            # Always send a response from the sequence, cycling through them
-            response_index = self.message_count % len(self.response_sequence)
-            response = self.response_sequence[response_index]
+        # Handle game start time detection
+        if "game start" in title_lower or "set game start time" in title_lower:
+            count = self.message_counts["game_start"]
+            self.message_counts["game_start"] += 1
+
+            # Respond "Yes" immediately (at 00:00) since test clips are 1 minute each
+            # (3 minutes total), so the game is already in progress from the first frame.
+            response = "Yes, game started at 00:00"
+
             logger.info(
-                f"NTFY response service: Responding to game detection: {response} (index {response_index})"
+                f"NTFY response service: Responding to game start [{count}]: {response}"
             )
-            self.message_count += 1
+            return response
+
+        # Handle game end time detection
+        if "game end" in title_lower or "set game end time" in title_lower:
+            count = self.message_counts["game_end"]
+            self.message_counts["game_end"] += 1
+            response = "Yes, the game ended"
+            logger.info(
+                f"NTFY response service: Responding to game end [{count}]: {response}"
+            )
             return response
 
         # Default case

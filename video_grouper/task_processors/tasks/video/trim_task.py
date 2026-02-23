@@ -4,8 +4,8 @@ Trim task for trimming combined videos based on match information.
 
 import os
 import logging
-from typing import Dict, Any
-from dataclasses import dataclass
+from typing import Dict, Any, Optional
+from dataclasses import dataclass, field
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
@@ -25,7 +25,9 @@ class TrimTask(BaseFfmpegTask):
 
     group_dir: str
     start_time: str  # Format: "HH:MM:SS"
-    end_time: str  # Format: "HH:MM:SS"
+    end_time: Optional[str] = field(
+        default=None
+    )  # Format: "HH:MM:SS", None = no end trim
 
     @property
     def task_type(self) -> str:
@@ -50,7 +52,7 @@ class TrimTask(BaseFfmpegTask):
         )
 
         # Execute the FFmpeg command using the utility function
-        # Use basic trim for e2e testing - advanced trim has compatibility issues
+        # When end_time is None, trim_video omits the -t flag (no end trim)
         success = await trim_video(
             input_path, output_path, self.start_time, self.end_time
         )
@@ -93,12 +95,14 @@ class TrimTask(BaseFfmpegTask):
         Returns:
             Dictionary containing task data
         """
-        return {
+        data = {
             "task_type": self.task_type,
             "group_dir": self.group_dir,
             "start_time": self.start_time,
-            "end_time": self.end_time,
         }
+        if self.end_time is not None:
+            data["end_time"] = self.end_time
+        return data
 
     def get_output_path(self) -> str:
         """
@@ -114,7 +118,8 @@ class TrimTask(BaseFfmpegTask):
 
     def __str__(self) -> str:
         """String representation of the task."""
-        return f"TrimTask({os.path.basename(self.group_dir)}, {self.start_time}-{self.end_time})"
+        end = self.end_time or "end"
+        return f"TrimTask({os.path.basename(self.group_dir)}, {self.start_time}-{end})"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrimTask":
@@ -132,7 +137,7 @@ class TrimTask(BaseFfmpegTask):
         return cls(
             group_dir=group_dir,
             start_time=data["start_time"],
-            end_time=data["end_time"],
+            end_time=data.get("end_time"),
         )
 
     @classmethod
@@ -149,13 +154,16 @@ class TrimTask(BaseFfmpegTask):
         return cls.from_dict(data)
 
     @classmethod
-    def from_match_info(cls, group_dir: str, match_info) -> "TrimTask":
+    def from_match_info(
+        cls, group_dir: str, match_info, trim_end_enabled: bool = True
+    ) -> "TrimTask":
         """
         Create a TrimTask from match information.
 
         Args:
             group_dir: Directory containing the combined video
             match_info: MatchInfo object with timing information
+            trim_end_enabled: Whether to include end time trimming
 
         Returns:
             TrimTask instance
@@ -163,11 +171,13 @@ class TrimTask(BaseFfmpegTask):
         # Get start time from match_info (start_time_offset)
         start_time = match_info.get_start_offset()  # This returns HH:MM:SS format
 
-        # Calculate end time from start_time_offset + total_duration
-        total_duration_seconds = match_info.get_total_duration_seconds()
-        start_offset_seconds = cls._time_to_seconds(start_time)
-        end_time_seconds = start_offset_seconds + total_duration_seconds
-        end_time = cls._seconds_to_time(end_time_seconds)
+        end_time = None
+        if trim_end_enabled:
+            # Calculate end time from start_time_offset + total_duration
+            total_duration_seconds = match_info.get_total_duration_seconds()
+            start_offset_seconds = cls._time_to_seconds(start_time)
+            end_time_seconds = start_offset_seconds + total_duration_seconds
+            end_time = cls._seconds_to_time(end_time_seconds)
 
         return cls(group_dir=group_dir, start_time=start_time, end_time=end_time)
 

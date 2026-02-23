@@ -126,8 +126,8 @@ class CombineTask(BaseFfmpegTask):
             logger.info(f"COMBINE: Successfully combined videos in {self.group_dir}")
             await dir_state.update_group_status("combined")
 
-            # The match info processing will be handled by the StateAuditor
-            # which will detect the "combined" status and process match info appropriately
+            # Match info gathering is triggered by VideoProcessor._on_combine_complete()
+            # which fires async API lookups and NTFY questions after this task completes.
 
         except Exception as e:
             logger.error(f"COMBINE: Error in post-combine actions for {self}: {e}")

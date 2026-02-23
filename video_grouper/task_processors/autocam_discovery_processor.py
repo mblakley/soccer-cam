@@ -150,8 +150,9 @@ class AutocamDiscoveryProcessor(PollingProcessor):
             for file in files:
                 if file.endswith("-raw.mp4"):
                     input_path = Path(root) / file
+                    # Autocam 3.x outputs .mkv format; the task will convert to .mp4 after
                     output_path = input_path.with_name(
-                        input_path.name.replace("-raw.mp4", ".mp4")
+                        input_path.name.replace("-raw.mp4", ".mkv")
                     )
                     return str(input_path), str(output_path)
 

@@ -25,8 +25,12 @@ logger = logging.getLogger(__name__)
 
 class StateAuditor(PollingProcessor):
     """
-    Task processor for auditing external state changes.
-    Scans the shared_data directory for state.json files and queues appropriate tasks.
+    Startup recovery scanner for the pipeline.
+
+    On app start, scans the shared_data directory for state.json files and
+    re-queues any interrupted work (pending downloads, combined dirs awaiting
+    match info, etc.). Does NOT run as a continuous poller during normal
+    operation — event-driven transitions handle ongoing work.
     """
 
     def __init__(
@@ -54,6 +58,16 @@ class StateAuditor(PollingProcessor):
 
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
+
+    async def start(self) -> None:
+        """Run a one-time startup scan to recover interrupted work.
+
+        Unlike the base PollingProcessor.start(), this does NOT create a
+        persistent polling loop. It runs discover_work() once and returns.
+        """
+        logger.info("STATE_AUDITOR: Running startup recovery scan")
+        await self.discover_work()
+        logger.info("STATE_AUDITOR: Startup recovery scan complete")
 
     async def discover_work(self) -> None:
         """
@@ -148,8 +162,13 @@ class StateAuditor(PollingProcessor):
                             )
                             # Queue trim task
                             if self.video_processor:
+                                trim_end = getattr(
+                                    self.config.processing, "trim_end_enabled", False
+                                )
                                 await self.video_processor.add_work(
-                                    TrimTask.from_match_info(group_dir, match_info)
+                                    TrimTask.from_match_info(
+                                        group_dir, match_info, trim_end_enabled=trim_end
+                                    )
                                 )
                         else:
                             # Check if we have team info but are missing timing info
@@ -231,6 +250,5 @@ class StateAuditor(PollingProcessor):
             logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
 
     async def stop(self) -> None:
-        """Stop the state auditor and clean up services."""
-        await super().stop()
+        """Clean up services. No polling loop to stop."""
         await self.match_info_service.shutdown()

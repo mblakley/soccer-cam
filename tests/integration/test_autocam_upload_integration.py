@@ -185,7 +185,7 @@ class TestAutocamUploadIntegration:
             # Check state file contents
             with open(autocam_state_file, "r") as f:
                 autocam_state = json.load(f)
-                assert len(autocam_state) == 0, (
+                assert len(autocam_state["queue"]) == 0, (
                     "Autocam state should be empty after processing"
                 )
 
@@ -349,7 +349,7 @@ class TestAutocamUploadIntegration:
 
             with open(autocam_state_file, "r") as f:
                 autocam_state = json.load(f)
-                assert len(autocam_state) == 0, (
+                assert len(autocam_state["queue"]) == 0, (
                     "Autocam state should be empty after processing"
                 )
 
@@ -459,9 +459,9 @@ class TestAutocamUploadIntegration:
                 autocam_state = json.load(f)
 
                 # State should contain the queued item
-                if len(autocam_state) > 0:
+                if len(autocam_state["queue"]) > 0:
                     # Verify state contains the correct task information
-                    task_data = autocam_state[0]
+                    task_data = autocam_state["queue"][0]
                     assert "task_type" in task_data or "item" in task_data, (
                         "Autocam state should contain task information"
                     )
@@ -472,7 +472,7 @@ class TestAutocamUploadIntegration:
             # Verify state is empty after processing
             with open(autocam_state_file, "r") as f:
                 final_autocam_state = json.load(f)
-                assert len(final_autocam_state) == 0, (
+                assert len(final_autocam_state["queue"]) == 0, (
                     "Autocam state should be empty after processing"
                 )
 
@@ -538,7 +538,7 @@ class TestAutocamUploadIntegration:
 
             with open(autocam_state_file, "r") as f:
                 autocam_state = json.load(f)
-                assert len(autocam_state) == 0, (
+                assert len(autocam_state["queue"]) == 0, (
                     "Autocam state should be empty after all processing"
                 )
 

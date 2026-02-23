@@ -293,8 +293,8 @@ class TestCameraPoller:
         mock_dir_state_instance.get_last_file.return_value = mock_last_file
         mock_directory_state.return_value = mock_dir_state_instance
 
-        # New file starting within 15 seconds should use same group
-        file_start_time = datetime(2023, 1, 1, 10, 5, 10)  # 10 seconds after last file
+        # New file starting within 5 seconds should use same group
+        file_start_time = datetime(2023, 1, 1, 10, 5, 3)  # 3 seconds after last file
 
         group_dir = find_group_directory(
             file_start_time, temp_storage, [existing_group]
@@ -321,7 +321,7 @@ class TestCameraPoller:
 
         asyncio.run(dir_state.add_file(existing_file.file_path, existing_file))
 
-        # New file starting more than 15 seconds later should create new group
+        # New file starting more than 5 seconds later should create new group
         file_start_time = datetime(2023, 1, 1, 10, 5, 30)  # 30 seconds after last file
 
         group_dir = find_group_directory(
@@ -397,3 +397,55 @@ class TestCameraPoller:
         await poller._sync_files_from_camera()
 
         mock_download_processor.add_work.assert_not_called()
+
+    @patch("video_grouper.task_processors.camera_poller.DirectoryState")
+    @patch("os.path.exists")
+    def test_find_group_directory_boundary_5s_joins_group(
+        self, mock_exists, mock_directory_state, temp_storage
+    ):
+        """Test that a file exactly 5 seconds after last file joins the same group."""
+        existing_group = os.path.join(temp_storage, "2023.01.01-10.00.00")
+
+        mock_exists.return_value = True
+
+        mock_dir_state_instance = Mock()
+        mock_last_file = Mock()
+        mock_last_file.end_time = datetime(2023, 1, 1, 10, 5, 0)
+        mock_dir_state_instance.get_last_file.return_value = mock_last_file
+        mock_directory_state.return_value = mock_dir_state_instance
+
+        # File starting exactly 5 seconds after last file should join group
+        file_start_time = datetime(2023, 1, 1, 10, 5, 5)
+
+        group_dir = find_group_directory(
+            file_start_time, temp_storage, [existing_group]
+        )
+
+        assert group_dir == existing_group
+
+    def test_find_group_directory_boundary_6s_creates_new_group(self, temp_storage):
+        """Test that a file 6 seconds after last file creates a new group."""
+        existing_group = os.path.join(temp_storage, "2023.01.01-10.00.00")
+        os.makedirs(existing_group)
+
+        dir_state = DirectoryState(existing_group)
+        existing_file = RecordingFile(
+            start_time=datetime(2023, 1, 1, 10, 0, 0),
+            end_time=datetime(2023, 1, 1, 10, 5, 0),
+            file_path=os.path.join(existing_group, "test1.dav"),
+            metadata={"path": "/test1.dav"},
+        )
+        import asyncio
+
+        asyncio.run(dir_state.add_file(existing_file.file_path, existing_file))
+
+        # File starting 6 seconds after last file should create new group
+        file_start_time = datetime(2023, 1, 1, 10, 5, 6)
+
+        group_dir = find_group_directory(
+            file_start_time, temp_storage, [existing_group]
+        )
+
+        expected_new_dir = os.path.join(temp_storage, "2023.01.01-10.05.06")
+        assert group_dir == expected_new_dir
+        assert os.path.exists(group_dir)

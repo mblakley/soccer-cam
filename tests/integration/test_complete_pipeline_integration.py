@@ -237,12 +237,18 @@ class TestCompletePipelineIntegration:
                     try:
                         with open(state_path, "r") as f:
                             state_data = json.load(f)
+                            queue_items = (
+                                state_data["queue"]
+                                if isinstance(state_data, dict)
+                                and "queue" in state_data
+                                else state_data
+                            )
                             # Video processor state may not be empty if ffmpeg fails, which is expected in test environment
                             if state_file == "video_queue_state.json":
                                 # Skip video processor state verification as it may fail due to missing DAV files
                                 continue
                             # State should be empty after processing
-                            assert len(state_data) == 0, (
+                            assert len(queue_items) == 0, (
                                 f"State file {state_file} should be empty after processing"
                             )
                     except FileNotFoundError:
@@ -555,11 +561,17 @@ class TestCompletePipelineIntegration:
                     try:
                         with open(state_path, "r") as f:
                             final_state = json.load(f)
+                            queue_items = (
+                                final_state["queue"]
+                                if isinstance(final_state, dict)
+                                and "queue" in final_state
+                                else final_state
+                            )
                             # Video processor state may not be empty if ffmpeg fails, which is expected in test environment
                             if state_file == "video_queue_state.json":
                                 # Skip video processor state verification as it may fail due to missing DAV files
                                 continue
-                            assert len(final_state) == 0, (
+                            assert len(queue_items) == 0, (
                                 f"State file {state_file} should be empty after processing"
                             )
                     except FileNotFoundError:
@@ -677,11 +689,17 @@ class TestCompletePipelineIntegration:
                     try:
                         with open(state_path, "r") as f:
                             state_data = json.load(f)
+                            queue_items = (
+                                state_data["queue"]
+                                if isinstance(state_data, dict)
+                                and "queue" in state_data
+                                else state_data
+                            )
                             # Video processor state may not be empty if ffmpeg fails, which is expected in test environment
                             if state_file == "video_queue_state.json":
                                 # Skip video processor state verification as it may fail due to missing DAV files
                                 continue
-                            assert len(state_data) == 0, (
+                            assert len(queue_items) == 0, (
                                 f"State file {state_file} should be empty after all processing"
                             )
                     except FileNotFoundError:
