@@ -5,10 +5,10 @@ Autocam Discovery Processor for finding trimmed directories and queuing autocam 
 import logging
 import json
 from pathlib import Path
-import os
 
 from .base_polling_processor import PollingProcessor
 from .tasks.autocam import AutocamTask
+from .autocam_utils import get_autocam_input_output_paths
 from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -56,17 +56,12 @@ class AutocamDiscoveryProcessor(PollingProcessor):
             )
             return
 
-        # Get all currently queued group names
+        # Get all currently queued group names (read-only peek via internal deque)
         queued_group_names = set()
         if self.autocam_processor._queue is not None:
-            temp_queue = []
-            while not self.autocam_processor._queue.empty():
-                item = await self.autocam_processor._queue.get()
+            for item in list(self.autocam_processor._queue._queue):
                 if hasattr(item, "group_dir"):
                     queued_group_names.add(str(item.group_dir))
-                temp_queue.append(item)
-            for item in temp_queue:
-                await self.autocam_processor._queue.put(item)
 
         logger.info(f"AUTOCAM_DISCOVERY: Currently queued groups: {queued_group_names}")
 
@@ -134,26 +129,6 @@ class AutocamDiscoveryProcessor(PollingProcessor):
         logger.info("AUTOCAM_DISCOVERY: Discovery complete")
 
     def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:
-        """
-        Get the input and output paths for autocam processing.
-
-        Args:
-            group_dir: Directory containing the video group
-
-        Returns:
-            Tuple of (input_path, output_path)
-
-        Raises:
-            FileNotFoundError: If no '-raw.mp4' file is found
-        """
-        for root, _, files in os.walk(group_dir):
-            for file in files:
-                if file.endswith("-raw.mp4"):
-                    input_path = Path(root) / file
-                    # Autocam 3.x outputs .mkv format; the task will convert to .mp4 after
-                    output_path = input_path.with_name(
-                        input_path.name.replace("-raw.mp4", ".mkv")
-                    )
-                    return str(input_path), str(output_path)
-
-        raise FileNotFoundError(f"No '-raw.mp4' file found in {group_dir}")
+        """Find the raw video file and determine the autocam output path."""
+        # Autocam 3.x outputs .mkv format; the task will convert to .mp4 after
+        return get_autocam_input_output_paths(group_dir, output_ext="mkv")

@@ -10,6 +10,7 @@ from pathlib import Path
 from .base_queue_processor import QueueProcessor
 from .tasks.autocam import AutocamTask
 from .queue_type import QueueType
+from .autocam_utils import get_autocam_input_output_paths
 from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -113,29 +114,8 @@ class AutocamProcessor(QueueProcessor):
             )
 
     def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:
-        """
-        Find the raw video file and determine the autocam output path.
-
-        Args:
-            group_dir: Directory containing the video group
-
-        Returns:
-            Tuple of (input_path, output_path)
-
-        Raises:
-            FileNotFoundError: If no raw video file is found
-        """
-        video_dir = group_dir / "videos"
-        if video_dir.exists():
-            for f in video_dir.iterdir():
-                if f.name.endswith("-raw.mp4"):
-                    input_path = str(f)
-                    output_path = str(f.with_name(f.name.replace("-raw.mp4", ".mp4")))
-                    return input_path, output_path
-
-        raise FileNotFoundError(
-            f"No raw video file ending with '-raw.mp4' found in {group_dir}"
-        )
+        """Find the raw video file and determine the autocam output path."""
+        return get_autocam_input_output_paths(group_dir, output_ext="mp4")
 
     async def discover_work(self) -> None:
         """

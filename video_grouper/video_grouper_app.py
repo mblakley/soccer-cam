@@ -17,13 +17,6 @@ from video_grouper.task_processors.register_tasks import register_all_tasks
 # Configure logging will be done after config is loaded
 logger = get_logger(__name__)
 
-DEFAULT_STORAGE_PATH = "./shared_data"
-
-
-def create_directory(path):
-    """Create a directory if it doesn't exist."""
-    os.makedirs(path, exist_ok=True)
-
 
 class VideoGrouperApp:
     """
@@ -193,7 +186,7 @@ class VideoGrouperApp:
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
         logger.info("Initializing VideoGrouperApp")
-        create_directory(self.storage_path)
+        os.makedirs(self.storage_path, exist_ok=True)
 
         # Initialize all processors
         for processor in self.processors:
@@ -303,31 +296,22 @@ class VideoGrouperApp:
             "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
         }
 
+    @staticmethod
+    def _processor_status(processor) -> str:
+        """Return 'running', 'stopped', or 'disabled' for a processor."""
+        if processor is None:
+            return "disabled"
+        if processor._processor_task and not processor._processor_task.done():
+            return "running"
+        return "stopped"
+
     def get_processor_status(self):
         """Get status of all processors."""
         return {
             "state_auditor": "startup_only",
-            "camera_poller": "running"
-            if self.camera_poller._processor_task
-            and not self.camera_poller._processor_task.done()
-            else "stopped",
-            "download_processor": "running"
-            if self.download_processor._processor_task
-            and not self.download_processor._processor_task.done()
-            else "stopped",
-            "video_processor": "running"
-            if self.video_processor._processor_task
-            and not self.video_processor._processor_task.done()
-            else "stopped",
-            "upload_processor": "running"
-            if self.upload_processor._processor_task
-            and not self.upload_processor._processor_task.done()
-            else "stopped",
-            "ntfy_processor": "running"
-            if self.ntfy_processor
-            and self.ntfy_processor._processor_task
-            and not self.ntfy_processor._processor_task.done()
-            else "stopped"
-            if self.ntfy_processor
-            else "disabled",
+            "camera_poller": self._processor_status(self.camera_poller),
+            "download_processor": self._processor_status(self.download_processor),
+            "video_processor": self._processor_status(self.video_processor),
+            "upload_processor": self._processor_status(self.upload_processor),
+            "ntfy_processor": self._processor_status(self.ntfy_processor),
         }

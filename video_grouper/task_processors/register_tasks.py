@@ -20,12 +20,3 @@ def register_all_tasks():
     task_registry.register_task(GameEndTask)
     task_registry.register_task(TeamInfoTask)
     task_registry.register_task(YoutubeUploadTask)
-
-
-# Register all task types
-task_registry.register_task(CombineTask)
-task_registry.register_task(TrimTask)
-task_registry.register_task(GameStartTask)
-task_registry.register_task(GameEndTask)
-task_registry.register_task(TeamInfoTask)
-task_registry.register_task(YoutubeUploadTask)
