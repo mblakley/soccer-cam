@@ -23,7 +23,7 @@ class SimulatorCamera(Camera):
     Camera simulator that provides controlled test data for end-to-end testing.
 
     This simulator:
-    - Returns a predefined set of 5 video files recorded 2 hours ago
+    - Returns 6 video files in 2 groups of 3 (with a 10-second gap between groups)
     - Provides realistic file sizes and durations
     - Simulates download behavior with actual small test video files
     - Allows control over connection status for testing connected/disconnected filtering
@@ -56,7 +56,7 @@ class SimulatorCamera(Camera):
         # Add initial connection event
         self._connection_events.append((self._simulator_start_time, "connected"))
 
-        # Generate test files metadata - 5 files recorded 2 hours ago
+        # Generate test files metadata - 6 files in 2 groups recorded 12 hours ago
         self._test_files = self._generate_test_files()
 
         # Create temporary test video files
@@ -67,7 +67,16 @@ class SimulatorCamera(Camera):
         )
 
     def _generate_test_files(self) -> List[Dict[str, Any]]:
-        """Generate metadata for test video files."""
+        """Generate metadata for test video files.
+
+        Creates 6 files in 2 groups of 3:
+        - Group 1: 3 consecutive 1-minute files (no gaps)
+        - 10-second gap (exceeds the 5-second grouping threshold)
+        - Group 2: 3 consecutive 1-minute files (no gaps)
+
+        This produces 2 group directories, proving that queue-based resource
+        gating works when multiple groups compete for the same processor.
+        """
         files = []
 
         # Start time: 12 hours ago in UTC to ensure files are clearly before simulator start
@@ -78,13 +87,21 @@ class SimulatorCamera(Camera):
         utc_now = datetime.now(pytz.utc)
         base_time = utc_now - timedelta(hours=12)
 
-        # Generate 3 video files, each exactly 1 minute long, consecutive (no gaps).
-        # 3 x 1min = 3 minutes combined, sufficient for NTFY to scan game start.
-        # Using 1-minute clips keeps autocam processing time short (~8 min vs 44 min).
+        # Store base_time for mock TeamSnap to align game schedules
+        self.base_time = base_time
+
+        # Generate 6 video files in 2 groups, each exactly 1 minute long.
+        # Using 1-minute clips keeps autocam processing time short (~8 min per group).
         file_duration_seconds = 60
         current_time = base_time
 
-        for i in range(3):
+        for i in range(6):
+            # Insert a 10-second gap between group 1 (files 0-2) and group 2 (files 3-5).
+            # This exceeds the 5-second threshold in find_group_directory(),
+            # forcing creation of a second group directory.
+            if i == 3:
+                current_time = current_time + timedelta(seconds=10)
+
             start_time = current_time
             end_time = current_time + timedelta(seconds=file_duration_seconds)
 
@@ -150,11 +167,12 @@ class SimulatorCamera(Camera):
             safe_filename = f"test_video_{i + 1:02d}_{start_time.strftime('%Y%m%d_%H%M%S')}_{end_time.strftime('%H%M%S')}.dav"
             local_path = os.path.join(self._temp_dir, safe_filename)
 
-            if i < len(clip_files):
-                # Use pre-extracted clip (copy .mp4 as .dav)
-                shutil.copy2(clip_files[i], local_path)
+            if clip_files:
+                # Use pre-extracted clip cyclically (copy .mp4 as .dav)
+                clip_index = i % len(clip_files)
+                shutil.copy2(clip_files[clip_index], local_path)
                 logger.info(
-                    f"Copied pre-extracted clip {clip_files[i]} -> {local_path}"
+                    f"Copied pre-extracted clip {clip_files[clip_index]} -> {local_path}"
                 )
             else:
                 # Fallback: generate with ffmpeg
@@ -212,7 +230,7 @@ class SimulatorCamera(Camera):
         """Get list of recording files from the camera."""
         await asyncio.sleep(0.2)  # Simulate network delay
 
-        # For E2E testing, always return the same 3 test files every time
+        # For E2E testing, always return the same 6 test files every time
         # This simulates finding the same historical files that need to be processed
         logger.info(
             f"Camera simulator returning {len(self._test_files)} files for time range {start_time} to {end_time} (E2E mode)"
