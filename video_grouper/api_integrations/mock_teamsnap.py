@@ -3,10 +3,16 @@ Mock TeamSnap API integration for end-to-end testing.
 
 This module provides a mock implementation of the TeamSnap API that returns
 realistic test data for comprehensive end-to-end testing scenarios.
+
+Two pre-generated games are created at init, timed to align with the simulator's
+2 groups of 3 files. The proximity guard + midpoint heuristic ensures each
+recording group is assigned the correct game:
+  - Group 1 (0:00-3:00 from base_time) -> Hawks vs Eagles
+  - Group 2 (3:10-6:10 from base_time) -> Hawks vs Falcons
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, TypedDict, Union
 
 logger = logging.getLogger(__name__)
@@ -44,65 +50,120 @@ class MockTeamSnapAPI:
     Mock TeamSnap API that provides realistic test data for end-to-end testing.
 
     This mock:
-    - Returns a scheduled match that overlaps with test recording times
-    - Provides realistic team names, locations, and match details
-    - Simulates API response delays and occasional failures
+    - Pre-generates 2 games aligned with the simulator's 2 recording groups
+    - Uses the same proximity guard + midpoint heuristic as the real API
+    - Assigns different opponents to each group for validation
     """
 
     def __init__(self, client_id: str, client_secret: str, access_token: str):
-        """Initialize the mock TeamSnap API."""
+        """Initialize the mock TeamSnap API with 2 pre-generated games."""
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
         self.enabled = True
 
-        logger.info("Mock TeamSnap API initialized")
+        # Pre-generate games aligned with simulator's base_time = now(UTC) - 12h.
+        # Simulator files:
+        #   Group 1: base_time + 0:00 to base_time + 3:00 (3 x 1-min files)
+        #   Group 2: base_time + 3:10 to base_time + 6:10 (3 x 1-min files, after 10s gap)
+        import pytz
+
+        base_time = datetime.now(pytz.utc) - timedelta(hours=12)
+
+        # Game 1: Hawks vs Eagles - overlaps with Group 1
+        # Starts 30s before base_time, ends 3min30s after -> midpoint at ~1min30s
+        game1_start = base_time - timedelta(seconds=30)
+        game1_end = base_time + timedelta(minutes=3, seconds=30)
+
+        # Game 2: Hawks vs Falcons - overlaps with Group 2
+        # Starts at base_time+2min30s, ends at base_time+6min40s -> midpoint at ~4min35s
+        game2_start = base_time + timedelta(minutes=2, seconds=30)
+        game2_end = base_time + timedelta(minutes=6, seconds=40)
+
+        self._games = [
+            MockTeamSnapEvent(
+                id="mock_game_001",
+                name="Hawks vs Eagles",
+                description="League Game 1",
+                start_date=game1_start.isoformat(),
+                end_date=game1_end.isoformat(),
+                duration_in_minutes=int((game1_end - game1_start).total_seconds() / 60),
+                event_type="game",
+                is_game=True,
+                location_name="Central Park Soccer Fields",
+                location_address="Central Park, New York, NY",
+                team_id="team_hawks_456",
+                team_name="Hawks",
+                custom_fields={
+                    "opponent_name": "Eagles",
+                    "field_number": "Field 3",
+                    "source": "TeamSnap",
+                },
+            ),
+            MockTeamSnapEvent(
+                id="mock_game_002",
+                name="Hawks vs Falcons",
+                description="League Game 2",
+                start_date=game2_start.isoformat(),
+                end_date=game2_end.isoformat(),
+                duration_in_minutes=int((game2_end - game2_start).total_seconds() / 60),
+                event_type="game",
+                is_game=True,
+                location_name="Riverside Soccer Fields",
+                location_address="Riverside Park, New York, NY",
+                team_id="team_hawks_456",
+                team_name="Hawks",
+                custom_fields={
+                    "opponent_name": "Falcons",
+                    "field_number": "Field 1",
+                    "source": "TeamSnap",
+                },
+            ),
+        ]
+
+        logger.info(
+            f"Mock TeamSnap API initialized with {len(self._games)} pre-generated games"
+        )
+        for g in self._games:
+            logger.info(
+                f"  Game: {g['name']} from {g['start_date']} to {g['end_date']}"
+            )
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
     ) -> Optional[MockTeamSnapEvent]:
-        """Find a game for the recording timeframe."""
+        """Find the best game for the recording using shared selection logic."""
         logger.info(
             f"Mock TeamSnap: Looking for games between {recording_start} and {recording_end}"
         )
 
-        # Create a game that overlaps with the recording time
-        # Game starts 5 minutes after recording starts and ends 5 minutes before recording ends
-        game_start = recording_start + timedelta(minutes=5)
-        game_end = recording_end - timedelta(minutes=5)
+        # Ensure recording times are timezone-aware (UTC)
+        if recording_start.tzinfo is None:
+            recording_start = recording_start.replace(tzinfo=timezone.utc)
+        if recording_end.tzinfo is None:
+            recording_end = recording_end.replace(tzinfo=timezone.utc)
 
-        # Ensure game duration is reasonable (at least 30 minutes)
-        if (game_end - game_start).total_seconds() < 1800:  # 30 minutes
-            # If the recording is too short, create a game that fits within it
-            game_start = recording_start + timedelta(minutes=2)
-            game_end = recording_end - timedelta(minutes=2)
+        # Parse pre-generated games into (game, start_utc, end_utc) tuples
+        candidates = []
+        for game in self._games:
+            game_start = datetime.fromisoformat(game["start_date"])
+            game_end = datetime.fromisoformat(game["end_date"])
 
-        mock_game = MockTeamSnapEvent(
-            id="mock_game_123",
-            name="Hawks vs Eagles",
-            description="League Championship Game",
-            start_date=game_start.isoformat(),
-            end_date=game_end.isoformat(),
-            duration_in_minutes=int((game_end - game_start).total_seconds() / 60),
-            event_type="game",
-            is_game=True,
-            location_name="Central Park Soccer Fields",
-            location_address="Central Park, New York, NY",
-            team_id="team_hawks_456",
-            team_name="Hawks",
-            custom_fields={
-                "opponent_name": "Eagles",
-                "field_number": "Field 3",
-                "referee": "John Smith",
-                "weather": "Sunny",
-                "source": "TeamSnap",
-            },
+            if game_start.tzinfo is None:
+                game_start = game_start.replace(tzinfo=timezone.utc)
+            if game_end.tzinfo is None:
+                game_end = game_end.replace(tzinfo=timezone.utc)
+
+            candidates.append((game, game_start, game_end))
+
+        from video_grouper.utils.game_selection import select_best_game
+
+        return select_best_game(
+            candidates,
+            recording_start,
+            recording_end,
+            game_label_fn=lambda g: g.get("name", "Unknown"),
         )
-
-        logger.info(
-            f"Mock TeamSnap: Found game '{mock_game['name']}' from {game_start} to {game_end}"
-        )
-        return mock_game
 
     def get_teams(self) -> List[Dict[str, Union[str, int]]]:
         """Get list of teams for the authenticated user."""
@@ -120,9 +181,7 @@ class MockTeamSnapAPI:
         self, team_id: str, start_date: datetime, end_date: datetime
     ) -> List[MockTeamSnapEvent]:
         """Get events for a specific team within a date range."""
-        # For testing, just return our mock game if it's within the range
-        mock_game = self.find_game_for_recording(start_date, end_date)
-        return [mock_game] if mock_game else []
+        return list(self._games)
 
     def get_team_info(self, team_id: str) -> Dict[str, Union[str, int]]:
         """Get information about a specific team."""

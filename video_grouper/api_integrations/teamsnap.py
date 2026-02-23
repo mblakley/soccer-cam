@@ -440,9 +440,9 @@ class TeamSnapAPI:
         recording_start = recording_start.astimezone(pytz.utc)
         recording_end = recording_end.astimezone(pytz.utc)
 
-        # Look for games that overlap with the recording timespan
+        # Parse games into (game, start_utc, end_utc) tuples for shared selection
+        candidates = []
         for game in games:
-            # Parse game start and end times
             game_start_str = game.get("start_date")
             if not game_start_str:
                 continue
@@ -462,25 +462,30 @@ class TeamSnapAPI:
                     duration_minutes = int(duration_minutes)
                 game_end_local = game_start_local + timedelta(minutes=duration_minutes)
 
-                # Convert local game times back to UTC for comparison with recording times
-                game_start_utc_for_comparison = game_start_local.astimezone(pytz.utc)
-                game_end_utc_for_comparison = game_end_local.astimezone(pytz.utc)
+                # Convert local game times back to UTC for comparison
+                game_start_utc_cmp = game_start_local.astimezone(pytz.utc)
+                game_end_utc_cmp = game_end_local.astimezone(pytz.utc)
 
-                # Check if the recording overlaps with the game
-                # (recording starts before game ends AND recording ends after game starts)
-                if (
-                    recording_start <= game_end_utc_for_comparison
-                    and recording_end >= game_start_utc_for_comparison
-                ):
-                    logger.info(
-                        f"Found matching game: {game.get('opponent_name')} at {game_start_local.strftime('%Y-%m-%d %H:%M %Z')} (local time)"
-                    )
-                    return game
+                candidates.append((game, game_start_utc_cmp, game_end_utc_cmp))
             except (ValueError, TypeError) as e:
                 logger.error(f"Error parsing game date: {e}")
 
-        logger.info("No matching game found for recording")
-        # Additional diagnostic logging: list all games on the same calendar day
+        from video_grouper.utils.game_selection import select_best_game
+
+        best = select_best_game(
+            candidates,
+            recording_start,
+            recording_end,
+            game_label_fn=lambda g: g.get("opponent_name", "Unknown"),
+        )
+
+        if best is None:
+            self._log_same_day_games(games, recording_start)
+
+        return best
+
+    def _log_same_day_games(self, games: list, recording_start: datetime) -> None:
+        """Log all games on the same calendar day as the recording for diagnostics."""
         try:
             rec_local = recording_start.astimezone(self._get_configured_timezone())
             rec_date = rec_local.date()
@@ -500,8 +505,6 @@ class TeamSnapAPI:
                 logger.info("TeamSnap games on same day: " + "; ".join(same_day_games))
         except Exception as e:
             logger.warning(f"Diagnostic game-day logging failed: {e}")
-
-        return None
 
     def populate_match_info(
         self,

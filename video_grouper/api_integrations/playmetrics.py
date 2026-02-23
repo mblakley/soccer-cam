@@ -782,31 +782,48 @@ class PlayMetricsAPI:
         recording_start = recording_start.astimezone(timezone.utc)
         recording_end = recording_end.astimezone(timezone.utc)
 
-        # Define the time window for matching (3 hours before and after the game)
-        time_window = timedelta(hours=3)
-
-        # Find games that overlap with the recording time
+        # Parse games into (game, start_utc, end_utc) tuples for shared selection
+        candidates = []
         for game in games:
             game_start = game.get("start_time")
+            game_end = game.get("end_time")
 
-            # Skip if no start time
             if not game_start:
                 continue
 
             # Convert to UTC if needed
             if game_start.tzinfo is None:
                 game_start = game_start.replace(tzinfo=timezone.utc)
+            else:
+                game_start = game_start.astimezone(timezone.utc)
 
-            # Check if the game is within the time window of the recording
-            if (
-                abs(recording_start - game_start) <= time_window
-                or abs(recording_end - game_start) <= time_window
-            ):
-                logger.info(f"Found matching game: {game['title']} at {game_start}")
-                return game
+            if game_end:
+                if game_end.tzinfo is None:
+                    game_end = game_end.replace(tzinfo=timezone.utc)
+                else:
+                    game_end = game_end.astimezone(timezone.utc)
+            else:
+                # Default to 2 hours if no end time
+                game_end = game_start + timedelta(hours=2)
 
-        logger.info("No matching game found for the recording time")
-        # Diagnostic: list all games on the same date as the recording
+            candidates.append((game, game_start, game_end))
+
+        from video_grouper.utils.game_selection import select_best_game
+
+        best = select_best_game(
+            candidates,
+            recording_start,
+            recording_end,
+            game_label_fn=lambda g: g.get("title", "Unknown"),
+        )
+
+        if best is None:
+            self._log_same_day_games(games, recording_start)
+
+        return best
+
+    def _log_same_day_games(self, games: list, recording_start: datetime) -> None:
+        """Log all games on the same calendar day as the recording for diagnostics."""
         try:
             local_tz = self._get_configured_timezone()
             rec_local = recording_start.astimezone(local_tz)
@@ -826,9 +843,7 @@ class PlayMetricsAPI:
             if same_day:
                 logger.info("PlayMetrics games on same day: " + "; ".join(same_day))
         except Exception as e:
-            logger.warning(f"Diagnostic same-day logging failed: {e}")
-
-        return None
+            logger.warning(f"Diagnostic game-day logging failed: {e}")
 
     def populate_match_info(
         self, match_info: GameInfo, recording_start: datetime, recording_end: datetime

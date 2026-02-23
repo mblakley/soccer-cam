@@ -119,6 +119,33 @@ class E2ETestRunner:
         # Stage timestamps for timeout tracking
         self.stage_timestamps: Dict[str, datetime] = {}
 
+        # Multi-group completion tracking: counts how many times key events occur.
+        # With 2 groups, each count must reach 2 for the pipeline to be complete.
+        self.expected_group_count = 2
+        self.multi_group_counts: Dict[str, int] = {
+            "groups_created": 0,
+            "combines_completed": 0,
+            "trims_completed": 0,
+            "autocams_completed": 0,
+            "uploads_completed": 0,
+        }
+        self.multi_group_patterns: Dict[str, List[str]] = {
+            "groups_created": ["Created new group directory"],
+            "combines_completed": [
+                "VIDEO: Successfully completed task: CombineTask",
+            ],
+            "trims_completed": [
+                "VIDEO: Successfully completed task: TrimTask",
+            ],
+            "autocams_completed": [
+                "AUTOCAM: Successfully completed task",
+            ],
+            "uploads_completed": [
+                "UPLOAD: Successfully completed task",
+                "YOUTUBE_UPLOAD: Task completed successfully",
+            ],
+        }
+
         # Expected log patterns for each stage
         self.stage_patterns = {
             "camera_polling": [
@@ -128,6 +155,7 @@ class E2ETestRunner:
             ],
             "files_discovered": [
                 "Found new recording files",
+                "Camera simulator returning 6 files",
                 "Camera simulator returning 5 files",
                 "Camera simulator returning 3 files",
                 "new files to process",
@@ -1089,6 +1117,89 @@ class E2ETestRunner:
             logger.error(f"Error checking match_info files for stage {stage}: {e}")
             return False
 
+    def _update_multi_group_progress(self, log_content: str) -> bool:
+        """
+        Count occurrences of multi-group patterns in the log.
+
+        Returns True if any count increased (resets inactivity timeout).
+        """
+        changed = False
+        for key, patterns in self.multi_group_patterns.items():
+            # Count total occurrences of any pattern for this key
+            count = 0
+            for pattern in patterns:
+                count += log_content.count(pattern)
+            if count > self.multi_group_counts[key]:
+                old = self.multi_group_counts[key]
+                self.multi_group_counts[key] = count
+                changed = True
+                logger.info(
+                    f"Multi-group progress: {key} = {count}/{self.expected_group_count} "
+                    f"(was {old})"
+                )
+        return changed
+
+    def _all_groups_complete(self) -> bool:
+        """Check if all multi-group counts have reached the expected count."""
+        return all(
+            count >= self.expected_group_count
+            for count in self.multi_group_counts.values()
+        )
+
+    def _validate_group_assignments(self) -> bool:
+        """
+        Validate that each group directory got the correct opponent assignment.
+
+        Group 1 (earlier recording) should have opponent = Eagles.
+        Group 2 (later recording) should have opponent = Falcons.
+        """
+        import configparser
+
+        if not self.test_data_path.exists():
+            logger.error("Test data path does not exist for validation")
+            return False
+
+        # Find group directories (skip non-group dirs like 'youtube')
+        group_dirs = []
+        for item in sorted(self.test_data_path.iterdir()):
+            if item.is_dir() and (item / "match_info.ini").exists():
+                group_dirs.append(item)
+
+        if len(group_dirs) < self.expected_group_count:
+            logger.error(
+                f"Expected {self.expected_group_count} group directories with "
+                f"match_info.ini, found {len(group_dirs)}: {group_dirs}"
+            )
+            return False
+
+        # Validate opponents in order (sorted by directory name = chronological)
+        expected_opponents = ["Eagles", "Falcons"]
+        all_valid = True
+
+        for i, (group_dir, expected_opponent) in enumerate(
+            zip(group_dirs, expected_opponents)
+        ):
+            config = configparser.ConfigParser()
+            config.read(group_dir / "match_info.ini", encoding="utf-8")
+
+            actual_opponent = ""
+            if "MATCH" in config:
+                actual_opponent = config["MATCH"].get("opponent_team_name", "").strip()
+
+            if actual_opponent == expected_opponent:
+                logger.info(
+                    f"Group {i + 1} ({group_dir.name}): "
+                    f"opponent = {actual_opponent} -- CORRECT"
+                )
+            else:
+                logger.error(
+                    f"Group {i + 1} ({group_dir.name}): "
+                    f"opponent = '{actual_opponent}', expected '{expected_opponent}'"
+                )
+                all_valid = False
+
+        return all_valid
+
     def _check_timeout(
         self, last_activity_time: datetime, timeout_seconds: int = 65
     ) -> bool:
@@ -1138,34 +1249,41 @@ class E2ETestRunner:
                 last_log_size = current_log_size
 
             # Update pipeline progress and track when stages actually change
+            # Include tray log for autocam patterns (tray agent handles autocam)
+            tray_log_path = self.test_logs_path / "tray_subprocess.log"
+            tray_log_content = self._read_log_file(tray_log_path)
+            all_logs = combined_log_content + "\n" + tray_log_content
+
             updated_stages = self._update_pipeline_progress(combined_log_content)
-            if updated_stages:
+            multi_group_changed = self._update_multi_group_progress(all_logs)
+
+            if updated_stages or multi_group_changed:
                 last_pipeline_change_time = datetime.now()
-                logger.info(f"Pipeline stages updated: {list(updated_stages.keys())}")
+                if updated_stages:
+                    logger.info(
+                        f"Pipeline stages updated: {list(updated_stages.keys())}"
+                    )
 
-            # Determine timeout based on current stage
-            # If autocam has started but not completed, use 5-minute timeout
-            # If upload has started but not completed, use 5-minute timeout
-            # Otherwise use 65-second timeout
+            # Use multi-group counts (not booleans) to detect if heavy stages
+            # are still in progress for group 2 after group 1 completes.
             autocam_started = self.pipeline_stages.get("autocam_started", False)
-            autocam_completed = self.pipeline_stages.get("autocam_completed", False)
+            autocams_done = self.multi_group_counts["autocams_completed"]
             upload_started = self.pipeline_stages.get("upload_started", False)
-            upload_completed = self.pipeline_stages.get("upload_completed", False)
+            uploads_done = self.multi_group_counts["uploads_completed"]
 
-            # Check NTFY conversation stage (real NTFY has network latency + response delay)
             ntfy_queued = self.pipeline_stages.get("ntfy_queued", False)
             timing_populated = self.pipeline_stages.get("timing_info_populated", False)
 
             combining_started = self.pipeline_stages.get("combining_started", False)
-            combining_completed = self.pipeline_stages.get("combining_completed", False)
+            combines_done = self.multi_group_counts["combines_completed"]
             trimming_started = self.pipeline_stages.get("trimming_started", False)
-            trimming_completed = self.pipeline_stages.get("trimming_completed", False)
+            trims_done = self.multi_group_counts["trims_completed"]
 
-            if autocam_started and not autocam_completed:
+            if autocam_started and autocams_done < self.expected_group_count:
                 # Autocam is running - heavy AI processing takes up to 90 minutes
                 timeout_seconds = 5400  # 90 minutes
                 timeout_description = "90 minutes (autocam processing)"
-            elif upload_started and not upload_completed:
+            elif upload_started and uploads_done < self.expected_group_count:
                 # Upload is running - give it 10 minutes for large files
                 timeout_seconds = 600  # 10 minutes
                 timeout_description = "10 minutes (YouTube upload processing)"
@@ -1173,11 +1291,11 @@ class E2ETestRunner:
                 # NTFY conversation in progress - give 3 minutes for multiple rounds
                 timeout_seconds = 180  # 3 minutes
                 timeout_description = "3 minutes (NTFY conversation)"
-            elif combining_started and not combining_completed:
-                # FFmpeg combining large files (stream copy + audio encode) - give 10 minutes
+            elif combining_started and combines_done < self.expected_group_count:
+                # FFmpeg combining large files - give 10 minutes
                 timeout_seconds = 600  # 10 minutes
                 timeout_description = "10 minutes (FFmpeg combining)"
-            elif trimming_started and not trimming_completed:
+            elif trimming_started and trims_done < self.expected_group_count:
                 # FFmpeg trimming large video - give 10 minutes
                 timeout_seconds = 600  # 10 minutes
                 timeout_description = "10 minutes (FFmpeg trimming)"
@@ -1191,25 +1309,45 @@ class E2ETestRunner:
                 last_pipeline_change_time, timeout_seconds=timeout_seconds
             ):
                 logger.error(
-                    f"No pipeline stage changes for {timeout_description}. Last change: {last_pipeline_change_time}"
+                    f"No pipeline stage changes for {timeout_description}. "
+                    f"Last change: {last_pipeline_change_time}"
                 )
                 logger.error("Current pipeline status:")
                 for stage, completed in self.pipeline_stages.items():
                     status = "DONE" if completed else "PENDING"
                     logger.error(f"  {status} {stage}")
+                logger.error("Multi-group completion counts:")
+                for key, count in self.multi_group_counts.items():
+                    status = "DONE" if count >= self.expected_group_count else "PENDING"
+                    logger.error(
+                        f"  {status} {key}: {count}/{self.expected_group_count}"
+                    )
                 return False
 
-            # Check if all stages are complete
-            all_complete = all(self.pipeline_stages.values())
-            if all_complete:
-                logger.info("All pipeline stages completed successfully!")
-                return True
+            # Check if fully complete: all boolean stages AND all groups done
+            all_stages_complete = all(self.pipeline_stages.values())
+            all_groups_complete = self._all_groups_complete()
+
+            if all_stages_complete and all_groups_complete:
+                logger.info("All pipeline stages and multi-group completions done!")
+                # Validate correct game assignment per group
+                if self._validate_group_assignments():
+                    logger.info("Group assignment validation passed!")
+                    return True
+                else:
+                    logger.error("Group assignment validation FAILED!")
+                    return False
 
             # Log current progress
             completed_count = sum(self.pipeline_stages.values())
             total_count = len(self.pipeline_stages)
+            group_summary = ", ".join(
+                f"{k}={v}/{self.expected_group_count}"
+                for k, v in self.multi_group_counts.items()
+            )
             logger.info(
-                f"Pipeline progress: {completed_count}/{total_count} stages complete"
+                f"Pipeline progress: {completed_count}/{total_count} stages, "
+                f"groups: [{group_summary}]"
             )
 
             # Wait before next check
