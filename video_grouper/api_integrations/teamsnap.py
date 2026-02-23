@@ -201,22 +201,25 @@ class TeamSnapAPI:
 
         logger.debug(f"Making {method} request to {url}")
 
-        try:
+        def _execute(hdrs):
             if method == "GET":
-                response = requests.get(url, headers=headers, params=params, timeout=30)
+                return requests.get(url, headers=hdrs, params=params, timeout=30)
             elif method == "POST":
-                response = requests.post(
-                    url, headers=headers, params=params, json=json_data, timeout=30
+                return requests.post(
+                    url, headers=hdrs, params=params, json=json_data, timeout=30
                 )
             elif method == "PATCH":
-                response = requests.patch(
-                    url, headers=headers, params=params, json=json_data, timeout=30
+                return requests.patch(
+                    url, headers=hdrs, params=params, json=json_data, timeout=30
                 )
             elif method == "DELETE":
-                response = requests.delete(
-                    url, headers=headers, params=params, timeout=30
-                )
+                return requests.delete(url, headers=hdrs, params=params, timeout=30)
             else:
+                return None
+
+        try:
+            response = _execute(headers)
+            if response is None:
                 logger.error(f"Unsupported method: {method}")
                 return None
 
@@ -226,36 +229,10 @@ class TeamSnapAPI:
                 logger.warning(
                     "TeamSnap API returned 401 - token may be expired, attempting refresh"
                 )
-                # Try to refresh the token and retry the request once
                 if self.get_access_token():
-                    # Retry the request with the new token
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    if method == "GET":
-                        response = requests.get(
-                            url, headers=headers, params=params, timeout=30
-                        )
-                    elif method == "POST":
-                        response = requests.post(
-                            url,
-                            headers=headers,
-                            params=params,
-                            json=json_data,
-                            timeout=30,
-                        )
-                    elif method == "PATCH":
-                        response = requests.patch(
-                            url,
-                            headers=headers,
-                            params=params,
-                            json=json_data,
-                            timeout=30,
-                        )
-                    elif method == "DELETE":
-                        response = requests.delete(
-                            url, headers=headers, params=params, timeout=30
-                        )
-
-                    if response.status_code == 200:
+                    response = _execute(headers)
+                    if response and response.status_code == 200:
                         return response.json()
 
                 logger.error(

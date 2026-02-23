@@ -131,6 +131,11 @@ class NtfyAPI:
 
         logger.info(f"NTFY integration configured with topic: {self.topic}")
 
+    def _cleanup_pending_message(self, message_id: str):
+        """Clean up pending message tracking."""
+        self.pending_messages.pop(message_id, None)
+        self.message_timestamps.pop(message_id, None)
+
     async def initialize(self):
         """Initialize the NTFY API integration."""
         if not self.enabled:
@@ -423,9 +428,7 @@ class NtfyAPI:
             if future and not future.done():
                 future.set_result(response)
 
-                # Clean up
-                del self.pending_messages[most_recent_id]
-                del self.message_timestamps[most_recent_id]
+                self._cleanup_pending_message(most_recent_id)
 
                 logger.info(
                     f"Processed response for message {most_recent_id}: {response}"
@@ -460,10 +463,7 @@ class NtfyAPI:
 
                 future.set_result(response_data)
 
-                # Clean up
-                del self.pending_messages[message_id]
-                if message_id in self.message_timestamps:
-                    del self.message_timestamps[message_id]
+                self._cleanup_pending_message(message_id)
 
                 logger.info(
                     f"Processed specific response for message {message_id}: {response}"
@@ -475,69 +475,55 @@ class NtfyAPI:
             # Try to handle as a regular response as fallback
             self._handle_response(response)
 
-    async def ask_game_start_time(
-        self, combined_video_path: str, group_dir: str, time_offset_minutes: int = 5
-    ) -> Optional[str]:
-        """
-        Send notification about the need to set game start time.
+    async def _send_screenshot_notification(
+        self,
+        combined_video_path: str,
+        time_offset: str,
+        title: str,
+        message: str,
+        screenshot_name: str = "temp_screenshot.jpg",
+    ) -> bool:
+        """Create a screenshot, compress it, send a notification, and clean up.
 
         Args:
-            combined_video_path: Path to the combined video file
-            group_dir: Path to the group directory
-            time_offset_minutes: Minutes between screenshots
+            combined_video_path: Path to the video file.
+            time_offset: Time offset for the screenshot (e.g. "00:00:00").
+            title: Notification title.
+            message: Notification message.
+            screenshot_name: Filename for the temporary screenshot.
 
         Returns:
-            None as we're not getting input, just sending notifications
+            True if the notification was sent successfully.
         """
-        if not self.enabled:
-            logger.warning(
-                "NTFY integration not enabled - cannot send game start time notification"
-            )
-            return None
+        screenshot_path = os.path.join(
+            os.path.dirname(combined_video_path), screenshot_name
+        )
 
-        # Create screenshots at different times in the video
+        screenshot_created = await create_screenshot(
+            combined_video_path, screenshot_path, time_offset=time_offset
+        )
+
+        if not screenshot_created:
+            logger.error(
+                f"Failed to create screenshot at {time_offset} of video {combined_video_path}"
+            )
+            return False
+
+        # Compress the screenshot
+        screenshot_path = await compress_image(
+            screenshot_path, quality=60, max_width=800
+        )
+
         try:
-            # Get video duration
-            duration = await get_video_duration(combined_video_path)
-            if not duration:
-                logger.error(f"Failed to get video duration for {combined_video_path}")
-                return None
-
-            if duration:
-                if re.match(r"^\d{1,2}:\d{2}:\d{2}$", duration):
-                    h, m, s = map(int, duration.split(":"))
-                else:
-                    int(duration)
-
-            # Create a screenshot at the beginning of the video
-            screenshot_path = os.path.join(
-                os.path.dirname(combined_video_path), "temp_screenshot_start.jpg"
-            )
-
-            screenshot_created = await create_screenshot(
-                combined_video_path, screenshot_path, time_offset="00:00:00"
-            )
-
-            if not screenshot_created:
-                logger.error(
-                    f"Failed to create screenshot at start of video {combined_video_path}"
-                )
-                return None
-
-            # Compress the screenshot
-            screenshot_path = await compress_image(
-                screenshot_path, quality=60, max_width=800
-            )
-
-            # Send notification with the screenshot
             await self.send_notification(
-                message=f"Game start time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
-                title="Set Game Start Time",
+                message=message,
+                title=title,
                 tags=["warning", "info"],
                 priority=4,
                 image_path=screenshot_path,
             )
-
+            return True
+        finally:
             # Clean up the screenshot
             if os.path.exists(screenshot_path):
                 try:
@@ -547,10 +533,33 @@ class NtfyAPI:
                         f"Failed to remove screenshot {screenshot_path}: {e}"
                     )
 
+    async def ask_game_start_time(
+        self, combined_video_path: str, group_dir: str, time_offset_minutes: int = 5
+    ) -> Optional[str]:
+        """Send notification about the need to set game start time."""
+        if not self.enabled:
+            logger.warning(
+                "NTFY integration not enabled - cannot send game start time notification"
+            )
+            return None
+
+        try:
+            duration = await get_video_duration(combined_video_path)
+            if not duration:
+                logger.error(f"Failed to get video duration for {combined_video_path}")
+                return None
+
+            await self._send_screenshot_notification(
+                combined_video_path,
+                time_offset="00:00:00",
+                title="Set Game Start Time",
+                message=f"Game start time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
+                screenshot_name="temp_screenshot_start.jpg",
+            )
+
             logger.info(
                 f"Sent notification about setting game start time for {group_dir}"
             )
-
         except Exception as e:
             logger.error(
                 f"Error creating screenshots for game start time notification: {e}"
@@ -565,74 +574,30 @@ class NtfyAPI:
         start_time_offset: str,
         time_offset_minutes: int = 5,
     ) -> Optional[str]:
-        """
-        Send notification about the need to set game end time.
-
-        Args:
-            combined_video_path: Path to the combined video file
-            group_dir: Path to the group directory
-            start_time_offset: Start time offset in HH:MM:SS format
-            time_offset_minutes: Minutes between screenshots
-
-        Returns:
-            None as we're not getting input, just sending notifications
-        """
+        """Send notification about the need to set game end time."""
         if not self.enabled:
             logger.warning(
                 "NTFY integration not enabled - cannot send game end time notification"
             )
             return None
 
-        # Create screenshots at different times in the video
         try:
-            # Get video duration
             duration = await get_video_duration(combined_video_path)
             if not duration:
                 logger.error(f"Failed to get video duration for {combined_video_path}")
                 return None
 
-            # Create a screenshot at the beginning of the video
-            screenshot_path = os.path.join(
-                os.path.dirname(combined_video_path), "temp_screenshot_end.jpg"
-            )
-
-            screenshot_created = await create_screenshot(
-                combined_video_path, screenshot_path, time_offset=start_time_offset
-            )
-
-            if not screenshot_created:
-                logger.error(
-                    f"Failed to create screenshot at {start_time_offset} of video {combined_video_path}"
-                )
-                return None
-
-            # Compress the screenshot
-            screenshot_path = await compress_image(
-                screenshot_path, quality=60, max_width=800
-            )
-
-            # Send notification with the screenshot
-            await self.send_notification(
-                message=f"Game end time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
+            await self._send_screenshot_notification(
+                combined_video_path,
+                time_offset=start_time_offset,
                 title="Set Game End Time",
-                tags=["warning", "info"],
-                priority=4,
-                image_path=screenshot_path,
+                message=f"Game end time needs to be set manually in match_info.ini for {os.path.basename(group_dir)}",
+                screenshot_name="temp_screenshot_end.jpg",
             )
-
-            # Clean up the screenshot
-            if os.path.exists(screenshot_path):
-                try:
-                    os.remove(screenshot_path)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to remove screenshot {screenshot_path}: {e}"
-                    )
 
             logger.info(
                 f"Sent notification about setting game end time for {group_dir}"
             )
-
         except Exception as e:
             logger.error(
                 f"Error creating screenshots for game end time notification: {e}"
@@ -771,11 +736,7 @@ class NtfyAPI:
                 logger.warning(
                     f"Timed out waiting for response to message {message_id}"
                 )
-                # Clean up the pending message
-                if message_id in self.pending_messages:
-                    del self.pending_messages[message_id]
-                    if message_id in self.message_timestamps:
-                        del self.message_timestamps[message_id]
+                self._cleanup_pending_message(message_id)
                 return {"is_affirmative": False, "message": "Timeout"}
         else:
             logger.warning(f"No pending message with ID {message_id}")
@@ -826,56 +787,33 @@ class NtfyAPI:
                 directory_name = os.path.basename(group_dir)
                 directory_info = f" in directory: {directory_name}"
 
-            # Create a screenshot if video path provided
-            screenshot_path = None
+            # Determine screenshot time offset (middle of video)
+            time_offset = "00:00:01"
             if combined_video_path and os.path.exists(combined_video_path):
                 try:
-                    # Create a screenshot at the middle of the video
                     duration = await get_video_duration(combined_video_path)
                     if duration:
-                        # Take screenshot at the middle
                         mid_point = int(duration) // 2
-                        time_str = str(timedelta(seconds=mid_point)).split(".")[0]
-
-                        # Create temporary screenshot
-                        formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        screenshot_path = os.path.join(
-                            os.path.dirname(combined_video_path),
-                            f"temp_screenshot_{formatted_datetime}.jpg",
-                        )
-
-                        screenshot_created = await create_screenshot(
-                            combined_video_path, screenshot_path, time_offset=time_str
-                        )
-
-                        if not screenshot_created:
-                            screenshot_path = None
-                        else:
-                            # Compress the screenshot
-                            screenshot_path = await compress_image(
-                                screenshot_path, quality=60, max_width=800
-                            )
+                        time_offset = str(timedelta(seconds=mid_point)).split(".")[0]
                 except Exception as e:
-                    logger.error(f"Error creating screenshot: {e}")
-                    screenshot_path = None
+                    logger.error(f"Error getting video duration: {e}")
 
-            # Send the notification
-            await self.send_notification(
-                message=f"Missing match information{directory_info}: {missing_fields_str}. Please update match_info.ini manually.",
-                title="Missing Match Information",
-                tags=["warning", "info"],
-                priority=4,
-                image_path=screenshot_path,
-            )
-
-            # Clean up the screenshot if it exists
-            if screenshot_path and os.path.exists(screenshot_path):
-                try:
-                    os.remove(screenshot_path)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to remove screenshot {screenshot_path}: {e}"
-                    )
+            # Send notification with screenshot
+            if combined_video_path and os.path.exists(combined_video_path):
+                await self._send_screenshot_notification(
+                    combined_video_path,
+                    time_offset=time_offset,
+                    title="Missing Match Information",
+                    message=f"Missing match information{directory_info}: {missing_fields_str}. Please update match_info.ini manually.",
+                    screenshot_name=f"temp_screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg",
+                )
+            else:
+                await self.send_notification(
+                    message=f"Missing match information{directory_info}: {missing_fields_str}. Please update match_info.ini manually.",
+                    title="Missing Match Information",
+                    tags=["warning", "info"],
+                    priority=4,
+                )
 
             logger.info(
                 f"Sent notification about missing match information: {missing_fields_str}"
@@ -920,63 +858,34 @@ class NtfyAPI:
             f"Asking user to resolve conflict between {len(game_options)} games"
         )
 
-        # Create a screenshot from a random point in the video for context
-        screenshot_path = None
+        # Determine screenshot time offset (middle third of video)
+        time_offset = "00:00:01"
         if combined_video_path and os.path.exists(combined_video_path):
             try:
-                # Get video duration
                 duration = await get_video_duration(combined_video_path)
-                if duration:
-                    # If duration is a string (e.g., "01:30:00"), convert to seconds
-                    if isinstance(duration, str):
-                        try:
-                            parts = list(map(int, duration.split(":")))
-                            if len(parts) == 3:
-                                duration = parts[0] * 3600 + parts[1] * 60 + parts[2]
-                            elif len(parts) == 2:
-                                duration = parts[0] * 60 + parts[1]
-                            else:
-                                duration = int(duration)
-                        except Exception:
-                            duration = 0
-
-                    # Ensure duration is int seconds
-                    if isinstance(duration, (int, float)) and duration > 0:
-                        import random
-
-                        start_point = int(duration) // 3
-                        end_point = int(duration) * 2 // 3
-                    else:
-                        start_point = 0
-                        end_point = 1
-
-                    random_point = random.randint(start_point, end_point)
-                    time_str = str(timedelta(seconds=random_point)).split(".")[0]
-
-                    # Create temporary screenshot
-                    formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    screenshot_path = os.path.join(
-                        os.path.dirname(combined_video_path),
-                        f"temp_screenshot_conflict_{formatted_datetime}.jpg",
-                    )
-
-                    screenshot_created = await create_screenshot(
-                        combined_video_path, screenshot_path, time_offset=time_str
-                    )
-
-                    if not screenshot_created:
-                        logger.error(
-                            "Failed to create screenshot for game conflict resolution"
-                        )
-                        screenshot_path = None
-                    else:
-                        # Compress the screenshot
-                        screenshot_path = await compress_image(
-                            screenshot_path, quality=60, max_width=800
-                        )
+                if duration and isinstance(duration, (int, float)) and duration > 0:
+                    mid_point = int(duration) // 2
+                    time_offset = str(timedelta(seconds=mid_point)).split(".")[0]
             except Exception as e:
-                logger.error(f"Error creating screenshot for game conflict: {e}")
-                screenshot_path = None
+                logger.error(f"Error getting video duration for conflict: {e}")
+
+        # Create and compress a screenshot for context
+        screenshot_path = None
+        if combined_video_path and os.path.exists(combined_video_path):
+            formatted_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_name = f"temp_screenshot_conflict_{formatted_datetime}.jpg"
+            temp_path = os.path.join(
+                os.path.dirname(combined_video_path), screenshot_name
+            )
+            screenshot_created = await create_screenshot(
+                combined_video_path, temp_path, time_offset=time_offset
+            )
+            if screenshot_created:
+                screenshot_path = await compress_image(
+                    temp_path, quality=60, max_width=800
+                )
+            else:
+                logger.error("Failed to create screenshot for game conflict resolution")
 
         # Create a unique message ID for this request
         message_id = f"game_conflict_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -1043,10 +952,7 @@ class NtfyAPI:
 
         if not sent:
             logger.error("Failed to send game conflict notification")
-            if message_id in self.pending_messages:
-                del self.pending_messages[message_id]
-            if message_id in self.message_timestamps:
-                del self.message_timestamps[message_id]
+            self._cleanup_pending_message(message_id)
             return None
 
         # Clean up the screenshot if it exists
@@ -1106,9 +1012,5 @@ class NtfyAPI:
 
         except asyncio.TimeoutError:
             logger.warning("Timed out waiting for game conflict resolution")
-            # Clean up the pending message
-            if message_id in self.pending_messages:
-                del self.pending_messages[message_id]
-            if message_id in self.message_timestamps:
-                del self.message_timestamps[message_id]
+            self._cleanup_pending_message(message_id)
             return None

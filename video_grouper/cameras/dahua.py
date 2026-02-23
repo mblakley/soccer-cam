@@ -108,6 +108,30 @@ class DahuaCamera(Camera):
         except Exception as e:
             logger.error(f"Error saving camera state: {e}")
 
+    def _get_local_timezone(self):
+        """Get the local timezone from config, falling back to America/New_York then UTC."""
+        timezone_str = getattr(self.config, "timezone", None)
+        if not timezone_str and hasattr(self.config, "app"):
+            timezone_str = getattr(self.config.app, "timezone", None)
+        if not timezone_str:
+            timezone_str = "America/New_York"
+        try:
+            return pytz.timezone(timezone_str)
+        except pytz.UnknownTimeZoneError:
+            logger.warning(f"Unknown timezone '{timezone_str}', falling back to UTC")
+            return pytz.utc
+
+    def _record_connection_event(self, event_type: str, message: str):
+        """Record a connection/disconnection event and save state."""
+        local_tz = self._get_local_timezone()
+        event: ConnectionEvent = {
+            "event_datetime": datetime.now(local_tz).isoformat(),
+            "event_type": event_type,
+            "message": message,
+        }
+        self._connection_events.append(event)
+        self._save_state()
+
     def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
         """Returns a list of timeframes when the camera was connected."""
         timeframes = []
@@ -153,23 +177,6 @@ class DahuaCamera(Camera):
                 client = httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
                 close_client = True
 
-            # Get timezone from config
-            timezone_str = getattr(self.config, "timezone", None)
-            if not timezone_str and hasattr(self.config, "app"):
-                timezone_str = getattr(self.config.app, "timezone", None)
-            if not timezone_str:
-                timezone_str = "America/New_York"
-            try:
-                local_tz = pytz.timezone(timezone_str)
-            except pytz.UnknownTimeZoneError:
-                logger.warning(
-                    f"Unknown timezone '{timezone_str}', falling back to UTC"
-                )
-                local_tz = pytz.utc
-
-            def now_local_iso():
-                return datetime.now(local_tz).isoformat()
-
             try:
                 logger.debug(f"Making request to: {url}")
                 response = await client.get(url, auth=auth)
@@ -178,49 +185,30 @@ class DahuaCamera(Camera):
                 if response.status_code == 200:
                     if not self._is_connected:
                         self._is_connected = True
-                        event: ConnectionEvent = {
-                            "event_datetime": now_local_iso(),
-                            "event_type": "connected",
-                            "message": "Successfully connected to camera.",
-                        }
-                        self._connection_events.append(event)
-                        self._save_state()
+                        self._record_connection_event(
+                            "connected", "Successfully connected to camera."
+                        )
                     return True
                 else:
                     if self._is_connected:
                         self._is_connected = False
-                        event: ConnectionEvent = {
-                            "event_datetime": now_local_iso(),
-                            "event_type": "disconnected",
-                            "message": f"Connection failed with status code: {response.status_code}",
-                        }
-                        self._connection_events.append(event)
+                        self._record_connection_event(
+                            "disconnected",
+                            f"Connection failed with status code: {response.status_code}",
+                        )
                         logger.info(f"Camera is not available at {self.device_ip}")
-                        self._save_state()
                     return False
             except httpx.ConnectError as e:
                 logger.info(f"Unable to connect to camera at {self.device_ip}: {e}")
                 if self._is_connected:
                     self._is_connected = False
-                    event: ConnectionEvent = {
-                        "event_datetime": now_local_iso(),
-                        "event_type": "disconnected",
-                        "message": str(e),
-                    }
-                    self._connection_events.append(event)
-                    self._save_state()
+                    self._record_connection_event("disconnected", str(e))
                 return False
             except httpx.RequestError as e:
                 logger.info(f"Request to camera at {self.device_ip} failed")
                 if self._is_connected:
                     self._is_connected = False
-                    event: ConnectionEvent = {
-                        "event_datetime": now_local_iso(),
-                        "event_type": "disconnected",
-                        "message": str(e),
-                    }
-                    self._connection_events.append(event)
-                    self._save_state()
+                    self._record_connection_event("disconnected", str(e))
                 return False
             except Exception as e:
                 logger.error(f"Request to {url} failed with error: {e}")
@@ -232,26 +220,7 @@ class DahuaCamera(Camera):
             logger.error(f"Error checking camera availability: {e}", exc_info=True)
             if self._is_connected:
                 self._is_connected = False
-                # Get timezone from config (again, for safety)
-                timezone_str = getattr(self.config, "timezone", None)
-                if not timezone_str and hasattr(self.config, "app"):
-                    timezone_str = getattr(self.config.app, "timezone", None)
-                if not timezone_str:
-                    timezone_str = "America/New_York"
-                try:
-                    local_tz = pytz.timezone(timezone_str)
-                except pytz.UnknownTimeZoneError:
-                    logger.warning(
-                        f"Unknown timezone '{timezone_str}', falling back to UTC"
-                    )
-                    local_tz = pytz.utc
-                event: ConnectionEvent = {
-                    "event_datetime": datetime.now(local_tz).isoformat(),
-                    "event_type": "disconnected",
-                    "message": str(e),
-                }
-                self._connection_events.append(event)
-                self._save_state()
+                self._record_connection_event("disconnected", str(e))
             return False
 
     async def get_file_list(

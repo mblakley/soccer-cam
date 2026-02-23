@@ -143,14 +143,6 @@ class DirectoryState:
         """Get a file by its full path."""
         return self.files.get(file_path)
 
-    def get_file_by_status(self, status: str) -> list[RecordingFile]:
-        """Get all files with the specified status."""
-        return [
-            f
-            for f in self.files.values()
-            if hasattr(f, "status") and f.status == status
-        ]
-
     def get_last_file(self) -> Optional[RecordingFile]:
         """Returns the last file in the group based on end time."""
         if not self.files:
@@ -203,21 +195,11 @@ class DirectoryState:
         # All of the remaining files must be in the 'downloaded' state.
         return all(f.status == "downloaded" for f in files_to_consider)
 
-    def is_file_in_queue(self, file_path: str) -> bool:
-        """Check if a file is already in the directory state."""
-        return file_path in self.files
-
     async def mark_file_as_skipped(self, file_path: str) -> None:
         """Marks a file to be skipped in future processing, without changing its status."""
         async with self._lock:
             if file_path in self.files:
                 self.files[file_path].skip = True
-                self._save_state_nolock()
-
-    async def update_file_status(self, file_path: str, status: str):
-        async with self._lock:
-            if file_path in self.files:
-                self.files[file_path].status = status
                 self._save_state_nolock()
 
     async def update_group_status(

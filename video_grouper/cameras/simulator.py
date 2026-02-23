@@ -9,9 +9,14 @@ end-to-end testing scenarios.
 import asyncio
 import logging
 import os
+import random
+import shutil
+import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+
+import pytz
 
 from .base import Camera, DeviceInfo
 
@@ -82,8 +87,6 @@ class SimulatorCamera(Camera):
         # Start time: 12 hours ago in UTC to ensure files are clearly before simulator start
         # The simulator starts at current time, so files should be 12+ hours old to avoid overlap
         # after timezone conversion (EST to UTC adds 4 hours, so 12 hours ago becomes 8 hours ago in UTC)
-        import pytz
-
         utc_now = datetime.now(pytz.utc)
         base_time = utc_now - timedelta(hours=12)
 
@@ -143,8 +146,6 @@ class SimulatorCamera(Camera):
 
     def _create_test_video_files(self) -> None:
         """Create test video files by copying pre-extracted clips or generating them."""
-        import shutil
-
         self._temp_dir = tempfile.mkdtemp(prefix="camera_sim_")
         self._test_file_paths = {}
 
@@ -182,8 +183,6 @@ class SimulatorCamera(Camera):
 
     def _generate_fallback_video(self, local_path: str) -> None:
         """Generate a fallback test video file using ffmpeg or dummy data."""
-        import subprocess
-
         temp_mp4_path = local_path.replace(".dav", ".mp4")
         try:
             cmd = [
@@ -215,8 +214,6 @@ class SimulatorCamera(Camera):
     async def check_availability(self) -> bool:
         """Check if the camera is available."""
         # Simulate occasional network issues (5% chance of failure)
-        import random
-
         if random.random() < 0.05:
             logger.debug("Simulating camera availability check failure")
             return False
@@ -295,8 +292,6 @@ class SimulatorCamera(Camera):
             await asyncio.sleep(download_time)
 
             # Copy the test file
-            import shutil
-
             shutil.copy2(source_path, local_path)
 
             logger.info(f"Successfully downloaded {file_path} to {local_path}")
@@ -358,8 +353,6 @@ class SimulatorCamera(Camera):
     def cleanup(self) -> None:
         """Clean up temporary test files."""
         if hasattr(self, "_temp_dir") and os.path.exists(self._temp_dir):
-            import shutil
-
             shutil.rmtree(self._temp_dir)
             logger.info(f"Cleaned up temporary test files in {self._temp_dir}")
 

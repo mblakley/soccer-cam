@@ -164,20 +164,39 @@ async def async_convert_file(file_path: str) -> Optional[str]:
         return None
 
 
+async def _run_ffmpeg_checked(
+    cmd: list[str], operation: str, timeout: int = FFMPEG_TIMEOUT
+) -> bool:
+    """Run an FFmpeg command with standardized error handling.
+
+    Args:
+        cmd: The FFmpeg command to run.
+        operation: Human-readable description for log messages.
+        timeout: Timeout in seconds.
+
+    Returns:
+        True on success, False on failure.
+    """
+    try:
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=timeout)
+        if returncode == 0:
+            logger.info(f"Successfully {operation}")
+            return True
+        else:
+            logger.error(f"Failed to {operation}: {stderr.decode()}")
+            return False
+    except asyncio.TimeoutError:
+        logger.error(f"{operation} timed out after {timeout}s")
+        return False
+    except Exception as e:
+        logger.error(f"Error during {operation}: {e}")
+        return False
+
+
 async def create_screenshot(
     video_path: str, output_path: str, time_offset: str = "00:00:01"
 ) -> bool:
-    """
-    Creates a screenshot from a video file using ffmpeg.
-
-    Args:
-        video_path: Path to the input video file.
-        output_path: Path to save the output screenshot.
-        time_offset: Time in seconds to take the screenshot from.
-
-    Returns:
-        True if successful, False otherwise.
-    """
+    """Creates a screenshot from a video file using ffmpeg."""
     cmd = [
         "ffmpeg",
         "-ss",
@@ -191,38 +210,17 @@ async def create_screenshot(
         output_path,
         "-y",
     ]
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=60)
-        if returncode == 0:
-            logger.info(
-                f"Successfully created screenshot for {os.path.basename(video_path)}"
-            )
-            return True
-        else:
-            logger.error(
-                f"Failed to create screenshot for {os.path.basename(video_path)}: {stderr.decode()}"
-            )
-            return False
-    except asyncio.TimeoutError:
-        logger.error(f"Screenshot timed out for {os.path.basename(video_path)}")
-        return False
+    return await _run_ffmpeg_checked(
+        cmd,
+        f"created screenshot for {os.path.basename(video_path)}",
+        timeout=60,
+    )
 
 
 async def trim_video(
     input_path: str, output_path: str, start_offset: str, duration: Optional[str] = None
 ) -> bool:
-    """
-    Trims a video file using ffmpeg.
-
-    Args:
-        input_path: Path to the input video file.
-        output_path: Path to save the output trimmed video.
-        start_offset: The start time for the trim (e.g., "00:00:10").
-        duration: The duration of the trim (e.g., "00:05:00").
-
-    Returns:
-        True if successful, False otherwise.
-    """
+    """Trims a video file using ffmpeg."""
     cmd = [
         "ffmpeg",
         "-y",
@@ -238,141 +236,34 @@ async def trim_video(
     cmd.extend(["-c", "copy", output_path])
 
     logger.info(f"Running ffmpeg trim command: {' '.join(cmd)}")
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
-
-        if returncode == 0:
-            logger.info(
-                f"Successfully trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}"
-            )
-            return True
-        else:
-            logger.error(
-                f"Failed to trim {os.path.basename(input_path)}: {stderr.decode()}"
-            )
-            return False
-    except asyncio.TimeoutError:
-        logger.error(
-            f"Trim timed out for {os.path.basename(input_path)} after {FFMPEG_TIMEOUT}s"
-        )
-        return False
+    return await _run_ffmpeg_checked(
+        cmd,
+        f"trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}",
+    )
 
 
 async def combine_videos(file_list_path: str, output_path: str) -> bool:
-    """
-    Combines multiple video files into a single MP4 using FFmpeg concat demuxer.
-
-    Args:
-        file_list_path: Path to the filelist.txt containing the list of video files to combine.
-        output_path: Path where the combined video will be saved.
-
-    Returns:
-        True if successful, False otherwise.
-    """
+    """Combines multiple video files into a single MP4 using FFmpeg concat demuxer."""
     cmd = [
         "ffmpeg",
-        "-y",  # Overwrite output file
+        "-y",
         "-f",
-        "concat",  # Use concat demuxer
+        "concat",
         "-safe",
-        "0",  # Allow unsafe file names
+        "0",
         "-i",
-        file_list_path,  # Input file list
+        file_list_path,
         "-c:v",
-        "copy",  # Copy video stream
+        "copy",
         "-c:a",
-        "aac",  # Re-encode audio to AAC
+        "aac",
         "-b:a",
-        "192k",  # Audio bitrate
+        "192k",
         output_path,
     ]
 
     logger.info(f"Running ffmpeg combine command: {' '.join(cmd)}")
-
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
-
-        if returncode == 0:
-            logger.info(
-                f"Successfully combined videos to {os.path.basename(output_path)}"
-            )
-            return True
-        else:
-            logger.error(f"Failed to combine videos: {stderr.decode()}")
-            return False
-
-    except asyncio.TimeoutError:
-        logger.error(f"Combine timed out after {FFMPEG_TIMEOUT}s")
-        return False
-    except Exception as e:
-        logger.error(f"Error combining videos: {e}")
-        return False
-
-
-async def trim_video_advanced(
-    input_path: str, output_path: str, start_time: str, end_time: str
-) -> bool:
-    """
-    Advanced video trimming with frame-drop removal and re-encoding.
-
-    Args:
-        input_path: Path to the input video file.
-        output_path: Path to save the output trimmed video.
-        start_time: The start time for the trim (e.g., "00:00:10").
-        end_time: The end time for the trim (e.g., "00:05:00").
-
-    Returns:
-        True if successful, False otherwise.
-    """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-fflags",
-        "+discardcorrupt",
-        "-err_detect",
-        "ignore_err",
-        "-i",
-        input_path,
-        "-ss",
-        start_time,
-        "-to",
-        end_time,
-        "-vf",
-        "mpdecimate,setpts=N/25/TB",
-        "-r",
-        "25",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "18",
-        "-preset",
-        "slow",
-        "-c:a",
-        "copy",
-        output_path,
-    ]
-
-    logger.info(f"Running advanced ffmpeg trim command: {' '.join(cmd)}")
-
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
-
-        if returncode == 0:
-            logger.info(
-                f"Successfully trimmed video with advanced processing to {os.path.basename(output_path)}"
-            )
-            return True
-        else:
-            logger.error(
-                f"Failed to trim video with advanced processing: {stderr.decode()}"
-            )
-            return False
-
-    except asyncio.TimeoutError:
-        logger.error(
-            f"Advanced trim timed out for {os.path.basename(input_path)} after {FFMPEG_TIMEOUT}s"
-        )
-        return False
-    except Exception as e:
-        logger.error(f"Error trimming video with advanced processing: {e}")
-        return False
+    return await _run_ffmpeg_checked(
+        cmd,
+        f"combined videos to {os.path.basename(output_path)}",
+    )
