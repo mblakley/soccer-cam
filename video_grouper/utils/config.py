@@ -197,6 +197,12 @@ class TTTConfig(BaseModel):
     plugin_sync_interval: int = 3600
 
 
+class MomentTaggingConfig(BaseModel):
+    enabled: bool = False
+    api_base_url: str = "http://localhost:8000"
+    service_role_key: str = ""
+
+
 class YouTubePlaylistConfig(BaseModel):
     name_format: str
     description: str
@@ -247,6 +253,9 @@ class Config(BaseModel):
     autocam: AutocamConfig = Field(alias="AUTOCAM")
     cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
+    moment_tagging: MomentTaggingConfig = Field(
+        default_factory=MomentTaggingConfig, alias="MOMENT_TAGGING"
+    )
 
     model_config = {"validate_by_name": True}
 

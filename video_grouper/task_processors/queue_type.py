@@ -15,3 +15,4 @@ class QueueType(Enum):
     YOUTUBE = "youtube"
     AUTOCAM = "autocam"
     CLIP_REQUEST = "clip_request"
+    CLIPS = "clips"
