@@ -3,8 +3,8 @@
 **Status**: NOT STARTED
 **Depends on**: SC-3 (clip generation pipeline must be working)
 **Goal**: Extend the clip pipeline to compile per-player highlight reels from
-individual clips, upload them to Supabase Storage, send NTFY push notifications,
-and optionally upload to YouTube.
+individual clips, upload them to Supabase Storage and YouTube, and send NTFY
+push notifications.
 
 ---
 
@@ -13,15 +13,16 @@ and optionally upload to YouTube.
 When a user requests a highlight reel (via the mobile app), the team-tech-tools
 API creates a `highlight_reels` row with status="pending". Soccer-cam's
 ClipDiscoveryProcessor (from SC-3) is extended to also check for pending
-highlight reels, and queues a HighlightCompilationTask when all clips for the
-reel are ready.
+highlight reels via the API, and queues a HighlightCompilationTask when all
+clips for the reel are ready.
 
 ### Compilation flow
 
 ```
 ClipDiscoveryProcessor (extended from SC-3)
-  └─> Checks for pending highlight_reels
-  └─> Verifies all linked clips have status="ready"
+  └─> Calls API: get pending highlight_reels
+  └─> Calls API: get clips linked to each reel
+  └─> Verifies all clips have status="ready"
   └─> Queues HighlightCompilationTask
       │
 ClipProcessor (reuses SC-3's queue)
@@ -29,23 +30,23 @@ ClipProcessor (reuses SC-3's queue)
   └─> Creates FFmpeg concat file list (chronological order)
   └─> combine_videos() → highlight_reel.mp4
   └─> Upload to Supabase Storage
-  └─> Update highlight_reels row (status: "ready", storage_url)
+  └─> Upload to YouTube (direct, reusing existing YouTubeUploader)
+  └─> Calls API: update highlight_reels (status: "ready", storage_url)
   └─> Send NTFY notification
-  └─> Optional: upload to YouTube
 ```
+
+### YouTube upload
+
+Highlight reels are uploaded directly from soccer-cam to YouTube, following
+the same pattern as the existing `UploadProcessor` / `YouTubeUploader`. This
+keeps the upload flow consistent — soccer-cam already handles YouTube OAuth
+tokens, playlist management, and retry logic.
 
 ### NTFY notification
 
-Reuse the existing NtfyAPI to send a push notification when a highlight reel
-is ready. Include the player name, game date, and a direct link to the storage
-URL. This uses a simple `send_notification()` call — no interactive response
+Reuse the existing `NtfyAPI.send_notification()` to push a notification when
+a highlight reel is ready. Simple fire-and-forget — no interactive response
 needed.
-
-### YouTube upload (optional)
-
-Reuse the existing YouTubeUploader pattern. If YouTube credentials are configured
-and the highlight reel's game session has YouTube upload enabled, upload the reel
-to a "Highlights" playlist.
 
 ---
 
@@ -69,7 +70,7 @@ video_grouper/
     clip_processor.py                 # Add HighlightCompilationTask handling
     register_tasks.py                 # Register HighlightCompilationTask
   services/
-    supabase_client.py                # Add download_from_storage() method
+    moment_api_client.py              # Already has highlight methods from SC-1
 ```
 
 ### Existing (reused)
@@ -77,8 +78,9 @@ video_grouper/
 ```
 video_grouper/
   utils/ffmpeg_utils.py               # combine_videos() for concat
+  utils/youtube_upload.py             # YouTubeUploader for direct YouTube upload
   api_integrations/ntfy.py            # NtfyAPI.send_notification()
-  utils/youtube_upload.py             # YouTubeUploader (optional)
+  task_processors/upload_processor.py  # Pattern reference for YouTube upload flow
 ```
 
 ---
@@ -112,49 +114,56 @@ video_grouper/
 ### 2. Extend ClipDiscoveryProcessor for highlights
 
 - [ ] In `discover_work()`, add a second discovery pass:
-  1. Query `highlight_reels` where status="pending"
+  1. Call `api_client.get_pending_highlights()` → list of pending reels
   2. For each pending reel:
-     a. Fetch linked clips via `highlight_reel_clips`
+     a. Call `api_client.get_highlight_clips(highlight_id)` → list of clips
      b. Check all clips have status="ready"
      c. If all ready: collect clip URLs/paths, queue HighlightCompilationTask
      d. If some clips still pending: skip (will retry next poll)
-     e. If any clips failed: update highlight_reels status="failed"
+     e. If any clips failed: call `api_client.update_highlight(id, status="failed")`
 
 ### 3. Extend ClipProcessor for highlights
 
 - [ ] Add handling for `HighlightCompilationTask` in `process_item()`:
   1. Execute the task (FFmpeg concat)
   2. Upload reel to Supabase Storage (`highlight-reels/{highlight_id}.mp4`)
-  3. Update `highlight_reels` row: status="ready", storage_url
-  4. Send NTFY notification (if configured)
-  5. Optional: upload to YouTube (if configured)
+  3. Upload reel to YouTube (if credentials configured):
+     a. Use existing `YouTubeUploader` class
+     b. Title: reel title, description: player name + game date
+     c. Add to "Highlights" playlist (configurable)
+  4. Call `api_client.update_highlight(id, status="ready", storage_url=url)`
+  5. Send NTFY notification (if configured)
+  6. On failure: call `api_client.update_highlight(id, status="failed")`
 - [ ] Differentiate between ClipExtractionTask and HighlightCompilationTask
   via `isinstance()` or `task_type` check
 
 ### 4. NTFY notification on reel ready
 
-- [ ] Add NTFY notification when a highlight reel is marked "ready"
+- [ ] Send NTFY notification when a highlight reel is marked "ready"
 - [ ] Notification content:
   - Title: "Highlight Reel Ready"
-  - Message: "{player_name}'s highlights from {game_date} are ready to watch"
+  - Message: "{player_name}'s highlights are ready to watch"
   - Action: "View" button linking to the storage URL
 - [ ] Only send if NTFY is configured (check config)
-- [ ] Add `send_highlight_notification()` to SupabaseClient or a new helper
+- [ ] Reuse existing `NtfyAPI.send_notification()` — no interactive flow needed
 
-### 5. YouTube upload (optional)
+### 5. YouTube upload for highlight reels
 
-- [ ] Add optional YouTube upload after reel compilation
-- [ ] Reuse existing `YouTubeUploader` pattern from `upload_processor.py`
-- [ ] Upload to a "Highlights" playlist (configurable)
-- [ ] Store `youtube_video_id` in highlight_reels table (needs SupabaseClient method)
-- [ ] Gated by config: only upload if YouTube credentials are configured
-  and highlight upload is enabled
+- [ ] Reuse existing `YouTubeUploader` from `utils/youtube_upload.py`
+- [ ] Upload highlight reel to YouTube after compilation:
+  - Title: highlight reel title
+  - Description: player name, game date, team info
+  - Playlist: configurable "Highlights" playlist name
+- [ ] Gated by config: only upload if YouTube credentials exist and are valid
+- [ ] On failure: log warning, don't fail the whole task (reel is still in Storage)
+- [ ] Note: youtube_video_id is NOT stored in the API — YouTube upload is
+  a best-effort delivery mechanism, not tracked in the database
 
-### 6. Supabase Storage download
+### 6. Supabase Storage download helper
 
-- [ ] Add `download_from_storage(bucket, path, local_path)` to SupabaseClient
-- [ ] Used by HighlightCompilationTask when clips are not available locally
-- [ ] Stream download to avoid loading full file into memory
+- [ ] Use `StorageUploader.download_file()` from SC-1 for downloading clips
+  that aren't available locally (e.g., clips from a different machine)
+- [ ] Prefer local paths when available (faster, no network)
 
 ### 7. Supabase Storage bucket for highlights
 
@@ -168,23 +177,24 @@ video_grouper/
 - [ ] Test HighlightCompilationTask.execute() with mocked combine_videos
 - [ ] Test highlight discovery (all clips ready → queue task)
 - [ ] Test highlight discovery (some clips pending → skip)
-- [ ] Test highlight discovery (some clips failed → mark reel failed)
-- [ ] Test ClipProcessor handling of HighlightCompilationTask
+- [ ] Test highlight discovery (some clips failed → mark reel failed via API)
+- [ ] Test ClipProcessor handling of HighlightCompilationTask (upload + API update)
 - [ ] Test NTFY notification sent on reel ready
 - [ ] Test YouTube upload gating (disabled when no credentials)
+- [ ] Test YouTube upload called when configured
 
 ---
 
 ## Acceptance Criteria
 
-- Pending highlight reels are discovered by ClipDiscoveryProcessor
+- Pending highlight reels are discovered via the API
 - Reel compilation produces a valid MP4 from concatenated clips
 - Reels are uploaded to Supabase Storage with accessible URLs
-- `highlight_reels` rows are updated with status and storage_url
+- Reels are uploaded to YouTube (when configured), same as existing video uploads
+- API is called to update highlight reel status and storage_url
 - NTFY push notification sent when reel is ready
-- YouTube upload works when configured (optional)
-- Failed compilations are marked as "failed" without blocking the pipeline
-- Existing clip generation (SC-3) is not disrupted
+- Failed compilations are marked as "failed" via API without blocking the pipeline
+- Existing clip generation (SC-3) and video pipeline are not disrupted
 
 ---
 

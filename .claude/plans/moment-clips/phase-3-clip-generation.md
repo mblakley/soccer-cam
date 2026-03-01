@@ -1,10 +1,10 @@
 # Phase SC-3 — Clip Generation Pipeline
 
 **Status**: NOT STARTED
-**Depends on**: SC-1 (Supabase client), SC-2 (timestamp matcher)
+**Depends on**: SC-1 (API client), SC-2 (timestamp matcher)
 **Goal**: Add a ClipDiscoveryProcessor and ClipProcessor to the pipeline that
 discover pending moment tags, compute video offsets, extract 30-second clips
-with FFmpeg, upload them to Supabase Storage, and update the database.
+with FFmpeg, upload them to Supabase Storage, and update status via the API.
 
 ---
 
@@ -18,17 +18,16 @@ Existing pipeline:
                                           │
 New additions (runs after VideoProcessor produces trimmed video):
   ClipDiscoveryProcessor (PollingProcessor, every 60s)
-    └─> Finds game_sessions matching local recording group directories
-    └─> Fetches moment_tags where video_offset_seconds IS NULL
+    └─> Calls API: find game sessions matching local recording group dirs
+    └─> Calls API: fetch moment_tags with NULL video_offset_seconds
     └─> Computes offsets using timestamp_matcher
-    └─> Writes offsets back to DB
-    └─> Creates moment_clips rows (status: "pending")
+    └─> Calls API: update tag offsets + create moment_clip rows
     └─> Queues ClipExtractionTask for each
         │
   ClipProcessor (QueueProcessor)
     └─> Extracts 30s clip via trim_video()
-    └─> Uploads to Supabase Storage
-    └─> Updates moment_clips (status: "ready", storage_url)
+    └─> Uploads to Supabase Storage (direct, via StorageUploader)
+    └─> Calls API: update moment_clips (status: "ready", storage_url)
 ```
 
 ### New QueueType
@@ -38,11 +37,11 @@ from the video processing queue.
 
 ### Directory matching
 
-`ClipDiscoveryProcessor` needs to correlate Supabase `game_sessions.recording_group_dir`
-with local group directories. The `recording_group_dir` column stores the group
-directory name (e.g., `2026.02.28-14.23.45`). The processor scans local group
-directories, checks which have trimmed videos, and queries the DB for matching
-game sessions with pending tags.
+`ClipDiscoveryProcessor` correlates local group directories with game sessions
+in the API. The `recording_group_dir` column stores the group directory name
+(e.g., `2026.02.28-14.23.45`). The processor scans local group directories
+that have trimmed videos, and queries the API for matching game sessions with
+pending tags.
 
 ### Clip output path
 
@@ -85,7 +84,8 @@ video_grouper/
   models/directory_state.py       # DirectoryState — group dirs, file tracking
   models/match_info.py            # MatchInfo — start_time_offset
   models/recording_file.py        # RecordingFile — start_time, end_time
-  services/supabase_client.py     # From SC-1
+  services/moment_api_client.py   # From SC-1
+  services/storage_uploader.py    # From SC-1
   services/timestamp_matcher.py   # From SC-2
 ```
 
@@ -103,7 +103,7 @@ video_grouper/
 - [ ] Create `video_grouper/task_processors/tasks/clips/clip_extraction_task.py`
 - [ ] Extend `BaseTask` as a `@dataclass(unsafe_hash=True)`:
   - `tag_id: str` — moment tag UUID
-  - `clip_id: str` — moment clip UUID (created by discovery)
+  - `clip_id: str` — moment clip UUID (created by discovery via API)
   - `game_session_id: str`
   - `group_dir: str` — local path to recording group
   - `trimmed_video_path: str` — path to trimmed-raw.mp4
@@ -124,18 +124,24 @@ video_grouper/
 
 - [ ] Create `video_grouper/task_processors/clip_discovery_processor.py`
 - [ ] Extend `PollingProcessor` with `poll_interval=60`
-- [ ] Constructor: `__init__(storage_path, config, supabase_client, clip_processor)`
+- [ ] Constructor: `__init__(storage_path, config, api_client, storage_uploader, clip_processor)`
 - [ ] `discover_work()`:
   1. Scan local group directories (from config `watch_directory`)
   2. For each group dir that has a trimmed video:
      a. Get the group directory name (e.g., `2026.02.28-14.23.45`)
-     b. Query Supabase for pending tags matching this group dir
-     c. Load DirectoryState to get recording files
-     d. Load MatchInfo to get start_time_offset
-     e. For each pending tag:
+     b. Call `api_client.get_game_session_by_dir(dir_name)` → game session or None
+     c. If no game session, skip this directory
+     d. Call `api_client.get_pending_tags(game_session_id)` → list of tags
+     e. Load DirectoryState to get recording files
+     f. Load MatchInfo to get start_time_offset
+     g. For each pending tag:
         - Call `compute_combined_offset()` with tag timestamp + recording files
         - Call `compute_trimmed_offset()` with combined offset + start_time_offset
-        - If valid offset: update tag in DB, create moment_clip row, queue ClipExtractionTask
+        - If valid offset:
+          - Call `api_client.update_tag_offset(tag_id, offset)`
+          - Call `compute_clip_boundaries(offset)` → (start, end)
+          - Call `api_client.create_clip(tag_id, game_session_id, start, end, duration)` → clip
+          - Queue ClipExtractionTask with clip details
         - If invalid: log warning, skip tag
   3. Handle errors gracefully (one bad tag shouldn't block others)
 - [ ] Only process groups where trimmed video exists (status check)
@@ -146,27 +152,27 @@ video_grouper/
 - [ ] Create `video_grouper/task_processors/clip_processor.py`
 - [ ] Extend `QueueProcessor`
 - [ ] `queue_type` → `QueueType.CLIPS`
-- [ ] Constructor: `__init__(storage_path, config, supabase_client)`
+- [ ] Constructor: `__init__(storage_path, config, api_client, storage_uploader)`
 - [ ] `process_item(item: ClipExtractionTask)`:
   1. Execute the task (FFmpeg trim)
   2. On success:
-     a. Upload clip to Supabase Storage (`moment-clips/{game_session_id}/{clip_id}.mp4`)
-     b. Get public URL from storage
-     c. Update `moment_clips` row: status="ready", storage_url=url, file_path=local_path
+     a. Upload clip via `storage_uploader.upload_file("moment-clips", path, local_path)`
+     b. Call `api_client.update_clip(clip_id, status="ready", storage_url=url, file_path=local_path)`
   3. On failure:
-     a. Update `moment_clips` row: status="failed"
+     a. Call `api_client.update_clip(clip_id, status="failed")`
      b. Log error
 - [ ] `get_item_key(item)` → `f"clip_extraction:{item.clip_id}"`
 
 ### 5. Wire into VideoGrouperApp
 
 - [ ] Import ClipDiscoveryProcessor and ClipProcessor in `video_grouper_app.py`
-- [ ] Instantiate `SupabaseClient` in `__init__()` (only if `config.supabase.enabled`)
-- [ ] Create `ClipProcessor(storage_path, config, supabase_client)`
-- [ ] Create `ClipDiscoveryProcessor(storage_path, config, supabase_client, clip_processor)`
+- [ ] Instantiate `MomentApiClient` and `StorageUploader` in `__init__()`
+  (only if `config.moment_tagging.enabled`)
+- [ ] Create `ClipProcessor(storage_path, config, api_client, storage_uploader)`
+- [ ] Create `ClipDiscoveryProcessor(storage_path, config, api_client, storage_uploader, clip_processor)`
 - [ ] Add both to `processors` list
-- [ ] Call `supabase_client.connect()` in `initialize()` and `close()` in shutdown
-- [ ] Feature-gated: only create these processors if Supabase is enabled
+- [ ] Close `api_client` and `storage_uploader` in shutdown
+- [ ] Feature-gated: only create these processors if moment_tagging is enabled
 
 ### 6. Supabase Storage bucket setup
 
@@ -174,34 +180,33 @@ video_grouper/
   - Bucket name: `moment-clips`
   - Public access for authenticated users
   - Path pattern: `{game_session_id}/{clip_id}.mp4`
-- [ ] Add storage upload method to SupabaseClient (if not done in SC-1)
 
 ### 7. Unit tests
 
 - [ ] Test ClipExtractionTask serialize/deserialize round-trip
 - [ ] Test ClipExtractionTask.execute() with mocked trim_video
-- [ ] Test ClipDiscoveryProcessor.discover_work() with mocked DB + file system
-- [ ] Test ClipProcessor.process_item() success path (mock execute + upload)
-- [ ] Test ClipProcessor.process_item() failure path (mock execute failure)
-- [ ] Test feature gating (processors not created when supabase disabled)
+- [ ] Test ClipDiscoveryProcessor.discover_work() with mocked API client + file system
+- [ ] Test ClipProcessor.process_item() success path (mock execute + upload + API)
+- [ ] Test ClipProcessor.process_item() failure path (mock execute failure + API update)
+- [ ] Test feature gating (processors not created when moment_tagging disabled)
 - [ ] Test deduplication (same clip not queued twice)
 
 ### 8. Integration testing
 
 - [ ] End-to-end test with real FFmpeg: create a short test video, run
   ClipExtractionTask, verify output file exists and is valid
-- [ ] Test with simulated recording files and a mock game session
+- [ ] Test with simulated recording files and mocked API responses
 
 ---
 
 ## Acceptance Criteria
 
-- ClipDiscoveryProcessor finds pending tags for local game recordings
+- ClipDiscoveryProcessor finds pending tags via the API for local game recordings
 - Timestamp matcher correctly computes video offsets
 - ClipExtractionTask extracts clips via FFmpeg (stream copy, fast)
 - Clips are uploaded to Supabase Storage with accessible URLs
-- `moment_clips` rows are updated with status and storage_url
-- Failed clips are marked as "failed" without blocking the pipeline
+- API is called to update clip status and storage_url
+- Failed clips are marked as "failed" via API without blocking the pipeline
 - Existing pipeline processors are not affected
 - All unit tests pass
 
