@@ -12,6 +12,8 @@ from video_grouper.task_processors import (
     VideoProcessor,
     UploadProcessor,
     NtfyProcessor,
+    ClipProcessor,
+    ClipDiscoveryProcessor,
 )
 from video_grouper.task_processors.register_tasks import register_all_tasks
 
@@ -241,6 +243,50 @@ class VideoGrouperApp:
             except Exception as e:
                 logger.error(f"Failed to initialize TTT ClipRequestProcessor: {e}")
 
+        # Moment tagging — clip generation and highlight compilation
+        self.clip_processor = None
+        self.clip_discovery_processor = None
+        self._moment_api_client = None
+
+        if self.config.moment_tagging.enabled:
+            from video_grouper.api_integrations.moment_api_client import MomentApiClient
+
+            logger.info("Moment tagging enabled -- initializing clip processors")
+            self._moment_api_client = MomentApiClient(
+                api_base_url=self.config.moment_tagging.api_base_url,
+                service_role_key=self.config.moment_tagging.service_role_key,
+            )
+
+            # Reuse existing YouTube uploader if available
+            youtube_uploader = None
+            if self.config.youtube.enabled:
+                try:
+                    from video_grouper.utils.youtube_upload import (
+                        YouTubeUploader,
+                        get_youtube_paths,
+                    )
+
+                    creds_file, token_file = get_youtube_paths(self.storage_path)
+                    youtube_uploader = YouTubeUploader(creds_file, token_file)
+                except Exception as e:
+                    logger.warning(
+                        "Could not initialize YouTube uploader for clips: %s", e
+                    )
+
+            self.clip_processor = ClipProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                api_client=self._moment_api_client,
+                youtube_uploader=youtube_uploader,
+            )
+            self.clip_discovery_processor = ClipDiscoveryProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                api_client=self._moment_api_client,
+                clip_processor=self.clip_processor,
+                poll_interval=self.poll_interval,
+            )
+
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
@@ -263,7 +309,11 @@ class VideoGrouperApp:
             self.processors.append(self.ntfy_processor)
         if self.clip_request_processor:
             self.processors.append(self.clip_request_processor)
-        # Polling processors last — StateAuditor discover_work() must see
+        if self.clip_processor:
+            self.processors.append(self.clip_processor)
+        if self.clip_discovery_processor:
+            self.processors.append(self.clip_discovery_processor)
+        # Polling processors last -- StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
         self.processors.append(self.state_auditor)
@@ -435,6 +485,10 @@ class VideoGrouperApp:
             if cam:
                 await cam.close()
 
+        # Close moment API client if open
+        if self._moment_api_client:
+            await self._moment_api_client.close()
+
         # Close all loggers to release file handles
         from video_grouper.utils.logger import close_loggers
 
@@ -469,6 +523,8 @@ class VideoGrouperApp:
             if self.clip_request_processor
             else -1,
         }
+        if self.clip_processor:
+            sizes["clips"] = self.clip_processor.get_queue_size()
         return sizes
 
     @staticmethod
@@ -499,4 +555,9 @@ class VideoGrouperApp:
                 status[f"camera_poller.{name}"] = self._processor_status(poller)
             for name, dl in self.download_processors.items():
                 status[f"download_processor.{name}"] = self._processor_status(dl)
+        if self.clip_processor is not None:
+            status["clip_processor"] = self._processor_status(self.clip_processor)
+            status["clip_discovery"] = self._processor_status(
+                self.clip_discovery_processor
+            )
         return status

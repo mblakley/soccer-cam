@@ -10,6 +10,8 @@ from .upload_processor import UploadProcessor
 from .video_processor import VideoProcessor
 from .autocam_processor import AutocamProcessor
 from .autocam_discovery_processor import AutocamDiscoveryProcessor
+from .clip_processor import ClipProcessor
+from .clip_discovery_processor import ClipDiscoveryProcessor
 
 __all__ = [
     "PollingProcessor",
@@ -22,4 +24,6 @@ __all__ = [
     "VideoProcessor",
     "AutocamProcessor",
     "AutocamDiscoveryProcessor",
+    "ClipProcessor",
+    "ClipDiscoveryProcessor",
 ]
