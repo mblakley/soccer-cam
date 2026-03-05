@@ -14,3 +14,4 @@ class QueueType(Enum):
     NTFY = "ntfy"
     YOUTUBE = "youtube"
     AUTOCAM = "autocam"
+    CLIP_REQUEST = "clip_request"

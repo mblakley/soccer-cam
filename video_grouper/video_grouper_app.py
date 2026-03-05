@@ -157,6 +157,52 @@ class VideoGrouperApp:
             # Wire ntfy_service into UploadProcessor for auth failure notifications
             # and playlist name requests
             self.upload_processor.ntfy_service = ntfy_service
+
+        # TTT Clip Request Processor (optional)
+        self.clip_request_processor = None
+        if self.config.ttt.enabled:
+            try:
+                from video_grouper.task_processors.clip_request_processor import (
+                    ClipRequestProcessor,
+                )
+                from video_grouper.api_integrations.ttt_api import TTTApiClient
+                from video_grouper.utils.google_drive_upload import GoogleDriveUploader
+
+                ttt_client = TTTApiClient(
+                    supabase_url=self.config.ttt.supabase_url,
+                    anon_key=self.config.ttt.anon_key,
+                    api_base_url=self.config.ttt.api_base_url,
+                    storage_path=self.storage_path,
+                )
+                # Login with stored credentials
+                if self.config.ttt.email and self.config.ttt.password:
+                    try:
+                        ttt_client.login(
+                            self.config.ttt.email, self.config.ttt.password
+                        )
+                        logger.info("TTT API client authenticated")
+                    except Exception as e:
+                        logger.error(f"TTT login failed: {e}")
+
+                drive_uploader = GoogleDriveUploader(self.storage_path)
+
+                # Get ntfy_service from ntfy_processor if available
+                ntfy_service = None
+                if self.ntfy_processor and hasattr(self.ntfy_processor, "ntfy_service"):
+                    ntfy_service = self.ntfy_processor.ntfy_service
+
+                self.clip_request_processor = ClipRequestProcessor(
+                    storage_path=self.storage_path,
+                    config=self.config,
+                    ttt_client=ttt_client,
+                    drive_uploader=drive_uploader,
+                    ntfy_service=ntfy_service,
+                    poll_interval=self.config.ttt.clip_request_poll_interval,
+                )
+                logger.info("TTT ClipRequestProcessor initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize TTT ClipRequestProcessor: {e}")
+
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
@@ -175,6 +221,8 @@ class VideoGrouperApp:
         ]
         if self.ntfy_processor:
             self.processors.append(self.ntfy_processor)
+        if self.clip_request_processor:
+            self.processors.append(self.clip_request_processor)
 
         self._shutdown_event = asyncio.Event()
 
@@ -294,6 +342,9 @@ class VideoGrouperApp:
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
             "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
+            "clip_request": self.clip_request_processor.get_queue_size()
+            if self.clip_request_processor
+            else -1,
         }
 
     @staticmethod
@@ -314,4 +365,7 @@ class VideoGrouperApp:
             "video_processor": self._processor_status(self.video_processor),
             "upload_processor": self._processor_status(self.upload_processor),
             "ntfy_processor": self._processor_status(self.ntfy_processor),
+            "clip_request_processor": self._processor_status(
+                self.clip_request_processor
+            ),
         }

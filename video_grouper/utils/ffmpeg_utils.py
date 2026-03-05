@@ -267,3 +267,165 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
         cmd,
         f"combined videos to {os.path.basename(output_path)}",
     )
+
+
+async def extract_clip(
+    input_path: str,
+    start_sec: float,
+    end_sec: float,
+    output_path: str,
+    timeout: int = FFMPEG_TIMEOUT,
+) -> str:
+    """Extract a clip from a video file using FFmpeg.
+
+    Uses stream copy (-c copy) for fast extraction without re-encoding.
+    Falls back to re-encoding if stream copy fails (e.g., keyframe alignment issues).
+
+    Args:
+        input_path: Path to the source video file
+        start_sec: Start time in seconds
+        end_sec: End time in seconds
+        output_path: Path for the output clip
+        timeout: Timeout in seconds
+
+    Returns:
+        The output_path on success
+
+    Raises:
+        RuntimeError: If FFmpeg fails
+    """
+    duration = end_sec - start_sec
+
+    # Try stream copy first (fast, no re-encoding)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(start_sec),
+        "-i",
+        input_path,
+        "-t",
+        str(duration),
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        output_path,
+    ]
+
+    returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
+
+    if returncode != 0:
+        # Fall back to re-encoding
+        logger.warning(
+            f"Stream copy failed for clip, falling back to re-encode: {stderr.decode('utf-8', errors='replace')[-200:]}"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_sec),
+            "-i",
+            input_path,
+            "-t",
+            str(duration),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            output_path,
+        ]
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
+
+        if returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg clip extraction failed: {stderr.decode('utf-8', errors='replace')[-500:]}"
+            )
+
+    logger.info(f"Extracted clip: {output_path} ({duration:.1f}s)")
+    return output_path
+
+
+async def compile_clips(
+    clip_paths: list[str],
+    output_path: str,
+    timeout: int = FFMPEG_TIMEOUT,
+) -> str:
+    """Compile multiple clips into a single video file.
+
+    Creates a temporary concat file and uses FFmpeg's concat demuxer.
+    Re-encodes to ensure consistent format across clips.
+
+    Args:
+        clip_paths: List of paths to clip files to concatenate
+        output_path: Path for the compiled output
+        timeout: Timeout in seconds
+
+    Returns:
+        The output_path on success
+
+    Raises:
+        RuntimeError: If FFmpeg fails
+        ValueError: If clip_paths is empty
+    """
+    if not clip_paths:
+        raise ValueError("No clips to compile")
+
+    if len(clip_paths) == 1:
+        # Single clip — just copy it
+        import shutil
+
+        shutil.copy2(clip_paths[0], output_path)
+        logger.info(f"Single clip, copied to: {output_path}")
+        return output_path
+
+    # Create concat list file
+    concat_file = output_path + ".concat.txt"
+    try:
+        with open(concat_file, "w") as f:
+            for path in clip_paths:
+                # Escape single quotes in paths for FFmpeg concat format
+                escaped = path.replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_file,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            output_path,
+        ]
+
+        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
+
+        if returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg compilation failed: {stderr.decode('utf-8', errors='replace')[-500:]}"
+            )
+
+        logger.info(f"Compiled {len(clip_paths)} clips into: {output_path}")
+        return output_path
+    finally:
+        # Clean up concat file
+        if os.path.exists(concat_file):
+            os.remove(concat_file)

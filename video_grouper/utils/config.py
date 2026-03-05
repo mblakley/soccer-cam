@@ -172,6 +172,19 @@ class CloudSyncConfig(BaseModel):
     provider: Optional[str] = None
 
 
+class TTTConfig(BaseModel):
+    """Configuration for Team Tech Tools integration (clip request automation)."""
+
+    enabled: bool = False
+    supabase_url: str = ""
+    anon_key: str = ""
+    api_base_url: str = ""
+    email: str = ""
+    password: str = ""
+    clip_request_poll_interval: int = 60
+    google_drive_folder_id: str = ""
+
+
 class YouTubePlaylistConfig(BaseModel):
     name_format: str
     description: str
@@ -221,6 +234,7 @@ class Config(BaseModel):
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
     autocam: AutocamConfig = Field(alias="AUTOCAM")
     cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
+    ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
 
     model_config = {"validate_by_name": True}
 

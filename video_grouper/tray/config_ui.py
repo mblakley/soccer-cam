@@ -533,6 +533,78 @@ class ConfigWindow(QWidget):
         settings_layout.addWidget(save_settings_button)
 
         settings_tab.setLayout(settings_layout)
+
+        # -- TTT Integration Tab --
+        ttt_tab = QWidget()
+        ttt_layout = QVBoxLayout()
+
+        # -- TTT Account Group --
+        ttt_account_group = QGroupBox("TTT Account")
+        ttt_account_layout = QFormLayout()
+
+        self.ttt_enabled = QCheckBox("Enable TTT Integration")
+        ttt_account_layout.addRow("", self.ttt_enabled)
+
+        self.ttt_api_base_url = QLineEdit()
+        self.ttt_api_base_url.setPlaceholderText("https://api.teamtechtools.com")
+        ttt_account_layout.addRow("API Base URL:", self.ttt_api_base_url)
+
+        self.ttt_supabase_url = QLineEdit()
+        self.ttt_supabase_url.setPlaceholderText("https://your-project.supabase.co")
+        ttt_account_layout.addRow("Supabase URL:", self.ttt_supabase_url)
+
+        self.ttt_anon_key = QLineEdit()
+        ttt_account_layout.addRow("Supabase Anon Key:", self.ttt_anon_key)
+
+        self.ttt_email = QLineEdit()
+        ttt_account_layout.addRow("Email:", self.ttt_email)
+
+        self.ttt_password = QLineEdit()
+        self.ttt_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ttt_show_password_checkbox = QCheckBox("Show Password")
+        self.ttt_show_password_checkbox.toggled.connect(
+            lambda checked: self.ttt_password.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        ttt_account_layout.addRow("Password:", self.ttt_password)
+        ttt_account_layout.addRow("", self.ttt_show_password_checkbox)
+
+        self.ttt_test_button = QPushButton("Test Connection")
+        self.ttt_test_button.clicked.connect(self.test_ttt_connection)
+        ttt_account_layout.addRow("", self.ttt_test_button)
+
+        self.ttt_status_label = QLabel("Not connected")
+        ttt_account_layout.addRow("Status:", self.ttt_status_label)
+
+        ttt_account_group.setLayout(ttt_account_layout)
+        ttt_layout.addWidget(ttt_account_group)
+
+        # -- Clip Request Settings Group --
+        clip_request_group = QGroupBox("Clip Request Settings")
+        clip_request_layout = QFormLayout()
+
+        self.ttt_poll_interval = QLineEdit()
+        self.ttt_poll_interval.setPlaceholderText("60")
+        clip_request_layout.addRow("Poll Interval (seconds):", self.ttt_poll_interval)
+
+        self.ttt_drive_folder_id = QLineEdit()
+        clip_request_layout.addRow("Google Drive Folder ID:", self.ttt_drive_folder_id)
+
+        self.ttt_drive_auth_button = QPushButton("Authenticate Google Drive")
+        self.ttt_drive_auth_button.clicked.connect(self.authenticate_google_drive)
+        clip_request_layout.addRow("", self.ttt_drive_auth_button)
+
+        self.ttt_drive_status_label = QLabel("Not authenticated")
+        clip_request_layout.addRow("Status:", self.ttt_drive_status_label)
+
+        clip_request_group.setLayout(clip_request_layout)
+        ttt_layout.addWidget(clip_request_group)
+
+        ttt_layout.addStretch(1)
+        ttt_tab.setLayout(ttt_layout)
+
+        tabs.addTab(ttt_tab, "TTT Integration")
         tabs.addTab(settings_tab, "Settings")
         tabs.addTab(team_management_tab, "Team Management")
 
@@ -581,6 +653,19 @@ class ConfigWindow(QWidget):
             self.playmetrics_configs_list.addItem("Default")
         for team in self.config.playmetrics.teams:
             self.playmetrics_configs_list.addItem(team.team_name)
+
+        # TTT Integration settings
+        if hasattr(self.config, "ttt"):
+            self.ttt_enabled.setChecked(self.config.ttt.enabled)
+            self.ttt_api_base_url.setText(self.config.ttt.api_base_url)
+            self.ttt_supabase_url.setText(self.config.ttt.supabase_url)
+            self.ttt_anon_key.setText(self.config.ttt.anon_key)
+            self.ttt_email.setText(self.config.ttt.email)
+            self.ttt_password.setText(self.config.ttt.password)
+            self.ttt_poll_interval.setText(
+                str(self.config.ttt.clip_request_poll_interval)
+            )
+            self.ttt_drive_folder_id.setText(self.config.ttt.google_drive_folder_id)
 
         # Cloud Sync settings
         # This part will be more complex and will be handled separately
@@ -703,6 +788,120 @@ class ConfigWindow(QWidget):
         # Check after 30 seconds
         QTimer.singleShot(30000, check_auth_thread)
 
+    def test_ttt_connection(self):
+        """Test connection to TTT API."""
+        api_url = self.ttt_api_base_url.text()
+        supabase_url = self.ttt_supabase_url.text()
+        anon_key = self.ttt_anon_key.text()
+        email = self.ttt_email.text()
+        password = self.ttt_password.text()
+
+        if not all([api_url, supabase_url, anon_key, email, password]):
+            QMessageBox.warning(self, "Warning", "Please fill in all TTT fields.")
+            return
+
+        self.ttt_status_label.setText("Connecting...")
+        self.ttt_test_button.setEnabled(False)
+
+        def auth_thread():
+            try:
+                from video_grouper.api_integrations.ttt_api import TTTApiClient
+
+                client = TTTApiClient(
+                    supabase_url=supabase_url,
+                    anon_key=anon_key,
+                    api_base_url=api_url,
+                    storage_path=self.storage_path.text(),
+                )
+                client.login(email, password)
+                assignments = client.get_team_assignments()
+                team_names = [a["team_name"] for a in assignments]
+
+                def update_ui():
+                    self.ttt_test_button.setEnabled(True)
+                    self.ttt_status_label.setText(
+                        f"Connected — {len(assignments)} team(s)"
+                    )
+                    if team_names:
+                        QMessageBox.information(
+                            self,
+                            "Success",
+                            "Connected to TTT!\n\nTeam assignments:\n"
+                            + "\n".join(f"• {n}" for n in team_names),
+                        )
+                    else:
+                        QMessageBox.information(
+                            self,
+                            "Success",
+                            "Connected to TTT! No team assignments found.",
+                        )
+
+                QTimer.singleShot(0, update_ui)
+
+            except Exception as e:
+
+                def show_error(err=e):
+                    self.ttt_test_button.setEnabled(True)
+                    self.ttt_status_label.setText("Connection failed")
+                    QMessageBox.warning(
+                        self,
+                        "Connection Failed",
+                        f"Could not connect to TTT:\n{str(err)}",
+                    )
+
+                QTimer.singleShot(0, show_error)
+
+        thread = threading.Thread(target=auth_thread, daemon=True)
+        thread.start()
+
+    def authenticate_google_drive(self):
+        """Authenticate with Google Drive API."""
+        storage_path = self.storage_path.text()
+        if not storage_path:
+            QMessageBox.warning(
+                self, "Warning", "Please specify the storage path first."
+            )
+            return
+
+        self.ttt_drive_status_label.setText("Authenticating...")
+        self.ttt_drive_auth_button.setEnabled(False)
+
+        def auth_thread():
+            try:
+                from video_grouper.utils.google_drive_upload import (
+                    GoogleDriveUploader,
+                )
+
+                uploader = GoogleDriveUploader(storage_path)
+                uploader.authenticate()
+
+                def update_ui():
+                    self.ttt_drive_auth_button.setEnabled(True)
+                    self.ttt_drive_status_label.setText("Authenticated")
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        "Google Drive authentication successful!",
+                    )
+
+                QTimer.singleShot(0, update_ui)
+
+            except Exception as e:
+
+                def show_error(err=e):
+                    self.ttt_drive_auth_button.setEnabled(True)
+                    self.ttt_drive_status_label.setText("Authentication failed")
+                    QMessageBox.warning(
+                        self,
+                        "Authentication Failed",
+                        f"Google Drive auth failed:\n{str(err)}",
+                    )
+
+                QTimer.singleShot(0, show_error)
+
+        thread = threading.Thread(target=auth_thread, daemon=True)
+        thread.start()
+
     def save_settings(self):
         """Save all settings from the UI to the config file."""
         try:
@@ -720,6 +919,24 @@ class ConfigWindow(QWidget):
                     self.raw_playlist_name.text()
                 )
                 self.config.app.timezone = self.timezone_combo.currentText()
+
+                # TTT Integration settings
+                if hasattr(self.config, "ttt"):
+                    self.config.ttt.enabled = self.ttt_enabled.isChecked()
+                    self.config.ttt.api_base_url = self.ttt_api_base_url.text()
+                    self.config.ttt.supabase_url = self.ttt_supabase_url.text()
+                    self.config.ttt.anon_key = self.ttt_anon_key.text()
+                    self.config.ttt.email = self.ttt_email.text()
+                    self.config.ttt.password = self.ttt_password.text()
+                    try:
+                        self.config.ttt.clip_request_poll_interval = int(
+                            self.ttt_poll_interval.text()
+                        )
+                    except ValueError:
+                        pass
+                    self.config.ttt.google_drive_folder_id = (
+                        self.ttt_drive_folder_id.text()
+                    )
 
                 # Save the updated config object
                 save_config(self.config, self.config_path)
