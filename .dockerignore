@@ -29,6 +29,8 @@ __pycache__/
 
 # Ignore test files and artifacts
 tests/
+!tests/camera_emulator/
+!tests/e2e/test_clips/
 .pytest_cache/
 test-results/
 coverage.xml

@@ -7,9 +7,7 @@ from the Camera class so the HTTP emulator can reuse it.
 
 import os
 import logging
-from datetime import datetime, timedelta
-
-import pytz
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +18,7 @@ def generate_test_files(clips_dir: str = "/clips"):
     Returns a list of dicts with keys:
         filename, start_time, end_time, size, clip_path
     """
-    utc_now = datetime.now(pytz.utc)
+    utc_now = datetime.now(timezone.utc)
     base_time = utc_now - timedelta(hours=12)
     file_duration = 60  # seconds
 
