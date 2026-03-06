@@ -152,6 +152,8 @@ class E2ETestRunner:
                 "Camera simulator returning",
                 "CameraPoller: Polling camera",
                 "Camera simulator initialized",
+                "CAMERA_POLLER: Looking for new files",
+                "CAMERA_POLLER: Camera connected",
             ],
             "files_discovered": [
                 "Found new recording files",
@@ -165,6 +167,7 @@ class E2ETestRunner:
                 "Starting download task",
                 "Downloading file",
                 "Simulating download of",
+                "DOWNLOAD: Processing task",
             ],
             "downloads_completed": [
                 "Download completed",
