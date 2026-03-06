@@ -237,31 +237,37 @@ class SystemTrayIcon(QSystemTrayIcon):
             storage_path=self.config.storage.path, config=self.config
         )
 
-        # Initialize AutocamProcessor and AutocamDiscoveryProcessor
-        self.autocam_processor = AutocamProcessor(
-            storage_path=self.config.storage.path,
-            config=self.config,
-            upload_processor=self.upload_processor,
-        )
+        # Initialize AutocamProcessor and AutocamDiscoveryProcessor (optional)
+        self.autocam_processor = None
+        self.autocam_discovery_processor = None
+        if self.config.autocam.enabled:
+            self.autocam_processor = AutocamProcessor(
+                storage_path=self.config.storage.path,
+                config=self.config,
+                upload_processor=self.upload_processor,
+            )
 
-        # Create discovery processor that will poll for new trimmed directories
-        from video_grouper.task_processors.autocam_discovery_processor import (
-            AutocamDiscoveryProcessor,
-        )
+            from video_grouper.task_processors.autocam_discovery_processor import (
+                AutocamDiscoveryProcessor,
+            )
 
-        self.autocam_discovery_processor = AutocamDiscoveryProcessor(
-            storage_path=self.config.storage.path,
-            config=self.config,
-            autocam_processor=self.autocam_processor,
-            poll_interval=30,  # Check every 30 seconds
-        )
+            self.autocam_discovery_processor = AutocamDiscoveryProcessor(
+                storage_path=self.config.storage.path,
+                config=self.config,
+                autocam_processor=self.autocam_processor,
+                poll_interval=30,
+            )
+        else:
+            logger.info("Autocam is disabled in configuration, skipping processor init")
 
     async def initialize(self):
         """Initialize the tray app asynchronously."""
         logger.info("Initializing SystemTrayIcon...")
         await self.upload_processor.start()
-        await self.autocam_processor.start()
-        await self.autocam_discovery_processor.start()
+        if self.autocam_processor:
+            await self.autocam_processor.start()
+        if self.autocam_discovery_processor:
+            await self.autocam_discovery_processor.start()
         logger.info("SystemTrayIcon initialization complete")
 
     async def shutdown(self):

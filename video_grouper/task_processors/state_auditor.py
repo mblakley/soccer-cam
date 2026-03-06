@@ -221,13 +221,23 @@ class StateAuditor(PollingProcessor):
                                 group_dir, combined_path
                             )
 
-            # Check for videos to upload (autocam_complete status)
-            # Note: Uploads are handled by the tray agent, not the state auditor
-            # The state auditor should not interfere with the tray agent's upload handling
-            if dir_state.status == "autocam_complete":
-                logger.debug(
-                    f"STATE_AUDITOR: Found autocam_complete status for {group_dir}, but uploads are handled by tray agent"
+            # Handle trimmed status - if autocam is disabled, skip to upload
+            if dir_state.status == "trimmed" and not self.config.autocam.enabled:
+                logger.info(
+                    f"STATE_AUDITOR: Autocam disabled, transitioning {group_dir} to upload"
                 )
+                await dir_state.update_group_status("autocam_complete")
+                await self._queue_upload(group_dir)
+
+            # Check for videos to upload (autocam_complete status)
+            elif dir_state.status == "autocam_complete":
+                if not self.config.autocam.enabled:
+                    # Headless mode: queue upload directly
+                    await self._queue_upload(group_dir)
+                else:
+                    logger.debug(
+                        f"STATE_AUDITOR: Found autocam_complete status for {group_dir}, uploads handled by tray agent"
+                    )
 
             # Check for not_a_game status (user confirmed there was no match)
             elif dir_state.status == "not_a_game":
@@ -240,6 +250,16 @@ class StateAuditor(PollingProcessor):
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
+
+    async def _queue_upload(self, group_dir: str) -> None:
+        """Queue a YouTube upload for a directory if YouTube is enabled."""
+        if self.config.youtube.enabled and self.video_processor.upload_processor:
+            from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
+
+            relative_group_dir = os.path.relpath(group_dir, self.storage_path)
+            youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
+            await self.video_processor.upload_processor.add_work(youtube_task)
+            logger.info(f"STATE_AUDITOR: Queued YouTube upload for {group_dir}")
 
     async def _handle_cleanup(self, group_dir: str) -> None:
         """Handle cleanup tasks for a directory."""

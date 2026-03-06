@@ -272,6 +272,7 @@ class TestVideoProcessorTransitions:
         mock_mis.populate_match_info_from_apis = AsyncMock()
         mock_ntfy = Mock()
         mock_ntfy.request_match_info_for_directory = AsyncMock()
+        mock_config.autocam.enabled = True
 
         processor = VideoProcessor(
             temp_storage,
@@ -291,6 +292,86 @@ class TestVideoProcessorTransitions:
 
         mock_mis.populate_match_info_from_apis.assert_not_called()
         mock_ntfy.request_match_info_for_directory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trim_success_skips_autocam_when_disabled(
+        self, temp_storage, mock_config
+    ):
+        """When autocam is disabled, trim success should queue upload directly."""
+        mock_config.autocam.enabled = False
+        mock_config.youtube.enabled = True
+        mock_upload = AsyncMock()
+        mock_upload.add_work = AsyncMock()
+
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload)
+
+        trim_task = TrimTask(group_dir=temp_storage, start_time="00:05:00")
+        with (
+            patch.object(
+                trim_task, "execute", new_callable=AsyncMock, return_value=True
+            ),
+            patch("video_grouper.models.DirectoryState") as mock_ds,
+        ):
+            mock_ds_instance = AsyncMock()
+            mock_ds.return_value = mock_ds_instance
+
+            await processor.process_item(trim_task)
+            await asyncio.sleep(0.05)
+
+            mock_ds_instance.update_group_status.assert_called_once_with(
+                "autocam_complete"
+            )
+            mock_upload.add_work.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_trim_success_no_upload_when_autocam_disabled_youtube_disabled(
+        self, temp_storage, mock_config
+    ):
+        """When autocam and youtube are both disabled, no upload is queued."""
+        mock_config.autocam.enabled = False
+        mock_config.youtube.enabled = False
+        mock_upload = AsyncMock()
+        mock_upload.add_work = AsyncMock()
+
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload)
+
+        trim_task = TrimTask(group_dir=temp_storage, start_time="00:05:00")
+        with (
+            patch.object(
+                trim_task, "execute", new_callable=AsyncMock, return_value=True
+            ),
+            patch("video_grouper.models.DirectoryState") as mock_ds,
+        ):
+            mock_ds_instance = AsyncMock()
+            mock_ds.return_value = mock_ds_instance
+
+            await processor.process_item(trim_task)
+            await asyncio.sleep(0.05)
+
+            mock_ds_instance.update_group_status.assert_called_once_with(
+                "autocam_complete"
+            )
+            mock_upload.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trim_success_does_not_skip_when_autocam_enabled(
+        self, temp_storage, mock_config
+    ):
+        """When autocam is enabled, trim success should NOT queue upload."""
+        mock_config.autocam.enabled = True
+        mock_upload = AsyncMock()
+        mock_upload.add_work = AsyncMock()
+
+        processor = VideoProcessor(temp_storage, mock_config, mock_upload)
+
+        trim_task = TrimTask(group_dir="/test/group", start_time="00:05:00")
+        with patch.object(
+            trim_task, "execute", new_callable=AsyncMock, return_value=True
+        ):
+            await processor.process_item(trim_task)
+            await asyncio.sleep(0.05)
+
+            mock_upload.add_work.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_combine_transition_without_services(self, temp_storage, mock_config):
