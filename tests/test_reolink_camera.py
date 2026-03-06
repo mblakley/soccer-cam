@@ -1,0 +1,519 @@
+import pytest
+import logging
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+
+from video_grouper.cameras.reolink import ReolinkCamera
+from video_grouper.utils.config import CameraConfig
+
+logging.basicConfig(level=logging.INFO)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _make_config():
+    return CameraConfig(
+        type="reolink",
+        device_ip="192.168.1.200",
+        username="admin",
+        password="admin",
+        channel=0,
+    )
+
+
+def _login_response():
+    """Successful login JSON response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = [
+        {
+            "cmd": "Login",
+            "code": 0,
+            "value": {
+                "Token": {"name": "abc123", "leaseTime": 3600},
+            },
+        }
+    ]
+    return resp
+
+
+def _success_response(cmd, value):
+    """Generic successful API JSON response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = [{"cmd": cmd, "code": 0, "value": value}]
+    resp.text = str(resp.json.return_value)
+    return resp
+
+
+def _error_response(cmd, code=1, detail="some error"):
+    """Generic error API JSON response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = [{"cmd": cmd, "code": code, "error": {"detail": detail}}]
+    resp.text = str(resp.json.return_value)
+    return resp
+
+
+# ── Initialization ────────────────────────────────────────────────────
+
+
+class TestReolinkCameraInitialization:
+    def test_init_with_config(self, tmp_path):
+        config = _make_config()
+        camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
+        assert camera.device_ip == "192.168.1.200"
+        assert camera.username == "admin"
+        assert camera.password == "admin"
+        assert camera.channel == 0
+        assert camera._token is None
+
+    def test_properties(self, tmp_path):
+        camera = ReolinkCamera(config=_make_config(), storage_path=str(tmp_path))
+        assert isinstance(camera.connection_events, list)
+        assert isinstance(camera.is_connected, bool)
+
+
+# ── Token management ──────────────────────────────────────────────────
+
+
+class TestReolinkTokenManagement:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_login_success(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.return_value = _login_response()
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        result = await camera._login(mock_client)
+        assert result is True
+        assert camera._token == "abc123"
+        assert camera._token_expiry > 0
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_login_failure(self, mock_log):
+        mock_client = AsyncMock()
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = [
+            {"cmd": "Login", "code": 1, "error": {"detail": "bad credentials"}}
+        ]
+        mock_client.post.return_value = resp
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        result = await camera._login(mock_client)
+        assert result is False
+        assert camera._token is None
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_login_http_error(self, mock_log):
+        mock_client = AsyncMock()
+        resp = MagicMock()
+        resp.status_code = 500
+        mock_client.post.return_value = resp
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        result = await camera._login(mock_client)
+        assert result is False
+
+
+# ── Availability ──────────────────────────────────────────────────────
+
+
+class TestReolinkCameraAvailability:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_check_availability_success(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetDevInfo",
+                {"DevInfo": {"name": "Reolink", "model": "RLC-810A"}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+        camera._is_connected = False
+        camera._connection_events = []
+
+        result = await camera.check_availability()
+        assert result is True
+        assert camera._is_connected is True
+        assert len(camera._connection_events) == 1
+        assert camera._connection_events[0]["event_type"] == "connected"
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_check_availability_connection_error(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+        camera._is_connected = True
+        camera._connection_events = []
+
+        result = await camera.check_availability()
+        assert result is False
+        assert camera._is_connected is False
+        assert len(camera._connection_events) == 1
+        assert camera._connection_events[0]["event_type"] == "disconnected"
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_check_availability_no_state_change(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetDevInfo",
+                {"DevInfo": {"name": "Reolink"}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+        camera._is_connected = True
+        camera._connection_events = []
+
+        result = await camera.check_availability()
+        assert result is True
+        assert camera._is_connected is True
+        assert len(camera._connection_events) == 0
+
+
+# ── File operations ───────────────────────────────────────────────────
+
+
+class TestReolinkCameraFileOperations:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_list_success(self, mock_log):
+        mock_client = AsyncMock()
+        search_value = {
+            "SearchResult": {
+                "Status": 0,
+                "File": [
+                    {
+                        "name": "Rec/20240101/Rec_00_20240101120000.mp4",
+                        "StartTime": {
+                            "year": 2024,
+                            "mon": 1,
+                            "day": 1,
+                            "hour": 12,
+                            "min": 0,
+                            "sec": 0,
+                        },
+                        "EndTime": {
+                            "year": 2024,
+                            "mon": 1,
+                            "day": 1,
+                            "hour": 12,
+                            "min": 30,
+                            "sec": 0,
+                        },
+                        "size": 320256446,
+                    },
+                ],
+            }
+        }
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("Search", search_value),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        start = datetime(2024, 1, 1, 12, 0, 0)
+        end = datetime(2024, 1, 1, 13, 0, 0)
+        files = await camera.get_file_list(start, end)
+
+        assert len(files) == 1
+        assert files[0]["path"] == "Rec/20240101/Rec_00_20240101120000.mp4"
+        assert files[0]["startTime"] == "2024-01-01 12:00:00"
+        assert files[0]["endTime"] == "2024-01-01 12:30:00"
+        assert files[0]["size"] == 320256446
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_list_empty(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("Search", {"SearchResult": {"Status": 0}}),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        files = await camera.get_file_list(datetime(2024, 1, 1), datetime(2024, 1, 2))
+        assert files == []
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_list_login_failure(self, mock_log):
+        mock_client = AsyncMock()
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = [{"cmd": "Login", "code": 1, "error": {}}]
+        mock_client.post.return_value = resp
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        files = await camera.get_file_list(datetime(2024, 1, 1), datetime(2024, 1, 2))
+        assert files == []
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_size_success(self, mock_log):
+        mock_client = AsyncMock()
+
+        # Login response
+        mock_client.post.return_value = _login_response()
+
+        # HEAD response for file size
+        head_resp = MagicMock()
+        head_resp.status_code = 200
+        head_resp.headers = {"content-length": "1048576"}
+        mock_client.head.return_value = head_resp
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        size = await camera.get_file_size("Rec/test.mp4")
+        assert size == 1048576
+
+
+# ── Recording control ─────────────────────────────────────────────────
+
+
+class TestReolinkCameraRecording:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_stop_recording_success(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("SetRec", {"rspCode": 200}),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        result = await camera.stop_recording()
+        assert result is True
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_recording_status_recording(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetRec",
+                {"Rec": {"channel": 0, "schedule": {"enable": 1}}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        assert await camera.get_recording_status() is True
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_recording_status_not_recording(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetRec",
+                {"Rec": {"channel": 0, "schedule": {"enable": 0}}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        assert await camera.get_recording_status() is False
+
+
+# ── Device info ───────────────────────────────────────────────────────
+
+
+class TestReolinkCameraDeviceInfo:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_device_info_success(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetDevInfo",
+                {
+                    "DevInfo": {
+                        "name": "Front Camera",
+                        "type": "IPC",
+                        "firmVer": "v3.1.0",
+                        "serial": "SN12345",
+                        "mac": "AA:BB:CC:DD:EE:FF",
+                        "model": "RLC-810A",
+                    }
+                },
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["device_name"] == "Front Camera"
+        assert info["device_type"] == "IPC"
+        assert info["firmware_version"] == "v3.1.0"
+        assert info["serial_number"] == "SN12345"
+        assert info["mac_address"] == "AA:BB:CC:DD:EE:FF"
+        assert info["model"] == "RLC-810A"
+        assert info["manufacturer"] == "Reolink"
+        assert info["ip_address"] == "192.168.1.200"
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_device_info_failure(self, mock_log):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _error_response("GetDevInfo"),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["device_name"] == ""
+        assert info["ip_address"] == "192.168.1.200"
+        assert info["manufacturer"] == "Reolink"
+
+
+# ── Connection state ──────────────────────────────────────────────────
+
+
+class TestReolinkConnectionState:
+    def test_get_connected_timeframes_empty(self, tmp_path):
+        camera = ReolinkCamera(config=_make_config(), storage_path=str(tmp_path))
+        assert camera.get_connected_timeframes() == []
+
+    def test_get_connected_timeframes_with_events(self, tmp_path):
+        camera = ReolinkCamera(config=_make_config(), storage_path=str(tmp_path))
+        camera._connection_events = [
+            {
+                "event_datetime": "2024-01-01T12:00:00-05:00",
+                "event_type": "connected",
+                "message": "Connected",
+            },
+            {
+                "event_datetime": "2024-01-01T14:00:00-05:00",
+                "event_type": "disconnected",
+                "message": "Disconnected",
+            },
+        ]
+        timeframes = camera.get_connected_timeframes()
+        assert len(timeframes) == 1
+        assert timeframes[0][0].hour == 12
+        assert timeframes[0][1].hour == 14
+
+
+# ── Datetime conversion helpers ───────────────────────────────────────
+
+
+class TestReolinkHelpers:
+    def test_datetime_to_reolink(self):
+        dt = datetime(2024, 3, 15, 14, 30, 45)
+        result = ReolinkCamera._datetime_to_reolink(dt)
+        assert result == {
+            "year": 2024,
+            "mon": 3,
+            "day": 15,
+            "hour": 14,
+            "min": 30,
+            "sec": 45,
+        }
+
+    def test_reolink_to_datetime_str(self):
+        t = {"year": 2024, "mon": 1, "day": 5, "hour": 8, "min": 3, "sec": 7}
+        result = ReolinkCamera._reolink_to_datetime_str(t)
+        assert result == "2024-01-05 08:03:07"

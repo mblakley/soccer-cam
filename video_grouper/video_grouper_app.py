@@ -63,6 +63,15 @@ class VideoGrouperApp:
                 self.camera = DahuaCamera(
                     config=config.camera, storage_path=self.storage_path
                 )
+            elif camera_type == "reolink":
+                from video_grouper.cameras.reolink import ReolinkCamera
+
+                logger.info(
+                    f"Initializing {camera_type} camera with IP: {config.camera.device_ip}"
+                )
+                self.camera = ReolinkCamera(
+                    config=config.camera, storage_path=self.storage_path
+                )
             elif camera_type == "simulator":
                 from video_grouper.cameras.simulator import SimulatorCamera
 

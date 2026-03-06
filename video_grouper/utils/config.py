@@ -50,6 +50,7 @@ class CameraConfig(BaseModel):
     username: str
     password: str
     auto_stop_recording: bool = True
+    channel: int = 0
 
 
 class StorageConfig(BaseModel):
