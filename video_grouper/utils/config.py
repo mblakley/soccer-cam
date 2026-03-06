@@ -198,6 +198,9 @@ class TTTConfig(BaseModel):
     camera_id: str = ""
     ttt_sync_enabled: bool = False
     heartbeat_interval: int = 30
+    job_polling_enabled: bool = False
+    job_poll_interval: int = 30
+    machine_name: str = ""
 
 
 class MomentTaggingConfig(BaseModel):
