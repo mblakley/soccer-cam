@@ -1,4 +1,19 @@
-/// Configuration for connecting to a Dahua IP camera.
+/// Supported camera types.
+enum CameraType {
+  dahua,
+  reolink;
+
+  String get displayName {
+    switch (this) {
+      case CameraType.dahua:
+        return 'Dahua';
+      case CameraType.reolink:
+        return 'ReoLink';
+    }
+  }
+}
+
+/// Configuration for connecting to an IP camera.
 class CameraConfig {
   const CameraConfig({
     required this.host,
@@ -9,6 +24,7 @@ class CameraConfig {
     this.protocol = 'http',
     this.connectTimeoutSeconds = 10,
     this.downloadTimeoutSeconds = 300,
+    this.cameraType = CameraType.dahua,
   });
 
   final String host;
@@ -19,10 +35,10 @@ class CameraConfig {
   final String protocol;
   final int connectTimeoutSeconds;
   final int downloadTimeoutSeconds;
+  final CameraType cameraType;
 
   String get baseUrl => '$protocol://$host:$port';
 
-  /// Create from a JSON map (e.g., from sqflite or shared_preferences).
   factory CameraConfig.fromJson(Map<String, dynamic> json) {
     return CameraConfig(
       host: json['host'] as String,
@@ -33,6 +49,10 @@ class CameraConfig {
       protocol: json['protocol'] as String? ?? 'http',
       connectTimeoutSeconds: json['connect_timeout_seconds'] as int? ?? 10,
       downloadTimeoutSeconds: json['download_timeout_seconds'] as int? ?? 300,
+      cameraType: CameraType.values.firstWhere(
+        (t) => t.name == (json['camera_type'] as String? ?? 'dahua'),
+        orElse: () => CameraType.dahua,
+      ),
     );
   }
 
@@ -46,6 +66,7 @@ class CameraConfig {
       'protocol': protocol,
       'connect_timeout_seconds': connectTimeoutSeconds,
       'download_timeout_seconds': downloadTimeoutSeconds,
+      'camera_type': cameraType.name,
     };
   }
 
@@ -58,6 +79,7 @@ class CameraConfig {
     String? protocol,
     int? connectTimeoutSeconds,
     int? downloadTimeoutSeconds,
+    CameraType? cameraType,
   }) {
     return CameraConfig(
       host: host ?? this.host,
@@ -70,9 +92,11 @@ class CameraConfig {
           connectTimeoutSeconds ?? this.connectTimeoutSeconds,
       downloadTimeoutSeconds:
           downloadTimeoutSeconds ?? this.downloadTimeoutSeconds,
+      cameraType: cameraType ?? this.cameraType,
     );
   }
 
   @override
-  String toString() => 'CameraConfig($baseUrl, channel=$channel)';
+  String toString() =>
+      'CameraConfig(${cameraType.displayName} $baseUrl, channel=$channel)';
 }

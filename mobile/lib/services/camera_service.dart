@@ -1,19 +1,70 @@
-import 'dart:async';
 import 'package:dio/dio.dart';
 import '../models/camera_config.dart';
 import '../models/recording_file.dart';
 import '../utils/digest_auth.dart';
 
+/// Abstract interface for camera communication services.
+///
+/// Implemented by [DahuaCameraService] and [ReolinkCameraService].
+abstract class CameraService {
+  CameraService({required this.config});
+
+  final CameraConfig config;
+
+  /// Check if the camera is reachable and responding.
+  Future<bool> checkAvailability();
+
+  /// List recording files on the camera within the given time range.
+  Future<List<RecordingFile>> listFiles({
+    required DateTime startTime,
+    required DateTime endTime,
+    int? channel,
+  });
+
+  /// Download a recording file from the camera.
+  ///
+  /// [onProgress] is called with (received, total) bytes.
+  Future<Response<dynamic>> downloadFile(
+    RecordingFile file, {
+    String? savePath,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  });
+
+  /// Dispose resources.
+  void dispose();
+
+  /// Factory that creates the correct service based on camera type.
+  factory CameraService.create({required CameraConfig config}) {
+    switch (config.cameraType) {
+      case CameraType.dahua:
+        return DahuaCameraService(config: config);
+      case CameraType.reolink:
+        return ReolinkCameraService(config: config);
+    }
+  }
+}
+
+/// Exception for camera communication errors.
+class CameraException implements Exception {
+  const CameraException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'CameraException: $message';
+}
+
+// ── Dahua Implementation ─────────────────────────────────────────────
+
 /// Service for communicating with Dahua IP cameras.
 ///
-/// Implements the Dahua HTTP API for:
+/// Implements the Dahua HTTP API:
 /// - Availability checks via recordManager.cgi
 /// - File listing via mediaFileFind.cgi (create/findFile/findNextFile/close/destroy)
 /// - File download via RPC_Loadfile
-///
-/// Uses HTTP Digest authentication.
-class CameraService {
-  CameraService({required this.config}) {
+/// - HTTP Digest authentication
+class DahuaCameraService extends CameraService {
+  DahuaCameraService({required super.config}) {
     _dio = Dio(BaseOptions(
       baseUrl: config.baseUrl,
       connectTimeout: Duration(seconds: config.connectTimeoutSeconds),
@@ -25,13 +76,9 @@ class CameraService {
     ));
   }
 
-  final CameraConfig config;
   late final Dio _dio;
 
-  /// Check if the camera is reachable and responding.
-  ///
-  /// Uses the recordManager getCaps endpoint.
-  /// Returns true if the camera responds successfully.
+  @override
   Future<bool> checkAvailability() async {
     try {
       final response = await _dio.get(
@@ -44,13 +91,7 @@ class CameraService {
     }
   }
 
-  /// List recording files on the camera within the given time range.
-  ///
-  /// Uses the Dahua mediaFileFind protocol:
-  /// 1. factory.create -> get object ID
-  /// 2. startFind with conditions (channel, time range, type)
-  /// 3. findNextFile in a loop until no more results
-  /// 4. close and destroy the search object
+  @override
   Future<List<RecordingFile>> listFiles({
     required DateTime startTime,
     required DateTime endTime,
@@ -87,7 +128,6 @@ class CameraService {
 
       return files;
     } catch (e) {
-      // Try to clean up the find object on error.
       try {
         await _closeFindObject(objectId);
         await _destroyFindObject(objectId);
@@ -96,11 +136,7 @@ class CameraService {
     }
   }
 
-  /// Download a recording file from the camera.
-  ///
-  /// Uses the RPC_Loadfile endpoint for streaming download.
-  /// [onProgress] is called with (received, total) bytes.
-  /// Returns the raw response stream for the caller to write to disk.
+  @override
   Future<Response<dynamic>> downloadFile(
     RecordingFile file, {
     String? savePath,
@@ -125,9 +161,7 @@ class CameraService {
     );
   }
 
-  /// Take a snapshot from the camera.
-  ///
-  /// Returns the image bytes.
+  /// Take a snapshot from the camera (Dahua-specific).
   Future<List<int>> takeSnapshot({int? channel}) async {
     final ch = channel ?? config.channel;
     final response = await _dio.get<List<int>>(
@@ -140,8 +174,6 @@ class CameraService {
 
   // --- Private Dahua mediaFileFind protocol methods ---
 
-  /// Step 1: Create a mediaFileFind object.
-  /// Returns the object ID.
   Future<int?> _createFindObject() async {
     final response = await _dio.get(
       '/cgi-bin/mediaFileFind.cgi',
@@ -150,7 +182,6 @@ class CameraService {
     return _parseObjectId(response.data.toString());
   }
 
-  /// Step 2: Start a file search with conditions.
   Future<bool> _startFind({
     required int objectId,
     required int channel,
@@ -177,7 +208,6 @@ class CameraService {
     return body.contains('OK') || body.contains('true');
   }
 
-  /// Step 3: Fetch the next batch of found files.
   Future<List<RecordingFile>> _findNextFiles({
     required int objectId,
     int count = 100,
@@ -195,33 +225,20 @@ class CameraService {
     return _parseFileList(body);
   }
 
-  /// Step 4: Close the find session.
   Future<void> _closeFindObject(int objectId) async {
     await _dio.get(
       '/cgi-bin/mediaFileFind.cgi',
-      queryParameters: {
-        'action': 'close',
-        'object': objectId,
-      },
+      queryParameters: {'action': 'close', 'object': objectId},
     );
   }
 
-  /// Step 5: Destroy the find object.
   Future<void> _destroyFindObject(int objectId) async {
     await _dio.get(
       '/cgi-bin/mediaFileFind.cgi',
-      queryParameters: {
-        'action': 'destroy',
-        'object': objectId,
-      },
+      queryParameters: {'action': 'destroy', 'object': objectId},
     );
   }
 
-  // --- Response parsers ---
-
-  /// Parse object ID from factory.create response.
-  ///
-  /// Response format: "result=<id>"
   int? _parseObjectId(String responseBody) {
     final match = RegExp(r'result=(\d+)').firstMatch(responseBody);
     if (match != null) {
@@ -230,20 +247,9 @@ class CameraService {
     return null;
   }
 
-  /// Parse file list from findNextFile response.
-  ///
-  /// Response format is key=value pairs like:
-  ///   found=3
-  ///   items[0].Channel=1
-  ///   items[0].StartTime=2024-01-15 12:30:00
-  ///   items[0].EndTime=2024-01-15 12:45:00
-  ///   items[0].FilePath=/mnt/sd/...
-  ///   items[0].Size=123456789
-  ///   items[0].Type=dav
   List<RecordingFile> _parseFileList(String responseBody) {
     final lines = responseBody.split('\n').map((l) => l.trim()).toList();
 
-    // Check if any files were found.
     final foundLine = lines.firstWhere(
       (l) => l.startsWith('found='),
       orElse: () => 'found=0',
@@ -251,7 +257,6 @@ class CameraService {
     final found = int.tryParse(foundLine.split('=').last) ?? 0;
     if (found == 0) return [];
 
-    // Group lines by item index.
     final itemFields = <int, Map<String, String>>{};
     final itemPattern = RegExp(r'items\[(\d+)\]\.(\w+)=(.+)');
 
@@ -272,9 +277,6 @@ class CameraService {
         .toList();
   }
 
-  /// Format a DateTime for Dahua API queries.
-  ///
-  /// Dahua expects: "YYYY-MM-DD HH:MM:SS"
   String _formatDahuaTime(DateTime dt) {
     return '${dt.year}-'
         '${dt.month.toString().padLeft(2, '0')}-'
@@ -284,17 +286,219 @@ class CameraService {
         '${dt.second.toString().padLeft(2, '0')}';
   }
 
-  /// Dispose resources.
+  @override
   void dispose() {
     _dio.close();
   }
 }
 
-/// Exception for camera communication errors.
-class CameraException implements Exception {
-  const CameraException(this.message);
-  final String message;
+// ── ReoLink Implementation ───────────────────────────────────────────
+
+/// Service for communicating with ReoLink IP cameras.
+///
+/// Implements the ReoLink HTTP JSON API:
+/// - Token-based authentication (Login command)
+/// - Availability checks via GetDevInfo
+/// - File listing via Search command
+/// - File download via Download command with token auth
+class ReolinkCameraService extends CameraService {
+  ReolinkCameraService({required super.config}) {
+    _dio = Dio(BaseOptions(
+      baseUrl: config.baseUrl,
+      connectTimeout: Duration(seconds: config.connectTimeoutSeconds),
+      receiveTimeout: Duration(seconds: config.downloadTimeoutSeconds),
+    ));
+  }
+
+  late final Dio _dio;
+  String? _token;
+  DateTime? _tokenExpiry;
+
+  // ── Token management ────────────────────────────────────────────
+
+  Future<bool> _login() async {
+    try {
+      final response = await _dio.post(
+        '/cgi-bin/api.cgi',
+        queryParameters: {'cmd': 'Login', 'token': 'null'},
+        data: [
+          {
+            'cmd': 'Login',
+            'action': 0,
+            'param': {
+              'User': {
+                'userName': config.username,
+                'password': config.password,
+              },
+            },
+          },
+        ],
+      );
+
+      if (response.statusCode != 200) return false;
+
+      final data = response.data as List;
+      if (data.isEmpty || data[0]['code'] != 0) return false;
+
+      final tokenInfo = data[0]['value']['Token'];
+      _token = tokenInfo['name'] as String;
+      final leaseTime = (tokenInfo['leaseTime'] as int?) ?? 3600;
+      _tokenExpiry = DateTime.now().add(Duration(seconds: leaseTime - 60));
+      return true;
+    } on DioException {
+      return false;
+    }
+  }
+
+  Future<bool> _ensureToken() async {
+    if (_token != null &&
+        _tokenExpiry != null &&
+        DateTime.now().isBefore(_tokenExpiry!)) {
+      return true;
+    }
+    return _login();
+  }
+
+  Future<List<dynamic>?> _apiCall(
+    String cmd,
+    Map<String, dynamic> param, {
+    int action = 0,
+  }) async {
+    if (!await _ensureToken()) return null;
+
+    final response = await _dio.post(
+      '/cgi-bin/api.cgi',
+      queryParameters: {'cmd': cmd, 'token': _token},
+      data: [
+        {'cmd': cmd, 'action': action, 'param': param},
+      ],
+    );
+
+    if (response.statusCode != 200) return null;
+    final data = response.data;
+    if (data == null || (data is List && data.isEmpty)) return null;
+    return data as List;
+  }
+
+  static Map<String, int> _dateTimeToReolink(DateTime dt) {
+    return {
+      'year': dt.year,
+      'mon': dt.month,
+      'day': dt.day,
+      'hour': dt.hour,
+      'min': dt.minute,
+      'sec': dt.second,
+    };
+  }
+
+  static String _reolinkTimeToString(Map<String, dynamic> t) {
+    return '${(t['year'] as int).toString().padLeft(4, '0')}-'
+        '${(t['mon'] as int).toString().padLeft(2, '0')}-'
+        '${(t['day'] as int).toString().padLeft(2, '0')} '
+        '${(t['hour'] as int).toString().padLeft(2, '0')}:'
+        '${(t['min'] as int).toString().padLeft(2, '0')}:'
+        '${(t['sec'] as int).toString().padLeft(2, '0')}';
+  }
+
+  // ── CameraService implementation ────────────────────────────────
 
   @override
-  String toString() => 'CameraException: $message';
+  Future<bool> checkAvailability() async {
+    try {
+      final data = await _apiCall(
+        'GetDevInfo',
+        {'DevInfo': {'channel': config.channel}},
+      );
+      return data != null && data[0]['code'] == 0;
+    } on DioException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<List<RecordingFile>> listFiles({
+    required DateTime startTime,
+    required DateTime endTime,
+    int? channel,
+  }) async {
+    final ch = channel ?? config.channel;
+    final data = await _apiCall(
+      'Search',
+      {
+        'Search': {
+          'channel': ch,
+          'onlyStatus': 0,
+          'streamType': 'main',
+          'StartTime': _dateTimeToReolink(startTime),
+          'EndTime': _dateTimeToReolink(endTime),
+        },
+      },
+      action: 1,
+    );
+
+    if (data == null) return [];
+    final resp = data[0] as Map<String, dynamic>;
+    if (resp['code'] != 0) return [];
+
+    final searchResult =
+        (resp['value'] as Map<String, dynamic>?)?['SearchResult']
+            as Map<String, dynamic>?;
+    if (searchResult == null) return [];
+
+    final rawFiles = searchResult['File'] as List? ?? [];
+    return rawFiles.map((f) {
+      final startMap = f['StartTime'] as Map<String, dynamic>;
+      final endMap = f['EndTime'] as Map<String, dynamic>;
+      return RecordingFile.fromReolinkJson(
+        filePath: f['name'] as String? ?? '',
+        startTimeStr: _reolinkTimeToString(startMap),
+        endTimeStr: _reolinkTimeToString(endMap),
+        fileSize: f['size'] as int? ?? 0,
+        channel: ch,
+      );
+    }).toList();
+  }
+
+  @override
+  Future<Response<dynamic>> downloadFile(
+    RecordingFile file, {
+    String? savePath,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    if (!await _ensureToken()) {
+      throw CameraException('Failed to authenticate with ReoLink camera');
+    }
+
+    final queryParams = {
+      'cmd': 'Download',
+      'source': file.filePath,
+      'output': file.filePath,
+      'token': _token,
+    };
+
+    if (savePath != null) {
+      return _dio.download(
+        '/cgi-bin/api.cgi',
+        savePath,
+        queryParameters: queryParams,
+        onReceiveProgress: onProgress,
+        cancelToken: cancelToken,
+      );
+    }
+
+    return _dio.get(
+      '/cgi-bin/api.cgi',
+      queryParameters: queryParams,
+      options: Options(responseType: ResponseType.stream),
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
+  void dispose() {
+    _dio.close();
+  }
 }

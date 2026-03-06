@@ -26,9 +26,29 @@ void main() {
       expect(httpsConfig.baseUrl, 'https://192.168.1.108:443');
     });
 
-    test('CameraService can be constructed', () {
-      final service = CameraService(config: config);
+    test('config defaults to dahua camera type', () {
+      expect(config.cameraType, CameraType.dahua);
+    });
+
+    test('config JSON round-trip preserves camera type', () {
+      final reolinkConfig = config.copyWith(cameraType: CameraType.reolink);
+      final json = reolinkConfig.toJson();
+      final restored = CameraConfig.fromJson(json);
+      expect(restored.cameraType, CameraType.reolink);
+    });
+
+    test('CameraService.create returns DahuaCameraService for dahua type', () {
+      final service = CameraService.create(config: config);
+      expect(service, isA<DahuaCameraService>());
       expect(service.config, config);
+      service.dispose();
+    });
+
+    test('CameraService.create returns ReolinkCameraService for reolink type', () {
+      final reolinkConfig = config.copyWith(cameraType: CameraType.reolink);
+      final service = CameraService.create(config: reolinkConfig);
+      expect(service, isA<ReolinkCameraService>());
+      expect(service.config.cameraType, CameraType.reolink);
       service.dispose();
     });
 
@@ -63,20 +83,13 @@ void main() {
     });
 
     test('fileName extracts correctly from path', () {
-      const file = RecordingFile(
-        filePath: '/mnt/sd/2024-01-15/001/dav/12/clip.dav',
-        startTime: null,
-        endTime: null,
-        channel: 1,
-      );
-      // RecordingFile requires non-null DateTime, so use a parsed version:
-      final parsed = RecordingFile.fromDahuaFields({
+      final file = RecordingFile.fromDahuaFields({
         'FilePath': '/mnt/sd/2024-01-15/001/dav/12/clip.dav',
         'StartTime': '2024-01-15 12:30:00',
         'EndTime': '2024-01-15 12:45:00',
       });
 
-      expect(parsed.fileName, 'clip.dav');
+      expect(file.fileName, 'clip.dav');
     });
 
     test('isDownloaded returns false when no localPath', () {
@@ -119,6 +132,44 @@ void main() {
       expect(restored.fileSize, original.fileSize);
       expect(restored.downloadProgress, original.downloadProgress);
       expect(restored.localPath, original.localPath);
+    });
+  });
+
+  group('RecordingFile.fromReolinkJson', () {
+    test('parses ReoLink fields correctly', () {
+      final file = RecordingFile.fromReolinkJson(
+        filePath: '/mnt/sd/20240115/rec_12300000.mp4',
+        startTimeStr: '2024-01-15 12:30:00',
+        endTimeStr: '2024-01-15 12:45:00',
+        fileSize: 987654321,
+        channel: 0,
+      );
+
+      expect(file.filePath, '/mnt/sd/20240115/rec_12300000.mp4');
+      expect(file.startTime, DateTime(2024, 1, 15, 12, 30, 0));
+      expect(file.endTime, DateTime(2024, 1, 15, 12, 45, 0));
+      expect(file.channel, 0);
+      expect(file.fileSize, 987654321);
+      expect(file.type, 'mp4');
+      expect(file.duration, const Duration(minutes: 15));
+    });
+
+    test('extracts file extension as type', () {
+      final file = RecordingFile.fromReolinkJson(
+        filePath: '/recordings/video.avi',
+        startTimeStr: '2024-01-15 12:30:00',
+        endTimeStr: '2024-01-15 12:45:00',
+      );
+      expect(file.type, 'avi');
+    });
+
+    test('defaults to mp4 when no extension', () {
+      final file = RecordingFile.fromReolinkJson(
+        filePath: '/recordings/video',
+        startTimeStr: '2024-01-15 12:30:00',
+        endTimeStr: '2024-01-15 12:45:00',
+      );
+      expect(file.type, 'mp4');
     });
   });
 

@@ -1,6 +1,6 @@
-/// Represents a single .dav recording file on the Dahua camera.
+/// Represents a single recording file on an IP camera.
 ///
-/// Mirrors the RecordingFile model from the soccer-cam Python project.
+/// Supports both Dahua (.dav) and ReoLink (.mp4) file formats.
 class RecordingFile {
   const RecordingFile({
     required this.filePath,
@@ -75,6 +75,26 @@ class RecordingFile {
     } catch (_) {
       return DateTime.now();
     }
+  }
+
+  /// Parse a recording file from ReoLink Search response.
+  ///
+  /// The caller converts ReoLink's time dicts to "YYYY-MM-DD HH:MM:SS" strings.
+  factory RecordingFile.fromReolinkJson({
+    required String filePath,
+    required String startTimeStr,
+    required String endTimeStr,
+    int fileSize = 0,
+    int channel = 0,
+  }) {
+    return RecordingFile(
+      filePath: filePath,
+      startTime: _parseDahuaTimestamp(startTimeStr),
+      endTime: _parseDahuaTimestamp(endTimeStr),
+      channel: channel,
+      fileSize: fileSize,
+      type: filePath.contains('.') ? filePath.split('.').last : 'mp4',
+    );
   }
 
   factory RecordingFile.fromJson(Map<String, dynamic> json) {

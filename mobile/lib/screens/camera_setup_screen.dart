@@ -4,10 +4,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/camera_config.dart';
 import '../services/camera_service.dart';
 
-/// Screen for configuring the Dahua camera connection.
+/// Screen for configuring the camera connection.
 ///
-/// Provides form fields for IP address, port, username, password,
-/// and a "Test Connection" button to verify connectivity.
+/// Supports both Dahua and ReoLink cameras. Provides form fields for
+/// camera type, IP address, port, username, password, and channel,
+/// plus a "Test Connection" button to verify connectivity.
 class CameraSetupScreen extends ConsumerStatefulWidget {
   const CameraSetupScreen({super.key});
 
@@ -23,6 +24,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
   final _passwordController = TextEditingController();
   final _channelController = TextEditingController(text: '1');
 
+  CameraType _cameraType = CameraType.dahua;
   bool _obscurePassword = true;
   bool _isTesting = false;
   _ConnectionTestResult? _testResult;
@@ -54,6 +56,15 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
       _channelController.text =
           (prefs.getInt('camera_channel') ?? 1).toString();
     }
+    final savedType = prefs.getString('camera_type');
+    if (savedType != null) {
+      setState(() {
+        _cameraType = CameraType.values.firstWhere(
+          (t) => t.name == savedType,
+          orElse: () => CameraType.dahua,
+        );
+      });
+    }
   }
 
   @override
@@ -77,7 +88,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Dahua Camera Configuration',
+              'Camera Configuration',
               textAlign: TextAlign.center,
               style: theme.textTheme.titleLarge,
             ),
@@ -90,6 +101,29 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
               ),
             ),
             const SizedBox(height: 24),
+
+            // Camera type selector.
+            SegmentedButton<CameraType>(
+              segments: CameraType.values.map((type) {
+                return ButtonSegment<CameraType>(
+                  value: type,
+                  label: Text(type.displayName),
+                  icon: Icon(
+                    type == CameraType.dahua
+                        ? Icons.camera_outdoor
+                        : Icons.linked_camera,
+                  ),
+                );
+              }).toList(),
+              selected: {_cameraType},
+              onSelectionChanged: (selected) {
+                setState(() {
+                  _cameraType = selected.first;
+                  _testResult = null;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
 
             // Host field.
             TextFormField(
@@ -105,7 +139,6 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
                 if (value == null || value.isEmpty) {
                   return 'IP address is required';
                 }
-                // Basic IP or hostname validation.
                 final ipPattern = RegExp(
                   r'^(\d{1,3}\.){3}\d{1,3}$|^[a-zA-Z0-9.-]+$',
                 );
@@ -144,17 +177,17 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
                 Expanded(
                   child: TextFormField(
                     controller: _channelController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Channel',
-                      hintText: '1',
-                      prefixIcon: Icon(Icons.tv),
-                      border: OutlineInputBorder(),
+                      hintText: _cameraType == CameraType.dahua ? '1' : '0',
+                      prefixIcon: const Icon(Icons.tv),
+                      border: const OutlineInputBorder(),
                     ),
                     keyboardType: TextInputType.number,
                     validator: (value) {
                       if (value == null || value.isEmpty) return 'Required';
                       final ch = int.tryParse(value);
-                      if (ch == null || ch < 1) return 'Invalid';
+                      if (ch == null || ch < 0) return 'Invalid';
                       return null;
                     },
                   ),
@@ -299,6 +332,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
       username: _usernameController.text.trim(),
       password: _passwordController.text,
       channel: int.tryParse(_channelController.text) ?? 1,
+      cameraType: _cameraType,
     );
   }
 
@@ -312,7 +346,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
 
     try {
       final config = _buildConfig();
-      final cameraService = CameraService(config: config);
+      final cameraService = CameraService.create(config: config);
 
       final available = await cameraService.checkAvailability();
       cameraService.dispose();
@@ -321,7 +355,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
         _testResult = _ConnectionTestResult(
           success: available,
           message: available
-              ? 'Camera is reachable at ${config.baseUrl}'
+              ? '${config.cameraType.displayName} camera is reachable at ${config.baseUrl}'
               : 'Camera did not respond. Check IP address and credentials.',
         );
       });
@@ -355,6 +389,7 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
       'camera_channel',
       int.tryParse(_channelController.text) ?? 1,
     );
+    await prefs.setString('camera_type', _cameraType.name);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
