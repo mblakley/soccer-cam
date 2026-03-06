@@ -131,6 +131,8 @@ async def async_convert_file(file_path: str) -> Optional[str]:
     cmd = [
         "ffmpeg",
         "-y",
+        "-fflags",
+        "+genpts+discardcorrupt",
         "-i",
         file_path,
         "-c:v",
@@ -139,6 +141,10 @@ async def async_convert_file(file_path: str) -> Optional[str]:
         "aac",
         "-b:a",
         "192k",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-movflags",
+        "+faststart",
         output_path,
     ]
 
@@ -224,6 +230,8 @@ async def trim_video(
     cmd = [
         "ffmpeg",
         "-y",
+        "-fflags",
+        "+genpts+discardcorrupt",
         "-i",
         input_path,
         "-ss",
@@ -233,7 +241,17 @@ async def trim_video(
     if duration:
         cmd.extend(["-t", duration])
 
-    cmd.extend(["-c", "copy", output_path])
+    cmd.extend(
+        [
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+    )
 
     logger.info(f"Running ffmpeg trim command: {' '.join(cmd)}")
     return await _run_ffmpeg_checked(
@@ -247,6 +265,8 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
     cmd = [
         "ffmpeg",
         "-y",
+        "-fflags",
+        "+genpts+discardcorrupt",
         "-f",
         "concat",
         "-safe",
@@ -259,6 +279,10 @@ async def combine_videos(file_list_path: str, output_path: str) -> bool:
         "aac",
         "-b:a",
         "192k",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-movflags",
+        "+faststart",
         output_path,
     ]
 
