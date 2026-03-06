@@ -95,3 +95,8 @@ markers = [
     "e2e: marks tests as end-to-end tests (deselect with '-m \"not e2e\"')",
 ]
 asyncio_mode = "strict" 
+
+[dependency-groups]
+dev = [
+    "aiohttp>=3.13.3",
+]

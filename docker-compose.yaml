@@ -11,3 +11,33 @@ services:
       - ./video_grouper/config.ini:/app/config.ini
     environment:
       - PYTHONUNBUFFERED=1
+
+  dahua-emulator:
+    profiles:
+      - dahua
+    build:
+      context: .
+      dockerfile: tests/camera_emulator/Dockerfile
+    environment:
+      - CAMERA_TYPE=dahua
+      - USERNAME=admin
+      - PASSWORD=admin
+    volumes:
+      - ./tests/e2e/test_clips:/clips:ro
+    ports:
+      - "8554:80"
+
+  reolink-emulator:
+    profiles:
+      - reolink
+    build:
+      context: .
+      dockerfile: tests/camera_emulator/Dockerfile
+    environment:
+      - CAMERA_TYPE=reolink
+      - USERNAME=admin
+      - PASSWORD=admin
+    volumes:
+      - ./tests/e2e/test_clips:/clips:ro
+    ports:
+      - "8555:80"
