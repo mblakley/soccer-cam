@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from video_grouper.utils.ffmpeg_utils import (
     async_convert_file,
+    combine_videos,
     get_video_duration,
+    trim_video,
     verify_ffmpeg_install,
     create_screenshot,
 )
@@ -145,3 +147,48 @@ async def test_create_screenshot_failure(mock_ffmpeg_subprocess, mock_file_ops):
 
     assert success is False
     mock_ffmpeg_subprocess.assert_called_once()
+
+
+def _get_ffmpeg_args(mock_subprocess):
+    """Extract the flat arg tuple passed to create_subprocess_exec."""
+    args, _ = mock_subprocess.call_args
+    return args
+
+
+STRUCTURAL_FLAGS = [
+    "+genpts+discardcorrupt",
+    "make_zero",
+    "+faststart",
+]
+
+
+@pytest.mark.asyncio
+async def test_convert_file_has_structural_flags(
+    mock_ffmpeg_subprocess, mock_file_ops, mock_logger
+):
+    """Verifies async_convert_file includes structural cleanup flags."""
+    await async_convert_file("test.dav")
+    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
+    for flag in STRUCTURAL_FLAGS:
+        assert flag in args, f"Missing structural flag: {flag}"
+    assert "libx264" not in args
+
+
+@pytest.mark.asyncio
+async def test_combine_videos_has_structural_flags(mock_ffmpeg_subprocess):
+    """Verifies combine_videos includes structural cleanup flags."""
+    await combine_videos("filelist.txt", "output.mp4")
+    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
+    for flag in STRUCTURAL_FLAGS:
+        assert flag in args, f"Missing structural flag: {flag}"
+    assert "libx264" not in args
+
+
+@pytest.mark.asyncio
+async def test_trim_video_has_structural_flags(mock_ffmpeg_subprocess):
+    """Verifies trim_video includes structural cleanup flags."""
+    await trim_video("input.mp4", "output.mp4", "00:05:00", "01:00:00")
+    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
+    for flag in STRUCTURAL_FLAGS:
+        assert flag in args, f"Missing structural flag: {flag}"
+    assert "libx264" not in args
