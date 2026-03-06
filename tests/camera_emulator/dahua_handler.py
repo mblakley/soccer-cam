@@ -145,20 +145,30 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
             if not session or not session["searched"]:
                 return web.Response(text="found=0\n")
 
-            lines = [f"found={len(session['files'])}"]
-            for i, f in enumerate(session["files"]):
+            # Consume files: return them once, then empty on subsequent calls
+            files = session["files"]
+            session["files"] = []
+
+            if not files:
+                return web.Response(text="found=0\n")
+
+            lines = [f"found={len(files)}"]
+            for i, f in enumerate(files):
                 start_str = f["start_time"].strftime("%Y-%m-%d %H:%M:%S")
                 end_str = f["end_time"].strftime("%Y-%m-%d %H:%M:%S")
                 lines.append(f"items[{i}].Channel=1")
                 lines.append(f"items[{i}].FilePath=/mnt/dvr/{f['filename']}")
                 lines.append(f"items[{i}].StartTime={start_str}")
                 lines.append(f"items[{i}].EndTime={end_str}")
-                lines.append(f"items[{i}].Length={f['size']}")
+                lines.append(f"items[{i}].Size={f['size']}")
                 lines.append(f"items[{i}].Type=dav")
                 lines.append(f"items[{i}].VideoStream=Main")
                 lines.append(f"items[{i}].UTCOffset=-14400")
 
             return web.Response(text="\n".join(lines) + "\n")
+
+        elif action == "close":
+            return web.Response(text="OK\n")
 
         elif action == "destroy":
             object_id = request.query.get("object", "")
