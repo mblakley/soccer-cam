@@ -61,10 +61,8 @@ jobs:
       run: choco install nsis -y
 
     - name: Build installer
-      uses: joncloud/makensis-action@v4.1
-      with:
-        script-file: video_grouper/installer/installer.nsi
-        arguments: "/DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }}"
+      run: |
+        & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer/installer.nsi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
