@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PyQt6.QtWidgets import QApplication
 from video_grouper.tray.main import SystemTrayIcon
-from video_grouper.utils.config import Config, AppConfig, StorageConfig
+from video_grouper.utils.config import Config, AppConfig, AutocamConfig, StorageConfig
 
 
 # We need a QApplication instance to test PyQt components
@@ -37,6 +37,8 @@ def mock_config(tmp_path):
     config.app.update_url = "http://fake-update-url.com"
     config.storage = MagicMock(spec=StorageConfig)
     config.storage.path = str(tmp_path)
+    config.autocam = MagicMock(spec=AutocamConfig)
+    config.autocam.enabled = True
     config.paths = MagicMock()
     config.paths.shared_data_path = str(tmp_path / "shared")
     return config

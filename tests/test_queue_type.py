@@ -59,6 +59,6 @@ class TestQueueType:
     def test_enum_iteration(self):
         """Test enum iteration."""
         all_types = list(QueueType)
-        assert len(all_types) == 6
+        assert len(all_types) == 7
         assert QueueType.AUTOCAM in all_types
         assert QueueType.YOUTUBE in all_types

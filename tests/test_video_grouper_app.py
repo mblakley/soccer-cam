@@ -278,11 +278,11 @@ class TestVideoGrouperAppRefactored:
             assert "upload_processor" in status
             assert "ntfy_processor" in status
 
-            # All processors should be stopped initially (except NTFY which may be disabled
-            # and StateAuditor which is startup-only)
+            # All processors should be stopped initially (except optional processors
+            # which may be disabled, and StateAuditor which is startup-only)
             for processor_name, processor_status in status.items():
-                if processor_name == "ntfy_processor":
-                    # NTFY processor can be "stopped" or "disabled" depending on config
+                if processor_name in ("ntfy_processor", "clip_request_processor"):
+                    # Optional processors can be "stopped" or "disabled" depending on config
                     assert processor_status in ["stopped", "disabled"]
                 elif processor_name == "state_auditor":
                     assert processor_status == "startup_only"

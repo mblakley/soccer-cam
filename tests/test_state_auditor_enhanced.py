@@ -424,6 +424,166 @@ class TestStateAuditorEnhanced:
             assert auditor.match_info_service.ntfy_service == auditor.ntfy_service
 
 
+class TestStateAuditorAutocamToggle:
+    """Tests for autocam-disabled behavior in state auditor."""
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @patch("video_grouper.task_processors.state_auditor.DirectoryState")
+    @patch("os.path.exists")
+    @pytest.mark.asyncio
+    async def test_trimmed_skips_to_upload_when_autocam_disabled(
+        self,
+        mock_exists,
+        mock_dir_state,
+        mock_ntfy,
+        mock_playmetrics,
+        mock_teamsnap,
+        tmp_path,
+    ):
+        """When autocam is disabled, trimmed dirs transition to autocam_complete and queue upload."""
+        config = Config(
+            camera=CameraConfig(
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            ),
+            storage=StorageConfig(path=str(tmp_path)),
+            recording=RecordingConfig(),
+            processing=ProcessingConfig(),
+            logging=LoggingConfig(),
+            app=AppConfig(storage_path=str(tmp_path)),
+            teamsnap=TeamSnapConfig(enabled=True, team_id="1", my_team_name="Team A"),
+            teamsnap_teams=[],
+            playmetrics=PlayMetricsConfig(
+                enabled=True, username="user", password="password", team_name="Team A"
+            ),
+            playmetrics_teams=[],
+            ntfy=NtfyConfig(
+                enabled=True, server_url="http://ntfy.sh", topic="soccercam"
+            ),
+            youtube=YouTubeConfig(enabled=True),
+            autocam=AutocamConfig(enabled=False),
+            cloud_sync=CloudSyncConfig(enabled=True),
+        )
+
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        # Mock directory state with trimmed status
+        mock_state = Mock()
+        mock_state.status = "trimmed"
+        mock_state.files = Mock()
+        mock_state.files.values.return_value = []
+        mock_state.is_ready_for_combining.return_value = False
+        mock_state.update_group_status = AsyncMock()
+        mock_dir_state.return_value = mock_state
+
+        test_dir = tmp_path / "test_group"
+        test_dir.mkdir()
+        state_file = test_dir / "state.json"
+        state_file.write_text('{"status": "trimmed", "files": {}}')
+
+        mock_exists.return_value = True
+
+        mock_download_processor = AsyncMock()
+        mock_video_processor = Mock()
+        mock_upload_processor = Mock()
+        mock_upload_processor.add_work = AsyncMock()
+        mock_video_processor.upload_processor = mock_upload_processor
+
+        auditor = StateAuditor(
+            str(tmp_path), config, mock_download_processor, mock_video_processor
+        )
+
+        await auditor._audit_directory(str(test_dir))
+
+        mock_state.update_group_status.assert_called_once_with("autocam_complete")
+        mock_upload_processor.add_work.assert_called_once()
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @patch("video_grouper.task_processors.state_auditor.DirectoryState")
+    @patch("os.path.exists")
+    @pytest.mark.asyncio
+    async def test_trimmed_not_skipped_when_autocam_enabled(
+        self,
+        mock_exists,
+        mock_dir_state,
+        mock_ntfy,
+        mock_playmetrics,
+        mock_teamsnap,
+        tmp_path,
+    ):
+        """When autocam is enabled, trimmed dirs are left for autocam discovery."""
+        config = Config(
+            camera=CameraConfig(
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            ),
+            storage=StorageConfig(path=str(tmp_path)),
+            recording=RecordingConfig(),
+            processing=ProcessingConfig(),
+            logging=LoggingConfig(),
+            app=AppConfig(storage_path=str(tmp_path)),
+            teamsnap=TeamSnapConfig(enabled=True, team_id="1", my_team_name="Team A"),
+            teamsnap_teams=[],
+            playmetrics=PlayMetricsConfig(
+                enabled=True, username="user", password="password", team_name="Team A"
+            ),
+            playmetrics_teams=[],
+            ntfy=NtfyConfig(
+                enabled=True, server_url="http://ntfy.sh", topic="soccercam"
+            ),
+            youtube=YouTubeConfig(enabled=True),
+            autocam=AutocamConfig(enabled=True),
+            cloud_sync=CloudSyncConfig(enabled=True),
+        )
+
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        mock_state = Mock()
+        mock_state.status = "trimmed"
+        mock_state.files = Mock()
+        mock_state.files.values.return_value = []
+        mock_state.is_ready_for_combining.return_value = False
+        mock_state.update_group_status = AsyncMock()
+        mock_dir_state.return_value = mock_state
+
+        test_dir = tmp_path / "test_group"
+        test_dir.mkdir()
+        state_file = test_dir / "state.json"
+        state_file.write_text('{"status": "trimmed", "files": {}}')
+
+        mock_exists.return_value = True
+
+        mock_download_processor = AsyncMock()
+        mock_video_processor = Mock()
+        mock_upload_processor = Mock()
+        mock_upload_processor.add_work = AsyncMock()
+        mock_video_processor.upload_processor = mock_upload_processor
+
+        auditor = StateAuditor(
+            str(tmp_path), config, mock_download_processor, mock_video_processor
+        )
+
+        await auditor._audit_directory(str(test_dir))
+
+        # Should NOT transition or queue upload
+        mock_state.update_group_status.assert_not_called()
+        mock_upload_processor.add_work.assert_not_called()
+
+
 class TestStateAuditorStartupOnly:
     """Tests that StateAuditor is startup-only (not continuous polling)."""
 

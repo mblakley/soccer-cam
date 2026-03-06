@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Any, Optional
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
@@ -42,7 +43,8 @@ class VideoProcessor(QueueProcessor):
 
         After successful completion, triggers event-driven transitions:
         - CombineTask → async match info gathering (APIs + NTFY)
-        - TrimTask → AutocamDiscoveryProcessor picks up "trimmed" status
+        - TrimTask → AutocamDiscoveryProcessor picks up "trimmed" status,
+          or if autocam is disabled, skips directly to upload
 
         Args:
             item: BaseFfmpegTask to process
@@ -59,6 +61,8 @@ class VideoProcessor(QueueProcessor):
                 # Trigger event-driven transitions based on task type
                 if item.task_type == "combine":
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
+                elif item.task_type == "trim" and not self.config.autocam.enabled:
+                    asyncio.create_task(self._on_trim_complete(item.get_item_path()))
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
 
@@ -94,6 +98,25 @@ class VideoProcessor(QueueProcessor):
             logger.error(
                 f"VIDEO: Error in post-combine transition for {group_dir}: {e}"
             )
+
+    async def _on_trim_complete(self, group_dir: str) -> None:
+        """Skip autocam and transition directly to upload when autocam is disabled."""
+        try:
+            from video_grouper.models import DirectoryState
+
+            dir_state = DirectoryState(group_dir)
+            await dir_state.update_group_status("autocam_complete")
+            logger.info(f"VIDEO: Autocam disabled, set {group_dir} to autocam_complete")
+
+            if self.config.youtube.enabled and self.upload_processor:
+                from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
+
+                relative_group_dir = os.path.relpath(group_dir, self.storage_path)
+                youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
+                await self.upload_processor.add_work(youtube_task)
+                logger.info(f"VIDEO: Queued YouTube upload for {group_dir}")
+        except Exception as e:
+            logger.error(f"VIDEO: Error in post-trim transition for {group_dir}: {e}")
 
     def get_item_key(self, item: BaseFfmpegTask) -> str:
         """Get unique key for a BaseFfmpegTask."""
