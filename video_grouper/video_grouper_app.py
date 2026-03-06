@@ -293,6 +293,49 @@ class VideoGrouperApp:
                 poll_interval=self.poll_interval,
             )
 
+        # TTT Job Processor (optional)
+        self.ttt_job_processor = None
+        if self.config.ttt.enabled and self.config.ttt.job_polling_enabled:
+            try:
+                ttt_client = None
+                if self.clip_request_processor:
+                    ttt_client = self.clip_request_processor.ttt_client
+
+                if not ttt_client:
+                    from video_grouper.api_integrations.ttt_api import TTTApiClient
+
+                    ttt_client = TTTApiClient(
+                        supabase_url=self.config.ttt.supabase_url,
+                        anon_key=self.config.ttt.anon_key,
+                        api_base_url=self.config.ttt.api_base_url,
+                        storage_path=self.storage_path,
+                    )
+                    if self.config.ttt.email and self.config.ttt.password:
+                        try:
+                            ttt_client.login(
+                                self.config.ttt.email, self.config.ttt.password
+                            )
+                        except Exception as e:
+                            logger.error(f"TTT login failed for job processor: {e}")
+
+                from video_grouper.task_processors.ttt_job_processor import (
+                    TTTJobProcessor,
+                )
+
+                self.ttt_job_processor = TTTJobProcessor(
+                    storage_path=self.storage_path,
+                    config=self.config,
+                    ttt_client=ttt_client,
+                    camera=self.camera,
+                    download_processor=self.download_processor,
+                    video_processor=self.video_processor,
+                    upload_processor=self.upload_processor,
+                    poll_interval=self.config.ttt.job_poll_interval,
+                )
+                logger.info("TTT JobProcessor initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize TTT JobProcessor: {e}")
+
         # TTT Reporter — optional, best-effort status reporting back to TTT
         # Works independently of the clip request processor: enabled when TTT
         # credentials are present, regardless of the full TTT enabled flag.
@@ -346,6 +389,8 @@ class VideoGrouperApp:
             self.processors.append(self.clip_processor)
         if self.clip_discovery_processor:
             self.processors.append(self.clip_discovery_processor)
+        if self.ttt_job_processor:
+            self.processors.append(self.ttt_job_processor)
         # Polling processors last -- StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
@@ -561,6 +606,9 @@ class VideoGrouperApp:
             "clip_request": self.clip_request_processor.get_queue_size()
             if self.clip_request_processor
             else -1,
+            "ttt_jobs": len(self.ttt_job_processor._processing_jobs)
+            if self.ttt_job_processor
+            else -1,
         }
         if self.clip_processor:
             sizes["clips"] = self.clip_processor.get_queue_size()
@@ -587,6 +635,7 @@ class VideoGrouperApp:
             "clip_request_processor": self._processor_status(
                 self.clip_request_processor
             ),
+            "ttt_job_processor": self._processor_status(self.ttt_job_processor),
         }
         # Add per-camera statuses if multiple cameras
         if len(self.cameras) > 1:

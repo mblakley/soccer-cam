@@ -644,3 +644,79 @@ class TTTApiClient:
             )
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(resp.content)
+
+    # ------------------------------------------------------------------
+    # Service registration & heartbeat
+    # ------------------------------------------------------------------
+
+    def register_service(self, machine_name: str, capabilities: dict) -> Any:
+        """Register this service instance with TTT.
+
+        POST {api_base_url}/api/device-link/register-service
+        """
+        url = f"{self.api_base_url}/api/device-link/register-service"
+        body = {"machine_name": machine_name, "capabilities": capabilities}
+        logger.debug("Registering service '%s' at %s", machine_name, url)
+        return self._request("POST", url, json=body)
+
+    def send_heartbeat(self, service_id: str, status: str = "online") -> Any:
+        """Send heartbeat to TTT.
+
+        PATCH {api_base_url}/api/device-link/heartbeat
+        """
+        url = f"{self.api_base_url}/api/device-link/heartbeat"
+        body = {"service_id": service_id, "status": status}
+        logger.debug("Sending heartbeat for service %s", service_id)
+        return self._request("PATCH", url, json=body)
+
+    # ------------------------------------------------------------------
+    # Processing jobs
+    # ------------------------------------------------------------------
+
+    def get_pending_jobs(self) -> Any:
+        """Get pending processing jobs assigned to this service.
+
+        GET {api_base_url}/api/device-link/processing-jobs
+        """
+        url = f"{self.api_base_url}/api/device-link/processing-jobs"
+        logger.debug("Fetching pending processing jobs from %s", url)
+        return self._request("GET", url)
+
+    def claim_job(self, job_id: str) -> Any:
+        """Claim a processing job.
+
+        PATCH {api_base_url}/api/processing-jobs/{job_id}/claim
+        """
+        url = f"{self.api_base_url}/api/processing-jobs/{job_id}/claim"
+        logger.debug("Claiming processing job %s", job_id)
+        return self._request("PATCH", url)
+
+    def update_job_progress(self, job_id: str, status: str, progress: dict) -> Any:
+        """Update job progress.
+
+        PATCH {api_base_url}/api/processing-jobs/{job_id}/progress
+        """
+        url = f"{self.api_base_url}/api/processing-jobs/{job_id}/progress"
+        body = {"status": status, "progress": progress}
+        logger.debug("Updating progress for job %s: %s", job_id, status)
+        return self._request("PATCH", url, json=body)
+
+    def complete_job(self, job_id: str, result: dict) -> Any:
+        """Mark job as complete with result.
+
+        PATCH {api_base_url}/api/processing-jobs/{job_id}/complete
+        """
+        url = f"{self.api_base_url}/api/processing-jobs/{job_id}/complete"
+        body = {"result": result}
+        logger.debug("Completing job %s", job_id)
+        return self._request("PATCH", url, json=body)
+
+    def fail_job(self, job_id: str, error: str) -> Any:
+        """Mark job as failed.
+
+        PATCH {api_base_url}/api/processing-jobs/{job_id}/fail
+        """
+        url = f"{self.api_base_url}/api/processing-jobs/{job_id}/fail"
+        body = {"error": error}
+        logger.debug("Failing job %s: %s", job_id, error)
+        return self._request("PATCH", url, json=body)

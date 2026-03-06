@@ -12,6 +12,7 @@ from .autocam_processor import AutocamProcessor
 from .autocam_discovery_processor import AutocamDiscoveryProcessor
 from .clip_processor import ClipProcessor
 from .clip_discovery_processor import ClipDiscoveryProcessor
+from .ttt_job_processor import TTTJobProcessor
 
 __all__ = [
     "PollingProcessor",
@@ -26,4 +27,5 @@ __all__ = [
     "AutocamDiscoveryProcessor",
     "ClipProcessor",
     "ClipDiscoveryProcessor",
+    "TTTJobProcessor",
 ]
