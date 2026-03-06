@@ -74,8 +74,19 @@ def mock_camera():
     camera.get_file_list = AsyncMock(return_value=[])
     camera.get_connected_timeframes = Mock(return_value=[])
     camera.download_file = AsyncMock(return_value=True)
+    camera.stop_recording = AsyncMock(return_value=True)
+    camera.is_connected = True
     camera.close = AsyncMock()
     return camera
+
+
+def _make_poller(temp_storage, mock_config, mock_camera, mock_download_processor=None):
+    """Helper to create a CameraPoller with common defaults."""
+    if mock_download_processor is None:
+        mock_download_processor = Mock()
+        mock_download_processor.get_queue_size = Mock(return_value=0)
+        mock_download_processor._in_progress_item = None
+    return CameraPoller(temp_storage, mock_config, mock_camera, mock_download_processor)
 
 
 class TestCameraPoller:
@@ -449,3 +460,269 @@ class TestCameraPoller:
         expected_new_dir = os.path.join(temp_storage, "2023.01.01-10.05.06")
         assert group_dir == expected_new_dir
         assert os.path.exists(group_dir)
+
+
+class TestAutoStopRecording:
+    """Tests for stop-recording-on-connect feature."""
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_called_on_first_connect(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Stop recording is called the first time camera is available."""
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        await poller.discover_work()
+        mock_camera.stop_recording.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_not_called_on_subsequent_polls(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Stop recording is only called once per connection session."""
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        await poller.discover_work()
+        await poller.discover_work()
+        mock_camera.stop_recording.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_called_again_after_reconnect(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Stop recording is called again after a disconnect/reconnect cycle."""
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+
+        # First connection
+        await poller.discover_work()
+        assert mock_camera.stop_recording.call_count == 1
+
+        # Disconnect
+        mock_camera.check_availability.return_value = False
+        await poller.discover_work()
+
+        # Reconnect
+        mock_camera.check_availability.return_value = True
+        await poller.discover_work()
+        assert mock_camera.stop_recording.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_not_called_when_disabled(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Stop recording is not called when auto_stop_recording is False."""
+        mock_config.camera.auto_stop_recording = False
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        await poller.discover_work()
+        mock_camera.stop_recording.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_recording_failure_still_sets_flag(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Even if stop_recording fails, the flag is set to avoid retrying every poll."""
+        mock_camera.stop_recording.return_value = False
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        await poller.discover_work()
+        await poller.discover_work()
+        # Called once, not retried
+        mock_camera.stop_recording.assert_called_once()
+
+
+class TestUnplugNotification:
+    """Tests for unplug-notification-on-downloads-complete feature."""
+
+    @pytest.mark.asyncio
+    async def test_notification_sent_when_downloads_complete(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Notification sent when camera connected, no new files, download queue empty."""
+        mock_config.ntfy.enabled = True
+
+        # Simulate: first poll finds files, second poll finds none
+        mock_camera.get_file_list.side_effect = [
+            [
+                {
+                    "path": "/test1.dav",
+                    "startTime": "2023-01-01 10:00:00",
+                    "endTime": "2023-01-01 10:05:00",
+                }
+            ],
+            [],
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.get_queue_size = Mock(return_value=0)
+        mock_download_processor._in_progress_item = None
+        mock_download_processor.add_work = AsyncMock()
+
+        poller = _make_poller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+
+        # First poll finds files -> no notification
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+        # Second poll finds no files, queue empty -> notification sent
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_called_once()
+        call_kwargs = poller.ntfy_service.send_notification.call_args[1]
+        assert "Downloads Complete" in call_kwargs["title"]
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_queue_has_items(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No notification when download queue still has items."""
+        mock_config.ntfy.enabled = True
+        mock_download_processor = Mock()
+        mock_download_processor.get_queue_size = Mock(return_value=2)
+        mock_download_processor._in_progress_item = None
+        mock_download_processor.add_work = AsyncMock()
+
+        poller = _make_poller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_item_in_progress(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No notification when a download is currently in progress."""
+        mock_config.ntfy.enabled = True
+        mock_download_processor = Mock()
+        mock_download_processor.get_queue_size = Mock(return_value=0)
+        mock_download_processor._in_progress_item = Mock()  # something in progress
+        mock_download_processor.add_work = AsyncMock()
+
+        poller = _make_poller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_files_still_being_found(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No notification when the last poll found files."""
+        mock_config.ntfy.enabled = True
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/test1.dav",
+                "startTime": "2023-01-01 10:00:00",
+                "endTime": "2023-01-01 10:05:00",
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.get_queue_size = Mock(return_value=0)
+        mock_download_processor._in_progress_item = None
+        mock_download_processor.add_work = AsyncMock()
+
+        poller = _make_poller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_sent_only_once(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Notification is only sent once per connection session."""
+        mock_config.ntfy.enabled = True
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        await poller.discover_work()
+        await poller.discover_work()
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_camera_disconnected(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No notification when camera is not connected."""
+        mock_config.ntfy.enabled = True
+        mock_camera.is_connected = False
+        mock_camera.check_availability.return_value = False
+
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_disabled(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No notification when unplug_notification is False."""
+        mock_config.ntfy.unplug_notification = False
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        await poller.discover_work()
+        poller.ntfy_service.send_notification.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_not_sent_when_no_ntfy_service(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No error when ntfy_service is None."""
+        mock_config.ntfy.enabled = True
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        poller._last_poll_found_files = False
+
+        # Should not raise
+        await poller.discover_work()
+        assert poller._unplug_notified is True
+
+    @pytest.mark.asyncio
+    async def test_notification_resets_on_reconnect(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Notification flag resets after disconnect so it fires again on reconnect."""
+        mock_config.ntfy.enabled = True
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        poller.ntfy_service = Mock()
+        poller.ntfy_service.send_notification = AsyncMock(return_value=True)
+        poller._last_poll_found_files = False
+
+        # First session: notification sent
+        await poller.discover_work()
+        assert poller.ntfy_service.send_notification.call_count == 1
+
+        # Disconnect
+        mock_camera.check_availability.return_value = False
+        mock_camera.is_connected = False
+        await poller.discover_work()
+
+        # Reconnect with no files
+        mock_camera.check_availability.return_value = True
+        mock_camera.is_connected = True
+        # First poll after reconnect: _last_poll_found_files resets to True on disconnect
+        await poller.discover_work()
+        # _last_poll_found_files is now False (no files found)
+        await poller.discover_work()
+        assert poller.ntfy_service.send_notification.call_count == 2

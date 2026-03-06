@@ -158,6 +158,9 @@ class VideoGrouperApp:
             # and playlist name requests
             self.upload_processor.ntfy_service = ntfy_service
 
+            # Wire ntfy_service into CameraPoller for unplug notifications
+            self.camera_poller.ntfy_service = ntfy_service
+
         # TTT Clip Request Processor (optional)
         self.clip_request_processor = None
         if self.config.ttt.enabled:

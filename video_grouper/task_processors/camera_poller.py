@@ -78,6 +78,10 @@ class CameraPoller(PollingProcessor):
         self.camera = camera
         self.download_processor = download_processor
         self._last_processed_time = None
+        self._recording_stopped = False
+        self._last_poll_found_files = True
+        self._unplug_notified = False
+        self.ntfy_service = None
 
     async def discover_work(self) -> None:
         """
@@ -87,10 +91,26 @@ class CameraPoller(PollingProcessor):
             # Check if camera is available
             is_available = await self.camera.check_availability()
             if not is_available:
+                self._recording_stopped = False
+                self._unplug_notified = False
+                self._last_poll_found_files = True
                 logger.debug("CAMERA_POLLER: Camera not available, skipping file sync")
                 return
 
+            # Stop recording on first connection if configured
+            if not self._recording_stopped and self.config.camera.auto_stop_recording:
+                logger.info("CAMERA_POLLER: Camera connected, stopping recording")
+                success = await self.camera.stop_recording()
+                if success:
+                    logger.info("CAMERA_POLLER: Successfully stopped camera recording")
+                else:
+                    logger.warning("CAMERA_POLLER: Failed to stop camera recording")
+                self._recording_stopped = True
+
             await self._sync_files_from_camera()
+
+            # Check if all downloads are complete and notify to unplug
+            await self._check_downloads_complete()
 
         except Exception as e:
             logger.error(f"CAMERA_POLLER: Error during camera polling: {e}")
@@ -112,10 +132,13 @@ class CameraPoller(PollingProcessor):
         )
 
         if not files:
+            self._last_poll_found_files = False
             logger.debug(
                 "CAMERA_POLLER: No new files found on the camera since last sync."
             )
             return
+
+        self._last_poll_found_files = True
 
         logger.info(f"CAMERA_POLLER: Found {len(files)} new files to process.")
         existing_dirs = [
@@ -246,6 +269,37 @@ class CameraPoller(PollingProcessor):
                 f"CAMERA_POLLER: Could not read or parse latest video file timestamp: {e}"
             )
             return None
+
+    async def _check_downloads_complete(self) -> None:
+        """Check if all downloads are complete and send unplug notification."""
+        if self._unplug_notified:
+            return
+        if not self.camera.is_connected:
+            return
+        if self._last_poll_found_files:
+            return
+        if not self.download_processor:
+            return
+        if self.download_processor.get_queue_size() > 0:
+            return
+        if self.download_processor._in_progress_item is not None:
+            return
+
+        self._unplug_notified = True
+        logger.info(
+            "CAMERA_POLLER: All downloads complete. Sending unplug notification."
+        )
+
+        if self.ntfy_service and self.config.ntfy.unplug_notification:
+            try:
+                await self.ntfy_service.send_notification(
+                    title="Downloads Complete",
+                    message="All files have been downloaded from the camera. You can safely unplug it now.",
+                    tags=["white_check_mark"],
+                    priority=4,
+                )
+            except Exception as e:
+                logger.error(f"CAMERA_POLLER: Failed to send unplug notification: {e}")
 
     async def _update_latest_processed_time(self, timestamp: datetime):
         """Update the high-water mark for file processing."""

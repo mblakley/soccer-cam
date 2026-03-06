@@ -49,6 +49,7 @@ class CameraConfig(BaseModel):
     device_ip: str
     username: str
     password: str
+    auto_stop_recording: bool = True
 
 
 class StorageConfig(BaseModel):
@@ -160,6 +161,7 @@ class NtfyConfig(BaseModel):
     server_url: str = "https://ntfy.sh"
     topic: Optional[str] = None
     response_service: bool = False
+    unplug_notification: bool = True
 
 
 class AutocamConfig(BaseModel):
