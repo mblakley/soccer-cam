@@ -25,7 +25,7 @@ services:
     volumes:
       - ./tests/e2e/test_clips:/clips:ro
     ports:
-      - "8554:80"
+      - "9554:80"
 
   reolink-emulator:
     profiles:
@@ -40,4 +40,4 @@ services:
     volumes:
       - ./tests/e2e/test_clips:/clips:ro
     ports:
-      - "8555:80"
+      - "9555:80"

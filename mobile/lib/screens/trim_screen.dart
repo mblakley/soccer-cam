@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 import 'dart:io';
-import '../models/pipeline_state.dart';
 import '../services/pipeline_orchestrator.dart';
 
 /// Screen for trimming a combined video with start/end markers.
@@ -359,13 +358,8 @@ class _TrimScreenState extends ConsumerState<TrimScreen> {
     if (_groupId == null) return;
 
     final orchestrator = ref.read(pipelineProvider.notifier);
+    // setTrimPoints auto-resumes the pipeline when in combined state.
     orchestrator.setTrimPoints(_groupId!, _trimStart, _trimEnd);
-
-    // Check if we should auto-advance to trimming.
-    final group = ref.read(pipelineProvider)[_groupId!];
-    if (group != null && group.state == PipelineState.combined) {
-      orchestrator.processGroup(_groupId!);
-    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

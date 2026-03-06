@@ -179,7 +179,7 @@ class YouTubeService {
 
     final videoResponse = await _youtubeApi!.videos.list(
       ['snippet', 'status', 'statistics'],
-      id: videoIds.join(','),
+      id: videoIds.toList(),
     );
 
     return videoResponse.items ?? [];

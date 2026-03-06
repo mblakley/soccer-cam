@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/camera_config.dart';
 import '../services/camera_service.dart';
+import '../services/pipeline_orchestrator.dart';
+import 'dashboard_screen.dart';
 
 /// Screen for configuring the camera connection.
 ///
@@ -391,6 +393,10 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
     );
     await prefs.setString('camera_type', _cameraType.name);
 
+    // Update the Riverpod camera config provider.
+    final config = _buildConfig();
+    ref.read(cameraConfigProvider.notifier).state = config;
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -398,7 +404,10 @@ class _CameraSetupScreenState extends ConsumerState<CameraSetupScreen> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-      Navigator.pop(context);
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        (route) => false,
+      );
     }
   }
 }

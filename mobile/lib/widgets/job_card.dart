@@ -15,6 +15,8 @@ class JobCard extends StatelessWidget {
     this.onRetry,
     this.onCancel,
     this.onDelete,
+    this.onTrim,
+    this.onSkipTrim,
     this.currentProgress,
   });
 
@@ -23,6 +25,8 @@ class JobCard extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onCancel;
   final VoidCallback? onDelete;
+  final VoidCallback? onTrim;
+  final VoidCallback? onSkipTrim;
   final double? currentProgress;
 
   @override
@@ -140,6 +144,27 @@ class JobCard extends StatelessWidget {
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: colorScheme.primary,
                       ),
+                    ),
+                  ],
+                ),
+              ],
+
+              // Trim action for combined state.
+              if (group.state == PipelineState.combined) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: onTrim,
+                        icon: const Icon(Icons.content_cut, size: 18),
+                        label: const Text('Trim Video'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: onSkipTrim,
+                      child: const Text('Skip'),
                     ),
                   ],
                 ),

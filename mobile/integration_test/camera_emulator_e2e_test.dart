@@ -34,10 +34,10 @@ String get emulatorHost =>
     Platform.environment['EMULATOR_HOST'] ?? '10.0.2.2';
 
 int get dahuaPort =>
-    int.parse(Platform.environment['DAHUA_PORT'] ?? '8554');
+    int.parse(Platform.environment['DAHUA_PORT'] ?? '9554');
 
 int get reolinkPort =>
-    int.parse(Platform.environment['REOLINK_PORT'] ?? '8555');
+    int.parse(Platform.environment['REOLINK_PORT'] ?? '9555');
 
 /// Shared test cases for any camera type.
 ///

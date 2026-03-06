@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import '../models/pipeline_state.dart';
 import '../models/video_group.dart';
+import '../models/camera_config.dart';
 import '../utils/storage_manager.dart';
 import 'camera_service.dart';
 import 'download_service.dart';
@@ -56,6 +57,10 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
 
   final Set<String> _pausedGroups = {};
   final Set<String> _cancelledGroups = {};
+  final Map<String, double> _stageProgress = {};
+
+  /// Current progress (0.0-1.0) for the active stage of each group.
+  double getProgress(String groupId) => _stageProgress[groupId] ?? 0.0;
 
   /// All tracked video groups.
   List<VideoGroup> get groups => state.values.toList();
@@ -98,8 +103,12 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
         if (_cancelledGroups.contains(groupId)) break;
         if (_pausedGroups.contains(groupId)) break;
 
+        final previousState = group.state;
         group = await _executeStage(group);
         _updateGroup(group);
+
+        // If state didn't change, we're waiting for user action (e.g. trim points).
+        if (group.state == previousState) break;
       }
     } catch (e) {
       group = group!.copyWith(
@@ -151,17 +160,22 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
       message: 'Downloading ${group.fileCount} files...',
     ));
 
+    _stageProgress[group.id] = 0.0;
     updated = await downloadService.downloadGroup(
       updated,
       onProgress: (file, received, total, overallProgress) {
+        _stageProgress[group.id] = overallProgress;
         _progressController.add(StageProgress(
           stage: PipelineState.downloading,
           progress: overallProgress,
           message: 'Downloading ${file.fileName}...',
         ));
+        // Trigger UI rebuild by updating state.
+        state = {...state};
       },
     );
 
+    _stageProgress.remove(group.id);
     return updated.copyWith(state: PipelineState.downloaded);
   }
 
@@ -188,10 +202,12 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
       message: 'Combining ${inputPaths.length} files...',
     ));
 
+    _stageProgress[group.id] = 0.0;
     await videoProcessor.combineFiles(
       inputPaths,
       outputPath: outputPath,
       onProgress: (progress, elapsed, remaining) {
+        _stageProgress[group.id] = progress;
         _progressController.add(StageProgress(
           stage: PipelineState.combining,
           progress: progress,
@@ -199,8 +215,10 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
           estimatedRemaining: remaining,
           message: 'Combining... ${(progress * 100).toStringAsFixed(1)}%',
         ));
+        state = {...state};
       },
     );
+    _stageProgress.remove(group.id);
 
     return updated.copyWith(
       state: PipelineState.combined,
@@ -294,10 +312,8 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
     );
   }
 
-  /// Set trim points for a video group.
-  ///
-  /// This enables the trimming stage to proceed.
-  void setTrimPoints(String groupId, double startSeconds, double? endSeconds) {
+  /// Set trim points for a video group and resume processing.
+  Future<void> setTrimPoints(String groupId, double startSeconds, double? endSeconds) async {
     final group = state[groupId];
     if (group == null) return;
 
@@ -305,6 +321,20 @@ class PipelineOrchestrator extends StateNotifier<Map<String, VideoGroup>> {
       trimStartSeconds: startSeconds,
       trimEndSeconds: endSeconds,
     ));
+
+    // Resume pipeline if the group was waiting at combined state.
+    if (group.state == PipelineState.combined) {
+      await processGroup(groupId);
+    }
+  }
+
+  /// Skip trimming and proceed directly to upload.
+  Future<void> skipTrim(String groupId) async {
+    final group = state[groupId];
+    if (group == null || group.state != PipelineState.combined) return;
+
+    _updateGroup(group.copyWith(state: PipelineState.trimmed));
+    await processGroup(groupId);
   }
 
   /// Pause processing for a group.
@@ -361,8 +391,20 @@ class PipelineException implements Exception {
 
 // --- Riverpod Providers ---
 
+final cameraConfigProvider = StateProvider<CameraConfig?>((ref) => null);
+
 final cameraServiceProvider = Provider<CameraService>((ref) {
-  throw UnimplementedError('Override with camera config');
+  final config = ref.watch(cameraConfigProvider);
+  if (config == null) {
+    return CameraService.create(
+      config: const CameraConfig(
+        host: 'unconfigured',
+        username: '',
+        password: '',
+      ),
+    );
+  }
+  return CameraService.create(config: config);
 });
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {

@@ -214,7 +214,7 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
 
         with open(clip_path, "rb") as fh:
             while True:
-                chunk = fh.read(65536)
+                chunk = fh.read(1048576)
                 if not chunk:
                     break
                 await response.write(chunk)

@@ -146,12 +146,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     return JobCard(
       group: group,
+      currentProgress: group.state.isProcessing
+          ? orchestrator.getProgress(group.id)
+          : null,
       onTap: () => _openGroupDetail(group),
       onRetry: group.state == PipelineState.error
           ? () => orchestrator.retryGroup(group.id)
           : null,
       onCancel: group.state.isProcessing
           ? () => orchestrator.cancelGroup(group.id)
+          : null,
+      onTrim: group.state == PipelineState.combined
+          ? () => Navigator.pushNamed(context, '/trim', arguments: group.id)
+          : null,
+      onSkipTrim: group.state == PipelineState.combined
+          ? () => orchestrator.skipTrim(group.id)
           : null,
       onDelete: () => _confirmDelete(group),
     );
@@ -171,37 +180,80 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     setState(() => _isScanning = true);
 
     try {
-      // In a real app, this would use CameraService to list files
-      // and group them into VideoGroups.
+      final cameraService = ref.read(cameraServiceProvider);
       final orchestrator = ref.read(pipelineProvider.notifier);
 
-      // Placeholder: show camera setup if not configured.
-      if (!mounted) return;
+      // Check if camera is configured.
+      final config = ref.read(cameraConfigProvider);
+      if (config == null || config.host == 'unconfigured') {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Set up your camera connection first.'),
+            action: SnackBarAction(
+              label: 'Setup',
+              onPressed: () => Navigator.pushNamed(context, '/camera-setup'),
+            ),
+          ),
+        );
+        return;
+      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Set up your camera connection in Settings first.'),
-          action: SnackBarAction(label: 'Setup', onPressed: null),
-        ),
+      // Check camera availability.
+      final available = await cameraService.checkAvailability();
+      if (!available) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Camera is not reachable. Check your connection.'),
+          ),
+        );
+        return;
+      }
+
+      // List files from the last 24 hours.
+      final now = DateTime.now();
+      final files = await cameraService.listFiles(
+        startTime: now.subtract(const Duration(hours: 24)),
+        endTime: now,
       );
 
-      // The actual implementation would:
-      // 1. cameraService.checkAvailability()
-      // 2. cameraService.listFiles(startTime, endTime)
-      // 3. VideoGroup.groupByTime(files)
-      // 4. orchestrator.addGroup(group) for each new group
-      // 5. orchestrator.processGroup(group.id) for auto-process
+      if (!mounted) return;
 
-      // Example of adding a dummy group for testing:
-      // final group = VideoGroup(
-      //   id: DateTime.now().millisecondsSinceEpoch.toString(),
-      //   name: 'Test Group',
-      //   files: [],
-      //   createdAt: DateTime.now(),
-      // );
-      // orchestrator.addGroup(group);
+      if (files.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No recordings found in the last 24 hours.')),
+        );
+        return;
+      }
 
-      _ = orchestrator; // suppress unused variable warning
+      // Group files by temporal proximity.
+      final groups = VideoGroup.groupByTime(files);
+
+      // Add new groups and start processing.
+      var newGroupCount = 0;
+      for (final group in groups) {
+        if (orchestrator.getGroup(group.id) == null) {
+          orchestrator.addGroup(group);
+          newGroupCount++;
+          // Auto-start the pipeline for each new group.
+          orchestrator.processGroup(group.id);
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Found ${files.length} files in $newGroupCount group(s). Processing started.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Scan failed: $e')),
+      );
     } finally {
       if (mounted) {
         setState(() => _isScanning = false);

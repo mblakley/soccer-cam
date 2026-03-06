@@ -16,9 +16,9 @@ import 'package:soccer_cam_mobile/services/camera_service.dart';
 String get emulatorHost =>
     Platform.environment['EMULATOR_HOST'] ?? '127.0.0.1';
 int get dahuaPort =>
-    int.parse(Platform.environment['DAHUA_PORT'] ?? '8554');
+    int.parse(Platform.environment['DAHUA_PORT'] ?? '9554');
 int get reolinkPort =>
-    int.parse(Platform.environment['REOLINK_PORT'] ?? '8555');
+    int.parse(Platform.environment['REOLINK_PORT'] ?? '9555');
 
 void runCameraSuite(String label, CameraConfig config) {
   late CameraService service;
