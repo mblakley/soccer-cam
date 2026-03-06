@@ -18,7 +18,7 @@ def generate_test_files(clips_dir: str = "/clips"):
     Returns a list of dicts with keys:
         filename, start_time, end_time, size, clip_path
     """
-    utc_now = datetime.now(timezone.utc)
+    utc_now = datetime.now(timezone.utc).replace(microsecond=0)
     base_time = utc_now - timedelta(hours=12)
     file_duration = 60  # seconds
 

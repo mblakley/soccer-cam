@@ -118,10 +118,35 @@ async def _handle_get_dev_info(request: web.Request):
     )
 
 
+def _reolink_time_to_datetime(t: dict):
+    """Convert ReoLink time dict to datetime."""
+    from datetime import datetime
+
+    return datetime(t["year"], t["mon"], t["day"], t["hour"], t["min"], t["sec"])
+
+
 async def _handle_search(request: web.Request, test_files):
+    # Filter files by the requested time range (like a real camera)
+    filtered = test_files
+    try:
+        body = await request.json()
+        if body and isinstance(body, list):
+            search_param = body[0].get("param", {}).get("Search", {})
+            if "StartTime" in search_param and "EndTime" in search_param:
+                req_start = _reolink_time_to_datetime(search_param["StartTime"])
+                req_end = _reolink_time_to_datetime(search_param["EndTime"])
+                filtered = [
+                    f
+                    for f in test_files
+                    if f["start_time"].replace(tzinfo=None) > req_start
+                    and f["end_time"].replace(tzinfo=None) <= req_end
+                ]
+    except Exception:
+        pass
+
     # Build ReoLink-format file list
     reolink_files = []
-    for f in test_files:
+    for f in filtered:
         st = f["start_time"]
         et = f["end_time"]
         reolink_files.append(

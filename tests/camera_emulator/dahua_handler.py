@@ -120,6 +120,23 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
             object_id = request.query.get("object", "")
             if object_id in _find_sessions:
                 _find_sessions[object_id]["searched"] = True
+                # Filter files by the requested time range (like a real camera)
+                start_str = request.query.get("condition.StartTime", "")
+                end_str = request.query.get("condition.EndTime", "")
+                if start_str and end_str:
+                    from datetime import datetime
+
+                    try:
+                        req_start = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                        req_end = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+                        _find_sessions[object_id]["files"] = [
+                            f
+                            for f in _find_sessions[object_id]["files"]
+                            if f["start_time"].replace(tzinfo=None) > req_start
+                            and f["end_time"].replace(tzinfo=None) <= req_end
+                        ]
+                    except ValueError:
+                        pass
             return web.Response(text="OK\n")
 
         elif action == "findNextFile":
