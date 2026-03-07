@@ -56,20 +56,32 @@
 import * as THREE from 'three';
 
 // -- Configuration --
-const PAN_SENSITIVITY = 0.005;
-const ZOOM_SENSITIVITY = 0.05;
-const MIN_FOV = 15;
-const MAX_FOV = 90;
-const YAW_RANGE_DEG = 120;
-const PITCH_RANGE_DEG = 30;
+const PAN_SENSITIVITY = 0.003;  // radians per pixel dragged
+const ZOOM_SENSITIVITY_WHEEL = 0.5; // degrees per wheel delta unit
+const ZOOM_SENSITIVITY_PINCH = 0.15; // degrees per pinch pixel
+const MIN_FOV = 10;   // degrees (zoomed in)
+const MAX_FOV = 80;   // degrees (zoomed out)
+const INITIAL_FOV = 40; // degrees
+const SRC_HFOV = Math.PI; // 180 degrees horizontal
+const SRC_WIDTH = 4096;
+const SRC_HEIGHT = 1800;
+const YAW_LIMIT = Math.PI * 0.47; // ~85 degrees each way
+const PITCH_LIMIT = 1.2; // radians (~69 degrees) -- needs to exceed CAMERA_TILT to see near field
 
-// Dahua B180 profile (d=[0,0,0,0] since geometry handles projection)
-const PROFILE = {
-  width: 4096, height: 1800,
-  splitHalf: false, splitPoint: 0.5, blendWidth: 0,
-  left: { fx: 4096, fy: 1800, cx: 2048, cy: 900, d: [0, 0, 0, 0] },
-  right: { fx: 4096, fy: 1800, cx: 2048, cy: 900, d: [0, 0, 0, 0] },
-};
+// Physical camera tilt: the Dahua B180 is mounted on a pole, tilted
+// downward from horizontal. This angle (radians) corrects for the tilt
+// so that panning left/right keeps the horizon level in the output.
+const CAMERA_TILT = 0.55; // radians (~31 degrees down from horizontal)
+
+// Default virtual camera pitch (in world space). 0 = horizontal.
+// Positive = look down toward the field. Set equal to CAMERA_TILT to
+// center the default view on the camera's optical axis (mid-field).
+const DEFAULT_PITCH = 0.55;
+
+// Virtual PTZ state
+let yaw = 0;    // radians, 0 = center
+let pitch = DEFAULT_PITCH;
+let vFov = THREE.MathUtils.degToRad(INITIAL_FOV); // vertical FOV in radians
 
 // -- Video source from URL params --
 const params = new URLSearchParams(window.location.search);
@@ -78,116 +90,76 @@ if (!videoSrc) {
   document.getElementById('loading').textContent = 'No video source. Pass ?src=/path/to/video.mp4';
 }
 
-// -- Dewarping shader (from video-stitcher) --
+// -- Virtual PTZ shader --
+// Reprojects from cylindrical panorama to rectilinear view per-pixel.
+// The horizon stays level regardless of pan angle (like Veo output).
 const vertexShader = `
   varying vec2 vUv;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
 
 const fragmentShader = `
   precision highp float;
   uniform sampler2D uVideo;
-  uniform float splitPoint;
-  uniform float blendWidth;
-  uniform float splitHalf;
-  uniform float lFx, lFy, lCx, lCy;
-  uniform vec4 lD;
-  uniform float rFx, rFy, rCx, rCy;
-  uniform vec4 rD;
+  uniform float uYaw;        // pan angle (radians)
+  uniform float uPitch;      // tilt angle (radians, world space)
+  uniform float uFov;        // vertical FOV (radians)
+  uniform float uAspect;     // output width / height
+  uniform float uCameraTilt; // physical camera downward tilt (radians)
+  uniform float uSrcHFov;    // source horizontal FOV (radians)
+  uniform float uSrcVRange;  // source vertical range on unit cylinder
+
   varying vec2 vUv;
 
-  vec2 undistort(vec2 inputUV, float fx, float fy, float cx, float cy, vec4 d) {
-    float x = (inputUV.x - cx) / fx;
-    float y = (inputUV.y - cy) / fy;
-    float r2 = x * x + y * y;
-    float scale = 1.0 + d.x * r2 + d.y * r2 * r2 + d.z * r2 * r2 * r2 + d.w * r2 * r2 * r2 * r2;
-    return vec2(fx * x * scale + cx, fy * y * scale + cy);
-  }
-
   void main() {
-    vec2 distortedUV;
-    if (splitHalf < 0.5) {
-      distortedUV = undistort(vUv, lFx, lFy, lCx, lCy, lD);
-    } else {
-      bool isLeft = vUv.x < splitPoint;
-      if (isLeft) {
-        vec2 localUV = vec2(vUv.x / splitPoint, vUv.y);
-        vec2 localDistorted = undistort(localUV, lFx, lFy, lCx, lCy, lD);
-        distortedUV = vec2(localDistorted.x * splitPoint, localDistorted.y);
-      } else {
-        vec2 localUV = vec2((vUv.x - splitPoint) / (1.0 - splitPoint), vUv.y);
-        vec2 localDistorted = undistort(localUV, rFx, rFy, rCx, rCy, rD);
-        distortedUV = vec2(localDistorted.x * (1.0 - splitPoint) + splitPoint, localDistorted.y);
-      }
-    }
-    if (distortedUV.x < 0.0 || distortedUV.x > 1.0 || distortedUV.y < 0.0 || distortedUV.y > 1.0) {
-      gl_FragColor = vec4(0.0);
+    // Map UV [0,1] to NDC [-1,1]
+    vec2 ndc = vUv * 2.0 - 1.0;
+
+    // Ray direction in virtual camera local space (looking along +Z)
+    float tanHalf = tan(uFov * 0.5);
+    vec3 ray = normalize(vec3(
+      ndc.x * tanHalf * uAspect,
+      ndc.y * tanHalf,
+      1.0
+    ));
+
+    // Rotate by pitch (around X axis, in world space)
+    float cp = cos(uPitch), sp = sin(uPitch);
+    vec3 r1 = vec3(ray.x, cp * ray.y - sp * ray.z, sp * ray.y + cp * ray.z);
+
+    // Rotate by yaw (around world Y axis -- true vertical)
+    float cy = cos(uYaw), sy = sin(uYaw);
+    vec3 r2 = vec3(cy * r1.x + sy * r1.z, r1.y, -sy * r1.x + cy * r1.z);
+
+    // Transform from world space to camera space.
+    // The camera is tilted down by uCameraTilt from horizontal.
+    // This rotation around X maps world coords to the camera's frame
+    // so the cylindrical projection lookup is correct.
+    float ct = cos(uCameraTilt), st = sin(uCameraTilt);
+    vec3 r3 = vec3(r2.x, ct * r2.y + st * r2.z, -st * r2.y + ct * r2.z);
+
+    // Convert ray (now in camera space) to cylindrical panorama coordinates
+    float theta = atan(r3.x, r3.z);              // azimuth angle
+    float yCyl = r3.y / length(r3.xz);           // height on unit cylinder
+
+    // Map to source texture UV
+    float srcU = theta / uSrcHFov + 0.5;
+    float srcV = yCyl / uSrcVRange + 0.5;
+
+    if (srcU < 0.0 || srcU > 1.0 || srcV < 0.0 || srcV > 1.0) {
+      // Blend sky/ground based on world-space ray direction
+      float skyFactor = smoothstep(-0.05, 0.25, r2.y);
+      vec3 skyColor = vec3(0.82, 0.84, 0.80);    // bright overcast sky
+      vec3 groundColor = vec3(0.08, 0.18, 0.08);  // dark field green
+      gl_FragColor = vec4(mix(groundColor, skyColor, skyFactor), 1.0);
       return;
     }
-    gl_FragColor = texture2D(uVideo, distortedUV);
+    gl_FragColor = texture2D(uVideo, vec2(srcU, srcV));
   }
 `;
-
-// -- Half-cylinder geometry (from video-stitcher) --
-function createHalfCylinderGeometry(radius, height, widthSegments, heightSegments) {
-  const positions = [];
-  const uvs = [];
-  const indices = [];
-
-  for (let iy = 0; iy <= heightSegments; iy++) {
-    const v = iy / heightSegments;
-    const y = (v - 0.5) * height;
-    for (let ix = 0; ix <= widthSegments; ix++) {
-      const u = ix / widthSegments;
-      const theta = (0.5 - u) * Math.PI;
-      positions.push(radius * Math.sin(theta), y, -radius * Math.cos(theta));
-      uvs.push(1 - u, v);
-    }
-  }
-
-  for (let iy = 0; iy < heightSegments; iy++) {
-    for (let ix = 0; ix < widthSegments; ix++) {
-      const a = iy * (widthSegments + 1) + ix;
-      const b = a + 1;
-      const c = a + (widthSegments + 1);
-      const d = c + 1;
-      indices.push(a, b, c, b, d, c);
-    }
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-// -- Format shader uniforms --
-function formatUniforms(profile, texture) {
-  const { width, height, splitPoint, blendWidth, splitHalf, left, right } = profile;
-  const isSplit = splitHalf !== false;
-  const lw = isSplit ? width * splitPoint : width;
-  const lh = height;
-  const rw = isSplit ? width * (1 - splitPoint) : width;
-  const rh = height;
-
-  return {
-    uVideo: { value: texture },
-    splitPoint: { value: splitPoint },
-    blendWidth: { value: blendWidth },
-    splitHalf: { value: isSplit ? 1.0 : 0.0 },
-    lFx: { value: left.fx / lw }, lFy: { value: left.fy / lh },
-    lCx: { value: left.cx / lw }, lCy: { value: left.cy / lh },
-    lD: { value: new THREE.Vector4(...left.d) },
-    rFx: { value: right.fx / rw }, rFy: { value: right.fy / rh },
-    rCx: { value: right.cx / rw }, rCy: { value: right.cy / rh },
-    rD: { value: new THREE.Vector4(...right.d) },
-  };
-}
 
 // -- Main app --
 if (videoSrc) {
@@ -204,26 +176,42 @@ if (videoSrc) {
   video.crossOrigin = 'anonymous';
   video.preload = 'auto';
   video.playsInline = true;
-  video.muted = true; // Allow autoplay on mobile
+  video.muted = true;
   video.src = videoSrc;
 
-  // Three.js setup
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // Three.js setup -- orthographic camera + full-screen quad
+  const renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.insertBefore(renderer.domElement, controlsEl);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.01, 5);
-  camera.position.set(0, 0, 0);
+  const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-  // Half-cylinder mesh
-  const aspect = PROFILE.width / PROFILE.height;
-  const radius = 1;
-  const cylinderHeight = (1 / aspect) * Math.PI * radius;
-  const geometry = createHalfCylinderGeometry(radius, cylinderHeight, 128, 32);
+  // Source vertical range: in cylindrical projection with square pixels,
+  // the vertical extent = HFOV * (height / width) in "tan(elevation)" units.
+  const srcVRange = SRC_HFOV * (SRC_HEIGHT / SRC_WIDTH);
 
-  let mesh = null;
+  // Full-screen quad geometry (fills clip space via vertex shader)
+  const geometry = new THREE.PlaneGeometry(2, 2);
+
+  const uniforms = {
+    uVideo: { value: null },
+    uYaw: { value: yaw },
+    uPitch: { value: pitch },
+    uFov: { value: vFov },
+    uAspect: { value: container.clientWidth / container.clientHeight },
+    uCameraTilt: { value: CAMERA_TILT },
+    uSrcHFov: { value: SRC_HFOV },
+    uSrcVRange: { value: srcVRange },
+  };
+
+  const material = new THREE.ShaderMaterial({
+    vertexShader, fragmentShader, uniforms,
+  });
+
+  const quad = new THREE.Mesh(geometry, material);
+  scene.add(quad);
 
   video.addEventListener('loadeddata', () => {
     loadingEl.style.display = 'none';
@@ -233,16 +221,8 @@ if (videoSrc) {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
+    uniforms.uVideo.value = texture;
 
-    const uniforms = formatUniforms(PROFILE, texture);
-    const material = new THREE.ShaderMaterial({
-      vertexShader, fragmentShader, uniforms, side: THREE.BackSide,
-    });
-
-    mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-
-    // Auto-play (muted video can autoplay on mobile)
     video.play().catch(() => {});
   });
 
@@ -254,14 +234,8 @@ if (videoSrc) {
   video.load();
 
   // -- Pan/zoom controls --
-  const yawRangeRad = THREE.MathUtils.degToRad(YAW_RANGE_DEG);
-  const pitchRangeRad = THREE.MathUtils.degToRad(PITCH_RANGE_DEG);
   let dragging = false;
   let lastX = 0, lastY = 0;
-  const yawQuat = new THREE.Quaternion();
-  const pitchQuat = new THREE.Quaternion();
-  const tempVec = new THREE.Vector3();
-  const tempEuler = new THREE.Euler();
 
   const canvas = renderer.domElement;
   canvas.style.cursor = 'grab';
@@ -282,23 +256,21 @@ if (videoSrc) {
     const dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
 
-    yawQuat.setFromAxisAngle(tempVec.set(0, 1, 0), dx * PAN_SENSITIVITY);
-    camera.quaternion.premultiply(yawQuat);
-
-    tempVec.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-    pitchQuat.setFromAxisAngle(tempVec, dy * PAN_SENSITIVITY);
-    camera.quaternion.premultiply(pitchQuat);
-
-    const euler = tempEuler.setFromQuaternion(camera.quaternion, 'YXZ');
-    euler.x = THREE.MathUtils.clamp(euler.x, -pitchRangeRad / 2, pitchRangeRad / 2);
-    euler.y = THREE.MathUtils.clamp(euler.y, -yawRangeRad / 2, yawRangeRad / 2);
-    camera.quaternion.setFromEuler(euler);
+    // Drag right → view pans left (yaw decreases), like dragging a map
+    yaw = THREE.MathUtils.clamp(yaw - dx * PAN_SENSITIVITY, -YAW_LIMIT, YAW_LIMIT);
+    pitch = THREE.MathUtils.clamp(pitch + dy * PAN_SENSITIVITY, -PITCH_LIMIT, PITCH_LIMIT);
+    uniforms.uYaw.value = yaw;
+    uniforms.uPitch.value = pitch;
   });
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    camera.fov = THREE.MathUtils.clamp(camera.fov + e.deltaY * ZOOM_SENSITIVITY, MIN_FOV, MAX_FOV);
-    camera.updateProjectionMatrix();
+    const newFov = THREE.MathUtils.clamp(
+      THREE.MathUtils.radToDeg(vFov) + e.deltaY * ZOOM_SENSITIVITY_WHEEL,
+      MIN_FOV, MAX_FOV
+    );
+    vFov = THREE.MathUtils.degToRad(newFov);
+    uniforms.uFov.value = vFov;
   }, { passive: false });
 
   // Touch pinch-to-zoom
@@ -318,8 +290,12 @@ if (videoSrc) {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const delta = lastTouchDist - dist;
       lastTouchDist = dist;
-      camera.fov = THREE.MathUtils.clamp(camera.fov + delta * 0.1, MIN_FOV, MAX_FOV);
-      camera.updateProjectionMatrix();
+      const newFov = THREE.MathUtils.clamp(
+        THREE.MathUtils.radToDeg(vFov) + delta * ZOOM_SENSITIVITY_PINCH,
+        MIN_FOV, MAX_FOV
+      );
+      vFov = THREE.MathUtils.degToRad(newFov);
+      uniforms.uFov.value = vFov;
     }
   }, { passive: true });
 
@@ -355,9 +331,9 @@ if (videoSrc) {
 
   // -- Resize --
   window.addEventListener('resize', () => {
-    camera.aspect = container.clientWidth / container.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    const w = container.clientWidth, h = container.clientHeight;
+    uniforms.uAspect.value = w / h;
+    renderer.setSize(w, h);
   });
 
   // -- Render loop --
@@ -368,18 +344,16 @@ if (videoSrc) {
       progressFill.style.width = pct + '%';
       timeEl.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
     }
-    renderer.render(scene, camera);
+    renderer.render(scene, orthoCamera);
   }
   animate();
 
   // -- Flutter communication --
-  // Flutter can call setVideoSrc(url) to change video, or getTrimPoints() to read trim state.
   window.setVideoSrc = function(url) {
     video.src = url;
     video.load();
   };
 
-  // Expose current playback position for trim integration.
   window.getCurrentTime = function() {
     return video.currentTime;
   };
@@ -390,6 +364,23 @@ if (videoSrc) {
 
   window.seekTo = function(seconds) {
     video.currentTime = seconds;
+  };
+
+  // Debug helpers for tuning camera tilt
+  window.setTilt = function(radians) {
+    uniforms.uCameraTilt.value = radians;
+  };
+  window.setYaw = function(radians) {
+    yaw = radians;
+    uniforms.uYaw.value = yaw;
+  };
+  window.setPitch = function(radians) {
+    pitch = radians;
+    uniforms.uPitch.value = pitch;
+  };
+  window.setFov = function(degrees) {
+    vFov = THREE.MathUtils.degToRad(degrees);
+    uniforms.uFov.value = vFov;
   };
 }
 </script>
