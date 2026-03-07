@@ -48,7 +48,7 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js"
+    "three": "./three.module.min.js"
   }
 }
 </script>
@@ -204,6 +204,7 @@ if (videoSrc) {
   video.crossOrigin = 'anonymous';
   video.preload = 'auto';
   video.playsInline = true;
+  video.muted = true; // Allow autoplay on mobile
   video.src = videoSrc;
 
   // Three.js setup
@@ -240,11 +241,17 @@ if (videoSrc) {
 
     mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
+
+    // Auto-play (muted video can autoplay on mobile)
+    video.play().catch(() => {});
   });
 
   video.addEventListener('error', () => {
-    loadingEl.textContent = 'Failed to load video.';
+    const err = video.error;
+    loadingEl.textContent = `Failed to load video: ${err ? err.message : 'unknown error'}`;
   });
+
+  video.load();
 
   // -- Pan/zoom controls --
   const yawRangeRad = THREE.MathUtils.degToRad(YAW_RANGE_DEG);

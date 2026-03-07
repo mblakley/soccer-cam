@@ -44,3 +44,5 @@ flutter:
 
   assets:
     - assets/dewarp_viewer.html
+    - assets/three.module.min.js
+    - assets/three.core.min.js

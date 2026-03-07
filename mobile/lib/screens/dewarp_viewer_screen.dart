@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/local_file_server.dart';
@@ -36,21 +37,29 @@ class _DewarpViewerScreenState extends State<DewarpViewerScreen> {
       }
 
       final url = _server.viewerUrl(widget.videoPath);
+      debugPrint('DewarpViewer: loading URL: $url');
 
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(Colors.black)
+        ..setOnConsoleMessage((message) {
+          debugPrint('DewarpViewer JS [${message.level.name}]: ${message.message}');
+        })
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (_) {
               if (mounted) setState(() => _loading = false);
             },
             onWebResourceError: (error) {
-              if (mounted) {
-                setState(() {
-                  _error = 'WebView error: ${error.description}';
-                  _loading = false;
-                });
+              debugPrint('DewarpViewer: resource error: ${error.description} (isForMainFrame: ${error.isForMainFrame})');
+              // Only show error UI for main frame failures, not sub-resources.
+              if (error.isForMainFrame ?? false) {
+                if (mounted) {
+                  setState(() {
+                    _error = 'WebView error: ${error.description}';
+                    _loading = false;
+                  });
+                }
               }
             },
           ),
