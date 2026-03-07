@@ -175,3 +175,11 @@ tests/e2e/test_clips/
 
 # Ralph Wiggum loop state (temporary)
 .claude/ralph-state.json
+training/data/*
+training/runs/*
+runs/
+review_packets/*
+*.pt
+*.onnx
+*.tflite
+*.mlpackage

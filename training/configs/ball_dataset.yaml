@@ -1,7 +1,7 @@
-# YOLO26 dataset config for ball detection training
-# Usage: yolo train data=training/configs/ball_dataset.yaml model=yolo26n.pt
+# YOLO dataset config for ball detection training
+# Usage: yolo train data=training/configs/ball_dataset.yaml model=yolo11n.pt
 
-path: ../data/ball_dataset  # relative to this file, or absolute
+path: training/data/ball_dataset  # relative to project root
 train: images/train
 val: images/val
 test: images/test
