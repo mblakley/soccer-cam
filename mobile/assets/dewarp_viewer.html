@@ -29,6 +29,13 @@
     pointer-events: none; width: 0%;
   }
   #time { color: #fff; font-size: 12px; font-family: monospace; white-space: nowrap; }
+  #tracking-badge {
+    position: absolute; top: 8px; right: 8px;
+    background: rgba(0,0,0,0.5); color: #4caf50; font-family: monospace;
+    font-size: 11px; padding: 3px 8px; border-radius: 4px; z-index: 10;
+    display: none;
+  }
+  #tracking-badge.manual { color: #ff9800; }
   #loading {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
     color: #fff; font-family: sans-serif; font-size: 16px;
@@ -37,6 +44,7 @@
 </head>
 <body>
 <div id="container">
+  <div id="tracking-badge">TRACK</div>
   <div id="loading">Loading video...</div>
   <div id="controls" style="display:none">
     <button id="play-btn">&#9654;</button>
@@ -88,6 +96,102 @@ const params = new URLSearchParams(window.location.search);
 const videoSrc = params.get('src');
 if (!videoSrc) {
   document.getElementById('loading').textContent = 'No video source. Pass ?src=/path/to/video.mp4';
+}
+
+// -- Tracking data --
+// ball_track.json: { fps, frames: [{ frame, yaw, pitch, fov, ... }] }
+// Pipeline coords: yaw=0 center, pitch=0 image center
+// Viewer coords: yaw=0 center, pitch=CAMERA_TILT = image center
+const trackingSrc = params.get('track');
+let trackingData = null;       // parsed tracking JSON
+let trackingEnabled = false;   // auto-follow active
+let manualOverrideUntil = 0;   // timestamp when manual override expires
+const MANUAL_TIMEOUT = 3000;   // ms after drag before tracking resumes
+const TRACKING_SMOOTH = 0.97;  // EMA smoothing (higher = smoother, slower response)
+const MAX_YAW_RATE = 0.15;    // max radians per render frame (~60fps -> ~9 rad/s)
+const MAX_PITCH_RATE = 0.08;  // max pitch change per render frame
+
+function smoothTrackingData(data) {
+  // Remove (0,0) spikes: if a frame is at (0,0) and neighbors aren't, interpolate
+  const frames = data.frames;
+  for (let i = 1; i < frames.length - 1; i++) {
+    const prev = frames[i - 1], cur = frames[i], next = frames[i + 1];
+    const isZero = Math.abs(cur.yaw) < 0.01 && Math.abs(cur.pitch) < 0.01;
+    const prevNonZero = Math.abs(prev.yaw) > 0.01 || Math.abs(prev.pitch) > 0.01;
+    const nextNonZero = Math.abs(next.yaw) > 0.01 || Math.abs(next.pitch) > 0.01;
+    if (isZero && prevNonZero && nextNonZero) {
+      cur.yaw = (prev.yaw + next.yaw) / 2;
+      cur.pitch = (prev.pitch + next.pitch) / 2;
+      cur.fov = (prev.fov + next.fov) / 2;
+    }
+  }
+  // Multi-pass EMA to pre-smooth the entire track
+  const alpha = 0.15;  // low alpha = heavier smoothing
+  for (let pass = 0; pass < 3; pass++) {
+    // Forward pass
+    for (let i = 1; i < frames.length; i++) {
+      frames[i].yaw = frames[i - 1].yaw * (1 - alpha) + frames[i].yaw * alpha;
+      frames[i].pitch = frames[i - 1].pitch * (1 - alpha) + frames[i].pitch * alpha;
+      frames[i].fov = frames[i - 1].fov * (1 - alpha) + frames[i].fov * alpha;
+    }
+    // Backward pass
+    for (let i = frames.length - 2; i >= 0; i--) {
+      frames[i].yaw = frames[i + 1].yaw * (1 - alpha) + frames[i].yaw * alpha;
+      frames[i].pitch = frames[i + 1].pitch * (1 - alpha) + frames[i].pitch * alpha;
+      frames[i].fov = frames[i + 1].fov * (1 - alpha) + frames[i].fov * alpha;
+    }
+  }
+  return data;
+}
+
+function loadTrackingFromUrl(url) {
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      trackingData = smoothTrackingData(data);
+      trackingEnabled = true;
+      console.log(`Loaded tracking: ${data.frames.length} frames, ${data.fps} fps (smoothed)`);
+    })
+    .catch(e => console.error('Failed to load tracking data:', e));
+}
+
+// Flutter / external API
+window.loadTrackingData = function(jsonString) {
+  trackingData = smoothTrackingData(JSON.parse(jsonString));
+  trackingEnabled = true;
+};
+
+window.toggleTracking = function() {
+  trackingEnabled = !trackingEnabled;
+  return trackingEnabled;
+};
+
+function getTrackingState(videoTime) {
+  if (!trackingData || !trackingData.frames || trackingData.frames.length === 0) return null;
+  const fps = trackingData.fps || 30;
+  const frameIdx = videoTime * fps;
+  const frames = trackingData.frames;
+
+  // Clamp to available range
+  if (frameIdx <= frames[0].frame) return frames[0];
+  if (frameIdx >= frames[frames.length - 1].frame) return frames[frames.length - 1];
+
+  // Binary search for surrounding frames
+  let lo = 0, hi = frames.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].frame <= frameIdx) lo = mid; else hi = mid;
+  }
+
+  // Linear interpolation
+  const a = frames[lo], b = frames[hi];
+  const t = (frameIdx - a.frame) / (b.frame - a.frame || 1);
+  return {
+    yaw: a.yaw + (b.yaw - a.yaw) * t,
+    pitch: a.pitch + (b.pitch - a.pitch) * t,
+    fov: a.fov + (b.fov - a.fov) * t,
+    confidence: a.confidence + (b.confidence - a.confidence) * t,
+  };
 }
 
 // -- Virtual PTZ shader --
@@ -244,6 +348,7 @@ if (videoSrc) {
     dragging = true;
     lastX = e.clientX; lastY = e.clientY;
     canvas.style.cursor = 'grabbing';
+    manualOverrideUntil = Date.now() + MANUAL_TIMEOUT;
   });
 
   const onPointerUp = () => { dragging = false; canvas.style.cursor = 'grab'; };
@@ -336,9 +441,75 @@ if (videoSrc) {
     renderer.setSize(w, h);
   });
 
+  // -- T key toggles tracking --
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 't' || e.key === 'T') {
+      trackingEnabled = !trackingEnabled;
+      console.log('Tracking:', trackingEnabled ? 'ON' : 'OFF');
+    }
+  });
+
+  // Load tracking data from URL param
+  const trackingBadge = document.getElementById('tracking-badge');
+  if (trackingSrc) loadTrackingFromUrl(trackingSrc);
+
   // -- Render loop --
   function animate() {
     requestAnimationFrame(animate);
+
+    // Apply tracking data when enabled and not manually overridden
+    if (trackingEnabled && trackingData && Date.now() > manualOverrideUntil) {
+      const state = getTrackingState(video.currentTime);
+      if (state) {
+        // Pipeline yaw maps directly to viewer yaw
+        const targetYaw = state.yaw;
+        // Pipeline pitch=0 is image center = viewer CAMERA_TILT
+        const targetPitch = CAMERA_TILT + state.pitch;
+        // Pipeline FOV is horizontal degrees; convert to vertical radians
+        const aspect = container.clientWidth / container.clientHeight;
+        const targetVFov = THREE.MathUtils.degToRad(state.fov / aspect);
+
+        // EMA smooth toward target
+        let newYaw = yaw * TRACKING_SMOOTH + targetYaw * (1 - TRACKING_SMOOTH);
+        let newPitch = pitch * TRACKING_SMOOTH + targetPitch * (1 - TRACKING_SMOOTH);
+        let newFov = vFov * TRACKING_SMOOTH + targetVFov * (1 - TRACKING_SMOOTH);
+
+        // Velocity gate: clamp max change per frame to prevent snapping
+        const dyaw = newYaw - yaw;
+        const dpitch = newPitch - pitch;
+        if (Math.abs(dyaw) > MAX_YAW_RATE) newYaw = yaw + Math.sign(dyaw) * MAX_YAW_RATE;
+        if (Math.abs(dpitch) > MAX_PITCH_RATE) newPitch = pitch + Math.sign(dpitch) * MAX_PITCH_RATE;
+
+        yaw = newYaw;
+        pitch = newPitch;
+        vFov = newFov;
+
+        // Clamp
+        yaw = THREE.MathUtils.clamp(yaw, -YAW_LIMIT, YAW_LIMIT);
+        pitch = THREE.MathUtils.clamp(pitch, -PITCH_LIMIT, PITCH_LIMIT);
+        vFov = THREE.MathUtils.clamp(vFov, THREE.MathUtils.degToRad(MIN_FOV), THREE.MathUtils.degToRad(MAX_FOV));
+
+        uniforms.uYaw.value = yaw;
+        uniforms.uPitch.value = pitch;
+        uniforms.uFov.value = vFov;
+      }
+    }
+
+    // Update tracking badge
+    if (trackingData) {
+      trackingBadge.style.display = 'block';
+      if (!trackingEnabled) {
+        trackingBadge.textContent = 'TRACK OFF';
+        trackingBadge.className = 'manual';
+      } else if (Date.now() <= manualOverrideUntil) {
+        trackingBadge.textContent = 'MANUAL';
+        trackingBadge.className = 'manual';
+      } else {
+        trackingBadge.textContent = 'TRACKING';
+        trackingBadge.className = '';
+      }
+    }
+
     if (video.duration) {
       const pct = (video.currentTime / video.duration) * 100;
       progressFill.style.width = pct + '%';
