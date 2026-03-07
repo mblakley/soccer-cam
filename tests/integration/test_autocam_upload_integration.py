@@ -176,7 +176,7 @@ class TestAutocamUploadIntegration:
 
             # Verify state files were created
             autocam_state_file = os.path.join(
-                setup_storage_environment, "autocam_queue_state.json"
+                setup_storage_environment, "tracking_queue_state.json"
             )
 
             assert os.path.exists(autocam_state_file), "Autocam state file should exist"
@@ -261,7 +261,7 @@ class TestAutocamUploadIntegration:
 
             # Verify state files exist
             autocam_state_file = os.path.join(
-                setup_storage_environment, "autocam_queue_state.json"
+                setup_storage_environment, "tracking_queue_state.json"
             )
 
             assert os.path.exists(autocam_state_file), (
@@ -344,7 +344,7 @@ class TestAutocamUploadIntegration:
 
             # Verify state files are consistent
             autocam_state_file = os.path.join(
-                setup_storage_environment, "autocam_queue_state.json"
+                setup_storage_environment, "tracking_queue_state.json"
             )
 
             with open(autocam_state_file, "r") as f:
@@ -448,7 +448,7 @@ class TestAutocamUploadIntegration:
 
             # Check state file content during processing
             autocam_state_file = os.path.join(
-                setup_storage_environment, "autocam_queue_state.json"
+                setup_storage_environment, "tracking_queue_state.json"
             )
             os.path.join(setup_storage_environment, "upload_queue_state.json")
 
@@ -533,7 +533,7 @@ class TestAutocamUploadIntegration:
 
             # Verify state files are consistent
             autocam_state_file = os.path.join(
-                setup_storage_environment, "autocam_queue_state.json"
+                setup_storage_environment, "tracking_queue_state.json"
             )
 
             with open(autocam_state_file, "r") as f:

@@ -53,7 +53,7 @@ class TestAutocamTask:
             autocam_config=mock_autocam_config,
         )
 
-        assert task.queue_type() == QueueType.AUTOCAM
+        assert task.queue_type() == QueueType.TRACKING
 
     def test_task_type(self, mock_autocam_config, sample_group_dir):
         """Test task type property."""

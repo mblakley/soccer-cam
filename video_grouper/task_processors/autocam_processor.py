@@ -40,7 +40,7 @@ class AutocamProcessor(QueueProcessor):
     @property
     def queue_type(self) -> QueueType:
         """Return the queue type for this processor."""
-        return QueueType.AUTOCAM
+        return QueueType.TRACKING
 
     async def process_item(self, item: AutocamTask) -> None:
         """

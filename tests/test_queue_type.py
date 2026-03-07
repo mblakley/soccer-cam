@@ -6,10 +6,10 @@ from video_grouper.task_processors.queue_type import QueueType
 class TestQueueType:
     """Test the QueueType enum."""
 
-    def test_autocam_queue_type_exists(self):
-        """Test that AUTOCAM queue type exists."""
-        assert hasattr(QueueType, "AUTOCAM")
-        assert QueueType.AUTOCAM.value == "autocam"
+    def test_tracking_queue_type_exists(self):
+        """Test that TRACKING queue type exists."""
+        assert hasattr(QueueType, "TRACKING")
+        assert QueueType.TRACKING.value == "tracking"
 
     def test_all_queue_types(self):
         """Test all queue types are present."""
@@ -18,7 +18,7 @@ class TestQueueType:
             "VIDEO": "video",
             "UPLOAD": "upload",
             "NTFY": "ntfy",
-            "AUTOCAM": "autocam",
+            "TRACKING": "tracking",
         }
 
         for name, value in expected_types.items():
@@ -27,7 +27,7 @@ class TestQueueType:
 
     def test_string_representation(self):
         """Test value representation of queue types."""
-        assert QueueType.AUTOCAM.value == "autocam"
+        assert QueueType.TRACKING.value == "tracking"
         assert QueueType.DOWNLOAD.value == "download"
         assert QueueType.VIDEO.value == "video"
         assert QueueType.UPLOAD.value == "upload"
@@ -36,23 +36,23 @@ class TestQueueType:
 
     def test_enum_comparison(self):
         """Test enum comparison."""
-        assert QueueType.AUTOCAM == QueueType.AUTOCAM
-        assert QueueType.AUTOCAM != QueueType.DOWNLOAD
-        assert QueueType.AUTOCAM != QueueType.VIDEO
-        assert QueueType.AUTOCAM != QueueType.UPLOAD
-        assert QueueType.AUTOCAM != QueueType.NTFY
+        assert QueueType.TRACKING == QueueType.TRACKING
+        assert QueueType.TRACKING != QueueType.DOWNLOAD
+        assert QueueType.TRACKING != QueueType.VIDEO
+        assert QueueType.TRACKING != QueueType.UPLOAD
+        assert QueueType.TRACKING != QueueType.NTFY
 
     def test_enum_hash(self):
         """Test enum hash functionality."""
-        autocam_set = {QueueType.AUTOCAM, QueueType.AUTOCAM}
-        assert len(autocam_set) == 1
+        tracking_set = {QueueType.TRACKING, QueueType.TRACKING}
+        assert len(tracking_set) == 1
 
         all_types_set = {
             QueueType.DOWNLOAD,
             QueueType.VIDEO,
             QueueType.UPLOAD,
             QueueType.NTFY,
-            QueueType.AUTOCAM,
+            QueueType.TRACKING,
         }
         assert len(all_types_set) == 5
 
@@ -60,5 +60,5 @@ class TestQueueType:
         """Test enum iteration."""
         all_types = list(QueueType)
         assert len(all_types) == 7
-        assert QueueType.AUTOCAM in all_types
+        assert QueueType.TRACKING in all_types
         assert QueueType.YOUTUBE in all_types

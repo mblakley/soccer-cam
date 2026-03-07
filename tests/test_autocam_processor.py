@@ -100,13 +100,13 @@ class TestAutocamProcessor:
         processor = AutocamProcessor(temp_storage, mock_config)
         from video_grouper.task_processors.queue_type import QueueType
 
-        assert processor.queue_type == QueueType.AUTOCAM
+        assert processor.queue_type == QueueType.TRACKING
 
     def test_get_state_file_name(self, temp_storage, mock_config):
         """Test getting state file name."""
         processor = AutocamProcessor(temp_storage, mock_config)
         state_file_name = processor.get_state_file_name()
-        assert state_file_name == "autocam_queue_state.json"
+        assert state_file_name == "tracking_queue_state.json"
 
     @pytest.mark.asyncio
     async def test_autocam_task_processing_success(

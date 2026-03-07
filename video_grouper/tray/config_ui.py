@@ -1008,7 +1008,7 @@ class ConfigWindow(QWidget):
 
     def refresh_autocam_queue_display(self):
         """Reads and displays the autocam queue state."""
-        queue_file = get_shared_data_path() / "autocam_queue_state.json"
+        queue_file = get_shared_data_path() / "tracking_queue_state.json"
         self.autocam_queue_list.clear()
         try:
             with FileLock(queue_file):

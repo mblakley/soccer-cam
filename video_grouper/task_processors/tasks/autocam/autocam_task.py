@@ -44,7 +44,7 @@ class AutocamTask(BaseTask):
 
     @classmethod
     def queue_type(cls) -> QueueType:
-        return QueueType.AUTOCAM
+        return QueueType.TRACKING
 
     @property
     def task_type(self) -> str:
