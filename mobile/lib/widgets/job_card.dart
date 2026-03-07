@@ -17,6 +17,7 @@ class JobCard extends StatelessWidget {
     this.onDelete,
     this.onTrim,
     this.onSkipTrim,
+    this.onDewarp,
     this.currentProgress,
   });
 
@@ -27,6 +28,7 @@ class JobCard extends StatelessWidget {
   final VoidCallback? onDelete;
   final VoidCallback? onTrim;
   final VoidCallback? onSkipTrim;
+  final VoidCallback? onDewarp;
   final double? currentProgress;
 
   @override
@@ -167,6 +169,16 @@ class JobCard extends StatelessWidget {
                       child: const Text('Skip'),
                     ),
                   ],
+                ),
+              ],
+
+              // Dewarp viewer button when a combined file exists.
+              if (group.combinedFilePath != null && onDewarp != null) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: onDewarp,
+                  icon: const Icon(Icons.panorama_horizontal, size: 18),
+                  label: const Text('Dewarped View'),
                 ),
               ],
 

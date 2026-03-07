@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/pipeline_state.dart';
 import '../models/video_group.dart';
 import '../services/pipeline_orchestrator.dart';
+import '../screens/dewarp_viewer_screen.dart';
 import '../widgets/job_card.dart';
 
 /// Main dashboard screen showing all video processing jobs.
@@ -162,6 +163,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       onSkipTrim: group.state == PipelineState.combined
           ? () => orchestrator.skipTrim(group.id)
           : null,
+      onDewarp: group.combinedFilePath != null
+          ? () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      DewarpViewerScreen(videoPath: group.combinedFilePath!),
+                ),
+              )
+          : null,
       onDelete: () => _confirmDelete(group),
     );
   }
@@ -170,6 +180,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (group.state == PipelineState.combined) {
       // Navigate to trim screen.
       Navigator.pushNamed(context, '/trim', arguments: group.id);
+    } else if (group.state == PipelineState.complete &&
+        group.combinedFilePath != null) {
+      // Navigate to dewarp viewer for completed videos.
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              DewarpViewerScreen(videoPath: group.combinedFilePath!),
+        ),
+      );
     } else if (group.state.isProcessing) {
       // Navigate to processing screen.
       Navigator.pushNamed(context, '/processing', arguments: group.id);

@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Dewarp Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #container { width: 100%; height: 100%; position: relative; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  #controls {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    padding: 8px 12px; display: flex; align-items: center; gap: 10px;
+    z-index: 10;
+  }
+  #controls button {
+    background: none; border: none; color: #fff; font-size: 20px;
+    cursor: pointer; padding: 4px; line-height: 1;
+  }
+  #progress-bar {
+    flex: 1; height: 6px; background: rgba(255,255,255,0.3);
+    border-radius: 3px; cursor: pointer; position: relative;
+  }
+  #progress-fill {
+    height: 100%; background: #4caf50; border-radius: 3px;
+    pointer-events: none; width: 0%;
+  }
+  #time { color: #fff; font-size: 12px; font-family: monospace; white-space: nowrap; }
+  #loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    color: #fff; font-family: sans-serif; font-size: 16px;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="loading">Loading video...</div>
+  <div id="controls" style="display:none">
+    <button id="play-btn">&#9654;</button>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <span id="time">00:00 / 00:00</span>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// -- Configuration --
+const PAN_SENSITIVITY = 0.005;
+const ZOOM_SENSITIVITY = 0.05;
+const MIN_FOV = 15;
+const MAX_FOV = 90;
+const YAW_RANGE_DEG = 120;
+const PITCH_RANGE_DEG = 30;
+
+// Dahua B180 profile (d=[0,0,0,0] since geometry handles projection)
+const PROFILE = {
+  width: 4096, height: 1800,
+  splitHalf: false, splitPoint: 0.5, blendWidth: 0,
+  left: { fx: 4096, fy: 1800, cx: 2048, cy: 900, d: [0, 0, 0, 0] },
+  right: { fx: 4096, fy: 1800, cx: 2048, cy: 900, d: [0, 0, 0, 0] },
+};
+
+// -- Video source from URL params --
+const params = new URLSearchParams(window.location.search);
+const videoSrc = params.get('src');
+if (!videoSrc) {
+  document.getElementById('loading').textContent = 'No video source. Pass ?src=/path/to/video.mp4';
+}
+
+// -- Dewarping shader (from video-stitcher) --
+const vertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const fragmentShader = `
+  precision highp float;
+  uniform sampler2D uVideo;
+  uniform float splitPoint;
+  uniform float blendWidth;
+  uniform float splitHalf;
+  uniform float lFx, lFy, lCx, lCy;
+  uniform vec4 lD;
+  uniform float rFx, rFy, rCx, rCy;
+  uniform vec4 rD;
+  varying vec2 vUv;
+
+  vec2 undistort(vec2 inputUV, float fx, float fy, float cx, float cy, vec4 d) {
+    float x = (inputUV.x - cx) / fx;
+    float y = (inputUV.y - cy) / fy;
+    float r2 = x * x + y * y;
+    float scale = 1.0 + d.x * r2 + d.y * r2 * r2 + d.z * r2 * r2 * r2 + d.w * r2 * r2 * r2 * r2;
+    return vec2(fx * x * scale + cx, fy * y * scale + cy);
+  }
+
+  void main() {
+    vec2 distortedUV;
+    if (splitHalf < 0.5) {
+      distortedUV = undistort(vUv, lFx, lFy, lCx, lCy, lD);
+    } else {
+      bool isLeft = vUv.x < splitPoint;
+      if (isLeft) {
+        vec2 localUV = vec2(vUv.x / splitPoint, vUv.y);
+        vec2 localDistorted = undistort(localUV, lFx, lFy, lCx, lCy, lD);
+        distortedUV = vec2(localDistorted.x * splitPoint, localDistorted.y);
+      } else {
+        vec2 localUV = vec2((vUv.x - splitPoint) / (1.0 - splitPoint), vUv.y);
+        vec2 localDistorted = undistort(localUV, rFx, rFy, rCx, rCy, rD);
+        distortedUV = vec2(localDistorted.x * (1.0 - splitPoint) + splitPoint, localDistorted.y);
+      }
+    }
+    if (distortedUV.x < 0.0 || distortedUV.x > 1.0 || distortedUV.y < 0.0 || distortedUV.y > 1.0) {
+      gl_FragColor = vec4(0.0);
+      return;
+    }
+    gl_FragColor = texture2D(uVideo, distortedUV);
+  }
+`;
+
+// -- Half-cylinder geometry (from video-stitcher) --
+function createHalfCylinderGeometry(radius, height, widthSegments, heightSegments) {
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+
+  for (let iy = 0; iy <= heightSegments; iy++) {
+    const v = iy / heightSegments;
+    const y = (v - 0.5) * height;
+    for (let ix = 0; ix <= widthSegments; ix++) {
+      const u = ix / widthSegments;
+      const theta = (0.5 - u) * Math.PI;
+      positions.push(radius * Math.sin(theta), y, -radius * Math.cos(theta));
+      uvs.push(1 - u, v);
+    }
+  }
+
+  for (let iy = 0; iy < heightSegments; iy++) {
+    for (let ix = 0; ix < widthSegments; ix++) {
+      const a = iy * (widthSegments + 1) + ix;
+      const b = a + 1;
+      const c = a + (widthSegments + 1);
+      const d = c + 1;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// -- Format shader uniforms --
+function formatUniforms(profile, texture) {
+  const { width, height, splitPoint, blendWidth, splitHalf, left, right } = profile;
+  const isSplit = splitHalf !== false;
+  const lw = isSplit ? width * splitPoint : width;
+  const lh = height;
+  const rw = isSplit ? width * (1 - splitPoint) : width;
+  const rh = height;
+
+  return {
+    uVideo: { value: texture },
+    splitPoint: { value: splitPoint },
+    blendWidth: { value: blendWidth },
+    splitHalf: { value: isSplit ? 1.0 : 0.0 },
+    lFx: { value: left.fx / lw }, lFy: { value: left.fy / lh },
+    lCx: { value: left.cx / lw }, lCy: { value: left.cy / lh },
+    lD: { value: new THREE.Vector4(...left.d) },
+    rFx: { value: right.fx / rw }, rFy: { value: right.fy / rh },
+    rCx: { value: right.cx / rw }, rCy: { value: right.cy / rh },
+    rD: { value: new THREE.Vector4(...right.d) },
+  };
+}
+
+// -- Main app --
+if (videoSrc) {
+  const container = document.getElementById('container');
+  const loadingEl = document.getElementById('loading');
+  const controlsEl = document.getElementById('controls');
+  const playBtn = document.getElementById('play-btn');
+  const progressBar = document.getElementById('progress-bar');
+  const progressFill = document.getElementById('progress-fill');
+  const timeEl = document.getElementById('time');
+
+  // Create video element
+  const video = document.createElement('video');
+  video.crossOrigin = 'anonymous';
+  video.preload = 'auto';
+  video.playsInline = true;
+  video.src = videoSrc;
+
+  // Three.js setup
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.insertBefore(renderer.domElement, controlsEl);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.01, 5);
+  camera.position.set(0, 0, 0);
+
+  // Half-cylinder mesh
+  const aspect = PROFILE.width / PROFILE.height;
+  const radius = 1;
+  const cylinderHeight = (1 / aspect) * Math.PI * radius;
+  const geometry = createHalfCylinderGeometry(radius, cylinderHeight, 128, 32);
+
+  let mesh = null;
+
+  video.addEventListener('loadeddata', () => {
+    loadingEl.style.display = 'none';
+    controlsEl.style.display = 'flex';
+
+    const texture = new THREE.VideoTexture(video);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+
+    const uniforms = formatUniforms(PROFILE, texture);
+    const material = new THREE.ShaderMaterial({
+      vertexShader, fragmentShader, uniforms, side: THREE.BackSide,
+    });
+
+    mesh = new THREE.Mesh(geometry, material);
+    scene.add(mesh);
+  });
+
+  video.addEventListener('error', () => {
+    loadingEl.textContent = 'Failed to load video.';
+  });
+
+  // -- Pan/zoom controls --
+  const yawRangeRad = THREE.MathUtils.degToRad(YAW_RANGE_DEG);
+  const pitchRangeRad = THREE.MathUtils.degToRad(PITCH_RANGE_DEG);
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+  const yawQuat = new THREE.Quaternion();
+  const pitchQuat = new THREE.Quaternion();
+  const tempVec = new THREE.Vector3();
+  const tempEuler = new THREE.Euler();
+
+  const canvas = renderer.domElement;
+  canvas.style.cursor = 'grab';
+
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    canvas.style.cursor = 'grabbing';
+  });
+
+  const onPointerUp = () => { dragging = false; canvas.style.cursor = 'grab'; };
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointerleave', onPointerUp);
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+
+    yawQuat.setFromAxisAngle(tempVec.set(0, 1, 0), dx * PAN_SENSITIVITY);
+    camera.quaternion.premultiply(yawQuat);
+
+    tempVec.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    pitchQuat.setFromAxisAngle(tempVec, dy * PAN_SENSITIVITY);
+    camera.quaternion.premultiply(pitchQuat);
+
+    const euler = tempEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+    euler.x = THREE.MathUtils.clamp(euler.x, -pitchRangeRad / 2, pitchRangeRad / 2);
+    euler.y = THREE.MathUtils.clamp(euler.y, -yawRangeRad / 2, yawRangeRad / 2);
+    camera.quaternion.setFromEuler(euler);
+  });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    camera.fov = THREE.MathUtils.clamp(camera.fov + e.deltaY * ZOOM_SENSITIVITY, MIN_FOV, MAX_FOV);
+    camera.updateProjectionMatrix();
+  }, { passive: false });
+
+  // Touch pinch-to-zoom
+  let lastTouchDist = 0;
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastTouchDist = Math.sqrt(dx * dx + dy * dy);
+    }
+  }, { passive: true });
+
+  canvas.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const delta = lastTouchDist - dist;
+      lastTouchDist = dist;
+      camera.fov = THREE.MathUtils.clamp(camera.fov + delta * 0.1, MIN_FOV, MAX_FOV);
+      camera.updateProjectionMatrix();
+    }
+  }, { passive: true });
+
+  // -- Player controls --
+  let playing = false;
+
+  playBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (video.paused) { video.play(); } else { video.pause(); }
+  });
+
+  video.addEventListener('play', () => { playing = true; playBtn.innerHTML = '&#9646;&#9646;'; });
+  video.addEventListener('pause', () => { playing = false; playBtn.innerHTML = '&#9654;'; });
+
+  progressBar.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!video.duration) return;
+    const rect = progressBar.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    video.currentTime = pct * video.duration;
+  });
+
+  // Prevent pan when interacting with controls
+  controlsEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+  controlsEl.addEventListener('pointermove', (e) => e.stopPropagation());
+
+  function formatTime(t) {
+    if (isNaN(t)) return '00:00';
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  // -- Resize --
+  window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+
+  // -- Render loop --
+  function animate() {
+    requestAnimationFrame(animate);
+    if (video.duration) {
+      const pct = (video.currentTime / video.duration) * 100;
+      progressFill.style.width = pct + '%';
+      timeEl.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+    }
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // -- Flutter communication --
+  // Flutter can call setVideoSrc(url) to change video, or getTrimPoints() to read trim state.
+  window.setVideoSrc = function(url) {
+    video.src = url;
+    video.load();
+  };
+
+  // Expose current playback position for trim integration.
+  window.getCurrentTime = function() {
+    return video.currentTime;
+  };
+
+  window.getDuration = function() {
+    return video.duration || 0;
+  };
+
+  window.seekTo = function(seconds) {
+    video.currentTime = seconds;
+  };
+}
+</script>
+</body>
+</html>
