@@ -52,13 +52,20 @@ class BallDetector:
         confidence: float = 0.25,
         imgsz: int = 640,
         device: str = "cpu",
+        model=None,
     ):
         self.profile = profile
         self.confidence = confidence
         self.imgsz = imgsz
-        self._model = None
+        self._model = model
         self._model_path = model_path
         self._device = device
+
+    @property
+    def model(self):
+        """Expose the loaded YOLO model for sharing with other detectors."""
+        self._ensure_model()
+        return self._model
 
     def _ensure_model(self):
         if self._model is None:
