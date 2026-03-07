@@ -1,0 +1,10 @@
+# YOLO26 dataset config for ball detection training
+# Usage: yolo train data=training/configs/ball_dataset.yaml model=yolo26n.pt
+
+path: ../data/ball_dataset  # relative to this file, or absolute
+train: images/train
+val: images/val
+test: images/test
+
+nc: 1
+names: ["ball"]
