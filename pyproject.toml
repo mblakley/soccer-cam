@@ -52,6 +52,8 @@ ml = [
     "supervision>=0.26.0",
     "lapx>=0.5.0",
     "filterpy>=1.4.5",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
 ]
 
 [build-system]
