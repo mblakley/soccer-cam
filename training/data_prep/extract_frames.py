@@ -129,7 +129,7 @@ def main():
 
     video_path = args.video
     if video_path.is_dir():
-        videos = sorted(video_path.glob("*.mp4"))
+        videos = sorted(video_path.glob("*.mp4")) + sorted(video_path.glob("*.dav"))
         logger.info("Found %d video files in %s", len(videos), video_path)
     else:
         videos = [video_path]
