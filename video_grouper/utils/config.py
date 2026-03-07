@@ -170,6 +170,17 @@ class AutocamConfig(BaseModel):
     executable: Optional[str] = None
 
 
+class BallTrackingConfig(BaseModel):
+    enabled: bool = False
+    model_path: Optional[str] = None
+    confidence: float = 0.25
+    output_width: int = 1920
+    output_height: int = 1080
+    camera_fov: float = 60.0
+    camera_smoothing: float = 0.85
+    device: str = "cpu"
+
+
 class CloudSyncConfig(BaseModel):
     enabled: bool = False
     provider: Optional[str] = None
@@ -236,6 +247,9 @@ class Config(BaseModel):
     ntfy: NtfyConfig = Field(alias="NTFY")
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
     autocam: AutocamConfig = Field(alias="AUTOCAM")
+    ball_tracking: BallTrackingConfig = Field(
+        alias="BALL_TRACKING", default_factory=BallTrackingConfig
+    )
     cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
 
