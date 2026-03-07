@@ -11,6 +11,8 @@ A set of tools to automate the process of recording, processing, and uploading s
 - Convert proprietary .dav files to standard MP4 format
 - Group related recordings together
 - Process videos with Once Autocam for automated camera tracking
+- Train and run custom YOLO ball detection models from panoramic footage
+- Human-in-the-loop annotation workflow via mobile app
 - Automatically upload videos to YouTube
 - TeamSnap integration to automatically populate match information
 
@@ -172,6 +174,15 @@ act --list
 soccer-cam/
 ├── .github/workflows/          # GitHub Actions CI/CD workflows
 ├── tests/                      # Test files
+├── training/                   # Ball detection model training pipeline
+│   ├── configs/               # YOLO dataset configs
+│   ├── data_prep/             # Frame extraction, tiling, labeling, dataset organization
+│   ├── train.py               # Model training
+│   ├── evaluate.py            # Model evaluation
+│   ├── export_mobile.py       # Export to mobile formats
+│   ├── annotation_server.py   # Mobile annotation server (FastAPI)
+│   ├── correction_ingester.py # Convert annotations to YOLO labels
+│   └── review_packet_generator.py  # Generate annotation review packets
 ├── video_grouper/             # Main application package
 │   ├── api_integrations/      # External API integrations (TeamSnap, PlayMetrics, etc.)
 │   ├── cameras/               # Camera interface implementations
@@ -391,8 +402,78 @@ The camera itself is pretty heavy, and putting it at the top of a tall pole mean
 
 I cut the ethernet cable off close to the female connector, crimped a new male ethernet onto the cable (configured to 10/100 specs, since there are only 4 wires), and purchased a male-to-male ethernet adapter from my local tech store.  This allowed me to pull the cable through the base after cutting it, unbolt a few pieces, and then put everything back in working order!
 
+## Ball Detection & Tracking
+
+The project includes a YOLO-based ball detection pipeline that can train a custom model from your panoramic footage and use it for automated camera tracking.
+
+### Training Pipeline
+
+The training pipeline lives in `training/` and processes panoramic 4096x1800 video into a YOLO dataset:
+
+```
+Extract Frames → Tile → Bootstrap Labels → Organize Dataset → Train
+```
+
+#### Setup
+
+```bash
+# Install ML dependencies
+uv sync --extra ml
+
+# Install CUDA-enabled PyTorch (adjust cu124 for your CUDA version)
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# Verify GPU
+uv run python -c "import torch; print(torch.cuda.get_device_name(0))"
+```
+
+#### Data Preparation
+
+Each step runs as a Python module from the project root:
+
+```bash
+# 1. Extract frames from video (2-sec intervals, skip near-identical frames)
+uv run python -m training.data_prep.extract_frames "F:\path\to\video.mp4" -o "D:\training_data\frames\game_id"
+
+# 2. Tile panoramic frames into 6x2 grid (~768x900 tiles with 128px overlap)
+uv run python -m training.data_prep.tile_frames "D:\training_data\frames\game_id" -o "D:\training_data\tiles\game_id"
+
+# 3. Bootstrap labels using pretrained YOLO (auto-detects COCO sports_ball class)
+uv run python -m training.data_prep.bootstrap_labels D:\training_data\tiles -o D:\training_data\labels --model yolo11x.pt --batch-size 8
+
+# 4. Organize into YOLO dataset structure (85/15 train/val split)
+uv run python -m training.data_prep.organize_dataset --tiles D:\training_data\tiles --labels D:\training_data\labels -o D:\training_data\ball_dataset
+```
+
+A batch processing script (`training/data_prep/process_batch.py`) automates steps 1-2 for many videos at once, with resume support.
+
+#### Training
+
+```bash
+uv run python -m training.train --data training/configs/ball_dataset.yaml --model yolo11m.pt --device 0 --epochs 150 --batch 8 --project D:\training_data\runs
+```
+
+For a GTX 1060 6GB, use batch size 8 (or 4 if OOM). For GPUs with more VRAM, increase batch size for faster training.
+
+#### Evaluation & Export
+
+```bash
+# Evaluate model metrics (mAP, precision, recall)
+uv run python -m training.evaluate D:\training_data\runs\ball_v1\weights\best.pt
+
+# Export to mobile formats (CoreML, TFLite, ONNX)
+uv run python -m training.export_mobile D:\training_data\runs\ball_v1\weights\best.pt
+```
+
+### Human-in-the-Loop Annotation
+
+After initial training, you can improve the model with human corrections:
+
+1. **Generate review packets** from live tracking results (`training/review_packet_generator.py`) — prioritizes low-confidence detections and tracker failures
+2. **Run the annotation server** (`training/annotation_server.py`) — serves crops to a Flutter mobile app over Tailscale
+3. **Ingest corrections** (`training/correction_ingester.py`) — converts human annotations back into YOLO labels for retraining
+
 ## Potential Improvements
-- Video post-processing.  It should be able "follow the ball", either by manually inputting X coordinates and timestamps, or by running a ball detection algorithm to generate the coordinates, and sliding the frame back and forth across the image.
 - Audio quality.  It's possible to connect a microphone to the camera, but I haven't tried it.
 - Setup HTTPS security.  It should be possible to generate a certificate to allow the camera to serve the Web UI over HTTPS.  This isn't a huge security risk, since I'm usually recording in the middle of a field.
 

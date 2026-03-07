@@ -101,6 +101,27 @@ Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (defaul
 - **YouTube** (`utils/youtube_upload.py`): Google OAuth 2.0 upload
 - **Dahua Camera** (`cameras/dahua.py`): HTTP/Digest auth for file listing and download
 
+### Training Pipeline (Ball Detection)
+
+The `training/` package contains a YOLO ball detection model training pipeline. Install with `uv sync --extra ml` plus CUDA PyTorch (`uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124`).
+
+**Data prep pipeline** (`training/data_prep/`):
+1. `extract_frames.py` — Extracts frames from 4096x1800 panoramic video at 2-sec intervals, skipping near-identical frames. Supports `.mp4` and `.dav` formats.
+2. `tile_frames.py` — Slices panoramic frames into 6x2 grid of ~768x900 tiles with 128px overlap.
+3. `bootstrap_labels.py` — Runs pretrained YOLO (yolo11x.pt) on tiles to auto-label ball positions using COCO sports_ball class.
+4. `organize_dataset.py` — Organizes tiles + labels into YOLO directory structure with 85/15 train/val split.
+5. `process_batch.py` — Orchestrates steps 1-2 for many videos, with skip/resume support.
+
+All modules run via `uv run python -m training.data_prep.<module>`.
+
+**Training & evaluation**: `training/train.py`, `training/evaluate.py`, `training/export_mobile.py`
+
+**Human-in-the-loop annotation**: `training/annotation_server.py` (FastAPI), `training/review_packet_generator.py`, `training/correction_ingester.py`
+
+**Dataset config**: `training/configs/ball_dataset.yaml` — points to `D:\training_data\ball_dataset`
+
+**Training data location**: `D:\training_data\` (frames, tiles, labels, ball_dataset, runs)
+
 ### Test Conventions
 
 - Global fixtures in `tests/conftest.py`: `mock_ffmpeg`, `mock_file_system`, `mock_httpx`, `temp_storage`, `mock_config`, `cleanup_asyncio_tasks`
