@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 
 from video_grouper.ball_tracking.candidate_generator import CandidateGenerator
-from video_grouper.ball_tracking.coordinates import CameraProfile
+from video_grouper.ball_tracking.coordinates import AngularPosition, CameraProfile
 from video_grouper.ball_tracking.detector import BallDetector
 from video_grouper.ball_tracking.fov_controller import FovController
 from video_grouper.ball_tracking.player_tracker import PlayerTracker
@@ -43,8 +43,9 @@ def process_video(
     profile: CameraProfile | None = None,
     device: str = "cpu",
     confidence: float = 0.25,
-    player_detection_interval: int = 5,
+    player_detection_interval: int = 3,
     player_track_scale: float = 0.5,
+    player_confidence: float = 0.15,
     fov_min: float = 25.0,
     fov_max: float = 60.0,
     fov_padding: float = 1.2,
@@ -60,6 +61,7 @@ def process_video(
         confidence: Detection confidence threshold
         player_detection_interval: Run player tracking every N frames
         player_track_scale: Downscale factor for player tracking (0.5 = half res)
+        player_confidence: Detection confidence for player tracking
         fov_min: Minimum FOV in degrees
         fov_max: Maximum FOV in degrees
         fov_padding: Padding factor for player bounding box (1.2 = 20%)
@@ -92,11 +94,12 @@ def process_video(
     detector = BallDetector(model_path, profile, confidence=confidence, device=device)
     tracker = BallTracker(fps=fps)
 
-    # Player tracking uses its own model instance to avoid conflicts
-    # with ball detector's predict() calls resetting ByteTrack state
+    # Player tracking uses yolov8n COCO pretrained (person class 0)
+    # with its own model instance to avoid ByteTrack state conflicts
     player_tracker = PlayerTracker(
-        model_path=str(model_path),
+        model_path="yolov8n.pt",
         profile=profile,
+        confidence=player_confidence,
         track_scale=player_track_scale,
         fps=fps,
     )
@@ -104,10 +107,17 @@ def process_video(
         min_fov_deg=fov_min,
         max_fov_deg=fov_max,
         padding=fov_padding,
+        relevance_radius=0.8,  # wider radius to include more players
     )
 
     records: list[FrameRecord] = []
     frame_idx = 0
+
+    # Pipeline-side EMA smoothing for pan target
+    smooth_yaw = 0.0
+    smooth_pitch = 0.0
+    pan_alpha = 0.96  # higher = smoother, slower response
+    last_known_target = AngularPosition(yaw=0.0, pitch=0.0)
 
     while True:
         ret, frame = cap.read()
@@ -137,10 +147,10 @@ def process_video(
         # Predict step (every frame)
         tracker.predict()
 
-        # Stage D: Get blended output
+        # Stage D: Get blended output from ball tracker
         state = tracker.get_state(proposals.play_region)
 
-        # Stage C2: Update FOV from player spread
+        # Stage C2: Update FOV and get player bbox center
         ball_pos = state.position if state.confidence > 0.1 else None
         if should_track_players:
             fov_state = fov_ctrl.update(
@@ -152,13 +162,38 @@ def process_video(
         else:
             fov_state = fov_ctrl.predict()
 
+        # Determine pan target: prefer player bbox center > ball > motion > hold
+        if fov_state.center is not None:
+            # Player cluster center is the most stable signal
+            target = fov_state.center
+            source = "players"
+            last_known_target = target
+        elif state.confidence > 0.3:
+            # Confident ball detection
+            target = state.position
+            source = "ball"
+            last_known_target = target
+        elif proposals.has_motion:
+            # Motion-based play region as fallback (only when motion exists)
+            target = proposals.play_region
+            source = "motion"
+            last_known_target = target
+        else:
+            # No players, no ball, no motion: hold last known position
+            target = last_known_target
+            source = "hold"
+
+        # EMA smooth the pan target
+        smooth_yaw = smooth_yaw * pan_alpha + target.yaw * (1 - pan_alpha)
+        smooth_pitch = smooth_pitch * pan_alpha + target.pitch * (1 - pan_alpha)
+
         records.append(
             FrameRecord(
                 frame=frame_idx,
-                yaw=state.position.yaw,
-                pitch=state.position.pitch,
+                yaw=round(smooth_yaw, 4),
+                pitch=round(smooth_pitch, 4),
                 confidence=state.confidence,
-                source=state.source,
+                source=source,
                 vyaw=state.velocity.vyaw,
                 vpitch=state.velocity.vpitch,
                 fov=round(fov_state.smoothed_fov_deg, 1),
@@ -168,11 +203,11 @@ def process_video(
 
         if frame_idx % 300 == 0:
             logger.info(
-                "Frame %d/%d -- conf=%.2f source=%s fov=%.1f players=%d",
+                "Frame %d/%d -- src=%s yaw=%.3f fov=%.1f players=%d",
                 frame_idx,
                 total_frames,
-                state.confidence,
-                state.source,
+                source,
+                smooth_yaw,
                 fov_state.smoothed_fov_deg,
                 fov_state.active_player_count,
             )

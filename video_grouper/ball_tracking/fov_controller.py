@@ -23,6 +23,7 @@ class FovState:
     active_player_count: int
     spread_yaw: float  # angular spread in radians
     spread_pitch: float
+    center: AngularPosition | None  # center of active player bounding box
 
 
 class FovController:
@@ -62,6 +63,7 @@ class FovController:
             active_player_count=0,
             spread_yaw=0.0,
             spread_pitch=0.0,
+            center=None,
         )
 
     def update(
@@ -100,6 +102,8 @@ class FovController:
         if len(active) < 2:
             active = relevant
 
+        bbox_center = None
+
         if len(active) >= 2:
             # Compute angular bounding box of active players
             yaws = [p.center.yaw for p in active]
@@ -118,6 +122,12 @@ class FovController:
             spread_yaw = max_yaw - min_yaw
             spread_pitch = max_pitch - min_pitch
 
+            # Bounding box center = ideal pan target
+            bbox_center = AngularPosition(
+                yaw=(min_yaw + max_yaw) / 2,
+                pitch=(min_pitch + max_pitch) / 2,
+            )
+
             # Apply padding
             padded_yaw = spread_yaw * self.padding
             padded_pitch = spread_pitch * self.padding
@@ -125,6 +135,12 @@ class FovController:
             # FOV = max of horizontal spread and vertical spread scaled by aspect ratio
             target_fov_rad = max(padded_yaw, padded_pitch * self.aspect_ratio)
             target_fov_deg = math.degrees(target_fov_rad)
+        elif len(active) == 1:
+            # Single player: use their position as center
+            bbox_center = active[0].center
+            spread_yaw = 0.0
+            spread_pitch = 0.0
+            target_fov_deg = self.default_fov_deg
         else:
             spread_yaw = 0.0
             spread_pitch = 0.0
@@ -147,6 +163,7 @@ class FovController:
             active_player_count=len(active),
             spread_yaw=spread_yaw,
             spread_pitch=spread_pitch,
+            center=bbox_center,
         )
         return self._last_state
 
@@ -163,4 +180,5 @@ class FovController:
             active_player_count=0,
             spread_yaw=0.0,
             spread_pitch=0.0,
+            center=None,
         )
