@@ -177,7 +177,6 @@ tests/e2e/test_clips/
 .claude/ralph-state.json
 training/data/*
 training/runs/*
-runs/
 review_packets/*
 *.pt
 *.onnx

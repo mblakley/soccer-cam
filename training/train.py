@@ -18,7 +18,7 @@ def train(
     batch: int = 32,
     patience: int = 30,
     device: str = "0",
-    project: str = "training/runs",
+    project: str = str(Path(__file__).resolve().parent / "runs"),
     name: str = "ball_v1",
 ):
     """Train a YOLO26 model for ball detection.
@@ -57,7 +57,6 @@ def train(
         hsv_h=0.015,
         hsv_s=0.7,
         hsv_v=0.4,
-        blur=0.01,
         # Training
         workers=4,
     )
