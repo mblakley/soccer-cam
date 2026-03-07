@@ -122,11 +122,15 @@ class BallTracker:
 
     @property
     def position(self) -> AngularPosition:
-        return AngularPosition(yaw=float(self._kf.x[0]), pitch=float(self._kf.x[1]))
+        return AngularPosition(
+            yaw=float(self._kf.x[0].item()), pitch=float(self._kf.x[1].item())
+        )
 
     @property
     def velocity(self) -> AngularVelocity:
-        return AngularVelocity(vyaw=float(self._kf.x[2]), vpitch=float(self._kf.x[3]))
+        return AngularVelocity(
+            vyaw=float(self._kf.x[2].item()), vpitch=float(self._kf.x[3].item())
+        )
 
     @property
     def confidence(self) -> float:
