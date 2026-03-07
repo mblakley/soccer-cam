@@ -67,6 +67,7 @@ class CameraController:
         confidence: float,
         velocity_yaw: float = 0.0,
         velocity_pitch: float = 0.0,
+        player_fov: float | None = None,
     ) -> CameraState:
         """Compute the virtual camera position for this frame.
 
@@ -75,6 +76,8 @@ class CameraController:
             confidence: Tracker confidence (0-1)
             velocity_yaw: Ball velocity in yaw (rad/s) for lead calculation
             velocity_pitch: Ball velocity in pitch (rad/s) for lead calculation
+            player_fov: FOV from player spread (radians). When provided, overrides
+                        the confidence-based FOV logic.
 
         Returns:
             CameraState for this frame
@@ -98,6 +101,10 @@ class CameraController:
             target_pitch = target.pitch
             alpha = self.smooth_alpha_low
             target_fov = self.wide_fov
+
+        # Player-spread FOV overrides confidence-based FOV when available
+        if player_fov is not None:
+            target_fov = player_fov
 
         # Exponential smoothing
         self._yaw = self._yaw * alpha + target_yaw * (1 - alpha)

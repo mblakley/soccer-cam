@@ -179,6 +179,11 @@ class BallTrackingConfig(BaseModel):
     camera_fov: float = 60.0
     camera_smoothing: float = 0.85
     device: str = "cpu"
+    player_detection_interval: int = 5
+    player_track_scale: float = 1.0
+    fov_min: float = 25.0
+    fov_max: float = 60.0
+    fov_padding: float = 1.2
 
 
 class CloudSyncConfig(BaseModel):
