@@ -36,6 +36,16 @@
     display: none;
   }
   #tracking-badge.manual { color: #ff9800; }
+  #debug-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 5;
+  }
+  #debug-info {
+    position: absolute; top: 8px; left: 8px;
+    background: rgba(0,0,0,0.7); color: #0f0; font-family: monospace;
+    font-size: 11px; padding: 6px 10px; border-radius: 4px; z-index: 10;
+    display: none; white-space: pre; line-height: 1.4;
+  }
   #loading {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
     color: #fff; font-family: sans-serif; font-size: 16px;
@@ -45,6 +55,8 @@
 <body>
 <div id="container">
   <div id="tracking-badge">TRACK</div>
+  <div id="debug-info"></div>
+  <canvas id="debug-overlay"></canvas>
   <div id="loading">Loading video...</div>
   <div id="controls" style="display:none">
     <button id="play-btn">&#9654;</button>
@@ -103,6 +115,7 @@ if (!videoSrc) {
 // Pipeline coords: yaw=0 center, pitch=0 image center
 // Viewer coords: yaw=0 center, pitch=CAMERA_TILT = image center
 const trackingSrc = params.get('track');
+const debugMode = params.get('debug') === '1';
 let trackingData = null;       // parsed tracking JSON
 let trackingEnabled = false;   // auto-follow active
 let manualOverrideUntil = 0;   // timestamp when manual override expires
@@ -192,6 +205,154 @@ function getTrackingState(videoTime) {
     fov: a.fov + (b.fov - a.fov) * t,
     confidence: a.confidence + (b.confidence - a.confidence) * t,
   };
+}
+
+// -- Debug overlay: project angular coords to screen --
+function angularToScreen(playerYaw, playerPitch, camYaw, camPitch, camVFov, canvasW, canvasH) {
+  // Convert player angular position (pipeline coords) to a 3D ray in camera space
+  // Pipeline pitch=0 is image center; in cylindrical: theta=playerYaw, yCyl derived from pitch
+  const theta = playerYaw;  // azimuth in panorama
+  // yCyl = tan(elevation) where elevation is measured from optical axis
+  // For cylindrical projection: yCyl = playerPitch / srcVRange * srcVRange ≈ playerPitch
+  // More precisely: pixel_y = (0.5 - yCyl/srcVRange) * height
+  // and playerPitch comes from pixel_to_angular which does yCyl = (0.5 - py/h) * srcVRange
+  // So yCyl = -playerPitch (pipeline pitch positive = up in angular, yCyl positive = up on cylinder)
+  // Actually let's just work from the cylindrical coords directly
+  const yCyl = -playerPitch;  // negate: pipeline pitch>0 = above center, yCyl>0 = above center
+
+  // Camera-space ray from cylindrical coords
+  const sinT = Math.sin(theta), cosT = Math.cos(theta);
+  const len = Math.sqrt(1 + yCyl * yCyl);
+  const r3x = sinT / len, r3y = yCyl / len, r3z = cosT / len;
+
+  // Undo camera tilt (camera space -> world space)
+  const ct = Math.cos(CAMERA_TILT), st = Math.sin(CAMERA_TILT);
+  const r2x = r3x;
+  const r2y = ct * r3y - st * r3z;
+  const r2z = st * r3y + ct * r3z;
+
+  // Undo virtual camera yaw
+  const cy = Math.cos(camYaw), sy = Math.sin(camYaw);
+  const r1x = cy * r2x - sy * r2z;
+  const r1y = r2y;
+  const r1z = sy * r2x + cy * r2z;
+
+  // Undo virtual camera pitch
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  const rx = r1x;
+  const ry = cp * r1y + sp * r1z;
+  const rz = -sp * r1y + cp * r1z;
+
+  // Behind camera?
+  if (rz <= 0.001) return null;
+
+  // Project to screen
+  const tanHalf = Math.tan(camVFov * 0.5);
+  const aspect = canvasW / canvasH;
+  const ndcX = rx / (rz * tanHalf * aspect);
+  const ndcY = ry / (rz * tanHalf);
+
+  // Outside viewport?
+  if (Math.abs(ndcX) > 1.2 || Math.abs(ndcY) > 1.2) return null;
+
+  return {
+    x: (ndcX + 1) / 2 * canvasW,
+    y: (1 - (ndcY + 1) / 2) * canvasH,
+  };
+}
+
+function angularSizeToPixels(angW, angH, camVFov, canvasW, canvasH) {
+  const tanHalf = Math.tan(camVFov * 0.5);
+  const aspect = canvasW / canvasH;
+  const pxW = (angW / (2 * tanHalf * aspect)) * canvasW;
+  const pxH = (angH / (2 * tanHalf)) * canvasH;
+  return { w: Math.max(pxW, 8), h: Math.max(pxH, 8) };
+}
+
+function getFrameDetections(videoTime) {
+  if (!trackingData || !trackingData.frames) return { detections: [], source: '', playerCount: 0 };
+  const fps = trackingData.fps || 30;
+  const frameIdx = Math.round(videoTime * fps);
+  const frames = trackingData.frames;
+  const idx = Math.min(Math.max(0, frameIdx), frames.length - 1);
+  const f = frames[idx];
+  return {
+    detections: f.detections || [],
+    source: f.source || '',
+    playerCount: f.player_count || 0,
+    yaw: f.yaw,
+    pitch: f.pitch,
+    fov: f.fov,
+  };
+}
+
+function drawDebugOverlay(ctx, videoTime, camYaw, camPitch, camVFov, canvasW, canvasH) {
+  ctx.clearRect(0, 0, canvasW, canvasH);
+  const info = getFrameDetections(videoTime);
+  if (!info.detections.length && !info.source) return;
+
+  // Draw detection boxes
+  for (const det of info.detections) {
+    const pos = angularToScreen(det.yaw, det.pitch, camYaw, camPitch, camVFov, canvasW, canvasH);
+    if (!pos) continue;
+
+    const size = angularSizeToPixels(det.w, det.h, camVFov, canvasW, canvasH);
+
+    // Box
+    ctx.strokeStyle = '#0f0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(pos.x - size.w / 2, pos.y - size.h / 2, size.w, size.h);
+
+    // Label
+    ctx.fillStyle = '#0f0';
+    ctx.font = '11px monospace';
+    ctx.fillText(`#${det.id} ${(det.conf * 100).toFixed(0)}%`, pos.x - size.w / 2, pos.y - size.h / 2 - 3);
+  }
+
+  // Draw camera target crosshair (where the tracked camera is pointing)
+  const targetPos = angularToScreen(info.yaw, info.pitch, camYaw, camPitch, camVFov, canvasW, canvasH);
+  if (targetPos) {
+    ctx.strokeStyle = '#f00';
+    ctx.lineWidth = 2;
+    const cs = 15;
+    ctx.beginPath();
+    ctx.moveTo(targetPos.x - cs, targetPos.y); ctx.lineTo(targetPos.x + cs, targetPos.y);
+    ctx.moveTo(targetPos.x, targetPos.y - cs); ctx.lineTo(targetPos.x, targetPos.y + cs);
+    ctx.stroke();
+
+    // Draw FOV rectangle (what the tracked camera would see)
+    const aspect = canvasW / canvasH;
+    const trackVFov = THREE.MathUtils.degToRad(info.fov / aspect);
+    const trackHalfH = Math.tan(trackVFov / 2);
+    const trackHalfW = trackHalfH * aspect;
+    // Approximate: corners of the tracked viewport
+    const corners = [
+      { yaw: info.yaw - trackHalfW, pitch: info.pitch - trackHalfH },
+      { yaw: info.yaw + trackHalfW, pitch: info.pitch - trackHalfH },
+      { yaw: info.yaw + trackHalfW, pitch: info.pitch + trackHalfH },
+      { yaw: info.yaw - trackHalfW, pitch: info.pitch + trackHalfH },
+    ];
+    const screenCorners = corners.map(c =>
+      angularToScreen(c.yaw, c.pitch, camYaw, camPitch, camVFov, canvasW, canvasH)
+    );
+    if (screenCorners.every(c => c !== null)) {
+      ctx.strokeStyle = 'rgba(255, 100, 100, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(screenCorners[0].x, screenCorners[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(screenCorners[i].x, screenCorners[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Update info panel
+  const infoEl = document.getElementById('debug-info');
+  infoEl.style.display = 'block';
+  const t = videoTime.toFixed(1);
+  infoEl.textContent = `t=${t}s  src=${info.source}  players=${info.playerCount}  dets=${info.detections.length}\nyaw=${info.yaw?.toFixed(3)}  pitch=${info.pitch?.toFixed(3)}  fov=${info.fov?.toFixed(1)}`;
 }
 
 // -- Virtual PTZ shader --
@@ -439,6 +600,7 @@ if (videoSrc) {
     const w = container.clientWidth, h = container.clientHeight;
     uniforms.uAspect.value = w / h;
     renderer.setSize(w, h);
+    resizeDebugCanvas();
   });
 
   // -- T key toggles tracking --
@@ -453,12 +615,33 @@ if (videoSrc) {
   const trackingBadge = document.getElementById('tracking-badge');
   if (trackingSrc) loadTrackingFromUrl(trackingSrc);
 
+  // Debug overlay setup
+  const debugCanvas = document.getElementById('debug-overlay');
+  const debugCtx = debugCanvas.getContext('2d');
+  function resizeDebugCanvas() {
+    debugCanvas.width = container.clientWidth;
+    debugCanvas.height = container.clientHeight;
+  }
+  resizeDebugCanvas();
+  window.addEventListener('resize', resizeDebugCanvas);
+
+  // In debug mode: fix camera to wide view, disable tracking movement
+  if (debugMode) {
+    yaw = 0;
+    pitch = CAMERA_TILT;
+    vFov = THREE.MathUtils.degToRad(MAX_FOV);
+    uniforms.uYaw.value = yaw;
+    uniforms.uPitch.value = pitch;
+    uniforms.uFov.value = vFov;
+    trackingEnabled = false;
+  }
+
   // -- Render loop --
   function animate() {
     requestAnimationFrame(animate);
 
     // Apply tracking data when enabled and not manually overridden
-    if (trackingEnabled && trackingData && Date.now() > manualOverrideUntil) {
+    if (!debugMode && trackingEnabled && trackingData && Date.now() > manualOverrideUntil) {
       const state = getTrackingState(video.currentTime);
       if (state) {
         // Pipeline yaw maps directly to viewer yaw
@@ -516,6 +699,12 @@ if (videoSrc) {
       timeEl.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
     }
     renderer.render(scene, orthoCamera);
+
+    // Debug overlay: draw detection boxes on 2D canvas
+    if (debugMode && trackingData) {
+      drawDebugOverlay(debugCtx, video.currentTime, yaw, pitch, vFov,
+        debugCanvas.width, debugCanvas.height);
+    }
   }
   animate();
 
