@@ -254,3 +254,195 @@ class TTTApiClient:
             body["fulfilled_notes"] = notes
         logger.debug("Fulfilling clip request %s", request_id)
         return self._request("PATCH", endpoint, json=body)
+
+    # ------------------------------------------------------------------
+    # Schedule & game management
+    # ------------------------------------------------------------------
+
+    def get_schedule(
+        self,
+        team_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Get team schedule within a date range.
+
+        GET {api_base_url}/api/device-link/schedule
+        """
+        url = f"{self.api_base_url}/api/device-link/schedule"
+        params: dict[str, str] = {"team_id": team_id}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        logger.debug("Fetching schedule for team %s", team_id)
+        return self._request("GET", url, params=params)
+
+    def get_roster(self, team_id: str) -> list[dict[str, Any]]:
+        """Get team roster.
+
+        GET {api_base_url}/api/device-link/roster
+        """
+        url = f"{self.api_base_url}/api/device-link/roster"
+        params = {"team_id": team_id}
+        logger.debug("Fetching roster for team %s", team_id)
+        return self._request("GET", url, params=params)
+
+    def auto_match_video(
+        self, team_id: str, video_url: str, recorded_at: str
+    ) -> dict[str, Any]:
+        """Auto-match a video to a game based on recording time.
+
+        POST {api_base_url}/api/device-link/auto-match-video
+        """
+        url = f"{self.api_base_url}/api/device-link/auto-match-video"
+        body = {"team_id": team_id, "video_url": video_url, "recorded_at": recorded_at}
+        logger.debug("Auto-matching video for team %s at %s", team_id, recorded_at)
+        return self._request("POST", url, json=body)
+
+    # ------------------------------------------------------------------
+    # Game sessions
+    # ------------------------------------------------------------------
+
+    def get_game_sessions(
+        self,
+        team_id: str,
+        recording_group_dir: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Get game sessions, optionally filtered by recording group dir.
+
+        GET {api_base_url}/api/game-sessions
+        """
+        url = f"{self.api_base_url}/api/game-sessions"
+        params: dict[str, str] = {"team_id": team_id}
+        if recording_group_dir:
+            params["recording_group_dir"] = recording_group_dir
+        logger.debug("Fetching game sessions for team %s", team_id)
+        return self._request("GET", url, params=params)
+
+    def create_game_session(
+        self,
+        team_id: str,
+        recording_group_dir: str,
+        game_date: str,
+        opponent_name: str,
+        video_youtube_id: Optional[str] = None,
+        status: str = "recording_complete",
+    ) -> dict[str, Any]:
+        """Create a new game session.
+
+        POST {api_base_url}/api/game-sessions
+        """
+        url = f"{self.api_base_url}/api/game-sessions"
+        body: dict[str, Any] = {
+            "team_id": team_id,
+            "recording_group_dir": recording_group_dir,
+            "game_date": game_date,
+            "opponent_name": opponent_name,
+            "status": status,
+        }
+        if video_youtube_id is not None:
+            body["video_youtube_id"] = video_youtube_id
+        logger.debug("Creating game session for team %s vs %s", team_id, opponent_name)
+        return self._request("POST", url, json=body)
+
+    def update_game_session(self, session_id: str, **fields: Any) -> dict[str, Any]:
+        """Update a game session.
+
+        PATCH {api_base_url}/api/game-sessions/{session_id}
+        """
+        url = f"{self.api_base_url}/api/game-sessions/{session_id}"
+        logger.debug("Updating game session %s", session_id)
+        return self._request("PATCH", url, json=fields)
+
+    # ------------------------------------------------------------------
+    # Time sync
+    # ------------------------------------------------------------------
+
+    def get_sync_anchors(self, game_session_id: str) -> list[dict[str, Any]]:
+        """Get sync anchors for a game session.
+
+        GET {api_base_url}/api/sync-anchors
+        """
+        url = f"{self.api_base_url}/api/sync-anchors"
+        params = {"game_session_id": game_session_id}
+        logger.debug("Fetching sync anchors for session %s", game_session_id)
+        return self._request("GET", url, params=params)
+
+    def update_sync_anchor(self, anchor_id: str, **fields: Any) -> dict[str, Any]:
+        """Update sync anchor detection results.
+
+        PATCH {api_base_url}/api/sync-anchors/{anchor_id}
+        Fields: detected_at_video_time, detected_in_file,
+                detection_confidence, computed_offset_ms, status
+        """
+        url = f"{self.api_base_url}/api/sync-anchors/{anchor_id}"
+        logger.debug("Updating sync anchor %s", anchor_id)
+        return self._request("PATCH", url, json=fields)
+
+    def reconcile_game_session(self, session_id: str) -> dict[str, Any]:
+        """Trigger time sync reconciliation for a game session.
+
+        POST {api_base_url}/api/game-sessions/{session_id}/reconcile
+        Returns sync_status, true_recording_start, and tags_updated.
+        """
+        url = f"{self.api_base_url}/api/game-sessions/{session_id}/reconcile"
+        logger.debug("Reconciling game session %s", session_id)
+        return self._request("POST", url)
+
+    # ------------------------------------------------------------------
+    # Moment tags & clips
+    # ------------------------------------------------------------------
+
+    def get_pending_moment_tags(self, game_session_id: str) -> list[dict[str, Any]]:
+        """Get moment tags that need offset calculation.
+
+        GET {api_base_url}/api/moment-tags?pending_offset=true
+        """
+        url = f"{self.api_base_url}/api/moment-tags"
+        params = {"game_session_id": game_session_id, "pending_offset": "true"}
+        logger.debug("Fetching pending moment tags for session %s", game_session_id)
+        return self._request("GET", url, params=params)
+
+    def update_moment_tag(self, tag_id: str, **fields: Any) -> dict[str, Any]:
+        """Update moment tag offsets.
+
+        PATCH {api_base_url}/api/moment-tags/{tag_id}
+        Fields: video_offset_seconds, trimmed_offset_seconds
+        """
+        url = f"{self.api_base_url}/api/moment-tags/{tag_id}"
+        logger.debug("Updating moment tag %s", tag_id)
+        return self._request("PATCH", url, json=fields)
+
+    def create_moment_clip(
+        self,
+        moment_tag_id: str,
+        game_session_id: str,
+        clip_start_offset: float,
+        clip_end_offset: float,
+        clip_duration: float = 30.0,
+    ) -> dict[str, Any]:
+        """Create a moment clip record.
+
+        POST {api_base_url}/api/moment-clips
+        """
+        url = f"{self.api_base_url}/api/moment-clips"
+        body = {
+            "moment_tag_id": moment_tag_id,
+            "game_session_id": game_session_id,
+            "clip_start_offset": clip_start_offset,
+            "clip_end_offset": clip_end_offset,
+            "clip_duration": clip_duration,
+        }
+        logger.debug("Creating moment clip for tag %s", moment_tag_id)
+        return self._request("POST", url, json=body)
+
+    def update_moment_clip(self, clip_id: str, **fields: Any) -> dict[str, Any]:
+        """Update moment clip status or file path.
+
+        PATCH {api_base_url}/api/moment-clips/{clip_id}
+        Fields: status, file_path, youtube_video_id
+        """
+        url = f"{self.api_base_url}/api/moment-clips/{clip_id}"
+        logger.debug("Updating moment clip %s", clip_id)
+        return self._request("PATCH", url, json=fields)
