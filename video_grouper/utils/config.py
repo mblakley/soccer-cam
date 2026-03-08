@@ -186,6 +186,8 @@ class TTTConfig(BaseModel):
     password: str = ""
     clip_request_poll_interval: int = 60
     google_drive_folder_id: str = ""
+    plugin_signing_key: str = ""
+    plugin_sync_interval: int = 3600
 
 
 class YouTubePlaylistConfig(BaseModel):

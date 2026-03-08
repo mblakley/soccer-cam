@@ -446,3 +446,49 @@ class TTTApiClient:
         url = f"{self.api_base_url}/api/moment-clips/{clip_id}"
         logger.debug("Updating moment clip %s", clip_id)
         return self._request("PATCH", url, json=fields)
+
+    # ------------------------------------------------------------------
+    # Plugins & capabilities
+    # ------------------------------------------------------------------
+
+    def get_capabilities(self) -> dict[str, Any]:
+        """Get feature flags and entitlements for the current user.
+
+        GET {api_base_url}/api/users/me/capabilities
+        """
+        url = f"{self.api_base_url}/api/users/me/capabilities"
+        logger.debug("Fetching capabilities from %s", url)
+        return self._request("GET", url)
+
+    def get_available_plugins(self) -> list[dict[str, Any]]:
+        """Get list of plugins the current user is entitled to.
+
+        GET {api_base_url}/api/plugins
+        """
+        url = f"{self.api_base_url}/api/plugins"
+        logger.debug("Fetching available plugins from %s", url)
+        return self._request("GET", url)
+
+    def download_plugin(self, key: str, dest_path: Path) -> None:
+        """Download a plugin zip and save it to dest_path.
+
+        GET {api_base_url}/api/plugins/{key}/download
+        """
+        url = f"{self.api_base_url}/api/plugins/{key}/download"
+        logger.debug("Downloading plugin %s from %s", key, url)
+        self._ensure_auth()
+        resp = self._http.get(url, headers=self._auth_headers())
+        if resp.status_code == 403:
+            raise TTTApiError(
+                f"Not entitled to plugin '{key}'",
+                status_code=403,
+                response_body=resp.text,
+            )
+        if resp.status_code >= 400:
+            raise TTTApiError(
+                f"Plugin download failed (HTTP {resp.status_code})",
+                status_code=resp.status_code,
+                response_body=resp.text,
+            )
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(resp.content)

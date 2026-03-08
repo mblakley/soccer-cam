@@ -1,5 +1,6 @@
 import os
 import asyncio
+from pathlib import Path
 
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.utils.config import Config
@@ -195,6 +196,24 @@ class VideoGrouperApp:
                         logger.info("TTT API client authenticated")
                     except Exception as e:
                         logger.error(f"TTT login failed: {e}")
+
+                # Initialize plugin manager
+                try:
+                    from video_grouper.plugins.plugin_manager import PluginManager
+
+                    self.plugin_manager = PluginManager(
+                        ttt_client=ttt_client,
+                        storage_path=Path(self.storage_path),
+                        signing_key=self.config.ttt.plugin_signing_key,
+                    )
+                    self.plugin_manager.sync_plugins()
+                    self.plugin_manager.load_plugins()
+                    logger.info(
+                        "Plugin manager initialized, %d plugins loaded",
+                        len(self.plugin_manager.get_loaded_plugins()),
+                    )
+                except Exception:
+                    logger.warning("Failed to initialize plugin manager", exc_info=True)
 
                 drive_uploader = GoogleDriveUploader(self.storage_path)
 
