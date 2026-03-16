@@ -46,6 +46,15 @@ class DownloadProcessor(QueueProcessor):
         group_dir = os.path.dirname(file_path)
         dir_state = DirectoryState(group_dir)
 
+        # Defense-in-depth: skip download if group has already progressed
+        # past the download stage to avoid overwriting during combining.
+        skip_statuses = {"combined", "trimmed", "autocam_complete", "complete"}
+        if dir_state.status in skip_statuses:
+            logger.info(
+                f"DOWNLOAD: Skipping {os.path.basename(file_path)} - group already at status '{dir_state.status}'"
+            )
+            return
+
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")

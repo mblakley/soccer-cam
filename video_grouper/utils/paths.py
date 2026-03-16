@@ -1,6 +1,12 @@
 from pathlib import Path
 import os
+import sys
 from datetime import datetime
+
+
+def _is_pyinstaller() -> bool:
+    """Return True if running inside a PyInstaller bundle."""
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
 def get_project_root() -> Path:
@@ -12,8 +18,33 @@ def get_project_root() -> Path:
     return current_file.parent.parent.parent.resolve()
 
 
+def _get_storage_path_from_registry() -> Path | None:
+    """Read StoragePath from the Windows registry (set by the NSIS installer)."""
+    try:
+        import winreg
+
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper")
+        storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
+        winreg.CloseKey(key)
+        return Path(storage_path)
+    except Exception:
+        return None
+
+
 def get_shared_data_path() -> Path:
-    """Returns the path to the shared_data directory."""
+    """Returns the path to the shared_data directory.
+
+    In development: <project_root>/shared_data
+    In PyInstaller:  reads StoragePath from Windows registry, falls back to exe directory.
+    """
+    if _is_pyinstaller():
+        # Try registry first (set by NSIS installer)
+        reg_path = _get_storage_path_from_registry()
+        if reg_path and reg_path.exists():
+            return reg_path
+        # Fall back to directory containing the executable
+        return Path(os.path.dirname(sys.executable))
+
     path = get_project_root() / "shared_data"
     path.mkdir(parents=True, exist_ok=True)
     return path

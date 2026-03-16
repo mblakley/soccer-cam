@@ -1,104 +1,97 @@
+"""Windows Service wrapper for VideoGrouper."""
+
+import os
+import sys
+import asyncio
+import logging
+
 import win32serviceutil
 import win32service
 import win32event
 import servicemanager
-import sys
-import asyncio
-from video_grouper.video_grouper_app import VideoGrouperApp
-from video_grouper.update.update_manager import check_and_update
-from video_grouper.version import get_version, get_full_version
-from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.utils.locking import FileLock
-from video_grouper.utils.config import load_config, Config
-from video_grouper.utils.logger import setup_logging, get_logger
-from typing import Optional
-
-# Configure logging
-setup_logging(level="INFO", app_name="video_grouper_service")
-logger = get_logger(__name__)
+import win32timezone  # noqa: F401 - required for pyinstaller
 
 
 class VideoGrouperService(win32serviceutil.ServiceFramework):
     _svc_name_ = "VideoGrouperService"
-    _svc_display_name_ = "Video Grouper Service"
-    _svc_description_ = "Service for managing video grouping operations"
+    _svc_display_name_ = "VideoGrouper Service"
+    _svc_description_ = "Automated soccer video processing pipeline"
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
-        self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self.running = False
-        self.version = get_version()
-        self.full_version = get_full_version()
-
-        # Load configuration
-        self.config: Optional[Config] = None
-        self.config_path = get_shared_data_path() / "config.ini"
-        try:
-            with FileLock(self.config_path):
-                if self.config_path.exists():
-                    self.config = load_config(self.config_path)
-        except TimeoutError as e:
-            logger.error(f"Could not acquire lock to read config file for service: {e}")
-        except Exception as e:
-            logger.error(f"Error loading configuration for service: {e}")
-
-        # Get update URL from config
-        self.update_url = (
-            self.config.app.update_url
-            if self.config
-            else "https://updates.videogrouper.com"
-        )
+        self.loop = None
 
     def SvcStop(self):
-        """Stop the service."""
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        win32event.SetEvent(self.stop_event)
+        win32event.SetEvent(self.hWaitStop)
         self.running = False
+        if self.loop:
+            self.loop.call_soon_threadsafe(self.loop.stop)
 
     def SvcDoRun(self):
-        """Run the service."""
-        self.running = True
         servicemanager.LogMsg(
             servicemanager.EVENTLOG_INFORMATION_TYPE,
             servicemanager.PYS_SERVICE_STARTED,
-            (self._svc_name_, f"Version {self.full_version}"),
+            (self._svc_name_, ""),
         )
+        self.running = True
+        self.main()
+
+    def main(self):
+        from pathlib import Path
+        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.utils.config import load_config
+        from video_grouper.utils.logger import setup_logging
+        from video_grouper.utils.locking import FileLock
+
+        setup_logging(level="INFO", app_name="video_grouper")
+        logger = logging.getLogger(__name__)
+
+        # Find config: check registry, then exe directory
+        config_path = None
+        try:
+            import winreg
+
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper")
+            storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
+            winreg.CloseKey(key)
+            config_path = Path(storage_path) / "config.ini"
+        except Exception:
+            pass
+
+        if not config_path or not config_path.exists():
+            exe_dir = Path(os.path.dirname(sys.executable))
+            config_path = exe_dir / "config.ini"
+
+        if not config_path.exists():
+            logger.error(f"Config file not found at {config_path}")
+            return
+
+        logger.info(f"Loading config from {config_path}")
+        try:
+            with FileLock(config_path):
+                config = load_config(config_path)
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            return
+
+        app = VideoGrouperApp(config)
+
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
 
         try:
-            # Run the main service and update checker concurrently
-            asyncio.run(self.run_service())
+            self.loop.run_until_complete(app.run())
         except Exception as e:
             logger.error(f"Service error: {e}")
-            servicemanager.LogErrorMsg(f"Service error: {e}")
-
-    async def run_service(self):
-        """Run the main service and update checker."""
-        try:
-            # Start both tasks
-            await asyncio.gather(self.run_main_service(), self.check_updates())
-        except Exception as e:
-            logger.error(f"Error in service tasks: {e}")
-            raise
-
-    async def run_main_service(self):
-        """Run the main service functionality."""
-        try:
-            app = VideoGrouperApp(self.config)
-            await app.run()
-        except Exception as e:
-            logger.error(f"Error in main service: {e}")
-            raise
-
-    async def check_updates(self):
-        """Check for updates periodically."""
-        while self.running:
+        finally:
             try:
-                # Check for updates every hour
-                await check_and_update(self.version, self.update_url)
-                await asyncio.sleep(3600)  # Sleep for 1 hour
-            except Exception as e:
-                logger.error(f"Error checking for updates: {e}")
-                await asyncio.sleep(300)  # Sleep for 5 minutes on error
+                self.loop.run_until_complete(app.shutdown())
+            except Exception:
+                pass
+            self.loop.close()
 
 
 def main():

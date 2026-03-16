@@ -71,9 +71,12 @@ class ConfigWindow(QWidget):
     # Signal emitted when configuration is saved
     config_saved = Signal()
 
-    def __init__(self):
+    def __init__(self, config_path=None):
         super().__init__()
-        self.config_path = get_shared_data_path() / "config.ini"
+        if config_path:
+            self.config_path = Path(config_path)
+        else:
+            self.config_path = get_shared_data_path() / "config.ini"
         self.config: Optional[Config] = None
         self.load_config()
 
@@ -148,6 +151,15 @@ class ConfigWindow(QWidget):
         autocam_queue_layout.addWidget(self.autocam_queue_list)
         autocam_queue_tab.setLayout(autocam_queue_layout)
         tabs.addTab(autocam_queue_tab, "Autocam Queue")
+
+        # YouTube Uploads Tab
+        youtube_upload_tab = QWidget()
+        youtube_upload_layout = QVBoxLayout()
+        self.youtube_upload_list = QListWidget()
+        self.youtube_upload_list.setSpacing(5)
+        youtube_upload_layout.addWidget(self.youtube_upload_list)
+        youtube_upload_tab.setLayout(youtube_upload_layout)
+        tabs.addTab(youtube_upload_tab, "YouTube Uploads")
 
         # Connection History Tab
         connection_tab = QWidget()
@@ -633,12 +645,20 @@ class ConfigWindow(QWidget):
         # Storage settings
         self.storage_path.setText(self.config.storage.path)
 
+        # Timezone
+        tz = getattr(self.config.app, "timezone", "America/New_York")
+        idx = self.timezone_combo.findText(tz)
+        if idx >= 0:
+            self.timezone_combo.setCurrentIndex(idx)
+
         # YouTube settings
         self.youtube_enabled.setChecked(self.config.youtube.enabled)
-        self.processed_playlist_name.setText(
-            self.config.youtube.processed_playlist.name_format
-        )
-        self.raw_playlist_name.setText(self.config.youtube.raw_playlist.name_format)
+        if self.config.youtube.processed_playlist:
+            self.processed_playlist_name.setText(
+                self.config.youtube.processed_playlist.name_format
+            )
+        if self.config.youtube.raw_playlist:
+            self.raw_playlist_name.setText(self.config.youtube.raw_playlist.name_format)
 
         # TeamSnap configurations
         self.teamsnap_configs_list.clear()
@@ -704,6 +724,12 @@ class ConfigWindow(QWidget):
                 )
         else:
             self.youtube_status_label.setText("Not authenticated")
+            self.password.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def toggle_password_visibility(self, checked):
+        if checked:
+            self.password.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
             self.password.setEchoMode(QLineEdit.EchoMode.Password)
 
     def browse_storage_path(self):
@@ -912,12 +938,14 @@ class ConfigWindow(QWidget):
                 self.config.camera.password = self.password.text()
                 self.config.storage.path = self.storage_path.text()
                 self.config.youtube.enabled = self.youtube_enabled.isChecked()
-                self.config.youtube.processed_playlist.name_format = (
-                    self.processed_playlist_name.text()
-                )
-                self.config.youtube.raw_playlist.name_format = (
-                    self.raw_playlist_name.text()
-                )
+                if self.config.youtube.processed_playlist:
+                    self.config.youtube.processed_playlist.name_format = (
+                        self.processed_playlist_name.text()
+                    )
+                if self.config.youtube.raw_playlist:
+                    self.config.youtube.raw_playlist.name_format = (
+                        self.raw_playlist_name.text()
+                    )
                 self.config.app.timezone = self.timezone_combo.currentText()
 
                 # TTT Integration settings
@@ -966,12 +994,13 @@ class ConfigWindow(QWidget):
         self.refresh_download_queue_display()
         self.refresh_processing_queue_display()
         self.refresh_autocam_queue_display()
+        self.refresh_youtube_upload_display()
 
     def refresh_download_queue_display(self):
         """Reads and displays the download queue state."""
         queue_file = get_shared_data_path() / "download_queue_state.json"
         self.download_queue_list.clear()
-        tz_str = self.config.get("APP", "timezone", fallback="UTC")
+        tz_str = getattr(self.config.app, "timezone", "UTC")
         try:
             with FileLock(queue_file):
                 if not queue_file.exists():
@@ -1031,11 +1060,50 @@ class ConfigWindow(QWidget):
         """Refreshes the autocam queue tab."""
         self.refresh_autocam_queue_display()
 
+    def refresh_youtube_upload_display(self):
+        """Reads and displays the YouTube upload queue state."""
+        queue_file = get_shared_data_path() / "upload_queue_state.json"
+        self.youtube_upload_list.clear()
+        try:
+            with FileLock(queue_file):
+                if not queue_file.exists():
+                    return
+                with open(queue_file, "r") as f:
+                    queue_data = json.load(f)
+            if not queue_data:
+                return
+
+            # Handle both new format (dict with "queue" key) and legacy format
+            if isinstance(queue_data, dict):
+                in_progress = queue_data.get("in_progress")
+                items = queue_data.get("queue", [])
+            else:
+                in_progress = None
+                items = queue_data
+
+            # Show in-progress item first
+            if in_progress:
+                group_dir = in_progress.get("group_dir", "Unknown")
+                group_name = os.path.basename(group_dir)
+                self.youtube_upload_list.addItem(f"[Uploading] {group_name}")
+
+            # Show queued items
+            for item in items:
+                group_dir = item.get("group_dir", "Unknown")
+                group_name = os.path.basename(group_dir)
+                self.youtube_upload_list.addItem(f"[Pending] {group_name}")
+        except TimeoutError:
+            self.youtube_upload_list.addItem(
+                "Could not read queue state: file is locked."
+            )
+        except Exception as e:
+            logger.error(f"Error refreshing YouTube upload display: {e}")
+
     def refresh_processing_queue_display(self):
         """Reads and displays the FFmpeg processing queue state."""
         queue_file = get_shared_data_path() / "ffmpeg_queue_state.json"
         self.processing_queue_list.clear()
-        tz_str = self.config.get("APP", "timezone", fallback="UTC")
+        tz_str = getattr(self.config.app, "timezone", "UTC")
         try:
             with FileLock(queue_file):
                 if not queue_file.exists():
@@ -1105,10 +1173,10 @@ class ConfigWindow(QWidget):
     def refresh_skipped_files_display(self):
         """Scans for and displays all files marked as skipped."""
         self.skipped_list.clear()
-        storage_path_str = self.config.get("STORAGE", "path", fallback=None)
+        storage_path_str = getattr(self.config.storage, "path", None)
         if not storage_path_str or not os.path.isdir(storage_path_str):
             return
-        tz_str = self.config.get("APP", "timezone", fallback="UTC")
+        tz_str = getattr(self.config.app, "timezone", "UTC")
 
         try:
             for dirname in os.listdir(storage_path_str):
@@ -1146,10 +1214,10 @@ class ConfigWindow(QWidget):
     def refresh_match_info_display(self):
         """Scans for and displays directories that need match info."""
         self.match_info_list.clear()
-        storage_path_str = self.config.get("STORAGE", "path", fallback=None)
+        storage_path_str = getattr(self.config.storage, "path", None)
         if not storage_path_str or not os.path.isdir(storage_path_str):
             return
-        tz_str = self.config.get("APP", "timezone", fallback="UTC")
+        tz_str = getattr(self.config.app, "timezone", "UTC")
 
         try:
             for dirname in os.listdir(storage_path_str):
@@ -1235,7 +1303,7 @@ class ConfigWindow(QWidget):
     def refresh_connection_events_display(self):
         """Reads and displays camera connection timeframes."""
         self.connection_events_list.clear()
-        storage_path_str = self.config.get("STORAGE", "path", fallback=None)
+        storage_path_str = getattr(self.config.storage, "path", None)
         if not storage_path_str or not os.path.isdir(storage_path_str):
             self.connection_events_list.addItem(
                 "Storage path not configured or not found."
@@ -1293,7 +1361,7 @@ class ConfigWindow(QWidget):
             self.connection_events_list.addItem("No complete connection periods found.")
             return
 
-        tz_str = self.config.get("APP", "timezone", fallback="UTC")
+        tz_str = getattr(self.config.app, "timezone", "UTC")
 
         for start, end in reversed(timeframes):  # Show most recent first
             start_local = convert_utc_to_local(start, tz_str)

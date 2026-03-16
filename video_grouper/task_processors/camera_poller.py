@@ -121,6 +121,12 @@ class CameraPoller(PollingProcessor):
         if start_time:
             start_time -= timedelta(minutes=1)
 
+        # Clamp start_time so we never look back further than max_lookback_hours
+        max_lookback = getattr(self.config.app, "max_lookback_hours", 48)
+        earliest_allowed = datetime.now() - timedelta(hours=max_lookback)
+        if start_time is None or start_time < earliest_allowed:
+            start_time = earliest_allowed
+
         end_time = datetime.now()
 
         logger.info(
@@ -139,6 +145,14 @@ class CameraPoller(PollingProcessor):
             return
 
         self._last_poll_found_files = True
+
+        # Cap the number of files per poll to avoid overwhelming the pipeline
+        max_files = getattr(self.config.app, "max_files_per_poll", 50)
+        if len(files) > max_files:
+            logger.warning(
+                f"CAMERA_POLLER: Found {len(files)} files, truncating to {max_files}"
+            )
+            files = files[:max_files]
 
         logger.info(f"CAMERA_POLLER: Found {len(files)} new files to process.")
         existing_dirs = [

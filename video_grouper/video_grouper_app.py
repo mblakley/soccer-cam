@@ -243,9 +243,9 @@ class VideoGrouperApp:
             ntfy_processor=self.ntfy_processor,
         )
 
+        # Queue processors must start (and load_state) BEFORE StateAuditor
+        # runs discover_work(), otherwise duplicate items get queued.
         self.processors = [
-            self.state_auditor,
-            self.camera_poller,
             self.download_processor,
             self.video_processor,
             self.upload_processor,
@@ -254,6 +254,10 @@ class VideoGrouperApp:
             self.processors.append(self.ntfy_processor)
         if self.clip_request_processor:
             self.processors.append(self.clip_request_processor)
+        # Polling processors last — StateAuditor discover_work() must see
+        # already-loaded queues to avoid duplicate enqueues.
+        self.processors.append(self.camera_poller)
+        self.processors.append(self.state_auditor)
 
         self._shutdown_event = asyncio.Event()
 

@@ -24,11 +24,12 @@ from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.config import load_config, Config
 from video_grouper.task_processors import AutocamProcessor
+from video_grouper.task_processors.register_tasks import register_all_tasks
 from typing import Optional
 
 from video_grouper.utils.logger import setup_logging, get_logger
 
-# Configure logging
+# Configure logging - get_shared_data_path() handles PyInstaller vs dev
 setup_logging(level="DEBUG", app_name="video_grouper_tray")
 logger = get_logger(__name__)
 
@@ -197,6 +198,8 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def __init__(self, config_path=None):
         super().__init__()
+        # Ensure task types are registered for deserialization (safety net)
+        register_all_tasks()
         self.version = get_version()
         self.full_version = get_full_version()
 
@@ -285,10 +288,35 @@ class SystemTrayIcon(QSystemTrayIcon):
         logger.info("SystemTrayIcon shutdown complete")
 
     def init_ui(self):
-        # Create tray icon
+        # Create tray icon - search multiple locations for PyInstaller compatibility
+        icon_path = None
+        candidates = []
+
+        # 1. PyInstaller bundled data (via --add-data)
+        if getattr(sys, "_MEIPASS", None):
+            candidates.append(os.path.join(sys._MEIPASS, "video_grouper", "icon.ico"))
+
+        # 2. Next to the executable (installed location)
+        candidates.append(os.path.join(os.path.dirname(sys.executable), "icon.ico"))
+
+        # 3. Relative to source file (development)
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(script_dir, "..", "icon.ico")
-        self.setIcon(QIcon(icon_path))
+        candidates.append(os.path.join(script_dir, "..", "icon.ico"))
+
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                icon_path = candidate
+                break
+
+        if icon_path:
+            self.setIcon(QIcon(icon_path))
+            logger.info(f"Loaded tray icon from: {icon_path}")
+        else:
+            logger.warning(f"Icon not found in any location: {candidates}")
+            # Set a default system icon so the tray is at least visible
+            self.setIcon(
+                self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+            )
         self.setToolTip(f"VideoGrouper v{self.full_version}")
 
         # Create context menu
@@ -344,14 +372,22 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.show_config()
 
     def show_config(self):
-        if not hasattr(self, "config_window") or self.config_window is None:
-            self.config_window = ConfigWindow()
-            self.config_window.config_saved.connect(self.on_config_saved)
+        try:
+            if not hasattr(self, "config_window") or self.config_window is None:
+                self.config_window = ConfigWindow(config_path=self.config_path)
+                self.config_window.config_saved.connect(self.on_config_saved)
 
-        self.config_window.show()
-        self.config_window.raise_()
-        self.config_window.activateWindow()
-        self.refresh_autocam_queue_ui()
+            self.config_window.show()
+            self.config_window.raise_()
+            self.config_window.activateWindow()
+            self.refresh_autocam_queue_ui()
+        except Exception as e:
+            logger.error(f"Error showing config window: {e}", exc_info=True)
+            self.showMessage(
+                "Error",
+                f"Failed to open config window: {e}",
+                QSystemTrayIcon.MessageIcon.Critical,
+            )
 
     def refresh_autocam_queue_ui(self):
         if hasattr(self, "config_window") and self.config_window:

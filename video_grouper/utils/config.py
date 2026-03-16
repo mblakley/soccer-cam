@@ -82,6 +82,8 @@ class AppConfig(BaseModel):
     timezone: str = "America/New_York"
     update_url: str = "https://updates.videogrouper.com"
     storage_path: Optional[str] = None
+    max_lookback_hours: int = 48
+    max_files_per_poll: int = 50
 
 
 class TeamSnapTeamConfig(BaseModel):
@@ -162,6 +164,7 @@ class NtfyConfig(BaseModel):
     server_url: str = "https://ntfy.sh"
     topic: Optional[str] = None
     response_service: bool = False
+    auto_respond: bool = False
     unplug_notification: bool = True
 
 

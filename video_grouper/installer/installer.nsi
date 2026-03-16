@@ -19,7 +19,7 @@
 ; General settings
 Name "${APPNAME}"
 OutFile "..\dist\VideoGrouperSetup.exe"
-InstallDir "$PROGRAMFILES\${APPNAME}"
+InstallDir "$PROGRAMFILES64\${APPNAME}"
 InstallDirRegKey HKLM "Software\${APPNAME}" "Install_Dir"
 RequestExecutionLevel admin
 
@@ -43,9 +43,9 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2024 ${COMPANYNAME}"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 
-; Custom pages for configuration
-Page custom CameraConfigPage CameraConfigPageLeave
+; Storage page first so we can read existing config
 Page custom StorageConfigPage StorageConfigPageLeave
+Page custom CameraConfigPage CameraConfigPageLeave
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -61,179 +61,205 @@ Page custom StorageConfigPage StorageConfigPageLeave
 ; Variables for configuration
 Var Dialog
 Var IPAddress
+Var IPAddressCtl
 Var Username
+Var UsernameCtl
 Var Password
+Var PasswordCtl
 Var StoragePath
-Var TempPath
+Var StoragePathCtl
+Var ConfigExists
 
-; Camera Configuration Page
-Function CameraConfigPage
-    !insertmacro MUI_HEADER_TEXT "Camera Configuration" "Enter your camera settings"
-    
-    nsDialogs::Create 1018
-    Pop $Dialog
-    
-    ${NSD_CreateLabel} 0 0 100% 12u "IP Address:"
-    ${NSD_CreateText} 0 13u 100% 12u $IPAddress
-    Pop $IPAddress
-    
-    ${NSD_CreateLabel} 0 30u 100% 12u "Username:"
-    ${NSD_CreateText} 0 43u 100% 12u $Username
-    Pop $Username
-    
-    ${NSD_CreateLabel} 0 60u 100% 12u "Password:"
-    ${NSD_CreatePassword} 0 73u 100% 12u $Password
-    Pop $Password
-    
-    nsDialogs::Show
-FunctionEnd
-
-Function CameraConfigPageLeave
-    ${NSD_GetText} $IPAddress $IPAddress
-    ${NSD_GetText} $Username $Username
-    ${NSD_GetText} $Password $Password
-FunctionEnd
-
-; Storage Configuration Page
+; Storage Configuration Page (shown first)
 Function StorageConfigPage
-    !insertmacro MUI_HEADER_TEXT "Storage Configuration" "Select storage locations"
-    
+    !insertmacro MUI_HEADER_TEXT "Storage Configuration" "Select the shared_data directory"
+
     nsDialogs::Create 1018
     Pop $Dialog
-    
-    ${NSD_CreateLabel} 0 0 100% 12u "Storage Base Path:"
-    ${NSD_CreateText} 0 13u 80% 12u $StoragePath
-    Pop $StoragePath
-    
-    ${NSD_CreateButton} 81% 13u 19% 12u "Browse..."
+
+    ${NSD_CreateLabel} 0 0 100% 24u "Select the shared_data directory for config, logs, and video data.$\r$\nIf a config.ini exists there, camera settings will be pre-filled."
+    ${NSD_CreateText} 0 30u 80% 12u $StoragePath
+    Pop $StoragePathCtl
+
+    ${NSD_CreateButton} 81% 30u 19% 12u "Browse..."
     Pop $0
     ${NSD_OnClick} $0 StoragePathBrowse
-    
+
     nsDialogs::Show
 FunctionEnd
 
 Function StoragePathBrowse
-    nsDialogs::SelectFolderDialog "Select Storage Directory" ""
+    nsDialogs::SelectFolderDialog "Select shared_data Directory" ""
     Pop $0
-    ${NSD_SetText} $StoragePath $0
+    ${NSD_SetText} $StoragePathCtl $0
 FunctionEnd
 
 Function StorageConfigPageLeave
-    ${NSD_GetText} $StoragePath $StoragePath
-    StrCpy $TempPath "$StoragePath\temp"
+    ${NSD_GetText} $StoragePathCtl $StoragePath
+
+    ; Try to read existing config.ini
+    StrCpy $ConfigExists "0"
+    IfFileExists "$StoragePath\config.ini" 0 no_existing_config
+        StrCpy $ConfigExists "1"
+        ; Read camera settings from existing config
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "device_ip"
+        StrCmp $0 "" +2
+            StrCpy $IPAddress $0
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "username"
+        StrCmp $0 "" +2
+            StrCpy $Username $0
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "password"
+        StrCmp $0 "" +2
+            StrCpy $Password $0
+    no_existing_config:
 FunctionEnd
 
-; Variables
-Var PythonVersion
+; Camera Configuration Page (shown second, pre-populated if config exists)
+Function CameraConfigPage
+    !insertmacro MUI_HEADER_TEXT "Camera Configuration" "Enter your camera settings"
 
-Section "Install Python" SecPython
-    ; Check if Python is installed
-    ReadRegStr $PythonVersion HKLM "SOFTWARE\Python\PythonCore\3.9\InstallPath" ""
-    StrCmp $PythonVersion "" 0 python_installed
-    
-    ; Download Python installer
-    NSISdl::download "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe" "$TEMP\python-3.9.13-amd64.exe"
-    Pop $R0
-    StrCmp $R0 "success" +3
-        MessageBox MB_OK "Failed to download Python installer. Please install Python 3.9 manually."
-        Abort
-    
-    ; Install Python
-    ExecWait '"$TEMP\python-3.9.13-amd64.exe" /quiet InstallAllUsers=1 PrependPath=1'
-    Delete "$TEMP\python-3.9.13-amd64.exe"
-    
-    python_installed:
-    SetOutPath "$INSTDIR"
-SectionEnd
+    nsDialogs::Create 1018
+    Pop $Dialog
 
-Section "Install Service" SecService
+    StrCmp $ConfigExists "1" 0 +3
+        ${NSD_CreateLabel} 0 0 100% 12u "Settings loaded from existing config.ini. Modify if needed:"
+        Goto label_done
+        ${NSD_CreateLabel} 0 0 100% 12u "Enter your camera connection settings:"
+    label_done:
+
+    ${NSD_CreateLabel} 0 16u 100% 12u "IP Address:"
+    ${NSD_CreateText} 0 29u 100% 12u $IPAddress
+    Pop $IPAddressCtl
+
+    ${NSD_CreateLabel} 0 46u 100% 12u "Username:"
+    ${NSD_CreateText} 0 59u 100% 12u $Username
+    Pop $UsernameCtl
+
+    ${NSD_CreateLabel} 0 76u 100% 12u "Password:"
+    ${NSD_CreateText} 0 89u 100% 12u $Password
+    Pop $PasswordCtl
+
+    nsDialogs::Show
+FunctionEnd
+
+Function CameraConfigPageLeave
+    ${NSD_GetText} $IPAddressCtl $IPAddress
+    ${NSD_GetText} $UsernameCtl $Username
+    ${NSD_GetText} $PasswordCtl $Password
+FunctionEnd
+
+Section "Install" SecInstall
+    ; Use 64-bit registry view so the 64-bit service can find the keys
+    SetRegView 64
     SetOutPath "$INSTDIR"
-    
-    ; Create necessary directories
-    CreateDirectory "$INSTDIR\logs"
-    CreateDirectory "$INSTDIR\config"
-    CreateDirectory "$StoragePath"
-    CreateDirectory "$TempPath"
-    
-    ; Create config.ini with user input
-    FileOpen $0 "$INSTDIR\config.ini" w
-    FileWrite $0 "[CAMERA]$\r$\n"
-    FileWrite $0 "ip_address = $IPAddress$\r$\n"
-    FileWrite $0 "username = $Username$\r$\n"
-    FileWrite $0 "password = $Password$\r$\n"
-    FileWrite $0 "$\r$\n"
-    FileWrite $0 "[STORAGE]$\r$\n"
-    FileWrite $0 "base_path = $StoragePath$\r$\n"
-    FileWrite $0 "temp_path = $TempPath$\r$\n"
-    FileWrite $0 "$\r$\n"
-    FileWrite $0 "[PROCESSING]$\r$\n"
-    FileWrite $0 "max_concurrent_downloads = 2$\r$\n"
-    FileWrite $0 "max_concurrent_conversions = 1$\r$\n"
-    FileWrite $0 "retry_attempts = 3$\r$\n"
-    FileWrite $0 "retry_delay = 60$\r$\n"
-    FileWrite $0 "$\r$\n"
-    FileWrite $0 "[LOGGING]$\r$\n"
-    FileWrite $0 "level = INFO$\r$\n"
-    FileWrite $0 "log_dir = logs$\r$\n"
-    FileWrite $0 "app_name = video_grouper$\r$\n"
-    FileWrite $0 "backup_count = 30$\r$\n"
-    FileClose $0
-    
+
     ; Copy files
     File "..\dist\VideoGrouperService.exe"
     File "..\dist\VideoGrouperTray.exe"
     File "..\icon.ico"
-    File "..\match_info.ini.dist"
-    File "..\..\requirements.lock"
-    
-    ; Install Python dependencies using uv
-    ExecWait 'uv pip install -r "$INSTDIR\requirements.lock"'
-    
-    ; Install and start the service
+
+    ; Create config.ini in storage path if it doesn't exist
+    IfFileExists "$StoragePath\config.ini" skip_config
+        CreateDirectory "$StoragePath"
+        CreateDirectory "$StoragePath\logs"
+        FileOpen $0 "$StoragePath\config.ini" w
+        FileWrite $0 "[CAMERA]$\r$\n"
+        FileWrite $0 "type = dahua$\r$\n"
+        FileWrite $0 "device_ip = $IPAddress$\r$\n"
+        FileWrite $0 "username = $Username$\r$\n"
+        FileWrite $0 "password = $Password$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[STORAGE]$\r$\n"
+        FileWrite $0 "path = $StoragePath$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[RECORDING]$\r$\n"
+        FileWrite $0 "min_duration = 60$\r$\n"
+        FileWrite $0 "max_duration = 3600$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[PROCESSING]$\r$\n"
+        FileWrite $0 "max_concurrent_downloads = 1$\r$\n"
+        FileWrite $0 "max_concurrent_conversions = 1$\r$\n"
+        FileWrite $0 "retry_attempts = 3$\r$\n"
+        FileWrite $0 "retry_delay = 60$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[LOGGING]$\r$\n"
+        FileWrite $0 "level = INFO$\r$\n"
+        FileWrite $0 "log_file = $StoragePath\logs\video_grouper.log$\r$\n"
+        FileWrite $0 "max_log_size = 10485760$\r$\n"
+        FileWrite $0 "backup_count = 5$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[APP]$\r$\n"
+        FileWrite $0 "check_interval_seconds = 60$\r$\n"
+        FileWrite $0 "timezone = America/New_York$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[NTFY]$\r$\n"
+        FileWrite $0 "enabled = false$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[YOUTUBE]$\r$\n"
+        FileWrite $0 "enabled = false$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[TEAMSNAP]$\r$\n"
+        FileWrite $0 "enabled = false$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[PLAYMETRICS]$\r$\n"
+        FileWrite $0 "enabled = false$\r$\n"
+        FileWrite $0 "$\r$\n"
+        FileWrite $0 "[AUTOCAM]$\r$\n"
+        FileWrite $0 "enabled = false$\r$\n"
+        FileClose $0
+    skip_config:
+
+    ; Save storage path to registry (service reads this to find config)
+    WriteRegStr HKLM "Software\${APPNAME}" "StoragePath" "$StoragePath"
+
+    ; Install and start the Windows service
     ExecWait '"$INSTDIR\VideoGrouperService.exe" install'
     ExecWait '"$INSTDIR\VideoGrouperService.exe" start'
-    
-    ; Create startup shortcut for tray agent
-    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
-    
+
+    ; Create startup shortcut for tray agent with config path argument
+    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" '"$StoragePath\config.ini"' "$INSTDIR\icon.ico"
+
+    ; Also create a desktop shortcut
+    CreateShortCut "$DESKTOP\VideoGrouper.lnk" "$INSTDIR\VideoGrouperTray.exe" '"$StoragePath\config.ini"' "$INSTDIR\icon.ico"
+
+    ; Launch tray agent now
+    Exec '"$INSTDIR\VideoGrouperTray.exe" "$StoragePath\config.ini"'
+
     ; Create uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
-    
+
     ; Add uninstall information to Add/Remove Programs
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\icon.ico"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${FULL_VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Version" "${VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "VersionMajor" "${VERSION}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "VersionMinor" "0"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${COMPANYNAME}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "InstallLocation" "$INSTDIR"
 SectionEnd
 
 Section "Uninstall"
+    SetRegView 64
     ; Stop and remove the service
     ExecWait '"$INSTDIR\VideoGrouperService.exe" stop'
     ExecWait '"$INSTDIR\VideoGrouperService.exe" remove'
-    
-    ; Remove files and directories
+
+    ; Kill tray if running
+    ExecWait 'taskkill /F /IM VideoGrouperTray.exe'
+
+    ; Remove files
     Delete "$INSTDIR\VideoGrouperService.exe"
     Delete "$INSTDIR\VideoGrouperTray.exe"
     Delete "$INSTDIR\icon.ico"
-    Delete "$INSTDIR\match_info.ini.dist"
-    Delete "$INSTDIR\requirements.lock"
-    Delete "$INSTDIR\config.ini"
     Delete "$INSTDIR\uninstall.exe"
-    
-    ; Remove startup shortcut
+
+    ; Remove shortcuts
     Delete "$SMSTARTUP\VideoGrouperTray.lnk"
-    
-    ; Remove directories
-    RMDir /r "$INSTDIR\logs"
-    RMDir /r "$INSTDIR\config"
+    Delete "$DESKTOP\VideoGrouper.lnk"
+
+    ; Remove install directory
     RMDir "$INSTDIR"
-    
+
     ; Remove registry keys
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
     DeleteRegKey HKLM "Software\${APPNAME}"
-SectionEnd 
+SectionEnd

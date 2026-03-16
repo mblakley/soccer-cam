@@ -94,6 +94,7 @@ class TestUploadProcessor:
             mock_execute.assert_called_once_with(
                 youtube_config=mock_config.youtube,
                 ntfy_service=None,
+                storage_path=temp_storage,
             )
 
     @pytest.mark.asyncio
@@ -271,6 +272,7 @@ class TestUploadProcessorAuthCheck:
             mock_execute.assert_called_once_with(
                 youtube_config=mock_config.youtube,
                 ntfy_service=mock_ntfy,
+                storage_path=temp_storage,
             )
 
     @pytest.mark.asyncio

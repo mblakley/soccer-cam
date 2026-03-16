@@ -61,6 +61,11 @@ class QueueProcessor(ABC):
         """Get a unique key for an item to prevent duplicates."""
         return str(item)
 
+    def _inject_storage_path(self, item: BaseTask) -> None:
+        """Ensure the task knows the storage path for later execution."""
+        if not hasattr(item, "storage_path"):
+            setattr(item, "storage_path", self.storage_path)
+
     async def add_work(self, item: BaseTask) -> None:
         """Add work to the processor's queue."""
         # Create queue if it doesn't exist
@@ -70,11 +75,7 @@ class QueueProcessor(ABC):
         item_key = self.get_item_key(item)
 
         if item_key not in self._queued_items:
-            # Ensure the task knows the storage path for later execution.
-            # Many task classes rely on `self.storage_path` being set at runtime
-            # rather than during construction.
-            if not hasattr(item, "storage_path"):
-                setattr(item, "storage_path", self.storage_path)
+            self._inject_storage_path(item)
 
             await self._queue.put(item)
             self._queued_items.add(item_key)
@@ -300,6 +301,7 @@ class QueueProcessor(ABC):
                 try:
                     task = self._deserialize_task(in_progress_data)
                     if task:
+                        self._inject_storage_path(task)
                         await self._queue.put(task)
                         item_key = self.get_item_key(task)
                         self._queued_items.add(item_key)
@@ -323,6 +325,7 @@ class QueueProcessor(ABC):
                     # Deserialize the task
                     task = self._deserialize_task(item_data)
                     if task:
+                        self._inject_storage_path(task)
                         # Add to queue and track
                         await self._queue.put(task)
                         item_key = self.get_item_key(task)

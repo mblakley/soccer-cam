@@ -21,16 +21,24 @@ class NtfyResponseService:
     controlled inputs to simulate user interaction during E2E testing.
     """
 
-    def __init__(self, topic: str, server_url: str = "https://ntfy.sh"):
+    def __init__(
+        self,
+        topic: str,
+        server_url: str = "https://ntfy.sh",
+        auto_respond: bool = False,
+    ):
         """
         Initialize the NTFY response service.
 
         Args:
             topic: NTFY topic to subscribe to
             server_url: NTFY server URL
+            auto_respond: Whether to automatically respond to messages.
+                          Only enable for E2E testing, never in production.
         """
         self.topic = topic
         self.server_url = server_url
+        self.auto_respond = auto_respond
         self.subscription_url = f"{server_url}/{topic}/json"
         self.response_url = f"{server_url}/{topic}"
 
@@ -228,6 +236,9 @@ class NtfyResponseService:
 
     def _should_respond_to_message(self, title: str, message: str) -> bool:
         """Determine if we should respond to this message."""
+        if not self.auto_respond:
+            return False
+
         title_lower = title.lower()
         message_lower = message.lower()
 
@@ -331,5 +342,8 @@ def create_ntfy_response_service(config) -> NtfyResponseService:
     """
     topic = getattr(config, "topic", "video_grouper_mblakley43431")
     server_url = getattr(config, "server_url", "https://ntfy.sh")
+    auto_respond = getattr(config, "auto_respond", False)
 
-    return NtfyResponseService(topic=topic, server_url=server_url)
+    return NtfyResponseService(
+        topic=topic, server_url=server_url, auto_respond=auto_respond
+    )
