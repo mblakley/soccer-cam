@@ -74,6 +74,8 @@ class RecordingFile:
     def mp4_path(self) -> str:
         """Returns the expected path for the MP4 file."""
         base, ext = os.path.splitext(self.file_path)
+        if ext.lower() == ".mp4":
+            return self.file_path
         return base + ".mp4" if ext.lower() == ".dav" else self.file_path + ".mp4"
 
     def to_dict(self) -> dict[str, Union[str, int, bool, Metadata, None]]:
@@ -146,7 +148,7 @@ class RecordingFile:
                         parts[key] = value
 
                 path = parts.get("path", "")
-                if not path.endswith(".dav"):
+                if not path.endswith((".dav", ".mp4")):
                     continue
 
                 start_time = datetime.strptime(

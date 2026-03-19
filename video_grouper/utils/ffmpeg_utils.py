@@ -1,7 +1,10 @@
 import os
 import asyncio
 import logging
+import shutil
 from typing import Optional
+
+import av
 
 logger = logging.getLogger(__name__)
 
@@ -10,64 +13,50 @@ logger = logging.getLogger(__name__)
 FFMPEG_TIMEOUT = 1800
 
 
-async def _run_ffmpeg_with_timeout(
-    cmd: list[str], timeout: int = FFMPEG_TIMEOUT
-) -> tuple[int, bytes, bytes]:
-    """Run an FFmpeg command with a timeout, capturing stderr for diagnostics.
+async def _run_in_thread_with_timeout(func, *args, timeout=FFMPEG_TIMEOUT):
+    """Run a synchronous function in a thread pool with a timeout.
 
-    Returns (returncode, stdout_bytes, stderr_bytes).
-    Kills the process on timeout or cancellation to avoid zombies.
+    PyAV operations are synchronous C code. This wrapper runs them off the
+    event loop. On timeout the caller gets TimeoutError but the C thread
+    finishes in background (acceptable because timeouts rarely fire).
     """
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        return process.returncode, stdout, stderr
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        process.kill()
-        await process.wait()
-        raise
-
-
-async def verify_ffmpeg_install() -> bool:
-    """Verify that FFmpeg is installed and accessible."""
-    try:
-        returncode, _, _ = await _run_ffmpeg_with_timeout(
-            ["ffmpeg", "-version"], timeout=10
-        )
-        return returncode == 0
-    except Exception as e:
-        logger.error(f"Error verifying FFmpeg installation: {e}")
-        return False
+    return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout=timeout)
 
 
 def get_default_date_format():
     return "%Y-%m-%d %H:%M:%S"
 
 
-async def get_video_duration(file_path: str) -> Optional[float]:
-    """Get the duration of a video file using ffprobe."""
+async def verify_ffmpeg_install() -> bool:
+    """Verify that PyAV (bundled FFmpeg) is available."""
     try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            file_path,
-        ]
+        return av.codec.Codec("h264", "r") is not None
+    except Exception as e:
+        logger.error(f"Error verifying FFmpeg/PyAV installation: {e}")
+        return False
 
-        returncode, stdout, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=60)
 
-        if returncode != 0:
-            logger.error(f"Error getting video duration: {stderr.decode()}")
-            return None
+def _get_video_duration_sync(file_path: str) -> Optional[float]:
+    """Synchronous implementation: get video duration via av.open metadata."""
+    try:
+        with av.open(file_path) as container:
+            if container.duration is not None:
+                return container.duration / av.time_base
+            # Fallback: check the first video stream's duration
+            for stream in container.streams.video:
+                if stream.duration is not None and stream.time_base is not None:
+                    return float(stream.duration * stream.time_base)
+    except Exception:
+        raise
+    return None
 
-        return float(stdout.decode().strip())
 
+async def get_video_duration(file_path: str) -> Optional[float]:
+    """Get the duration of a video file using PyAV."""
+    try:
+        return await _run_in_thread_with_timeout(
+            _get_video_duration_sync, file_path, timeout=60
+        )
     except Exception as e:
         logger.error(f"Error getting video duration: {e}")
         return None
@@ -87,7 +76,6 @@ async def verify_mp4_duration(
         if dav_duration is None or mp4_duration is None:
             return False
 
-        # Check if durations are within tolerance
         duration_diff = abs(dav_duration - mp4_duration)
         return duration_diff <= (dav_duration * tolerance)
 
@@ -96,201 +84,516 @@ async def verify_mp4_duration(
         return False
 
 
-async def run_ffmpeg(command):
-    """Run an FFmpeg command. Returns True on success, False on failure."""
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(command)
-        if returncode != 0:
-            logger.error(f"FFmpeg command failed (rc={returncode}): {stderr.decode()}")
-            return False
-        return True
-    except asyncio.TimeoutError:
-        logger.error(f"FFmpeg command timed out after {FFMPEG_TIMEOUT}s")
-        return False
-    except Exception as e:
-        logger.error(f"FFmpeg command failed: {e}")
-        return False
+def _remux_dav_to_mp4_sync(file_path: str, output_path: str) -> str:
+    """Synchronous implementation: remux DAV -> MP4 (video copy, AAC re-encode)."""
+    with av.open(file_path) as input_container:
+        with av.open(
+            output_path, "w", options={"movflags": "faststart"}
+        ) as output_container:
+            # Set up streams
+            in_video_stream = None
+            in_audio_stream = None
+            out_video_stream = None
+            out_audio_stream = None
+
+            for stream in input_container.streams:
+                if stream.type == "video" and in_video_stream is None:
+                    in_video_stream = stream
+                    out_video_stream = output_container.add_stream_from_template(
+                        in_video_stream
+                    )
+                elif stream.type == "audio" and in_audio_stream is None:
+                    in_audio_stream = stream
+                    out_audio_stream = output_container.add_stream(
+                        "aac", rate=in_audio_stream.rate or 44100
+                    )
+                    out_audio_stream.bit_rate = 192000
+
+            if in_video_stream is None:
+                raise ValueError(f"No video stream found in {file_path}")
+
+            # Track first DTS per stream to normalize timestamps
+            first_dts = {}
+
+            # Demux and remux
+            streams_to_demux = []
+            if in_video_stream:
+                streams_to_demux.append(in_video_stream)
+            if in_audio_stream:
+                streams_to_demux.append(in_audio_stream)
+
+            for packet in input_container.demux(streams_to_demux):
+                if packet.dts is None:
+                    continue
+
+                try:
+                    if packet.stream == in_video_stream:
+                        # Normalize DTS
+                        if in_video_stream.index not in first_dts:
+                            first_dts[in_video_stream.index] = packet.dts
+                        packet.dts -= first_dts[in_video_stream.index]
+                        packet.pts -= first_dts[in_video_stream.index]
+                        if packet.dts < 0:
+                            continue
+                        packet.stream = out_video_stream
+                        output_container.mux(packet)
+
+                    elif packet.stream == in_audio_stream and out_audio_stream:
+                        # Decode and re-encode audio to AAC
+                        for frame in packet.decode():
+                            frame.pts = None  # Let encoder set pts
+                            for out_packet in out_audio_stream.encode(frame):
+                                output_container.mux(out_packet)
+                except (av.InvalidDataError, av.error.FFmpegError):
+                    continue
+
+            # Flush audio encoder
+            if out_audio_stream:
+                for out_packet in out_audio_stream.encode(None):
+                    output_container.mux(out_packet)
+
+    return output_path
 
 
 async def async_convert_file(file_path: str) -> Optional[str]:
-    """
-    Converts a video file to MP4 format using ffmpeg.
-    -i: input file
-    -c:v copy: copy video stream without re-encoding
-    -c:a aac: re-encode audio to aac
-    -b:a 192k: set audio bitrate to 192k
+    """Converts a video file to MP4 format using PyAV.
+
+    Video stream is copied (no re-encoding), audio is re-encoded to AAC 192k.
     """
     if not os.path.exists(file_path):
         logger.error(f"Input file not found: {file_path}")
         return None
 
-    # Use pathlib-style suffix replacement to handle .dav anywhere in the path
     base, ext = os.path.splitext(file_path)
     output_path = base + ".mp4" if ext.lower() == ".dav" else file_path + ".mp4"
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-fflags",
-        "+genpts+discardcorrupt",
-        "-i",
-        file_path,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-movflags",
-        "+faststart",
-        output_path,
-    ]
-
-    logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+    logger.info(
+        f"Converting {os.path.basename(file_path)} to {os.path.basename(output_path)}"
+    )
 
     try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd)
-
-        if returncode == 0:
-            logger.info(
-                f"Successfully converted {os.path.basename(file_path)} to {os.path.basename(output_path)}"
-            )
-            return output_path
-        else:
-            logger.error(
-                f"Failed to convert {os.path.basename(file_path)}: {stderr.decode()}"
-            )
-            return None
+        await _run_in_thread_with_timeout(
+            _remux_dav_to_mp4_sync, file_path, output_path
+        )
+        logger.info(
+            f"Successfully converted {os.path.basename(file_path)} to {os.path.basename(output_path)}"
+        )
+        return output_path
     except asyncio.TimeoutError:
         logger.error(
             f"Conversion timed out for {os.path.basename(file_path)} after {FFMPEG_TIMEOUT}s"
         )
         return None
-
-
-async def _run_ffmpeg_checked(
-    cmd: list[str], operation: str, timeout: int = FFMPEG_TIMEOUT
-) -> bool:
-    """Run an FFmpeg command with standardized error handling.
-
-    Args:
-        cmd: The FFmpeg command to run.
-        operation: Human-readable description for log messages.
-        timeout: Timeout in seconds.
-
-    Returns:
-        True on success, False on failure.
-    """
-    try:
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout=timeout)
-        if returncode == 0:
-            logger.info(f"Successfully {operation}")
-            return True
-        else:
-            logger.error(f"Failed to {operation}: {stderr.decode()}")
-            return False
-    except asyncio.TimeoutError:
-        logger.error(f"{operation} timed out after {timeout}s")
-        return False
     except Exception as e:
-        logger.error(f"Error during {operation}: {e}")
-        return False
+        logger.error(f"Failed to convert {os.path.basename(file_path)}: {e}")
+        return None
+
+
+def _create_screenshot_sync(
+    video_path: str, output_path: str, time_offset: str
+) -> bool:
+    """Synchronous implementation: extract a single frame as JPEG."""
+    # Parse time offset string (HH:MM:SS or seconds)
+    try:
+        parts = time_offset.split(":")
+        if len(parts) == 3:
+            seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        elif len(parts) == 2:
+            seconds = int(parts[0]) * 60 + float(parts[1])
+        else:
+            seconds = float(time_offset)
+    except (ValueError, IndexError):
+        seconds = 1.0
+
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        # Seek to the target time
+        target_pts = int(seconds / stream.time_base)
+        container.seek(target_pts, stream=stream)
+
+        for frame in container.decode(video=0):
+            # Save first decoded frame as JPEG
+            image = frame.to_image()
+            image.save(output_path, "JPEG", quality=95)
+            return True
+
+    return False
 
 
 async def create_screenshot(
     video_path: str, output_path: str, time_offset: str = "00:00:01"
 ) -> bool:
-    """Creates a screenshot from a video file using ffmpeg."""
-    cmd = [
-        "ffmpeg",
-        "-ss",
-        str(time_offset),
-        "-i",
-        video_path,
-        "-vframes",
-        "1",
-        "-q:v",
-        "2",
-        output_path,
-        "-y",
-    ]
-    return await _run_ffmpeg_checked(
-        cmd,
-        f"created screenshot for {os.path.basename(video_path)}",
-        timeout=60,
-    )
+    """Creates a screenshot from a video file."""
+    try:
+        result = await _run_in_thread_with_timeout(
+            _create_screenshot_sync, video_path, output_path, time_offset, timeout=60
+        )
+        if result:
+            logger.info(
+                f"Successfully created screenshot for {os.path.basename(video_path)}"
+            )
+        return result
+    except Exception as e:
+        logger.error(
+            f"Failed to create screenshot for {os.path.basename(video_path)}: {e}"
+        )
+        return False
+
+
+def _trim_video_sync(
+    input_path: str, output_path: str, start_offset: str, duration: Optional[str]
+) -> bool:
+    """Synchronous implementation: trim video with stream copy."""
+    # Parse start offset
+    try:
+        parts = start_offset.split(":")
+        if len(parts) == 3:
+            start_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        elif len(parts) == 2:
+            start_seconds = int(parts[0]) * 60 + float(parts[1])
+        else:
+            start_seconds = float(start_offset)
+    except (ValueError, IndexError):
+        start_seconds = 0.0
+
+    # Parse duration
+    duration_seconds = None
+    if duration:
+        try:
+            parts = duration.split(":")
+            if len(parts) == 3:
+                duration_seconds = (
+                    int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                )
+            elif len(parts) == 2:
+                duration_seconds = int(parts[0]) * 60 + float(parts[1])
+            else:
+                duration_seconds = float(duration)
+        except (ValueError, IndexError):
+            pass
+
+    with av.open(input_path) as input_container:
+        with av.open(
+            output_path, "w", options={"movflags": "faststart"}
+        ) as output_container:
+            # Create output streams as copies of input streams
+            stream_map = {}
+            for in_stream in input_container.streams:
+                if in_stream.type in ("video", "audio"):
+                    out_stream = output_container.add_stream_from_template(in_stream)
+                    stream_map[in_stream] = out_stream
+
+            if not stream_map:
+                raise ValueError(f"No video/audio streams found in {input_path}")
+
+            # Seek to start position
+            video_stream = input_container.streams.video[0]
+            target_pts = int(start_seconds / video_stream.time_base)
+            input_container.seek(target_pts, stream=video_stream)
+
+            # Track first DTS per stream for normalization
+            first_dts = {}
+            end_pts = None
+
+            if duration_seconds is not None:
+                end_pts = int(
+                    (start_seconds + duration_seconds) / video_stream.time_base
+                )
+
+            for packet in input_container.demux(list(stream_map.keys())):
+                if packet.dts is None:
+                    continue
+
+                # Check if we've passed the end time
+                if (
+                    end_pts is not None
+                    and packet.stream == video_stream
+                    and packet.dts > end_pts
+                ):
+                    break
+
+                try:
+                    in_stream = packet.stream
+                    out_stream = stream_map[in_stream]
+
+                    # Normalize timestamps
+                    if in_stream.index not in first_dts:
+                        first_dts[in_stream.index] = packet.dts
+                    packet.dts -= first_dts[in_stream.index]
+                    packet.pts -= first_dts[in_stream.index]
+                    if packet.dts < 0:
+                        continue
+
+                    packet.stream = out_stream
+                    output_container.mux(packet)
+                except (av.InvalidDataError, av.error.FFmpegError):
+                    continue
+
+    return True
 
 
 async def trim_video(
     input_path: str, output_path: str, start_offset: str, duration: Optional[str] = None
 ) -> bool:
-    """Trims a video file using ffmpeg."""
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-fflags",
-        "+genpts+discardcorrupt",
-        "-i",
-        input_path,
-        "-ss",
-        start_offset,
-    ]
-
-    if duration:
-        cmd.extend(["-t", duration])
-
-    cmd.extend(
-        [
-            "-c",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-movflags",
-            "+faststart",
-            output_path,
-        ]
+    """Trims a video file using stream copy via PyAV."""
+    logger.info(
+        f"Trimming {os.path.basename(input_path)} to {os.path.basename(output_path)}"
     )
+    try:
+        result = await _run_in_thread_with_timeout(
+            _trim_video_sync, input_path, output_path, start_offset, duration
+        )
+        if result:
+            logger.info(
+                f"Successfully trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}"
+            )
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"Trim timed out after {FFMPEG_TIMEOUT}s")
+        return False
+    except Exception as e:
+        logger.error(f"Error during trim: {e}")
+        return False
 
-    logger.info(f"Running ffmpeg trim command: {' '.join(cmd)}")
-    return await _run_ffmpeg_checked(
-        cmd,
-        f"trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}",
+
+def _combine_videos_sync(file_paths: list[str], output_path: str) -> bool:
+    """Synchronous implementation: concatenate multiple video files (video copy, AAC re-encode).
+
+    Uses stream copy for video regardless of codec (H.264, HEVC, etc.) for speed.
+    HEVC-to-H.264 transcoding is deferred to later pipeline stages (trim/autocam)
+    where the video is shorter and transcoding is practical.
+    """
+    if not file_paths:
+        raise ValueError("No files to combine")
+
+    with av.open(
+        output_path, "w", options={"movflags": "faststart"}
+    ) as output_container:
+        out_video_stream = None
+        out_audio_stream = None
+
+        # Probe the first file to set up output streams
+        with av.open(file_paths[0]) as probe:
+            for stream in probe.streams:
+                if stream.type == "video" and out_video_stream is None:
+                    out_video_stream = output_container.add_stream_from_template(stream)
+                elif stream.type == "audio" and out_audio_stream is None:
+                    out_audio_stream = output_container.add_stream(
+                        "aac", rate=stream.rate or 44100
+                    )
+                    out_audio_stream.bit_rate = 192000
+
+        if out_video_stream is None:
+            raise ValueError("No video stream found in first input file")
+
+        return _combine_copy(
+            file_paths, output_container, out_video_stream, out_audio_stream
+        )
+
+
+def _combine_copy(
+    file_paths: list[str], output_container, out_video_stream, out_audio_stream
+) -> bool:
+    """Concatenate files using stream copy (fast path for H.264 input)."""
+    video_pts_offset = 0
+
+    for file_path in file_paths:
+        with av.open(file_path) as input_container:
+            in_video = None
+            in_audio = None
+            for stream in input_container.streams:
+                if stream.type == "video" and in_video is None:
+                    in_video = stream
+                elif stream.type == "audio" and in_audio is None:
+                    in_audio = stream
+
+            streams_to_demux = []
+            if in_video:
+                streams_to_demux.append(in_video)
+            if in_audio:
+                streams_to_demux.append(in_audio)
+
+            first_dts = {}
+            max_video_pts = 0
+
+            for packet in input_container.demux(streams_to_demux):
+                if packet.dts is None:
+                    continue
+
+                try:
+                    if packet.stream == in_video:
+                        # Normalize and offset
+                        if in_video.index not in first_dts:
+                            first_dts[in_video.index] = packet.dts
+                        packet.dts -= first_dts[in_video.index]
+                        packet.pts -= first_dts[in_video.index]
+                        if packet.dts < 0:
+                            continue
+
+                        # Track max pts for offset calculation
+                        if packet.pts is not None:
+                            end_pts = packet.pts + (packet.duration or 0)
+                            if end_pts > max_video_pts:
+                                max_video_pts = end_pts
+
+                        packet.dts += video_pts_offset
+                        packet.pts += video_pts_offset
+                        packet.stream = out_video_stream
+                        output_container.mux(packet)
+
+                    elif packet.stream == in_audio and out_audio_stream:
+                        for frame in packet.decode():
+                            frame.pts = None
+                            for out_packet in out_audio_stream.encode(frame):
+                                output_container.mux(out_packet)
+                except (av.InvalidDataError, av.error.FFmpegError):
+                    continue
+
+            video_pts_offset += max_video_pts
+
+    # Flush audio encoder
+    if out_audio_stream:
+        for out_packet in out_audio_stream.encode(None):
+            output_container.mux(out_packet)
+
+    return True
+
+
+async def combine_videos(file_paths: list[str], output_path: str) -> bool:
+    """Combines multiple video files into a single MP4 using PyAV.
+
+    Args:
+        file_paths: List of input file paths to concatenate.
+        output_path: Path for the combined output file.
+    """
+    logger.info(
+        f"Combining {len(file_paths)} videos to {os.path.basename(output_path)}"
     )
+    try:
+        result = await _run_in_thread_with_timeout(
+            _combine_videos_sync, file_paths, output_path
+        )
+        if result:
+            logger.info(
+                f"Successfully combined videos to {os.path.basename(output_path)}"
+            )
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"Combine timed out after {FFMPEG_TIMEOUT}s")
+        return False
+    except Exception as e:
+        logger.error(f"Error during combine: {e}")
+        return False
 
 
-async def combine_videos(file_list_path: str, output_path: str) -> bool:
-    """Combines multiple video files into a single MP4 using FFmpeg concat demuxer."""
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-fflags",
-        "+genpts+discardcorrupt",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        file_list_path,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-movflags",
-        "+faststart",
-        output_path,
-    ]
+def _extract_clip_copy_sync(
+    input_path: str, start_sec: float, end_sec: float, output_path: str
+) -> bool:
+    """Synchronous implementation: extract clip with stream copy."""
+    with av.open(input_path) as input_container:
+        with av.open(output_path, "w") as output_container:
+            stream_map = {}
+            for in_stream in input_container.streams:
+                if in_stream.type in ("video", "audio"):
+                    out_stream = output_container.add_stream_from_template(in_stream)
+                    stream_map[in_stream] = out_stream
 
-    logger.info(f"Running ffmpeg combine command: {' '.join(cmd)}")
-    return await _run_ffmpeg_checked(
-        cmd,
-        f"combined videos to {os.path.basename(output_path)}",
-    )
+            video_stream = input_container.streams.video[0]
+            target_pts = int(start_sec / video_stream.time_base)
+            end_pts = int(end_sec / video_stream.time_base)
+            input_container.seek(target_pts, stream=video_stream)
+
+            first_dts = {}
+
+            for packet in input_container.demux(list(stream_map.keys())):
+                if packet.dts is None:
+                    continue
+
+                if packet.stream == video_stream and packet.dts > end_pts:
+                    break
+
+                try:
+                    in_stream = packet.stream
+                    out_stream = stream_map[in_stream]
+
+                    if in_stream.index not in first_dts:
+                        first_dts[in_stream.index] = packet.dts
+                    packet.dts -= first_dts[in_stream.index]
+                    packet.pts -= first_dts[in_stream.index]
+                    if packet.dts < 0:
+                        continue
+
+                    packet.stream = out_stream
+                    output_container.mux(packet)
+                except (av.InvalidDataError, av.error.FFmpegError):
+                    continue
+
+    return True
+
+
+def _extract_clip_reencode_sync(
+    input_path: str, start_sec: float, end_sec: float, output_path: str
+) -> bool:
+    """Synchronous implementation: extract clip with full re-encode (fallback)."""
+    with av.open(input_path) as input_container:
+        with av.open(output_path, "w") as output_container:
+            in_video = input_container.streams.video[0]
+            in_audio = None
+            for stream in input_container.streams:
+                if stream.type == "audio":
+                    in_audio = stream
+                    break
+
+            # Set up output video with libx264
+            out_video = output_container.add_stream(
+                "libx264", rate=in_video.average_rate
+            )
+            out_video.width = in_video.width
+            out_video.height = in_video.height
+            out_video.pix_fmt = "yuv420p"
+            out_video.options = {"preset": "fast", "crf": "18"}
+
+            out_audio = None
+            if in_audio:
+                out_audio = output_container.add_stream(
+                    "aac", rate=in_audio.rate or 44100
+                )
+                out_audio.bit_rate = 128000
+
+            # Seek to start
+            target_pts = int(start_sec / in_video.time_base)
+            end_pts = int(end_sec / in_video.time_base)
+            input_container.seek(target_pts, stream=in_video)
+
+            streams_to_decode = [in_video]
+            if in_audio:
+                streams_to_decode.append(in_audio)
+
+            for packet in input_container.demux(streams_to_decode):
+                if packet.stream == in_video:
+                    for frame in packet.decode():
+                        if frame.pts is not None and frame.pts > end_pts:
+                            break
+                        frame.pts = None
+                        for out_packet in out_video.encode(frame):
+                            output_container.mux(out_packet)
+                    else:
+                        continue
+                    break
+                elif packet.stream == in_audio and out_audio:
+                    for frame in packet.decode():
+                        frame.pts = None
+                        for out_packet in out_audio.encode(frame):
+                            output_container.mux(out_packet)
+
+            # Flush encoders
+            for out_packet in out_video.encode(None):
+                output_container.mux(out_packet)
+            if out_audio:
+                for out_packet in out_audio.encode(None):
+                    output_container.mux(out_packet)
+
+    return True
 
 
 async def extract_clip(
@@ -300,80 +603,106 @@ async def extract_clip(
     output_path: str,
     timeout: int = FFMPEG_TIMEOUT,
 ) -> str:
-    """Extract a clip from a video file using FFmpeg.
+    """Extract a clip from a video file.
 
-    Uses stream copy (-c copy) for fast extraction without re-encoding.
-    Falls back to re-encoding if stream copy fails (e.g., keyframe alignment issues).
-
-    Args:
-        input_path: Path to the source video file
-        start_sec: Start time in seconds
-        end_sec: End time in seconds
-        output_path: Path for the output clip
-        timeout: Timeout in seconds
+    Uses stream copy for fast extraction. Falls back to re-encoding if
+    stream copy fails (e.g., keyframe alignment issues).
 
     Returns:
-        The output_path on success
+        The output_path on success.
 
     Raises:
-        RuntimeError: If FFmpeg fails
+        RuntimeError: If extraction fails.
     """
     duration = end_sec - start_sec
 
-    # Try stream copy first (fast, no re-encoding)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        str(start_sec),
-        "-i",
-        input_path,
-        "-t",
-        str(duration),
-        "-c",
-        "copy",
-        "-avoid_negative_ts",
-        "make_zero",
-        output_path,
-    ]
-
-    returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
-
-    if returncode != 0:
-        # Fall back to re-encoding
-        logger.warning(
-            f"Stream copy failed for clip, falling back to re-encode: {stderr.decode('utf-8', errors='replace')[-200:]}"
-        )
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start_sec),
-            "-i",
+    try:
+        await _run_in_thread_with_timeout(
+            _extract_clip_copy_sync,
             input_path,
-            "-t",
-            str(duration),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "18",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
+            start_sec,
+            end_sec,
             output_path,
-        ]
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
-
-        if returncode != 0:
-            raise RuntimeError(
-                f"FFmpeg clip extraction failed: {stderr.decode('utf-8', errors='replace')[-500:]}"
+            timeout=timeout,
+        )
+    except Exception as copy_err:
+        logger.warning(
+            f"Stream copy failed for clip, falling back to re-encode: {copy_err}"
+        )
+        try:
+            await _run_in_thread_with_timeout(
+                _extract_clip_reencode_sync,
+                input_path,
+                start_sec,
+                end_sec,
+                output_path,
+                timeout=timeout,
             )
+        except Exception as enc_err:
+            raise RuntimeError(f"Clip extraction failed: {enc_err}") from enc_err
 
     logger.info(f"Extracted clip: {output_path} ({duration:.1f}s)")
     return output_path
+
+
+def _compile_clips_sync(clip_paths: list[str], output_path: str) -> bool:
+    """Synchronous implementation: concatenate clips with full re-encode."""
+    with av.open(output_path, "w") as output_container:
+        out_video = None
+        out_audio = None
+
+        # Probe first clip for stream parameters
+        with av.open(clip_paths[0]) as probe:
+            in_video = probe.streams.video[0]
+            in_audio = None
+            for stream in probe.streams:
+                if stream.type == "audio":
+                    in_audio = stream
+                    break
+
+            out_video = output_container.add_stream(
+                "libx264", rate=in_video.average_rate
+            )
+            out_video.width = in_video.width
+            out_video.height = in_video.height
+            out_video.pix_fmt = "yuv420p"
+            out_video.options = {"preset": "fast", "crf": "18"}
+
+            if in_audio:
+                out_audio = output_container.add_stream(
+                    "aac", rate=in_audio.rate or 44100
+                )
+                out_audio.bit_rate = 128000
+
+        for clip_path in clip_paths:
+            with av.open(clip_path) as input_container:
+                streams_to_decode = list(input_container.streams.video)
+                if out_audio:
+                    streams_to_decode.extend(list(input_container.streams.audio))
+
+                for packet in input_container.demux(streams_to_decode):
+                    try:
+                        if packet.stream.type == "video":
+                            for frame in packet.decode():
+                                frame.pts = None
+                                for out_packet in out_video.encode(frame):
+                                    output_container.mux(out_packet)
+                        elif packet.stream.type == "audio" and out_audio:
+                            for frame in packet.decode():
+                                frame.pts = None
+                                for out_packet in out_audio.encode(frame):
+                                    output_container.mux(out_packet)
+                    except (av.InvalidDataError, av.error.FFmpegError):
+                        continue
+
+        # Flush encoders
+        for out_packet in out_video.encode(None):
+            output_container.mux(out_packet)
+        if out_audio:
+            for out_packet in out_audio.encode(None):
+                output_container.mux(out_packet)
+
+    return True
 
 
 async def compile_clips(
@@ -383,73 +712,29 @@ async def compile_clips(
 ) -> str:
     """Compile multiple clips into a single video file.
 
-    Creates a temporary concat file and uses FFmpeg's concat demuxer.
     Re-encodes to ensure consistent format across clips.
 
-    Args:
-        clip_paths: List of paths to clip files to concatenate
-        output_path: Path for the compiled output
-        timeout: Timeout in seconds
-
     Returns:
-        The output_path on success
+        The output_path on success.
 
     Raises:
-        RuntimeError: If FFmpeg fails
-        ValueError: If clip_paths is empty
+        RuntimeError: If compilation fails.
+        ValueError: If clip_paths is empty.
     """
     if not clip_paths:
         raise ValueError("No clips to compile")
 
     if len(clip_paths) == 1:
-        # Single clip — just copy it
-        import shutil
-
         shutil.copy2(clip_paths[0], output_path)
         logger.info(f"Single clip, copied to: {output_path}")
         return output_path
 
-    # Create concat list file
-    concat_file = output_path + ".concat.txt"
     try:
-        with open(concat_file, "w") as f:
-            for path in clip_paths:
-                # Escape single quotes in paths for FFmpeg concat format
-                escaped = path.replace("'", "'\\''")
-                f.write(f"file '{escaped}'\n")
+        await _run_in_thread_with_timeout(
+            _compile_clips_sync, clip_paths, output_path, timeout=timeout
+        )
+    except Exception as e:
+        raise RuntimeError(f"Clip compilation failed: {e}") from e
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "18",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            output_path,
-        ]
-
-        returncode, _, stderr = await _run_ffmpeg_with_timeout(cmd, timeout)
-
-        if returncode != 0:
-            raise RuntimeError(
-                f"FFmpeg compilation failed: {stderr.decode('utf-8', errors='replace')[-500:]}"
-            )
-
-        logger.info(f"Compiled {len(clip_paths)} clips into: {output_path}")
-        return output_path
-    finally:
-        # Clean up concat file
-        if os.path.exists(concat_file):
-            os.remove(concat_file)
+    logger.info(f"Compiled {len(clip_paths)} clips into: {output_path}")
+    return output_path

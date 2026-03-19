@@ -6,14 +6,12 @@ import os
 import logging
 from typing import List, Dict, Any
 from dataclasses import dataclass
-import aiofiles
 
 from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
 from video_grouper.utils.ffmpeg_utils import combine_videos
 from video_grouper.utils.paths import (
     get_combined_video_path,
-    get_file_list_path,
     resolve_path,
 )
 
@@ -25,7 +23,7 @@ class CombineTask(BaseFfmpegTask):
     """
     Task for combining multiple DAV files in a directory into a single combined MP4 video.
 
-    Uses FFmpeg concat demuxer to combine files and convert to MP4 in one step.
+    Uses PyAV to concatenate files and convert to MP4 in one step.
     """
 
     group_dir: str
@@ -57,22 +55,33 @@ class CombineTask(BaseFfmpegTask):
         """
         return get_combined_video_path(self.group_dir, self.storage_path)
 
+    # File extensions that contain raw camera recordings to combine
+    VIDEO_EXTENSIONS = (".dav", ".mp4")
+    # Files produced by the pipeline itself that should not be combined
+    EXCLUDE_PREFIXES = ("combined",)
+
     def get_dav_files(self) -> List[str]:
         """
-        Get the list of DAV files to combine from the group directory.
+        Get the list of video files to combine from the group directory.
+
+        Supports .dav (Dahua) and .mp4 (Reolink) input files.
+        Excludes pipeline-produced files like combined.mp4.
 
         Returns:
-            Sorted list of DAV file paths
+            Sorted list of video file paths
         """
-        dav_files = []
+        video_files = []
         group_dir_abs = resolve_path(self.group_dir, self.storage_path)
         try:
             for filename in sorted(os.listdir(group_dir_abs)):
-                if filename.endswith(".dav"):
-                    dav_files.append(os.path.join(group_dir_abs, filename))
+                if not filename.lower().endswith(self.VIDEO_EXTENSIONS):
+                    continue
+                if filename.lower().startswith(self.EXCLUDE_PREFIXES):
+                    continue
+                video_files.append(os.path.join(group_dir_abs, filename))
         except FileNotFoundError:
             pass
-        return dav_files
+        return video_files
 
     async def execute(self) -> bool:
         """
@@ -86,18 +95,11 @@ class CombineTask(BaseFfmpegTask):
             await self._handle_task_failure()
             return False
 
-        file_list_path = get_file_list_path(self.group_dir, self.storage_path)
         output_path = self.get_output_path()
 
         try:
-            # Create the file list for ffmpeg concat
-            async with aiofiles.open(file_list_path, "w") as f:
-                for dav_file in dav_files:
-                    # Use relative paths for the concat file
-                    await f.write(f"file '{os.path.basename(dav_file)}'\n")
-
-            # Execute the ffmpeg command using the utility function
-            success = await combine_videos(file_list_path, output_path)
+            # Pass file paths directly to combine_videos (PyAV-based)
+            success = await combine_videos(dav_files, output_path)
 
             if success:
                 await self._handle_post_combine_actions()
@@ -110,13 +112,6 @@ class CombineTask(BaseFfmpegTask):
             logger.error(f"COMBINE: Error during combine task execution: {e}")
             await self._handle_task_failure()
             return False
-        finally:
-            # Clean up the temporary file list
-            try:
-                if os.path.exists(file_list_path):
-                    os.remove(file_list_path)
-            except Exception:
-                pass
 
     async def _handle_post_combine_actions(self) -> None:
         """Handle post-combine actions like updating status and checking for trim readiness."""
