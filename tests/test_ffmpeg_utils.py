@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from video_grouper.utils.ffmpeg_utils import (
     async_convert_file,
     combine_videos,
@@ -17,17 +17,44 @@ def mock_logger():
         yield mock
 
 
+def _make_mock_container(duration_us=123_450_000):
+    """Create a mock av container with configurable duration."""
+    container = MagicMock()
+    container.duration = duration_us
+
+    video_stream = MagicMock()
+    video_stream.type = "video"
+    video_stream.duration = 12345
+    video_stream.time_base = 0.01
+    video_stream.index = 0
+    video_stream.rate = 30
+    video_stream.average_rate = 30
+    video_stream.width = 1920
+    video_stream.height = 1080
+
+    audio_stream = MagicMock()
+    audio_stream.type = "audio"
+    audio_stream.rate = 44100
+    audio_stream.index = 1
+
+    container.streams = MagicMock()
+    container.streams.video = [video_stream]
+    container.streams.audio = [audio_stream]
+    container.streams.__iter__ = lambda self: iter([video_stream, audio_stream])
+    container.demux.return_value = iter([])
+    container.decode.return_value = iter([])
+    container.__enter__ = MagicMock(return_value=container)
+    container.__exit__ = MagicMock(return_value=False)
+    return container
+
+
 @pytest.fixture
-def mock_ffmpeg_subprocess():
-    """Mocks asyncio.create_subprocess_exec to avoid actual FFmpeg/FFprobe calls."""
-    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock:
-        process = mock.return_value
-        # Configure the mock process to simulate a successful command execution by default
-        process.returncode = 0
-        process.communicate = AsyncMock(return_value=(b"", b""))
-        process.wait = AsyncMock(return_value=None)
-        # Mock stdout for progress parsing if needed
-        process.stdout.readline = AsyncMock(return_value=b"")
+def mock_av_open():
+    """Mocks av.open to avoid actual file I/O."""
+    container = _make_mock_container()
+    with patch(
+        "video_grouper.utils.ffmpeg_utils.av.open", return_value=container
+    ) as mock:
         yield mock
 
 
@@ -43,24 +70,24 @@ def mock_file_ops():
 
 
 @pytest.mark.asyncio
-async def test_get_video_duration_success(mock_ffmpeg_subprocess):
-    """Verifies that get_video_duration correctly parses ffprobe's output."""
-    mock_process = mock_ffmpeg_subprocess.return_value
-    # Simulate ffprobe outputting a duration
-    mock_process.communicate.return_value = (b"123.45\n", b"")
+async def test_get_video_duration_success(mock_av_open):
+    """Verifies that get_video_duration correctly reads container duration."""
+    # duration is in microseconds, av.time_base = 1_000_000
+    mock_av_open.return_value.duration = 123_450_000
+    mock_av_open.return_value.__enter__.return_value = mock_av_open.return_value
 
     duration = await get_video_duration("dummy.mp4")
 
-    assert duration == 123.45
-    mock_ffmpeg_subprocess.assert_called_once()
+    assert duration == pytest.approx(123.45, abs=0.01)
+    mock_av_open.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_get_video_duration_failure(mock_ffmpeg_subprocess):
-    """Ensures get_video_duration returns None when ffprobe fails."""
-    mock_process = mock_ffmpeg_subprocess.return_value
-    mock_process.returncode = 1
-    mock_process.communicate.return_value = (b"", b"ffprobe error")
+async def test_get_video_duration_failure(mock_av_open):
+    """Ensures get_video_duration returns None when av.open fails."""
+    import av
+
+    mock_av_open.side_effect = av.error.FFmpegError(0, "test error")
 
     duration = await get_video_duration("dummy.mp4")
 
@@ -68,127 +95,104 @@ async def test_get_video_duration_failure(mock_ffmpeg_subprocess):
 
 
 @pytest.mark.asyncio
-async def test_async_convert_file_success(
-    mock_ffmpeg_subprocess, mock_file_ops, mock_logger
-):
+async def test_async_convert_file_success(mock_av_open, mock_file_ops, mock_logger):
     """Tests the successful conversion of a .dav file to .mp4."""
     dav_path = "test.dav"
     mock_file_ops["exists"].return_value = True
 
+    # Mock the output container as well (second call to av.open)
+    output_container = _make_mock_container()
+    mock_av_open.side_effect = [mock_av_open.return_value, output_container]
+
     result_path = await async_convert_file(dav_path)
 
-    # Verify that FFmpeg was called to perform the conversion
-    assert mock_ffmpeg_subprocess.called
-    # Verify the function returns the correct path on success
     assert result_path == "test.mp4"
 
 
 @pytest.mark.asyncio
-async def test_async_convert_file_ffmpeg_failure(
-    mock_ffmpeg_subprocess, mock_file_ops, mock_logger
-):
-    """Tests that the function returns None if FFmpeg fails."""
-    mock_process = mock_ffmpeg_subprocess.return_value
-    mock_process.returncode = 1
-    mock_process.communicate.return_value = (b"", b"ffmpeg error")
+async def test_async_convert_file_failure(mock_av_open, mock_file_ops, mock_logger):
+    """Tests that the function returns None if PyAV fails."""
+    import av
 
-    dav_path = "test.dav"
+    mock_av_open.side_effect = av.error.FFmpegError(0, "test error")
     mock_file_ops["exists"].return_value = True
 
-    result_path = await async_convert_file(dav_path)
+    result_path = await async_convert_file("test.dav")
 
-    # Verify that the function returns None on failure
     assert result_path is None
 
 
 @pytest.mark.asyncio
-async def test_verify_ffmpeg_install_success(mock_ffmpeg_subprocess):
-    """Tests that ffmpeg installation is correctly verified when the command succeeds."""
-    assert await verify_ffmpeg_install() is True
-    mock_ffmpeg_subprocess.assert_called_once()
+async def test_verify_ffmpeg_install_success():
+    """Tests that PyAV installation is correctly verified."""
+    with patch("video_grouper.utils.ffmpeg_utils.av.codec.Codec") as mock_codec:
+        mock_codec.return_value = MagicMock()
+        assert await verify_ffmpeg_install() is True
 
 
 @pytest.mark.asyncio
-async def test_verify_ffmpeg_install_failure(mock_ffmpeg_subprocess):
-    """Tests that ffmpeg installation verification fails when the command fails."""
-    mock_process = mock_ffmpeg_subprocess.return_value
-    mock_process.returncode = 1
-    mock_process.communicate.return_value = (b"", b"ffmpeg not found")
-
-    assert await verify_ffmpeg_install() is False
+async def test_verify_ffmpeg_install_failure():
+    """Tests that verification fails when codec is not available."""
+    with patch(
+        "video_grouper.utils.ffmpeg_utils.av.codec.Codec",
+        side_effect=Exception("not found"),
+    ):
+        assert await verify_ffmpeg_install() is False
 
 
 @pytest.mark.asyncio
-async def test_create_screenshot_success(mock_ffmpeg_subprocess, mock_file_ops):
+async def test_create_screenshot_success(mock_av_open, mock_file_ops):
     """Tests the successful creation of a video screenshot."""
     video_path = "test.mp4"
     screenshot_path = "test.jpg"
 
+    # Set up frame decode with realistic image mock
+    mock_frame = MagicMock()
+    mock_image = MagicMock()
+    mock_image.size = (1920, 1080)
+    # getextrema returns per-channel (min, max) tuples; wide range = not corrupt
+    mock_image.crop.return_value = mock_image
+    mock_image.getextrema.return_value = ((0, 255), (0, 255), (0, 255))
+    mock_frame.to_image.return_value = mock_image
+    container = mock_av_open.return_value
+    container.__enter__.return_value = container
+    container.decode.return_value = iter([mock_frame])
+
     success = await create_screenshot(video_path, screenshot_path)
 
     assert success is True
-    mock_ffmpeg_subprocess.assert_called_once()
-    args, _ = mock_ffmpeg_subprocess.call_args
-    # Check that the correct ffmpeg command was constructed
-    assert "ffmpeg" in args[0]
-    assert "-i" in args
-    assert video_path in args
-    assert screenshot_path in args
 
 
 @pytest.mark.asyncio
-async def test_create_screenshot_failure(mock_ffmpeg_subprocess, mock_file_ops):
-    """Tests that screenshot creation returns False when FFmpeg fails."""
-    mock_process = mock_ffmpeg_subprocess.return_value
-    mock_process.returncode = 1
-    mock_process.communicate.return_value = (b"", b"ffmpeg error")
+async def test_create_screenshot_failure(mock_av_open, mock_file_ops):
+    """Tests that screenshot creation returns False when PyAV fails."""
+    import av
+
+    mock_av_open.side_effect = av.error.FFmpegError(0, "test error")
 
     success = await create_screenshot("test.mp4", "test.jpg")
 
     assert success is False
-    mock_ffmpeg_subprocess.assert_called_once()
-
-
-def _get_ffmpeg_args(mock_subprocess):
-    """Extract the flat arg tuple passed to create_subprocess_exec."""
-    args, _ = mock_subprocess.call_args
-    return args
-
-
-STRUCTURAL_FLAGS = [
-    "+genpts+discardcorrupt",
-    "make_zero",
-    "+faststart",
-]
 
 
 @pytest.mark.asyncio
-async def test_convert_file_has_structural_flags(
-    mock_ffmpeg_subprocess, mock_file_ops, mock_logger
-):
-    """Verifies async_convert_file includes structural cleanup flags."""
-    await async_convert_file("test.dav")
-    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
-    for flag in STRUCTURAL_FLAGS:
-        assert flag in args, f"Missing structural flag: {flag}"
-    assert "libx264" not in args
+async def test_combine_videos_success(mock_av_open):
+    """Tests successful video combination."""
+    # Set up mock for multiple av.open calls (probe + each input + output)
+    containers = [_make_mock_container() for _ in range(4)]
+    mock_av_open.side_effect = containers
+
+    result = await combine_videos(["file1.dav", "file2.dav"], "output.mp4")
+
+    assert result is True
 
 
 @pytest.mark.asyncio
-async def test_combine_videos_has_structural_flags(mock_ffmpeg_subprocess):
-    """Verifies combine_videos includes structural cleanup flags."""
-    await combine_videos("filelist.txt", "output.mp4")
-    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
-    for flag in STRUCTURAL_FLAGS:
-        assert flag in args, f"Missing structural flag: {flag}"
-    assert "libx264" not in args
+async def test_trim_video_success(mock_av_open):
+    """Tests successful video trimming."""
+    containers = [_make_mock_container() for _ in range(2)]
+    mock_av_open.side_effect = containers
 
+    result = await trim_video("input.mp4", "output.mp4", "00:05:00", "01:00:00")
 
-@pytest.mark.asyncio
-async def test_trim_video_has_structural_flags(mock_ffmpeg_subprocess):
-    """Verifies trim_video includes structural cleanup flags."""
-    await trim_video("input.mp4", "output.mp4", "00:05:00", "01:00:00")
-    args = _get_ffmpeg_args(mock_ffmpeg_subprocess)
-    for flag in STRUCTURAL_FLAGS:
-        assert flag in args, f"Missing structural flag: {flag}"
-    assert "libx264" not in args
+    assert result is True

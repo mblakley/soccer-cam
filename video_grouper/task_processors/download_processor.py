@@ -107,10 +107,7 @@ class DownloadProcessor(QueueProcessor):
                         )
             else:
                 await dir_state.update_file_state(file_path, status="download_failed")
-                logger.error(
-                    f"DOWNLOAD: Download failed for {os.path.basename(file_path)}"
-                )
-                return  # Failure handled – do not raise
+                raise RuntimeError(f"Download failed for {os.path.basename(file_path)}")
 
         except Exception as e:
             logger.error(
@@ -118,8 +115,7 @@ class DownloadProcessor(QueueProcessor):
                 exc_info=True,
             )
             await dir_state.update_file_state(file_path, status="download_failed")
-            # Swallow the exception so that the processor can continue without retry loop in unit tests
-            return
+            raise
 
     def get_item_key(self, item: RecordingFile) -> str:
         return f"recording:{item.file_path}"

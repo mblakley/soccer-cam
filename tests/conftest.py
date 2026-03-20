@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch, AsyncMock, MagicMock
 import tempfile
 import configparser
 
@@ -30,15 +30,43 @@ def cleanup_after_test():
         pass
 
 
+def _make_mock_av_container(duration_us=100_000_000):
+    """Create a mock av container that behaves like av.open(...)."""
+    container = MagicMock()
+    # Duration in microseconds (100s default)
+    container.duration = duration_us
+    # Streams
+    video_stream = MagicMock()
+    video_stream.type = "video"
+    video_stream.duration = 100
+    video_stream.time_base = 1
+    video_stream.index = 0
+    video_stream.rate = 30
+    video_stream.average_rate = 30
+    video_stream.width = 1920
+    video_stream.height = 1080
+    audio_stream = MagicMock()
+    audio_stream.type = "audio"
+    audio_stream.rate = 44100
+    audio_stream.index = 1
+    container.streams = MagicMock()
+    container.streams.video = [video_stream]
+    container.streams.audio = [audio_stream]
+    container.streams.__iter__ = lambda self: iter([video_stream, audio_stream])
+    container.demux.return_value = iter([])
+    container.decode.return_value = iter([])
+    return container
+
+
 @pytest.fixture(autouse=True)
 def mock_ffmpeg():
-    """Mock ffmpeg command for all tests."""
-    with patch("asyncio.create_subprocess_exec") as mock:
-        process = Mock()
-        process.communicate = Mock(return_value=(b"100.0", b""))
-        process.returncode = 0
-        mock.return_value = process
-        yield mock
+    """Mock PyAV (av.open) for all tests."""
+    container = _make_mock_av_container()
+    mock_open = MagicMock(return_value=container)
+    container.__enter__ = MagicMock(return_value=container)
+    container.__exit__ = MagicMock(return_value=False)
+    with patch("av.open", mock_open):
+        yield mock_open
 
 
 @pytest.fixture(autouse=True)

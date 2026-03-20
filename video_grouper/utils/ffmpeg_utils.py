@@ -189,10 +189,35 @@ async def async_convert_file(file_path: str) -> Optional[str]:
         return None
 
 
+def _is_frame_corrupt(image) -> bool:
+    """Check if a decoded frame is corrupt (solid green, half-green, etc.)."""
+    w, h = image.size
+
+    # Check full frame and sub-regions (HEVC corruption often appears as a
+    # solid-green right half while the left decodes partially).
+    regions = [
+        (0, 0, w, h),  # full frame
+        (w // 2, 0, w, h),  # right half
+        (0, h // 2, w, h),  # bottom half
+    ]
+    for box in regions:
+        crop = image.crop(box)
+        extrema = crop.getextrema()
+        # If all RGB channels span < 10 values, the region is near-solid = corrupt
+        if all((hi - lo) < 10 for lo, hi in extrema[:3]):
+            return True
+    return False
+
+
 def _create_screenshot_sync(
     video_path: str, output_path: str, time_offset: str
 ) -> bool:
-    """Synchronous implementation: extract a single frame as JPEG."""
+    """Synchronous implementation: extract a single frame as JPEG.
+
+    For HEVC stream-copy files, seeking can land between keyframes and produce
+    corrupt (green) frames.  Strategy: try the requested offset first, then
+    fall back to progressively later positions until a clean frame is found.
+    """
     # Parse time offset string (HH:MM:SS or seconds)
     try:
         parts = time_offset.split(":")
@@ -207,17 +232,40 @@ def _create_screenshot_sync(
 
     with av.open(video_path) as container:
         stream = container.streams.video[0]
-        # Seek to the target time
-        target_pts = int(seconds / stream.time_base)
-        container.seek(target_pts, stream=stream)
+        duration = float(stream.duration * stream.time_base) if stream.duration else 0
 
-        for frame in container.decode(video=0):
-            # Save first decoded frame as JPEG
-            image = frame.to_image()
-            image.save(output_path, "JPEG", quality=95)
-            return True
+        # Try several seek positions: requested offset, then 30s, 60s, 10% in, 25% in
+        seek_targets = [seconds]
+        for extra in [30, 60]:
+            if extra not in seek_targets:
+                seek_targets.append(extra)
+        if duration > 0:
+            for pct in [0.10, 0.25]:
+                t = duration * pct
+                if t not in seek_targets:
+                    seek_targets.append(t)
 
-    return False
+        for seek_sec in seek_targets:
+            if duration > 0 and seek_sec >= duration:
+                continue
+
+            target_pts = int(seek_sec / stream.time_base)
+            container.seek(target_pts, stream=stream)
+
+            # Decode up to 60 frames (~3s at 20fps) to find a clean one
+            for i, frame in enumerate(container.decode(video=0)):
+                if i >= 60:
+                    break
+                image = frame.to_image()
+                if not _is_frame_corrupt(image):
+                    image.save(output_path, "JPEG", quality=95)
+                    return True
+
+        # All attempts failed
+        logger.warning(
+            f"Could not find a non-corrupt frame in {os.path.basename(video_path)}"
+        )
+        return False
 
 
 async def create_screenshot(

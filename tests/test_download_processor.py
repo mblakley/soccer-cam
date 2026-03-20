@@ -211,8 +211,9 @@ class TestDownloadProcessor:
             temp_storage, mock_config, mock_camera, mock_video_processor
         )
 
-        # Process the download
-        await processor.process_item(recording_file)
+        # Process the download -- code re-raises after marking download_failed
+        with pytest.raises(RuntimeError, match="Download failed"):
+            await processor.process_item(recording_file)
 
         mock_camera.download_file.assert_called_once()
 
@@ -250,8 +251,9 @@ class TestDownloadProcessor:
             temp_storage, mock_config, mock_camera, mock_video_processor
         )
 
-        # Process the download - should handle exception gracefully
-        await processor.process_item(recording_file)
+        # Process the download -- exception is re-raised after updating state
+        with pytest.raises(Exception, match="Download error"):
+            await processor.process_item(recording_file)
 
         # Verify file status was updated to download_failed
         mock_dir_state_instance.update_file_state.assert_any_call(
