@@ -559,13 +559,20 @@ class ReolinkCamera(Camera):
             return False
 
     async def stop_recording(self) -> bool:
+        """Disable recording via SetRecV20.
+
+        The older SetRec command returns "not support" on newer Reolink
+        models (e.g. Duo 3 PoE).  SetRecV20 with enable=0 reliably
+        disables recording for the current power session.  Recording
+        re-enables on the next power cycle (desirable for field use).
+        """
         try:
             client, close_client = self._get_client()
             try:
                 data = await self._api_call(
                     client,
-                    "SetRec",
-                    {"Rec": {"channel": self.channel, "schedule": {"enable": 0}}},
+                    "SetRecV20",
+                    {"Rec": {"channel": self.channel, "enable": 0}},
                     log_name="stop_recording",
                 )
                 return data is not None and data[0].get("code") == 0
@@ -595,20 +602,20 @@ class ReolinkCamera(Camera):
         return 0
 
     async def get_recording_status(self) -> bool:
+        """Check if recording is enabled via GetRecV20."""
         try:
             client, close_client = self._get_client()
             try:
                 data = await self._api_call(
                     client,
-                    "GetRec",
-                    {"Rec": {"channel": self.channel}},
+                    "GetRecV20",
+                    {"channel": self.channel},
                     log_name="get_recording_status",
                 )
                 if data is None or data[0].get("code") != 0:
                     return False
                 rec_info = data[0].get("value", {}).get("Rec", {})
-                schedule = rec_info.get("schedule", {})
-                return schedule.get("enable", 0) == 1
+                return rec_info.get("enable", 0) == 1
             finally:
                 if close_client:
                     await client.aclose()

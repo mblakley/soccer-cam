@@ -353,7 +353,7 @@ class TestReolinkCameraRecording:
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
             _login_response(),
-            _success_response("SetRec", {"rspCode": 200}),
+            _success_response("SetRecV20", {"rspCode": 200}),
         ]
 
         camera = ReolinkCamera(
@@ -373,8 +373,8 @@ class TestReolinkCameraRecording:
         mock_client.post.side_effect = [
             _login_response(),
             _success_response(
-                "GetRec",
-                {"Rec": {"channel": 0, "schedule": {"enable": 1}}},
+                "GetRecV20",
+                {"Rec": {"channel": 0, "enable": 1}},
             ),
         ]
 
@@ -394,8 +394,8 @@ class TestReolinkCameraRecording:
         mock_client.post.side_effect = [
             _login_response(),
             _success_response(
-                "GetRec",
-                {"Rec": {"channel": 0, "schedule": {"enable": 0}}},
+                "GetRecV20",
+                {"Rec": {"channel": 0, "enable": 0}},
             ),
         ]
 
