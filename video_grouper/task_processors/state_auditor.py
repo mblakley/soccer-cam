@@ -37,13 +37,23 @@ class StateAuditor(PollingProcessor):
         self,
         storage_path: str,
         config: Config,
-        download_processor: DownloadProcessor,
-        video_processor: VideoProcessor,
+        download_processors=None,
+        video_processor: VideoProcessor = None,
         poll_interval: int = 60,
         ntfy_processor=None,
+        # Legacy single-processor param
+        download_processor: DownloadProcessor = None,
     ):
         super().__init__(storage_path, config, poll_interval)
-        self.download_processor = download_processor
+        # Accept either a dict of download_processors or a single one
+        if isinstance(download_processors, dict):
+            self._download_processors = download_processors
+        elif download_processors is not None:
+            self._download_processors = {"default": download_processors}
+        elif download_processor is not None:
+            self._download_processors = {"default": download_processor}
+        else:
+            self._download_processors = {}
         self.video_processor = video_processor
         self.ntfy_processor = ntfy_processor
 
@@ -69,10 +79,16 @@ class StateAuditor(PollingProcessor):
         await self.discover_work()
         logger.info("STATE_AUDITOR: Startup recovery scan complete")
 
+    @property
+    def download_processor(self):
+        """Backward compat: return the first download processor."""
+        if self._download_processors:
+            return next(iter(self._download_processors.values()))
+        return None
+
     async def discover_work(self) -> None:
         """
         Audit all directories in storage_path and queue appropriate tasks.
-        This is the main work of the state auditor.
         """
         logger.info("STATE_AUDITOR: Starting audit of storage directory")
 

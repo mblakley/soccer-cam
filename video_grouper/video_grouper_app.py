@@ -31,7 +31,7 @@ class VideoGrouperApp:
 
         Args:
             config: Configuration object
-            camera: Camera object (optional, will be created if not provided)
+            camera: Camera object or dict of {name: Camera} (optional, will be created if not provided)
         """
         # Setup logging from config
         setup_logging_from_config(config)
@@ -50,43 +50,10 @@ class VideoGrouperApp:
         self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
 
-        # Initialize camera
-        if camera:
-            self.camera = camera
-        else:
-            camera_type = config.camera.type
-            if camera_type == "dahua":
-                from video_grouper.cameras.dahua import DahuaCamera
-
-                logger.info(
-                    f"Initializing {camera_type} camera with IP: {config.camera.device_ip}"
-                )
-                self.camera = DahuaCamera(
-                    config=config.camera, storage_path=self.storage_path
-                )
-            elif camera_type == "reolink":
-                from video_grouper.cameras.reolink import ReolinkCamera
-
-                logger.info(
-                    f"Initializing {camera_type} camera with IP: {config.camera.device_ip}"
-                )
-                self.camera = ReolinkCamera(
-                    config=config.camera, storage_path=self.storage_path
-                )
-            elif camera_type == "simulator":
-                from video_grouper.cameras.simulator import SimulatorCamera
-
-                logger.info(f"Initializing {camera_type} camera for testing")
-                self.camera = SimulatorCamera(
-                    config=config.camera, storage_path=self.storage_path
-                )
-            else:
-                raise ValueError(f"Unsupported camera type: {camera_type}")
-
         # Get poll interval from config
         self.poll_interval = config.app.check_interval_seconds
 
-        # Instantiate processors in dependency order
+        # Instantiate shared processors in dependency order
         self.upload_processor = UploadProcessor(
             storage_path=self.storage_path, config=self.config
         )
@@ -95,19 +62,55 @@ class VideoGrouperApp:
             config=self.config,
             upload_processor=self.upload_processor,
         )
-        self.download_processor = DownloadProcessor(
-            storage_path=self.storage_path,
-            config=self.config,
-            camera=self.camera,
-            video_processor=self.video_processor,
-        )
-        self.camera_poller = CameraPoller(
-            storage_path=self.storage_path,
-            config=self.config,
-            camera=self.camera,
-            download_processor=self.download_processor,
-            poll_interval=self.poll_interval,
-        )
+
+        # Initialize per-camera processors
+        self.cameras: dict = {}
+        self.download_processors: dict = {}
+        self.camera_pollers: dict = {}
+
+        if isinstance(camera, dict):
+            # Dict of {name: Camera} provided
+            provided_cameras = camera
+        elif camera is not None:
+            # Single camera provided (backward compat for tests)
+            provided_cameras = {config.camera.name: camera}
+        else:
+            provided_cameras = {}
+
+        for cam_config in config.cameras:
+            cam_name = cam_config.name
+
+            if cam_name in provided_cameras:
+                cam = provided_cameras[cam_name]
+            else:
+                cam = self._create_camera(cam_config, self.storage_path)
+
+            self.cameras[cam_name] = cam
+
+            dl_proc = DownloadProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                camera=cam,
+                video_processor=self.video_processor,
+            )
+            self.download_processors[cam_name] = dl_proc
+
+            poller = CameraPoller(
+                storage_path=self.storage_path,
+                config=self.config,
+                camera=cam,
+                download_processor=dl_proc,
+                poll_interval=self.poll_interval,
+            )
+            self.camera_pollers[cam_name] = poller
+
+        # Backward compat: expose first camera's processors as singular attributes
+        if self.cameras:
+            first_name = next(iter(self.cameras))
+            self._first_camera_name = first_name
+        else:
+            self._first_camera_name = None
+
         self.ntfy_processor = None
         if self.config.ntfy.enabled:
             from video_grouper.task_processors.services.ntfy_service import NtfyService
@@ -168,8 +171,9 @@ class VideoGrouperApp:
             # and playlist name requests
             self.upload_processor.ntfy_service = ntfy_service
 
-            # Wire ntfy_service into CameraPoller for unplug notifications
-            self.camera_poller.ntfy_service = ntfy_service
+            # Wire ntfy_service into all CameraPollers for unplug notifications
+            for poller in self.camera_pollers.values():
+                poller.ntfy_service = ntfy_service
 
         # TTT Clip Request Processor (optional)
         self.clip_request_processor = None
@@ -237,7 +241,7 @@ class VideoGrouperApp:
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
-            download_processor=self.download_processor,
+            download_processors=self.download_processors,
             video_processor=self.video_processor,
             poll_interval=self.poll_interval,
             ntfy_processor=self.ntfy_processor,
@@ -245,18 +249,20 @@ class VideoGrouperApp:
 
         # Queue processors must start (and load_state) BEFORE StateAuditor
         # runs discover_work(), otherwise duplicate items get queued.
-        self.processors = [
-            self.download_processor,
-            self.video_processor,
-            self.upload_processor,
-        ]
+        self.processors = list(self.download_processors.values())
+        self.processors.extend(
+            [
+                self.video_processor,
+                self.upload_processor,
+            ]
+        )
         if self.ntfy_processor:
             self.processors.append(self.ntfy_processor)
         if self.clip_request_processor:
             self.processors.append(self.clip_request_processor)
         # Polling processors last — StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
-        self.processors.append(self.camera_poller)
+        self.processors.extend(self.camera_pollers.values())
         self.processors.append(self.state_auditor)
 
         self._shutdown_event = asyncio.Event()
@@ -265,6 +271,55 @@ class VideoGrouperApp:
         register_all_tasks()
 
         logger.info("VideoGrouperApp initialized with task processors")
+
+    @staticmethod
+    def _create_camera(cam_config, storage_path):
+        """Create a Camera instance from a CameraConfig."""
+        camera_type = cam_config.type
+        if camera_type == "dahua":
+            from video_grouper.cameras.dahua import DahuaCamera
+
+            logger.info(
+                f"Initializing {camera_type} camera '{cam_config.name}' with IP: {cam_config.device_ip}"
+            )
+            return DahuaCamera(config=cam_config, storage_path=storage_path)
+        elif camera_type == "reolink":
+            from video_grouper.cameras.reolink import ReolinkCamera
+
+            logger.info(
+                f"Initializing {camera_type} camera '{cam_config.name}' with IP: {cam_config.device_ip}"
+            )
+            return ReolinkCamera(config=cam_config, storage_path=storage_path)
+        elif camera_type == "simulator":
+            from video_grouper.cameras.simulator import SimulatorCamera
+
+            logger.info(
+                f"Initializing {camera_type} camera '{cam_config.name}' for testing"
+            )
+            return SimulatorCamera(config=cam_config, storage_path=storage_path)
+        else:
+            raise ValueError(f"Unsupported camera type: {camera_type}")
+
+    @property
+    def camera(self):
+        """Backward compat: return the first camera."""
+        if self._first_camera_name:
+            return self.cameras[self._first_camera_name]
+        return None
+
+    @property
+    def download_processor(self):
+        """Backward compat: return the first download processor."""
+        if self._first_camera_name:
+            return self.download_processors[self._first_camera_name]
+        return None
+
+    @property
+    def camera_poller(self):
+        """Backward compat: return the first camera poller."""
+        if self._first_camera_name:
+            return self.camera_pollers[self._first_camera_name]
+        return None
 
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
@@ -342,9 +397,10 @@ class VideoGrouperApp:
         for processor in self.processors:
             await processor.stop()
 
-        # Close camera connection if open
-        if self.camera:
-            await self.camera.close()
+        # Close all camera connections
+        for cam in self.cameras.values():
+            if cam:
+                await cam.close()
 
         # Close all loggers to release file handles
         from video_grouper.utils.logger import close_loggers
@@ -369,8 +425,10 @@ class VideoGrouperApp:
 
     def get_queue_sizes(self):
         """Get the current queue sizes for monitoring."""
-        return {
-            "download": self.download_processor.get_queue_size(),
+        sizes = {
+            "download": sum(
+                dl.get_queue_size() for dl in self.download_processors.values()
+            ),
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
             "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
@@ -378,6 +436,7 @@ class VideoGrouperApp:
             if self.clip_request_processor
             else -1,
         }
+        return sizes
 
     @staticmethod
     def _processor_status(processor) -> str:
@@ -390,7 +449,7 @@ class VideoGrouperApp:
 
     def get_processor_status(self):
         """Get status of all processors."""
-        return {
+        status = {
             "state_auditor": "startup_only",
             "camera_poller": self._processor_status(self.camera_poller),
             "download_processor": self._processor_status(self.download_processor),
@@ -401,3 +460,10 @@ class VideoGrouperApp:
                 self.clip_request_processor
             ),
         }
+        # Add per-camera statuses if multiple cameras
+        if len(self.cameras) > 1:
+            for name, poller in self.camera_pollers.items():
+                status[f"camera_poller.{name}"] = self._processor_status(poller)
+            for name, dl in self.download_processors.items():
+                status[f"download_processor.{name}"] = self._processor_status(dl)
+        return status

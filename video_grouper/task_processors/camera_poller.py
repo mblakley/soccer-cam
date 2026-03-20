@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 from datetime import datetime, timedelta
@@ -7,6 +8,7 @@ import pytz
 from video_grouper.cameras.base import Camera
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
+from video_grouper.utils.paths import get_camera_state_path
 from .base_polling_processor import PollingProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
@@ -14,7 +16,6 @@ from video_grouper.models import RecordingFile
 logger = logging.getLogger(__name__)
 
 # Constants
-LATEST_VIDEO_FILE = "latest_video.txt"
 default_date_format = "%Y-%m-%d %H:%M:%S"
 
 
@@ -113,7 +114,7 @@ class CameraPoller(PollingProcessor):
                 return
 
             # Stop recording on first connection if configured
-            if not self._recording_stopped and self.config.camera.auto_stop_recording:
+            if not self._recording_stopped and self.camera.config.auto_stop_recording:
                 logger.info("CAMERA_POLLER: Camera connected, stopping recording")
                 success = await self.camera.stop_recording()
                 if success:
@@ -262,6 +263,10 @@ class CameraPoller(PollingProcessor):
                     )
                     continue
 
+                # Store camera identity in metadata for downstream use
+                file_info["camera_name"] = self.camera.name
+                file_info["camera_type"] = self.camera.config.type
+
                 recording_file = RecordingFile(
                     start_time=file_start_time,
                     end_time=file_end_time,
@@ -296,18 +301,20 @@ class CameraPoller(PollingProcessor):
             )
 
     async def _get_latest_processed_time(self) -> Optional[datetime]:
-        """Get the timestamp of the last processed video file."""
-        file_path = os.path.join(self.storage_path, LATEST_VIDEO_FILE)
-        if not os.path.exists(file_path):
+        """Get the timestamp of the last processed video file for this camera."""
+        state_path = get_camera_state_path(self.storage_path)
+        if not os.path.exists(state_path):
             return None
         try:
-            with open(file_path, "r") as f:
-                timestamp_str = f.read()
-                return datetime.strptime(timestamp_str.strip(), default_date_format)
+            with open(state_path, "r") as f:
+                all_state = json.load(f)
+            cam_state = all_state.get(self.camera.name, {})
+            timestamp_str = cam_state.get("latest_video_time")
+            if not timestamp_str:
+                return None
+            return datetime.strptime(timestamp_str.strip(), default_date_format)
         except Exception as e:
-            logger.error(
-                f"CAMERA_POLLER: Could not read or parse latest video file timestamp: {e}"
-            )
+            logger.error(f"CAMERA_POLLER: Could not read latest video timestamp: {e}")
             return None
 
     async def _check_downloads_complete(self) -> None:
@@ -342,11 +349,17 @@ class CameraPoller(PollingProcessor):
                 logger.error(f"CAMERA_POLLER: Failed to send unplug notification: {e}")
 
     async def _update_latest_processed_time(self, timestamp: datetime):
-        """Update the high-water mark for file processing."""
+        """Update the high-water mark for this camera in camera_state.json."""
         try:
-            latest_file_path = os.path.join(self.storage_path, LATEST_VIDEO_FILE)
-            with open(latest_file_path, "w") as f:
-                f.write(timestamp.strftime(default_date_format))
+            state_path = get_camera_state_path(self.storage_path)
+            all_state = {}
+            if os.path.exists(state_path):
+                with open(state_path, "r") as f:
+                    all_state = json.load(f)
+            cam_state = all_state.setdefault(self.camera.name, {})
+            cam_state["latest_video_time"] = timestamp.strftime(default_date_format)
+            with open(state_path, "w") as f:
+                json.dump(all_state, f, indent=4)
             logger.debug(
                 f"CAMERA_POLLER: Updated latest processed time to: {timestamp}"
             )
