@@ -23,6 +23,8 @@ services:
       - USERNAME=admin
       - PASSWORD=mblakley82
       - DEVICE_NAME=SoccerCam
+      - CLIPS_DIR=/clips
+      - PYTHONUNBUFFERED=1
     volumes:
       - reolink-sim-data:/data
       - ./tests/e2e/test_clips:/clips:ro
@@ -42,6 +44,7 @@ services:
       - USERNAME=admin
       - PASSWORD=admin
       - DEVICE_NAME=DahuaCam
+      - CLIPS_DIR=/clips
     volumes:
       - dahua-sim-data:/data
       - ./tests/e2e/test_clips:/clips:ro

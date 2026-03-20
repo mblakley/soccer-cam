@@ -230,7 +230,7 @@ class StorageManager:
             [
                 os.path.join(clips_dir, f)
                 for f in os.listdir(clips_dir)
-                if f.endswith(".mp4")
+                if f.endswith(".mp4") and "backup" not in f
             ]
         )
         if not clip_files:
