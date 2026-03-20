@@ -310,32 +310,41 @@ class E2ETestRunner:
         for process_name, pid in pids.items():
             try:
                 # Check if process is still running
-                import psutil
+                try:
+                    import psutil
 
-                if psutil.pid_exists(pid):
-                    proc = psutil.Process(pid)
-                    logger.info(
-                        f"Found existing {process_name} process (PID: {pid}), terminating..."
-                    )
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=3)
+                    if psutil.pid_exists(pid):
+                        proc = psutil.Process(pid)
                         logger.info(
-                            f"Successfully terminated {process_name} (PID: {pid})"
+                            f"Found existing {process_name} process (PID: {pid}), terminating..."
                         )
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=3)
+                            logger.info(
+                                f"Successfully terminated {process_name} (PID: {pid})"
+                            )
+                            killed_count += 1
+                        except psutil.TimeoutExpired:
+                            logger.warning(f"Force killing {process_name} (PID: {pid})")
+                            proc.kill()
+                            killed_count += 1
+                    else:
+                        logger.debug(
+                            f"Process {process_name} (PID: {pid}) is no longer running"
+                        )
+                except ImportError:
+                    # Fallback: use os.kill to check and terminate
+                    import os
+
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        logger.info(f"Sent SIGTERM to {process_name} (PID: {pid})")
                         killed_count += 1
-                    except psutil.TimeoutExpired:
-                        logger.warning(f"Force killing {process_name} (PID: {pid})")
-                        proc.kill()
-                        killed_count += 1
-                else:
-                    logger.debug(
-                        f"Process {process_name} (PID: {pid}) is no longer running"
-                    )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                logger.debug(
-                    f"Process {process_name} (PID: {pid}) is no longer accessible"
-                )
+                    except (ProcessLookupError, PermissionError):
+                        logger.debug(
+                            f"Process {process_name} (PID: {pid}) is no longer running"
+                        )
             except Exception as e:
                 logger.warning(
                     f"Error checking process {process_name} (PID: {pid}): {e}"
@@ -693,7 +702,7 @@ class E2ETestRunner:
             for attempt in range(30):
                 try:
                     req = urllib.request.Request(
-                        "http://localhost:8180/cgi-bin/api.cgi?cmd=Login&token=null",
+                        "http://127.0.0.1:8180/cgi-bin/api.cgi?cmd=Login&token=null",
                         method="GET",
                     )
                     urllib.request.urlopen(req, timeout=2)
