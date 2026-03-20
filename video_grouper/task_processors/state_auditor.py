@@ -202,8 +202,7 @@ class StateAuditor(PollingProcessor):
                                     logger.info(
                                         f"STATE_AUDITOR: Match info exists but not populated for {group_dir}, processing via service"
                                     )
-                                    # Use the match info service to process this directory
-                                    await self.match_info_service.process_combined_directory(
+                                    await self._trigger_match_info_flow(
                                         group_dir, combined_path
                                     )
                     else:
@@ -216,8 +215,7 @@ class StateAuditor(PollingProcessor):
                             logger.info(
                                 f"STATE_AUDITOR: No match_info.ini found for {group_dir}, processing via service"
                             )
-                            # Use the match info service to process this directory
-                            await self.match_info_service.process_combined_directory(
+                            await self._trigger_match_info_flow(
                                 group_dir, combined_path
                             )
 
@@ -250,6 +248,29 @@ class StateAuditor(PollingProcessor):
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
+
+    async def _trigger_match_info_flow(
+        self, group_dir: str, combined_path: str
+    ) -> None:
+        """Trigger the match info + NTFY flow for a combined directory.
+
+        Routes through ntfy_processor when available so that the NTFY
+        response listener is the same instance that sent the notification.
+        Falls back to match_info_service for direct processing.
+        """
+        # Try API-based population first
+        if self.match_info_service:
+            await self.match_info_service.populate_match_info_from_apis(group_dir)
+
+        # Route NTFY through ntfy_processor so responses are handled correctly
+        if self.ntfy_processor:
+            await self.ntfy_processor.request_match_info_for_directory(
+                group_dir, combined_path, force=False
+            )
+        elif self.match_info_service and self.match_info_service.ntfy_service.enabled:
+            await self.match_info_service.ntfy_service.process_combined_directory(
+                group_dir, combined_path
+            )
 
     async def _queue_upload(self, group_dir: str) -> None:
         """Queue a YouTube upload for a directory if YouTube is enabled."""

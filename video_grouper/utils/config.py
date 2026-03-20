@@ -51,6 +51,7 @@ class CameraConfig(BaseModel):
     password: str
     auto_stop_recording: bool = True
     channel: int = 0
+    baichuan_port: int = 9000
 
 
 class StorageConfig(BaseModel):
@@ -84,6 +85,7 @@ class AppConfig(BaseModel):
     storage_path: Optional[str] = None
     max_lookback_hours: int = 48
     max_files_per_poll: int = 50
+    recording_end_date: Optional[str] = None
 
 
 class TeamSnapTeamConfig(BaseModel):

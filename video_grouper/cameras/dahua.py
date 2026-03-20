@@ -6,7 +6,6 @@ import time
 import aiofiles
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
-import asyncio
 import pytz
 
 from .base import Camera, DeviceInfo
@@ -648,35 +647,30 @@ class DahuaCamera(Camera):
                         async for chunk in response.aiter_bytes():
                             await f.write(chunk)
 
-                # Use ffmpeg to extract the first frame
-                cmd = [
-                    "ffmpeg",
-                    "-i",
-                    temp_file,
-                    "-ss",
-                    "00:00:01",  # Skip to 1 second in
-                    "-vframes",
-                    "1",  # Extract 1 frame
-                    "-q:v",
-                    "2",  # High quality
-                    output_path,
-                ]
+                # Use PyAV to extract the first frame
+                try:
+                    import av
 
-                process = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
+                    with av.open(temp_file) as container:
+                        stream = container.streams.video[0]
+                        # Seek to ~1 second in
+                        target_pts = int(1.0 / stream.time_base)
+                        container.seek(target_pts, stream=stream)
 
-                stdout, stderr = await process.communicate()
+                        for frame in container.decode(video=0):
+                            image = frame.to_image()
+                            image.save(output_path, "JPEG", quality=95)
+                            break
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
 
-                # Clean up temp file
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-
-                if process.returncode == 0 and os.path.exists(output_path):
+                if os.path.exists(output_path):
                     logger.info(f"Successfully created screenshot at {output_path}")
                     return True
                 else:
-                    logger.error(f"Failed to create screenshot: {stderr.decode()}")
+                    logger.error("Failed to create screenshot: no frame decoded")
                     return False
 
             finally:

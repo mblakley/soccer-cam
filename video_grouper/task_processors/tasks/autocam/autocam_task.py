@@ -4,9 +4,10 @@ Autocam task for processing videos through Once Autocam GUI.
 
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import Dict
+
+import av
 
 from ..base_task import BaseTask
 from ...queue_type import QueueType
@@ -70,7 +71,7 @@ class AutocamTask(BaseTask):
 
     def _validate_video_file(self, path: str) -> bool:
         """
-        Use ffprobe to verify that the file is a valid video with non-zero duration.
+        Use PyAV to verify that the file is a valid video with non-zero duration.
 
         Args:
             path: Path to the video file
@@ -91,46 +92,33 @@ class AutocamTask(BaseTask):
             return False
 
         try:
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "csv=p=0",
-                    path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                logger.error(
-                    f"AUTOCAM: ffprobe failed on input file: {result.stderr.strip()}"
+            with av.open(path) as container:
+                duration = None
+                if container.duration is not None:
+                    duration = container.duration / av.time_base
+                else:
+                    for stream in container.streams.video:
+                        if stream.duration is not None and stream.time_base is not None:
+                            duration = float(stream.duration * stream.time_base)
+                            break
+
+                if duration is None:
+                    logger.error(f"AUTOCAM: Could not determine duration for: {path}")
+                    return False
+
+                if duration <= 0:
+                    logger.error(
+                        f"AUTOCAM: Input file has zero duration ({duration}s): {path}"
+                    )
+                    return False
+
+                logger.info(
+                    f"AUTOCAM: Input file validated OK - duration={duration:.1f}s, "
+                    f"size={file_size / (1024 * 1024):.1f}MB: {path}"
                 )
-                return False
+                return True
 
-            duration_str = result.stdout.strip()
-            if not duration_str:
-                logger.error(f"AUTOCAM: ffprobe returned no duration for: {path}")
-                return False
-
-            duration = float(duration_str)
-            if duration <= 0:
-                logger.error(
-                    f"AUTOCAM: Input file has zero duration ({duration}s): {path}"
-                )
-                return False
-
-            logger.info(
-                f"AUTOCAM: Input file validated OK - duration={duration:.1f}s, "
-                f"size={file_size / (1024 * 1024):.1f}MB: {path}"
-            )
-            return True
-
-        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+        except (ValueError, av.error.FFmpegError) as e:
             logger.error(f"AUTOCAM: Error validating input file: {e}")
             return False
 
@@ -191,23 +179,25 @@ class AutocamTask(BaseTask):
         """
         try:
             logger.info(f"AUTOCAM: Remuxing {mkv_path} -> {mp4_path}")
-            result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-i",
-                    mkv_path,
-                    "-c",
-                    "copy",
-                    "-y",
-                    mp4_path,
-                ],
-                capture_output=True,
-                text=True,
-            )
 
-            if result.returncode != 0:
-                logger.error(f"AUTOCAM: FFmpeg remux failed: {result.stderr}")
-                return False
+            with av.open(mkv_path) as input_container:
+                with av.open(mp4_path, "w") as output_container:
+                    stream_map = {}
+                    for in_stream in input_container.streams:
+                        if in_stream.type in ("video", "audio"):
+                            out_stream = output_container.add_stream_from_template(
+                                in_stream
+                            )
+                            stream_map[in_stream] = out_stream
+
+                    for packet in input_container.demux(list(stream_map.keys())):
+                        if packet.dts is None:
+                            continue
+                        try:
+                            packet.stream = stream_map[packet.stream]
+                            output_container.mux(packet)
+                        except (av.InvalidDataError, av.error.FFmpegError, KeyError):
+                            continue
 
             # Remove the original .mkv file
             if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:

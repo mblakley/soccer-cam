@@ -89,19 +89,6 @@ def get_match_info_path(group_dir: str, storage_path: str) -> str:
     return str(resolve_path(os.path.join(group_dir, "match_info.ini"), storage_path))
 
 
-def get_file_list_path(group_dir: str, storage_path: str) -> str:
-    """Get the path to the filelist.txt file in a group directory.
-
-    Args:
-        group_dir: The group directory path
-        storage_path: The storage path
-
-    Returns:
-        Path to the filelist.txt file
-    """
-    return str(resolve_path(os.path.join(group_dir, "filelist.txt"), storage_path))
-
-
 def get_trimmed_video_path(group_dir: str, match_info, storage_path: str) -> str:
     """
     Create the subdirectory structure and return the path for the trimmed file.

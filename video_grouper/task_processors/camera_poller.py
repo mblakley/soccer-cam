@@ -36,15 +36,30 @@ def find_group_directory(
         if os.path.exists(state_file_path):
             try:
                 dir_state = DirectoryState(group_dir_path)
+                first_file = dir_state.get_first_file()
                 last_file = dir_state.get_last_file()
                 if last_file and last_file.end_time:
-                    # Dahua cameras can have a small gap between files of the same recording
-                    time_difference = (
+                    # Check if file appends to end of group (within 5s gap)
+                    time_after_end = (
                         file_start_time - last_file.end_time
                     ).total_seconds()
-                    if 0 <= time_difference <= 5:
+                    if 0 <= time_after_end <= 5:
                         logger.info(
                             f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}, with time matching file end time {last_file.end_time}"
+                        )
+                        return group_dir_path
+
+                    # Check if file falls within the group's existing time range
+                    # (handles re-discovery on subsequent polls)
+                    if (
+                        first_file
+                        and first_file.start_time
+                        and first_file.start_time
+                        <= file_start_time
+                        <= last_file.end_time
+                    ):
+                        logger.info(
+                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time} (within group range {first_file.start_time} - {last_file.end_time})"
                         )
                         return group_dir_path
             except Exception as e:
@@ -129,6 +144,16 @@ class CameraPoller(PollingProcessor):
 
         end_time = datetime.now()
 
+        # Optional end date cap (e.g. "2025-07-23" to restrict to a specific game)
+        recording_end = getattr(self.config.app, "recording_end_date", None)
+        if recording_end:
+            try:
+                cap = datetime.strptime(str(recording_end), "%Y-%m-%d")
+                if cap < end_time:
+                    end_time = cap
+            except ValueError:
+                pass
+
         logger.info(
             f"CAMERA_POLLER: Looking for new files from: {start_time} to {end_time}"
         )
@@ -188,9 +213,6 @@ class CameraPoller(PollingProcessor):
                     file_info["endTime"], default_date_format
                 )
 
-                if latest_end_time is None or file_end_time > latest_end_time:
-                    latest_end_time = file_end_time
-
                 # Check if the file overlaps with any connected timeframe
                 should_skip = False
                 if connected_timeframes:
@@ -220,6 +242,10 @@ class CameraPoller(PollingProcessor):
 
                 if should_skip:
                     continue
+
+                # Track high-water mark from non-skipped files only
+                if latest_end_time is None or file_end_time > latest_end_time:
+                    latest_end_time = file_end_time
 
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs

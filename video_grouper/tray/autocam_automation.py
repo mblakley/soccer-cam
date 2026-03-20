@@ -439,7 +439,7 @@ def _execute_autocam_gui_automation(
 
         # Wait for processing to finish by monitoring the Notification text control
         start_time = datetime.datetime.now()
-        timeout_seconds = 60 * 60 * 6  # 6 hours
+        timeout_seconds = 60 * 60 * 24  # 24 hours
         startup_timeout_seconds = 300  # 5 minutes to start processing
         poll_interval = 30  # 30 seconds
         found = False

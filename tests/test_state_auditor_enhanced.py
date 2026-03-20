@@ -157,7 +157,12 @@ class TestStateAuditorEnhanced:
 
         # Mock match info service
         auditor.match_info_service = AsyncMock()
-        auditor.match_info_service.process_combined_directory = AsyncMock(
+        auditor.match_info_service.populate_match_info_from_apis = AsyncMock(
+            return_value=False
+        )
+        auditor.match_info_service.ntfy_service = AsyncMock()
+        auditor.match_info_service.ntfy_service.enabled = True
+        auditor.match_info_service.ntfy_service.process_combined_directory = AsyncMock(
             return_value=True
         )
 
@@ -185,8 +190,9 @@ class TestStateAuditorEnhanced:
         # Run audit
         await auditor._audit_directory(str(test_dir))
 
-        # Verify match info processing was called
-        auditor.match_info_service.process_combined_directory.assert_called_once()
+        # Verify match info flow was triggered (API lookup + NTFY fallback)
+        auditor.match_info_service.populate_match_info_from_apis.assert_called_once()
+        auditor.match_info_service.ntfy_service.process_combined_directory.assert_called_once()
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
