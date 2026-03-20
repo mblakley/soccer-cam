@@ -12,32 +12,43 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
 
-  dahua-emulator:
+  reolink-simulator:
     profiles:
+      - simulator
+      - reolink
+    build:
+      context: simulator
+    environment:
+      - CAMERA_TYPE=reolink
+      - USERNAME=admin
+      - PASSWORD=mblakley82
+      - DEVICE_NAME=SoccerCam
+    volumes:
+      - reolink-sim-data:/data
+      - ./tests/e2e/test_clips:/clips:ro
+    ports:
+      - "8180:80"
+      - "9000:9000"
+      - "8080:8080"
+
+  dahua-simulator:
+    profiles:
+      - simulator
       - dahua
     build:
-      context: .
-      dockerfile: tests/camera_emulator/Dockerfile
+      context: simulator
     environment:
       - CAMERA_TYPE=dahua
       - USERNAME=admin
       - PASSWORD=admin
+      - DEVICE_NAME=DahuaCam
     volumes:
+      - dahua-sim-data:/data
       - ./tests/e2e/test_clips:/clips:ro
     ports:
-      - "8554:80"
+      - "8181:80"
+      - "8081:8080"
 
-  reolink-emulator:
-    profiles:
-      - reolink
-    build:
-      context: .
-      dockerfile: tests/camera_emulator/Dockerfile
-    environment:
-      - CAMERA_TYPE=reolink
-      - USERNAME=admin
-      - PASSWORD=admin
-    volumes:
-      - ./tests/e2e/test_clips:/clips:ro
-    ports:
-      - "8555:80"
+volumes:
+  reolink-sim-data:
+  dahua-sim-data:

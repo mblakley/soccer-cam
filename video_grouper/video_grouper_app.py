@@ -290,13 +290,6 @@ class VideoGrouperApp:
                 f"Initializing {camera_type} camera '{cam_config.name}' with IP: {cam_config.device_ip}"
             )
             return ReolinkCamera(config=cam_config, storage_path=storage_path)
-        elif camera_type == "simulator":
-            from video_grouper.cameras.simulator import SimulatorCamera
-
-            logger.info(
-                f"Initializing {camera_type} camera '{cam_config.name}' for testing"
-            )
-            return SimulatorCamera(config=cam_config, storage_path=storage_path)
         else:
             raise ValueError(f"Unsupported camera type: {camera_type}")
 

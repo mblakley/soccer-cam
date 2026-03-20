@@ -1,7 +1,7 @@
-"""Integration tests for the camera emulator.
+"""Integration tests for the camera simulator.
 
-Starts the emulator in-process and exercises real DahuaCamera/ReolinkCamera
-clients against it. No Docker required.
+Starts the simulator HTTP API in-process and exercises real
+DahuaCamera/ReolinkCamera clients against it. No Docker required.
 """
 
 import os
@@ -10,16 +10,14 @@ import sys
 import pytest
 import pytest_asyncio
 from aiohttp import web
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-# Add camera_emulator to path so its modules can import each other
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "camera_emulator"))
+# Add simulator to path so its modules can import each other
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "simulator"))
 
 from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.cameras.reolink import ReolinkCamera
 from video_grouper.utils.config import CameraConfig
-
-from tests.camera_emulator.server import create_app
 
 
 @pytest.fixture(autouse=True)
@@ -55,33 +53,52 @@ def clips_dir():
 
 
 @pytest_asyncio.fixture
-async def dahua_server(clips_dir):
-    """Start an in-process Dahua emulator server."""
-    app = create_app(
+async def dahua_server(clips_dir, tmp_path):
+    """Start an in-process Dahua simulator server."""
+    import collections
+
+    from storage import StorageManager
+    from dahua.http_api import setup_routes
+
+    storage = StorageManager(
+        recordings_dir=str(tmp_path / "recordings"),
+        metadata_file=str(tmp_path / "recordings.json"),
         camera_type="dahua",
-        username="admin",
-        password="testpass",
-        clips_dir=clips_dir,
     )
+    storage.seed_from_clips(clips_dir)
+
+    app = web.Application()
+    app["activity_log"] = collections.deque(maxlen=200)
+    setup_routes(app, storage, "admin", "testpass", "DahuaCam")
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    # Get the actual bound port
     port = site._server.sockets[0].getsockname()[1]
     yield f"127.0.0.1:{port}"
     await runner.cleanup()
 
 
 @pytest_asyncio.fixture
-async def reolink_server(clips_dir):
-    """Start an in-process ReoLink emulator server."""
-    app = create_app(
+async def reolink_server(clips_dir, tmp_path):
+    """Start an in-process Reolink simulator server."""
+    import collections
+
+    from storage import StorageManager
+    from reolink.http_api import setup_routes
+
+    storage = StorageManager(
+        recordings_dir=str(tmp_path / "recordings"),
+        metadata_file=str(tmp_path / "recordings.json"),
         camera_type="reolink",
-        username="admin",
-        password="testpass",
-        clips_dir=clips_dir,
     )
+    storage.seed_from_clips(clips_dir)
+
+    app = web.Application()
+    app["activity_log"] = collections.deque(maxlen=200)
+    setup_routes(app, storage, "admin", "testpass", "SimCamera")
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -91,7 +108,7 @@ async def reolink_server(clips_dir):
     await runner.cleanup()
 
 
-# ── Dahua emulator tests ──────────────────────────────────────────────
+# ── Dahua simulator tests ─────────────────────────────────────────────
 
 
 @pytest.mark.integration
@@ -133,8 +150,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
+        start = datetime.now(timezone.utc) - timedelta(hours=24)
+        end = datetime.now(timezone.utc)
         files = await camera.get_file_list(start, end)
         assert len(files) == 6
         for f in files:
@@ -152,8 +169,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
+        start = datetime.now(timezone.utc) - timedelta(hours=24)
+        end = datetime.now(timezone.utc)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 
@@ -170,8 +187,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
+        start = datetime.now(timezone.utc) - timedelta(hours=24)
+        end = datetime.now(timezone.utc)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 
@@ -193,10 +210,10 @@ class TestDahuaEmulator:
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
         info = await camera.get_device_info()
         assert info["manufacturer"] == "Dahua"
-        assert info["device_name"] == "CameraEmulator"
+        assert info["device_name"] == "DahuaCam"
 
 
-# ── ReoLink emulator tests ───────────────────────────────────────────
+# ── Reolink simulator tests ──────────────────────────────────────────
 
 
 @pytest.mark.integration
@@ -241,8 +258,8 @@ class TestReolinkEmulator:
             channel=0,
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
+        start = datetime.now(timezone.utc) - timedelta(hours=24)
+        end = datetime.now(timezone.utc)
         files = await camera.get_file_list(start, end)
         assert len(files) == 6
         for f in files:
@@ -261,35 +278,13 @@ class TestReolinkEmulator:
             channel=0,
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
+        start = datetime.now(timezone.utc) - timedelta(hours=24)
+        end = datetime.now(timezone.utc)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 
         size = await camera.get_file_size(files[0]["path"])
         assert size > 0
-
-    @pytest.mark.asyncio
-    async def test_download_file(self, reolink_server, tmp_path):
-        config = CameraConfig(
-            name="default",
-            type="reolink",
-            device_ip=reolink_server,
-            username="admin",
-            password="testpass",
-            channel=0,
-        )
-        camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.utcnow() - timedelta(hours=24)
-        end = datetime.utcnow()
-        files = await camera.get_file_list(start, end)
-        assert len(files) > 0
-
-        local_path = os.path.join(str(tmp_path), "downloaded.mp4")
-        result = await camera.download_file(files[0]["path"], local_path)
-        assert result is True
-        assert os.path.exists(local_path)
-        assert os.path.getsize(local_path) > 0
 
     @pytest.mark.asyncio
     async def test_get_device_info(self, reolink_server, tmp_path):
@@ -304,8 +299,8 @@ class TestReolinkEmulator:
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
         info = await camera.get_device_info()
         assert info["manufacturer"] == "Reolink"
-        assert info["device_name"] == "CameraEmulator"
-        assert info["model"] == "RLC-810A"
+        assert info["device_name"] == "SimCamera"
+        assert info["model"] == "Reolink Duo 3 PoE"
 
     @pytest.mark.asyncio
     async def test_get_recording_status(self, reolink_server, tmp_path):
@@ -319,10 +314,11 @@ class TestReolinkEmulator:
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
         status = await camera.get_recording_status()
-        assert status is False
+        # New simulator starts with TIMING=all 1s (continuous recording on)
+        assert status is True
 
     @pytest.mark.asyncio
-    async def test_stop_recording(self, reolink_server, tmp_path):
+    async def test_stop_start_recording(self, reolink_server, tmp_path):
         config = CameraConfig(
             name="default",
             type="reolink",
@@ -332,5 +328,19 @@ class TestReolinkEmulator:
             channel=0,
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
+
+        # Stop recording
         result = await camera.stop_recording()
         assert result is True
+
+        # Verify recording is stopped
+        status = await camera.get_recording_status()
+        assert status is False
+
+        # Start recording again
+        result = await camera.start_recording()
+        assert result is True
+
+        # Verify recording is active
+        status = await camera.get_recording_status()
+        assert status is True

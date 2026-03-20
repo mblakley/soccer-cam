@@ -1,22 +1,27 @@
-"""Dahua camera HTTP API emulator handlers.
+"""Dahua HTTP API simulator with Digest Auth.
 
-Implements the Dahua proprietary HTTP API with Digest Auth,
-matching the endpoints used by video_grouper/cameras/dahua.py.
+Implements the Dahua camera HTTP API endpoints used by
+video_grouper/cameras/dahua.py: mediaFileFind, RPC_Loadfile,
+magicBox, recordManager, configManager.
 """
 
 import hashlib
+import logging
 import os
 import random
 import string
-import logging
+from datetime import datetime
 
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-# MediaFileFind state: track active search sessions
-_find_sessions = {}
+# MediaFileFind session state
+_find_sessions: dict[str, dict] = {}
 _find_counter = 1000000
+
+# Recording mode state
+_record_mode = 0  # 0 = auto/continuous
 
 
 def _random_nonce():
@@ -28,7 +33,7 @@ def _md5(s: str) -> str:
 
 
 class DigestAuthMiddleware:
-    """HTTP Digest Auth middleware for Dahua emulation."""
+    """HTTP Digest Auth validation matching Dahua camera behavior."""
 
     def __init__(self, username: str, password: str):
         self.username = username
@@ -42,9 +47,7 @@ class DigestAuthMiddleware:
         return web.Response(
             status=401,
             headers={
-                "WWW-Authenticate": (
-                    f'Digest realm="{self.realm}", nonce="{nonce}", qop="auth"'
-                )
+                "WWW-Authenticate": f'Digest realm="{self.realm}", nonce="{nonce}", qop="auth"'
             },
         )
 
@@ -53,7 +56,6 @@ class DigestAuthMiddleware:
         if not auth_header.startswith("Digest "):
             return False
 
-        # Parse digest fields
         params = {}
         for part in auth_header[7:].split(","):
             part = part.strip()
@@ -71,7 +73,6 @@ class DigestAuthMiddleware:
         if username != self.username or nonce not in self.nonces:
             return False
 
-        # Compute expected digest
         ha1 = _md5(f"{self.username}:{self.realm}:{self.password}")
         ha2 = _md5(f"{request.method}:{uri}")
         expected = _md5(f"{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}")
@@ -79,27 +80,37 @@ class DigestAuthMiddleware:
         return response_hash == expected
 
 
-def setup_routes(app: web.Application, test_files, username: str, password: str):
-    """Register all Dahua endpoint routes."""
+def setup_routes(
+    app: web.Application, storage, username: str, password: str, device_name: str
+):
+    """Register Dahua HTTP API routes."""
     auth = DigestAuthMiddleware(username, password)
+    activity_log = app.get("activity_log")
+
+    def _log_activity(msg):
+        if activity_log is not None:
+            activity_log.append(f"[HTTP] {msg}")
 
     def require_auth(handler):
         async def wrapper(request):
             if not auth.validate(request):
+                _log_activity(f"Auth challenge: {request.path}")
                 return auth.challenge_response()
             return await handler(request)
 
         return wrapper
 
     async def handle_get_caps(request):
+        _log_activity("recordManager getCaps")
         return web.Response(text="table.MediaFileFind.MaxCount=100\n")
 
     async def handle_system_info(request):
+        _log_activity("getSystemInfo")
         body = (
-            "deviceName=CameraEmulator\n"
+            f"deviceName={device_name}\n"
             "deviceType=IPC\n"
             "firmwareVersion=2.800.0000.0\n"
-            "serialNumber=EMU123456789\n"
+            "serialNumber=SIM00000000DAHUA\n"
             "macAddress=AA:BB:CC:DD:EE:FF\n"
             "model=IPC-HFW2831T\n"
             "manufacturer=Dahua\n"
@@ -113,30 +124,30 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
         if action == "factory.create":
             _find_counter += 1
             object_id = str(_find_counter)
-            _find_sessions[object_id] = {"files": test_files, "searched": False}
+            _find_sessions[object_id] = {"recordings": None, "searched": False}
+            _log_activity(f"mediaFileFind factory.create -> {object_id}")
             return web.Response(text=f"result={object_id}\n")
 
         elif action == "findFile":
             object_id = request.query.get("object", "")
-            if object_id in _find_sessions:
-                _find_sessions[object_id]["searched"] = True
-                # Filter files by the requested time range (like a real camera)
-                start_str = request.query.get("condition.StartTime", "")
-                end_str = request.query.get("condition.EndTime", "")
-                if start_str and end_str:
-                    from datetime import datetime
+            if object_id not in _find_sessions:
+                return web.Response(text="Error\n")
 
-                    try:
-                        req_start = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
-                        req_end = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
-                        _find_sessions[object_id]["files"] = [
-                            f
-                            for f in _find_sessions[object_id]["files"]
-                            if f["start_time"].replace(tzinfo=None) > req_start
-                            and f["end_time"].replace(tzinfo=None) <= req_end
-                        ]
-                    except ValueError:
-                        pass
+            start_str = request.query.get("condition.StartTime", "")
+            end_str = request.query.get("condition.EndTime", "")
+            _log_activity(f"mediaFileFind findFile {start_str} - {end_str}")
+
+            results = []
+            if start_str and end_str:
+                try:
+                    req_start = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                    req_end = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+                    results = storage.search(req_start, req_end)
+                except ValueError:
+                    pass
+
+            _find_sessions[object_id]["recordings"] = results
+            _find_sessions[object_id]["searched"] = True
             return web.Response(text="OK\n")
 
         elif action == "findNextFile":
@@ -145,19 +156,23 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
             if not session or not session["searched"]:
                 return web.Response(text="found=0\n")
 
-            lines = [f"found={len(session['files'])}"]
-            for i, f in enumerate(session["files"]):
-                start_str = f["start_time"].strftime("%Y-%m-%d %H:%M:%S")
-                end_str = f["end_time"].strftime("%Y-%m-%d %H:%M:%S")
+            recordings = session["recordings"] or []
+            lines = [f"found={len(recordings)}"]
+            for i, rec in enumerate(recordings):
+                st = datetime.fromisoformat(rec["start_time"])
+                et = datetime.fromisoformat(rec["end_time"])
+                start_fmt = st.strftime("%Y-%m-%d %H:%M:%S")
+                end_fmt = et.strftime("%Y-%m-%d %H:%M:%S")
                 lines.append(f"items[{i}].Channel=1")
-                lines.append(f"items[{i}].FilePath=/mnt/dvr/{f['filename']}")
-                lines.append(f"items[{i}].StartTime={start_str}")
-                lines.append(f"items[{i}].EndTime={end_str}")
-                lines.append(f"items[{i}].Length={f['size']}")
+                lines.append(f"items[{i}].FilePath={rec['camera_path']}")
+                lines.append(f"items[{i}].StartTime={start_fmt}")
+                lines.append(f"items[{i}].EndTime={end_fmt}")
+                lines.append(f"items[{i}].Length={rec['size']}")
                 lines.append(f"items[{i}].Type=dav")
                 lines.append(f"items[{i}].VideoStream=Main")
                 lines.append(f"items[{i}].UTCOffset=-14400")
 
+            _log_activity(f"mediaFileFind findNextFile -> {len(recordings)} files")
             return web.Response(text="\n".join(lines) + "\n")
 
         elif action == "destroy":
@@ -168,22 +183,23 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
         return web.Response(status=400, text="Unknown action\n")
 
     async def handle_rpc_loadfile(request):
-        # Extract file path from URL (everything after /cgi-bin/RPC_Loadfile)
         path = request.path.replace("/cgi-bin/RPC_Loadfile", "")
-        # Strip leading /mnt/dvr/ prefix that Dahua client prepends
-        filename = os.path.basename(path)
+        _log_activity(f"RPC_Loadfile {path}")
 
-        # Find the matching test file
-        clip_path = None
-        for f in test_files:
-            if f["filename"] == filename:
-                clip_path = f["clip_path"]
-                break
+        # Find recording by camera_path
+        file_path = storage.get_file(path)
+        if not file_path:
+            # Try by basename
+            basename = os.path.basename(path)
+            for rec in storage.recordings:
+                if os.path.basename(rec["camera_path"]) == basename:
+                    file_path = storage.get_file(rec["camera_path"])
+                    break
 
-        if not clip_path or not os.path.exists(clip_path):
+        if not file_path or not os.path.exists(file_path):
             return web.Response(status=404, text="File not found\n")
 
-        file_size = os.path.getsize(clip_path)
+        file_size = os.path.getsize(file_path)
 
         if request.method == "HEAD":
             return web.Response(
@@ -193,7 +209,6 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
                 },
             )
 
-        # Stream the file
         response = web.StreamResponse(
             headers={
                 "Content-Length": str(file_size),
@@ -202,7 +217,7 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
         )
         await response.prepare(request)
 
-        with open(clip_path, "rb") as fh:
+        with open(file_path, "rb") as fh:
             while True:
                 chunk = fh.read(65536)
                 if not chunk:
@@ -213,13 +228,22 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
         return response
 
     async def handle_config_manager(request):
+        global _record_mode
         action = request.query.get("action", "")
+
         if action == "setConfig":
+            _log_activity("configManager setConfig")
+            # Parse RecordMode if present
+            name = request.query.get("name", "")
+            if "RecordMode" in name:
+                mode = request.query.get("table.RecordMode[0].Mode", "0")
+                _record_mode = int(mode)
             return web.Response(text="OK\n")
         elif action == "getConfig":
             name = request.query.get("name", "")
             if name == "RecordMode":
-                return web.Response(text="table.RecordMode[0].Mode=0\n")
+                _log_activity("configManager getConfig RecordMode")
+                return web.Response(text=f"table.RecordMode[0].Mode={_record_mode}\n")
             return web.Response(text="OK\n")
         return web.Response(status=400, text="Unknown action\n")
 
@@ -234,7 +258,6 @@ def setup_routes(app: web.Application, test_files, username: str, password: str)
     app.router.add_route(
         "*", "/cgi-bin/configManager.cgi", require_auth(handle_config_manager)
     )
-    # RPC_Loadfile uses a path suffix, so we need a wildcard route
     app.router.add_route(
         "*", "/cgi-bin/RPC_Loadfile{path:.*}", require_auth(handle_rpc_loadfile)
     )

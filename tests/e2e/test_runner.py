@@ -149,24 +149,21 @@ class E2ETestRunner:
         # Expected log patterns for each stage
         self.stage_patterns = {
             "camera_polling": [
-                "Camera simulator returning",
                 "CameraPoller: Polling camera",
-                "Camera simulator initialized",
                 "CAMERA_POLLER: Looking for new files",
                 "CAMERA_POLLER: Camera connected",
+                "Successfully obtained ReoLink API token",
             ],
             "files_discovered": [
                 "Found new recording files",
-                "Camera simulator returning 6 files",
-                "Camera simulator returning 5 files",
-                "Camera simulator returning 3 files",
                 "new files to process",
                 "CAMERA_POLLER: Found",
+                "Found.*recording files from ReoLink camera",
             ],
             "downloads_started": [
                 "Starting download task",
                 "Downloading file",
-                "Simulating download of",
+                "Downloading.*via Baichuan",
                 "DOWNLOAD: Processing task",
             ],
             "downloads_completed": [
@@ -642,6 +639,10 @@ class E2ETestRunner:
             # Set environment variables for mock services
             setup_e2e_environment(self.project_root)
 
+            # Start Docker camera simulator
+            if not self._start_simulator_container():
+                return False
+
             logger.info("[OK] Test environment set up")
             logger.info(f"  - Test data path: {self.test_data_path}")
             logger.info(f"  - Test logs path: {self.test_logs_path}")
@@ -651,6 +652,76 @@ class E2ETestRunner:
         except Exception as e:
             logger.error(f"Failed to set up test environment: {e}")
             return False
+
+    def _start_simulator_container(self) -> bool:
+        """Start the Docker camera simulator container and wait for it to be ready."""
+        try:
+            logger.info("Starting Docker camera simulator...")
+
+            # Stop any existing simulator container first
+            subprocess.run(
+                ["docker", "compose", "--profile", "reolink", "down"],
+                cwd=str(self.project_root),
+                capture_output=True,
+                timeout=30,
+            )
+
+            # Build and start the simulator
+            result = subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "--profile",
+                    "reolink",
+                    "up",
+                    "-d",
+                    "--build",
+                    "reolink-simulator",
+                ],
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.error(f"Failed to start simulator: {result.stderr}")
+                return False
+
+            # Wait for simulator to be ready (health check on HTTP port)
+            import urllib.request
+
+            for attempt in range(30):
+                try:
+                    req = urllib.request.Request(
+                        "http://localhost:8180/cgi-bin/api.cgi?cmd=Login&token=null",
+                        method="GET",
+                    )
+                    urllib.request.urlopen(req, timeout=2)
+                    logger.info(f"Camera simulator ready (attempt {attempt + 1})")
+                    return True
+                except Exception:
+                    time.sleep(2)
+
+            logger.error("Camera simulator did not become ready within 60 seconds")
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to start simulator container: {e}")
+            return False
+
+    def _stop_simulator_container(self):
+        """Stop the Docker camera simulator container."""
+        try:
+            logger.info("Stopping Docker camera simulator...")
+            subprocess.run(
+                ["docker", "compose", "--profile", "reolink", "down"],
+                cwd=str(self.project_root),
+                capture_output=True,
+                timeout=30,
+            )
+            logger.info("Camera simulator stopped")
+        except Exception as e:
+            logger.warning(f"Error stopping simulator: {e}")
 
     def start_video_grouper_app(self) -> bool:
         """Start the video_grouper application as a subprocess with file logging."""
@@ -1402,6 +1473,9 @@ class E2ETestRunner:
         # Clean up any remaining lock files
         logger.info("Cleaning up tray agent lock files...")
         self._cleanup_tray_lock_file()
+
+        # Stop Docker camera simulator
+        self._stop_simulator_container()
 
         # NTFY response service is now stopped by the video_grouper application
 
