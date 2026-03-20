@@ -39,6 +39,7 @@ from video_grouper.utils.time_utils import get_all_timezones, convert_utc_to_loc
 from video_grouper.models import MatchInfo
 from video_grouper.utils.youtube_upload import authenticate_youtube, get_youtube_paths
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
+from .camera_setup_dialog import CameraSetupDialog
 from .queue_item_widget import QueueItemWidget
 from .match_info_item_widget import MatchInfoItemWidget
 from video_grouper.utils.config import (
@@ -194,6 +195,9 @@ class ConfigWindow(QWidget):
         camera_layout.addRow("Username:", self.username)
         camera_layout.addRow("Password:", self.password)
         camera_layout.addRow("", self.show_password_checkbox)
+        self.discover_camera_button = QPushButton("Discover Camera")
+        self.discover_camera_button.clicked.connect(self.discover_camera)
+        camera_layout.addRow("", self.discover_camera_button)
         camera_group.setLayout(camera_layout)
         settings_layout.addWidget(camera_group)
 
@@ -731,6 +735,22 @@ class ConfigWindow(QWidget):
             self.password.setEchoMode(QLineEdit.EchoMode.Normal)
         else:
             self.password.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def discover_camera(self):
+        """Open camera discovery wizard."""
+        dialog = CameraSetupDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            result = dialog.get_result()
+            if result:
+                ip, username, password = result
+                self.ip_address.setText(ip)
+                self.username.setText(username)
+                self.password.setText(password)
+                # Set camera type to reolink if there's a camera_type combo
+                if hasattr(self, "camera_type"):
+                    idx = self.camera_type.findText("reolink")
+                    if idx >= 0:
+                        self.camera_type.setCurrentIndex(idx)
 
     def browse_storage_path(self):
         path = QFileDialog.getExistingDirectory(self, "Select Storage Directory")
@@ -1324,71 +1344,79 @@ class ConfigWindow(QWidget):
             self.connection_events_list.addItem(f"Error reading state file: {e}")
             return
 
-        connection_events = state_data.get("connection_events", [])
-        if not connection_events:
-            self.connection_events_list.addItem("No connection events recorded.")
-            return
-
-        # Parse events
-        parsed_events = []
-        for event in connection_events:
-            t_str = event["event_datetime"]
-            event_type = event["event_type"]
-            dt_obj = datetime.fromisoformat(t_str)
-            if dt_obj.tzinfo is None:
-                dt_obj = pytz.utc.localize(dt_obj)
-            parsed_events.append((dt_obj, event_type))
-
-        # Get timeframes
-        timeframes = []
-        start_time = None
-        sorted_events = sorted(parsed_events, key=lambda x: x[0])
-
-        for event_time, event_type in sorted_events:
-            if event_type == "connected":
-                if start_time is None:
-                    start_time = event_time
-            else:  # any other event is a disconnection
-                if start_time is not None:
-                    timeframes.append((start_time, event_time))
-                    start_time = None
-
-        if start_time is not None:
-            timeframes.append((start_time, None))
-
-        # Display timeframes
-        if not timeframes:
-            self.connection_events_list.addItem("No complete connection periods found.")
-            return
-
         tz_str = getattr(self.config.app, "timezone", "UTC")
+        any_events = False
 
-        for start, end in reversed(timeframes):  # Show most recent first
-            start_local = convert_utc_to_local(start, tz_str)
-            start_str = start_local.strftime("%Y-%m-%d %H:%M:%S")
+        # Iterate per-camera state entries
+        for cam_name, cam_state in state_data.items():
+            if not isinstance(cam_state, dict):
+                continue
+            connection_events = cam_state.get("connection_events", [])
+            if not connection_events:
+                continue
 
-            if end:
-                end_local = convert_utc_to_local(end, tz_str)
-                end_str = end_local.strftime("%Y-%m-%d %H:%M:%S")
+            any_events = True
 
-                # Find the corresponding disconnection event to get the message
-                message = f"Disconnected: {end_str}"
-                for event in connection_events:
-                    if (
-                        datetime.fromisoformat(event["event_datetime"]).astimezone(
-                            pytz.utc
-                        )
-                        == end.astimezone(pytz.utc)
-                        and event["event_type"] == "disconnected"
-                    ):
-                        message = f"Disconnected: {end_str} ({event['message']})"
-                        break
+            # Parse events
+            parsed_events = []
+            for event in connection_events:
+                t_str = event["event_datetime"]
+                event_type = event["event_type"]
+                dt_obj = datetime.fromisoformat(t_str)
+                if dt_obj.tzinfo is None:
+                    dt_obj = pytz.utc.localize(dt_obj)
+                parsed_events.append((dt_obj, event_type))
 
-                display_text = f"Connected: {start_str}  |  {message}"
-            else:
-                display_text = f"Connected: {start_str}  |  (Still connected)"
+            # Get timeframes
+            timeframes = []
+            start_time = None
+            sorted_events = sorted(parsed_events, key=lambda x: x[0])
 
-            self.connection_events_list.addItem(display_text)
+            for event_time, event_type in sorted_events:
+                if event_type == "connected":
+                    if start_time is None:
+                        start_time = event_time
+                else:
+                    if start_time is not None:
+                        timeframes.append((start_time, event_time))
+                        start_time = None
+
+            if start_time is not None:
+                timeframes.append((start_time, None))
+
+            if not timeframes:
+                continue
+
+            for start, end in reversed(timeframes):
+                start_local = convert_utc_to_local(start, tz_str)
+                start_str = start_local.strftime("%Y-%m-%d %H:%M:%S")
+
+                if end:
+                    end_local = convert_utc_to_local(end, tz_str)
+                    end_str = end_local.strftime("%Y-%m-%d %H:%M:%S")
+
+                    message = f"Disconnected: {end_str}"
+                    for event in connection_events:
+                        if (
+                            datetime.fromisoformat(event["event_datetime"]).astimezone(
+                                pytz.utc
+                            )
+                            == end.astimezone(pytz.utc)
+                            and event["event_type"] == "disconnected"
+                        ):
+                            message = f"Disconnected: {end_str} ({event['message']})"
+                            break
+
+                    display_text = f"[{cam_name}] Connected: {start_str}  |  {message}"
+                else:
+                    display_text = (
+                        f"[{cam_name}] Connected: {start_str}  |  (Still connected)"
+                    )
+
+                self.connection_events_list.addItem(display_text)
+
+        if not any_events:
+            self.connection_events_list.addItem("No connection events recorded.")
 
     def refresh_youtube_status(self):
         """Manually refresh the YouTube token status."""
