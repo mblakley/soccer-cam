@@ -97,9 +97,23 @@ class CombineTask(BaseFfmpegTask):
 
         output_path = self.get_output_path()
 
+        # Extract camera metadata from the group's state.json
+        camera_name = None
+        camera_type = None
+        try:
+            dir_state = DirectoryState(self.group_dir)
+            first_file = dir_state.get_first_file()
+            if first_file and first_file.metadata:
+                camera_name = first_file.metadata.get("camera_name")
+                camera_type = first_file.metadata.get("camera_type")
+        except Exception:
+            pass  # Non-critical: metadata is optional
+
         try:
             # Pass file paths directly to combine_videos (PyAV-based)
-            success = await combine_videos(dav_files, output_path)
+            success = await combine_videos(
+                dav_files, output_path, camera_name=camera_name, camera_type=camera_type
+            )
 
             if success:
                 await self._handle_post_combine_actions()

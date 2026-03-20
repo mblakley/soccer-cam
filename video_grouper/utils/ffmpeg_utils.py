@@ -404,7 +404,12 @@ async def trim_video(
         return False
 
 
-def _combine_videos_sync(file_paths: list[str], output_path: str) -> bool:
+def _combine_videos_sync(
+    file_paths: list[str],
+    output_path: str,
+    camera_name: str | None = None,
+    camera_type: str | None = None,
+) -> bool:
     """Synchronous implementation: concatenate multiple video files (video copy, AAC re-encode).
 
     Uses stream copy for video regardless of codec (H.264, HEVC, etc.) for speed.
@@ -417,6 +422,16 @@ def _combine_videos_sync(file_paths: list[str], output_path: str) -> bool:
     with av.open(
         output_path, "w", options={"movflags": "faststart"}
     ) as output_container:
+        # Write camera metadata if available
+        if camera_name:
+            output_container.metadata["camera_name"] = camera_name
+            if camera_type:
+                output_container.metadata["camera_type"] = camera_type
+                output_container.metadata["comment"] = (
+                    f"Camera: {camera_name} ({camera_type})"
+                )
+            else:
+                output_container.metadata["comment"] = f"Camera: {camera_name}"
         out_video_stream = None
         out_audio_stream = None
 
@@ -507,19 +522,26 @@ def _combine_copy(
     return True
 
 
-async def combine_videos(file_paths: list[str], output_path: str) -> bool:
+async def combine_videos(
+    file_paths: list[str],
+    output_path: str,
+    camera_name: str | None = None,
+    camera_type: str | None = None,
+) -> bool:
     """Combines multiple video files into a single MP4 using PyAV.
 
     Args:
         file_paths: List of input file paths to concatenate.
         output_path: Path for the combined output file.
+        camera_name: Optional camera name to embed in MP4 metadata.
+        camera_type: Optional camera type to embed in MP4 metadata.
     """
     logger.info(
         f"Combining {len(file_paths)} videos to {os.path.basename(output_path)}"
     )
     try:
         result = await _run_in_thread_with_timeout(
-            _combine_videos_sync, file_paths, output_path
+            _combine_videos_sync, file_paths, output_path, camera_name, camera_type
         )
         if result:
             logger.info(
