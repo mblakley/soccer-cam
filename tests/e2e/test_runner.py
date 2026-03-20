@@ -163,8 +163,9 @@ class E2ETestRunner:
             "downloads_started": [
                 "Starting download task",
                 "Downloading file",
-                "Downloading.*via Baichuan",
+                "via Baichuan",
                 "DOWNLOAD: Processing task",
+                "DOWNLOAD: Starting download of",
             ],
             "downloads_completed": [
                 "Download completed",
