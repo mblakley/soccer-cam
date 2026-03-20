@@ -178,7 +178,7 @@ class TestIntegration:
     def test_load_application_config_with_real_config(self):
         """Test loading config from a real config file in a real temp directory."""
         config_content = """
-[CAMERA]
+[CAMERA.default]
 type = dahua
 device_ip = 192.168.1.100
 username = admin

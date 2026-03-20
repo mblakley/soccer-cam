@@ -45,6 +45,7 @@ if not hasattr(configparser.ConfigParser, "__getattr__"):
 
 
 class CameraConfig(BaseModel):
+    name: str
     type: str
     device_ip: str
     username: str
@@ -232,7 +233,7 @@ class YouTubeConfig(BaseModel):
 
 
 class Config(BaseModel):
-    camera: CameraConfig = Field(alias="CAMERA")
+    cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
     recording: RecordingConfig = Field(alias="RECORDING")
     processing: ProcessingConfig = Field(alias="PROCESSING")
@@ -247,6 +248,11 @@ class Config(BaseModel):
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
 
     model_config = {"validate_by_name": True}
+
+    @property
+    def camera(self) -> CameraConfig:
+        """Convenience accessor for the first camera config."""
+        return self.cameras[0]
 
 
 def load_config(config_path: Path) -> Config:
@@ -283,6 +289,16 @@ def load_config(config_path: Path) -> Config:
     if "PLAYMETRICS" in config_dict:
         config_dict["PLAYMETRICS"]["teams"] = playmetrics_teams
 
+    # Handle camera sections: [CAMERA.name] -> cameras list
+    cameras = []
+    for section in list(config_dict.keys()):
+        if section.startswith("CAMERA."):
+            camera_name = section.split(".", 1)[1]
+            camera_config = config_dict.pop(section)
+            camera_config["name"] = camera_name
+            cameras.append(camera_config)
+    config_dict["cameras"] = cameras
+
     # Handle TeamSnap teams
     teamsnap_teams = []
     for section in list(config_dict.keys()):
@@ -303,9 +319,20 @@ def load_config(config_path: Path) -> Config:
 def save_config(config: Config, config_path: Path):
     parser = configparser.ConfigParser()
 
+    # Write camera sections as [CAMERA.name]
+    for cam in config.cameras:
+        section_name = f"CAMERA.{cam.name}"
+        cam_dict = cam.model_dump()
+        cam_dict.pop("name")
+        parser[section_name] = {k: str(v) for k, v in cam_dict.items() if v is not None}
+
     for field_name, field in Config.model_fields.items():
         alias = field.alias if field.alias else field_name
         value = getattr(config, field_name)
+
+        # cameras are handled above
+        if field_name == "cameras":
+            continue
 
         if field_name == "playmetrics_teams":
             for item in value:
