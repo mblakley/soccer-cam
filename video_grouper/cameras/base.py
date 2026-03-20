@@ -19,6 +19,11 @@ class DeviceInfo(TypedDict):
 class Camera(ABC):
     """Base class for camera implementations."""
 
+    @property
+    def name(self) -> str:
+        """Get the camera name from config."""
+        return self.config.name
+
     @abstractmethod
     async def check_availability(self) -> bool:
         """Check if the camera is available."""

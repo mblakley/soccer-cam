@@ -237,7 +237,8 @@ class ReolinkCamera(Camera):
         try:
             if os.path.exists(self._state_file):
                 with open(self._state_file, "r") as f:
-                    state = json.load(f)
+                    all_state = json.load(f)
+                    state = all_state.get(self.config.name, {})
                     self._connection_events = state.get("connection_events", [])
                     self._is_connected = state.get("is_connected", False)
         except Exception as e:
@@ -245,13 +246,17 @@ class ReolinkCamera(Camera):
 
     def _save_state(self):
         try:
-            state = {
+            all_state = {}
+            if os.path.exists(self._state_file):
+                with open(self._state_file, "r") as f:
+                    all_state = json.load(f)
+            all_state[self.config.name] = {
                 "connection_events": self._connection_events,
                 "is_connected": self._is_connected,
             }
             os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
             with open(self._state_file, "w") as f:
-                json.dump(state, f, indent=4)
+                json.dump(all_state, f, indent=4)
         except Exception as e:
             logger.error(f"Error saving camera state: {e}")
 

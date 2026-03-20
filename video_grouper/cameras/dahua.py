@@ -82,11 +82,12 @@ class DahuaCamera(Camera):
                 await f.write(str(error))
 
     def _load_state(self):
-        """Load camera state from file."""
+        """Load this camera's state from the shared state file."""
         try:
             if os.path.exists(self._state_file):
                 with open(self._state_file, "r") as f:
-                    state = json.load(f)
+                    all_state = json.load(f)
+                    state = all_state.get(self.config.name, {})
                     self._connection_events: List[ConnectionEvent] = state.get(
                         "connection_events", []
                     )
@@ -95,15 +96,20 @@ class DahuaCamera(Camera):
             logger.error(f"Error loading camera state: {e}")
 
     def _save_state(self):
-        """Save camera state to file."""
+        """Save this camera's state to the shared state file."""
         try:
-            state = {
+            # Load existing state for other cameras
+            all_state = {}
+            if os.path.exists(self._state_file):
+                with open(self._state_file, "r") as f:
+                    all_state = json.load(f)
+            all_state[self.config.name] = {
                 "connection_events": self._connection_events,
                 "is_connected": self._is_connected,
             }
             os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
             with open(self._state_file, "w") as f:
-                json.dump(state, f, indent=4)
+                json.dump(all_state, f, indent=4)
         except Exception as e:
             logger.error(f"Error saving camera state: {e}")
 
