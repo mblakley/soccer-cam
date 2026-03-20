@@ -44,9 +44,15 @@ def temp_storage():
 def mock_config(temp_storage):
     """Create a real Config object for integration tests."""
     return Config(
-        camera=CameraConfig(
-            type="dahua", device_ip="127.0.0.1", username="admin", password="password"
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=str(temp_storage)),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),

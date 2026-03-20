@@ -57,12 +57,15 @@ def temp_storage():
 def mock_config(temp_storage):
     """Create a mock configuration object."""
     return Config(
-        camera=CameraConfig(
-            type="dahua",
-            device_ip="192.168.1.100",
-            username="admin",
-            password="password",
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=temp_storage),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
@@ -375,12 +378,15 @@ class TestVideoGrouperAppRefactored:
     def test_video_processor_wired_with_ntfy_services(self, temp_storage, mock_camera):
         """When NTFY is enabled, VideoProcessor should be wired with match_info_service and ntfy_processor."""
         ntfy_config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="192.168.1.100",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="192.168.1.100",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=temp_storage),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),
@@ -425,12 +431,15 @@ class TestVideoGrouperAppRefactored:
     def test_upload_processor_wired_with_ntfy_service(self, temp_storage, mock_camera):
         """When NTFY is enabled, UploadProcessor should have ntfy_service wired."""
         ntfy_config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="192.168.1.100",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="192.168.1.100",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=temp_storage),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),

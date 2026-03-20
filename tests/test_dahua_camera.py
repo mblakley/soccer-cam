@@ -17,7 +17,11 @@ logging.basicConfig(level=logging.INFO)
 def mock_config(tmp_path):
     """Create a mock camera configuration."""
     return CameraConfig(
-        type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
+        name="default",
+        type="dahua",
+        device_ip="192.168.1.100",
+        username="admin",
+        password="admin",
     )
 
 
@@ -62,6 +66,7 @@ class TestDahuaCameraAvailability:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -104,6 +109,7 @@ class TestDahuaCameraAvailability:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -148,6 +154,7 @@ class TestDahuaCameraAvailability:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -189,6 +196,7 @@ class TestDahuaCameraAvailability:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -275,6 +283,7 @@ items[0].WorkDirSN=0
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -324,6 +333,7 @@ items[0].WorkDirSN=0
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -362,6 +372,7 @@ items[0].WorkDirSN=0
         # Create the camera
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -404,6 +415,7 @@ items[0].WorkDirSN=0
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -443,6 +455,7 @@ class TestDahuaCameraRecording:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -479,6 +492,7 @@ class TestDahuaCameraRecording:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -512,6 +526,7 @@ class TestDahuaCameraRecording:
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -554,6 +569,7 @@ deviceType=IPC"""
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -589,6 +605,7 @@ deviceType=IPC"""
         # Create the camera with the mock client
         camera = DahuaCamera(
             config=CameraConfig(
+                name="default",
                 type="dahua",
                 device_ip="192.168.1.100",
                 username="admin",
@@ -620,7 +637,11 @@ def test_connection_events_property():
     """Test connection events property."""
     camera = DahuaCamera(
         config=CameraConfig(
-            type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
+            name="default",
+            type="dahua",
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
         ),
         storage_path="test_path",
     )
@@ -631,7 +652,11 @@ def test_is_connected_property():
     """Test is connected property."""
     camera = DahuaCamera(
         config=CameraConfig(
-            type="dahua", device_ip="192.168.1.100", username="admin", password="admin"
+            name="default",
+            type="dahua",
+            device_ip="192.168.1.100",
+            username="admin",
+            password="admin",
         ),
         storage_path="test_path",
     )

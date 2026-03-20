@@ -41,9 +41,15 @@ def temp_storage():
 def mock_config(temp_storage):
     """Create a mock configuration."""
     return Config(
-        camera=CameraConfig(
-            type="dahua", device_ip="127.0.0.1", username="admin", password="password"
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=temp_storage),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
@@ -77,6 +83,12 @@ def mock_camera():
     camera.stop_recording = AsyncMock(return_value=True)
     camera.is_connected = True
     camera.close = AsyncMock()
+    # Camera.config is read by CameraPoller for auto_stop_recording and metadata
+    cam_config = Mock()
+    cam_config.auto_stop_recording = True
+    cam_config.type = "dahua"
+    cam_config.name = "default"
+    camera.config = cam_config
     return camera
 
 
@@ -509,7 +521,7 @@ class TestAutoStopRecording:
         self, temp_storage, mock_config, mock_camera
     ):
         """Stop recording is not called when auto_stop_recording is False."""
-        mock_config.camera.auto_stop_recording = False
+        mock_camera.config.auto_stop_recording = False
         poller = _make_poller(temp_storage, mock_config, mock_camera)
         await poller.discover_work()
         mock_camera.stop_recording.assert_not_called()

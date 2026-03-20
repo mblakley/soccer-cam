@@ -243,12 +243,15 @@ enabled = false
         playlist_map = YouTubePlaylistMapConfig(mappings)
 
         original_config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="192.168.1.100",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="192.168.1.100",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path="/tmp/test"),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),

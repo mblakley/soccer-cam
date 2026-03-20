@@ -90,12 +90,15 @@ def temp_storage():
 def mock_config(temp_storage):
     """Create a config for full pipeline testing."""
     return Config(
-        camera=CameraConfig(
-            type="dahua",
-            device_ip="192.168.1.100",
-            username="admin",
-            password="password",
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=temp_storage),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),

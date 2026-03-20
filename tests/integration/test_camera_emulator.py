@@ -99,6 +99,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_check_availability(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -112,6 +113,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_check_availability_wrong_password(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -124,6 +126,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_get_file_list(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -142,6 +145,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_get_file_size(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -159,6 +163,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_download_file(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -179,6 +184,7 @@ class TestDahuaEmulator:
     @pytest.mark.asyncio
     async def test_get_device_info(self, dahua_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="dahua",
             device_ip=dahua_server,
             username="admin",
@@ -198,6 +204,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_check_availability(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -212,6 +219,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_check_availability_wrong_password(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -225,6 +233,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_get_file_list(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -244,6 +253,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_get_file_size(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -262,6 +272,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_download_file(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -283,6 +294,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_get_device_info(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -298,6 +310,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_get_recording_status(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",
@@ -311,6 +324,7 @@ class TestReolinkEmulator:
     @pytest.mark.asyncio
     async def test_stop_recording(self, reolink_server, tmp_path):
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip=reolink_server,
             username="admin",

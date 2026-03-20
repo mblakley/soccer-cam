@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 def _make_config():
     return CameraConfig(
+        name="default",
         type="reolink",
         device_ip="192.168.1.200",
         username="admin",
@@ -644,6 +645,7 @@ class TestReolinkCameraDownload:
         """Verify the configured baichuan_port is used."""
         mock_download.return_value = True
         config = CameraConfig(
+            name="default",
             type="reolink",
             device_ip="10.0.0.1",
             username="user",

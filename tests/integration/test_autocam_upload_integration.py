@@ -49,9 +49,15 @@ def temp_storage():
 def mock_config(temp_storage):
     """Create a mock configuration with autocam and upload enabled."""
     return Config(
-        camera=CameraConfig(
-            type="dahua", device_ip="127.0.0.1", username="admin", password="password"
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=temp_storage),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
@@ -629,12 +635,15 @@ class TestAutocamUploadIntegration:
         """Test that UploadProcessor handles YouTube being disabled gracefully."""
         # Create config with YouTube disabled
         config_without_youtube = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="127.0.0.1",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="127.0.0.1",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=setup_storage_environment),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),

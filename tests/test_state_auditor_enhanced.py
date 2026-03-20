@@ -28,9 +28,15 @@ from video_grouper.utils.config import (
 def mock_config():
     """Create a mock pydantic Config object."""
     return Config(
-        camera=CameraConfig(
-            type="dahua", device_ip="127.0.0.1", username="admin", password="password"
-        ),
+        cameras=[
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=tempfile.mkdtemp()),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
@@ -450,12 +456,15 @@ class TestStateAuditorAutocamToggle:
     ):
         """When autocam is disabled, trimmed dirs transition to autocam_complete and queue upload."""
         config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="127.0.0.1",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="127.0.0.1",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=str(tmp_path)),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),
@@ -528,12 +537,15 @@ class TestStateAuditorAutocamToggle:
     ):
         """When autocam is enabled, trimmed dirs are left for autocam discovery."""
         config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="127.0.0.1",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="default",
+                    type="dahua",
+                    device_ip="127.0.0.1",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=str(tmp_path)),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),
