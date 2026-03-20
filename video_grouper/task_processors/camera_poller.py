@@ -371,9 +371,22 @@ class CameraPoller(PollingProcessor):
             return
 
         self._unplug_notified = True
-        logger.info(
-            "CAMERA_POLLER: All downloads complete. Sending unplug notification."
-        )
+        logger.info("CAMERA_POLLER: All downloads complete.")
+
+        # Re-enable continuous recording before telling user to unplug
+        if self.camera.config.auto_stop_recording:
+            try:
+                success = await self.camera.start_recording()
+                if success:
+                    logger.info(
+                        "CAMERA_POLLER: Restored continuous recording before unplug"
+                    )
+                else:
+                    logger.warning(
+                        "CAMERA_POLLER: Failed to restore continuous recording"
+                    )
+            except Exception as e:
+                logger.warning(f"CAMERA_POLLER: Error restoring recording: {e}")
 
         if self.ntfy_service and self.config.ntfy.unplug_notification:
             try:

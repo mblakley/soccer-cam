@@ -349,7 +349,8 @@ class TestReolinkCameraRecording:
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
-    async def test_stop_recording_success(self, mock_log):
+    async def test_stop_recording_switches_to_md(self, mock_log):
+        """stop_recording swaps TIMING→0, MD→1."""
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
             _login_response(),
@@ -362,19 +363,57 @@ class TestReolinkCameraRecording:
 
         result = await camera.stop_recording()
         assert result is True
+        # Verify the payload sent
+        call_args = mock_client.post.call_args_list[-1]
+        payload = call_args[1]["json"][0]["param"]
+        table = payload["Rec"]["schedule"]["table"]
+        assert all(c == "0" for c in table["TIMING"])
+        assert all(c == "1" for c in table["MD"])
 
     @pytest.mark.asyncio
     @patch(
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
-    async def test_get_recording_status_recording(self, mock_log):
+    async def test_start_recording_restores_timing(self, mock_log):
+        """start_recording swaps TIMING→1, MD→0."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("SetRecV20", {"rspCode": 200}),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        result = await camera.start_recording()
+        assert result is True
+        call_args = mock_client.post.call_args_list[-1]
+        payload = call_args[1]["json"][0]["param"]
+        table = payload["Rec"]["schedule"]["table"]
+        assert all(c == "1" for c in table["TIMING"])
+        assert all(c == "0" for c in table["MD"])
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_recording_status_timing_active(self, mock_log):
+        """Returns True when TIMING schedule has active slots."""
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
             _login_response(),
             _success_response(
                 "GetRecV20",
-                {"Rec": {"channel": 0, "enable": 1}},
+                {
+                    "Rec": {
+                        "channel": 0,
+                        "enable": 1,
+                        "schedule": {"table": {"TIMING": "1" * 168}},
+                    }
+                },
             ),
         ]
 
@@ -389,13 +428,20 @@ class TestReolinkCameraRecording:
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
-    async def test_get_recording_status_not_recording(self, mock_log):
+    async def test_get_recording_status_timing_suppressed(self, mock_log):
+        """Returns False when TIMING schedule is all zeros (MD-only mode)."""
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
             _login_response(),
             _success_response(
                 "GetRecV20",
-                {"Rec": {"channel": 0, "enable": 0}},
+                {
+                    "Rec": {
+                        "channel": 0,
+                        "enable": 1,
+                        "schedule": {"table": {"TIMING": "0" * 168}},
+                    }
+                },
             ),
         ]
 

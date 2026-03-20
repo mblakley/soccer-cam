@@ -51,6 +51,15 @@ class Camera(ABC):
         """Stop recording on the camera."""
         pass
 
+    async def start_recording(self) -> bool:
+        """Re-enable recording on the camera.
+
+        Called before sending the unplug notification so the camera
+        is ready to record at the field.  Default is a no-op (cameras
+        that auto-record on power-on don't need this).
+        """
+        return True
+
     @abstractmethod
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""

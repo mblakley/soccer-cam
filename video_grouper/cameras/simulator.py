@@ -328,6 +328,13 @@ class SimulatorCamera(Camera):
         logger.info("Camera recording stopped")
         return True
 
+    async def start_recording(self) -> bool:
+        """Re-enable recording on the camera."""
+        await asyncio.sleep(0.1)
+        self._recording_status = True
+        logger.info("Camera recording started")
+        return True
+
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""
         await asyncio.sleep(0.1)  # Simulate network delay

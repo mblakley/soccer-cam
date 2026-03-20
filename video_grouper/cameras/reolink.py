@@ -559,20 +559,37 @@ class ReolinkCamera(Camera):
             return False
 
     async def stop_recording(self) -> bool:
-        """Disable recording via SetRecV20.
+        """Suppress recording by switching from TIMING to MD schedule.
 
-        The older SetRec command returns "not support" on newer Reolink
-        models (e.g. Duo 3 PoE).  SetRecV20 with enable=0 reliably
-        disables recording for the current power session.  Recording
-        re-enables on the next power cycle (desirable for field use).
+        Swaps the recording schedule from continuous (TIMING=all 1s) to
+        motion-detection only (MD=all 1s, TIMING=all 0s).  The master
+        enable stays at 1, so this change is safe across reboots -- if
+        the camera is unplugged before restore, it still records via
+        motion detection at the field.
+
+        Uses SetRecV20 (the older SetRec returns "not support" on newer
+        Reolink models like the Duo 3 PoE).
         """
         try:
             client, close_client = self._get_client()
             try:
+                all_zeros = "0" * 168
+                all_ones = "1" * 168
                 data = await self._api_call(
                     client,
                     "SetRecV20",
-                    {"Rec": {"channel": self.channel, "enable": 0}},
+                    {
+                        "Rec": {
+                            "channel": self.channel,
+                            "schedule": {
+                                "channel": self.channel,
+                                "table": {
+                                    "TIMING": all_zeros,
+                                    "MD": all_ones,
+                                },
+                            },
+                        }
+                    },
                     log_name="stop_recording",
                 )
                 return data is not None and data[0].get("code") == 0
@@ -581,6 +598,43 @@ class ReolinkCamera(Camera):
                     await client.aclose()
         except Exception as e:
             logger.error(f"Error stopping recording: {e}")
+            return False
+
+    async def start_recording(self) -> bool:
+        """Restore continuous recording by switching from MD back to TIMING.
+
+        Reverses stop_recording() by setting TIMING=all 1s, MD=all 0s.
+        Called before sending the unplug notification so the camera is
+        ready for continuous recording at the field.
+        """
+        try:
+            client, close_client = self._get_client()
+            try:
+                all_zeros = "0" * 168
+                all_ones = "1" * 168
+                data = await self._api_call(
+                    client,
+                    "SetRecV20",
+                    {
+                        "Rec": {
+                            "channel": self.channel,
+                            "schedule": {
+                                "channel": self.channel,
+                                "table": {
+                                    "TIMING": all_ones,
+                                    "MD": all_zeros,
+                                },
+                            },
+                        }
+                    },
+                    log_name="start_recording",
+                )
+                return data is not None and data[0].get("code") == 0
+            finally:
+                if close_client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}")
             return False
 
     async def delete_files(self, file_paths: List[str]) -> int:
@@ -602,7 +656,12 @@ class ReolinkCamera(Camera):
         return 0
 
     async def get_recording_status(self) -> bool:
-        """Check if recording is enabled via GetRecV20."""
+        """Check if continuous (TIMING) recording is active via GetRecV20.
+
+        Returns True if the TIMING schedule has any active slots,
+        indicating the camera is in continuous recording mode.
+        Returns False if TIMING is all zeros (suppressed to MD-only).
+        """
         try:
             client, close_client = self._get_client()
             try:
@@ -615,7 +674,8 @@ class ReolinkCamera(Camera):
                 if data is None or data[0].get("code") != 0:
                     return False
                 rec_info = data[0].get("value", {}).get("Rec", {})
-                return rec_info.get("enable", 0) == 1
+                timing = rec_info.get("schedule", {}).get("table", {}).get("TIMING", "")
+                return "1" in timing
             finally:
                 if close_client:
                     await client.aclose()
