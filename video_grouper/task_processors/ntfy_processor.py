@@ -384,16 +384,15 @@ class NtfyProcessor(QueueProcessor):
 
         tasks_added = False
 
-        # Determine what team information is missing
+        # Determine what team information is missing (check for empty values too)
         missing_fields = []
-        if "team_name" not in existing_info and "my_team_name" not in existing_info:
+        if not existing_info.get("team_name") and not existing_info.get("my_team_name"):
             missing_fields.append("team name")
-        if (
-            "opponent_name" not in existing_info
-            and "opponent_team_name" not in existing_info
+        if not existing_info.get("opponent_name") and not existing_info.get(
+            "opponent_team_name"
         ):
             missing_fields.append("opponent team name")
-        if "location" not in existing_info:
+        if not existing_info.get("location"):
             missing_fields.append("game location")
 
         # Add team info task if needed

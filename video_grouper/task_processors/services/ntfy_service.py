@@ -46,6 +46,10 @@ class NtfyService:
         self._response_events: Dict[str, asyncio.Event] = {}
         self._response_data: Dict[str, Optional[str]] = {}
 
+        # Track the most recently sent notification's group_dir
+        # so responses get routed to the correct group
+        self._last_notified_group_dir: Optional[str] = None
+
         self._state: Dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
@@ -172,6 +176,7 @@ class NtfyService:
             "sent_at": datetime.now().isoformat(),
             "response": None,
         }
+        self._last_notified_group_dir = group_dir
         self._save_state()
         logger.info(
             f"NTFY: Marked {group_dir} as waiting for input (task_type: {task_type})"
@@ -445,18 +450,42 @@ class NtfyService:
         """
         Process a response from NTFY and route it to the appropriate pending task.
 
+        Prefers the most recently notified group_dir to avoid routing responses
+        to stale pending tasks from previous runs.
+
         Args:
             response: The user's response message
         """
         logger.info(f"Processing NTFY response: {response}")
-        for group_dir, task_data in list(self._pending_tasks.items()):
+
+        # Try the most recently notified group first
+        if self._last_notified_group_dir:
+            task_data = self._pending_tasks.get(self._last_notified_group_dir)
+            if task_data and task_data.get("status") == "waiting_for_input":
+                task_type = task_data.get("task_type")
+                metadata = task_data.get("task_metadata", {})
+                if self._response_matches_task(
+                    self._last_notified_group_dir, task_type, metadata, response
+                ):
+                    logger.info(
+                        f"Found matching task for response: {task_type} in {self._last_notified_group_dir} (most recent notification)"
+                    )
+                    await self._process_task_response(
+                        self._last_notified_group_dir, task_type, metadata, response
+                    )
+                    return
+
+        # Fall back to iterating all pending tasks (sorted by sent_at descending)
+        sorted_tasks = sorted(
+            self._pending_tasks.items(),
+            key=lambda x: x[1].get("sent_at", ""),
+            reverse=True,
+        )
+        for group_dir, task_data in sorted_tasks:
             task_type = task_data.get("task_type")
             metadata = task_data.get("task_metadata", {})
             status = task_data.get("status")
             if status != "waiting_for_input":
-                logger.debug(
-                    f"Skipping task {task_type} for {group_dir} - status is {status}, not waiting_for_input"
-                )
                 continue
             if self._response_matches_task(group_dir, task_type, metadata, response):
                 logger.info(
@@ -663,6 +692,25 @@ class NtfyService:
                             logger.error(
                                 f"No combined_video_path in metadata for {group_dir}"
                             )
+
+                    elif (
+                        input_type == "team_info"
+                        and result.metadata
+                        and "next_field" in result.metadata
+                    ):
+                        from video_grouper.task_processors.tasks.ntfy.team_info_task import (
+                            TeamInfoTask,
+                        )
+
+                        next_task = TeamInfoTask.create_next_task(
+                            current_task=task,
+                            next_field=result.metadata["next_field"],
+                        )
+
+                        logger.info(
+                            f"Creating and executing next team info task for field {result.metadata['next_field']}"
+                        )
+                        await next_task.execute()
 
                     elif (
                         input_type == "game_start_time"

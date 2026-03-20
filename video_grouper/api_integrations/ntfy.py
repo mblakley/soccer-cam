@@ -29,7 +29,7 @@ async def compress_image(
     max_width: int = 800,
 ) -> str:
     """
-    Compress an image to reduce file size.
+    Compress an image to reduce file size using Pillow.
 
     Args:
         input_path: Path to the input image
@@ -45,33 +45,17 @@ async def compress_image(
         return input_path
 
     if output_path is None:
-        # Create a temporary path with _compressed suffix
         path_obj = Path(input_path)
         output_path = str(path_obj.with_stem(f"{path_obj.stem}_compressed"))
 
     try:
-        # Use ffmpeg to compress the image
-        cmd = [
-            "ffmpeg",
-            "-i",
-            input_path,
-            "-vf",
-            f"scale='min({max_width},iw)':-1",  # Scale down if larger than max_width
-            "-q:v",
-            str(quality // 10),  # Convert quality to ffmpeg scale (0-10)
-            "-y",  # Overwrite output file if it exists
-            output_path,
-        ]
+        from PIL import Image
 
-        # Run the command asynchronously to avoid blocking the event loop
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-
-        if process.returncode != 0:
-            logger.error(f"Error compressing image: {stderr.decode()}")
-            return input_path
+        img = Image.open(input_path)
+        if img.width > max_width:
+            ratio = max_width / img.width
+            img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+        img.save(output_path, "JPEG", quality=quality)
 
         # Check if compression actually reduced the file size
         original_size = os.path.getsize(input_path)
@@ -120,6 +104,7 @@ class NtfyAPI:
         # Track sent messages and their responses
         self.pending_messages = {}  # message_id -> future
         self.message_timestamps = {}  # message_id -> timestamp
+        self._sent_message_texts = set()  # messages we sent (to filter echoes)
         self.processed_screenshots = (
             set()
         )  # Set of screenshot paths that have been processed
@@ -310,6 +295,16 @@ class NtfyAPI:
                 except json.JSONDecodeError:
                     pass  # Not JSON, continue with normal processing
 
+                # Skip echoed-back notifications.
+                # Our notifications have title/actions/attachment/tags;
+                # user replies are plain messages with none of these.
+                if any(
+                    key in response_data
+                    for key in ("actions", "attachment", "title", "tags")
+                ):
+                    logger.debug(f"Skipping echoed notification: '{message[:80]}'")
+                    return
+
                 # Check for game started/ended responses
                 if any(
                     keyword in lower_message
@@ -328,6 +323,11 @@ class NtfyAPI:
                     for keyword in ["no", "not yet", "continue"]
                 ):
                     logger.info(f"Detected NO response: '{message}'")
+                    self._handle_response(message)
+                elif message.strip():
+                    # Route any non-empty text to the service callback
+                    # (e.g. team name, opponent name, location replies)
+                    logger.info(f"Routing free-text response: '{message}'")
                     self._handle_response(message)
 
             # For action events (button clicks)
@@ -690,6 +690,12 @@ class NtfyAPI:
                 logger.error(f"Failed to send NTFY notification: {status_code}")
                 return False
 
+            # Track the message text so we can filter the echo
+            if message:
+                self._sent_message_texts.add(message.strip())
+                # Keep set bounded
+                if len(self._sent_message_texts) > 50:
+                    self._sent_message_texts.pop()
             logger.info(f"Successfully sent NTFY notification to {self.topic}")
             return True
 

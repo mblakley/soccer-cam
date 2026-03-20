@@ -261,7 +261,7 @@ class BaseNtfyTask(BaseTask, ABC):
         max_width: int = 800,
     ) -> str:
         """
-        Compress an image to reduce file size.
+        Compress an image to reduce file size using Pillow.
 
         Args:
             input_path: Path to the input image
@@ -277,37 +277,19 @@ class BaseNtfyTask(BaseTask, ABC):
             return input_path
 
         if output_path is None:
-            # Create a temporary path with _compressed suffix
             from pathlib import Path
 
             path_obj = Path(input_path)
             output_path = str(path_obj.with_stem(f"{path_obj.stem}_compressed"))
 
         try:
-            # Use ffmpeg to compress the image
-            import subprocess
+            from PIL import Image
 
-            cmd = [
-                "ffmpeg",
-                "-i",
-                input_path,
-                "-vf",
-                f"scale='min({max_width},iw)':-1",  # Scale down if larger than max_width
-                "-q:v",
-                str(quality // 10),  # Convert quality to ffmpeg scale (0-10)
-                "-y",  # Overwrite output file if it exists
-                output_path,
-            ]
-
-            # Run the command
-            process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            stdout, stderr = process.communicate()
-
-            if process.returncode != 0:
-                logger.error(f"Error compressing image: {stderr.decode()}")
-                return input_path
+            img = Image.open(input_path)
+            if img.width > max_width:
+                ratio = max_width / img.width
+                img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+            img.save(output_path, "JPEG", quality=quality)
 
             # Check if compression actually reduced the file size
             original_size = os.path.getsize(input_path)

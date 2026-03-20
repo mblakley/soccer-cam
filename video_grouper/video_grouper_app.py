@@ -282,12 +282,9 @@ class VideoGrouperApp:
         logger.info("Running VideoGrouperApp")
         await self.initialize()
 
-        # Start NTFY response service if enabled
+        # Start NTFY response service when NTFY is enabled
         ntfy_response_service = None
-        if (
-            hasattr(self.config.ntfy, "response_service")
-            and self.config.ntfy.response_service
-        ):
+        if self.config.ntfy.enabled:
             try:
                 ntfy_response_service = create_ntfy_response_service(self.config.ntfy)
                 await ntfy_response_service.start()
