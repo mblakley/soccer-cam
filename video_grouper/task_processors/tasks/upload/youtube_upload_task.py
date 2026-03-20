@@ -43,7 +43,9 @@ class YoutubeUploadTask(BaseUploadTask):
         """
         return {"task_type": self.task_type, "group_dir": self.group_dir}
 
-    async def execute(self, youtube_config=None, ntfy_service=None) -> bool:
+    async def execute(
+        self, youtube_config=None, ntfy_service=None, storage_path=None
+    ) -> bool:
         """
         Execute the YouTube upload task.
 
@@ -60,8 +62,11 @@ class YoutubeUploadTask(BaseUploadTask):
                 get_youtube_paths,
             )
 
-            # Get storage path from group directory
-            storage_path = self.storage_path
+            # Get storage path - passed by processor or derive from shared_data
+            if storage_path is None:
+                from video_grouper.utils.paths import get_shared_data_path
+
+                storage_path = str(get_shared_data_path())
 
             if ntfy_service is None:
                 raise ValueError("ntfy_service must be provided to YoutubeUploadTask")

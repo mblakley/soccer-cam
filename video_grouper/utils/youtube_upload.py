@@ -321,26 +321,37 @@ class YouTubeUploader:
                 },
             }
 
-            # Use simple upload for all files - much cleaner and faster
-            logger.info("Using simple upload for all files")
-            media = MediaFileUpload(video_path, resumable=False)
+            # Use resumable upload for reliable large file transfers
+            logger.info("Using resumable upload")
+            media = MediaFileUpload(
+                video_path, resumable=True, chunksize=50 * 1024 * 1024
+            )
 
             # Create the upload request
             request = self.youtube.videos().insert(
                 part=",".join(body.keys()), body=body, media_body=media
             )
             logger.info(f"Created upload request for video: {title}")
-            logger.debug(f"Upload parts: {list(body.keys())}")
-            logger.debug(f"Media file: {video_path}")
 
-            # Execute the upload
+            # Execute the resumable upload with progress tracking
             start_time = time.time()
             logger.info(
                 f"Starting upload... (file: {file_size / (1024 * 1024):.1f} MB)"
             )
 
             try:
-                response = request.execute()
+                response = None
+                while response is None:
+                    status, response = request.next_chunk()
+                    if status:
+                        pct = int(status.progress() * 100)
+                        elapsed = time.time() - start_time
+                        speed = (
+                            status.progress() * file_size / elapsed / 1024 / 1024
+                            if elapsed > 0
+                            else 0
+                        )
+                        logger.info(f"Upload {pct}% ({speed:.1f} MB/s)")
                 logger.info("Upload completed successfully")
             except HttpError as e:
                 logger.error(f"Upload failed with error: {e}")

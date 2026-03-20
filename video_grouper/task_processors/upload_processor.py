@@ -89,6 +89,7 @@ class UploadProcessor(QueueProcessor):
             success = await item.execute(
                 youtube_config=self.config.youtube,
                 ntfy_service=self.ntfy_service,
+                storage_path=self.storage_path,
             )
 
             if success:
