@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, List, Dict, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from datetime import datetime
 
 
@@ -54,6 +54,18 @@ class Camera(ABC):
     @abstractmethod
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""
+        pass
+
+    @abstractmethod
+    async def delete_files(self, file_paths: List[str]) -> int:
+        """Delete recording files from the camera's storage.
+
+        Args:
+            file_paths: List of remote file paths to delete.
+
+        Returns:
+            Number of files successfully deleted.
+        """
         pass
 
     @abstractmethod

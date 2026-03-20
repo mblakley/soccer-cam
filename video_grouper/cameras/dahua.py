@@ -492,6 +492,11 @@ class DahuaCamera(Camera):
             logger.error(f"Error stopping recording: {e}")
             return False
 
+    async def delete_files(self, file_paths: List[str]) -> int:
+        """Delete recording files from the camera. Not yet implemented for Dahua."""
+        logger.warning("delete_files not implemented for Dahua cameras")
+        return 0
+
     async def get_recording_status(self) -> bool:
         """Get recording status from the camera."""
         try:

@@ -178,6 +178,19 @@ class ConfigWindow(QWidget):
         skipped_tab.setLayout(skipped_layout)
         tabs.addTab(skipped_tab, "Skipped Files")
 
+        # Camera Cleanup Tab
+        cleanup_tab = QWidget()
+        cleanup_layout = QVBoxLayout()
+        self.cleanup_list = QListWidget()
+        self.cleanup_list.setSpacing(5)
+        cleanup_layout.addWidget(self.cleanup_list)
+        self.cleanup_delete_btn = QPushButton("Delete All from Camera")
+        self.cleanup_delete_btn.clicked.connect(self.handle_cleanup_delete)
+        self.cleanup_delete_btn.setEnabled(False)
+        cleanup_layout.addWidget(self.cleanup_delete_btn)
+        cleanup_tab.setLayout(cleanup_layout)
+        tabs.addTab(cleanup_tab, "Camera Cleanup")
+
         # Settings Tab
         settings_tab = QWidget()
         settings_layout = QVBoxLayout()
@@ -1008,6 +1021,7 @@ class ConfigWindow(QWidget):
         self.refresh_skipped_files_display()
         self.refresh_match_info_display()
         self.refresh_connection_events_display()
+        self.refresh_cleanup_display()
 
     def refresh_queue_displays(self):
         """Refreshes the text in the queue display tabs."""
@@ -1230,6 +1244,96 @@ class ConfigWindow(QWidget):
                         self.skipped_list.setItemWidget(list_item, widget)
         except Exception as e:
             logger.error(f"Error refreshing skipped files display: {e}")
+
+    def refresh_cleanup_display(self):
+        """Reads and displays home recordings pending cleanup from the camera."""
+        self.cleanup_list.clear()
+        self.cleanup_delete_btn.setEnabled(False)
+        storage_path_str = getattr(self.config.storage, "path", None)
+        if not storage_path_str:
+            return
+
+        from video_grouper.utils.paths import get_home_cleanup_state_path
+
+        state_path = get_home_cleanup_state_path(storage_path_str)
+        try:
+            if not os.path.exists(state_path):
+                return
+            with open(state_path, "r") as f:
+                state = json.load(f)
+
+            files = state.get("files", [])
+            if not files:
+                return
+
+            if state.get("approved"):
+                self.cleanup_list.addItem(
+                    "Deletion approved -- waiting for next poll to delete."
+                )
+                return
+
+            tz_str = getattr(self.config.app, "timezone", "UTC")
+            for file_info in files:
+                path = file_info.get("path", "")
+                filename = os.path.basename(path)
+                start = file_info.get("startTime", "")
+                end = file_info.get("endTime", "")
+                size_bytes = file_info.get("size", 0)
+                size_mb = f" ({size_bytes / 1024 / 1024:.1f}MB)" if size_bytes else ""
+                display = f"{filename}  {start} - {end}{size_mb}"
+
+                widget = QueueItemWidget(
+                    item_text=display,
+                    file_path=path,
+                    skip_callback=None,
+                    show_thumbnail=False,
+                    group_name="Home recording",
+                    timezone_str=tz_str,
+                )
+                list_item = QListWidgetItem(self.cleanup_list)
+                list_item.setSizeHint(widget.sizeHint())
+                self.cleanup_list.addItem(list_item)
+                self.cleanup_list.setItemWidget(list_item, widget)
+
+            self.cleanup_delete_btn.setEnabled(True)
+
+        except Exception as e:
+            logger.error(f"Error refreshing cleanup display: {e}")
+
+    def handle_cleanup_delete(self):
+        """Handle the 'Delete All from Camera' button click."""
+        storage_path_str = getattr(self.config.storage, "path", None)
+        if not storage_path_str:
+            return
+
+        from video_grouper.utils.paths import get_home_cleanup_state_path
+
+        state_path = get_home_cleanup_state_path(storage_path_str)
+        try:
+            if not os.path.exists(state_path):
+                return
+            with open(state_path, "r") as f:
+                state = json.load(f)
+
+            file_count = len(state.get("files", []))
+            reply = QMessageBox.question(
+                self,
+                "Confirm Deletion",
+                f"Delete {file_count} home recording(s) from the camera's SD card?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            state["approved"] = True
+            with open(state_path, "w") as f:
+                json.dump(state, f, indent=2)
+
+            self.cleanup_delete_btn.setEnabled(False)
+            logger.info("Camera cleanup deletion approved via tray UI")
+        except Exception as e:
+            logger.error(f"Error approving cleanup deletion: {e}")
 
     def refresh_match_info_display(self):
         """Scans for and displays directories that need match info."""

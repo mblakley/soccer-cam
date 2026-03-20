@@ -8,7 +8,7 @@ import pytz
 from video_grouper.cameras.base import Camera
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
-from video_grouper.utils.paths import get_camera_state_path
+from video_grouper.utils.paths import get_camera_state_path, get_home_cleanup_state_path
 from .base_polling_processor import PollingProcessor
 from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
@@ -94,10 +94,10 @@ class CameraPoller(PollingProcessor):
         self.camera = camera
         self.download_processor = download_processor
         self._last_processed_time = None
-        self._recording_stopped = False
         self._last_poll_found_files = True
         self._unplug_notified = False
         self.ntfy_service = None
+        self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
 
     async def discover_work(self) -> None:
         """
@@ -107,21 +107,31 @@ class CameraPoller(PollingProcessor):
             # Check if camera is available
             is_available = await self.camera.check_availability()
             if not is_available:
-                self._recording_stopped = False
                 self._unplug_notified = False
+                self._clear_cleanup_state()
                 self._last_poll_found_files = True
                 logger.debug("CAMERA_POLLER: Camera not available, skipping file sync")
                 return
 
-            # Stop recording on first connection if configured
-            if not self._recording_stopped and self.camera.config.auto_stop_recording:
-                logger.info("CAMERA_POLLER: Camera connected, stopping recording")
-                success = await self.camera.stop_recording()
-                if success:
-                    logger.info("CAMERA_POLLER: Successfully stopped camera recording")
-                else:
-                    logger.warning("CAMERA_POLLER: Failed to stop camera recording")
-                self._recording_stopped = True
+            # Continuously suppress recording while connected
+            if self.camera.config.auto_stop_recording:
+                try:
+                    is_recording = await self.camera.get_recording_status()
+                    if is_recording:
+                        logger.info("CAMERA_POLLER: Camera is recording, stopping...")
+                        success = await self.camera.stop_recording()
+                        if success:
+                            logger.info(
+                                "CAMERA_POLLER: Successfully stopped camera recording"
+                            )
+                        else:
+                            logger.warning(
+                                "CAMERA_POLLER: Failed to stop camera recording"
+                            )
+                except Exception as e:
+                    logger.warning(
+                        f"CAMERA_POLLER: Error checking/stopping recording: {e}"
+                    )
 
             await self._sync_files_from_camera()
 
@@ -204,6 +214,8 @@ class CameraPoller(PollingProcessor):
             logger.warning(f"Unknown timezone '{timezone_str}', falling back to UTC")
             local_tz = pytz.utc
 
+        files_to_delete = []
+
         for file_info in files:
             try:
                 filename = os.path.basename(file_info["path"])
@@ -242,6 +254,7 @@ class CameraPoller(PollingProcessor):
                             break
 
                 if should_skip:
+                    files_to_delete.append(file_info["path"])
                     continue
 
                 # Track high-water mark from non-skipped files only
@@ -293,6 +306,27 @@ class CameraPoller(PollingProcessor):
                 logger.error(
                     f"CAMERA_POLLER: Error processing file info {file_info}: {e}"
                 )
+
+        if files_to_delete and self.camera.config.auto_stop_recording:
+            cleanup_state = self._read_cleanup_state()
+            if cleanup_state.get("approved"):
+                # User approved — delete home recordings
+                try:
+                    deleted = await self.camera.delete_files(files_to_delete)
+                    if deleted > 0:
+                        logger.info(
+                            f"CAMERA_POLLER: Deleted {deleted} home recordings "
+                            "from camera"
+                        )
+                        self._clear_cleanup_state()
+                except Exception as e:
+                    logger.warning(
+                        f"CAMERA_POLLER: Error deleting home recordings: {e}"
+                    )
+            elif not cleanup_state.get("files"):
+                # No pending cleanup — publish files and ask user
+                self._write_cleanup_state(files_to_delete, files)
+                await self._send_deletion_notification(len(files_to_delete))
 
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
@@ -347,6 +381,143 @@ class CameraPoller(PollingProcessor):
                 )
             except Exception as e:
                 logger.error(f"CAMERA_POLLER: Failed to send unplug notification: {e}")
+
+    # ── Home recording cleanup state file ─────────────────────────────
+
+    def _read_cleanup_state(self) -> dict:
+        """Read the home cleanup state file."""
+        from pathlib import Path
+
+        try:
+            path = Path(self._cleanup_state_path)
+            if path.exists():
+                return json.loads(path.read_text())
+        except Exception as e:
+            logger.debug(f"CAMERA_POLLER: Error reading cleanup state: {e}")
+        return {}
+
+    def _write_cleanup_state(self, file_paths: List[str], file_infos: list) -> None:
+        """Write home files pending cleanup to the state file."""
+        # Build a lookup of file info by path for display metadata
+        info_by_path = {}
+        for fi in file_infos:
+            info_by_path[fi["path"]] = fi
+
+        files = []
+        for path in file_paths:
+            entry = {"path": path}
+            info = info_by_path.get(path, {})
+            if "startTime" in info:
+                entry["startTime"] = info["startTime"]
+            if "endTime" in info:
+                entry["endTime"] = info["endTime"]
+            if "size" in info:
+                entry["size"] = info["size"]
+            files.append(entry)
+
+        state = {
+            "files": files,
+            "approved": False,
+            "updated_at": datetime.now().isoformat(),
+        }
+        try:
+            with open(self._cleanup_state_path, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"CAMERA_POLLER: Error writing cleanup state: {e}")
+
+    def _clear_cleanup_state(self) -> None:
+        """Remove the cleanup state file."""
+        from pathlib import Path
+
+        try:
+            path = Path(self._cleanup_state_path)
+            if path.exists():
+                path.unlink()
+        except Exception as e:
+            logger.debug(f"CAMERA_POLLER: Error clearing cleanup state: {e}")
+
+    # ── Deletion notification (NTFY) ───────────────────────────────────
+
+    async def _send_deletion_notification(self, file_count: int) -> None:
+        """Send an NTFY notification about home recordings found."""
+        if not self.ntfy_service:
+            return
+
+        try:
+            topic = self.ntfy_service.config.topic
+            server_url = self.ntfy_service.config.server_url
+            publish_url = f"{server_url}/{topic}"
+
+            actions = [
+                {
+                    "action": "http",
+                    "label": "Yes, delete",
+                    "url": publish_url,
+                    "method": "POST",
+                    "headers": {"Content-Type": "text/plain"},
+                    "body": "yes, delete home recordings",
+                    "clear": True,
+                },
+                {
+                    "action": "http",
+                    "label": "No, keep",
+                    "url": publish_url,
+                    "method": "POST",
+                    "headers": {"Content-Type": "text/plain"},
+                    "body": "no, keep home recordings",
+                    "clear": True,
+                },
+            ]
+
+            success = await self.ntfy_service.send_notification(
+                title="Home Recordings Found",
+                message=(
+                    f"Found {file_count} recording(s) made while the camera "
+                    f"was connected at home. These are not game footage. "
+                    f"Delete them from the camera's SD card?"
+                ),
+                tags=["warning"],
+                priority=4,
+                actions=actions,
+            )
+
+            if success:
+                self.ntfy_service.register_response_handler(
+                    "delete home recordings",
+                    self._handle_deletion_response,
+                )
+                self.ntfy_service.register_response_handler(
+                    "keep home recordings",
+                    self._handle_deletion_response,
+                )
+                logger.info(
+                    "CAMERA_POLLER: Sent home recording deletion confirmation request"
+                )
+        except Exception as e:
+            logger.warning(f"CAMERA_POLLER: Error sending deletion notification: {e}")
+
+    async def _handle_deletion_response(self, response: str) -> None:
+        """Handle the user's NTFY response to the deletion request."""
+        response_lower = response.lower()
+        approved = "yes" in response_lower or "delete" in response_lower
+        if approved:
+            # Set approved in state file so next poll deletes
+            state = self._read_cleanup_state()
+            state["approved"] = True
+            try:
+                with open(self._cleanup_state_path, "w") as f:
+                    json.dump(state, f, indent=2)
+            except Exception as e:
+                logger.error(f"CAMERA_POLLER: Error updating cleanup state: {e}")
+            logger.info("CAMERA_POLLER: User approved home recording deletion")
+        else:
+            self._clear_cleanup_state()
+            logger.info("CAMERA_POLLER: User denied home recording deletion")
+        # Unregister handlers
+        if self.ntfy_service:
+            self.ntfy_service.unregister_response_handler("delete home recordings")
+            self.ntfy_service.unregister_response_handler("keep home recordings")
 
     async def _update_latest_processed_time(self, timestamp: datetime):
         """Update the high-water mark for this camera in camera_state.json."""

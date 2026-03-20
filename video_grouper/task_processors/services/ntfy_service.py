@@ -46,6 +46,9 @@ class NtfyService:
         self._response_events: Dict[str, asyncio.Event] = {}
         self._response_data: Dict[str, Optional[str]] = {}
 
+        # Generic response handlers for non-task components (e.g. camera poller)
+        self._response_handlers: Dict[str, Any] = {}
+
         # Track the most recently sent notification's group_dir
         # so responses get routed to the correct group
         self._last_notified_group_dir: Optional[str] = None
@@ -446,6 +449,19 @@ class NtfyService:
             logger.error(f"Error requesting playlist name for {group_dir}: {e}")
             return False
 
+    def register_response_handler(self, key: str, handler) -> None:
+        """Register a handler for non-task responses.
+
+        When a response contains the key (case-insensitive), the handler
+        is called with the response text.  Handlers are checked before
+        the task-based routing in process_response().
+        """
+        self._response_handlers[key] = handler
+
+    def unregister_response_handler(self, key: str) -> None:
+        """Remove a previously registered response handler."""
+        self._response_handlers.pop(key, None)
+
     async def process_response(self, response: str) -> None:
         """
         Process a response from NTFY and route it to the appropriate pending task.
@@ -457,6 +473,17 @@ class NtfyService:
             response: The user's response message
         """
         logger.info(f"Processing NTFY response: {response}")
+
+        # Check generic response handlers first (e.g. home recording deletion)
+        response_lower = response.lower()
+        for key, handler in list(self._response_handlers.items()):
+            if key.lower() in response_lower:
+                logger.info(f"Matched response handler: {key}")
+                try:
+                    await handler(response)
+                except Exception as e:
+                    logger.error(f"Error in response handler '{key}': {e}")
+                return
 
         # Try the most recently notified group first
         if self._last_notified_group_dir:

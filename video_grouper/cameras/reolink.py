@@ -576,6 +576,32 @@ class ReolinkCamera(Camera):
             logger.error(f"Error stopping recording: {e}")
             return False
 
+    async def delete_files(self, file_paths: List[str]) -> int:
+        """Delete recording files from the camera."""
+        if not file_paths:
+            return 0
+        try:
+            client, close_client = self._get_client()
+            try:
+                file_list = [{"name": p} for p in file_paths]
+                data = await self._api_call(
+                    client,
+                    "Remove",
+                    {"Remove": {"channel": self.channel, "File": file_list}},
+                    log_name="delete_files",
+                )
+                if data is not None and data[0].get("code") == 0:
+                    logger.info(f"Deleted {len(file_paths)} files from camera")
+                    return len(file_paths)
+                logger.warning(f"Delete API returned error: {data}")
+                return 0
+            finally:
+                if close_client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error deleting files from camera: {e}")
+            return 0
+
     async def get_recording_status(self) -> bool:
         try:
             client, close_client = self._get_client()

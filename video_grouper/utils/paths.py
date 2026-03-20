@@ -147,6 +147,18 @@ def get_ntfy_service_state_path(storage_path: str) -> str:
     return os.path.join(storage_path, "ntfy_service_state.json")
 
 
+def get_home_cleanup_state_path(storage_path: str) -> str:
+    """Get the path to the home recording cleanup state file.
+
+    Args:
+        storage_path: The storage path
+
+    Returns:
+        Path to the home_cleanup_state.json file
+    """
+    return os.path.join(storage_path, "home_cleanup_state.json")
+
+
 def get_camera_state_path(storage_path: str) -> str:
     """Get the path to the camera state file.
 

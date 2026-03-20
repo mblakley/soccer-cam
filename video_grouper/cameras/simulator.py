@@ -301,6 +301,22 @@ class SimulatorCamera(Camera):
             logger.error(f"Error downloading file {file_path}: {e}")
             return False
 
+    async def delete_files(self, file_paths: List[str]) -> int:
+        """Delete recording files from the simulator's internal list."""
+        if not file_paths:
+            return 0
+        deleted = 0
+        paths_to_delete = set(file_paths)
+        original_count = len(self._test_files)
+        self._test_files = [
+            f for f in self._test_files if f["path"] not in paths_to_delete
+        ]
+        deleted = original_count - len(self._test_files)
+        for p in file_paths:
+            self._test_file_paths.pop(p, None)
+        logger.info(f"Simulator deleted {deleted} files")
+        return deleted
+
     async def stop_recording(self) -> bool:
         """Stop recording on the camera."""
         await asyncio.sleep(0.1)  # Simulate network delay
