@@ -24,6 +24,7 @@ dependencies = [
     "webdriver-manager>=4.0.1",
     "pycryptodome>=3.20.0",
     "pillow>=11.3.0",
+    "av>=13.0.0",
 ]
 
 [project.optional-dependencies]

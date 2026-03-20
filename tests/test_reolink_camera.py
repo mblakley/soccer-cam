@@ -517,3 +517,146 @@ class TestReolinkHelpers:
         t = {"year": 2024, "mon": 1, "day": 5, "hour": 8, "min": 3, "sec": 7}
         result = ReolinkCamera._reolink_to_datetime_str(t)
         assert result == "2024-01-05 08:03:07"
+
+
+# ── File size from search metadata ───────────────────────────────────
+
+
+class TestReolinkFileSizeCache:
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_size_from_cache(self, mock_log):
+        """get_file_size returns cached size from search results."""
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=AsyncMock()
+        )
+        camera._file_sizes = {"Rec/test.mp4": 450_000_000}
+        size = await camera.get_file_size("Rec/test.mp4")
+        assert size == 450_000_000
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_file_sizes_populated_by_search(self, mock_log):
+        """get_file_list populates the file size cache."""
+        mock_client = AsyncMock()
+        search_value = {
+            "SearchResult": {
+                "Status": 0,
+                "File": [
+                    {
+                        "name": "Rec/20240101/clip.mp4",
+                        "StartTime": {
+                            "year": 2024,
+                            "mon": 1,
+                            "day": 1,
+                            "hour": 12,
+                            "min": 0,
+                            "sec": 0,
+                        },
+                        "EndTime": {
+                            "year": 2024,
+                            "mon": 1,
+                            "day": 1,
+                            "hour": 12,
+                            "min": 30,
+                            "sec": 0,
+                        },
+                        "size": 320_256_446,
+                    },
+                ],
+            }
+        }
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("Search", search_value),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+        await camera.get_file_list(datetime(2024, 1, 1), datetime(2024, 1, 2))
+
+        assert camera._file_sizes["Rec/20240101/clip.mp4"] == 320_256_446
+
+
+# ── Download via Baichuan ────────────────────────────────────────────
+
+
+class TestReolinkCameraDownload:
+    @pytest.mark.asyncio
+    @patch("video_grouper.cameras.reolink.download_and_mux", new_callable=AsyncMock)
+    async def test_download_file_success(self, mock_download, tmp_path):
+        mock_download.return_value = True
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        local_path = str(tmp_path / "video" / "file.mp4")
+
+        result = await camera.download_file("Rec/test.mp4", local_path)
+
+        assert result is True
+        mock_download.assert_awaited_once()
+        call_kwargs = mock_download.call_args[1]
+        assert call_kwargs["host"] == "192.168.1.200"
+        assert call_kwargs["port"] == 9000
+        assert call_kwargs["username"] == "admin"
+        assert call_kwargs["password"] == "admin"
+        assert call_kwargs["file_path"] == "Rec/test.mp4"
+        assert call_kwargs["output_mp4"] == local_path
+        assert call_kwargs["channel"] == 0
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.cameras.reolink.download_and_mux", new_callable=AsyncMock)
+    async def test_download_file_failure(self, mock_download, tmp_path):
+        mock_download.return_value = False
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        local_path = str(tmp_path / "video" / "file.mp4")
+
+        result = await camera.download_file("Rec/test.mp4", local_path)
+        assert result is False
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.cameras.reolink.download_and_mux", new_callable=AsyncMock)
+    async def test_download_file_exception(self, mock_download, tmp_path):
+        mock_download.side_effect = Exception("network error")
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        local_path = str(tmp_path / "video" / "file.mp4")
+
+        result = await camera.download_file("Rec/test.mp4", local_path)
+        assert result is False
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.cameras.reolink.download_and_mux", new_callable=AsyncMock)
+    async def test_download_uses_baichuan_port(self, mock_download, tmp_path):
+        """Verify the configured baichuan_port is used."""
+        mock_download.return_value = True
+        config = CameraConfig(
+            type="reolink",
+            device_ip="10.0.0.1",
+            username="user",
+            password="pass",
+            channel=1,
+            baichuan_port=9001,
+        )
+
+        camera = ReolinkCamera(
+            config=config, storage_path=str(tmp_path), client=AsyncMock()
+        )
+        await camera.download_file("Rec/test.mp4", str(tmp_path / "out.mp4"))
+
+        call_kwargs = mock_download.call_args[1]
+        assert call_kwargs["port"] == 9001
+        assert call_kwargs["channel"] == 1

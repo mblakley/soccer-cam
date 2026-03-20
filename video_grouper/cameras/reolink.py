@@ -10,6 +10,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import pytz
 
 from .base import Camera, DeviceInfo
+from .reolink_download import download_and_mux
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
@@ -39,6 +40,7 @@ class ReolinkCamera(Camera):
         self.logger = logging.getLogger(__name__)
         self._token: Optional[str] = None
         self._token_expiry: float = 0
+        self._file_sizes: dict[str, int] = {}
         self._load_state()
 
     # ── Token management ──────────────────────────────────────────────
@@ -138,6 +140,96 @@ class ReolinkCamera(Camera):
             f"{t['year']:04d}-{t['mon']:02d}-{t['day']:02d} "
             f"{t['hour']:02d}:{t['min']:02d}:{t['sec']:02d}"
         )
+
+    def _parse_file_list(self, raw_files: list) -> List[Dict[str, Any]]:
+        """Parse raw file entries from SearchResult into our file list format."""
+        files = []
+        for f in raw_files:
+            start = f.get("StartTime", {})
+            end = f.get("EndTime", {})
+            file_entry = {
+                "path": f.get("name", ""),
+                "startTime": self._reolink_to_datetime_str(start),
+                "endTime": self._reolink_to_datetime_str(end),
+            }
+            if "size" in f:
+                size_val = int(f["size"])
+                file_entry["size"] = size_val
+                self._file_sizes[file_entry["path"]] = size_val
+            files.append(file_entry)
+        logger.info(f"Found {len(files)} recording files from ReoLink camera")
+        return files
+
+    async def _search_by_active_days(
+        self,
+        client,
+        status_entries: list,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Search day-by-day for files on days marked active in the status bitmap.
+
+        Reolink's Search API returns a status bitmap (31-char string, one per day)
+        instead of file results when the time range spans multiple months.
+        """
+        active_days = []
+        for entry in status_entries:
+            year = entry.get("year", 0)
+            mon = entry.get("mon", 0)
+            table = entry.get("table", "")
+            for day_idx, char in enumerate(table):
+                if char == "1":
+                    day = day_idx + 1  # 0-indexed to 1-indexed
+                    try:
+                        dt = datetime(year, mon, day)
+                        if start_time.date() <= dt.date() <= end_time.date():
+                            active_days.append(dt)
+                    except ValueError:
+                        continue
+
+        if not active_days:
+            logger.info("No active recording days found in status bitmap")
+            return []
+
+        logger.info(
+            f"Status bitmap shows {len(active_days)} active days, "
+            f"searching each for files"
+        )
+
+        all_files = []
+        for day in active_days:
+            day_start = day.replace(hour=0, minute=0, second=0)
+            day_end = day.replace(hour=23, minute=59, second=59)
+
+            data = await self._api_call(
+                client,
+                "Search",
+                {
+                    "Search": {
+                        "channel": self.channel,
+                        "onlyStatus": 0,
+                        "streamType": "main",
+                        "StartTime": self._datetime_to_reolink(day_start),
+                        "EndTime": self._datetime_to_reolink(day_end),
+                    }
+                },
+                action=1,
+                log_name="get_file_list_day",
+            )
+
+            if data is None:
+                continue
+
+            resp = data[0]
+            if resp.get("code") != 0:
+                continue
+
+            sr = resp.get("value", {}).get("SearchResult", {})
+            raw_files = sr.get("File", [])
+            if raw_files:
+                all_files.extend(self._parse_file_list(raw_files))
+
+        return all_files
 
     # ── State persistence (same pattern as Dahua) ─────────────────────
 
@@ -342,25 +434,13 @@ class ReolinkCamera(Camera):
                 search_result = resp.get("value", {}).get("SearchResult", {})
                 status_only = search_result.get("Status")
                 if status_only is not None and not search_result.get("File"):
-                    logger.info(f"Search returned status only: {status_only}")
-                    return []
+                    # Wide time range: camera returns day-level status bitmap
+                    # instead of file list. Search day-by-day for active days.
+                    return await self._search_by_active_days(
+                        client, status_only, start_time, end_time
+                    )
 
-                raw_files = search_result.get("File", [])
-                files = []
-                for f in raw_files:
-                    start = f.get("StartTime", {})
-                    end = f.get("EndTime", {})
-                    file_entry = {
-                        "path": f.get("name", ""),
-                        "startTime": self._reolink_to_datetime_str(start),
-                        "endTime": self._reolink_to_datetime_str(end),
-                    }
-                    if "size" in f:
-                        file_entry["size"] = f["size"]
-                    files.append(file_entry)
-
-                logger.info(f"Found {len(files)} recording files from ReoLink camera")
-                return files
+                return self._parse_file_list(search_result.get("File", []))
             except (httpx.RequestError, httpx.HTTPStatusError) as e:
                 logger.error(f"Failed to get file list from camera: {e}")
                 return []
@@ -372,12 +452,22 @@ class ReolinkCamera(Camera):
             return []
 
     async def get_file_size(self, file_path: str) -> int:
+        """Get file size from search metadata or HTTP HEAD.
+
+        Prefers the 'size' field from get_file_list() search results (available
+        in the SearchResult).  Falls back to an HTTP HEAD request.
+        """
+        # Try cached search metadata first (populated by get_file_list)
+        size = self._file_sizes.get(file_path, 0)
+        if size > 0:
+            return size
+
+        # Fallback: HTTP HEAD (broken on some firmware, may return 0)
         try:
             client, close_client = self._get_client()
             try:
                 if not await self._ensure_token(client):
                     return 0
-
                 url = (
                     f"http://{self.device_ip}/cgi-bin/api.cgi"
                     f"?cmd=Download&source={file_path}"
@@ -396,99 +486,61 @@ class ReolinkCamera(Camera):
             return 0
 
     async def download_file(self, file_path: str, local_path: str) -> bool:
+        """Download a recording via Baichuan protocol (port 9000).
+
+        The Reolink HTTP Download API is broken on some firmware versions.
+        This uses the native Baichuan binary protocol to stream the recording
+        to disk, then remuxes to MP4 via PyAV.
+        """
         try:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-            file_size = await self.get_file_size(file_path)
-            if file_size == 0:
-                logger.warning(
-                    f"File {file_path} reported size 0, attempting download anyway."
-                )
-
             dir_name = os.path.basename(os.path.dirname(local_path))
             file_name = os.path.basename(local_path)
+            file_size = await self.get_file_size(file_path)
 
             if file_size > 0:
                 self.logger.info(
-                    f"Downloading {file_name} to directory '{dir_name}' "
+                    f"Downloading {file_name} to '{dir_name}' via Baichuan "
                     f"({file_size / 1024 / 1024:.1f}MB)"
                 )
-
-            client, close_client = self._get_client()
-            try:
-                if not await self._ensure_token(client):
-                    return False
-
-                url = (
-                    f"http://{self.device_ip}/cgi-bin/api.cgi"
-                    f"?cmd=Download&source={file_path}"
-                    f"&output={file_path}&token={self._token}"
+            else:
+                self.logger.info(
+                    f"Downloading {file_name} to '{dir_name}' via Baichuan"
                 )
 
-                async with client.stream("GET", url) as response:
-                    await self._log_http_call(
-                        "download_file",
-                        response.request,
-                        response,
-                        stream_response=True,
-                    )
-                    if response.status_code != 200:
-                        self.logger.error(
-                            f"Download failed with status {response.status_code}"
-                        )
-                        return False
-
-                    # Get content-length from the streaming response if we didn't have it
-                    if file_size == 0:
-                        file_size = int(response.headers.get("content-length", 0))
-
-                    async with aiofiles.open(local_path, "wb") as f:
-                        downloaded = 0
-                        last_update = time.time()
-                        last_downloaded = 0
-
-                        async for chunk in response.aiter_bytes():
-                            await f.write(chunk)
-                            downloaded += len(chunk)
-
-                            current_time = time.time()
-                            if current_time - last_update >= 10.0 and file_size > 0:
-                                speed = (downloaded - last_downloaded) / (
-                                    current_time - last_update
-                                )
-                                progress = downloaded / file_size * 100
-                                bar_length = 20
-                                filled_length = int(
-                                    bar_length * downloaded // file_size
-                                )
-                                bar = "#" * filled_length + "-" * (
-                                    bar_length - filled_length
-                                )
-                                self.logger.info(
-                                    f"Downloading {file_name} to directory "
-                                    f"'{dir_name}': [{bar}] {progress:.1f}% "
-                                    f"({downloaded / 1024 / 1024:.1f}MB/"
-                                    f"{file_size / 1024 / 1024:.1f}MB) "
-                                    f"@ {speed / 1024 / 1024:.1f}MB/s"
-                                )
-                                last_update = current_time
-                                last_downloaded = downloaded
-
-                    if file_size > 0 and downloaded != file_size:
-                        self.logger.error(
-                            f"Download incomplete: {os.path.basename(file_path)} "
-                            f"({downloaded}/{file_size} bytes)"
-                        )
-                        return False
-
+            def _progress(bytes_written, elapsed):
+                if file_size > 0:
+                    pct = bytes_written / file_size * 100
+                    speed = bytes_written / elapsed if elapsed > 0 else 0
                     self.logger.info(
-                        f"Download complete: {os.path.basename(file_path)} "
-                        f"({downloaded} bytes)"
+                        f"Downloading {file_name}: {pct:.0f}% "
+                        f"({bytes_written / 1024 / 1024:.1f}MB) "
+                        f"@ {speed / 1024 / 1024:.1f}MB/s"
                     )
-                    return True
-            finally:
-                if close_client:
-                    await client.aclose()
+
+            success = await download_and_mux(
+                host=self.device_ip,
+                port=self.config.baichuan_port,
+                username=self.username,
+                password=self.password,
+                file_path=file_path,
+                output_mp4=local_path,
+                channel=self.channel,
+                on_progress=_progress,
+            )
+
+            if success:
+                self.logger.info(f"Download complete: {os.path.basename(file_path)}")
+            else:
+                self.logger.error(f"Download failed: {os.path.basename(file_path)}")
+                if os.path.exists(local_path):
+                    try:
+                        os.remove(local_path)
+                    except OSError:
+                        pass
+            return success
+
         except Exception as e:
             self.logger.error(f"Error downloading {file_path}: {e}")
             if os.path.exists(local_path):
