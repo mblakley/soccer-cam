@@ -56,9 +56,15 @@ class Camera(ABC):
         """Get recording status from the camera."""
         pass
 
-    @abstractmethod
+    @property
+    def supports_file_deletion(self) -> bool:
+        """Whether this camera supports programmatic file deletion."""
+        return False
+
     async def delete_files(self, file_paths: List[str]) -> int:
         """Delete recording files from the camera's storage.
+
+        Not all cameras support this. Check supports_file_deletion first.
 
         Args:
             file_paths: List of remote file paths to delete.
@@ -66,7 +72,7 @@ class Camera(ABC):
         Returns:
             Number of files successfully deleted.
         """
-        pass
+        return 0
 
     @abstractmethod
     async def get_device_info(self) -> DeviceInfo:

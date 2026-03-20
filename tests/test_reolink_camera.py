@@ -410,42 +410,18 @@ class TestReolinkCameraRecording:
 
 
 class TestReolinkCameraDeleteFiles:
+    def test_supports_file_deletion_is_false(self, tmp_path):
+        """Reolink cameras do not support programmatic file deletion."""
+        camera = ReolinkCamera(config=_make_config(), storage_path=str(tmp_path))
+        assert camera.supports_file_deletion is False
+
     @pytest.mark.asyncio
-    @patch(
-        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
-        new_callable=AsyncMock,
-    )
-    async def test_delete_files_success(self, mock_log):
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = [
-            _login_response(),
-            _success_response("Remove", {"rspCode": 200}),
-        ]
-
+    async def test_delete_files_returns_zero(self):
+        """delete_files always returns 0 (unsupported by Reolink API)."""
         camera = ReolinkCamera(
-            config=_make_config(), storage_path="test_path", client=mock_client
+            config=_make_config(), storage_path="test_path", client=AsyncMock()
         )
-
         result = await camera.delete_files(["Rec/file1.mp4", "Rec/file2.mp4"])
-        assert result == 2
-
-    @pytest.mark.asyncio
-    @patch(
-        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
-        new_callable=AsyncMock,
-    )
-    async def test_delete_files_api_error(self, mock_log):
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = [
-            _login_response(),
-            _error_response("Remove"),
-        ]
-
-        camera = ReolinkCamera(
-            config=_make_config(), storage_path="test_path", client=mock_client
-        )
-
-        result = await camera.delete_files(["Rec/file1.mp4"])
         assert result == 0
 
     @pytest.mark.asyncio

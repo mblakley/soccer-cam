@@ -96,6 +96,7 @@ def mock_camera():
     camera.stop_recording = AsyncMock(return_value=True)
     camera.get_recording_status = AsyncMock(return_value=True)
     camera.delete_files = AsyncMock(return_value=0)
+    camera.supports_file_deletion = True
     camera.is_connected = True
     camera.close = AsyncMock()
     return camera

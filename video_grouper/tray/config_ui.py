@@ -1266,6 +1266,15 @@ class ConfigWindow(QWidget):
             if not files:
                 return
 
+            deletion_supported = state.get("deletion_supported", True)
+
+            if not deletion_supported:
+                self.cleanup_list.addItem(
+                    f"Found {len(files)} home recording(s) on the camera. "
+                    "This camera does not support remote file deletion. "
+                    "Files will be automatically overwritten when the SD card fills."
+                )
+
             if state.get("approved"):
                 self.cleanup_list.addItem(
                     "Deletion approved -- waiting for next poll to delete."
@@ -1295,7 +1304,8 @@ class ConfigWindow(QWidget):
                 self.cleanup_list.addItem(list_item)
                 self.cleanup_list.setItemWidget(list_item, widget)
 
-            self.cleanup_delete_btn.setEnabled(True)
+            if deletion_supported:
+                self.cleanup_delete_btn.setEnabled(True)
 
         except Exception as e:
             logger.error(f"Error refreshing cleanup display: {e}")

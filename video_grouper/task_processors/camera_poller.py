@@ -309,24 +309,28 @@ class CameraPoller(PollingProcessor):
 
         if files_to_delete and self.camera.config.auto_stop_recording:
             cleanup_state = self._read_cleanup_state()
-            if cleanup_state.get("approved"):
-                # User approved — delete home recordings
-                try:
-                    deleted = await self.camera.delete_files(files_to_delete)
-                    if deleted > 0:
-                        logger.info(
-                            f"CAMERA_POLLER: Deleted {deleted} home recordings "
-                            "from camera"
+            if self.camera.supports_file_deletion:
+                if cleanup_state.get("approved"):
+                    try:
+                        deleted = await self.camera.delete_files(files_to_delete)
+                        if deleted > 0:
+                            logger.info(
+                                f"CAMERA_POLLER: Deleted {deleted} home "
+                                "recordings from camera"
+                            )
+                            self._clear_cleanup_state()
+                    except Exception as e:
+                        logger.warning(
+                            f"CAMERA_POLLER: Error deleting home recordings: {e}"
                         )
-                        self._clear_cleanup_state()
-                except Exception as e:
-                    logger.warning(
-                        f"CAMERA_POLLER: Error deleting home recordings: {e}"
-                    )
+                elif not cleanup_state.get("files"):
+                    self._write_cleanup_state(files_to_delete, files)
+                    await self._send_deletion_notification(len(files_to_delete))
             elif not cleanup_state.get("files"):
-                # No pending cleanup — publish files and ask user
-                self._write_cleanup_state(files_to_delete, files)
-                await self._send_deletion_notification(len(files_to_delete))
+                # Camera doesn't support deletion — log for tray visibility
+                self._write_cleanup_state(
+                    files_to_delete, files, deletion_supported=False
+                )
 
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
@@ -396,7 +400,12 @@ class CameraPoller(PollingProcessor):
             logger.debug(f"CAMERA_POLLER: Error reading cleanup state: {e}")
         return {}
 
-    def _write_cleanup_state(self, file_paths: List[str], file_infos: list) -> None:
+    def _write_cleanup_state(
+        self,
+        file_paths: List[str],
+        file_infos: list,
+        deletion_supported: bool = True,
+    ) -> None:
         """Write home files pending cleanup to the state file."""
         # Build a lookup of file info by path for display metadata
         info_by_path = {}
@@ -418,6 +427,7 @@ class CameraPoller(PollingProcessor):
         state = {
             "files": files,
             "approved": False,
+            "deletion_supported": deletion_supported,
             "updated_at": datetime.now().isoformat(),
         }
         try:

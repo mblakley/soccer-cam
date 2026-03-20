@@ -301,6 +301,10 @@ class SimulatorCamera(Camera):
             logger.error(f"Error downloading file {file_path}: {e}")
             return False
 
+    @property
+    def supports_file_deletion(self) -> bool:
+        return True
+
     async def delete_files(self, file_paths: List[str]) -> int:
         """Delete recording files from the simulator's internal list."""
         if not file_paths:
