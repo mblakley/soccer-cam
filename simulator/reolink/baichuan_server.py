@@ -21,6 +21,7 @@ from typing import Optional
 from .bcmedia_encoder import encode_file_to_bcmedia
 from .crypto import (
     aes_decrypt,
+    aes_encrypt,
     decrypt_baichuan,
     encrypt_baichuan,
     md5_str_modern,
@@ -381,40 +382,46 @@ class BaichuanServer:
             await writer.drain()
             return
 
-        # Send initial ack: Extension XML with binaryData=1
+        # Build the extension XML that accompanies each data frame.
+        # The client AES-decrypts this to look for <encryptLen>, so we
+        # AES-encrypt it to match real camera behavior.
         ext_xml = (
             '<?xml version="1.0" encoding="UTF-8" ?>'
             "<Extension>"
             "<binaryData>1</binaryData>"
             "</Extension>"
         )
-        ext_encrypted = encrypt_baichuan(ext_xml, header["channel_id"])
+        ext_encrypted = aes_encrypt(ext_xml.encode("utf8"), aes_key)
+
+        # Send initial ack (extension XML only, no binary payload)
         ack_header = self._build_header(
             cmd_id=5,
             body_length=len(ext_encrypted),
             channel_id=header["channel_id"],
             msg_num=0,
             response_code=200,
+            payload_offset=0,
         )
         writer.write(ack_header + ext_encrypted)
         await writer.drain()
 
-        # Stream BcMedia-encoded video as push frames
-        # Each chunk is sent as a cmd_id=5 message with the binary payload
-        # The client reads these with idle timeout to detect end of stream
+        # Stream BcMedia-encoded video as push frames.
+        # Each frame = extension XML + binary payload in one message.
+        # payload_offset = len(ext_xml) tells the client where the
+        # binary BcMedia data begins (client splits on this offset).
         chunks_sent = 0
         bytes_sent = 0
         for bcmedia_chunk in encode_file_to_bcmedia(local_path):
-            # Send as unencrypted BcMedia data (client handles raw BcMedia)
+            total_body = ext_encrypted + bcmedia_chunk
             frame_header = self._build_header(
                 cmd_id=5,
-                body_length=len(bcmedia_chunk),
+                body_length=len(total_body),
                 channel_id=header["channel_id"],
                 msg_num=0,
                 response_code=200,
-                payload_offset=0,
+                payload_offset=len(ext_encrypted),
             )
-            writer.write(frame_header + bcmedia_chunk)
+            writer.write(frame_header + total_body)
             chunks_sent += 1
             bytes_sent += len(bcmedia_chunk)
 

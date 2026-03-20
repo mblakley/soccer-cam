@@ -524,8 +524,11 @@ class ReolinkCamera(Camera):
                         f"@ {speed / 1024 / 1024:.1f}MB/s"
                     )
 
+            # Extract hostname without port (device_ip may be "host:port")
+            baichuan_host = self.device_ip.split(":")[0]
+
             success = await download_and_mux(
-                host=self.device_ip,
+                host=baichuan_host,
                 port=self.config.baichuan_port,
                 username=self.username,
                 password=self.password,
