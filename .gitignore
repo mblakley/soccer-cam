@@ -167,6 +167,12 @@ cython_debug/
 /shared_data/*
 !/shared_data/.gitkeep
 
+/shared_data_simulator/*
+!/shared_data_simulator/config.ini
+
+simulator_clips_staging/
+.simulator_test_backup.json
+
 tests/e2e/test_data/*
 tests/e2e/test_logs/*
 tests/e2e/test_pids.json

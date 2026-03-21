@@ -111,6 +111,9 @@ class AutocamDiscoveryProcessor(PollingProcessor):
                                 logger.error(
                                     f"AUTOCAM_DISCOVERY: Could not enqueue autocam task for group '{group_dir.name}': {e}"
                                 )
+                        elif status == "autocam_complete":
+                            # Recovery: queue YouTube upload if not already done
+                            await self._recover_upload(group_dir)
                         else:
                             logger.debug(
                                 f"AUTOCAM_DISCOVERY: Directory {group_dir.name} skipped - status: {status}, queued: {str(group_dir) in queued_group_names}"
@@ -127,6 +130,24 @@ class AutocamDiscoveryProcessor(PollingProcessor):
                 logger.debug(f"AUTOCAM_DISCOVERY: Skipping non-directory: {group_dir}")
 
         logger.info("AUTOCAM_DISCOVERY: Discovery complete")
+
+    async def _recover_upload(self, group_dir: Path) -> None:
+        """Queue YouTube upload for autocam_complete directories missing an upload."""
+        if not self.config.youtube.enabled:
+            return
+        upload_processor = getattr(self.autocam_processor, "upload_processor", None)
+        if not upload_processor:
+            return
+        # Skip if upload already queued or completed (state would be 'complete')
+        if upload_processor.get_queue_size() > 0:
+            return
+        from .tasks.upload import YoutubeUploadTask
+        import os
+
+        relative_group_dir = os.path.relpath(str(group_dir), self.storage_path)
+        youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
+        await upload_processor.add_work(youtube_task)
+        logger.info(f"AUTOCAM_DISCOVERY: Recovered YouTube upload for {group_dir.name}")
 
     def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:
         """Find the raw video file and determine the autocam output path."""

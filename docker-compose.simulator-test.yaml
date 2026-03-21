@@ -1,0 +1,28 @@
+# Docker Compose override for real E2E test with installed service.
+#
+# Mounts 2 real Reolink clips from the July 22, 2025 game and seeds them
+# with their original timestamps so TeamSnap/PlayMetrics find matching games.
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.simulator-test.yaml --profile reolink up -d
+#
+# Requires SIMULATOR_CLIPS_DIR env var pointing to a directory containing
+# the 2 clips to mount (set by run_simulator_test.ps1).
+
+services:
+  reolink-simulator:
+    volumes:
+      - reolink-sim-data:/data
+      - "${SIMULATOR_CLIPS_DIR}:/clips:ro"
+    environment:
+      - CAMERA_TYPE=reolink
+      - USERNAME=admin
+      - PASSWORD=mblakley82
+      - DEVICE_NAME=SoccerCam
+      - CLIPS_DIR=/clips
+      - PYTHONUNBUFFERED=1
+      - SEED_BASE_TIME=2025-07-22T18:08:14+00:00
+      - SEED_DURATION=300
+      - SEED_GAP=0
+      - SEED_GROUP_SIZE=2
+      - SEED_FILE_COUNT=2

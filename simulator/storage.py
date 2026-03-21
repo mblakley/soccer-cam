@@ -218,9 +218,20 @@ class StorageManager:
     def seed_from_clips(self, clips_dir: str) -> int:
         """Auto-seed recordings from a mounted clips directory.
 
-        Creates 6 files in 2 groups of 3 (10-second gap between groups),
-        timestamped 12 hours ago. Matches the SimulatorCamera seeding logic
-        so E2E test expectations (17 stages, multi-group validation) hold.
+        By default, creates 6 files in 2 groups of 3 (10-second gap between
+        groups), timestamped 12 hours ago. Matches the SimulatorCamera seeding
+        logic so E2E test expectations hold.
+
+        Override defaults with environment variables:
+          SEED_BASE_TIME  -- ISO datetime for first file (e.g. 2025-07-22T18:08:14+00:00)
+          SEED_DURATION   -- per-file duration in seconds (default 60)
+          SEED_GAP        -- gap between groups in seconds (default 10)
+          SEED_GROUP_SIZE -- files per group (default 3)
+          SEED_FILE_COUNT -- total number of files (default 6)
+
+        When SEED_FILE_COUNT is set to match the number of available clips,
+        each clip is used exactly once (no cycling). Otherwise clips are
+        cycled as needed.
         """
         if not os.path.isdir(clips_dir):
             logger.warning(f"Clips directory not found: {clips_dir}")
@@ -242,16 +253,27 @@ class StorageManager:
             logger.info("Recordings already exist, skipping seed")
             return 0
 
-        utc_now = datetime.now(timezone.utc).replace(microsecond=0)
-        base_time = utc_now - timedelta(hours=12)
-        file_duration = 60  # seconds
+        # Read overrides from environment
+        env_base_time = os.environ.get("SEED_BASE_TIME")
+        file_duration = int(os.environ.get("SEED_DURATION", "60"))
+        gap_seconds = int(os.environ.get("SEED_GAP", "10"))
+        group_size = int(os.environ.get("SEED_GROUP_SIZE", "3"))
+        file_count = int(os.environ.get("SEED_FILE_COUNT", "6"))
+
+        if env_base_time:
+            base_time = datetime.fromisoformat(env_base_time)
+            logger.info(f"Using SEED_BASE_TIME={env_base_time}")
+        else:
+            utc_now = datetime.now(timezone.utc).replace(microsecond=0)
+            base_time = utc_now - timedelta(hours=12)
+
         current_time = base_time
         count = 0
 
-        for i in range(6):
-            # 10-second gap between group 1 (0-2) and group 2 (3-5)
-            if i == 3:
-                current_time = current_time + timedelta(seconds=10)
+        for i in range(file_count):
+            # Insert gap between groups (at each group boundary after the first)
+            if group_size > 0 and i > 0 and i % group_size == 0 and gap_seconds > 0:
+                current_time = current_time + timedelta(seconds=gap_seconds)
 
             start_time = current_time
             end_time = current_time + timedelta(seconds=file_duration)
@@ -287,6 +309,8 @@ class StorageManager:
 
         self._save_metadata()
         logger.info(
-            f"Seeded {count} recordings from {clips_dir} ({len(clip_files)} clips)"
+            f"Seeded {count} recordings from {clips_dir} "
+            f"({len(clip_files)} clips, duration={file_duration}s, "
+            f"gap={gap_seconds}s, group_size={group_size})"
         )
         return count

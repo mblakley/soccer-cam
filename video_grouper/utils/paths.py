@@ -31,14 +31,31 @@ def _get_storage_path_from_registry() -> Path | None:
         return None
 
 
+def _get_storage_path_from_env() -> Path | None:
+    """Read storage path from VIDEOGROUPER_CONFIG environment variable.
+
+    The env var should point to a config.ini file; we return its parent directory.
+    """
+    env_config = os.environ.get("VIDEOGROUPER_CONFIG")
+    if env_config:
+        config_path = Path(env_config)
+        if config_path.exists():
+            return config_path.parent
+    return None
+
+
 def get_shared_data_path() -> Path:
     """Returns the path to the shared_data directory.
 
-    In development: <project_root>/shared_data
-    In PyInstaller:  reads StoragePath from Windows registry, falls back to exe directory.
+    Priority: VIDEOGROUPER_CONFIG env var > Windows registry > exe directory > project root.
     """
+    # Environment variable override (highest priority)
+    env_path = _get_storage_path_from_env()
+    if env_path:
+        return env_path
+
     if _is_pyinstaller():
-        # Try registry first (set by NSIS installer)
+        # Try registry (set by NSIS installer)
         reg_path = _get_storage_path_from_registry()
         if reg_path and reg_path.exists():
             return reg_path
