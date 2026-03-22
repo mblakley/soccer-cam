@@ -69,7 +69,10 @@ class YoutubeUploadTask(BaseUploadTask):
                 storage_path = str(get_shared_data_path())
 
             if ntfy_service is None:
-                raise ValueError("ntfy_service must be provided to YoutubeUploadTask")
+                logger.warning(
+                    "YoutubeUploadTask: ntfy_service not provided, "
+                    "playlist fallback notifications will be unavailable"
+                )
 
             # Get credentials and token file paths
             credentials_file, token_file = get_youtube_paths(storage_path)
@@ -224,6 +227,10 @@ class YoutubeUploadTask(BaseUploadTask):
             logger.error(f"YouTube upload functionality not available: {e}")
             return False
         except Exception as e:
+            from video_grouper.utils.youtube_upload import YouTubeQuotaError
+
+            if isinstance(e, YouTubeQuotaError):
+                raise  # Propagate to processor for deferred retry
             logger.error(f"Error during YouTube upload for {self.group_dir}: {e}")
             return False
 
@@ -311,7 +318,7 @@ class YoutubeUploadTask(BaseUploadTask):
             return processed_playlist_name, raw_playlist_name
 
         # 5. No mapping found — request via ntfy if not already waiting
-        if not ntfy_service.is_waiting_for_input(self.group_dir):
+        if ntfy_service and not ntfy_service.is_waiting_for_input(self.group_dir):
             logger.warning(
                 f"No playlist mapping found for team '{match_info.my_team_name}'. Sending NTFY request."
             )

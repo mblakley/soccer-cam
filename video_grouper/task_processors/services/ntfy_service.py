@@ -309,10 +309,10 @@ class NtfyService:
             success = await self.request_was_there_a_match(group_dir, combined_path)
 
             if success:
-                logger.info(f"✓ Successfully initiated NTFY processing for {group_dir}")
+                logger.info(f"Successfully initiated NTFY processing for {group_dir}")
                 return True
             else:
-                logger.error(f"✗ Failed to initiate NTFY processing for {group_dir}")
+                logger.error(f"Failed to initiate NTFY processing for {group_dir}")
                 return False
 
         except Exception as e:

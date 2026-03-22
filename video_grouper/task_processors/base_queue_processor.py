@@ -185,19 +185,56 @@ class QueueProcessor(ABC):
                         f"{self.__class__.__name__}: Removed completed item from queue: {item} (queue size: {queue_size})"
                     )
                 except Exception as e:
+                    from video_grouper.utils.youtube_upload import YouTubeQuotaError
+
+                    item_key = self.get_item_key(item)
+
+                    if isinstance(e, YouTubeQuotaError):
+                        # Quota errors should not be retried immediately.
+                        # Wait until the quota resets (YouTube daily quotas
+                        # reset at midnight Pacific Time) then retry.
+                        self._queue.task_done()
+                        self._in_progress_item = None
+
+                        # Calculate wait: next midnight PT + 5 min buffer
+                        from datetime import datetime, timedelta
+                        import pytz
+
+                        now_pt = datetime.now(pytz.timezone("US/Pacific"))
+                        tomorrow_pt = (now_pt + timedelta(days=1)).replace(
+                            hour=0, minute=5, second=0, microsecond=0
+                        )
+                        wait_seconds = (tomorrow_pt - now_pt).total_seconds()
+                        wait_hours = wait_seconds / 3600
+
+                        logger.warning(
+                            f"{self.__class__.__name__}: YouTube quota exceeded for {item}. "
+                            f"Waiting {wait_hours:.1f}h until quota resets "
+                            f"(~{tomorrow_pt.strftime('%I:%M %p PT')}). [trace_id: {trace_id}]"
+                        )
+
+                        # Sleep until quota resets, then requeue
+                        await asyncio.sleep(wait_seconds)
+                        await self._queue.put(item)
+                        self._retry_counts.pop(item_key, None)
+                        await self.save_state()
+                        logger.info(
+                            f"{self.__class__.__name__}: Quota reset, requeued {item} for upload."
+                        )
+                        continue
+
                     logger.error(
                         f"{self.__class__.__name__}: Failed to process item {item}: {e} [trace_id: {trace_id}]"
                     )
 
                     # Check retry count
-                    item_key = self.get_item_key(item)
                     retry_count = self._retry_counts.get(item_key, 0)
 
                     if retry_count < self._max_retries:
                         # Task failed but can be retried - requeue at the end
-                        self._queue.task_done()  # Mark current item as done
+                        self._queue.task_done()
                         self._in_progress_item = None
-                        await self._queue.put(item)  # Requeue at the end
+                        await self._queue.put(item)
                         self._retry_counts[item_key] = retry_count + 1
                         queue_size = self._queue.qsize()
                         logger.info(

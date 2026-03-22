@@ -337,6 +337,14 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
+        # Recording control
+        self.recording_action = QAction("Pause Recording", self)
+        self.recording_action.triggered.connect(self.toggle_recording)
+        menu.addAction(self.recording_action)
+        self._recording_enabled = True
+
+        menu.addSeparator()
+
         # Configuration action
         config_action = QAction("Configuration", self)
         config_action.triggered.connect(self.show_config)
@@ -396,6 +404,50 @@ class SystemTrayIcon(QSystemTrayIcon):
     def on_config_saved(self):
         self.config = load_config(self.config_path)
         logger.info("Configuration saved.")
+
+    def toggle_recording(self):
+        """Toggle camera recording on/off via the Reolink API."""
+        import asyncio
+        from video_grouper.utils.config import load_config
+        from video_grouper.cameras.reolink import ReolinkCamera
+
+        try:
+            config = load_config(self.config_path)
+            cam_config = config.cameras[0] if config.cameras else None
+            if not cam_config or cam_config.type != "reolink":
+                self.showMessage("Recording", "No Reolink camera configured")
+                return
+
+            cam = ReolinkCamera(cam_config, config.storage.path)
+            loop = asyncio.new_event_loop()
+
+            if self._recording_enabled:
+                # Pause: set TIMING to all zeros
+                success = loop.run_until_complete(cam.stop_recording())
+                if success:
+                    self._recording_enabled = False
+                    self.recording_action.setText("Resume Recording")
+                    self.showMessage("Recording", "Recording paused")
+                else:
+                    self.showMessage("Recording", "Failed to pause recording")
+            else:
+                # Resume: set TIMING to all ones
+                success = loop.run_until_complete(cam.start_recording())
+                if success:
+                    self._recording_enabled = True
+                    self.recording_action.setText("Pause Recording")
+                    self.showMessage("Recording", "Recording resumed")
+                else:
+                    self.showMessage("Recording", "Failed to resume recording")
+
+            loop.close()
+        except Exception as e:
+            logger.error(f"Error toggling recording: {e}")
+            self.showMessage(
+                "Recording",
+                f"Error: {str(e)}",
+                QSystemTrayIcon.MessageIcon.Critical.value,
+            )
 
     def start_service(self):
         try:

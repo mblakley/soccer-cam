@@ -182,7 +182,8 @@ async def test_combine_videos_success(mock_av_open):
     containers = [_make_mock_container() for _ in range(4)]
     mock_av_open.side_effect = containers
 
-    result = await combine_videos(["file1.dav", "file2.dav"], "output.mp4")
+    with patch("video_grouper.utils.ffmpeg_utils.os.replace"):
+        result = await combine_videos(["file1.dav", "file2.dav"], "output.mp4")
 
     assert result is True
 
@@ -193,6 +194,7 @@ async def test_trim_video_success(mock_av_open):
     containers = [_make_mock_container() for _ in range(2)]
     mock_av_open.side_effect = containers
 
-    result = await trim_video("input.mp4", "output.mp4", "00:05:00", "01:00:00")
+    with patch("video_grouper.utils.ffmpeg_utils.os.replace"):
+        result = await trim_video("input.mp4", "output.mp4", "00:05:00", "01:00:00")
 
     assert result is True

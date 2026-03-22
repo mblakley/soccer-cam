@@ -6,7 +6,7 @@ $BUILD_NUMBER = "0"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ICON_PATH = Join-Path $SCRIPT_DIR "video_grouper\icon.ico"
 $SERVICE_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\service\main.py"
-$TRAY_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\tray\main.py"
+$TRAY_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\tray\tray_entry.py"
 $INSTALLER_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\installer\installer.nsi"
 $DIST_DIR = Join-Path $SCRIPT_DIR "video_grouper\dist"
 $BUILD_DIR = Join-Path $SCRIPT_DIR "video_grouper\build"
@@ -37,7 +37,7 @@ if (-not (Test-Path $NSIS_PATH)) {
 # Build service executable
 Write-Host "Building service executable..."
 $iconArg = if (Test-Path $ICON_PATH) { "--icon=$ICON_PATH" } else { "" }
-uv run pyinstaller --noconfirm --onefile --windowed $iconArg --name=VideoGrouperService --distpath=$DIST_DIR --workpath=$BUILD_DIR $SERVICE_SCRIPT
+uv run pyinstaller --noconfirm --onefile $iconArg --name=VideoGrouperService --distpath=$DIST_DIR --workpath=$BUILD_DIR $SERVICE_SCRIPT
 
 # Build tray agent executable
 Write-Host "Building tray agent executable..."

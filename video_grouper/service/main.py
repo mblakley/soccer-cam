@@ -49,17 +49,25 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         setup_logging(level="INFO", app_name="video_grouper")
         logger = logging.getLogger(__name__)
 
-        # Find config: check registry, then exe directory
+        # Find config: env var > registry > exe directory
         config_path = None
-        try:
-            import winreg
+        env_config = os.environ.get("VIDEOGROUPER_CONFIG")
+        if env_config:
+            config_path = Path(env_config)
+            logger.info(f"Using config from VIDEOGROUPER_CONFIG: {config_path}")
 
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper")
-            storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
-            winreg.CloseKey(key)
-            config_path = Path(storage_path) / "config.ini"
-        except Exception:
-            pass
+        if not config_path or not config_path.exists():
+            try:
+                import winreg
+
+                key = winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper"
+                )
+                storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
+                winreg.CloseKey(key)
+                config_path = Path(storage_path) / "config.ini"
+            except Exception:
+                pass
 
         if not config_path or not config_path.exists():
             exe_dir = Path(os.path.dirname(sys.executable))

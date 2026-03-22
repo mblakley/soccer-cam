@@ -203,10 +203,16 @@ class MatchInfoService:
             logger.info(f"TeamSnap conversion result: {match_info}")
             return match_info
         elif source == "PlayMetrics":
+            # Use is_home flag from API to set "Home"/"Away" as location
+            if "is_home" in game:
+                location = "Home" if game["is_home"] else "Away"
+            else:
+                location = game.get("location", "")
+
             match_info = {
                 "my_team_name": game.get("team_name", ""),
                 "opponent_team_name": game.get("opponent", ""),
-                "location": game.get("location", ""),
+                "location": location,
             }
 
             # Add date/time if available
@@ -348,12 +354,10 @@ class MatchInfoService:
         api_success = await self.populate_match_info_from_apis(group_dir)
 
         if api_success:
-            logger.info(
-                f"✓ Successfully populated match info from APIs for {group_dir}"
-            )
+            logger.info(f"Successfully populated match info from APIs for {group_dir}")
             return True
 
-        logger.info("✗ API-based population failed or returned no data")
+        logger.info("API-based population failed or returned no data")
 
         # If APIs didn't work and NTFY is enabled, try NTFY
         logger.info(f"NTFY service enabled: {self.ntfy_service.enabled}")
@@ -364,13 +368,13 @@ class MatchInfoService:
             )
 
             if ntfy_success:
-                logger.info(f"✓ Initiated NTFY processing for {group_dir}")
+                logger.info(f"Initiated NTFY processing for {group_dir}")
                 return True
             else:
-                logger.warning(f"✗ NTFY processing failed for {group_dir}")
+                logger.warning(f"NTFY processing failed for {group_dir}")
 
         logger.warning(
-            f"✗ Could not process match info for {group_dir} - no APIs found games and NTFY not available"
+            f"Could not process match info for {group_dir} - no APIs found games and NTFY not available"
         )
         return False
 

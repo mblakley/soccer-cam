@@ -17,7 +17,22 @@ class DeviceInfo(TypedDict):
 
 
 class Camera(ABC):
-    """Base class for camera implementations."""
+    """Base class for camera implementations.
+
+    To add a new camera type, subclass this and implement all abstract methods.
+    Then register it with the camera registry::
+
+        from video_grouper.cameras import register_camera
+        register_camera("mytype", MyCameraClass)
+
+    Constructor signature: ``__init__(self, config: CameraConfig, storage_path: str, client=None)``
+
+    - *config*: A :class:`~video_grouper.utils.config.CameraConfig` instance.
+    - *storage_path*: Root directory for downloaded videos.
+    - *client*: Optional HTTP client for dependency injection in tests.
+
+    See ``docs/ADDING_A_CAMERA.md`` for a full walkthrough.
+    """
 
     @property
     def name(self) -> str:

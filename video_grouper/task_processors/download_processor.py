@@ -8,6 +8,7 @@ from video_grouper.models import DirectoryState
 from video_grouper.models import RecordingFile
 from .tasks.video import CombineTask
 from video_grouper.utils.config import Config
+from video_grouper.utils.disk_space import check_disk_space
 from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
@@ -55,9 +56,31 @@ class DownloadProcessor(QueueProcessor):
             )
             return
 
+        # Check disk space before downloading
+        min_free_gb = self.config.storage.min_free_gb
+        has_space, free_gb = check_disk_space(self.storage_path, min_free_gb)
+        if not has_space:
+            logger.error(
+                f"DOWNLOAD: Low disk space ({free_gb:.1f} GB free, "
+                f"minimum {min_free_gb} GB required). "
+                f"Skipping download of {os.path.basename(file_path)}."
+            )
+            raise RuntimeError(
+                f"Insufficient disk space: {free_gb:.1f} GB free, need {min_free_gb} GB"
+            )
+
+        # Download to a temp file first so a crash mid-download never
+        # leaves a partial file at the final path.  Only rename on success.
+        temp_path = file_path + ".tmp"
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
+
+            # Clean up any leftover temp file from a previous crashed attempt
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
             # The camera implementation may expose either a synchronous or an
             # asynchronous `download_file` method depending on the concrete
@@ -66,7 +89,7 @@ class DownloadProcessor(QueueProcessor):
             # are supported seamlessly.
 
             download_result = self.camera.download_file(
-                file_path=item.metadata["path"], local_path=file_path
+                file_path=item.metadata["path"], local_path=temp_path
             )
 
             import asyncio
@@ -77,6 +100,13 @@ class DownloadProcessor(QueueProcessor):
                 download_successful = download_result
 
             if download_successful:
+                # Atomic rename: temp -> final (only on success).
+                # If the camera wrote directly to file_path (legacy behavior
+                # or mock), the temp file won't exist -- that's OK.
+                try:
+                    os.replace(temp_path, file_path)
+                except OSError:
+                    pass
                 await dir_state.update_file_state(file_path, status="downloaded")
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
@@ -114,6 +144,11 @@ class DownloadProcessor(QueueProcessor):
                 f"DOWNLOAD: An error occurred during download of {os.path.basename(file_path)}: {e}",
                 exc_info=True,
             )
+            # Clean up temp file on any error
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
             await dir_state.update_file_state(file_path, status="download_failed")
             raise
 

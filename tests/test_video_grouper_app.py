@@ -341,7 +341,7 @@ class TestVideoGrouperAppRefactored:
         mock_config.camera.type = "invalid_camera"
 
         try:
-            with pytest.raises(ValueError, match="Unsupported camera type"):
+            with pytest.raises(ValueError, match="Unknown camera type"):
                 VideoGrouperApp(mock_config)
         finally:
             # Ensure loggers are closed even if exception occurs

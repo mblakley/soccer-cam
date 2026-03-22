@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import re
+import socket
 import struct
 import time
 from hashlib import md5
@@ -295,11 +296,21 @@ class BaichuanStreamClient:
     def is_connected(self) -> bool:
         return self._writer is not None and not self._writer.is_closing()
 
-    async def connect(self):
-        """Open TCP connection to camera on Baichuan port."""
-        self._reader, self._writer = await asyncio.open_connection(
-            self._host, self._port
+    async def connect(self, timeout: float = 30.0):
+        """Open TCP connection to camera on Baichuan port.
+
+        Args:
+            timeout: Connection timeout in seconds (default 30s).
+        """
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_connection(self._host, self._port),
+            timeout=timeout,
         )
+        # Tune TCP socket for download throughput (2x speed improvement)
+        sock = self._writer.transport.get_extra_info("socket")
+        if sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     async def close(self):
         """Close TCP connection."""
@@ -896,7 +907,41 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
             os.remove(annexb_path)
 
 
-async def download_and_mux(
+def _download_and_mux_sync(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    file_path: str,
+    output_mp4: str,
+    channel: int = 0,
+    on_progress=None,
+) -> bool:
+    """Run download + mux in a dedicated event loop (called from a thread).
+
+    Having a private event loop prevents contention with the main service
+    loop (camera poller, PlayMetrics, NTFY, etc.) which was halving
+    download throughput.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            _download_and_mux_async(
+                host,
+                port,
+                username,
+                password,
+                file_path,
+                output_mp4,
+                channel,
+                on_progress,
+            )
+        )
+    finally:
+        loop.close()
+
+
+async def _download_and_mux_async(
     host: str,
     port: int,
     username: str,
@@ -919,8 +964,8 @@ async def download_and_mux(
     client = BaichuanStreamClient(host, port, username, password)
 
     try:
-        await client.connect()
-        await client.login()
+        await client.connect()  # has built-in 30s timeout
+        await asyncio.wait_for(client.login(), timeout=30.0)
 
         stats = await client.download_file_replay(
             file_path=file_path,
@@ -941,7 +986,7 @@ async def download_and_mux(
 
         # Remux raw bitstream -> MP4
         codec = stats.get("video_codec") or "H265"
-        await asyncio.to_thread(_remux_raw_to_mp4, temp_raw, output_mp4, codec)
+        _remux_raw_to_mp4(temp_raw, output_mp4, codec)
         logger.info(f"Remuxed to {os.path.basename(output_mp4)}")
 
         return True
@@ -956,3 +1001,31 @@ async def download_and_mux(
                 os.remove(temp_raw)
             except OSError:
                 pass
+
+
+async def download_and_mux(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    file_path: str,
+    output_mp4: str,
+    channel: int = 0,
+    on_progress=None,
+) -> bool:
+    """Download a recording via Baichuan protocol and mux to MP4.
+
+    Runs in a dedicated thread with its own event loop to avoid contention
+    with the main service loop.
+    """
+    return await asyncio.to_thread(
+        _download_and_mux_sync,
+        host,
+        port,
+        username,
+        password,
+        file_path,
+        output_mp4,
+        channel,
+        on_progress,
+    )

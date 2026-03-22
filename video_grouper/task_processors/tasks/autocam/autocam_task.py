@@ -2,6 +2,7 @@
 Autocam task for processing videos through Once Autocam GUI.
 """
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -143,9 +144,15 @@ class AutocamTask(BaseTask):
                 )
                 return False
 
-            # Run the autocam automation (outputs .mkv)
-            success = run_autocam_on_file(
-                self.autocam_config, self.input_path, self.output_path
+            # Run the autocam automation in a thread to avoid blocking
+            # the asyncio/Qt event loop (autocam polls with time.sleep)
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(
+                None,
+                run_autocam_on_file,
+                self.autocam_config,
+                self.input_path,
+                self.output_path,
             )
 
             if not success:

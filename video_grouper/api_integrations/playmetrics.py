@@ -1,9 +1,11 @@
 """
-PlayMetrics API integration using calendar ICS file.
+PlayMetrics API integration.
 
-This module provides a way to get game information from the PlayMetrics calendar.
+This module provides a way to get game information from PlayMetrics via their
+REST API (primary) or calendar ICS file (fallback).
 """
 
+import json
 import os
 import logging
 from datetime import datetime, timedelta, timezone
@@ -692,9 +694,387 @@ class PlayMetricsAPI:
             logger.error(f"Failed to parse calendar: {e}")
             return []
 
+    def _get_events_via_rest_api(self) -> Optional[List[GameInfo]]:
+        """
+        Get events via PlayMetrics REST API using the authenticated Selenium session.
+
+        The PlayMetrics SPA uses Firebase auth + pm-access-key headers. The API
+        scopes calendars to the current role (club). Users may have multiple roles
+        across clubs, so we try each role that might contain our team.
+
+        Returns:
+            List of event dicts, or None if the API approach failed.
+        """
+        if not self.driver or not self.logged_in:
+            return None
+
+        try:
+            # Navigate to dashboard to trigger Firebase auth flow
+            logger.info("Navigating to dashboard to establish API auth...")
+            self.driver.get(f"{self.BASE_URL}/dashboard")
+            time.sleep(5)
+
+            # Get the user's roles from firebase/user/login response
+            roles = self._get_user_roles()
+            if not roles:
+                logger.warning("Could not get user roles from PlayMetrics")
+                return None
+
+            logger.info(
+                f"PlayMetrics user has {len(roles)} roles: "
+                f"{[r.get('name', '?') for r in roles]}"
+            )
+
+            # Try each role to find calendars with games
+            for role in roles:
+                role_id = role.get("id", "")
+                role_name = role.get("name", "?")
+                logger.info(f"Trying role: {role_id} ({role_name})")
+
+                # Switch to this role by updating Vuex localStorage
+                self.driver.execute_script(
+                    """
+                    var vuex = JSON.parse(localStorage.getItem('vuex') || '{}');
+                    if (!vuex.auth) vuex.auth = {};
+                    vuex.auth.currentRole = arguments[0];
+                    vuex.auth.previousRoleID = arguments[0].id;
+                    localStorage.setItem('vuex', JSON.stringify(vuex));
+                    """,
+                    role,
+                )
+
+                # Reload calendar page with the new role
+                self.driver.get(f"{self.BASE_URL}/calendar")
+                time.sleep(6)
+
+                # Fetch calendar data via JS in the page context
+                events = self._fetch_calendar_from_page()
+                if events:
+                    logger.info(f"Found {len(events)} events under role {role_name}")
+                    return events
+
+            logger.warning("No events found under any role")
+            return []
+
+        except Exception as e:
+            logger.error(f"PlayMetrics REST API failed: {e}")
+            return None
+
+    def _get_user_roles(self) -> list:
+        """Extract user roles from the firebase/user/login API response."""
+        try:
+            result = self.driver.execute_async_script("""
+var callback = arguments[arguments.length - 1];
+var dbReq = indexedDB.open('firebaseLocalStorageDb');
+dbReq.onerror = function() { callback('[]'); };
+dbReq.onsuccess = function(event) {
+    var db = event.target.result;
+    var tx = db.transaction('firebaseLocalStorage', 'readonly');
+    var getAll = tx.objectStore('firebaseLocalStorage').getAll();
+    getAll.onsuccess = function() {
+        var firebaseToken = null;
+        for (var i = 0; i < getAll.result.length; i++) {
+            var val = getAll.result[i].value;
+            if (val && val.stsTokenManager) {
+                firebaseToken = val.stsTokenManager.accessToken;
+                break;
+            }
+        }
+        if (!firebaseToken) { callback('[]'); return; }
+
+        fetch('https://api.playmetrics.com/firebase/user/login', {
+            method: 'POST',
+            headers: {'Firebase-Token': firebaseToken, 'Content-Type': 'application/json'},
+            body: '{}'
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            callback(JSON.stringify(data.roles || []));
+        })
+        .catch(function() { callback('[]'); });
+    };
+};
+""")
+            return json.loads(result) if result else []
+        except Exception as e:
+            logger.error(f"Failed to get user roles: {e}")
+            return []
+
+    def _fetch_calendar_from_page(self) -> Optional[List[GameInfo]]:
+        """
+        Fetch calendar data using the authenticated page context.
+
+        After navigating to the calendar page with the correct role set in
+        Vuex, this extracts the Firebase token and pm-access-key, then calls
+        the calendar API.
+        """
+        try:
+            js_code = """
+var callback = arguments[arguments.length - 1];
+
+var dbReq = indexedDB.open('firebaseLocalStorageDb');
+dbReq.onerror = function() { callback(JSON.stringify({error: 'IndexedDB open failed'})); };
+dbReq.onsuccess = function(event) {
+    var db = event.target.result;
+    var tx = db.transaction('firebaseLocalStorage', 'readonly');
+    var getAll = tx.objectStore('firebaseLocalStorage').getAll();
+    getAll.onsuccess = function() {
+        var firebaseToken = null;
+        for (var i = 0; i < getAll.result.length; i++) {
+            var val = getAll.result[i].value;
+            if (val && val.stsTokenManager && val.stsTokenManager.accessToken) {
+                firebaseToken = val.stsTokenManager.accessToken;
+                break;
+            }
+        }
+        if (!firebaseToken) {
+            callback(JSON.stringify({error: 'No Firebase token'}));
+            return;
+        }
+
+        // Get the current role from Vuex store
+        var vuex = JSON.parse(localStorage.getItem('vuex') || '{}');
+        var currentRoleId = (vuex.auth && vuex.auth.currentRole)
+            ? vuex.auth.currentRole.id : '';
+
+        // Login with the specific role to get role-scoped access_key
+        fetch('https://api.playmetrics.com/firebase/user/login', {
+            method: 'POST',
+            headers: {'Firebase-Token': firebaseToken, 'Content-Type': 'application/json'},
+            body: JSON.stringify({current_role_id: currentRoleId, client_type: 'desktop'})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(loginData) {
+            var accessKey = loginData.access_key || '';
+
+            var now = new Date();
+            var startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            var endDate = new Date(now.getFullYear(), now.getMonth() + 6, 0);
+            var filter = JSON.stringify({
+                start_date: startDate.toISOString().split('T')[0],
+                end_date: endDate.toISOString().split('T')[0],
+                limit: 100,
+                offset: 0,
+                only_my_events: true
+            });
+
+            var apiUrl = 'https://api.playmetrics.com/user/calendars'
+                + '?populate=team,team:games,team:games:league'
+                + '&calendar_filter=' + encodeURIComponent(filter);
+
+            fetch(apiUrl, {
+                headers: {
+                    'Firebase-Token': firebaseToken,
+                    'pm-access-key': accessKey
+                }
+            })
+            .then(function(r) { return r.text(); })
+            .then(function(text) { callback(text.substring(0, 500000)); })
+            .catch(function(e) { callback(JSON.stringify({error: e.message})); });
+        })
+        .catch(function(e) { callback(JSON.stringify({error: e.message})); });
+    };
+};
+"""
+            raw_result = self.driver.execute_async_script(js_code)
+            if not raw_result:
+                return None
+
+            data = json.loads(raw_result)
+            if isinstance(data, dict) and "error" in data:
+                logger.warning(f"Calendar fetch error: {data['error']}")
+                return None
+
+            events = self._parse_api_calendars(data)
+            # Return None (not empty list) if no events, so we try the next role
+            return events if events else None
+
+        except Exception as e:
+            logger.error(f"Calendar page fetch failed: {e}")
+            return None
+
+    def _parse_api_calendars(self, data) -> List[GameInfo]:
+        """
+        Parse the PlayMetrics REST API calendar response into GameInfo objects.
+
+        The API returns a list of calendar objects, each containing teams with
+        games and practices.
+        """
+        events = []
+        local_tz = self._get_configured_timezone()
+
+        if not isinstance(data, list):
+            logger.warning(f"Unexpected API response type: {type(data)}")
+            if isinstance(data, dict):
+                # Might be a single calendar object
+                data = [data]
+            else:
+                return []
+
+        for calendar in data:
+            if not isinstance(calendar, dict):
+                continue
+
+            team = calendar.get("team") or {}
+            team_name = team.get("name", "")
+            team_games = team.get("games") or []
+
+            for game in team_games:
+                try:
+                    # API uses start_datetime/end_datetime (ISO UTC)
+                    start_str = (
+                        game.get("start_datetime")
+                        or game.get("start_date")
+                        or game.get("date")
+                    )
+                    end_str = game.get("end_datetime") or game.get("end_date")
+
+                    if not start_str:
+                        continue
+
+                    start_time = self._parse_api_datetime(start_str, local_tz)
+                    end_time = (
+                        self._parse_api_datetime(end_str, local_tz)
+                        if end_str
+                        else start_time + timedelta(hours=2)
+                    )
+
+                    # opponent_team_name is the direct field
+                    opponent = game.get("opponent_team_name", "Unknown Opponent")
+                    is_home = game.get("is_home", False)
+
+                    # Location from nested field object
+                    field_obj = game.get("field") or {}
+                    location = (
+                        field_obj.get("display_name", "")
+                        or field_obj.get("facility_name", "")
+                        or game.get("field_name", "")
+                    )
+
+                    # Build title
+                    game_team_name = game.get("team_name", "") or team_name
+                    title = game.get("title", "")
+                    if not title:
+                        if is_home:
+                            title = f"{game_team_name} vs {opponent}"
+                        else:
+                            title = f"{game_team_name} @ {opponent}"
+
+                    league = game.get("league") or {}
+                    description = league.get("name", "")
+                    game_type = (game.get("extra") or {}).get("game_type", "")
+                    if game_type and not description:
+                        description = game_type
+
+                    event = {
+                        "id": str(game.get("id", hash(f"{start_time}-{title}"))),
+                        "title": title,
+                        "description": description,
+                        "location": location,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "is_game": True,
+                        "is_home": is_home,
+                        "opponent": opponent,
+                        "my_team_name": self.team_name or game_team_name,
+                    }
+
+                    # Add display time
+                    chosen_dt = start_time
+                    if chosen_dt.tzinfo is None:
+                        chosen_dt = chosen_dt.replace(tzinfo=pytz.UTC)
+                    event["time"] = chosen_dt.astimezone(local_tz).strftime("%H:%M")
+
+                    events.append(event)
+                except Exception as e:
+                    logger.error(f"Error parsing API game: {e}")
+
+            # Also parse practices as non-game events
+            team_practices = team.get("practices") or []
+            for practice in team_practices:
+                try:
+                    start_str = (
+                        practice.get("start_datetime")
+                        or practice.get("start_date")
+                        or practice.get("date")
+                    )
+                    if not start_str:
+                        continue
+
+                    start_time = self._parse_api_datetime(start_str, local_tz)
+                    end_str = practice.get("end_datetime") or practice.get("end_date")
+                    end_time = (
+                        self._parse_api_datetime(end_str, local_tz)
+                        if end_str
+                        else start_time + timedelta(hours=1.5)
+                    )
+
+                    field_obj = practice.get("field") or {}
+                    location = (
+                        field_obj.get("display_name", "")
+                        or field_obj.get("facility_name", "")
+                        or practice.get("field_name", "")
+                    )
+                    title = practice.get("title") or f"{team_name} Practice"
+
+                    event = {
+                        "id": str(practice.get("id", hash(f"{start_time}-{title}"))),
+                        "title": title,
+                        "description": "",
+                        "location": location,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "is_game": False,
+                        "opponent": None,
+                        "my_team_name": self.team_name or team_name,
+                    }
+                    events.append(event)
+                except Exception as e:
+                    logger.error(f"Error parsing API practice: {e}")
+
+        logger.info(
+            f"PlayMetrics REST API: Found {len(events)} events "
+            f"({sum(1 for e in events if e.get('is_game'))} games)"
+        )
+        return events
+
+    def _parse_api_datetime(self, dt_str: str, local_tz) -> datetime:
+        """Parse a datetime string from the PlayMetrics API."""
+        if not dt_str:
+            raise ValueError("Empty datetime string")
+
+        # Try ISO format first
+        for fmt in [
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+        ]:
+            try:
+                dt = datetime.strptime(dt_str, fmt)
+                if fmt.endswith("Z"):
+                    dt = dt.replace(tzinfo=pytz.UTC)
+                elif dt.tzinfo is None:
+                    # Assume local timezone if no tz info
+                    dt = local_tz.localize(dt)
+                return dt
+            except ValueError:
+                continue
+
+        # Try dateutil as last resort
+        try:
+            from dateutil import parser as dateutil_parser
+
+            return dateutil_parser.parse(dt_str)
+        except Exception:
+            raise ValueError(f"Cannot parse datetime: {dt_str}")
+
     def get_events(self) -> List[GameInfo]:
         """
         Get all events from the PlayMetrics calendar.
+
+        Tries the REST API first, falls back to ICS calendar scraping.
 
         Returns:
             List of event dictionaries
@@ -716,7 +1096,16 @@ class PlayMetricsAPI:
             logger.error("Failed to log in to PlayMetrics")
             return []
 
-        # Download and parse calendar
+        # Try REST API first (new approach)
+        events = self._get_events_via_rest_api()
+        if events is not None:
+            logger.info(f"Got {len(events)} events via REST API")
+            self.events_cache = events
+            self.last_cache_update = datetime.now()
+            return events
+
+        # Fall back to ICS calendar scraping (legacy approach)
+        logger.info("REST API failed, falling back to ICS calendar scraping")
         calendar_path = self.download_calendar()
         if not calendar_path:
             logger.error("Failed to download calendar")

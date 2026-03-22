@@ -3,19 +3,10 @@
 
 a = Analysis(
     ['video_grouper\\tray\\tray_entry.py'],
-    pathex=['.'],
+    pathex=[],
     binaries=[],
-    datas=[('video_grouper/icon.ico', 'video_grouper')],
-    hiddenimports=[
-        'video_grouper.task_processors.tasks.video.combine_task',
-        'video_grouper.task_processors.tasks.video.trim_task',
-        'video_grouper.task_processors.tasks.ntfy.game_start_task',
-        'video_grouper.task_processors.tasks.ntfy.game_end_task',
-        'video_grouper.task_processors.tasks.ntfy.team_info_task',
-        'video_grouper.task_processors.tasks.upload.youtube_upload_task',
-        'video_grouper.task_processors.tasks.clip.clip_request_task',
-        'video_grouper.task_processors.register_tasks',
-    ],
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -44,5 +35,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['video_grouper\\icon.ico'],
 )
