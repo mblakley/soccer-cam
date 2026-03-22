@@ -191,17 +191,35 @@ class QueueProcessor(ABC):
 
                     if isinstance(e, YouTubeQuotaError):
                         # Quota errors should not be retried immediately.
-                        # Keep the item in the queue persisted to disk so the
-                        # state auditor picks it up on next service restart
-                        # (after the daily quota resets).
+                        # Wait until the quota resets (YouTube daily quotas
+                        # reset at midnight Pacific Time) then retry.
                         self._queue.task_done()
                         self._in_progress_item = None
-                        self._queued_items.discard(item_key)
-                        self._retry_counts.pop(item_key, None)
-                        await self.save_state()
+
+                        # Calculate wait: next midnight PT + 5 min buffer
+                        from datetime import datetime, timedelta
+                        import pytz
+
+                        now_pt = datetime.now(pytz.timezone("US/Pacific"))
+                        tomorrow_pt = (now_pt + timedelta(days=1)).replace(
+                            hour=0, minute=5, second=0, microsecond=0
+                        )
+                        wait_seconds = (tomorrow_pt - now_pt).total_seconds()
+                        wait_hours = wait_seconds / 3600
+
                         logger.warning(
                             f"{self.__class__.__name__}: YouTube quota exceeded for {item}. "
-                            f"Upload will be retried on next service restart. [trace_id: {trace_id}]"
+                            f"Waiting {wait_hours:.1f}h until quota resets "
+                            f"(~{tomorrow_pt.strftime('%I:%M %p PT')}). [trace_id: {trace_id}]"
+                        )
+
+                        # Sleep until quota resets, then requeue
+                        await asyncio.sleep(wait_seconds)
+                        await self._queue.put(item)
+                        self._retry_counts.pop(item_key, None)
+                        await self.save_state()
+                        logger.info(
+                            f"{self.__class__.__name__}: Quota reset, requeued {item} for upload."
                         )
                         continue
 
