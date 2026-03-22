@@ -16,8 +16,7 @@ services:
     profiles:
       - simulator
       - reolink
-    build:
-      context: simulator
+    image: ghcr.io/mblakley/camera-simulator:main
     environment:
       - CAMERA_TYPE=reolink
       - USERNAME=admin
@@ -37,8 +36,7 @@ services:
     profiles:
       - simulator
       - dahua
-    build:
-      context: simulator
+    image: ghcr.io/mblakley/camera-simulator:main
     environment:
       - CAMERA_TYPE=dahua
       - USERNAME=admin

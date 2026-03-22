@@ -12,12 +12,30 @@ import pytest_asyncio
 from aiohttp import web
 from datetime import datetime, timedelta, timezone
 
-# Add simulator to path so its modules can import each other
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "simulator"))
+# Add simulator to path so its modules can import each other.
+# The simulator was extracted to github.com/mblakley/camera-simulator.
+# Clone it alongside this repo, or these tests will be skipped.
+_sim_paths = [
+    os.path.join(os.path.dirname(__file__), "..", "..", "simulator"),  # legacy in-repo
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "camera-simulator", "simulator"
+    ),  # sibling repo
+]
+_sim_found = False
+for _p in _sim_paths:
+    if os.path.isdir(_p):
+        sys.path.insert(0, _p)
+        _sim_found = True
+        break
+if not _sim_found:
+    pytest.skip(
+        "Camera simulator not found (clone camera-simulator repo as sibling)",
+        allow_module_level=True,
+    )
 
-from video_grouper.cameras.dahua import DahuaCamera
-from video_grouper.cameras.reolink import ReolinkCamera
-from video_grouper.utils.config import CameraConfig
+from video_grouper.cameras.dahua import DahuaCamera  # noqa: E402
+from video_grouper.cameras.reolink import ReolinkCamera  # noqa: E402
+from video_grouper.utils.config import CameraConfig  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
