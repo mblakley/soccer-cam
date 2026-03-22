@@ -13,6 +13,30 @@ logger = logging.getLogger(__name__)
 FFMPEG_TIMEOUT = 1800
 
 
+def _scaled_timeout(file_paths: list[str], base_timeout: int = FFMPEG_TIMEOUT) -> int:
+    """Scale the FFmpeg timeout based on total input file size.
+
+    Uses 30 seconds per MB with a floor of *base_timeout* so large
+    multi-hour recordings don't hit an artificial limit.
+    """
+    total_bytes = 0
+    for p in file_paths:
+        try:
+            total_bytes += os.path.getsize(p)
+        except OSError:
+            pass
+    size_based = int(total_bytes / (1024 * 1024) * 30)
+    return max(base_timeout, size_based)
+
+
+def _cleanup_temp(path: str) -> None:
+    """Remove a temp file, ignoring errors if it doesn't exist."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 async def _run_in_thread_with_timeout(func, *args, timeout=FFMPEG_TIMEOUT):
     """Run a synchronous function in a thread pool with a timeout.
 
@@ -383,24 +407,34 @@ def _trim_video_sync(
 async def trim_video(
     input_path: str, output_path: str, start_offset: str, duration: Optional[str] = None
 ) -> bool:
-    """Trims a video file using stream copy via PyAV."""
+    """Trims a video file using stream copy via PyAV.
+
+    Writes to a temp file first, then renames on success so a crash
+    never leaves a partial MP4 at the final path.
+    """
     logger.info(
         f"Trimming {os.path.basename(input_path)} to {os.path.basename(output_path)}"
     )
+    temp_output = output_path + ".tmp"
     try:
         result = await _run_in_thread_with_timeout(
-            _trim_video_sync, input_path, output_path, start_offset, duration
+            _trim_video_sync, input_path, temp_output, start_offset, duration
         )
         if result:
+            os.replace(temp_output, output_path)
             logger.info(
                 f"Successfully trimmed {os.path.basename(input_path)} to {os.path.basename(output_path)}"
             )
+        else:
+            _cleanup_temp(temp_output)
         return result
     except asyncio.TimeoutError:
         logger.error(f"Trim timed out after {FFMPEG_TIMEOUT}s")
+        _cleanup_temp(temp_output)
         return False
     except Exception as e:
         logger.error(f"Error during trim: {e}")
+        _cleanup_temp(temp_output)
         return False
 
 
@@ -530,6 +564,9 @@ async def combine_videos(
 ) -> bool:
     """Combines multiple video files into a single MP4 using PyAV.
 
+    Writes to a temp file first, then renames on success so a crash
+    never leaves a partial MP4 at the final path.
+
     Args:
         file_paths: List of input file paths to concatenate.
         output_path: Path for the combined output file.
@@ -539,20 +576,32 @@ async def combine_videos(
     logger.info(
         f"Combining {len(file_paths)} videos to {os.path.basename(output_path)}"
     )
+    temp_output = output_path + ".tmp"
+    timeout = _scaled_timeout(file_paths)
     try:
         result = await _run_in_thread_with_timeout(
-            _combine_videos_sync, file_paths, output_path, camera_name, camera_type
+            _combine_videos_sync,
+            file_paths,
+            temp_output,
+            camera_name,
+            camera_type,
+            timeout=timeout,
         )
         if result:
+            os.replace(temp_output, output_path)
             logger.info(
                 f"Successfully combined videos to {os.path.basename(output_path)}"
             )
+        else:
+            _cleanup_temp(temp_output)
         return result
     except asyncio.TimeoutError:
-        logger.error(f"Combine timed out after {FFMPEG_TIMEOUT}s")
+        logger.error(f"Combine timed out after {timeout}s")
+        _cleanup_temp(temp_output)
         return False
     except Exception as e:
         logger.error(f"Error during combine: {e}")
+        _cleanup_temp(temp_output)
         return False
 
 

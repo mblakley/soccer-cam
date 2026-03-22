@@ -43,7 +43,7 @@ The CameraPoller continuously monitors the IP camera for new video files:
 - Queues individual files for download
 
 **File Grouping Logic**:
-- Files within 15 seconds of each other are grouped together
+- Files within 5 seconds of each other are grouped together
 - Each group gets a directory named with timestamp format: `YYYY.MM.DD-HH.MM.SS`
 - Groups are created in the storage directory
 
@@ -280,8 +280,9 @@ The system is configured through `config.ini` with sections for:
 - **Once Autocam** - Automated video processing and camera tracking
 
 ### Camera Systems
-- **Dahua IP Cameras** - Primary supported camera type
-- Extensible architecture for additional camera types
+- **Dahua IP Cameras** - HTTP/Digest auth, .dav file format, H.264 output
+- **Reolink Cameras** - HTTP JSON API + native Baichuan binary protocol (port 9000) for downloads, H.265 output
+- **Modular camera registry** - new camera types self-register via ``register_camera()`` in ``cameras/__init__.py``. See ``docs/ADDING_A_CAMERA.md``.
 
 ## Performance Considerations
 
@@ -298,4 +299,17 @@ The system is configured through `config.ini` with sections for:
 ### Reliability
 - Comprehensive error handling and recovery
 - State persistence across restarts
-- Automatic retry mechanisms for transient failures 
+- Automatic retry mechanisms for transient failures (3 retries per item)
+- YouTube quota exceeded: waits until midnight PT, then retries
+
+### Crash Recovery
+
+The pipeline is designed to recover from crashes at any stage:
+
+- **Queue state**: Persisted atomically (temp file + rename) after every enqueue/dequeue
+- **In-progress items**: Tracked in queue state and restored to front of queue on restart
+- **state.json**: Written atomically with FileLock; stale locks auto-cleaned after 60s
+- **Downloads**: Write to `.tmp` file, rename on success. Crash leaves only a temp file that is cleaned up on restart
+- **Combine/Trim**: Write to `.tmp` file, rename on success. Partial output never overwrites a valid file
+- **StateAuditor**: Runs once on startup, scans all directories, re-queues interrupted work (including files stuck in "downloading" state)
+- **Temp file cleanup**: Orphaned `.tmp` files are removed by StateAuditor on startup

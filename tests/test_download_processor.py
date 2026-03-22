@@ -125,7 +125,7 @@ class TestDownloadProcessor:
         await processor.process_item(recording_file)
 
         mock_camera.download_file.assert_called_once_with(
-            file_path="/test.dav", local_path="/test/group/test.dav"
+            file_path="/test.dav", local_path="/test/group/test.dav.tmp"
         )
         mock_video_processor.add_work.assert_called_once()
 
@@ -177,7 +177,7 @@ class TestDownloadProcessor:
         await processor.process_item(recording_file)
 
         mock_camera.download_file.assert_called_once_with(
-            file_path="/test.dav", local_path="/test/group/test.dav"
+            file_path="/test.dav", local_path="/test/group/test.dav.tmp"
         )
 
         # Verify no combine task was queued since group is not ready

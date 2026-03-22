@@ -108,7 +108,9 @@ class NtfyProcessor(QueueProcessor):
                 f"NTFY: Successfully sent notification for task: {item}, waiting for response"
             )
 
-            # Block until user responds to this task
+            # Block indefinitely until user responds to this task.
+            # NTFY responses should be very forgiving -- the user may not
+            # respond for hours or days and that is fine.
             event = asyncio.Event()
             self._response_events[item.group_dir] = event
 

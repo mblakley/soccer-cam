@@ -10,6 +10,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import pytz
 
 from .base import Camera, DeviceInfo
+from . import register_camera
 from .reolink_download import download_and_mux
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
@@ -700,3 +701,7 @@ class ReolinkCamera(Camera):
                 logger.info("Closed HTTP client")
             except Exception as e:
                 logger.error(f"Error closing HTTP client: {e}")
+
+
+# Register with the camera registry
+register_camera("reolink", ReolinkCamera)

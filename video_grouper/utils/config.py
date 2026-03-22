@@ -56,6 +56,7 @@ class CameraConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     path: str
+    min_free_gb: float = 2.0
 
 
 class RecordingConfig(BaseModel):
@@ -69,6 +70,7 @@ class ProcessingConfig(BaseModel):
     retry_attempts: int = 3
     retry_delay: int = 60
     trim_end_enabled: bool = False
+    ffmpeg_timeout_seconds: int = 1800
 
 
 class LoggingConfig(BaseModel):

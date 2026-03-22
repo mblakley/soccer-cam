@@ -9,6 +9,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import pytz
 
 from .base import Camera, DeviceInfo
+from . import register_camera
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
@@ -691,3 +692,7 @@ class DahuaCamera(Camera):
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
             return False
+
+
+# Register with the camera registry
+register_camera("dahua", DahuaCamera)

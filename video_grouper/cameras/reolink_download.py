@@ -296,10 +296,15 @@ class BaichuanStreamClient:
     def is_connected(self) -> bool:
         return self._writer is not None and not self._writer.is_closing()
 
-    async def connect(self):
-        """Open TCP connection to camera on Baichuan port."""
-        self._reader, self._writer = await asyncio.open_connection(
-            self._host, self._port
+    async def connect(self, timeout: float = 30.0):
+        """Open TCP connection to camera on Baichuan port.
+
+        Args:
+            timeout: Connection timeout in seconds (default 30s).
+        """
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_connection(self._host, self._port),
+            timeout=timeout,
         )
         # Tune TCP socket for download throughput (2x speed improvement)
         sock = self._writer.transport.get_extra_info("socket")
@@ -959,8 +964,8 @@ async def _download_and_mux_async(
     client = BaichuanStreamClient(host, port, username, password)
 
     try:
-        await client.connect()
-        await client.login()
+        await client.connect()  # has built-in 30s timeout
+        await asyncio.wait_for(client.login(), timeout=30.0)
 
         stats = await client.download_file_replay(
             file_path=file_path,

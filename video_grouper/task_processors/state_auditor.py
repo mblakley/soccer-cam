@@ -98,10 +98,30 @@ class StateAuditor(PollingProcessor):
             for item in items:
                 group_dir = os.path.join(self.storage_path, item)
                 if os.path.isdir(group_dir) and not item.startswith("."):
+                    self._cleanup_temp_files(group_dir)
                     await self._audit_directory(group_dir)
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error during directory audit: {e}")
+
+    @staticmethod
+    def _cleanup_temp_files(group_dir: str) -> None:
+        """Remove .tmp files left by crashed downloads or FFmpeg operations."""
+        try:
+            for fname in os.listdir(group_dir):
+                if fname.endswith(".tmp"):
+                    tmp_path = os.path.join(group_dir, fname)
+                    try:
+                        os.remove(tmp_path)
+                        logger.info(
+                            f"STATE_AUDITOR: Cleaned up orphaned temp file: {fname}"
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            f"STATE_AUDITOR: Could not remove temp file {fname}: {exc}"
+                        )
+        except OSError:
+            pass
 
     async def _audit_directory(self, group_dir: str) -> None:
         """Audit a single directory and queue appropriate tasks."""
@@ -120,8 +140,10 @@ class StateAuditor(PollingProcessor):
                 if file_obj.skip:
                     continue
 
-                # Queue download tasks for pending/failed downloads
-                if file_obj.status in ["pending", "download_failed"]:
+                # Queue download tasks for pending/failed/interrupted downloads.
+                # "downloading" status means the app crashed mid-download, so
+                # treat it the same as a failure and re-queue.
+                if file_obj.status in ["pending", "download_failed", "downloading"]:
                     if self.download_processor:
                         recording_file = RecordingFile(
                             start_time=file_obj.start_time,

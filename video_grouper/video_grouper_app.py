@@ -50,6 +50,9 @@ class VideoGrouperApp:
         self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
 
+        # Validate storage path is usable
+        self._validate_storage_path()
+
         # Get poll interval from config
         self.poll_interval = config.app.check_interval_seconds
 
@@ -272,26 +275,63 @@ class VideoGrouperApp:
 
         logger.info("VideoGrouperApp initialized with task processors")
 
+    def _validate_storage_path(self):
+        """Validate that the storage path is usable.
+
+        Creates the directory if needed, checks write permissions, and
+        warns about low disk space.  Raises on fatal errors so the app
+        fails early with a clear message.
+        """
+        from video_grouper.utils.disk_space import check_disk_space
+
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot create storage directory '{self.storage_path}': {exc}"
+            ) from exc
+
+        # Quick write test
+        test_file = os.path.join(self.storage_path, ".write_test")
+        try:
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Storage directory '{self.storage_path}' is not writable: {exc}"
+            ) from exc
+
+        # Disk space warning (non-fatal)
+        min_free_gb = self.config.storage.min_free_gb
+        has_space, free_gb = check_disk_space(self.storage_path, min_free_gb)
+        if not has_space:
+            logger.warning(
+                f"Low disk space on storage path: {free_gb:.1f} GB free "
+                f"(minimum {min_free_gb} GB recommended)"
+            )
+        else:
+            logger.info(f"Storage path OK: {free_gb:.1f} GB free")
+
     @staticmethod
     def _create_camera(cam_config, storage_path):
-        """Create a Camera instance from a CameraConfig."""
-        camera_type = cam_config.type
-        if camera_type == "dahua":
-            from video_grouper.cameras.dahua import DahuaCamera
+        """Create a Camera instance from a CameraConfig.
 
-            logger.info(
-                f"Initializing {camera_type} camera '{cam_config.name}' with IP: {cam_config.device_ip}"
-            )
-            return DahuaCamera(config=cam_config, storage_path=storage_path)
-        elif camera_type == "reolink":
-            from video_grouper.cameras.reolink import ReolinkCamera
+        Uses the camera registry so that new camera types can be added
+        by implementing the Camera ABC and calling ``register_camera()``.
+        See docs/ADDING_A_CAMERA.md for details.
+        """
+        # Ensure built-in camera modules are imported (triggers registration)
+        import video_grouper.cameras.dahua  # noqa: F401
+        import video_grouper.cameras.reolink  # noqa: F401
 
-            logger.info(
-                f"Initializing {camera_type} camera '{cam_config.name}' with IP: {cam_config.device_ip}"
-            )
-            return ReolinkCamera(config=cam_config, storage_path=storage_path)
-        else:
-            raise ValueError(f"Unsupported camera type: {camera_type}")
+        from video_grouper.cameras import create_camera
+
+        logger.info(
+            f"Initializing {cam_config.type} camera '{cam_config.name}' "
+            f"with IP: {cam_config.device_ip}"
+        )
+        return create_camera(cam_config, storage_path)
 
     @property
     def camera(self):
@@ -336,7 +376,7 @@ class VideoGrouperApp:
             try:
                 ntfy_response_service = create_ntfy_response_service(self.config.ntfy)
                 await ntfy_response_service.start()
-                logger.info("✓ NTFY response service started in VideoGrouperApp")
+                logger.info("NTFY response service started in VideoGrouperApp")
             except Exception as e:
                 logger.error(f"Failed to start NTFY response service: {e}")
         else:
@@ -356,7 +396,7 @@ class VideoGrouperApp:
             if ntfy_response_service:
                 try:
                     await ntfy_response_service.stop()
-                    logger.info("✓ NTFY response service stopped")
+                    logger.info("NTFY response service stopped")
                 except Exception as e:
                     logger.error(f"Error stopping NTFY response service: {e}")
 

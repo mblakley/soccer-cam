@@ -26,7 +26,7 @@ backup_count = 30
 
 [APP]
 check_interval_seconds = 60
-timezone = America/New York
+timezone = America/New_York
 
 [TEAMSNAP]
 # Set to true to enable TeamSnap integration
