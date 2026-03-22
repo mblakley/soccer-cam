@@ -180,3 +180,10 @@ tests/e2e/test_clips/
 
 # Ralph Wiggum loop state (temporary)
 .claude/ralph-state.json
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Large media / experiment files
+*.mp4
+*.jsonl
