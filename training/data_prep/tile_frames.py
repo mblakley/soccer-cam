@@ -12,9 +12,9 @@ import cv2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLS = 6
-DEFAULT_ROWS = 2
-DEFAULT_OVERLAP = 128
+DEFAULT_COLS = 7
+DEFAULT_ROWS = 3
+DEFAULT_TILE_SIZE = 640
 DEFAULT_JPEG_QUALITY = 95
 
 
@@ -23,8 +23,9 @@ def tile_frame(
     output_dir: Path,
     cols: int = DEFAULT_COLS,
     rows: int = DEFAULT_ROWS,
-    overlap: int = DEFAULT_OVERLAP,
+    tile_size: int = DEFAULT_TILE_SIZE,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    overlap: int | None = None,
 ) -> list[Path]:
     """Slice a single panoramic frame into overlapping tiles.
 
@@ -33,8 +34,10 @@ def tile_frame(
         output_dir: Directory to write tiles
         cols: Number of tile columns
         rows: Number of tile rows
-        overlap: Overlap in pixels between adjacent tiles
+        tile_size: Target tile width and height in pixels
         jpeg_quality: JPEG compression quality
+        overlap: Legacy overlap parameter. If set, computes tile size from overlap
+                 instead of using tile_size.
 
     Returns:
         List of paths to generated tile files
@@ -44,8 +47,16 @@ def tile_frame(
         raise ValueError(f"Cannot read image: {frame_path}")
 
     h, w = img.shape[:2]
-    tile_w = (w + overlap * (cols - 1)) // cols
-    tile_h = (h + overlap * (rows - 1)) // rows
+
+    if overlap is not None:
+        # Legacy mode: compute tile size from overlap
+        tile_w = (w + overlap * (cols - 1)) // cols
+        tile_h = (h + overlap * (rows - 1)) // rows
+    else:
+        # New mode: fixed tile size, compute step to cover image
+        tile_w = tile_size
+        tile_h = tile_size
+
     step_x = (w - tile_w) // max(1, cols - 1) if cols > 1 else 0
     step_y = (h - tile_h) // max(1, rows - 1) if rows > 1 else 0
 
@@ -74,14 +85,19 @@ def tile_info(
     img_h: int,
     cols: int = DEFAULT_COLS,
     rows: int = DEFAULT_ROWS,
-    overlap: int = DEFAULT_OVERLAP,
+    tile_size: int = DEFAULT_TILE_SIZE,
+    overlap: int | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """Compute tile bounding boxes without reading an image.
 
     Returns list of (x, y, w, h) for each tile.
     """
-    tile_w = (img_w + overlap * (cols - 1)) // cols
-    tile_h = (img_h + overlap * (rows - 1)) // rows
+    if overlap is not None:
+        tile_w = (img_w + overlap * (cols - 1)) // cols
+        tile_h = (img_h + overlap * (rows - 1)) // rows
+    else:
+        tile_w = tile_size
+        tile_h = tile_size
     step_x = (img_w - tile_w) // max(1, cols - 1) if cols > 1 else 0
     step_y = (img_h - tile_h) // max(1, rows - 1) if rows > 1 else 0
 
@@ -115,10 +131,10 @@ def main():
         "--rows", type=int, default=DEFAULT_ROWS, help="Number of tile rows"
     )
     parser.add_argument(
-        "--overlap",
+        "--tile-size",
         type=int,
-        default=DEFAULT_OVERLAP,
-        help="Pixel overlap between tiles",
+        default=DEFAULT_TILE_SIZE,
+        help="Target tile width and height in pixels",
     )
     args = parser.parse_args()
 
@@ -133,7 +149,9 @@ def main():
 
     total = 0
     for f in frames:
-        tiles = tile_frame(f, args.output / f.stem, args.cols, args.rows, args.overlap)
+        tiles = tile_frame(
+            f, args.output / f.stem, args.cols, args.rows, args.tile_size
+        )
         total += len(tiles)
 
     logger.info("Generated %d tiles total", total)

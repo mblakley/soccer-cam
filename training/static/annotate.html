@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Ball Annotation</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --green: #22c55e;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --gray: #6b7280;
+  --bg: #111;
+  --surface: #1a1a1a;
+  --text: #f0f0f0;
+  --text-dim: #888;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100%;
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Pages */
+.page { display: none; height: 100%; flex-direction: column; }
+.page.active { display: flex; }
+
+/* Header bar */
+.header {
+  display: flex; align-items: center; padding: 12px 16px;
+  background: var(--surface); border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+.header h1 { font-size: 18px; font-weight: 600; flex: 1; }
+.header-btn {
+  background: none; border: none; color: var(--text); font-size: 16px;
+  padding: 8px 12px; cursor: pointer; border-radius: 8px;
+}
+.header-btn:active { background: #333; }
+
+/* Packet list */
+#packet-list-page .content { flex: 1; overflow-y: auto; padding: 12px; }
+
+.packet-card {
+  background: var(--surface); border-radius: 12px; padding: 16px;
+  margin-bottom: 10px; cursor: pointer; border: 1px solid #333;
+  transition: background 0.1s;
+}
+.packet-card:active { background: #252525; }
+.packet-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+.packet-card .meta { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+.packet-card .progress-bar {
+  height: 6px; background: #333; border-radius: 3px; overflow: hidden;
+}
+.packet-card .progress-fill {
+  height: 100%; border-radius: 3px; transition: width 0.3s;
+}
+.packet-card .progress-fill.pending { background: var(--gray); width: 0; }
+.packet-card .progress-fill.partial { background: var(--blue); }
+.packet-card .progress-fill.complete { background: var(--green); }
+
+.status-badge {
+  display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 4px; margin-left: 8px;
+}
+.status-badge.pending { background: #333; color: var(--text-dim); }
+.status-badge.partial { background: #1e3a5f; color: var(--blue); }
+.status-badge.complete { background: #14532d; color: var(--green); }
+
+/* Nav tabs */
+.nav-tabs {
+  display: flex; background: var(--surface); border-top: 1px solid #333;
+  padding-bottom: var(--safe-bottom); flex-shrink: 0;
+}
+.nav-tab {
+  flex: 1; padding: 12px 0; text-align: center; font-size: 13px;
+  color: var(--text-dim); background: none; border: none; cursor: pointer;
+}
+.nav-tab.active { color: var(--blue); }
+.nav-tab span { display: block; font-size: 20px; margin-bottom: 2px; }
+
+/* Annotate page */
+#annotate-page { position: relative; }
+
+.annotate-header {
+  display: flex; align-items: center; padding: 8px 12px;
+  background: var(--surface); border-bottom: 1px solid #333;
+  flex-shrink: 0; gap: 10px;
+}
+.annotate-header .back-btn {
+  background: none; border: none; color: var(--text); font-size: 22px;
+  padding: 6px 10px; cursor: pointer; border-radius: 8px;
+}
+.annotate-header .back-btn:active { background: #333; }
+.annotate-header .progress-text { font-size: 14px; font-weight: 600; }
+.annotate-header .progress-track {
+  flex: 1; height: 4px; background: #333; border-radius: 2px; overflow: hidden;
+}
+.annotate-header .progress-inner {
+  height: 100%; background: var(--blue); border-radius: 2px; transition: width 0.3s;
+}
+
+.annotate-body {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  position: relative;
+}
+
+.frame-reason {
+  text-align: center; padding: 6px 0; font-size: 12px; color: var(--text-dim);
+  flex-shrink: 0; background: var(--surface);
+}
+
+.canvas-container {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; position: relative; padding: 4px;
+}
+.canvas-container canvas {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  touch-action: none;
+}
+
+.action-bar {
+  display: flex; gap: 8px; padding: 10px 12px;
+  background: var(--surface); border-top: 1px solid #333;
+  flex-shrink: 0; padding-bottom: max(10px, var(--safe-bottom));
+}
+.action-btn {
+  flex: 1; padding: 14px 4px; border-radius: 12px; border: 2px solid transparent;
+  font-size: 13px; font-weight: 600; cursor: pointer; text-align: center;
+  min-height: 52px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 2px; transition: transform 0.1s, opacity 0.1s;
+}
+.action-btn:active { transform: scale(0.95); }
+.action-btn .icon { font-size: 20px; }
+
+.btn-confirm { background: #14532d; color: var(--green); border-color: var(--green); }
+.btn-reject { background: #450a0a; color: var(--red); border-color: var(--red); }
+.btn-not-visible { background: #1f2937; color: var(--gray); border-color: var(--gray); }
+.btn-skip { background: transparent; color: var(--text-dim); border-color: #444; }
+.btn-submit-tap {
+  background: #1e3a5f; color: var(--blue); border-color: var(--blue);
+}
+
+/* Flash overlay */
+.flash-overlay {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none; opacity: 0; z-index: 10;
+  transition: opacity 0.15s;
+}
+.flash-overlay.show { opacity: 1; }
+.flash-overlay.green { background: rgba(34, 197, 94, 0.2); }
+.flash-overlay.red { background: rgba(239, 68, 68, 0.2); }
+.flash-overlay.gray { background: rgba(107, 114, 128, 0.2); }
+.flash-overlay.blue { background: rgba(59, 130, 246, 0.2); }
+
+/* Stats page */
+#stats-page .content { flex: 1; overflow-y: auto; padding: 16px; }
+.stat-card {
+  background: var(--surface); border-radius: 12px; padding: 16px;
+  margin-bottom: 10px; border: 1px solid #333;
+}
+.stat-card .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+.stat-card .sub { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+
+.stat-row { display: flex; gap: 10px; }
+.stat-row .stat-card { flex: 1; }
+
+.action-breakdown {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
+}
+.action-chip {
+  padding: 4px 10px; border-radius: 6px; font-size: 13px;
+  background: #252525; color: var(--text-dim);
+}
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: var(--text-dim); }
+
+/* Empty state */
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<!-- Packet List Page -->
+<div id="packet-list-page" class="page active">
+  <div class="header">
+    <h1>Review Packets</h1>
+    <button class="header-btn" onclick="navigateTo('stats')">Stats</button>
+  </div>
+  <div class="content" id="packet-list"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
+<!-- Annotate Page -->
+<div id="annotate-page" class="page">
+  <div class="annotate-header">
+    <button class="back-btn" onclick="leaveAnnotation()">&larr;</button>
+    <span class="progress-text" id="progress-text">0/0</span>
+    <div class="progress-track"><div class="progress-inner" id="progress-bar"></div></div>
+  </div>
+  <div class="annotate-body">
+    <div class="frame-reason" id="frame-reason"></div>
+    <div class="canvas-container">
+      <canvas id="crop-canvas"></canvas>
+    </div>
+    <div class="flash-overlay" id="flash-overlay"></div>
+    <div class="action-bar" id="action-bar">
+      <button class="action-btn btn-confirm" onclick="doAction('confirm')">
+        <span class="icon">&#x2713;</span>Confirm
+      </button>
+      <button class="action-btn btn-reject" onclick="doAction('reject')">
+        <span class="icon">&#x2717;</span>Reject
+      </button>
+      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
+        <span class="icon">&#x1F441;</span>None
+      </button>
+      <button class="action-btn btn-skip" onclick="doAction('skip')">
+        <span class="icon">&rarr;</span>Skip
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Stats Page -->
+<div id="stats-page" class="page">
+  <div class="header">
+    <button class="header-btn" onclick="navigateTo('packets')">&larr;</button>
+    <h1>Statistics</h1>
+  </div>
+  <div class="content" id="stats-content"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
+<script>
+// ========== State ==========
+let currentGameId = null;
+let manifest = null;
+let frames = [];
+let reviewedSet = new Set();
+let currentFrameIndex = 0;  // index into frames array
+let pendingResults = [];
+let frameStartTime = 0;
+let userTap = null;  // {x, y} in image coords
+let cropImage = null;
+
+const BATCH_SIZE = 10;
+const API = '';
+
+// ========== Navigation ==========
+function navigateTo(page, param) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  if (page === 'packets') {
+    document.getElementById('packet-list-page').classList.add('active');
+    location.hash = '#packets';
+    loadPackets();
+  } else if (page === 'annotate' && param) {
+    document.getElementById('annotate-page').classList.add('active');
+    location.hash = '#annotate/' + param;
+    startAnnotation(param);
+  } else if (page === 'stats') {
+    document.getElementById('stats-page').classList.add('active');
+    location.hash = '#stats';
+    loadStats();
+  }
+  updateNavTabs(page);
+}
+
+function updateNavTabs(page) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  // handled by page-specific tabs
+}
+
+function handleHash() {
+  const hash = location.hash || '#packets';
+  if (hash.startsWith('#annotate/')) {
+    const gameId = hash.replace('#annotate/', '');
+    navigateTo('annotate', gameId);
+  } else if (hash === '#stats') {
+    navigateTo('stats');
+  } else {
+    navigateTo('packets');
+  }
+}
+
+// ========== Packet List ==========
+async function loadPackets() {
+  const container = document.getElementById('packet-list');
+  container.innerHTML = '<div class="loading">Loading packets...</div>';
+  try {
+    const resp = await fetch(API + '/api/packets');
+    const packets = await resp.json();
+    if (packets.length === 0) {
+      const notifBtn = Notification.permission === 'granted'
+        ? '<button class="action-btn btn-confirm" style="margin:16px auto;flex:none;padding:12px 24px" onclick="testNotification()">&#x1F514; Test Notification</button>'
+        : '<button class="action-btn btn-submit-tap" style="margin:16px auto;flex:none;padding:12px 24px" onclick="setupNotifications()">&#x1F514; Enable Notifications</button>';
+      container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F4E6;</div><div>No review packets available yet</div><div style="margin-top:12px;font-size:13px">Packets will appear here after model training completes</div>' + notifBtn + '</div>';
+      return;
+    }
+    container.innerHTML = packets.map(p => {
+      const pct = p.frame_count > 0 ? Math.round(p.reviewed_count / p.frame_count * 100) : 0;
+      return `
+        <div class="packet-card" onclick="navigateTo('annotate','${p.game_id}')">
+          <div class="title">${p.game_id}<span class="status-badge ${p.status}">${p.status}</span></div>
+          <div class="meta">${p.reviewed_count} / ${p.frame_count} frames reviewed</div>
+          <div class="progress-bar"><div class="progress-fill ${p.status}" style="width:${pct}%"></div></div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    container.innerHTML = '<div class="loading">Failed to load packets</div>';
+  }
+}
+
+// ========== Annotation ==========
+async function startAnnotation(gameId) {
+  currentGameId = gameId;
+  pendingResults = [];
+  userTap = null;
+
+  try {
+    const resp = await fetch(API + '/api/packets/' + gameId);
+    manifest = await resp.json();
+    frames = manifest.frames || [];
+    reviewedSet = new Set(manifest.reviewed_frames || []);
+
+    // Resume from saved position or first unreviewed
+    const saved = localStorage.getItem('pos_' + gameId);
+    if (saved !== null) {
+      currentFrameIndex = Math.min(parseInt(saved), frames.length - 1);
+    } else {
+      currentFrameIndex = findNextUnreviewed(-1);
+    }
+
+    if (frames.length === 0) {
+      alert('No frames in this packet');
+      navigateTo('packets');
+      return;
+    }
+
+    showFrame();
+  } catch (e) {
+    alert('Failed to load packet: ' + e.message);
+    navigateTo('packets');
+  }
+}
+
+function findNextUnreviewed(fromIndex) {
+  for (let i = fromIndex + 1; i < frames.length; i++) {
+    if (!reviewedSet.has(frames[i].frame_idx)) return i;
+  }
+  // Wrap around
+  for (let i = 0; i <= fromIndex && i < frames.length; i++) {
+    if (!reviewedSet.has(frames[i].frame_idx)) return i;
+  }
+  return Math.min(fromIndex + 1, frames.length - 1);
+}
+
+function showFrame() {
+  if (currentFrameIndex < 0 || currentFrameIndex >= frames.length) return;
+
+  const frame = frames[currentFrameIndex];
+  userTap = null;
+  frameStartTime = Date.now();
+
+  // Save position
+  localStorage.setItem('pos_' + currentGameId, currentFrameIndex);
+
+  // Update progress
+  const reviewed = reviewedSet.size;
+  const total = frames.length;
+  document.getElementById('progress-text').textContent = `${reviewed}/${total}`;
+  document.getElementById('progress-bar').style.width = (total > 0 ? reviewed / total * 100 : 0) + '%';
+
+  // Reason text
+  const det = frame.model_detection;
+  let reasonText = frame.reason ? frame.reason.replace(/_/g, ' ') : '';
+  if (det && det.confidence !== undefined) {
+    reasonText += ` (${det.confidence.toFixed(2)})`;
+  }
+  if (reviewedSet.has(frame.frame_idx)) {
+    reasonText = '[already reviewed] ' + reasonText;
+  }
+  document.getElementById('frame-reason').textContent = reasonText;
+
+  // Show default action bar
+  showDefaultActions();
+
+  // Load image
+  const img = new Image();
+  img.onload = () => {
+    cropImage = img;
+    drawCanvas();
+  };
+  img.onerror = () => {
+    cropImage = null;
+    const canvas = document.getElementById('crop-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 400; canvas.height = 400;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, 0, 400, 400);
+    ctx.fillStyle = '#888';
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Image failed to load', 200, 200);
+  };
+  img.src = API + '/api/packets/' + currentGameId + '/crops/' + frame.frame_idx;
+}
+
+function drawCanvas() {
+  const canvas = document.getElementById('crop-canvas');
+  const ctx = canvas.getContext('2d');
+  if (!cropImage) return;
+
+  const container = canvas.parentElement;
+  const cw = container.clientWidth - 8;
+  const ch = container.clientHeight - 8;
+
+  const imgW = cropImage.naturalWidth;
+  const imgH = cropImage.naturalHeight;
+
+  // Scale to fit container
+  const scale = Math.min(cw / imgW, ch / imgH);
+  const dw = Math.floor(imgW * scale);
+  const dh = Math.floor(imgH * scale);
+
+  canvas.width = dw;
+  canvas.height = dh;
+  canvas.dataset.scale = scale;
+  canvas.dataset.imgW = imgW;
+  canvas.dataset.imgH = imgH;
+
+  ctx.drawImage(cropImage, 0, 0, dw, dh);
+
+  const frame = frames[currentFrameIndex];
+
+  // Draw model detection (blue)
+  if (frame.model_detection) {
+    const mx = frame.model_detection.x * scale;
+    const my = frame.model_detection.y * scale;
+    const r = Math.max(12, 18 * scale);
+
+    // Crosshair
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(mx, my, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mx - r - 4, my); ctx.lineTo(mx + r + 4, my);
+    ctx.moveTo(mx, my - r - 4); ctx.lineTo(mx, my + r + 4);
+    ctx.stroke();
+
+    // Confidence label
+    if (frame.model_detection.confidence !== undefined) {
+      const label = frame.model_detection.confidence.toFixed(2);
+      ctx.font = `bold ${Math.max(11, 13 * scale)}px sans-serif`;
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, mx + r + 4, my - 4);
+    }
+  }
+
+  // Draw user tap (green)
+  if (userTap) {
+    const ux = userTap.x * scale;
+    const uy = userTap.y * scale;
+    const r = Math.max(12, 18 * scale);
+
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.9)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(ux, uy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ux - r - 4, uy); ctx.lineTo(ux + r + 4, uy);
+    ctx.moveTo(ux, uy - r - 4); ctx.lineTo(ux, uy + r + 4);
+    ctx.stroke();
+
+    // Fill center dot
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.7)';
+    ctx.beginPath();
+    ctx.arc(ux, uy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function showDefaultActions() {
+  document.getElementById('action-bar').innerHTML = `
+    <button class="action-btn btn-confirm" onclick="doAction('confirm')">
+      <span class="icon">&#x2713;</span>Confirm
+    </button>
+    <button class="action-btn btn-reject" onclick="doAction('reject')">
+      <span class="icon">&#x2717;</span>Reject
+    </button>
+    <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
+      <span class="icon">&#x1F441;</span>None
+    </button>
+    <button class="action-btn btn-skip" onclick="doAction('skip')">
+      <span class="icon">&rarr;</span>Skip
+    </button>`;
+}
+
+function showTapActions() {
+  const frame = frames[currentFrameIndex];
+  const actionLabel = frame.model_detection ? 'Adjust' : 'Locate';
+  document.getElementById('action-bar').innerHTML = `
+    <button class="action-btn btn-submit-tap" onclick="submitTap()" style="flex:2">
+      <span class="icon">&#x2713;</span>${actionLabel}
+    </button>
+    <button class="action-btn btn-skip" onclick="cancelTap()">
+      <span class="icon">&#x2717;</span>Cancel
+    </button>
+    <button class="action-btn btn-skip" onclick="doAction('skip')">
+      <span class="icon">&rarr;</span>Skip
+    </button>`;
+}
+
+// Canvas tap handling
+document.getElementById('crop-canvas').addEventListener('pointerdown', function(e) {
+  e.preventDefault();
+  const rect = this.getBoundingClientRect();
+  const scale = parseFloat(this.dataset.scale) || 1;
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+
+  // Convert to image coordinates
+  userTap = {
+    x: Math.round(cx / scale),
+    y: Math.round(cy / scale)
+  };
+
+  drawCanvas();
+  showTapActions();
+  vibrate(10);
+});
+
+function submitTap() {
+  if (!userTap) return;
+  const frame = frames[currentFrameIndex];
+  const action = frame.model_detection ? 'adjust' : 'locate';
+  doAction(action, { x: userTap.x, y: userTap.y });
+}
+
+function cancelTap() {
+  userTap = null;
+  drawCanvas();
+  showDefaultActions();
+}
+
+function doAction(action, ballPos) {
+  vibrate(15);
+
+  const frame = frames[currentFrameIndex];
+  const duration = Date.now() - frameStartTime;
+
+  const result = {
+    frame_idx: frame.frame_idx,
+    action: action,
+    ball_position: ballPos || null,
+    duration_ms: duration
+  };
+
+  pendingResults.push(result);
+  reviewedSet.add(frame.frame_idx);
+
+  // Flash
+  const flashColor = {
+    confirm: 'green', reject: 'red', not_visible: 'gray',
+    skip: 'gray', adjust: 'blue', locate: 'blue'
+  }[action] || 'gray';
+  flashScreen(flashColor);
+
+  // Batch submit
+  if (pendingResults.length >= BATCH_SIZE) {
+    flushResults();
+  }
+
+  // Advance to next unreviewed
+  setTimeout(() => {
+    const next = findNextUnreviewed(currentFrameIndex);
+    if (next === currentFrameIndex && reviewedSet.has(frames[next].frame_idx)) {
+      // All done
+      flushResults();
+      alert('All frames reviewed!');
+      navigateTo('packets');
+      return;
+    }
+    currentFrameIndex = next;
+    showFrame();
+  }, 180);
+}
+
+function flashScreen(color) {
+  const el = document.getElementById('flash-overlay');
+  el.className = 'flash-overlay ' + color + ' show';
+  setTimeout(() => el.classList.remove('show'), 150);
+}
+
+function vibrate(ms) {
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
+// ========== Batch submit ==========
+async function flushResults() {
+  if (pendingResults.length === 0 || !currentGameId) return;
+
+  const toSend = pendingResults.splice(0);
+  try {
+    await fetch(API + '/api/packets/' + currentGameId + '/results', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: toSend })
+    });
+  } catch (e) {
+    // Re-queue on failure
+    pendingResults.unshift(...toSend);
+    console.error('Failed to submit results:', e);
+  }
+}
+
+function leaveAnnotation() {
+  flushResults();
+  navigateTo('packets');
+}
+
+// Flush on page leave
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushResults();
+});
+window.addEventListener('beforeunload', () => flushResults());
+
+// ========== Swipe to skip ==========
+let touchStartX = 0;
+let touchStartY = 0;
+document.getElementById('crop-canvas').addEventListener('touchstart', function(e) {
+  if (e.touches.length === 1) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+}, { passive: true });
+
+document.getElementById('crop-canvas').addEventListener('touchend', function(e) {
+  if (e.changedTouches.length === 1) {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 2) {
+      if (dx < 0) {
+        // Swipe left = skip
+        doAction('skip');
+      }
+    }
+  }
+}, { passive: true });
+
+// ========== Stats ==========
+async function loadStats() {
+  const container = document.getElementById('stats-content');
+  container.innerHTML = '<div class="loading">Loading stats...</div>';
+  try {
+    const resp = await fetch(API + '/api/stats');
+    const s = await resp.json();
+    const breakdown = s.action_breakdown || {};
+    const chips = Object.entries(breakdown).map(([k, v]) =>
+      `<span class="action-chip">${k}: ${v}</span>`
+    ).join('');
+
+    container.innerHTML = `
+      <div class="stat-row">
+        <div class="stat-card">
+          <div class="label">Reviewed</div>
+          <div class="value">${s.total_reviewed}</div>
+          <div class="sub">of ${s.total_frames} frames</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Packets</div>
+          <div class="value">${s.total_packets}</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-card">
+          <div class="label">Agreement</div>
+          <div class="value">${(s.agreement_rate * 100).toFixed(1)}%</div>
+          <div class="sub">model confirmed</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Avg Speed</div>
+          <div class="value">${s.avg_ms_per_frame}ms</div>
+          <div class="sub">per frame</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Total Review Time</div>
+        <div class="value">${s.total_review_time_minutes} min</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Action Breakdown</div>
+        <div class="action-breakdown">${chips || '<span class="action-chip">No data yet</span>'}</div>
+      </div>
+      <button class="action-btn btn-submit-tap" style="margin-top:12px;flex:none;padding:14px 24px;width:100%" onclick="testNotification()">
+        <span class="icon">&#x1F514;</span>${Notification.permission === 'granted' ? 'Test Notification' : 'Enable Notifications'}
+      </button>`;
+  } catch (e) {
+    container.innerHTML = '<div class="loading">Failed to load stats</div>';
+  }
+}
+
+// ========== Notifications ==========
+async function setupNotifications() {
+  if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+    alert('Notifications are not supported in this browser');
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission === 'granted') {
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    reg.active?.postMessage('start-polling');
+    // Also send on new SW activation
+    navigator.serviceWorker.ready.then(r => r.active.postMessage('start-polling'));
+    alert('Notifications enabled! You\'ll be notified when new packets are available.');
+  } else {
+    alert('Notification permission denied. Enable it in browser settings.');
+  }
+}
+
+async function testNotification() {
+  if (!('Notification' in window)) {
+    alert('Notifications not supported');
+    return;
+  }
+  if (Notification.permission !== 'granted') {
+    await setupNotifications();
+    return;
+  }
+  const reg = await navigator.serviceWorker.ready;
+  await reg.showNotification('Test notification', {
+    body: 'Notifications are working! You\'ll be notified when new review packets are ready.',
+    icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚽</text></svg>",
+    tag: 'test',
+  });
+}
+
+// ========== Resize handling ==========
+window.addEventListener('resize', () => {
+  if (cropImage && document.getElementById('annotate-page').classList.contains('active')) {
+    drawCanvas();
+  }
+});
+
+// ========== Init ==========
+// Register service worker for push notifications
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
+    if (Notification.permission === 'granted' && reg.active) {
+      reg.active.postMessage('start-polling');
+    }
+  }).catch(() => {});
+}
+
+window.addEventListener('hashchange', handleHash);
+handleHash();
+</script>
+</body>
+</html>

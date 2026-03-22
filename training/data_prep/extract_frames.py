@@ -24,15 +24,17 @@ def extract_frames(
     interval_sec: float = DEFAULT_INTERVAL_SEC,
     diff_threshold: float = DEFAULT_DIFF_THRESHOLD,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    frame_interval: int | None = None,
 ) -> int:
     """Extract frames from a video file at regular intervals.
 
     Args:
         video_path: Path to the input video (.mp4)
         output_dir: Directory to write extracted frames
-        interval_sec: Seconds between extracted frames
+        interval_sec: Seconds between extracted frames (ignored if frame_interval set)
         diff_threshold: Minimum mean absolute pixel difference to keep a frame
         jpeg_quality: JPEG compression quality (0-100)
+        frame_interval: Extract every N-th frame (overrides interval_sec)
 
     Returns:
         Number of frames extracted
@@ -43,7 +45,8 @@ def extract_frames(
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_interval = max(1, int(fps * interval_sec))
+    if frame_interval is None:
+        frame_interval = max(1, int(fps * interval_sec))
 
     output_dir.mkdir(parents=True, exist_ok=True)
     video_name = video_path.stem

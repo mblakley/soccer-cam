@@ -6,7 +6,6 @@ Prints structured progress updates.
 
 import argparse
 import logging
-import sys
 import time
 from pathlib import Path
 
@@ -156,9 +155,17 @@ VIDEOS = [
 # fmt: on
 
 DIFF_THRESHOLD = 2.0  # Lowered from 5.0 to capture more frames from static camera
+FRAME_INTERVAL = 8  # Extract every 8th frame (~3 fps at 24.6 fps source)
+
+# Tiling grid: 7x3 produces exact 640x640 tiles from 4096x1800 panoramic frames
+TILE_COLS = 7
+TILE_ROWS = 3
+TILE_SIZE = 640
 
 
-def process_video(video_path: str, game_id: str, frames_base: Path, tiles_base: Path) -> dict:
+def process_video(
+    video_path: str, game_id: str, frames_base: Path, tiles_base: Path
+) -> dict:
     """Process a single video segment: extract -> tile -> cleanup."""
     import shutil
 
@@ -168,18 +175,24 @@ def process_video(video_path: str, game_id: str, frames_base: Path, tiles_base: 
     tiles_dir = tiles_base / game_id
 
     # Skip if this segment's tiles already exist (check by filename prefix)
-    existing = list(tiles_dir.glob(f"{segment_id}_*_r0_c0.jpg")) if tiles_dir.exists() else []
+    existing = (
+        list(tiles_dir.glob(f"{segment_id}_*_r0_c0.jpg")) if tiles_dir.exists() else []
+    )
     if existing:
         return {"game_id": game_id, "status": "skipped", "tiles": 0}
 
     # Extract frames into segment-specific dir
-    n_frames = extract_frames(video, frames_dir, diff_threshold=DIFF_THRESHOLD)
+    n_frames = extract_frames(
+        video, frames_dir, diff_threshold=DIFF_THRESHOLD, frame_interval=FRAME_INTERVAL
+    )
 
     # Tile all frames into shared game tiles dir
     frame_files = sorted(frames_dir.rglob("*.jpg"))
     n_tiles = 0
     for frame_path in frame_files:
-        tiles = tile_frame(frame_path, tiles_dir)
+        tiles = tile_frame(
+            frame_path, tiles_dir, cols=TILE_COLS, rows=TILE_ROWS, tile_size=TILE_SIZE
+        )
         n_tiles += len(tiles)
 
     # Cleanup raw frames for this segment
@@ -192,12 +205,18 @@ def process_video(video_path: str, game_id: str, frames_base: Path, tiles_base: 
 def main():
     parser = argparse.ArgumentParser(description="Batch process videos for training")
     parser.add_argument(
-        "--frames-dir", type=Path, default=Path("D:/training_data/frames"),
+        "--frames-dir",
+        type=Path,
+        default=Path("F:/training_data/frames"),
     )
     parser.add_argument(
-        "--tiles-dir", type=Path, default=Path("D:/training_data/tiles"),
+        "--tiles-dir",
+        type=Path,
+        default=Path("F:/training_data/tiles_640"),
     )
-    parser.add_argument("--start", type=int, default=0, help="Start index (for resuming)")
+    parser.add_argument(
+        "--start", type=int, default=0, help="Start index (for resuming)"
+    )
     parser.add_argument("--end", type=int, default=len(VIDEOS), help="End index")
     args = parser.parse_args()
 
@@ -213,9 +232,7 @@ def main():
     start_time = time.time()
 
     for i, (video_path, game_id) in enumerate(VIDEOS[args.start : args.end], start=1):
-        logger.info(
-            "=== [%d/%d] %s ===", i, total_videos, game_id
-        )
+        logger.info("=== [%d/%d] %s ===", i, total_videos, game_id)
         try:
             result = process_video(video_path, game_id, args.frames_dir, args.tiles_dir)
             if result["status"] == "skipped":
@@ -239,7 +256,10 @@ def main():
     elapsed = time.time() - start_time
     logger.info(
         "=== COMPLETE: %d videos, %d frames, %d tiles in %.0f min ===",
-        total_videos, total_frames, total_tiles, elapsed / 60,
+        total_videos,
+        total_frames,
+        total_tiles,
+        elapsed / 60,
     )
 
 

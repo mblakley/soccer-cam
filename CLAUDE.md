@@ -106,21 +106,23 @@ Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (defaul
 The `training/` package contains a YOLO ball detection model training pipeline. Install with `uv sync --extra ml` plus CUDA PyTorch (`uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124`).
 
 **Data prep pipeline** (`training/data_prep/`):
-1. `extract_frames.py` — Extracts frames from 4096x1800 panoramic video at 2-sec intervals, skipping near-identical frames. Supports `.mp4` and `.dav` formats.
-2. `tile_frames.py` — Slices panoramic frames into 6x2 grid of ~768x900 tiles with 128px overlap.
-3. `bootstrap_labels.py` — Runs pretrained YOLO (yolo11x.pt) on tiles to auto-label ball positions using COCO sports_ball class.
-4. `organize_dataset.py` — Organizes tiles + labels into YOLO directory structure with 85/15 train/val split.
-5. `process_batch.py` — Orchestrates steps 1-2 for many videos, with skip/resume support.
+1. `extract_frames.py` — Extracts frames from 4096x1800 panoramic video every 8 frames (~3 fps). Supports `.mp4` and `.dav` formats.
+2. `tile_frames.py` — Slices panoramic frames into 7x3 grid of 640x640 tiles with overlap.
+3. `bootstrap_labels.py` — Runs pretrained YOLO (yolo11x.pt) on tiles to auto-label ball positions using COCO sports_ball class. Supports row exclusion.
+4. `bootstrap_batch.py` — Runs bootstrap labeling game-by-game to avoid memory issues with large datasets.
+5. `organize_dataset.py` — Organizes tiles + labels into YOLO directory structure with game-level train/val split. Supports tile weighting and row exclusion.
+6. `create_sample_lists.py` — Creates sampled train.txt/val.txt for memory-safe training with large datasets.
+7. `process_batch.py` — Orchestrates steps 1-2 for many videos, with skip/resume support.
 
 All modules run via `uv run python -m training.data_prep.<module>`.
 
-**Training & evaluation**: `training/train.py`, `training/evaluate.py`, `training/export_mobile.py`
+**Training & evaluation**: `training/train.py` (YOLO11m, workers=0 for 16GB RAM), `training/evaluate.py`, `training/export_mobile.py`
 
 **Human-in-the-loop annotation**: `training/annotation_server.py` (FastAPI), `training/review_packet_generator.py`, `training/correction_ingester.py`
 
-**Dataset config**: `training/configs/ball_dataset.yaml` — points to `D:\training_data\ball_dataset`
+**Dataset config**: `training/configs/ball_dataset_640.yaml` — points to `F:\training_data\ball_dataset_640`
 
-**Training data location**: `D:\training_data\` (frames, tiles, labels, ball_dataset, runs)
+**Training data location**: `F:\training_data\` (frames, tiles_640, labels_640, ball_dataset_640, runs). Top-row (r0) tiles excluded via .excluded rename. Dataset uses NTFS junctions for zero-copy train/val split.
 
 ### Test Conventions
 

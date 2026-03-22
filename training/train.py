@@ -58,7 +58,7 @@ def train(
         hsv_s=0.7,
         hsv_v=0.4,
         # Training
-        workers=4,
+        workers=0,
     )
     logger.info("Training complete. Best model: %s/%s/weights/best.pt", project, name)
     return results
@@ -69,7 +69,7 @@ def main():
     parser.add_argument(
         "--data",
         type=Path,
-        default=Path("training/configs/ball_dataset.yaml"),
+        default=Path("training/configs/ball_dataset_640.yaml"),
         help="Dataset YAML config",
     )
     parser.add_argument(
@@ -84,6 +84,12 @@ def main():
         "--device", default="0", help="Device: '0' for GPU, 'cpu' for CPU"
     )
     parser.add_argument("--name", default="ball_v1", help="Run name")
+    parser.add_argument(
+        "--project",
+        type=str,
+        default=str(Path(__file__).resolve().parent / "runs"),
+        help="Output directory for training runs",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -95,6 +101,7 @@ def main():
         args.batch,
         device=args.device,
         name=args.name,
+        project=args.project,
     )
 
 

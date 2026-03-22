@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -279,3 +280,28 @@ async def trigger_ingestion():
             "total_labels_written": sum(s.labels_written for s in stats_list),
         }
     )
+
+
+@app.get("/sw.js")
+async def service_worker():
+    """Serve SW from root so it can control all pages."""
+    sw_path = Path(__file__).parent / "static" / "sw.js"
+    return FileResponse(
+        sw_path,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/")
+async def root_redirect():
+    """Redirect root to the annotation UI."""
+    return RedirectResponse(url="/static/annotate.html")
+
+
+# Static file mount must come AFTER all API routes (catch-all).
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)

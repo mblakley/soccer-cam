@@ -7,7 +7,10 @@ Exports YOLO-format label files for import into CVAT or direct training.
 
 import argparse
 import logging
+import time
 from pathlib import Path
+
+from training.data_prep.organize_dataset import parse_tile_position
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ def bootstrap_labels(
     model_name: str = "yolo11x.pt",
     confidence: float = DEFAULT_CONFIDENCE,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    exclude_rows: set[int] | None = None,
 ) -> dict[str, int]:
     """Run pretrained YOLO on tiles and export ball detections as YOLO labels.
 
@@ -43,7 +47,25 @@ def bootstrap_labels(
     model = YOLO(model_name)
     labels_dir.mkdir(parents=True, exist_ok=True)
 
-    tile_paths = sorted(tiles_dir.rglob("*.jpg"))
+    if exclude_rows is None:
+        exclude_rows = set()
+
+    all_paths = sorted(tiles_dir.rglob("*.jpg"))
+    if exclude_rows:
+        tile_paths = [
+            p
+            for p in all_paths
+            if (pos := parse_tile_position(p.stem)) is None
+            or pos[0] not in exclude_rows
+        ]
+        logger.info(
+            "Filtered %d -> %d tiles (excluded rows %s)",
+            len(all_paths),
+            len(tile_paths),
+            exclude_rows,
+        )
+    else:
+        tile_paths = all_paths
     logger.info(
         "Processing %d tiles with %s (conf=%.2f, batch=%d)",
         len(tile_paths),
@@ -53,9 +75,12 @@ def bootstrap_labels(
     )
 
     stats = {"tiles_processed": 0, "tiles_with_balls": 0, "total_detections": 0}
+    total_tiles = len(tile_paths)
+    start_time = time.time()
+    last_log_time = start_time
 
     # Process in batches for better throughput
-    for batch_start in range(0, len(tile_paths), batch_size):
+    for batch_start in range(0, total_tiles, batch_size):
         batch_paths = tile_paths[batch_start : batch_start + batch_size]
         batch_strs = [str(p) for p in batch_paths]
 
@@ -90,19 +115,33 @@ def bootstrap_labels(
                 stats["tiles_with_balls"] += 1
                 stats["total_detections"] += len(detections)
 
-        if stats["tiles_processed"] % 500 < batch_size:
-            logger.info(
-                "Processed %d/%d tiles (%d detections so far)",
-                stats["tiles_processed"],
-                len(tile_paths),
-                stats["total_detections"],
+        # Log every 30 seconds or every 1000 tiles
+        now = time.time()
+        if now - last_log_time >= 30 or stats["tiles_processed"] % 1000 < batch_size:
+            elapsed = now - start_time
+            rate = stats["tiles_processed"] / elapsed if elapsed > 0 else 0
+            remaining = (
+                (total_tiles - stats["tiles_processed"]) / rate if rate > 0 else 0
             )
+            pct = stats["tiles_processed"] / total_tiles * 100
+            logger.info(
+                "%d/%d tiles (%.1f%%) | %d detections | %.1f tiles/sec | ETA %.0f min",
+                stats["tiles_processed"],
+                total_tiles,
+                pct,
+                stats["total_detections"],
+                rate,
+                remaining / 60,
+            )
+            last_log_time = now
 
+    elapsed = time.time() - start_time
     logger.info(
-        "Done: %d tiles, %d with balls, %d total detections",
+        "=== COMPLETE: %d tiles, %d with balls, %d total detections in %.0f min ===",
         stats["tiles_processed"],
         stats["tiles_with_balls"],
         stats["total_detections"],
+        elapsed / 60,
     )
     return stats
 
