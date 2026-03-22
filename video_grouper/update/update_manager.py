@@ -1,36 +1,28 @@
 import os
 import sys
+import subprocess
 import json
 import httpx
 import logging
-import win32serviceutil
 import tempfile
 import shutil
-from typing import Tuple, Optional, TypedDict, Union
+from typing import Tuple, Optional, TypedDict
+
+from packaging.version import Version, InvalidVersion
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_ASSETS = ("VideoGrouperService.exe", "VideoGrouperTray.exe")
+
 
 class VersionInfo(TypedDict, total=False):
-    """Represents version information from the update server."""
+    """Represents version information from a GitHub Release."""
 
-    # Version info
     version: str
-    build_number: int
+    tag_name: str
     release_date: str
-
-    # Download info
-    download_url: str
-    file_size: int
-    checksum: str
-
-    # Release info
     release_notes: str
-    changelog: list[str]
-    is_mandatory: bool
-
-    # Custom fields
-    custom_fields: dict[str, Union[str, int, float, bool]]
+    assets: list[dict]
 
 
 class UpdateError(Exception):
@@ -67,47 +59,45 @@ class UpdateManager:
     def __init__(
         self,
         current_version: str,
-        update_url: str,
+        github_repo: str,
         service_name: str = "VideoGrouperService",
     ):
         self.current_version = current_version
-        self.update_url = update_url
+        self.github_repo = github_repo
         self.service_name = service_name
         self.temp_dir = tempfile.mkdtemp()
         self.timeout = httpx.Timeout(
-            10.0, connect=5.0
-        )  # 10 second timeout, 5 second connect timeout
+            300.0, connect=10.0
+        )  # 300s read timeout, 10s connect
 
     async def check_for_updates(self) -> Tuple[bool, Optional[VersionInfo]]:
         """
-        Check if a new version is available.
+        Check GitHub Releases for a newer version.
         Returns a tuple of (has_update, version_info).
         """
+        api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
+        headers = {"Accept": "application/vnd.github+json"}
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 try:
-                    response = await client.get(f"{self.update_url}/version")
-                    response.raise_for_status()
-                    version_info = response.json()
+                    response = await client.get(api_url, headers=headers)
 
-                    # Validate version info
-                    if (
-                        not isinstance(version_info, dict)
-                        or "version" not in version_info
-                    ):
-                        logger.error("Invalid version info format received")
+                    if response.status_code == 404:
+                        logger.info("No releases found for this repository")
                         return False, None
 
-                    return version_info["version"] > self.current_version, version_info
+                    response.raise_for_status()
+                    release = response.json()
 
                 except httpx.HTTPStatusError as e:
                     logger.error(f"HTTP error checking for updates: {e}")
                     return False, None
                 except httpx.RequestError as e:
                     logger.error(f"Network error checking for updates: {e}")
-                    raise NetworkError(f"Failed to connect to update server: {e}")
+                    raise NetworkError(f"Failed to connect to GitHub API: {e}")
                 except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON response from update server: {e}")
+                    logger.error(f"Invalid JSON from GitHub API: {e}")
                     return False, None
 
         except Exception as e:
@@ -116,10 +106,50 @@ class UpdateManager:
                 raise UpdateCheckError(f"Failed to check for updates: {e}")
             raise
 
+        # Parse version from tag
+        tag_name = release.get("tag_name", "")
+        version_str = tag_name.lstrip("v")
+
+        try:
+            remote_version = Version(version_str)
+            local_version = Version(self.current_version)
+        except InvalidVersion as e:
+            logger.error(f"Invalid version format: {e}")
+            return False, None
+
+        if remote_version <= local_version:
+            logger.debug(
+                f"No update needed: local={local_version}, remote={remote_version}"
+            )
+            return False, None
+
+        # Check that required assets are present
+        assets = release.get("assets", [])
+        asset_names = {a["name"] for a in assets}
+        if not set(REQUIRED_ASSETS).issubset(asset_names):
+            logger.info(
+                f"Release {tag_name} exists but required assets not ready yet. "
+                f"Found: {asset_names}, need: {set(REQUIRED_ASSETS)}"
+            )
+            return False, None
+
+        version_info: VersionInfo = {
+            "version": version_str,
+            "tag_name": tag_name,
+            "release_date": release.get("published_at", ""),
+            "release_notes": release.get("body", ""),
+            "assets": assets,
+        }
+
+        logger.info(f"Update available: {local_version} -> {remote_version}")
+        return True, version_info
+
     async def download_file(self, url: str, file_path: str) -> bool:
         """Download a file with progress tracking and error handling."""
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, follow_redirects=True
+            ) as client:
                 try:
                     async with client.stream("GET", url) as response:
                         response.raise_for_status()
@@ -127,17 +157,17 @@ class UpdateManager:
 
                         with open(file_path, "wb") as f:
                             downloaded = 0
+                            last_logged = -1
                             async for chunk in response.aiter_bytes():
                                 if chunk:
                                     f.write(chunk)
                                     downloaded += len(chunk)
-                                    # Log progress every 10%
                                     if total_size > 0:
-                                        progress = (downloaded / total_size) * 100
-                                        if int(progress) % 10 == 0:
-                                            logger.info(
-                                                f"Download progress: {progress:.1f}%"
-                                            )
+                                        pct = int((downloaded / total_size) * 100)
+                                        tens = pct // 10
+                                        if tens > last_logged:
+                                            last_logged = tens
+                                            logger.info(f"Download progress: {pct}%")
 
                 except httpx.HTTPStatusError as e:
                     logger.error(f"HTTP error downloading file: {e}")
@@ -155,33 +185,29 @@ class UpdateManager:
             raise
 
     async def download_update(self, version_info: VersionInfo) -> bool:
-        """Download the new version with error handling."""
+        """Download the new version executables from GitHub Release assets."""
         try:
-            # Download service executable
-            service_url = (
-                f"{self.update_url}/download/service/{version_info['version']}"
-            )
-            service_path = os.path.join(self.temp_dir, "VideoGrouperService.exe")
+            assets_by_name = {a["name"]: a for a in version_info["assets"]}
 
-            if not await self.download_file(service_url, service_path):
-                return False
+            for exe_name in REQUIRED_ASSETS:
+                asset = assets_by_name.get(exe_name)
+                if not asset:
+                    logger.error(f"Asset {exe_name} not found in release")
+                    return False
 
-            # Download tray agent executable
-            tray_url = f"{self.update_url}/download/tray/{version_info['version']}"
-            tray_path = os.path.join(self.temp_dir, "tray_agent.exe")
+                url = asset["browser_download_url"]
+                dest = os.path.join(self.temp_dir, exe_name)
 
-            if not await self.download_file(tray_url, tray_path):
-                return False
+                logger.info(f"Downloading {exe_name}...")
+                if not await self.download_file(url, dest):
+                    return False
 
-            # Verify downloaded files
-            if not os.path.exists(service_path) or not os.path.exists(tray_path):
-                logger.error("Downloaded files not found")
-                return False
-
-            # Verify file sizes
-            if os.path.getsize(service_path) == 0 or os.path.getsize(tray_path) == 0:
-                logger.error("Downloaded files are empty")
-                return False
+            # Verify downloaded files exist and are non-empty
+            for exe_name in REQUIRED_ASSETS:
+                path = os.path.join(self.temp_dir, exe_name)
+                if not os.path.exists(path) or os.path.getsize(path) == 0:
+                    logger.error(f"Downloaded {exe_name} is missing or empty")
+                    return False
 
             return True
 
@@ -191,6 +217,8 @@ class UpdateManager:
 
     def install_update(self) -> bool:
         """Install the downloaded update with error handling and rollback."""
+        import win32serviceutil
+
         backup_files = []
         try:
             # Get installation directory
@@ -203,12 +231,21 @@ class UpdateManager:
                 logger.error(f"Error stopping service: {e}")
                 raise UpdateInstallError(f"Failed to stop service: {e}")
 
+            # Kill the tray process so its exe can be overwritten
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "VideoGrouperTray.exe"],
+                    capture_output=True,
+                )
+            except Exception as e:
+                logger.warning(f"Could not kill tray process: {e}")
+
             # Prepare file paths
             service_src = os.path.join(self.temp_dir, "VideoGrouperService.exe")
             service_dst = os.path.join(install_dir, "VideoGrouperService.exe")
 
-            tray_src = os.path.join(self.temp_dir, "tray_agent.exe")
-            tray_dst = os.path.join(install_dir, "tray_agent.exe")
+            tray_src = os.path.join(self.temp_dir, "VideoGrouperTray.exe")
+            tray_dst = os.path.join(install_dir, "VideoGrouperTray.exe")
 
             # Backup existing files
             for src, dst in [
@@ -267,13 +304,15 @@ class UpdateManager:
 
 
 async def check_and_update(
-    current_version: str, update_url: str, service_name: str = "VideoGrouperService"
+    current_version: str,
+    github_repo: str,
+    service_name: str = "VideoGrouperService",
 ) -> bool:
     """
     Convenience function to check for and install updates.
     Returns True if an update was successfully installed, False otherwise.
     """
-    update_manager = UpdateManager(current_version, update_url, service_name)
+    update_manager = UpdateManager(current_version, github_repo, service_name)
     try:
         try:
             has_update, version_info = await update_manager.check_for_updates()

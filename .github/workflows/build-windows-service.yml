@@ -11,6 +11,9 @@ jobs:
   build:
     name: Build Windows Service
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_number: ${{ steps.version.outputs.build_number }}
 
     steps:
     - uses: actions/checkout@v4
@@ -43,11 +46,16 @@ jobs:
         }
         echo "VERSION=$VERSION" >> $env:GITHUB_ENV
         echo "BUILD_NUMBER=$BUILD_NUMBER" >> $env:GITHUB_ENV
+        echo "version=$VERSION" >> $env:GITHUB_OUTPUT
+        echo "build_number=$BUILD_NUMBER" >> $env:GITHUB_OUTPUT
 
     - name: Update version.py
+      shell: pwsh
       run: |
-        echo "VERSION = '${{ env.VERSION }}'" > video_grouper/version.py
-        echo "BUILD_NUMBER = '${{ env.BUILD_NUMBER }}'" >> video_grouper/version.py
+        $content = Get-Content video_grouper/version.py -Raw
+        $content = $content -replace 'VERSION = "0\.0\.0"', "VERSION = `"${{ env.VERSION }}`""
+        $content = $content -replace 'BUILD_NUMBER = "0"', "BUILD_NUMBER = `"${{ env.BUILD_NUMBER }}`""
+        Set-Content video_grouper/version.py $content
 
     - name: Build service executable
       run: |
@@ -72,3 +80,38 @@ jobs:
           video_grouper/dist/VideoGrouperSetup.exe
           video_grouper/dist/VideoGrouperService.exe
           video_grouper/dist/VideoGrouperTray.exe
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: VideoGrouper-${{ needs.build.outputs.version }}-${{ needs.build.outputs.build_number }}
+        path: artifacts
+
+    - name: Create or update GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        body: |
+          # VideoGrouper ${{ needs.build.outputs.version }}
+
+          ## Windows Installer
+          Download and run `VideoGrouperSetup.exe` to install the Windows application.
+
+          ## Individual Executables
+          - `VideoGrouperService.exe` - Windows service
+          - `VideoGrouperTray.exe` - System tray agent
+        files: |
+          artifacts/VideoGrouperSetup.exe
+          artifacts/VideoGrouperService.exe
+          artifacts/VideoGrouperTray.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -34,7 +34,7 @@ def mock_config(tmp_path):
     """Create a mock pydantic Config object."""
     config = MagicMock(spec=Config)
     config.app = MagicMock(spec=AppConfig)
-    config.app.update_url = "http://fake-update-url.com"
+    config.app.github_repo = "test-owner/test-repo"
     config.storage = MagicMock(spec=StorageConfig)
     config.storage.path = str(tmp_path)
     config.autocam = MagicMock(spec=AutocamConfig)
@@ -82,7 +82,7 @@ def test_system_tray_icon_initialization(
     assert tray_icon.config_path == config_file
     mock_load_config.assert_called_once_with(config_file)
     assert tray_icon.config == mock_config
-    assert tray_icon.update_url == "http://fake-update-url.com"
+    assert tray_icon.github_repo == "test-owner/test-repo"
     mock_init_ui.assert_called_once()
     mock_start_update_checker.assert_called_once()
 

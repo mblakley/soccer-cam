@@ -58,7 +58,7 @@ def mock_config(temp_storage):
         processing=ProcessingConfig(),
         logging=LoggingConfig(),
         app=AppConfig(
-            storage_path=str(temp_storage), update_url="https://test-updates.com"
+            storage_path=str(temp_storage), github_repo="test-owner/test-repo"
         ),
         teamsnap=TeamSnapConfig(enabled=True, team_id="1", my_team_name="Team A"),
         teamsnap_teams=[],

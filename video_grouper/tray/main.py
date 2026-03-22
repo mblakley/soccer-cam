@@ -35,10 +35,10 @@ logger = get_logger(__name__)
 
 
 class UpdateChecker(threading.Thread):
-    def __init__(self, version, update_url, signal):
+    def __init__(self, version, github_repo, signal):
         super().__init__()
         self.version = version
-        self.update_url = update_url
+        self.github_repo = github_repo
         self.signal = signal
         self.daemon = True
 
@@ -51,7 +51,7 @@ class UpdateChecker(threading.Thread):
 
                 # Check for updates
                 has_update = loop.run_until_complete(
-                    check_and_update(self.version, self.update_url)
+                    check_and_update(self.version, self.github_repo)
                 )
 
                 if has_update:
@@ -213,11 +213,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self.config_path.exists():
             self.config = load_config(self.config_path)
 
-        # Get update URL from config
-        self.update_url = (
-            self.config.app.update_url
-            if self.config
-            else "https://updates.videogrouper.com"
+        # Get GitHub repo from config for update checks
+        self.github_repo = (
+            self.config.app.github_repo if self.config else "mblakley/soccer-cam"
         )
 
         # Ensure storage path is configured in the config model
@@ -371,7 +369,7 @@ class SystemTrayIcon(QSystemTrayIcon):
     def start_update_checker(self):
         """Start the background update checker thread."""
         self.update_checker = UpdateChecker(
-            self.version, self.update_url, self.update_available
+            self.version, self.github_repo, self.update_available
         )
         self.update_checker.start()
 
@@ -488,7 +486,7 @@ class SystemTrayIcon(QSystemTrayIcon):
     async def check_updates(self):
         """Manually check for updates."""
         try:
-            has_update = await check_and_update(self.version, self.update_url)
+            has_update = await check_and_update(self.version, self.github_repo)
             if has_update:
                 self.showMessage(
                     "Updates",

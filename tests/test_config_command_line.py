@@ -78,7 +78,7 @@ class TestMainFunction:
         config.camera.device_ip = "192.168.1.100"
         config.camera.username = "admin"
         config.app = MagicMock()
-        config.app.update_url = "https://updates.videogrouper.com"
+        config.app.github_repo = "mblakley/soccer-cam"
         return config
 
     @pytest.mark.asyncio

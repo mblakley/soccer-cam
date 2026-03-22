@@ -83,7 +83,7 @@ class LoggingConfig(BaseModel):
 class AppConfig(BaseModel):
     check_interval_seconds: int = 60
     timezone: str = "America/New_York"
-    update_url: str = "https://updates.videogrouper.com"
+    github_repo: str = "mblakley/soccer-cam"
     storage_path: Optional[str] = None
     max_lookback_hours: int = 48
     max_files_per_poll: int = 50

@@ -4,9 +4,7 @@ This file is automatically updated during the build process.
 """
 
 VERSION = "0.0.0"  # Will be replaced with Git tag version during build
-BUILD_NUMBER = (
-    "0"  # Will be replaced with 0 for releases, commit count for development builds
-)
+BUILD_NUMBER = "0"  # 0 for releases, commit count for dev builds
 
 # Full version string including build number
 FULL_VERSION = f"{VERSION}+{BUILD_NUMBER}"
