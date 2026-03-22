@@ -15,6 +15,13 @@ import configparser
 
 logger = logging.getLogger(__name__)
 
+
+class YouTubeQuotaError(Exception):
+    """Raised when YouTube API quota is exceeded. Should not be retried immediately."""
+
+    pass
+
+
 MAX_RETRIES = 5
 
 # If modifying these scopes, delete the token.json file.
@@ -354,6 +361,27 @@ class YouTubeUploader:
                         logger.info(f"Upload {pct}% ({speed:.1f} MB/s)")
                 logger.info("Upload completed successfully")
             except HttpError as e:
+                reason = ""
+                if e.resp and e.resp.status in (400, 403):
+                    try:
+                        import json
+
+                        detail = json.loads(e.content)
+                        errors = detail.get("error", {}).get("errors", [])
+                        reason = errors[0].get("reason", "") if errors else ""
+                    except Exception:
+                        pass
+                if reason in (
+                    "uploadLimitExceeded",
+                    "quotaExceeded",
+                    "rateLimitExceeded",
+                    "dailyLimitExceeded",
+                ):
+                    logger.error(
+                        f"YouTube quota exceeded ({reason}). "
+                        f"Upload will be retried after quota resets."
+                    )
+                    raise YouTubeQuotaError(reason) from e
                 logger.error(f"Upload failed with error: {e}")
                 return None
             except Exception as e:

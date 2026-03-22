@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.utils.config import Config
-from video_grouper.utils.paths import get_combined_video_path
+from video_grouper.utils.paths import get_combined_video_path, get_match_info_path
 from .base_queue_processor import QueueProcessor
 from .tasks.video import BaseFfmpegTask
 from .queue_type import QueueType
@@ -70,18 +70,49 @@ class VideoProcessor(QueueProcessor):
             logger.error(f"VIDEO: Error processing task {item}: {e}")
 
     async def _on_combine_complete(self, group_dir: str) -> None:
-        """Trigger match info gathering after a successful combine.
+        """Trigger match info gathering and trim after a successful combine.
 
-        Runs asynchronously so the video queue can continue processing
-        other groups' tasks without waiting for API calls or user input.
+        If match_info.ini is already fully populated (team info + start time),
+        queues the trim immediately. Otherwise falls back to API lookups and
+        NTFY prompts.
         """
         try:
             combined_path = get_combined_video_path(group_dir, self.storage_path)
+
+            # Check if match_info is already fully populated (e.g. pre-set by user)
+            from video_grouper.models import MatchInfo
+
+            match_info_path = get_match_info_path(group_dir, self.storage_path)
+            if os.path.exists(match_info_path):
+                match_info = MatchInfo.from_file(match_info_path)
+                if match_info and match_info.is_populated():
+                    logger.info(
+                        f"VIDEO: Match info already fully populated for {group_dir}, "
+                        f"queuing trim directly"
+                    )
+                    from video_grouper.task_processors.tasks.video import TrimTask
+
+                    await self.add_work(TrimTask(group_dir))
+                    return
 
             # Try API-based population first (TeamSnap, PlayMetrics)
             if self.match_info_service:
                 logger.info(f"VIDEO: Triggering API-based match info for {group_dir}")
                 await self.match_info_service.populate_match_info_from_apis(group_dir)
+
+            # Check again after API population - APIs may have filled team info
+            # but not start_time_offset, so we may still need NTFY for that
+            if os.path.exists(match_info_path):
+                match_info = MatchInfo.from_file(match_info_path)
+                if match_info and match_info.is_populated():
+                    logger.info(
+                        f"VIDEO: Match info populated after API lookup for {group_dir}, "
+                        f"queuing trim directly"
+                    )
+                    from video_grouper.task_processors.tasks.video import TrimTask
+
+                    await self.add_work(TrimTask(group_dir))
+                    return
 
             # Queue NTFY tasks for remaining info (game start time, team info
             # if APIs didn't find it). request_match_info_for_directory() skips

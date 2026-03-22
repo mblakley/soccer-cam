@@ -113,26 +113,6 @@ class CameraPoller(PollingProcessor):
                 logger.debug("CAMERA_POLLER: Camera not available, skipping file sync")
                 return
 
-            # Continuously suppress recording while connected
-            if self.camera.config.auto_stop_recording:
-                try:
-                    is_recording = await self.camera.get_recording_status()
-                    if is_recording:
-                        logger.info("CAMERA_POLLER: Camera is recording, stopping...")
-                        success = await self.camera.stop_recording()
-                        if success:
-                            logger.info(
-                                "CAMERA_POLLER: Successfully stopped camera recording"
-                            )
-                        else:
-                            logger.warning(
-                                "CAMERA_POLLER: Failed to stop camera recording"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"CAMERA_POLLER: Error checking/stopping recording: {e}"
-                    )
-
             await self._sync_files_from_camera()
 
             # Check if all downloads are complete and notify to unplug
@@ -307,31 +287,6 @@ class CameraPoller(PollingProcessor):
                     f"CAMERA_POLLER: Error processing file info {file_info}: {e}"
                 )
 
-        if files_to_delete and self.camera.config.auto_stop_recording:
-            cleanup_state = self._read_cleanup_state()
-            if self.camera.supports_file_deletion:
-                if cleanup_state.get("approved"):
-                    try:
-                        deleted = await self.camera.delete_files(files_to_delete)
-                        if deleted > 0:
-                            logger.info(
-                                f"CAMERA_POLLER: Deleted {deleted} home "
-                                "recordings from camera"
-                            )
-                            self._clear_cleanup_state()
-                    except Exception as e:
-                        logger.warning(
-                            f"CAMERA_POLLER: Error deleting home recordings: {e}"
-                        )
-                elif not cleanup_state.get("files"):
-                    self._write_cleanup_state(files_to_delete, files)
-                    await self._send_deletion_notification(len(files_to_delete))
-            elif not cleanup_state.get("files"):
-                # Camera doesn't support deletion — log for tray visibility
-                self._write_cleanup_state(
-                    files_to_delete, files, deletion_supported=False
-                )
-
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
             logger.info(
@@ -372,21 +327,6 @@ class CameraPoller(PollingProcessor):
 
         self._unplug_notified = True
         logger.info("CAMERA_POLLER: All downloads complete.")
-
-        # Re-enable continuous recording before telling user to unplug
-        if self.camera.config.auto_stop_recording:
-            try:
-                success = await self.camera.start_recording()
-                if success:
-                    logger.info(
-                        "CAMERA_POLLER: Restored continuous recording before unplug"
-                    )
-                else:
-                    logger.warning(
-                        "CAMERA_POLLER: Failed to restore continuous recording"
-                    )
-            except Exception as e:
-                logger.warning(f"CAMERA_POLLER: Error restoring recording: {e}")
 
         if self.ntfy_service and self.config.ntfy.unplug_notification:
             try:

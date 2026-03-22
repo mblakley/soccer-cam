@@ -203,10 +203,16 @@ class MatchInfoService:
             logger.info(f"TeamSnap conversion result: {match_info}")
             return match_info
         elif source == "PlayMetrics":
+            # Use is_home flag from API to set "Home"/"Away" as location
+            if "is_home" in game:
+                location = "Home" if game["is_home"] else "Away"
+            else:
+                location = game.get("location", "")
+
             match_info = {
                 "my_team_name": game.get("team_name", ""),
                 "opponent_team_name": game.get("opponent", ""),
-                "location": game.get("location", ""),
+                "location": location,
             }
 
             # Add date/time if available

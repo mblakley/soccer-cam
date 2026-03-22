@@ -89,9 +89,7 @@ def mock_camera():
     camera.supports_file_deletion = True
     camera.is_connected = True
     camera.close = AsyncMock()
-    # Camera.config is read by CameraPoller for auto_stop_recording and metadata
     cam_config = Mock()
-    cam_config.auto_stop_recording = True
     cam_config.type = "dahua"
     cam_config.name = "default"
     camera.config = cam_config
@@ -550,29 +548,6 @@ class TestAutoStopRecording:
         await poller.discover_work()
         assert mock_camera.stop_recording.call_count == 2
 
-    @pytest.mark.asyncio
-    async def test_stop_recording_not_called_when_disabled(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Nothing is called when auto_stop_recording is False."""
-        mock_camera.config.auto_stop_recording = False
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()
-        mock_camera.get_recording_status.assert_not_called()
-        mock_camera.stop_recording.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_failure_allows_retry_next_poll(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Failed stop is retried on the next poll (no flag blocking retry)."""
-        mock_camera.get_recording_status.return_value = True
-        mock_camera.stop_recording.return_value = False
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()
-        await poller.discover_work()
-        assert mock_camera.stop_recording.call_count == 2
-
 
 class TestHomeRecordingDeletion:
     """Tests for deleting home recordings from the camera with user confirmation."""
@@ -746,24 +721,6 @@ class TestHomeRecordingDeletion:
         mock_download_processor.add_work.assert_called_once()
         queued_file = mock_download_processor.add_work.call_args[0][0]
         assert "field_clip.dav" in queued_file.file_path
-
-    @pytest.mark.asyncio
-    async def test_no_deletion_when_auto_stop_disabled(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """delete_files is not called when auto_stop_recording is False."""
-        mock_camera.config.auto_stop_recording = False
-        self._setup_home_files(mock_camera)
-
-        mock_download_processor = Mock()
-        mock_download_processor.add_work = AsyncMock()
-        poller = _make_poller(
-            temp_storage, mock_config, mock_camera, mock_download_processor
-        )
-
-        await poller._sync_files_from_camera()
-
-        mock_camera.delete_files.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cleanup_state_cleared_on_disconnect(

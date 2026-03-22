@@ -98,6 +98,10 @@ class UploadProcessor(QueueProcessor):
                 logger.error(f"UPLOAD: Task execution failed: {item}")
 
         except Exception as e:
+            from video_grouper.utils.youtube_upload import YouTubeQuotaError
+
+            if isinstance(e, YouTubeQuotaError):
+                raise  # Let base processor handle quota errors
             logger.error(f"UPLOAD: Error processing task {item}: {e}")
 
     def get_item_key(self, item: BaseUploadTask) -> str:

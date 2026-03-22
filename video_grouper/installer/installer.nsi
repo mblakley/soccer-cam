@@ -102,13 +102,31 @@ Function StorageConfigPageLeave
     IfFileExists "$StoragePath\config.ini" 0 no_existing_config
         StrCpy $ConfigExists "1"
         ; Read camera settings from existing config
+        ; Try [CAMERA.reolink] first, then [CAMERA.dahua], then [CAMERA]
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.reolink" "device_ip"
+        StrCmp $0 "" 0 got_ip
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.dahua" "device_ip"
+        StrCmp $0 "" 0 got_ip
         ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "device_ip"
+        got_ip:
         StrCmp $0 "" +2
             StrCpy $IPAddress $0
+
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.reolink" "username"
+        StrCmp $0 "" 0 got_user
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.dahua" "username"
+        StrCmp $0 "" 0 got_user
         ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "username"
+        got_user:
         StrCmp $0 "" +2
             StrCpy $Username $0
+
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.reolink" "password"
+        StrCmp $0 "" 0 got_pass
+        ReadINIStr $0 "$StoragePath\config.ini" "CAMERA.dahua" "password"
+        StrCmp $0 "" 0 got_pass
         ReadINIStr $0 "$StoragePath\config.ini" "CAMERA" "password"
+        got_pass:
         StrCmp $0 "" +2
             StrCpy $Password $0
     no_existing_config:

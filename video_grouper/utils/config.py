@@ -50,7 +50,6 @@ class CameraConfig(BaseModel):
     device_ip: str
     username: str
     password: str
-    auto_stop_recording: bool = True
     channel: int = 0
     baichuan_port: int = 9000
 

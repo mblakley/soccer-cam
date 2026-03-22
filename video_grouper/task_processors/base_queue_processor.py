@@ -185,19 +185,38 @@ class QueueProcessor(ABC):
                         f"{self.__class__.__name__}: Removed completed item from queue: {item} (queue size: {queue_size})"
                     )
                 except Exception as e:
+                    from video_grouper.utils.youtube_upload import YouTubeQuotaError
+
+                    item_key = self.get_item_key(item)
+
+                    if isinstance(e, YouTubeQuotaError):
+                        # Quota errors should not be retried immediately.
+                        # Keep the item in the queue persisted to disk so the
+                        # state auditor picks it up on next service restart
+                        # (after the daily quota resets).
+                        self._queue.task_done()
+                        self._in_progress_item = None
+                        self._queued_items.discard(item_key)
+                        self._retry_counts.pop(item_key, None)
+                        await self.save_state()
+                        logger.warning(
+                            f"{self.__class__.__name__}: YouTube quota exceeded for {item}. "
+                            f"Upload will be retried on next service restart. [trace_id: {trace_id}]"
+                        )
+                        continue
+
                     logger.error(
                         f"{self.__class__.__name__}: Failed to process item {item}: {e} [trace_id: {trace_id}]"
                     )
 
                     # Check retry count
-                    item_key = self.get_item_key(item)
                     retry_count = self._retry_counts.get(item_key, 0)
 
                     if retry_count < self._max_retries:
                         # Task failed but can be retried - requeue at the end
-                        self._queue.task_done()  # Mark current item as done
+                        self._queue.task_done()
                         self._in_progress_item = None
-                        await self._queue.put(item)  # Requeue at the end
+                        await self._queue.put(item)
                         self._retry_counts[item_key] = retry_count + 1
                         queue_size = self._queue.qsize()
                         logger.info(
