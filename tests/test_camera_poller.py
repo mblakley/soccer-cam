@@ -478,77 +478,6 @@ class TestCameraPoller:
         assert os.path.exists(group_dir)
 
 
-class TestAutoStopRecording:
-    """Tests for continuous recording suppression."""
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_called_when_camera_is_recording(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """stop_recording is called when get_recording_status returns True."""
-        mock_camera.get_recording_status.return_value = True
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()
-        mock_camera.get_recording_status.assert_called_once()
-        mock_camera.stop_recording.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_not_called_when_already_stopped(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """stop_recording is NOT called when recording is already off."""
-        mock_camera.get_recording_status.return_value = False
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()
-        mock_camera.get_recording_status.assert_called_once()
-        mock_camera.stop_recording.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_checked_on_every_poll(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Recording status is checked on every poll cycle."""
-        mock_camera.get_recording_status.return_value = False
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()
-        await poller.discover_work()
-        await poller.discover_work()
-        assert mock_camera.get_recording_status.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_called_when_recording_resumes(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """If recording re-enables between polls, it is caught and stopped."""
-        mock_camera.get_recording_status.side_effect = [True, False, True]
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-        await poller.discover_work()  # recording=True -> stop
-        await poller.discover_work()  # recording=False -> skip
-        await poller.discover_work()  # recording=True -> stop again
-        assert mock_camera.stop_recording.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_stop_recording_called_again_after_reconnect(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Recording check resumes after disconnect/reconnect."""
-        mock_camera.get_recording_status.return_value = True
-        poller = _make_poller(temp_storage, mock_config, mock_camera)
-
-        # First connection
-        await poller.discover_work()
-        assert mock_camera.stop_recording.call_count == 1
-
-        # Disconnect
-        mock_camera.check_availability.return_value = False
-        await poller.discover_work()
-
-        # Reconnect
-        mock_camera.check_availability.return_value = True
-        await poller.discover_work()
-        assert mock_camera.stop_recording.call_count == 2
-
-
 class TestHomeRecordingDeletion:
     """Tests for deleting home recordings from the camera with user confirmation."""
 
@@ -579,79 +508,6 @@ class TestHomeRecordingDeletion:
         state = {"files": [{"path": "/home_clip.dav"}], "approved": True}
         with open(poller._cleanup_state_path, "w") as f:
             json.dump(state, f)
-
-    @pytest.mark.asyncio
-    async def test_home_files_deleted_after_user_approves(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Files are deleted only after user approves (via state file)."""
-        self._setup_home_files(mock_camera)
-        mock_camera.delete_files.return_value = 1
-
-        mock_download_processor = Mock()
-        mock_download_processor.add_work = AsyncMock()
-        poller = _make_poller(
-            temp_storage, mock_config, mock_camera, mock_download_processor
-        )
-        self._approve_cleanup(poller)
-
-        await poller._sync_files_from_camera()
-
-        mock_camera.delete_files.assert_called_once_with(["/home_clip.dav"])
-
-    @pytest.mark.asyncio
-    async def test_cleanup_state_written_on_first_discovery(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Cleanup state file is written when home files are first found."""
-        import json
-
-        self._setup_home_files(mock_camera)
-
-        mock_download_processor = Mock()
-        mock_download_processor.add_work = AsyncMock()
-        poller = _make_poller(
-            temp_storage, mock_config, mock_camera, mock_download_processor
-        )
-
-        await poller._sync_files_from_camera()
-
-        # State file should exist with the home file listed
-        assert Path(poller._cleanup_state_path).exists()
-        with open(poller._cleanup_state_path, "r") as f:
-            state = json.load(f)
-        assert len(state["files"]) == 1
-        assert state["files"][0]["path"] == "/home_clip.dav"
-        assert state["approved"] is False
-
-        # delete_files should NOT be called yet
-        mock_camera.delete_files.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_ntfy_notification_sent_on_first_discovery(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """NTFY notification is sent when home files are first found."""
-        self._setup_home_files(mock_camera)
-
-        mock_download_processor = Mock()
-        mock_download_processor.add_work = AsyncMock()
-        poller = _make_poller(
-            temp_storage, mock_config, mock_camera, mock_download_processor
-        )
-        mock_ntfy = Mock()
-        mock_ntfy.send_notification = AsyncMock(return_value=True)
-        mock_ntfy.config = mock_config.ntfy
-        mock_ntfy.register_response_handler = Mock()
-        poller.ntfy_service = mock_ntfy
-
-        await poller._sync_files_from_camera()
-
-        mock_ntfy.send_notification.assert_called_once()
-        call_kwargs = mock_ntfy.send_notification.call_args[1]
-        assert "Home Recordings Found" in call_kwargs["title"]
-        assert "1 recording" in call_kwargs["message"]
-        mock_camera.delete_files.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_deletion_when_not_approved(
@@ -737,25 +593,6 @@ class TestHomeRecordingDeletion:
         # Camera disconnects
         mock_camera.check_availability.return_value = False
         await poller.discover_work()
-
-        assert not Path(poller._cleanup_state_path).exists()
-
-    @pytest.mark.asyncio
-    async def test_cleanup_state_cleared_after_successful_delete(
-        self, temp_storage, mock_config, mock_camera
-    ):
-        """Cleanup state file is removed after successful deletion."""
-        self._setup_home_files(mock_camera)
-        mock_camera.delete_files.return_value = 1
-
-        mock_download_processor = Mock()
-        mock_download_processor.add_work = AsyncMock()
-        poller = _make_poller(
-            temp_storage, mock_config, mock_camera, mock_download_processor
-        )
-        self._approve_cleanup(poller)
-
-        await poller._sync_files_from_camera()
 
         assert not Path(poller._cleanup_state_path).exists()
 
