@@ -134,7 +134,7 @@ class MatchInfoItemWidget(QWidget):
 
             info_dict = {
                 "start_time_offset": start_time,
-                "my_team_name": self.my_team_name.text().strip(),
+                "team_name": self.my_team_name.text().strip(),
                 "opponent_team_name": self.opponent_team_name.text().strip(),
                 "location": self.location.text().strip(),
             }

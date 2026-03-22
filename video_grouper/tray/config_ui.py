@@ -104,6 +104,20 @@ class ConfigWindow(QWidget):
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")
 
+    def _read_json_file(self, path, timeout=1):
+        """Read a JSON file with a short lock timeout. Returns None if unavailable."""
+        try:
+            with FileLock(path, timeout=timeout):
+                if not os.path.exists(path):
+                    return None
+                with open(path, "r") as f:
+                    return json.load(f)
+        except TimeoutError:
+            return "locked"
+        except Exception as e:
+            logger.error(f"Error reading {path}: {e}")
+            return "error"
+
     def init_ui(self):
         self.setWindowTitle("VideoGrouper Configuration")
         layout = QVBoxLayout()
@@ -1035,15 +1049,22 @@ class ConfigWindow(QWidget):
         queue_file = get_shared_data_path() / "download_queue_state.json"
         self.download_queue_list.clear()
         tz_str = getattr(self.config.app, "timezone", "UTC")
-        try:
-            with FileLock(queue_file):
-                if not queue_file.exists():
-                    return
-                with open(queue_file, "r") as f:
-                    queue_data = json.load(f)
-            if not queue_data:
-                return
 
+        queue_data = self._read_json_file(queue_file)
+        if queue_data is None or queue_data == []:
+            self.download_queue_list.addItem("No downloads queued.")
+            return
+        if queue_data == "locked":
+            self.download_queue_list.addItem("Queue file is busy, will retry...")
+            return
+        if queue_data == "error":
+            self.download_queue_list.addItem("Error reading download queue.")
+            return
+        if not queue_data:
+            self.download_queue_list.addItem("No downloads queued.")
+            return
+
+        try:
             for item_data in queue_data:
                 file_path = item_data.get("file_path", "Unknown File")
                 filename = os.path.basename(file_path)
@@ -1061,11 +1082,6 @@ class ConfigWindow(QWidget):
                 list_item.setSizeHint(widget.sizeHint())
                 self.download_queue_list.addItem(list_item)
                 self.download_queue_list.setItemWidget(list_item, widget)
-
-        except TimeoutError:
-            self.download_queue_list.addItem(
-                "Could not read queue state: file is locked."
-            )
         except Exception as e:
             logger.error(f"Error refreshing download queue display: {e}")
 
@@ -1073,15 +1089,22 @@ class ConfigWindow(QWidget):
         """Reads and displays the autocam queue state."""
         queue_file = get_shared_data_path() / "autocam_queue_state.json"
         self.autocam_queue_list.clear()
-        try:
-            with FileLock(queue_file):
-                if not queue_file.exists():
-                    return
-                with open(queue_file, "r") as f:
-                    queue_data = json.load(f)
-            if not queue_data:
-                return
 
+        queue_data = self._read_json_file(queue_file)
+        if queue_data is None or queue_data == []:
+            self.autocam_queue_list.addItem("No autocam tasks queued.")
+            return
+        if queue_data == "locked":
+            self.autocam_queue_list.addItem("Queue file is busy, will retry...")
+            return
+        if queue_data == "error":
+            self.autocam_queue_list.addItem("Error reading autocam queue.")
+            return
+        if not queue_data:
+            self.autocam_queue_list.addItem("No autocam tasks queued.")
+            return
+
+        try:
             for item in queue_data:
                 group_name = item.get("group_name", "Unknown")
                 status = item.get("status", "unknown")
@@ -1098,15 +1121,19 @@ class ConfigWindow(QWidget):
         """Reads and displays the YouTube upload queue state."""
         queue_file = get_shared_data_path() / "upload_queue_state.json"
         self.youtube_upload_list.clear()
-        try:
-            with FileLock(queue_file):
-                if not queue_file.exists():
-                    return
-                with open(queue_file, "r") as f:
-                    queue_data = json.load(f)
-            if not queue_data:
-                return
 
+        queue_data = self._read_json_file(queue_file)
+        if queue_data is None:
+            self.youtube_upload_list.addItem("No uploads queued.")
+            return
+        if queue_data == "locked":
+            self.youtube_upload_list.addItem("Queue file is busy, will retry...")
+            return
+        if queue_data == "error":
+            self.youtube_upload_list.addItem("Error reading upload queue.")
+            return
+
+        try:
             # Handle both new format (dict with "queue" key) and legacy format
             if isinstance(queue_data, dict):
                 in_progress = queue_data.get("in_progress")
@@ -1114,6 +1141,10 @@ class ConfigWindow(QWidget):
             else:
                 in_progress = None
                 items = queue_data
+
+            if not in_progress and not items:
+                self.youtube_upload_list.addItem("No uploads queued.")
+                return
 
             # Show in-progress item first
             if in_progress:
@@ -1126,10 +1157,6 @@ class ConfigWindow(QWidget):
                 group_dir = item.get("group_dir", "Unknown")
                 group_name = os.path.basename(group_dir)
                 self.youtube_upload_list.addItem(f"[Pending] {group_name}")
-        except TimeoutError:
-            self.youtube_upload_list.addItem(
-                "Could not read queue state: file is locked."
-            )
         except Exception as e:
             logger.error(f"Error refreshing YouTube upload display: {e}")
 
@@ -1138,15 +1165,22 @@ class ConfigWindow(QWidget):
         queue_file = get_shared_data_path() / "ffmpeg_queue_state.json"
         self.processing_queue_list.clear()
         tz_str = getattr(self.config.app, "timezone", "UTC")
-        try:
-            with FileLock(queue_file):
-                if not queue_file.exists():
-                    return
-                with open(queue_file, "r") as f:
-                    queue_data = json.load(f)
-            if not queue_data:
-                return
 
+        queue_data = self._read_json_file(queue_file)
+        if queue_data is None or queue_data == []:
+            self.processing_queue_list.addItem("No processing tasks queued.")
+            return
+        if queue_data == "locked":
+            self.processing_queue_list.addItem("Queue file is busy, will retry...")
+            return
+        if queue_data == "error":
+            self.processing_queue_list.addItem("Error reading processing queue state.")
+            return
+        if not queue_data:
+            self.processing_queue_list.addItem("No processing tasks queued.")
+            return
+
+        try:
             for task_type, item_path in queue_data:
                 item_name = os.path.basename(item_path)
                 display_text = f"Task: {task_type.capitalize()}, Item: {item_name}"
@@ -1168,19 +1202,11 @@ class ConfigWindow(QWidget):
                 if not file_to_skip:
                     widget.skip_button.setEnabled(False)
                     widget.skip_button.setToolTip("Cannot skip a directory-level task.")
-
-        except TimeoutError:
-            self.processing_queue_list.addItem(
-                "Could not read queue state: file is locked."
-            )
         except Exception as e:
             logger.error(f"Error reading processing queue state: {e}")
-            self.processing_queue_list.addItem("Error reading processing queue state.")
 
     def handle_skip_request(self, file_path: str):
-        """
-        Finds the correct state.json for a file and marks it as skipped.
-        """
+        """Finds the correct state.json for a file and marks it as skipped."""
         try:
             logger.info(f"Received skip request for: {file_path}")
             group_dir = os.path.dirname(file_path)
@@ -1189,15 +1215,36 @@ class ConfigWindow(QWidget):
                     f"Could not find group directory for file: {file_path}"
                 )
 
-            dir_state = DirectoryState(group_dir)
-            asyncio.run(dir_state.mark_file_as_skipped(file_path))
+            def skip_in_thread():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    dir_state = DirectoryState(group_dir)
+                    loop.run_until_complete(dir_state.mark_file_as_skipped(file_path))
+                    loop.close()
 
-            QMessageBox.information(
-                self,
-                "Success",
-                f"File marked to be skipped:\n{os.path.basename(file_path)}",
-            )
-            self.refresh_queue_displays()
+                    def on_success():
+                        QMessageBox.information(
+                            self,
+                            "Success",
+                            f"File marked to be skipped:\n{os.path.basename(file_path)}",
+                        )
+                        self.refresh_queue_displays()
+
+                    QTimer.singleShot(0, on_success)
+                except Exception as e:
+                    logger.error(f"Error processing skip request for {file_path}: {e}")
+
+                    def on_error(err=e):
+                        QMessageBox.critical(
+                            self,
+                            "Error",
+                            f"Failed to mark file as skipped:\n{str(err)}",
+                        )
+
+                    QTimer.singleShot(0, on_error)
+
+            threading.Thread(target=skip_in_thread, daemon=True).start()
         except Exception as e:
             logger.error(f"Error processing skip request for {file_path}: {e}")
             QMessageBox.critical(
@@ -1212,38 +1259,47 @@ class ConfigWindow(QWidget):
             return
         tz_str = getattr(self.config.app, "timezone", "UTC")
 
+        skipped_list = []
         try:
             for dirname in os.listdir(storage_path_str):
                 group_dir_path = os.path.join(storage_path_str, dirname)
                 if not os.path.isdir(group_dir_path):
                     continue
 
-                dir_state = DirectoryState(group_dir_path)
+                try:
+                    dir_state = DirectoryState(group_dir_path)
+                except TimeoutError:
+                    continue
                 if not dir_state.files:
-                    continue  # Skip if not a valid group dir or no files
+                    continue
 
                 for file_obj in dir_state.files.values():
                     if file_obj.skip:
-                        filename = os.path.basename(file_obj.file_path)
-                        display_text = f"{filename} (Status: {file_obj.status})"
-                        group_name = os.path.basename(
-                            os.path.dirname(file_obj.file_path)
-                        )
-
-                        widget = QueueItemWidget(
-                            item_text=display_text,
-                            file_path=file_obj.file_path,
-                            skip_callback=None,  # No "unskip" functionality for now
-                            show_thumbnail=False,
-                            group_name=group_name,
-                            timezone_str=tz_str,
-                        )
-                        list_item = QListWidgetItem(self.skipped_list)
-                        list_item.setSizeHint(widget.sizeHint())
-                        self.skipped_list.addItem(list_item)
-                        self.skipped_list.setItemWidget(list_item, widget)
+                        skipped_list.append(file_obj)
         except Exception as e:
             logger.error(f"Error refreshing skipped files display: {e}")
+
+        if not skipped_list:
+            self.skipped_list.addItem("No skipped files.")
+            return
+
+        for file_obj in skipped_list:
+            filename = os.path.basename(file_obj.file_path)
+            display_text = f"{filename} (Status: {file_obj.status})"
+            group_name = os.path.basename(os.path.dirname(file_obj.file_path))
+
+            widget = QueueItemWidget(
+                item_text=display_text,
+                file_path=file_obj.file_path,
+                skip_callback=None,
+                show_thumbnail=False,
+                group_name=group_name,
+                timezone_str=tz_str,
+            )
+            list_item = QListWidgetItem(self.skipped_list)
+            list_item.setSizeHint(widget.sizeHint())
+            self.skipped_list.addItem(list_item)
+            self.skipped_list.setItemWidget(list_item, widget)
 
     def refresh_cleanup_display(self):
         """Reads and displays home recordings pending cleanup from the camera."""
@@ -1258,12 +1314,14 @@ class ConfigWindow(QWidget):
         state_path = get_home_cleanup_state_path(storage_path_str)
         try:
             if not os.path.exists(state_path):
+                self.cleanup_list.addItem("No files pending cleanup.")
                 return
             with open(state_path, "r") as f:
                 state = json.load(f)
 
             files = state.get("files", [])
             if not files:
+                self.cleanup_list.addItem("No files pending cleanup.")
                 return
 
             deletion_supported = state.get("deletion_supported", True)
@@ -1353,28 +1411,38 @@ class ConfigWindow(QWidget):
             return
         tz_str = getattr(self.config.app, "timezone", "UTC")
 
+        match_info_list = []
         try:
             for dirname in os.listdir(storage_path_str):
                 group_dir_path = os.path.join(storage_path_str, dirname)
                 if not os.path.isdir(group_dir_path):
                     continue
 
-                dir_state = DirectoryState(group_dir_path)
+                try:
+                    dir_state = DirectoryState(group_dir_path)
+                except TimeoutError:
+                    continue
                 if dir_state.status == "combined":
-                    # Check if match info is already populated
                     match_info_path = os.path.join(group_dir_path, "match_info.ini")
                     match_info = MatchInfo.from_file(match_info_path)
 
                     if not all_fields_filled(match_info):
-                        widget = MatchInfoItemWidget(
-                            group_dir_path, self.save_match_info, timezone_str=tz_str
-                        )
-                        list_item = QListWidgetItem(self.match_info_list)
-                        list_item.setSizeHint(widget.sizeHint())
-                        self.match_info_list.addItem(list_item)
-                        self.match_info_list.setItemWidget(list_item, widget)
+                        match_info_list.append(group_dir_path)
         except Exception as e:
             logger.error(f"Error refreshing match info display: {e}")
+
+        if not match_info_list:
+            self.match_info_list.addItem("No videos awaiting match info.")
+            return
+
+        for group_dir_path in match_info_list:
+            widget = MatchInfoItemWidget(
+                group_dir_path, self.save_match_info, timezone_str=tz_str
+            )
+            list_item = QListWidgetItem(self.match_info_list)
+            list_item.setSizeHint(widget.sizeHint())
+            self.match_info_list.addItem(list_item)
+            self.match_info_list.setItemWidget(list_item, widget)
 
     def save_match_info(self, group_dir_path, info_dict):
         """Callback to save match info for a group and refresh."""
