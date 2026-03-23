@@ -302,6 +302,14 @@ class VideoGrouperApp:
             ttt_client=ttt_reporter_client, config=self.config
         )
 
+        # Wire ttt_reporter into all processors for best-effort pipeline reporting
+        for poller in self.camera_pollers.values():
+            poller.ttt_reporter = self.ttt_reporter
+        for dl_proc in self.download_processors.values():
+            dl_proc.ttt_reporter = self.ttt_reporter
+        self.video_processor.ttt_reporter = self.ttt_reporter
+        self.upload_processor.ttt_reporter = self.ttt_reporter
+
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,

@@ -78,6 +78,8 @@ class MockTTTApiClient:
         self._moment_tags: dict[str, dict[str, Any]] = {}
         self._moment_clips: dict[str, dict[str, Any]] = {}
         self._clip_requests: list[dict[str, Any]] = []
+        self._recordings: dict[str, dict[str, Any]] = {}
+        self._recording_statuses: list[dict[str, Any]] = []
 
         logger.info("MockTTTApiClient initialized with base_time=%s", self._base_time)
 
@@ -281,6 +283,69 @@ class MockTTTApiClient:
         self._moment_clips[clip_id] = clip
         logger.debug("Mock created moment clip %s", clip_id)
         return clip
+
+    # ------------------------------------------------------------------
+    # Recording pipeline reporting
+    # ------------------------------------------------------------------
+
+    def register_recordings(
+        self, camera_id: str, team_id: str, files: list[dict]
+    ) -> list[dict[str, Any]]:
+        logger.debug(
+            "Mock register_recordings for camera %s: %d file(s)", camera_id, len(files)
+        )
+        registered = []
+        for f in files:
+            rec_id = str(uuid.uuid4())
+            rec = {
+                "id": rec_id,
+                "camera_id": camera_id,
+                "team_id": team_id,
+                "file_name": f.get("file_name"),
+                "file_group": f.get("file_group"),
+                "recording_start": f.get("recording_start"),
+                "recording_end": f.get("recording_end"),
+                "status": "registered",
+            }
+            self._recordings[rec_id] = rec
+            registered.append(rec)
+        return registered
+
+    def update_recording_status(
+        self,
+        recording_id: str,
+        stage: str,
+        status: str,
+        error_message: Optional[str] = None,
+        youtube_url: Optional[str] = None,
+        youtube_video_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        logger.debug(
+            "Mock update_recording_status %s: %s=%s", recording_id, stage, status
+        )
+        entry = {
+            "recording_id": recording_id,
+            "stage": stage,
+            "status": status,
+            "error_message": error_message,
+            "youtube_url": youtube_url,
+            "youtube_video_id": youtube_video_id,
+        }
+        self._recording_statuses.append(entry)
+        if recording_id in self._recordings:
+            self._recordings[recording_id][f"{stage}_status"] = status
+        return entry
+
+    def get_high_water_mark(self, camera_id: str) -> Optional[str]:
+        logger.debug("Mock get_high_water_mark for camera %s", camera_id)
+        # Return the latest recording_end among all recordings for this camera
+        latest = None
+        for rec in self._recordings.values():
+            if rec.get("camera_id") == camera_id:
+                end = rec.get("recording_end")
+                if end and (latest is None or end > latest):
+                    latest = end
+        return latest
 
     def update_moment_clip(self, clip_id: str, **fields: Any) -> dict[str, Any]:
         if clip_id in self._moment_clips:

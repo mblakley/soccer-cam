@@ -30,6 +30,7 @@ class DownloadProcessor(QueueProcessor):
         super().__init__(storage_path, config)
         self.camera = camera
         self.video_processor = video_processor
+        self.ttt_reporter = None
 
     @property
     def queue_type(self) -> QueueType:
@@ -75,6 +76,10 @@ class DownloadProcessor(QueueProcessor):
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
+            if self.ttt_reporter:
+                await self.ttt_reporter.update_recording_status(
+                    dir_state.ttt_recording_id, "download", "downloading"
+                )
 
             # Clean up any leftover temp file from a previous crashed attempt
             try:
@@ -108,6 +113,10 @@ class DownloadProcessor(QueueProcessor):
                 except OSError:
                     pass
                 await dir_state.update_file_state(file_path, status="downloaded")
+                if self.ttt_reporter:
+                    await self.ttt_reporter.update_recording_status(
+                        dir_state.ttt_recording_id, "download", "downloaded"
+                    )
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
                 )
@@ -137,6 +146,10 @@ class DownloadProcessor(QueueProcessor):
                         )
             else:
                 await dir_state.update_file_state(file_path, status="download_failed")
+                if self.ttt_reporter:
+                    await self.ttt_reporter.update_recording_status(
+                        dir_state.ttt_recording_id, "download", "failed"
+                    )
                 raise RuntimeError(f"Download failed for {os.path.basename(file_path)}")
 
         except Exception as e:
@@ -150,6 +163,10 @@ class DownloadProcessor(QueueProcessor):
             except OSError:
                 pass
             await dir_state.update_file_state(file_path, status="download_failed")
+            if self.ttt_reporter:
+                await self.ttt_reporter.update_recording_status(
+                    dir_state.ttt_recording_id, "download", "failed", error=str(e)
+                )
             raise
 
     def get_item_key(self, item: RecordingFile) -> str:

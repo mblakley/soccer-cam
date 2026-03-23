@@ -35,6 +35,7 @@ class UploadProcessor(QueueProcessor):
         super().__init__(storage_path, config)
         self.config = config
         self.ntfy_service = ntfy_service
+        self.ttt_reporter = None
 
     @property
     def queue_type(self) -> QueueType:
@@ -54,6 +55,19 @@ class UploadProcessor(QueueProcessor):
         """
         try:
             logger.info(f"UPLOAD: Processing task: {item}")
+
+            # Report upload start to TTT (best-effort)
+            if self.ttt_reporter:
+                group_dir = item.get_item_path()
+                try:
+                    from video_grouper.models import DirectoryState
+
+                    dir_state = DirectoryState(group_dir)
+                    await self.ttt_reporter.update_recording_status(
+                        dir_state.ttt_recording_id, "upload", "in_progress"
+                    )
+                except Exception:
+                    pass  # Never block upload on TTT
 
             # In mock mode, simulate successful upload without actual YouTube API calls
             if self.config.youtube.use_mock:
@@ -94,8 +108,32 @@ class UploadProcessor(QueueProcessor):
 
             if success:
                 logger.info(f"UPLOAD: Successfully completed task: {item}")
+                # Report upload complete to TTT (best-effort)
+                if self.ttt_reporter:
+                    group_dir = item.get_item_path()
+                    try:
+                        from video_grouper.models import DirectoryState
+
+                        dir_state = DirectoryState(group_dir)
+                        await self.ttt_reporter.update_recording_status(
+                            dir_state.ttt_recording_id, "upload", "complete"
+                        )
+                    except Exception:
+                        pass  # Never block upload on TTT
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
+                # Report upload failure to TTT (best-effort)
+                if self.ttt_reporter:
+                    group_dir = item.get_item_path()
+                    try:
+                        from video_grouper.models import DirectoryState
+
+                        dir_state = DirectoryState(group_dir)
+                        await self.ttt_reporter.update_recording_status(
+                            dir_state.ttt_recording_id, "upload", "failed"
+                        )
+                    except Exception:
+                        pass  # Never block upload on TTT
 
         except Exception as e:
             from video_grouper.utils.youtube_upload import YouTubeQuotaError
