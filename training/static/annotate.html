@@ -399,9 +399,16 @@ function showFrame() {
 
   // Reason text
   const det = frame.model_detection;
-  let reasonText = frame.reason ? frame.reason.replace(/_/g, ' ') : '';
-  if (det && det.confidence !== undefined) {
-    reasonText += ` (${det.confidence.toFixed(2)})`;
+  let reasonText = '';
+  if (frame.reason === 'gold_standard_verify') {
+    reasonText = 'Verify: tap ball or mark No Ball';
+  } else if (frame.reason === 'gold_standard_search') {
+    reasonText = 'Search: tap ball if visible, else No Ball';
+  } else {
+    reasonText = frame.reason ? frame.reason.replace(/_/g, ' ') : '';
+    if (det && det.confidence !== undefined) {
+      reasonText += ` (${det.confidence.toFixed(2)})`;
+    }
   }
   if (reviewedSet.has(frame.frame_idx)) {
     reasonText = '[already reviewed] ' + reasonText;
@@ -511,19 +518,34 @@ function drawCanvas() {
 }
 
 function showDefaultActions() {
-  document.getElementById('action-bar').innerHTML = `
-    <button class="action-btn btn-confirm" onclick="doAction('confirm')">
-      <span class="icon">&#x2713;</span>Confirm
-    </button>
-    <button class="action-btn btn-reject" onclick="doAction('reject')">
-      <span class="icon">&#x2717;</span>Reject
-    </button>
-    <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
-      <span class="icon">&#x1F441;</span>None
-    </button>
-    <button class="action-btn btn-skip" onclick="doAction('skip')">
-      <span class="icon">&rarr;</span>Skip
-    </button>`;
+  const frame = frames[currentFrameIndex];
+  const isGoldStandard = !frame.model_detection;
+
+  if (isGoldStandard) {
+    // Gold-standard mode: no model prediction to confirm/reject
+    // User taps ball location or marks "no ball"
+    document.getElementById('action-bar').innerHTML = `
+      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')" style="flex:2">
+        <span class="icon">&#x1F6AB;</span>No Ball
+      </button>
+      <button class="action-btn btn-skip" onclick="doAction('skip')">
+        <span class="icon">&rarr;</span>Skip
+      </button>`;
+  } else {
+    document.getElementById('action-bar').innerHTML = `
+      <button class="action-btn btn-confirm" onclick="doAction('confirm')">
+        <span class="icon">&#x2713;</span>Confirm
+      </button>
+      <button class="action-btn btn-reject" onclick="doAction('reject')">
+        <span class="icon">&#x2717;</span>Reject
+      </button>
+      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
+        <span class="icon">&#x1F441;</span>None
+      </button>
+      <button class="action-btn btn-skip" onclick="doAction('skip')">
+        <span class="icon">&rarr;</span>Skip
+      </button>`;
+  }
 }
 
 function showTapActions() {

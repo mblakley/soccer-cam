@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SoccerCamAnnotator" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#FF111111</item>
+        <item name="android:navigationBarColor">#FF111111</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
