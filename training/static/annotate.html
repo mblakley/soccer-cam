@@ -410,7 +410,8 @@ function showFrame() {
   let reasonText = '';
   if (frame.reason === 'tracking_loss') {
     const ctx = frame.context || {};
-    reasonText = `Lost ball (r${ctx.row || '?'}c${ctx.col || '?'}) \u2014 hint shows prev position`;
+    const traj = ctx.trajectory_length || 1;
+    reasonText = `Tracked ${traj} frames then lost (r${ctx.row || '?'}c${ctx.col || '?'}) \u2014 find ball`;
   } else if (frame.reason === 'gold_standard_verify') {
     reasonText = 'Verify: tap ball or mark No Ball';
   } else if (frame.reason === 'gold_standard_search') {

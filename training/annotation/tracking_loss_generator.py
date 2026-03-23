@@ -54,21 +54,16 @@ def _parse_label(label_path: Path) -> dict | None:
         return None
 
 
-def find_tracking_losses(
+def _build_tile_indices(
     dataset_path: Path,
     tiles_path: Path,
     split: str = "val",
-    prefer_far_field: bool = True,
-) -> list[dict]:
-    """Find tiles where ball detection was lost between consecutive frames.
+) -> list[tuple[str, dict, dict]]:
+    """Build tile and label indices for each val game.
 
-    For each (game, segment, row, col) position:
-    1. Find all frames that have a label (ball detected)
-    2. For each labeled frame, check if the NEXT frame at that position
-       has a tile image but NO label (ball lost)
-    3. The "loss frame" tile is what we show the annotator
-
-    Returns list of dicts with tile info for annotation.
+    Returns list of (game_id, tile_index, labeled_frames) tuples.
+    tile_index: {(segment, row, col): {frame_idx: Path}}
+    labeled_frames: {(segment, row, col): {frame_idx: detection_dict}}
     """
     images_dir = dataset_path / "images" / split
     labels_dir = dataset_path / "labels" / split
@@ -77,7 +72,7 @@ def find_tracking_losses(
         logger.warning("Images directory not found: %s", images_dir)
         return []
 
-    losses = []
+    results = []
 
     for game_dir in sorted(images_dir.iterdir()):
         if not game_dir.is_dir():
@@ -89,7 +84,7 @@ def find_tracking_losses(
         if not game_tiles_dir.exists():
             continue
 
-        # Index all tiles by (segment, row, col) -> sorted frame indices
+        # Index all tiles by (segment, row, col) -> frame_idx -> path
         tile_index: dict[tuple, dict[int, Path]] = defaultdict(dict)
         for img_path in game_tiles_dir.glob("*.jpg"):
             parsed = parse_tile_filename(img_path.stem)
@@ -98,7 +93,7 @@ def find_tracking_losses(
             segment, frame_idx, row, col = parsed
             tile_index[(segment, row, col)][frame_idx] = img_path
 
-        # Index labeled frames for this game
+        # Index labeled frames
         labeled_frames: dict[tuple, dict[int, dict]] = defaultdict(dict)
         if label_game_dir and label_game_dir.exists():
             for label_path in label_game_dir.glob("*.txt"):
@@ -110,25 +105,64 @@ def find_tracking_losses(
                 if det:
                     labeled_frames[(segment, row, col)][frame_idx] = det
 
-        # Find losses: labeled at frame N, no label at frame N+FRAME_INTERVAL
+        results.append((game_id, tile_index, labeled_frames))
+
+    return results
+
+
+def find_tracking_losses(
+    dataset_path: Path,
+    tiles_path: Path,
+    split: str = "val",
+    min_trajectory_length: int = 3,
+) -> list[dict]:
+    """Find trajectory breaks where the game ball was likely lost.
+
+    Strategy:
+    1. At each tile position (segment, row, col), find runs of consecutive
+       frames with detections = trajectories
+    2. Keep only trajectories >= min_trajectory_length frames (real ball
+       movement, not noise)
+    3. For each trajectory end, if the NEXT frame has a tile but no
+       detection, that's a tracking loss
+    4. Score by trajectory length, field position, and ball size
+
+    Returns list of dicts with tile info for annotation.
+    """
+    game_indices = _build_tile_indices(dataset_path, tiles_path, split)
+    losses = []
+
+    for game_id, tile_index, labeled_frames in game_indices:
         for pos_key, frame_map in tile_index.items():
             segment, row, col = pos_key
             labeled = labeled_frames.get(pos_key, {})
             sorted_frames = sorted(frame_map.keys())
 
-            for i, frame_idx in enumerate(sorted_frames):
-                if frame_idx not in labeled:
-                    continue
+            # Build trajectories: runs of consecutive labeled frames
+            trajectories = []
+            current_run = []
 
-                # Check next frame
-                next_frame = frame_idx + FRAME_INTERVAL
+            for frame_idx in sorted_frames:
+                if frame_idx in labeled:
+                    current_run.append(frame_idx)
+                else:
+                    if len(current_run) >= min_trajectory_length:
+                        trajectories.append(current_run)
+                    current_run = []
+            if len(current_run) >= min_trajectory_length:
+                trajectories.append(current_run)
+
+            # For each trajectory, check if there's a loss frame after it
+            for traj in trajectories:
+                last_frame = traj[-1]
+                next_frame = last_frame + FRAME_INTERVAL
+
                 if next_frame not in frame_map:
-                    continue
+                    continue  # No tile exists for next frame
                 if next_frame in labeled:
-                    continue  # Still detected, no loss
+                    continue  # Ball still detected (shouldn't happen)
 
-                # Found a tracking loss!
-                prev_det = labeled[frame_idx]
+                prev_det = labeled[last_frame]
                 loss_tile_path = frame_map[next_frame]
 
                 losses.append(
@@ -139,54 +173,64 @@ def find_tracking_losses(
                         "row": row,
                         "col": col,
                         "frame_idx": next_frame,
-                        "prev_frame_idx": frame_idx,
+                        "prev_frame_idx": last_frame,
                         "prev_detection": prev_det,
-                        # Score: prefer mid-field, edge cols, small balls
+                        "trajectory_length": len(traj),
                         "priority_score": _priority_score(
-                            row, col, prev_det, prefer_far_field
+                            row, col, prev_det, len(traj)
                         ),
                     }
                 )
 
-    logger.info("Found %d tracking loss frames across all games", len(losses))
+    logger.info(
+        "Found %d trajectory-break losses (min traj length=%d)",
+        len(losses),
+        min_trajectory_length,
+    )
     return losses
 
 
 def _priority_score(
-    row: int, col: int, prev_det: dict, prefer_far_field: bool
+    row: int, col: int, prev_det: dict, trajectory_length: int
 ) -> float:
     """Score for prioritizing which losses to annotate.
 
-    Higher = more valuable to annotate.
-    Prefers: row 1 (mid-field) over row 2 (far field, too many sideline balls),
-    edge columns (c0, c6) where the ball enters/exits frame,
-    and smaller ball detections.
+    Higher = more valuable. Prefers:
+    - Longer trajectories (more likely real game ball, not noise)
+    - Center columns (c2-c4, mid-field action)
+    - Row 1 (mid-field) over row 2 (too many sideline balls)
+    - Smaller balls (harder, more valuable)
     """
     score = 0.0
 
-    # Row preference: row 1 (mid-field) is highest value for game ball
-    # Row 2 (far field) has too many sideline ball false positives
+    # Trajectory length is the strongest signal that this was the game ball
+    # A ball tracked for 10+ frames is almost certainly real
+    score += min(trajectory_length, 20) * 2.0
+
+    # Row preference: row 1 (mid-field) >> row 2 (far field)
     if row == 1:
         score += 10.0
     elif row == 2:
         score += 3.0
 
-    # Edge columns (c0, c6) where ball tracking commonly fails
-    if col in (0, 6):
+    # Center columns = game action; edges still useful but less likely game ball
+    if col in (2, 3, 4):
         score += 6.0
     elif col in (1, 5):
-        score += 3.0
-
-    # Smaller balls are harder and more valuable to annotate
-    ball_size = (prev_det.get("w_norm", 0.03) + prev_det.get("h_norm", 0.03)) / 2
-    if ball_size < 0.02:  # < 13px, very small
-        score += 8.0
-    elif ball_size < 0.03:  # < 19px, small
-        score += 5.0
-    elif ball_size < 0.04:  # < 26px, medium
+        score += 4.0
+    elif col in (0, 6):
         score += 2.0
 
-    # Add small random factor to avoid always picking same positions
+    # Smaller balls are harder and more valuable
+    ball_size = (prev_det.get("w_norm", 0.03) + prev_det.get("h_norm", 0.03)) / 2
+    if ball_size < 0.02:
+        score += 6.0
+    elif ball_size < 0.03:
+        score += 4.0
+    elif ball_size < 0.04:
+        score += 2.0
+
+    # Small random factor
     score += random.random() * 0.5
 
     return score
@@ -283,6 +327,7 @@ def _create_packet(output_dir: Path, packet_id: str, tiles: list[dict]) -> Path:
                 "prev_frame_idx": tile["prev_frame_idx"],
                 "loss_frame_idx": tile["frame_idx"],
                 "prev_ball_size": round(prev.get("w_norm", 0.03), 4),
+                "trajectory_length": tile.get("trajectory_length", 1),
             },
         }
         frames.append(frame_entry)
