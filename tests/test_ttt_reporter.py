@@ -2,9 +2,10 @@
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
+from video_grouper.utils.error_tracker import ErrorTracker
 
 
 class TestTTTReporterDisabled:
@@ -149,13 +150,16 @@ class TestTTTReporterEnabled:
 
     @pytest.mark.asyncio
     async def test_report_heartbeat_calls_client_when_camera_id_set(self):
+        """When service_id is set (MagicMock returns truthy), enhanced_heartbeat is used."""
         self.reporter._last_status = "online"
         await self.reporter.report_heartbeat()
-        self.client.update_camera_status.assert_called_once()
+        # MagicMock config.ttt.service_id is truthy, so enhanced_heartbeat is called
+        self.client.enhanced_heartbeat.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_report_heartbeat_uses_online_status_as_default(self):
-        # _last_status is None — should default to "online"
+    async def test_report_heartbeat_uses_camera_status_when_no_service_id(self):
+        """When service_id is None, falls back to update_camera_status with default 'online'."""
+        self.config.ttt.service_id = None
         await self.reporter.report_heartbeat()
         call_kwargs = self.client.update_camera_status.call_args.kwargs
         assert call_kwargs["status"] == "online"
@@ -364,3 +368,99 @@ class TestRecordingReporter:
         self.client.get_team_assignments.return_value = []
         result = self.reporter._get_team_id_sync()
         assert result is None
+
+
+class TestEnhancedHeartbeat:
+    """Tests for system metrics in heartbeat."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.config = MagicMock()
+        self.config.ttt.camera_id = "test-camera-id"
+        self.config.ttt.service_id = "test-service-id"
+        self.config.ttt.ttt_sync_enabled = True
+        self.config.ttt.heartbeat_interval = 30
+        self.error_tracker = ErrorTracker()
+        self.reporter = TTTReporter(
+            ttt_client=self.client, config=self.config, error_tracker=self.error_tracker
+        )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_sends_metrics(self):
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={"cpu_usage_percent": 25.0, "disk_free_gb": 100.0},
+        ):
+            await self.reporter.report_heartbeat()
+            self.client.enhanced_heartbeat.assert_called_once()
+            call_args = self.client.enhanced_heartbeat.call_args
+            assert "cpu_usage_percent" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_includes_error_info(self):
+        self.error_tracker.record("download", "timeout")
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={},
+        ):
+            await self.reporter.report_heartbeat()
+            call_args = self.client.enhanced_heartbeat.call_args
+            metrics = call_args[0][1]
+            assert metrics["error_count_24h"] == 1
+            assert "download" in metrics["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_includes_no_error_info_when_none(self):
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={},
+        ):
+            await self.reporter.report_heartbeat()
+            call_args = self.client.enhanced_heartbeat.call_args
+            metrics = call_args[0][1]
+            assert metrics["error_count_24h"] == 0
+            assert metrics["last_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_merges_external_metrics(self):
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={"cpu_usage_percent": 10.0},
+        ):
+            await self.reporter.report_heartbeat(
+                metrics={"queue_depth": 5, "version": "1.2.3"}
+            )
+            call_args = self.client.enhanced_heartbeat.call_args
+            metrics = call_args[0][1]
+            assert metrics["cpu_usage_percent"] == 10.0
+            assert metrics["queue_depth"] == 5
+            assert metrics["version"] == "1.2.3"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_falls_back_to_camera_status_when_no_service_id(self):
+        """When service_id is not set, falls back to camera status update."""
+        # service_id not set — getattr returns None via MagicMock spec
+        self.config.ttt.service_id = None
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={},
+        ):
+            await self.reporter.report_heartbeat()
+            self.client.enhanced_heartbeat.assert_not_called()
+            self.client.update_camera_status.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_error_tracker_default_created_when_none_passed(self):
+        """Reporter creates its own ErrorTracker when none is provided."""
+        reporter = TTTReporter(ttt_client=self.client, config=self.config)
+        assert reporter.error_tracker is not None
+        assert reporter.error_tracker.get_error_count_24h() == 0
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_fails_silently_on_client_error(self):
+        self.client.enhanced_heartbeat.side_effect = Exception("network error")
+        with patch(
+            "video_grouper.api_integrations.ttt_reporter.get_system_metrics",
+            return_value={},
+        ):
+            await self.reporter.report_heartbeat()  # Should not raise
