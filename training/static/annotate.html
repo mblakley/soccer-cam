@@ -411,7 +411,11 @@ function showFrame() {
   if (frame.reason === 'tracking_loss') {
     const ctx = frame.context || {};
     const traj = ctx.trajectory_length || 1;
-    reasonText = `Tracked ${traj} frames then lost (r${ctx.row || '?'}c${ctx.col || '?'}) \u2014 find ball`;
+    const secs = ctx.time_secs || 0;
+    const mins = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    const pct = Math.round((ctx.pct_through || 0) * 100);
+    reasonText = `${mins}:${s.toString().padStart(2,'0')} (${pct}%) \u2014 tracked ${traj}f then lost (r${ctx.row || '?'}c${ctx.col || '?'})`;
   } else if (frame.reason === 'gold_standard_verify') {
     reasonText = 'Verify: tap ball or mark No Ball';
   } else if (frame.reason === 'gold_standard_search') {

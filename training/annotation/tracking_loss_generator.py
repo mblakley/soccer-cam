@@ -152,6 +152,9 @@ def find_tracking_losses(
             if len(current_run) >= min_trajectory_length:
                 trajectories.append(current_run)
 
+            # Find max frame in this position to compute % through segment
+            max_frame = max(sorted_frames) if sorted_frames else 1
+
             # For each trajectory, check if there's a loss frame after it
             for traj in trajectories:
                 last_frame = traj[-1]
@@ -165,6 +168,10 @@ def find_tracking_losses(
                 prev_det = labeled[last_frame]
                 loss_tile_path = frame_map[next_frame]
 
+                # Time offset assuming 25fps source video
+                time_secs = next_frame / 25.0
+                pct_through = next_frame / max_frame if max_frame > 0 else 0
+
                 losses.append(
                     {
                         "image_path": str(loss_tile_path),
@@ -176,8 +183,10 @@ def find_tracking_losses(
                         "prev_frame_idx": last_frame,
                         "prev_detection": prev_det,
                         "trajectory_length": len(traj),
+                        "time_secs": time_secs,
+                        "pct_through_segment": pct_through,
                         "priority_score": _priority_score(
-                            row, col, prev_det, len(traj), next_frame
+                            row, col, prev_det, len(traj), pct_through
                         ),
                     }
                 )
@@ -191,12 +200,12 @@ def find_tracking_losses(
 
 
 def _priority_score(
-    row: int, col: int, prev_det: dict, trajectory_length: int, frame_idx: int
+    row: int, col: int, prev_det: dict, trajectory_length: int, pct_through: float
 ) -> float:
     """Score for prioritizing which losses to annotate.
 
     Higher = more valuable. Prefers:
-    - Later frames (actual game, not warmup — warmup is always first)
+    - Later in segment (actual game, not warmup — warmup is always first)
     - Longer trajectories (more likely real game ball, not noise)
     - Center columns (c2-c4, mid-field action)
     - Row 1 (mid-field) over row 2 (too many sideline balls)
@@ -204,10 +213,10 @@ def _priority_score(
     """
     score = 0.0
 
-    # Later frames = actual game, not warmup. This is the strongest filter.
-    # Warmup is typically first ~5 min = ~1000 frames at 3fps/8-frame interval.
-    # Heavily reward frames deep into the video.
-    score += min(frame_idx / 500, 40.0)
+    # Later in segment = actual game. Warmup is first ~60% of first segment.
+    # Using % through segment so this works regardless of segment length.
+    # Heavily penalize first half of any segment.
+    score += pct_through * 50.0
 
     # Trajectory length: ball tracked for many frames = almost certainly game ball
     score += min(trajectory_length, 20) * 2.0
@@ -333,6 +342,8 @@ def _create_packet(output_dir: Path, packet_id: str, tiles: list[dict]) -> Path:
                 "loss_frame_idx": tile["frame_idx"],
                 "prev_ball_size": round(prev.get("w_norm", 0.03), 4),
                 "trajectory_length": tile.get("trajectory_length", 1),
+                "time_secs": tile.get("time_secs", 0),
+                "pct_through": round(tile.get("pct_through_segment", 0), 2),
             },
         }
         frames.append(frame_entry)
