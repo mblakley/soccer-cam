@@ -600,8 +600,21 @@ function toggleZoom() {
 function showDefaultActions() {
   const frame = frames[currentFrameIndex];
   const isGoldStandard = !frame.model_detection;
+  const isTrackingLoss = frame.reason === 'tracking_loss';
 
-  if (isGoldStandard) {
+  if (isTrackingLoss) {
+    // Tracking loss: ball moved from prev position, must tap new location
+    document.getElementById('action-bar').innerHTML = `
+      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
+        <span class="icon">&#x1F6AB;</span>No Ball
+      </button>
+      <button class="action-btn btn-not-game-ball" onclick="doAction('not_game_ball')">
+        <span class="icon">&#x26BD;</span>Other
+      </button>
+      <button class="action-btn btn-skip" onclick="doAction('skip')">
+        <span class="icon">&rarr;</span>Skip
+      </button>`;
+  } else if (isGoldStandard) {
     // Gold-standard mode: no model prediction to confirm/reject
     // User taps ball location or marks "no ball"
     document.getElementById('action-bar').innerHTML = `
