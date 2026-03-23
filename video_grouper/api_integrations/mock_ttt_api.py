@@ -80,6 +80,10 @@ class MockTTTApiClient:
         self._clip_requests: list[dict[str, Any]] = []
         self._recordings: dict[str, dict[str, Any]] = {}
         self._recording_statuses: list[dict[str, Any]] = []
+        self._pending_commands: list[dict[str, Any]] = []
+        self._auto_record_rules: dict[str, Any] = {}
+        self._acknowledged_commands: list[str] = []
+        self._completed_commands: list[dict[str, Any]] = []
 
         logger.info("MockTTTApiClient initialized with base_time=%s", self._base_time)
 
@@ -352,3 +356,33 @@ class MockTTTApiClient:
             self._moment_clips[clip_id].update(fields)
             return self._moment_clips[clip_id]
         return {"id": clip_id, **fields}
+
+    # ------------------------------------------------------------------
+    # Command polling & auto-record rules
+    # ------------------------------------------------------------------
+
+    def get_auto_record_rules(self, camera_id: str) -> Optional[dict[str, Any]]:
+        logger.debug("Mock get_auto_record_rules for camera %s", camera_id)
+        return self._auto_record_rules or None
+
+    def get_pending_commands(self, camera_id: str) -> list[dict[str, Any]]:
+        logger.debug("Mock get_pending_commands for camera %s", camera_id)
+        return [c for c in self._pending_commands if c.get("status") == "pending"]
+
+    def acknowledge_command(self, command_id: str) -> dict[str, Any]:
+        logger.debug("Mock acknowledge_command %s", command_id)
+        self._acknowledged_commands.append(command_id)
+        for cmd in self._pending_commands:
+            if cmd.get("id") == command_id:
+                cmd["status"] = "acknowledged"
+                return cmd
+        return {"id": command_id, "status": "acknowledged"}
+
+    def complete_command(self, command_id: str, result: dict) -> dict[str, Any]:
+        logger.debug("Mock complete_command %s", command_id)
+        entry = {"id": command_id, "result": result, "status": "completed"}
+        self._completed_commands.append(entry)
+        for cmd in self._pending_commands:
+            if cmd.get("id") == command_id:
+                cmd["status"] = "completed"
+        return entry

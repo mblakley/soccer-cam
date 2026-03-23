@@ -370,6 +370,140 @@ class TestRecordingReporter:
         assert result is None
 
 
+class TestCommandPolling:
+    """Tests for command polling and execution (Phase 5B)."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.config = MagicMock()
+        self.config.ttt.camera_id = "test-camera-id"
+        self.config.ttt.ttt_sync_enabled = True
+        self.config.ttt.heartbeat_interval = 30
+        self.reporter = TTTReporter(ttt_client=self.client, config=self.config)
+
+    @pytest.mark.asyncio
+    async def test_poll_pending_commands(self):
+        self.client.get_pending_commands.return_value = [
+            {"id": "cmd-1", "command_type": "restart"}
+        ]
+        result = await self.reporter.poll_pending_commands()
+        assert len(result) == 1
+        assert result[0]["id"] == "cmd-1"
+
+    @pytest.mark.asyncio
+    async def test_poll_commands_returns_empty_on_error(self):
+        self.client.get_pending_commands.side_effect = Exception("network")
+        result = await self.reporter.poll_pending_commands()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_poll_commands_returns_empty_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        result = await reporter.poll_pending_commands()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_poll_commands_returns_empty_without_camera_id(self):
+        self.config.ttt.camera_id = ""
+        reporter = TTTReporter(ttt_client=self.client, config=self.config)
+        result = await reporter.poll_pending_commands()
+        assert result == []
+        self.client.get_pending_commands.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_acknowledge_command(self):
+        await self.reporter.acknowledge_command("cmd-1")
+        self.client.acknowledge_command.assert_called_once_with("cmd-1")
+
+    @pytest.mark.asyncio
+    async def test_acknowledge_command_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        await reporter.acknowledge_command("cmd-1")
+        self.client.acknowledge_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_acknowledge_command_handles_error(self):
+        self.client.acknowledge_command.side_effect = Exception("network")
+        await self.reporter.acknowledge_command("cmd-1")  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_complete_command(self):
+        await self.reporter.complete_command("cmd-1", {"success": True})
+        self.client.complete_command.assert_called_once_with("cmd-1", {"success": True})
+
+    @pytest.mark.asyncio
+    async def test_complete_command_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        await reporter.complete_command("cmd-1", {"success": True})
+        self.client.complete_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_complete_command_handles_error(self):
+        self.client.complete_command.side_effect = Exception("network")
+        await self.reporter.complete_command(
+            "cmd-1", {"success": True}
+        )  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_pull_auto_record_rules(self):
+        self.client.get_auto_record_rules.return_value = {"pre_start_minutes": 15}
+        result = await self.reporter.pull_auto_record_rules()
+        assert result == {"pre_start_minutes": 15}
+        self.client.get_auto_record_rules.assert_called_once_with("test-camera-id")
+
+    @pytest.mark.asyncio
+    async def test_pull_auto_record_rules_returns_none_on_error(self):
+        self.client.get_auto_record_rules.side_effect = Exception("network")
+        result = await self.reporter.pull_auto_record_rules()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_pull_auto_record_rules_returns_none_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        result = await reporter.pull_auto_record_rules()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_execute_command_calls_executor(self):
+        """_execute_command delegates to the command executor."""
+        from unittest.mock import AsyncMock
+
+        executor = MagicMock()
+        executor.execute = AsyncMock(return_value={"success": True, "message": "ok"})
+        reporter = TTTReporter(
+            ttt_client=self.client, config=self.config, command_executor=executor
+        )
+        await reporter._execute_command({"id": "cmd-1", "command_type": "restart"})
+        executor.execute.assert_called_once()
+        self.client.acknowledge_command.assert_called_once_with("cmd-1")
+        self.client.complete_command.assert_called_once_with(
+            "cmd-1", {"success": True, "message": "ok"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_command_skips_when_no_id(self):
+        """_execute_command is a no-op when command has no id."""
+        from unittest.mock import AsyncMock
+
+        executor = MagicMock()
+        executor.execute = AsyncMock()
+        reporter = TTTReporter(
+            ttt_client=self.client, config=self.config, command_executor=executor
+        )
+        await reporter._execute_command({"command_type": "restart"})  # no id
+        executor.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_command_without_executor_reports_failure(self):
+        """When no executor is set, complete_command is called with failure result."""
+        reporter = TTTReporter(ttt_client=self.client, config=self.config)
+        await reporter._execute_command({"id": "cmd-1", "command_type": "restart"})
+        self.client.acknowledge_command.assert_called_once_with("cmd-1")
+        call_args = self.client.complete_command.call_args
+        assert call_args.args[0] == "cmd-1"
+        assert call_args.args[1]["success"] is False
+
+
 class TestEnhancedHeartbeat:
     """Tests for system metrics in heartbeat."""
 
