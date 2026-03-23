@@ -146,6 +146,7 @@ html, body {
 .btn-confirm { background: #14532d; color: var(--green); border-color: var(--green); }
 .btn-reject { background: #450a0a; color: var(--red); border-color: var(--red); }
 .btn-not-visible { background: #1f2937; color: var(--gray); border-color: var(--gray); }
+.btn-not-game-ball { background: #422006; color: #f59e0b; border-color: #f59e0b; }
 .btn-skip { background: transparent; color: var(--text-dim); border-color: #444; }
 .btn-submit-tap {
   background: #1e3a5f; color: var(--blue); border-color: var(--blue);
@@ -162,6 +163,7 @@ html, body {
 .flash-overlay.red { background: rgba(239, 68, 68, 0.2); }
 .flash-overlay.gray { background: rgba(107, 114, 128, 0.2); }
 .flash-overlay.blue { background: rgba(59, 130, 246, 0.2); }
+.flash-overlay.amber { background: rgba(245, 158, 11, 0.2); }
 
 /* Stats page */
 #stats-page .content { flex: 1; overflow-y: auto; padding: 16px; }
@@ -525,8 +527,11 @@ function showDefaultActions() {
     // Gold-standard mode: no model prediction to confirm/reject
     // User taps ball location or marks "no ball"
     document.getElementById('action-bar').innerHTML = `
-      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')" style="flex:2">
+      <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
         <span class="icon">&#x1F6AB;</span>No Ball
+      </button>
+      <button class="action-btn btn-not-game-ball" onclick="doAction('not_game_ball')">
+        <span class="icon">&#x26BD;</span>Other
       </button>
       <button class="action-btn btn-skip" onclick="doAction('skip')">
         <span class="icon">&rarr;</span>Skip
@@ -536,8 +541,8 @@ function showDefaultActions() {
       <button class="action-btn btn-confirm" onclick="doAction('confirm')">
         <span class="icon">&#x2713;</span>Confirm
       </button>
-      <button class="action-btn btn-reject" onclick="doAction('reject')">
-        <span class="icon">&#x2717;</span>Reject
+      <button class="action-btn btn-not-game-ball" onclick="doAction('not_game_ball')">
+        <span class="icon">&#x26BD;</span>Other
       </button>
       <button class="action-btn btn-not-visible" onclick="doAction('not_visible')">
         <span class="icon">&#x1F441;</span>None
@@ -614,7 +619,7 @@ function doAction(action, ballPos) {
   // Flash
   const flashColor = {
     confirm: 'green', reject: 'red', not_visible: 'gray',
-    skip: 'gray', adjust: 'blue', locate: 'blue'
+    not_game_ball: 'amber', skip: 'gray', adjust: 'blue', locate: 'blue'
   }[action] || 'gray';
   flashScreen(flashColor);
 

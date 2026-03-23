@@ -47,6 +47,7 @@ def export_gold_labels(
         "total": 0,
         "ball_found": 0,
         "no_ball": 0,
+        "not_game_ball": 0,
         "skipped": 0,
         "labels_written": 0,
         "image_paths": [],
@@ -135,6 +136,14 @@ def export_gold_labels(
                 stats["labels_written"] += 1
                 stats["image_paths"].append((game_id, original_filename, False))
 
+            elif action == "not_game_ball":
+                # Real ball detected but not the game ball (sideline, spectator, etc.)
+                # Write empty label — correct detection but wrong ball for our task
+                label_path.touch()
+                stats["not_game_ball"] += 1
+                stats["labels_written"] += 1
+                stats["image_paths"].append((game_id, original_filename, False))
+
             elif action == "skip":
                 stats["skipped"] += 1
 
@@ -189,6 +198,7 @@ def main():
     print("Exported gold-standard labels:")
     print(f"  Ball found: {stats['ball_found']}")
     print(f"  No ball: {stats['no_ball']}")
+    print(f"  Not game ball: {stats['not_game_ball']}")
     print(f"  Skipped: {stats['skipped']}")
     print(f"  Labels written: {stats['labels_written']}")
 
