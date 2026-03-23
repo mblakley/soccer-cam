@@ -195,6 +195,9 @@ class TTTConfig(BaseModel):
     google_drive_folder_id: str = ""
     plugin_signing_key: str = ""
     plugin_sync_interval: int = 3600
+    camera_id: str = ""
+    ttt_sync_enabled: bool = False
+    heartbeat_interval: int = 30
 
 
 class MomentTaggingConfig(BaseModel):

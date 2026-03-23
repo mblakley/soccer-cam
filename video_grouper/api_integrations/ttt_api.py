@@ -469,6 +469,50 @@ class TTTApiClient:
         logger.debug("Fetching available plugins from %s", url)
         return self._request("GET", url)
 
+    # ------------------------------------------------------------------
+    # Camera status & config
+    # ------------------------------------------------------------------
+
+    def update_camera_status(
+        self,
+        camera_id: str,
+        status: str,
+        firmware_version: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Report camera status to TTT.
+
+        PATCH {api_base_url}/api/device-link/camera-status
+        """
+        url = f"{self.api_base_url}/api/device-link/camera-status"
+        data: dict[str, Any] = {"camera_id": camera_id, "status": status}
+        if firmware_version:
+            data["firmware_version"] = firmware_version
+        if error_message:
+            data["error_message"] = error_message
+        logger.debug("Updating camera status for %s: %s", camera_id, status)
+        return self._request("PATCH", url, json=data)
+
+    def get_camera_config(self, camera_id: str) -> Optional[dict[str, Any]]:
+        """Fetch camera config from TTT.
+
+        GET {api_base_url}/api/device-link/camera-config
+        """
+        url = f"{self.api_base_url}/api/device-link/camera-config"
+        logger.debug("Fetching camera config for %s", camera_id)
+        return self._request("GET", url, params={"camera_id": camera_id})
+
+    def push_camera_config(
+        self, camera_id: str, config: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """Push local config to TTT for backup/transfer.
+
+        PUT {api_base_url}/api/cameras/{camera_id}
+        """
+        url = f"{self.api_base_url}/api/cameras/{camera_id}"
+        logger.debug("Pushing camera config for %s", camera_id)
+        return self._request("PUT", url, json=config)
+
     def download_plugin(self, key: str, dest_path: Path) -> None:
         """Download a plugin zip and save it to dest_path.
 
