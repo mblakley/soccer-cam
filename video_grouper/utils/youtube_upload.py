@@ -38,6 +38,40 @@ YOUTUBE_DIR = "youtube"
 CREDENTIALS_FILENAME = "client_secret.json"
 TOKEN_FILENAME = "token.json"
 
+# Embedded OAuth client for Desktop app -- users don't need to touch GCP Console.
+# Client secrets for Desktop/Installed apps are NOT truly secret per Google's docs:
+# https://developers.google.com/identity/protocols/oauth2/native-app
+#
+# Values are injected at build time via _youtube_secrets.py (generated from
+# GitHub secrets by the build script) or read from environment variables.
+# See build-installer.ps1 for the injection step.
+
+
+def _load_embedded_client_config():
+    """Load OAuth client config from build-time secrets or env vars."""
+    # Try build-time generated secrets file first
+    try:
+        from video_grouper.utils._youtube_secrets import YT_CLIENT_ID, YT_CLIENT_SECRET
+    except ImportError:
+        # Fall back to environment variables
+        YT_CLIENT_ID = os.environ.get("SOCCER_CAM_YT_CLIENT_ID", "")
+        YT_CLIENT_SECRET = os.environ.get("SOCCER_CAM_YT_CLIENT_SECRET", "")
+
+    return {
+        "installed": {
+            "client_id": YT_CLIENT_ID,
+            "project_id": "team-tech-tools-hh",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": YT_CLIENT_SECRET,
+            "redirect_uris": ["http://localhost"],
+        }
+    }
+
+
+EMBEDDED_CLIENT_CONFIG = _load_embedded_client_config()
+
 
 def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
     """Get the paths for YouTube credentials and token files.
@@ -237,6 +271,73 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
 
         except Exception as e:
             logger.error(f"Error creating YouTube API client: {e}")
+            return False, f"Failed to connect to YouTube API: {str(e)}"
+
+    except Exception as e:
+        logger.error(f"Unexpected error during authentication: {e}")
+        return False, f"Authentication error: {str(e)}"
+
+
+def authenticate_youtube_embedded(token_file: str) -> Tuple[bool, str]:
+    """Authenticate with YouTube using the embedded OAuth client.
+
+    No client_secret.json file is needed -- the OAuth client config is
+    shipped with the app. Users just sign into their Google account.
+
+    Args:
+        token_file: Path to store the token.json file
+
+    Returns:
+        Tuple[bool, str]: (success, message)
+    """
+    try:
+        creds = None
+
+        # Check if token file exists and is valid
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, "r") as f:
+                    creds_data = json.load(f)
+                    creds = (
+                        google.oauth2.credentials.Credentials.from_authorized_user_info(
+                            creds_data, SCOPES
+                        )
+                    )
+            except Exception as e:
+                logger.error(f"Error loading token file: {e}")
+
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    logger.error(f"Error refreshing credentials: {e}")
+                    creds = None
+
+            if not creds:
+                flow = InstalledAppFlow.from_client_config(
+                    EMBEDDED_CLIENT_CONFIG, SCOPES
+                )
+                creds = flow.run_local_server(
+                    port=8080, access_type="offline", prompt="consent"
+                )
+
+            # Save the credentials
+            try:
+                os.makedirs(os.path.dirname(token_file), exist_ok=True)
+                with open(token_file, "w") as f:
+                    f.write(creds.to_json())
+            except Exception as e:
+                logger.error(f"Error saving token: {e}")
+                return False, f"Failed to save token: {str(e)}"
+
+        # Verify the credentials work
+        try:
+            youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+            youtube.videos().getRating(id="dQw4w9WgXcQ").execute()
+            return True, "Successfully authenticated with YouTube"
+        except Exception as e:
+            logger.error(f"Error verifying YouTube API: {e}")
             return False, f"Failed to connect to YouTube API: {str(e)}"
 
     except Exception as e:
