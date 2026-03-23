@@ -141,9 +141,9 @@ def find_tracking_losses(
                         "frame_idx": next_frame,
                         "prev_frame_idx": frame_idx,
                         "prev_detection": prev_det,
-                        # Score: prefer far field (row 2) and small balls
+                        # Score: prefer mid-field, edge cols, small balls
                         "priority_score": _priority_score(
-                            row, prev_det, prefer_far_field
+                            row, col, prev_det, prefer_far_field
                         ),
                     }
                 )
@@ -152,20 +152,30 @@ def find_tracking_losses(
     return losses
 
 
-def _priority_score(row: int, prev_det: dict, prefer_far_field: bool) -> float:
+def _priority_score(
+    row: int, col: int, prev_det: dict, prefer_far_field: bool
+) -> float:
     """Score for prioritizing which losses to annotate.
 
     Higher = more valuable to annotate.
-    Prefers: far field (row 2), smaller balls, mid-field positions.
+    Prefers: row 1 (mid-field) over row 2 (far field, too many sideline balls),
+    edge columns (c0, c6) where the ball enters/exits frame,
+    and smaller ball detections.
     """
     score = 0.0
 
-    # Far field preference (row 2 = far, row 1 = mid)
-    if prefer_far_field:
-        if row == 2:
-            score += 10.0
-        elif row == 1:
-            score += 5.0
+    # Row preference: row 1 (mid-field) is highest value for game ball
+    # Row 2 (far field) has too many sideline ball false positives
+    if row == 1:
+        score += 10.0
+    elif row == 2:
+        score += 3.0
+
+    # Edge columns (c0, c6) where ball tracking commonly fails
+    if col in (0, 6):
+        score += 6.0
+    elif col in (1, 5):
+        score += 3.0
 
     # Smaller balls are harder and more valuable to annotate
     ball_size = (prev_det.get("w_norm", 0.03) + prev_det.get("h_norm", 0.03)) / 2
