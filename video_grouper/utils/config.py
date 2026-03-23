@@ -233,6 +233,12 @@ class YouTubeConfig(BaseModel):
         return self.playlist_map.root if self.playlist_map else {}
 
 
+class SetupConfig(BaseModel):
+    """Tracks onboarding wizard completion state."""
+
+    onboarding_completed: bool = False
+
+
 class Config(BaseModel):
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
@@ -247,6 +253,7 @@ class Config(BaseModel):
     autocam: AutocamConfig = Field(alias="AUTOCAM")
     cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
+    setup: SetupConfig = Field(alias="SETUP", default_factory=SetupConfig)
 
     model_config = {"validate_by_name": True}
 
@@ -384,3 +391,42 @@ def save_config(config: Config, config_path: Path):
 
     with config_path.open("w") as f:
         parser.write(f)
+
+
+def create_default_config(config_path: Path, storage_path: str) -> Config:
+    """Create a minimal config with sensible defaults and save to disk.
+
+    Used by the onboarding wizard to bootstrap a new config.ini.
+    """
+    config = Config.model_validate(
+        {
+            "cameras": [],
+            "STORAGE": {"path": storage_path},
+            "RECORDING": {},
+            "PROCESSING": {},
+            "LOGGING": {},
+            "APP": {},
+            "TEAMSNAP": {},
+            "PLAYMETRICS": {},
+            "NTFY": {},
+            "YOUTUBE": {},
+            "AUTOCAM": {"enabled": False},
+            "CLOUD_SYNC": {},
+            "TTT": {},
+            "SETUP": {"onboarding_completed": False},
+        }
+    )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    save_config(config, config_path)
+    return config
+
+
+def config_needs_onboarding(config_path: Path) -> bool:
+    """Check if the config file exists but onboarding hasn't been completed."""
+    if not config_path.exists():
+        return True
+    try:
+        config = load_config(config_path)
+        return not config.setup.onboarding_completed
+    except Exception:
+        return True
