@@ -3,6 +3,7 @@ import asyncio
 from pathlib import Path
 
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
+from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.utils.config import Config
 from video_grouper.utils.logger import setup_logging_from_config, get_logger
 from video_grouper.task_processors import (
@@ -287,6 +288,20 @@ class VideoGrouperApp:
                 poll_interval=self.poll_interval,
             )
 
+        # TTT Reporter — optional, best-effort status reporting back to TTT
+        # Works independently of the clip request processor: enabled when TTT
+        # credentials are present, regardless of the full TTT enabled flag.
+        ttt_reporter_client = None
+        if self.config.ttt.enabled and self.clip_request_processor is not None:
+            # Re-use the client that was created for the clip request processor
+            try:
+                ttt_reporter_client = self.clip_request_processor.ttt_client
+            except AttributeError:
+                pass
+        self.ttt_reporter = TTTReporter(
+            ttt_client=ttt_reporter_client, config=self.config
+        )
+
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
             config=self.config,
@@ -413,6 +428,9 @@ class VideoGrouperApp:
         for processor in self.processors:
             await processor.start()
 
+        # Start optional TTT status reporter (best-effort, never blocks startup)
+        await self.ttt_reporter.start()
+
         logger.info("VideoGrouperApp initialization complete")
 
     async def run(self):
@@ -475,6 +493,9 @@ class VideoGrouperApp:
 
         # Signal shutdown to wake up the run() method if it's waiting
         self._shutdown_event.set()
+
+        # Stop TTT reporter (best-effort, no-op if not configured)
+        await self.ttt_reporter.stop()
 
         # Stop all processors
         for processor in self.processors:
