@@ -25,6 +25,7 @@ class TTTReporter:
         self.enabled = ttt_client is not None
         self._heartbeat_task: asyncio.Task | None = None
         self._last_status: str | None = None
+        self._cached_team_id: str | None = None
 
     async def start(self):
         """Start periodic heartbeat reporting. No-op if TTT not configured."""
@@ -166,3 +167,135 @@ class TTTReporter:
             except Exception as e:
                 logger.warning("TTT: Heartbeat loop error: %s", e)
                 # Continue the loop — don't crash on transient errors
+
+    # ------------------------------------------------------------------
+    # Recording pipeline reporting (Phase 2B)
+    # ------------------------------------------------------------------
+
+    def _get_team_id_sync(self) -> str | None:
+        """Synchronously get team ID from TTT (for use in run_in_executor calls).
+
+        Fetches team assignments on first call and caches the result.
+        Returns the first team_id from assignments, or None if unavailable.
+        """
+        if self._cached_team_id:
+            return self._cached_team_id
+        try:
+            assignments = self.client.get_team_assignments()
+            if assignments:
+                team_id = assignments[0].get("team_id")
+                if team_id:
+                    self._cached_team_id = team_id
+                    return team_id
+        except Exception as e:
+            logger.warning("TTT: Failed to fetch team assignments for team_id: %s", e)
+        return None
+
+    async def register_recordings(self, files: list) -> list[dict] | None:
+        """Register new recording files with TTT.
+
+        Returns list of registered recordings with TTT IDs,
+        or None if TTT unreachable. Best-effort — never blocks processing.
+        """
+        if not self.enabled or not self.camera_id:
+            return None
+        try:
+            file_dicts = []
+            for f in files:
+                file_path = f.file_path
+                file_name = (
+                    file_path.name
+                    if hasattr(file_path, "name")
+                    else str(file_path).split("/")[-1].split("\\")[-1]
+                )
+                # Extract group directory name from group_dir or file_path parent
+                group_dir = getattr(f, "group_dir", None)
+                file_group = ""
+                if group_dir:
+                    import os
+
+                    file_group = os.path.basename(str(group_dir))
+                file_dicts.append(
+                    {
+                        "file_name": file_name,
+                        "file_group": file_group,
+                        "file_size_bytes": f.metadata.get("file_size")
+                        if f.metadata
+                        else None,
+                        "duration_seconds": None,
+                        "recording_start": f.start_time.isoformat()
+                        if f.start_time
+                        else None,
+                        "recording_end": f.end_time.isoformat() if f.end_time else None,
+                    }
+                )
+
+            team_id = await asyncio.get_event_loop().run_in_executor(
+                None, self._get_team_id_sync
+            )
+            if not team_id:
+                logger.debug(
+                    "TTT: No team_id available, skipping recording registration"
+                )
+                return None
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.register_recordings(
+                    self.camera_id, team_id, file_dicts
+                ),
+            )
+            if result:
+                logger.info("TTT: Registered %d recording(s)", len(result))
+            return result
+        except Exception as e:
+            logger.warning("TTT: Failed to register recordings: %s", e)
+            return None
+
+    async def update_recording_status(
+        self,
+        recording_id: str | None,
+        stage: str,
+        status: str,
+        error: str | None = None,
+        youtube_url: str | None = None,
+        youtube_video_id: str | None = None,
+    ) -> None:
+        """Update pipeline stage status for a recording.
+
+        No-op if recording_id is None (TTT wasn't available during registration).
+        """
+        if not self.enabled or not recording_id:
+            return
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.update_recording_status(
+                    recording_id,
+                    stage,
+                    status,
+                    error,
+                    youtube_url,
+                    youtube_video_id,
+                ),
+            )
+            logger.debug("TTT: Updated recording %s %s=%s", recording_id, stage, status)
+        except Exception as e:
+            logger.warning("TTT: Failed to update recording status: %s", e)
+
+    async def get_high_water_mark(self) -> str | None:
+        """Get the latest recording timestamp TTT knows about for this camera.
+
+        Supplementary — used for remote visibility, not for local decisions.
+        """
+        if not self.enabled or not self.camera_id:
+            return None
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.get_high_water_mark(self.camera_id),
+            )
+            return result
+        except Exception as e:
+            logger.warning("TTT: Failed to get high water mark: %s", e)
+            return None

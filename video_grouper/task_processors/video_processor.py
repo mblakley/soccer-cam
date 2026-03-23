@@ -31,6 +31,7 @@ class VideoProcessor(QueueProcessor):
         self.upload_processor = upload_processor
         self.match_info_service = match_info_service
         self.ntfy_processor = ntfy_processor
+        self.ttt_reporter = None
 
     @property
     def queue_type(self) -> QueueType:
@@ -52,11 +53,37 @@ class VideoProcessor(QueueProcessor):
         try:
             logger.info(f"VIDEO: Processing task: {item}")
 
+            # Report stage start to TTT (best-effort)
+            if self.ttt_reporter and item.task_type in ("combine", "trim"):
+                group_dir = item.get_item_path()
+                try:
+                    from video_grouper.models import DirectoryState
+
+                    dir_state = DirectoryState(group_dir)
+                    await self.ttt_reporter.update_recording_status(
+                        dir_state.ttt_recording_id, item.task_type, "in_progress"
+                    )
+                except Exception:
+                    pass  # Never block video processing on TTT
+
             # Execute the task using its own execute method
             success = await item.execute()
 
             if success:
                 logger.info(f"VIDEO: Successfully completed task: {item}")
+
+                # Report stage completion to TTT (best-effort)
+                if self.ttt_reporter and item.task_type in ("combine", "trim"):
+                    group_dir = item.get_item_path()
+                    try:
+                        from video_grouper.models import DirectoryState
+
+                        dir_state = DirectoryState(group_dir)
+                        await self.ttt_reporter.update_recording_status(
+                            dir_state.ttt_recording_id, item.task_type, "complete"
+                        )
+                    except Exception:
+                        pass  # Never block video processing on TTT
 
                 # Trigger event-driven transitions based on task type
                 if item.task_type == "combine":
@@ -65,6 +92,19 @@ class VideoProcessor(QueueProcessor):
                     asyncio.create_task(self._on_trim_complete(item.get_item_path()))
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
+
+                # Report stage failure to TTT (best-effort)
+                if self.ttt_reporter and item.task_type in ("combine", "trim"):
+                    group_dir = item.get_item_path()
+                    try:
+                        from video_grouper.models import DirectoryState
+
+                        dir_state = DirectoryState(group_dir)
+                        await self.ttt_reporter.update_recording_status(
+                            dir_state.ttt_recording_id, item.task_type, "failed"
+                        )
+                    except Exception:
+                        pass  # Never block video processing on TTT
 
         except Exception as e:
             logger.error(f"VIDEO: Error processing task {item}: {e}")

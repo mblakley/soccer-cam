@@ -513,6 +513,64 @@ class TTTApiClient:
         logger.debug("Pushing camera config for %s", camera_id)
         return self._request("PUT", url, json=config)
 
+    # ------------------------------------------------------------------
+    # Recording pipeline reporting
+    # ------------------------------------------------------------------
+
+    def register_recordings(
+        self, camera_id: str, team_id: str, files: list[dict]
+    ) -> list[dict] | None:
+        """Register newly discovered recording files with TTT.
+
+        POST {api_base_url}/api/device-link/recordings?camera_id={camera_id}&team_id={team_id}
+
+        files is a list of dicts with optional keys:
+        file_name, file_group, file_size_bytes, duration_seconds,
+        recording_start, recording_end
+        """
+        url = f"{self.api_base_url}/api/device-link/recordings"
+        params = {"camera_id": camera_id, "team_id": team_id}
+        logger.debug("Registering %d recording(s) for camera %s", len(files), camera_id)
+        return self._request("POST", url, params=params, json=files)
+
+    def update_recording_status(
+        self,
+        recording_id: str,
+        stage: str,
+        status: str,
+        error_message: Optional[str] = None,
+        youtube_url: Optional[str] = None,
+        youtube_video_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Update pipeline stage status for a recording.
+
+        PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
+        """
+        url = f"{self.api_base_url}/api/device-link/recordings/{recording_id}/status"
+        body: dict[str, Any] = {"stage": stage, "status": status}
+        if error_message is not None:
+            body["error_message"] = error_message
+        if youtube_url is not None:
+            body["youtube_url"] = youtube_url
+        if youtube_video_id is not None:
+            body["youtube_video_id"] = youtube_video_id
+        logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
+        return self._request("PATCH", url, json=body)
+
+    def get_high_water_mark(self, camera_id: str) -> Optional[str]:
+        """Get the latest recording timestamp TTT knows about for this camera.
+
+        GET {api_base_url}/api/device-link/high-water-mark?camera_id={camera_id}
+        Returns ISO datetime string or None.
+        """
+        url = f"{self.api_base_url}/api/device-link/high-water-mark"
+        params = {"camera_id": camera_id}
+        logger.debug("Fetching high-water mark for camera %s", camera_id)
+        result = self._request("GET", url, params=params)
+        if isinstance(result, dict):
+            return result.get("high_water_mark")
+        return result
+
     def download_plugin(self, key: str, dest_path: Path) -> None:
         """Download a plugin zip and save it to dest_path.
 

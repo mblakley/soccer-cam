@@ -35,6 +35,7 @@ class DirectoryState:
         self._lock = asyncio.Lock()
         self.status: str = "pending"
         self.error_message: Optional[str] = None
+        self.ttt_recording_id: Optional[str] = None
 
         # Validate directory name format before proceeding
         dir_name = os.path.basename(directory_path)
@@ -56,6 +57,7 @@ class DirectoryState:
                         state_data = json.load(f)
                         self.status = state_data.get("status", "pending")
                         self.error_message = state_data.get("error_message")
+                        self.ttt_recording_id = state_data.get("ttt_recording_id")
 
                         loaded_files = state_data.get("files", {})
                         for file_path, file_data in loaded_files.items():
@@ -89,6 +91,8 @@ class DirectoryState:
             "error_message": self.error_message,
             "files": files_dict,
         }
+        if self.ttt_recording_id is not None:
+            state_data["ttt_recording_id"] = self.ttt_recording_id
         try:
             with FileLock(self.state_file_path):
                 # Atomic write: temp file then rename to prevent corruption on crash
@@ -240,6 +244,15 @@ class DirectoryState:
             )
         logger.debug(
             f"Set youtube_playlist_name to '{playlist_name}' in {self.state_file_path}"
+        )
+
+    async def set_ttt_recording_id(self, recording_id: str) -> None:
+        """Persist the TTT recording ID for this group to state.json."""
+        async with self._lock:
+            self.ttt_recording_id = recording_id
+            self._save_state_nolock()
+        logger.debug(
+            "Set ttt_recording_id to '%s' in %s", recording_id, self.state_file_path
         )
 
     def get_youtube_playlist_name(self) -> Optional[str]:

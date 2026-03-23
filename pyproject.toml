@@ -128,4 +128,6 @@ torchvision = { index = "pytorch-cu126" }
 [dependency-groups]
 dev = [
     "aiohttp>=3.13.3",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
 ]

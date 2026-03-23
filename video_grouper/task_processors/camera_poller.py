@@ -97,6 +97,7 @@ class CameraPoller(PollingProcessor):
         self._last_poll_found_files = True
         self._unplug_notified = False
         self.ntfy_service = None
+        self.ttt_reporter = None
         self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
 
     async def discover_work(self) -> None:
@@ -195,6 +196,8 @@ class CameraPoller(PollingProcessor):
             local_tz = pytz.utc
 
         files_to_delete = []
+        # Track newly discovered files per group for TTT registration
+        new_files_by_group: dict[str, list] = {}
 
         for file_info in files:
             try:
@@ -274,6 +277,12 @@ class CameraPoller(PollingProcessor):
 
                 await dir_state.add_file(local_path, recording_file)
 
+                # Track for TTT registration (best-effort, done after main loop)
+                if not recording_file.skip:
+                    if group_dir not in new_files_by_group:
+                        new_files_by_group[group_dir] = []
+                    new_files_by_group[group_dir].append(recording_file)
+
                 # Add to download queue if not skipped
                 if not recording_file.skip and self.download_processor:
                     await self.download_processor.add_work(recording_file)
@@ -286,6 +295,24 @@ class CameraPoller(PollingProcessor):
                 logger.error(
                     f"CAMERA_POLLER: Error processing file info {file_info}: {e}"
                 )
+
+        # Register newly discovered files with TTT (best-effort, per group)
+        if self.ttt_reporter and new_files_by_group:
+            for group_dir, group_files in new_files_by_group.items():
+                try:
+                    registered = await self.ttt_reporter.register_recordings(
+                        group_files
+                    )
+                    if registered:
+                        # Use the first registration ID for the group
+                        ttt_id = registered[0].get("id") if registered else None
+                        if ttt_id:
+                            dir_state = DirectoryState(group_dir)
+                            await dir_state.set_ttt_recording_id(ttt_id)
+                except Exception as e:
+                    logger.warning(
+                        f"CAMERA_POLLER: TTT registration failed for {os.path.basename(group_dir)}: {e}"
+                    )
 
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
