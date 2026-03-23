@@ -177,7 +177,7 @@ def find_tracking_losses(
                         "prev_detection": prev_det,
                         "trajectory_length": len(traj),
                         "priority_score": _priority_score(
-                            row, col, prev_det, len(traj)
+                            row, col, prev_det, len(traj), next_frame
                         ),
                     }
                 )
@@ -191,11 +191,12 @@ def find_tracking_losses(
 
 
 def _priority_score(
-    row: int, col: int, prev_det: dict, trajectory_length: int
+    row: int, col: int, prev_det: dict, trajectory_length: int, frame_idx: int
 ) -> float:
     """Score for prioritizing which losses to annotate.
 
     Higher = more valuable. Prefers:
+    - Later frames (actual game, not warmup — warmup is always first)
     - Longer trajectories (more likely real game ball, not noise)
     - Center columns (c2-c4, mid-field action)
     - Row 1 (mid-field) over row 2 (too many sideline balls)
@@ -203,8 +204,12 @@ def _priority_score(
     """
     score = 0.0
 
-    # Trajectory length is the strongest signal that this was the game ball
-    # A ball tracked for 10+ frames is almost certainly real
+    # Later frames = actual game, not warmup. This is the strongest filter.
+    # Warmup is typically first ~5 min = ~1000 frames at 3fps/8-frame interval.
+    # Heavily reward frames deep into the video.
+    score += min(frame_idx / 500, 40.0)
+
+    # Trajectory length: ball tracked for many frames = almost certainly game ball
     score += min(trajectory_length, 20) * 2.0
 
     # Row preference: row 1 (mid-field) >> row 2 (far field)
@@ -213,7 +218,7 @@ def _priority_score(
     elif row == 2:
         score += 3.0
 
-    # Center columns = game action; edges still useful but less likely game ball
+    # Center columns = game action
     if col in (2, 3, 4):
         score += 6.0
     elif col in (1, 5):
