@@ -720,3 +720,31 @@ class TTTApiClient:
         body = {"error": error}
         logger.debug("Failing job %s: %s", job_id, error)
         return self._request("PATCH", url, json=body)
+
+    # ------------------------------------------------------------------
+    # Device configuration (onboarding)
+    # ------------------------------------------------------------------
+
+    def get_device_config(self) -> Optional[dict[str, Any]]:
+        """Retrieve stored device config for this camera manager.
+
+        GET {api_base_url}/api/device-link/config
+        Returns None if no config has been saved yet (HTTP 404).
+        """
+        url = f"{self.api_base_url}/api/device-link/config"
+        logger.debug("Fetching device config from %s", url)
+        try:
+            return self._request("GET", url)
+        except TTTApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+    def save_device_config(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create or update device config for this camera manager.
+
+        PUT {api_base_url}/api/device-link/config
+        """
+        url = f"{self.api_base_url}/api/device-link/config"
+        logger.debug("Saving device config to %s", url)
+        return self._request("PUT", url, json=data)

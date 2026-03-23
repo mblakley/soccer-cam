@@ -5,7 +5,7 @@ import atexit
 import asyncio
 import threading
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QDialog, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import (
     QRunnable,
     QThreadPool,
@@ -231,40 +231,47 @@ class SystemTrayIcon(QSystemTrayIcon):
             f"Using a thread pool with {self.threadpool.maxThreadCount()} threads."
         )
 
-        # Initialize UploadProcessor for YouTube uploads
-        from video_grouper.task_processors.upload_processor import UploadProcessor
-
-        self.upload_processor = UploadProcessor(
-            storage_path=self.config.storage.path, config=self.config
-        )
-
-        # Initialize AutocamProcessor and AutocamDiscoveryProcessor (optional)
+        # Initialize processors only if config is loaded
+        self.upload_processor = None
         self.autocam_processor = None
         self.autocam_discovery_processor = None
-        if self.config.autocam.enabled:
-            self.autocam_processor = AutocamProcessor(
-                storage_path=self.config.storage.path,
-                config=self.config,
-                upload_processor=self.upload_processor,
+
+        if self.config:
+            from video_grouper.task_processors.upload_processor import UploadProcessor
+
+            self.upload_processor = UploadProcessor(
+                storage_path=self.config.storage.path, config=self.config
             )
 
-            from video_grouper.task_processors.autocam_discovery_processor import (
-                AutocamDiscoveryProcessor,
-            )
+            if self.config.autocam.enabled:
+                self.autocam_processor = AutocamProcessor(
+                    storage_path=self.config.storage.path,
+                    config=self.config,
+                    upload_processor=self.upload_processor,
+                )
 
-            self.autocam_discovery_processor = AutocamDiscoveryProcessor(
-                storage_path=self.config.storage.path,
-                config=self.config,
-                autocam_processor=self.autocam_processor,
-                poll_interval=30,
-            )
+                from video_grouper.task_processors.autocam_discovery_processor import (
+                    AutocamDiscoveryProcessor,
+                )
+
+                self.autocam_discovery_processor = AutocamDiscoveryProcessor(
+                    storage_path=self.config.storage.path,
+                    config=self.config,
+                    autocam_processor=self.autocam_processor,
+                    poll_interval=30,
+                )
+            else:
+                logger.info(
+                    "Autocam is disabled in configuration, skipping processor init"
+                )
         else:
-            logger.info("Autocam is disabled in configuration, skipping processor init")
+            logger.warning("No config loaded, skipping processor initialization")
 
     async def initialize(self):
         """Initialize the tray app asynchronously."""
         logger.info("Initializing SystemTrayIcon...")
-        await self.upload_processor.start()
+        if self.upload_processor:
+            await self.upload_processor.start()
         if self.autocam_processor:
             await self.autocam_processor.start()
         if self.autocam_discovery_processor:
@@ -353,6 +360,11 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.update_action.triggered.connect(self.check_updates)
         menu.addAction(self.update_action)
 
+        # Setup wizard
+        setup_wizard_action = QAction("Setup Wizard", self)
+        setup_wizard_action.triggered.connect(self.show_setup_wizard)
+        menu.addAction(setup_wizard_action)
+
         menu.addSeparator()
 
         # Exit action
@@ -402,6 +414,16 @@ class SystemTrayIcon(QSystemTrayIcon):
     def on_config_saved(self):
         self.config = load_config(self.config_path)
         logger.info("Configuration saved.")
+
+    def show_setup_wizard(self):
+        """Re-launch the onboarding wizard from the tray menu."""
+        from video_grouper.tray.onboarding_wizard import OnboardingWizard
+
+        wizard = OnboardingWizard(self.config_path)
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            # Reload config after wizard completes
+            self.config = load_config(self.config_path)
+            logger.info("Setup wizard completed, config reloaded.")
 
     def toggle_recording(self):
         """Toggle camera recording on/off via the Reolink API."""
@@ -518,14 +540,15 @@ class SystemTrayIcon(QSystemTrayIcon):
 
 async def main():
     """Main entry point for the tray application."""
-    if len(sys.argv) != 2:
-        print("Usage: python -m video_grouper.tray.main <config_file>")
-        sys.exit(1)
-
-    config_path = sys.argv[1]
+    # Config path: use CLI arg if provided, otherwise default
+    if len(sys.argv) >= 2:
+        config_path = Path(sys.argv[1])
+    else:
+        config_path = get_shared_data_path() / "config.ini"
 
     # Create lock file path in the same directory as the config
-    config_dir = Path(config_path).parent
+    config_dir = config_path.parent
+    config_dir.mkdir(parents=True, exist_ok=True)
     lock_file_path = config_dir / "tray_agent.lock"
 
     # Create and acquire lock
@@ -540,6 +563,19 @@ async def main():
     try:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
+
+        # First-run detection: show onboarding wizard if needed
+        from video_grouper.utils.config import config_needs_onboarding
+        from video_grouper.tray.onboarding_wizard import OnboardingWizard
+
+        if config_needs_onboarding(config_path):
+            logger.info("Config needs onboarding, launching setup wizard")
+            wizard = OnboardingWizard(config_path)
+            result = wizard.exec()
+            if result != QDialog.DialogCode.Accepted:
+                logger.info("Setup wizard cancelled, exiting")
+                sys.exit(0)
+            logger.info("Setup wizard completed")
 
         # Initialize the tray application
         tray_app = SystemTrayIcon(config_path)
