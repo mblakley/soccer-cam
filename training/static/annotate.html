@@ -408,7 +408,10 @@ function showFrame() {
   // Reason text
   const det = frame.model_detection;
   let reasonText = '';
-  if (frame.reason === 'gold_standard_verify') {
+  if (frame.reason === 'tracking_loss') {
+    const ctx = frame.context || {};
+    reasonText = `Lost ball (r${ctx.row || '?'}c${ctx.col || '?'}) \u2014 hint shows prev position`;
+  } else if (frame.reason === 'gold_standard_verify') {
     reasonText = 'Verify: tap ball or mark No Ball';
   } else if (frame.reason === 'gold_standard_search') {
     reasonText = 'Search: tap ball if visible, else No Ball';
@@ -516,30 +519,47 @@ function drawCanvas() {
 
   ctx.drawImage(cropImage, 0, 0, dw, dh);
 
-  // Draw model detection (blue)
+  // Draw model detection (blue) or tracking hint (dashed orange)
   if (frame.model_detection) {
     const mx = frame.model_detection.x * scale;
     const my = frame.model_detection.y * scale;
     const r = Math.max(12, 18 * scale);
+    const isHint = frame.reason === 'tracking_loss';
 
-    // Crosshair
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(mx, my, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(mx - r - 4, my); ctx.lineTo(mx + r + 4, my);
-    ctx.moveTo(mx, my - r - 4); ctx.lineTo(mx, my + r + 4);
-    ctx.stroke();
-
-    // Confidence label
-    if (frame.model_detection.confidence !== undefined) {
-      const label = frame.model_detection.confidence.toFixed(2);
+    if (isHint) {
+      // Dashed orange circle = "ball was here last frame, find it now"
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.arc(mx, my, r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Label
       ctx.font = `bold ${Math.max(11, 13 * scale)}px sans-serif`;
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.7)';
       ctx.textAlign = 'left';
-      ctx.fillText(label, mx + r + 4, my - 4);
+      ctx.fillText('prev', mx + r + 6, my - 4);
+    } else {
+      // Solid blue crosshair = model detection
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(mx, my, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(mx - r - 4, my); ctx.lineTo(mx + r + 4, my);
+      ctx.moveTo(mx, my - r - 4); ctx.lineTo(mx, my + r + 4);
+      ctx.stroke();
+
+      // Confidence label
+      if (frame.model_detection.confidence !== undefined) {
+        const label = frame.model_detection.confidence.toFixed(2);
+        ctx.font = `bold ${Math.max(11, 13 * scale)}px sans-serif`;
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.9)';
+        ctx.textAlign = 'left';
+        ctx.fillText(label, mx + r + 4, my - 4);
+      }
     }
   }
 
