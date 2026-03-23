@@ -569,6 +569,44 @@ class TTTApiClient:
         logger.debug("Sending enhanced heartbeat for service %s", service_id)
         return self._request("PATCH", url, json=data)
 
+    def get_auto_record_rules(self, camera_id: str) -> Optional[dict[str, Any]]:
+        """Get auto-record rules for a camera.
+
+        GET {api_base_url}/api/device-link/auto-record-rules?camera_id=
+        """
+        url = f"{self.api_base_url}/api/device-link/auto-record-rules"
+        logger.debug("Fetching auto-record rules for camera %s", camera_id)
+        return self._request("GET", url, params={"camera_id": camera_id})
+
+    def get_pending_commands(self, camera_id: str) -> Optional[list[dict[str, Any]]]:
+        """Get pending commands for a camera.
+
+        GET {api_base_url}/api/device-link/pending-commands?camera_id=
+        """
+        url = f"{self.api_base_url}/api/device-link/pending-commands"
+        logger.debug("Fetching pending commands for camera %s", camera_id)
+        return self._request("GET", url, params={"camera_id": camera_id})
+
+    def acknowledge_command(self, command_id: str) -> Optional[dict[str, Any]]:
+        """Acknowledge receipt of a command.
+
+        PATCH {api_base_url}/api/device-link/commands/{command_id}/acknowledge
+        """
+        url = f"{self.api_base_url}/api/device-link/commands/{command_id}/acknowledge"
+        logger.debug("Acknowledging command %s", command_id)
+        return self._request("PATCH", url)
+
+    def complete_command(
+        self, command_id: str, result: dict
+    ) -> Optional[dict[str, Any]]:
+        """Report command completion.
+
+        PATCH {api_base_url}/api/device-link/commands/{command_id}/complete
+        """
+        url = f"{self.api_base_url}/api/device-link/commands/{command_id}/complete"
+        logger.debug("Completing command %s", command_id)
+        return self._request("PATCH", url, json=result)
+
     def get_high_water_mark(self, camera_id: str) -> Optional[str]:
         """Get the latest recording timestamp TTT knows about for this camera.
 

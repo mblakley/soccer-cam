@@ -16,12 +16,19 @@ class TTTReporter:
     Soccer-cam never blocks or crashes due to TTT being unavailable.
     """
 
-    def __init__(self, ttt_client, config, error_tracker: ErrorTracker | None = None):
+    def __init__(
+        self,
+        ttt_client,
+        config,
+        error_tracker: ErrorTracker | None = None,
+        command_executor=None,
+    ):
         """
         Args:
             ttt_client: TTTApiClient instance, or None if TTT not configured.
             config: App config object.
             error_tracker: Optional shared ErrorTracker for recording pipeline errors.
+            command_executor: Optional CommandExecutor for executing remote commands.
         """
         self.client = ttt_client
         self.config = config
@@ -31,6 +38,7 @@ class TTTReporter:
         self._last_status: str | None = None
         self._cached_team_id: str | None = None
         self.error_tracker = error_tracker or ErrorTracker()
+        self._command_executor = command_executor
 
     async def start(self):
         """Start periodic heartbeat reporting. No-op if TTT not configured."""
@@ -181,16 +189,97 @@ class TTTReporter:
             logger.warning("TTT: Heartbeat failed: %s", e)
 
     async def _heartbeat_loop(self, interval: int):
-        """Periodic heartbeat — runs until cancelled."""
+        """Periodic heartbeat + command polling — runs until cancelled."""
         while True:
             try:
                 await asyncio.sleep(interval)
                 await self.report_heartbeat()
+
+                # Poll for commands every heartbeat cycle
+                commands = await self.poll_pending_commands()
+                for cmd in commands:
+                    await self._execute_command(cmd)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning("TTT: Heartbeat loop error: %s", e)
                 # Continue the loop — don't crash on transient errors
+
+    async def _execute_command(self, command: dict) -> None:
+        """Acknowledge, execute, and report result for a command."""
+        cmd_id = command.get("id")
+        if not cmd_id:
+            return
+
+        # Acknowledge receipt
+        await self.acknowledge_command(cmd_id)
+
+        # Execute
+        if self._command_executor:
+            result = await self._command_executor.execute(command)
+        else:
+            result = {"success": False, "message": "Command executor not available"}
+
+        # Report result
+        await self.complete_command(cmd_id, result)
+
+    # ------------------------------------------------------------------
+    # Command polling & auto-record rules (Phase 5B)
+    # ------------------------------------------------------------------
+
+    async def pull_auto_record_rules(self) -> dict | None:
+        """Pull auto-record rules from TTT. Returns None if unavailable."""
+        if not self.enabled or not self.camera_id:
+            return None
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self.client.get_auto_record_rules, self.camera_id
+            )
+            if result:
+                logger.info("TTT: Pulled auto-record rules")
+            return result
+        except Exception as e:
+            logger.warning("TTT: Failed to pull auto-record rules: %s", e)
+            return None
+
+    async def poll_pending_commands(self) -> list[dict]:
+        """Poll for pending commands from TTT. Returns empty list on failure."""
+        if not self.enabled or not self.camera_id:
+            return []
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self.client.get_pending_commands, self.camera_id
+            )
+            if result:
+                logger.info("TTT: Found %d pending command(s)", len(result))
+            return result or []
+        except Exception as e:
+            logger.warning("TTT: Failed to poll commands: %s", e)
+            return []
+
+    async def acknowledge_command(self, command_id: str) -> None:
+        """Acknowledge receipt of a command."""
+        if not self.enabled:
+            return
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.client.acknowledge_command, command_id
+            )
+            logger.debug("TTT: Acknowledged command %s", command_id)
+        except Exception as e:
+            logger.warning("TTT: Failed to acknowledge command: %s", e)
+
+    async def complete_command(self, command_id: str, result: dict) -> None:
+        """Report command completion."""
+        if not self.enabled:
+            return
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.client.complete_command, command_id, result
+            )
+            logger.debug("TTT: Completed command %s", command_id)
+        except Exception as e:
+            logger.warning("TTT: Failed to complete command: %s", e)
 
     # ------------------------------------------------------------------
     # Recording pipeline reporting (Phase 2B)

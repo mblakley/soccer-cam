@@ -4,6 +4,7 @@ from pathlib import Path
 
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
+from video_grouper.api_integrations.command_executor import CommandExecutor
 from video_grouper.utils.config import Config
 from video_grouper.utils.error_tracker import ErrorTracker
 from video_grouper.utils.logger import setup_logging_from_config, get_logger
@@ -302,10 +303,12 @@ class VideoGrouperApp:
                 ttt_reporter_client = self.clip_request_processor.ttt_client
             except AttributeError:
                 pass
+        command_executor = CommandExecutor(self)
         self.ttt_reporter = TTTReporter(
             ttt_client=ttt_reporter_client,
             config=self.config,
             error_tracker=self.error_tracker,
+            command_executor=command_executor,
         )
 
         # Wire ttt_reporter into all processors for best-effort pipeline reporting
