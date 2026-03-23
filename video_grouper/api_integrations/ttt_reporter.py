@@ -3,6 +3,9 @@
 import asyncio
 import logging
 
+from video_grouper.utils.error_tracker import ErrorTracker
+from video_grouper.utils.system_metrics import get_system_metrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -13,11 +16,12 @@ class TTTReporter:
     Soccer-cam never blocks or crashes due to TTT being unavailable.
     """
 
-    def __init__(self, ttt_client, config):
+    def __init__(self, ttt_client, config, error_tracker: ErrorTracker | None = None):
         """
         Args:
             ttt_client: TTTApiClient instance, or None if TTT not configured.
             config: App config object.
+            error_tracker: Optional shared ErrorTracker for recording pipeline errors.
         """
         self.client = ttt_client
         self.config = config
@@ -26,6 +30,7 @@ class TTTReporter:
         self._heartbeat_task: asyncio.Task | None = None
         self._last_status: str | None = None
         self._cached_team_id: str | None = None
+        self.error_tracker = error_tracker or ErrorTracker()
 
     async def start(self):
         """Start periodic heartbeat reporting. No-op if TTT not configured."""
@@ -138,21 +143,40 @@ class TTTReporter:
             logger.warning("TTT: Failed to push config: %s", e)
 
     async def report_heartbeat(self, metrics: dict | None = None) -> None:
-        """Send heartbeat with optional system metrics. Fails silently if TTT unreachable."""
+        """Send heartbeat with system metrics. Fails silently if TTT unreachable."""
         if not self.enabled:
             return
         try:
-            if self.camera_id:
+            system_metrics = get_system_metrics()
+
+            # Add queue/error info
+            heartbeat_data = {
+                **system_metrics,
+                "last_error": self.error_tracker.get_last_error(),
+                "error_count_24h": self.error_tracker.get_error_count_24h(),
+            }
+
+            # Merge any externally provided metrics (active_job_count, queue_depth, version)
+            if metrics:
+                heartbeat_data.update(metrics)
+
+            # Use enhanced heartbeat if we have a service_id, fall back to camera status
+            service_id = getattr(self.config.ttt, "service_id", None)
+            if service_id:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self.client.enhanced_heartbeat, service_id, heartbeat_data
+                )
+            elif self.camera_id:
                 status = self._last_status or "online"
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
+                await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: self.client.update_camera_status(
                         camera_id=self.camera_id,
                         status=status,
                     ),
                 )
-                logger.debug("TTT: Heartbeat sent")
+
+            logger.debug("TTT: Heartbeat sent with metrics")
         except Exception as e:
             logger.warning("TTT: Heartbeat failed: %s", e)
 

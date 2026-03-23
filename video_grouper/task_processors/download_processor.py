@@ -31,6 +31,7 @@ class DownloadProcessor(QueueProcessor):
         self.camera = camera
         self.video_processor = video_processor
         self.ttt_reporter = None
+        self.error_tracker = None
 
     @property
     def queue_type(self) -> QueueType:
@@ -47,13 +48,14 @@ class DownloadProcessor(QueueProcessor):
         file_path = item.file_path
         group_dir = os.path.dirname(file_path)
         dir_state = DirectoryState(group_dir)
+        file_name = os.path.basename(file_path)
 
         # Defense-in-depth: skip download if group has already progressed
         # past the download stage to avoid overwriting during combining.
         skip_statuses = {"combined", "trimmed", "autocam_complete", "complete"}
         if dir_state.status in skip_statuses:
             logger.info(
-                f"DOWNLOAD: Skipping {os.path.basename(file_path)} - group already at status '{dir_state.status}'"
+                f"DOWNLOAD: Skipping {file_name} - group already at status '{dir_state.status}'"
             )
             return
 
@@ -61,14 +63,17 @@ class DownloadProcessor(QueueProcessor):
         min_free_gb = self.config.storage.min_free_gb
         has_space, free_gb = check_disk_space(self.storage_path, min_free_gb)
         if not has_space:
+            error_msg = (
+                f"Insufficient disk space: {free_gb:.1f} GB free, need {min_free_gb} GB"
+            )
             logger.error(
                 f"DOWNLOAD: Low disk space ({free_gb:.1f} GB free, "
                 f"minimum {min_free_gb} GB required). "
-                f"Skipping download of {os.path.basename(file_path)}."
+                f"Skipping download of {file_name}."
             )
-            raise RuntimeError(
-                f"Insufficient disk space: {free_gb:.1f} GB free, need {min_free_gb} GB"
-            )
+            if self.error_tracker:
+                self.error_tracker.record("download", error_msg, {"file": file_name})
+            raise RuntimeError(error_msg)
 
         # Download to a temp file first so a crash mid-download never
         # leaves a partial file at the final path.  Only rename on success.
@@ -154,7 +159,7 @@ class DownloadProcessor(QueueProcessor):
 
         except Exception as e:
             logger.error(
-                f"DOWNLOAD: An error occurred during download of {os.path.basename(file_path)}: {e}",
+                f"DOWNLOAD: An error occurred during download of {file_name}: {e}",
                 exc_info=True,
             )
             # Clean up temp file on any error
@@ -167,6 +172,8 @@ class DownloadProcessor(QueueProcessor):
                 await self.ttt_reporter.update_recording_status(
                     dir_state.ttt_recording_id, "download", "failed", error=str(e)
                 )
+            if self.error_tracker:
+                self.error_tracker.record("download", str(e), {"file": file_name})
             raise
 
     def get_item_key(self, item: RecordingFile) -> str:

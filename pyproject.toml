@@ -32,6 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+metrics = [
+    "psutil>=5.9.0",
+]
 tray = [
     "PyQt6>=6.6.0",
     "pywin32>=306",

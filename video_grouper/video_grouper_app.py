@@ -5,6 +5,7 @@ from pathlib import Path
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.utils.config import Config
+from video_grouper.utils.error_tracker import ErrorTracker
 from video_grouper.utils.logger import setup_logging_from_config, get_logger
 from video_grouper.task_processors import (
     StateAuditor,
@@ -52,6 +53,9 @@ class VideoGrouperApp:
         self.config = config
         self.storage_path = os.path.abspath(config.storage.path)
         logger.info(f"Using storage path: {self.storage_path}")
+
+        # Shared error tracker — used by all processors and the TTT reporter
+        self.error_tracker = ErrorTracker(max_errors=100)
 
         # Validate storage path is usable
         self._validate_storage_path()
@@ -299,7 +303,9 @@ class VideoGrouperApp:
             except AttributeError:
                 pass
         self.ttt_reporter = TTTReporter(
-            ttt_client=ttt_reporter_client, config=self.config
+            ttt_client=ttt_reporter_client,
+            config=self.config,
+            error_tracker=self.error_tracker,
         )
 
         # Wire ttt_reporter into all processors for best-effort pipeline reporting
@@ -307,6 +313,7 @@ class VideoGrouperApp:
             poller.ttt_reporter = self.ttt_reporter
         for dl_proc in self.download_processors.values():
             dl_proc.ttt_reporter = self.ttt_reporter
+            dl_proc.error_tracker = self.error_tracker
         self.video_processor.ttt_reporter = self.ttt_reporter
         self.upload_processor.ttt_reporter = self.ttt_reporter
 

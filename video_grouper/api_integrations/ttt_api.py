@@ -557,6 +557,18 @@ class TTTApiClient:
         logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
         return self._request("PATCH", url, json=body)
 
+    def enhanced_heartbeat(
+        self, service_id: str, metrics: dict
+    ) -> Optional[dict[str, Any]]:
+        """Send enhanced heartbeat with system metrics.
+
+        PATCH {api_base_url}/api/device-link/heartbeat-enhanced
+        """
+        url = f"{self.api_base_url}/api/device-link/heartbeat-enhanced"
+        data = {"service_id": service_id, **metrics}
+        logger.debug("Sending enhanced heartbeat for service %s", service_id)
+        return self._request("PATCH", url, json=data)
+
     def get_high_water_mark(self, camera_id: str) -> Optional[str]:
         """Get the latest recording timestamp TTT knows about for this camera.
 
