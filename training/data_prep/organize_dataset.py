@@ -29,12 +29,29 @@ DEFAULT_VAL_SPLIT = 0.15
 # Tile position pattern: _r{row}_c{col} before the file extension
 _TILE_POS_RE = re.compile(r"_r(\d+)_c(\d+)$")
 
+# Full tile filename pattern: {segment}_frame_{frame_idx}_r{row}_c{col}
+_TILE_FULL_RE = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
+
 
 def parse_tile_position(stem: str) -> tuple[int, int] | None:
     """Extract (row, col) from a tile filename stem like 'frame001_r1_c3'."""
     m = _TILE_POS_RE.search(stem)
     if m:
         return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def parse_tile_filename(stem: str) -> tuple[str, int, int, int] | None:
+    """Extract (segment_stem, frame_idx, row, col) from a tile filename.
+
+    Parses filenames like 'Game_segment01_frame_000123_r1_c3' into
+    ('Game_segment01', 123, 1, 3).
+
+    Returns None if the filename doesn't match the expected pattern.
+    """
+    m = _TILE_FULL_RE.match(stem)
+    if m:
+        return m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
     return None
 
 

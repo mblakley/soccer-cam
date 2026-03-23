@@ -2,8 +2,8 @@
 # Usage: yolo train data=training/configs/ball_dataset_640.yaml model=yolo11m.pt
 
 path: F:\training_data\ball_dataset_640
-train: train.txt
-val: val.txt
+train: images/train
+val: images/val
 
 nc: 1
 names: ["ball"]

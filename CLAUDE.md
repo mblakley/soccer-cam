@@ -116,7 +116,21 @@ The `training/` package contains a YOLO ball detection model training pipeline. 
 
 All modules run via `uv run python -m training.data_prep.<module>`.
 
-**Training & evaluation**: `training/train.py` (YOLO11m, workers=0 for 16GB RAM), `training/evaluate.py`, `training/export_mobile.py`
+**Label cleaning pipeline** (`training/data_prep/`):
+1. `label_filters.py` — Heuristic pre-filter: aspect ratio, size bounds, edge clipping. Reads `labels_640/`, writes `labels_640_filtered/`.
+2. `trajectory_validator.py` — Physics-based cleaning: links detections across consecutive frames in panoramic coords, keeps trajectories ≥3 frames. Reads `labels_640_filtered/`, writes `labels_640_clean/`.
+3. `smart_sampler.py` — Intelligent sampling: all positives + hard negatives (adjacent tiles) + random negatives. Writes `train.txt`/`val.txt`.
+4. `create_temporal_dataset.py` — Builds 3-frame triplet manifests (.jsonl) for temporal model training.
+
+**Temporal model** (`training/`):
+- `temporal_dataset.py` — PyTorch Dataset for 3-frame heatmap training (9-channel input → Gaussian heatmap target).
+- `train_temporal.py` — Training script with U-Net architecture (TemporalBallNet, ~4M params), weighted focal loss.
+
+**Inference pipeline** (`training/inference/`):
+- `panoramic_detector.py` — Full-frame detection: tiles panoramic frame, runs temporal model per tile, stitches heatmaps, finds peaks.
+- `ball_tracker.py` — Kalman filter tracker: links detections into trajectories, predicts during occlusion, state=[x,y,vx,vy,ax,ay].
+
+**Training & evaluation**: `training/train.py` (YOLO26, workers=0 for 16GB RAM, supports epoch rotation via `--epoch-rotation N`), `training/evaluate.py`, `training/export_mobile.py`
 
 **Human-in-the-loop annotation**: `training/annotation_server.py` (FastAPI), `training/review_packet_generator.py`, `training/correction_ingester.py`
 
