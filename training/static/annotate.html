@@ -47,6 +47,7 @@ html, body {
   padding: 8px 12px; cursor: pointer; border-radius: 8px;
 }
 .header-btn:active { background: #333; }
+.header-btn.active { background: var(--blue); color: #fff; }
 
 /* Packet list */
 #packet-list-page .content { flex: 1; overflow-y: auto; padding: 12px; }
@@ -219,6 +220,7 @@ html, body {
     <button class="back-btn" onclick="leaveAnnotation()">&larr;</button>
     <span class="progress-text" id="progress-text">0/0</span>
     <div class="progress-track"><div class="progress-inner" id="progress-bar"></div></div>
+    <button class="header-btn" id="zoom-btn" onclick="toggleZoom()" title="Zoom to detection">&#x1F50D;</button>
   </div>
   <div class="annotate-body">
     <div class="frame-reason" id="frame-reason"></div>
@@ -271,6 +273,7 @@ let pendingResults = [];
 let frameStartTime = 0;
 let userTap = null;  // {x, y} in image coords
 let cropImage = null;
+let isZoomed = false;
 
 const BATCH_SIZE = 10;
 const API = '';
@@ -388,7 +391,10 @@ function showFrame() {
 
   const frame = frames[currentFrameIndex];
   userTap = null;
+  isZoomed = false;
   frameStartTime = Date.now();
+  const zBtn = document.getElementById('zoom-btn');
+  if (zBtn) zBtn.classList.remove('active');
 
   // Save position
   localStorage.setItem('pos_' + currentGameId, currentFrameIndex);
@@ -453,7 +459,49 @@ function drawCanvas() {
   const imgW = cropImage.naturalWidth;
   const imgH = cropImage.naturalHeight;
 
-  // Scale to fit container
+  const frame = frames[currentFrameIndex];
+
+  if (isZoomed && frame.model_detection) {
+    // Zoomed view: 3x zoom centered on detection, no overlay
+    const zoomFactor = 3;
+    const zoomSize = 160; // pixels of source image to show
+    const det = frame.model_detection;
+
+    // Source rectangle centered on detection
+    let sx = det.x - zoomSize / 2;
+    let sy = det.y - zoomSize / 2;
+    sx = Math.max(0, Math.min(imgW - zoomSize, sx));
+    sy = Math.max(0, Math.min(imgH - zoomSize, sy));
+
+    const canvasSize = Math.min(cw, ch);
+    canvas.width = canvasSize;
+    canvas.height = canvasSize;
+    canvas.dataset.scale = canvasSize / zoomSize;
+    canvas.dataset.imgW = imgW;
+    canvas.dataset.imgH = imgH;
+    canvas.dataset.zoomOffsetX = sx;
+    canvas.dataset.zoomOffsetY = sy;
+
+    // Draw zoomed region without any overlays
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cropImage, sx, sy, zoomSize, zoomSize, 0, 0, canvasSize, canvasSize);
+
+    // Thin subtle crosshair at center so you can see what was detected
+    const cx = (det.x - sx) * (canvasSize / zoomSize);
+    const cy = (det.y - sy) * (canvasSize / zoomSize);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cx - 30, cy); ctx.lineTo(cx + 30, cy);
+    ctx.moveTo(cx, cy - 30); ctx.lineTo(cx, cy + 30);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
+
+  // Normal view: scale to fit
   const scale = Math.min(cw / imgW, ch / imgH);
   const dw = Math.floor(imgW * scale);
   const dh = Math.floor(imgH * scale);
@@ -463,10 +511,10 @@ function drawCanvas() {
   canvas.dataset.scale = scale;
   canvas.dataset.imgW = imgW;
   canvas.dataset.imgH = imgH;
+  delete canvas.dataset.zoomOffsetX;
+  delete canvas.dataset.zoomOffsetY;
 
   ctx.drawImage(cropImage, 0, 0, dw, dh);
-
-  const frame = frames[currentFrameIndex];
 
   // Draw model detection (blue)
   if (frame.model_detection) {
@@ -517,6 +565,16 @@ function drawCanvas() {
     ctx.arc(ux, uy, 4, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+function toggleZoom() {
+  const frame = frames[currentFrameIndex];
+  if (!frame.model_detection && !userTap) return;
+  isZoomed = !isZoomed;
+  drawCanvas();
+  // Update button appearance
+  const btn = document.getElementById('zoom-btn');
+  if (btn) btn.classList.toggle('active', isZoomed);
 }
 
 function showDefaultActions() {
@@ -576,11 +634,20 @@ document.getElementById('crop-canvas').addEventListener('pointerdown', function(
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
 
-  // Convert to image coordinates
+  // Convert to image coordinates (accounting for zoom offset)
+  const zoomOffsetX = parseFloat(this.dataset.zoomOffsetX) || 0;
+  const zoomOffsetY = parseFloat(this.dataset.zoomOffsetY) || 0;
   userTap = {
-    x: Math.round(cx / scale),
-    y: Math.round(cy / scale)
+    x: Math.round(cx / scale + zoomOffsetX),
+    y: Math.round(cy / scale + zoomOffsetY)
   };
+
+  // Exit zoom when tapping to place a marker
+  if (isZoomed) {
+    isZoomed = false;
+    const zBtn = document.getElementById('zoom-btn');
+    if (zBtn) zBtn.classList.remove('active');
+  }
 
   drawCanvas();
   showTapActions();
