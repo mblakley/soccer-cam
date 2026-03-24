@@ -105,8 +105,8 @@ def build_tracking_lab(
     from training.annotation.simple_tracker import SimpleTracker
 
     tracker = SimpleTracker(
-        gate_distance=max_link_distance,
-        max_missing=15,  # Predict through up to 15 missing frames (~5 sec)
+        gate_distance=300,     # 300px gate for following ball through kicks
+        max_missing=90,        # Predict through ~30 seconds of no detections
         min_track_length=3,
     )
 
