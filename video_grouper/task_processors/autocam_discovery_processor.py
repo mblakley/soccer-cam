@@ -38,6 +38,7 @@ class AutocamDiscoveryProcessor(PollingProcessor):
         """
         super().__init__(storage_path, config, poll_interval)
         self.autocam_processor = autocam_processor
+        self._recovered_uploads: set[str] = set()
 
     async def discover_work(self) -> None:
         """
@@ -132,14 +133,18 @@ class AutocamDiscoveryProcessor(PollingProcessor):
         logger.info("AUTOCAM_DISCOVERY: Discovery complete")
 
     async def _recover_upload(self, group_dir: Path) -> None:
-        """Queue YouTube upload for autocam_complete directories missing an upload."""
+        """Queue YouTube upload for autocam_complete directories missing an upload.
+
+        Only queues once per directory -- tracks recovered dirs to prevent
+        duplicate uploads on subsequent poll cycles.
+        """
+        group_key = str(group_dir)
+        if group_key in self._recovered_uploads:
+            return
         if not self.config.youtube.enabled:
             return
         upload_processor = getattr(self.autocam_processor, "upload_processor", None)
         if not upload_processor:
-            return
-        # Skip if upload already queued or completed (state would be 'complete')
-        if upload_processor.get_queue_size() > 0:
             return
         from .tasks.upload import YoutubeUploadTask
         import os
@@ -147,6 +152,7 @@ class AutocamDiscoveryProcessor(PollingProcessor):
         relative_group_dir = os.path.relpath(str(group_dir), self.storage_path)
         youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
         await upload_processor.add_work(youtube_task)
+        self._recovered_uploads.add(group_key)
         logger.info(f"AUTOCAM_DISCOVERY: Recovered YouTube upload for {group_dir.name}")
 
     def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:

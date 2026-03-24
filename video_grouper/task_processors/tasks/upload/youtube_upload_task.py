@@ -208,9 +208,20 @@ class YoutubeUploadTask(BaseUploadTask):
                 logger.info(
                     f"Successfully uploaded videos for {self.group_dir} to YouTube"
                 )
-                # Force flush the log to ensure the message is written
-                for handler in logger.handlers:
-                    handler.flush()
+                # Mark directory as fully complete
+                try:
+                    from video_grouper.models import DirectoryState
+
+                    resolved = str(resolve_path(self.group_dir, storage_path))
+                    dir_state = DirectoryState(resolved, storage_path)
+                    await dir_state.update_group_status("complete")
+                    logger.info(
+                        f"YOUTUBE_UPLOAD: Updated state to 'complete' for {self.group_dir}"
+                    )
+                except Exception as state_err:
+                    logger.warning(
+                        f"YOUTUBE_UPLOAD: Could not update state: {state_err}"
+                    )
                 logger.info(
                     f"YOUTUBE_UPLOAD: Task completed successfully for {self.group_dir}"
                 )
