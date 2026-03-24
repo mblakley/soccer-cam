@@ -149,6 +149,17 @@ html, body {
 .btn-not-visible { background: #1f2937; color: var(--gray); border-color: var(--gray); }
 .btn-not-game-ball { background: #422006; color: #f59e0b; border-color: #f59e0b; }
 .btn-skip { background: transparent; color: var(--text-dim); border-color: #444; }
+.btn-warmup { background: #431407; color: #fb923c; border-color: #fb923c; }
+.btn-gameover { background: #1e1b4b; color: #a78bfa; border-color: #a78bfa; }
+
+/* Toast notification */
+.toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: #1e293b; color: #e2e8f0; padding: 10px 20px; border-radius: 8px;
+  font-size: 14px; z-index: 100; opacity: 0; transition: opacity 0.3s;
+  pointer-events: none; border: 1px solid #475569; max-width: 90%;
+}
+.toast.show { opacity: 1; }
 .btn-submit-tap {
   background: #1e3a5f; color: var(--blue); border-color: var(--blue);
 }
@@ -168,6 +179,7 @@ html, body {
 
 /* Stats page */
 #stats-page .content { flex: 1; overflow-y: auto; padding: 16px; }
+#exclusions-page .content { flex: 1; overflow-y: auto; padding: 12px; }
 .stat-card {
   background: var(--surface); border-radius: 12px; padding: 16px;
   margin-bottom: 10px; border: 1px solid #333;
@@ -187,12 +199,73 @@ html, body {
   background: #252525; color: var(--text-dim);
 }
 
+/* Exclusion cards */
+.excl-section { margin: 16px; }
+.excl-section h2 { font-size: 15px; color: var(--text-dim); margin-bottom: 8px; }
+.excl-card {
+  background: var(--surface); border-radius: 10px; padding: 12px;
+  margin-bottom: 12px; border: 1px solid #333;
+}
+.excl-card .excl-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.excl-card .excl-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.excl-thumbs {
+  display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px;
+}
+.excl-thumbs img {
+  width: 80px; height: 80px; object-fit: cover; border-radius: 6px;
+  border: 1px solid #444; flex-shrink: 0;
+}
+.excl-summary {
+  background: var(--surface); border-radius: 10px; padding: 16px;
+  margin: 16px; border: 1px solid #333; text-align: center;
+}
+.excl-summary .big-num { font-size: 32px; font-weight: 700; color: var(--blue); }
+.excl-summary .label { font-size: 13px; color: var(--text-dim); }
+
 /* Loading */
 .loading { text-align: center; padding: 40px; color: var(--text-dim); }
 
 /* Empty state */
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+/* Tracking Lab */
+#tracking-lab-page .content { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; }
+.lab-header { padding: 10px 14px; background: var(--surface); border-bottom: 1px solid #333; }
+.lab-header .lab-title { font-size: 14px; font-weight: 600; }
+.lab-header .lab-stats { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.lab-coverage-bar { height: 4px; background: #333; margin-top: 6px; border-radius: 2px; overflow: hidden; position: relative; }
+.lab-coverage-fill { height: 100%; background: var(--green); border-radius: 2px; }
+
+.lab-timeline { height: 40px; margin: 0 14px; position: relative; cursor: pointer; touch-action: none; }
+.lab-timeline canvas { width: 100%; height: 100%; display: block; }
+
+.lab-tile-view { display: flex; flex-direction: column; align-items: stretch; padding: 0; }
+.lab-tile-view canvas { width: 100%; height: auto; display: block; }
+
+.lab-info { padding: 8px 14px; font-size: 12px; color: var(--text-dim); }
+.lab-info .lab-time { font-size: 16px; color: var(--text); font-weight: 600; }
+.lab-info .lab-dets { margin-top: 2px; }
+
+.lab-alt-dets { display: flex; gap: 4px; padding: 4px 14px; overflow-x: auto; }
+.lab-alt-det { width: 60px; height: 60px; border-radius: 6px; border: 2px solid #333; cursor: pointer; flex-shrink: 0; }
+.lab-alt-det.active { border-color: var(--green); }
+.lab-alt-det.static { border-color: #555; opacity: 0.5; }
+
+.lab-actions { display: flex; gap: 8px; padding: 8px 14px; }
+.lab-actions button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.lab-btn-correct { background: #166534; color: #4ade80; }
+.lab-btn-wrong { background: #7f1d1d; color: #f87171; }
+.lab-btn-note { background: #1e3a5f; color: #60a5fa; }
+
+.lab-notes { padding: 8px 14px; }
+.lab-notes textarea { width: 100%; background: var(--surface); border: 1px solid #333; color: var(--text); border-radius: 8px; padding: 8px; font-size: 13px; resize: none; height: 60px; }
+.lab-notes .saved { font-size: 11px; color: var(--green); margin-top: 2px; }
+
+.lab-charts { padding: 14px; }
+.lab-chart-card { background: var(--surface); border-radius: 10px; padding: 12px; margin-bottom: 12px; border: 1px solid #333; }
+.lab-chart-card h3 { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+.lab-chart-card canvas { width: 100%; height: 120px; }
 </style>
 </head>
 <body>
@@ -203,10 +276,17 @@ html, body {
     <h1>Review Packets</h1>
     <button class="header-btn" onclick="navigateTo('stats')">Stats</button>
   </div>
+  <div id="gen-status-banner" style="display:none"></div>
   <div class="content" id="packet-list"></div>
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab" onclick="navigateTo('tracking-lab')">
+      <span>&#x1F3AF;</span>Lab
+    </button>
+    <button class="nav-tab" onclick="navigateTo('exclusions')">
+      <span>&#x1F6AB;</span>Excluded
     </button>
     <button class="nav-tab" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
@@ -228,6 +308,7 @@ html, body {
       <canvas id="crop-canvas"></canvas>
     </div>
     <div class="flash-overlay" id="flash-overlay"></div>
+    <div class="toast" id="toast"></div>
     <div class="action-bar" id="action-bar">
       <button class="action-btn btn-confirm" onclick="doAction('confirm')">
         <span class="icon">&#x2713;</span>Confirm
@@ -256,7 +337,52 @@ html, body {
     <button class="nav-tab" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
     </button>
+    <button class="nav-tab" onclick="navigateTo('exclusions')">
+      <span>&#x1F6AB;</span>Excluded
+    </button>
     <button class="nav-tab active" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
+<!-- Tracking Lab Page -->
+<div id="tracking-lab-page" class="page">
+  <div class="header">
+    <button class="header-btn" onclick="navigateTo('packets')">&larr;</button>
+    <h1>Tracking Lab</h1>
+  </div>
+  <div class="content" id="lab-content">
+    <div class="loading">Loading tracking lab...</div>
+  </div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('tracking-lab')">
+      <span>&#x1F3AF;</span>Lab
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
+<!-- Exclusions Page -->
+<div id="exclusions-page" class="page">
+  <div class="header">
+    <button class="header-btn" onclick="navigateTo('packets')">&larr;</button>
+    <h1>Exclusion List</h1>
+  </div>
+  <div class="content" id="exclusions-content"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('exclusions')">
+      <span>&#x1F6AB;</span>Excluded
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
     </button>
   </div>
@@ -281,6 +407,7 @@ const API = '';
 // ========== Navigation ==========
 function navigateTo(page, param) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  if (page !== 'packets' && genPollInterval) { clearInterval(genPollInterval); genPollInterval = null; }
   if (page === 'packets') {
     document.getElementById('packet-list-page').classList.add('active');
     location.hash = '#packets';
@@ -289,6 +416,14 @@ function navigateTo(page, param) {
     document.getElementById('annotate-page').classList.add('active');
     location.hash = '#annotate/' + param;
     startAnnotation(param);
+  } else if (page === 'exclusions') {
+    document.getElementById('exclusions-page').classList.add('active');
+    location.hash = '#exclusions';
+    loadExclusions();
+  } else if (page === 'tracking-lab') {
+    document.getElementById('tracking-lab-page').classList.add('active');
+    location.hash = '#tracking-lab';
+    loadTrackingLab();
   } else if (page === 'stats') {
     document.getElementById('stats-page').classList.add('active');
     location.hash = '#stats';
@@ -307,6 +442,10 @@ function handleHash() {
   if (hash.startsWith('#annotate/')) {
     const gameId = hash.replace('#annotate/', '');
     navigateTo('annotate', gameId);
+  } else if (hash === '#exclusions') {
+    navigateTo('exclusions');
+  } else if (hash === '#tracking-lab') {
+    navigateTo('tracking-lab');
   } else if (hash === '#stats') {
     navigateTo('stats');
   } else {
@@ -315,6 +454,8 @@ function handleHash() {
 }
 
 // ========== Packet List ==========
+let genPollInterval = null;
+
 async function loadPackets() {
   const container = document.getElementById('packet-list');
   container.innerHTML = '<div class="loading">Loading packets...</div>';
@@ -339,6 +480,45 @@ async function loadPackets() {
     }).join('');
   } catch (e) {
     container.innerHTML = '<div class="loading">Failed to load packets</div>';
+  }
+
+  // Start polling for generation progress
+  pollGenProgress();
+  if (genPollInterval) clearInterval(genPollInterval);
+  genPollInterval = setInterval(pollGenProgress, 2000);
+}
+
+async function pollGenProgress() {
+  const banner = document.getElementById('gen-status-banner');
+  if (!banner) return;
+  try {
+    const resp = await fetch(API + '/api/generate-progress');
+    const pg = await resp.json();
+    if (pg.active) {
+      const pctVal = pg.pct != null ? Math.round(pg.pct * 100) : 0;
+      banner.style.display = 'block';
+      banner.innerHTML = `
+        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid #333">
+          <div style="font-size:13px;color:#7c7;margin-bottom:6px">Generating next packet...</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${pg.detail || ''}</div>
+          <div style="height:6px;background:#333;border-radius:3px;overflow:hidden">
+            <div style="height:100%;background:#4a4;width:${pctVal}%;transition:width 0.3s;border-radius:3px"></div>
+          </div>
+        </div>`;
+    } else if (pg.phase === 'done') {
+      banner.style.display = 'block';
+      banner.innerHTML = `
+        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid #333">
+          <div style="font-size:13px;color:#7c7">${pg.detail || 'Packet ready!'}</div>
+        </div>`;
+      // Refresh packet list and stop polling
+      if (genPollInterval) { clearInterval(genPollInterval); genPollInterval = null; }
+      setTimeout(() => { banner.style.display = 'none'; loadPackets(); }, 2000);
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch {
+    banner.style.display = 'none';
   }
 }
 
@@ -383,7 +563,8 @@ function findNextUnreviewed(fromIndex) {
   for (let i = 0; i <= fromIndex && i < frames.length; i++) {
     if (!reviewedSet.has(frames[i].frame_idx)) return i;
   }
-  return Math.min(fromIndex + 1, frames.length - 1);
+  // All reviewed — return same index to trigger completion check
+  return fromIndex;
 }
 
 function showFrame() {
@@ -430,6 +611,12 @@ function showFrame() {
     reasonText = '[already reviewed] ' + reasonText;
   }
   document.getElementById('frame-reason').textContent = reasonText;
+
+  // If all frames are reviewed, auto-trigger completion
+  if (reviewedSet.size >= frames.length) {
+    flushResults().then(() => onPacketComplete());
+    return;
+  }
 
   // Show default action bar
   showDefaultActions();
@@ -616,6 +803,12 @@ function showDefaultActions() {
       <button class="action-btn btn-not-game-ball" onclick="doAction('not_game_ball')">
         <span class="icon">&#x26BD;</span>Other
       </button>
+      <button class="action-btn btn-warmup" onclick="markWarmup()">
+        <span class="icon">&#x23EE;</span>Warmup
+      </button>
+      <button class="action-btn btn-gameover" onclick="markGameOver()">
+        <span class="icon">&#x23ED;</span>End
+      </button>
       <button class="action-btn btn-skip" onclick="doAction('skip')">
         <span class="icon">&rarr;</span>Skip
       </button>`;
@@ -628,6 +821,12 @@ function showDefaultActions() {
       </button>
       <button class="action-btn btn-not-game-ball" onclick="doAction('not_game_ball')">
         <span class="icon">&#x26BD;</span>Other
+      </button>
+      <button class="action-btn btn-warmup" onclick="markWarmup()">
+        <span class="icon">&#x23EE;</span>Warmup
+      </button>
+      <button class="action-btn btn-gameover" onclick="markGameOver()">
+        <span class="icon">&#x23ED;</span>End
       </button>
       <button class="action-btn btn-skip" onclick="doAction('skip')">
         <span class="icon">&rarr;</span>Skip
@@ -721,6 +920,12 @@ function doAction(action, ballPos) {
   pendingResults.push(result);
   reviewedSet.add(frame.frame_idx);
 
+  // Auto-skip nearby frames for "not_game_ball" (static out-of-play balls)
+  let autoSkipped = 0;
+  if (action === 'not_game_ball') {
+    autoSkipped = autoSkipNearby(frame, 'not_game_ball');
+  }
+
   // Flash
   const flashColor = {
     confirm: 'green', reject: 'red', not_visible: 'gray',
@@ -728,24 +933,215 @@ function doAction(action, ballPos) {
   }[action] || 'gray';
   flashScreen(flashColor);
 
+  if (autoSkipped > 0) {
+    showToast(`Auto-skipped ${autoSkipped} nearby frame${autoSkipped > 1 ? 's' : ''} with similar balls`);
+  }
+
   // Batch submit
   if (pendingResults.length >= BATCH_SIZE) {
     flushResults();
   }
 
   // Advance to next unreviewed
-  setTimeout(() => {
+  setTimeout(async () => {
     const next = findNextUnreviewed(currentFrameIndex);
     if (next === currentFrameIndex && reviewedSet.has(frames[next].frame_idx)) {
-      // All done
-      flushResults();
-      alert('All frames reviewed!');
-      navigateTo('packets');
+      // All done — flush remaining results then generate next packet
+      await flushResults();
+      onPacketComplete();
       return;
     }
     currentFrameIndex = next;
     showFrame();
   }, 180);
+}
+
+function autoSkipNearby(sourceFrame, action) {
+  // Find unreviewed frames within ±60s game time with similar detection positions
+  const ctx = sourceFrame.context || {};
+  const srcTime = ctx.time_secs || 0;
+  const srcDet = sourceFrame.model_detection;
+  const TIME_WINDOW = 60; // seconds
+  const POS_THRESHOLD = 80; // pixels — detections closer than this are "same ball"
+  let count = 0;
+
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (reviewedSet.has(f.frame_idx)) continue;
+
+    const fCtx = f.context || {};
+    const fTime = fCtx.time_secs || 0;
+    if (Math.abs(fTime - srcTime) > TIME_WINDOW) continue;
+
+    // Check if detection position is similar (same static ball)
+    if (srcDet && f.model_detection) {
+      const dx = srcDet.x - f.model_detection.x;
+      const dy = srcDet.y - f.model_detection.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      // Also check same tile row/col
+      if (dist < POS_THRESHOLD && fCtx.row === ctx.row && fCtx.col === ctx.col) {
+        pendingResults.push({
+          frame_idx: f.frame_idx,
+          action: action,
+          ball_position: null,
+          duration_ms: 0,
+          auto_skipped: true
+        });
+        reviewedSet.add(f.frame_idx);
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+function markWarmup() {
+  vibrate(30);
+  const frame = frames[currentFrameIndex];
+  const ctx = frame.context || {};
+  const cutoffTime = ctx.time_secs || 0;
+  let count = 0;
+
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (reviewedSet.has(f.frame_idx)) continue;
+    const fTime = (f.context || {}).time_secs || 0;
+    if (fTime <= cutoffTime) {
+      pendingResults.push({
+        frame_idx: f.frame_idx,
+        action: 'skip',
+        ball_position: null,
+        duration_ms: 0,
+        auto_skipped: true,
+        warmup: true
+      });
+      reviewedSet.add(f.frame_idx);
+      count++;
+    }
+  }
+
+  flashScreen('amber');
+  showToast(`Marked ${count} earlier frame${count !== 1 ? 's' : ''} as warmup`);
+
+  if (pendingResults.length >= BATCH_SIZE) {
+    flushResults();
+  }
+
+  // Advance past warmup
+  setTimeout(async () => {
+    const next = findNextUnreviewed(currentFrameIndex);
+    if (next === currentFrameIndex && reviewedSet.has(frames[next].frame_idx)) {
+      await flushResults();
+      onPacketComplete();
+      return;
+    }
+    currentFrameIndex = next;
+    showFrame();
+  }, 180);
+}
+
+function markGameOver() {
+  vibrate(30);
+  const frame = frames[currentFrameIndex];
+  const ctx = frame.context || {};
+  const cutoffTime = ctx.time_secs || 0;
+  const gameId = ctx.game_id || '';
+  let count = 0;
+
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (reviewedSet.has(f.frame_idx)) continue;
+    const fCtx = f.context || {};
+    const fTime = fCtx.time_secs || 0;
+    const fGame = fCtx.game_id || '';
+    // Only skip frames from the same game that are at or after this time
+    if (fGame === gameId && fTime >= cutoffTime) {
+      pendingResults.push({
+        frame_idx: f.frame_idx,
+        action: 'skip',
+        ball_position: null,
+        duration_ms: 0,
+        auto_skipped: true,
+        game_over: true
+      });
+      reviewedSet.add(f.frame_idx);
+      count++;
+    }
+  }
+
+  flashScreen('blue');
+  showToast(`Marked ${count} later frame${count !== 1 ? 's' : ''} as post-game`);
+
+  if (pendingResults.length >= BATCH_SIZE) {
+    flushResults();
+  }
+
+  setTimeout(async () => {
+    const next = findNextUnreviewed(currentFrameIndex);
+    if (next === currentFrameIndex && reviewedSet.has(frames[next].frame_idx)) {
+      // All done — flush remaining results then generate next packet
+      await flushResults();
+      onPacketComplete();
+      return;
+    }
+    currentFrameIndex = next;
+    showFrame();
+  }, 180);
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+async function onPacketComplete() {
+  // Update counter to show all frames reviewed
+  document.getElementById('reason-text').textContent = `${frames.length}/${frames.length} — Generating...`;
+
+  // Show generating state with progress bar
+  const actionBar = document.getElementById('action-bar');
+  actionBar.innerHTML = `<div style="color:var(--text-dim);text-align:center;padding:16px;width:100%">
+    Packet complete! Generating next packet from your feedback...<br>
+    <div id="gen-progress-detail" style="font-size:13px;margin:8px 0;opacity:0.8"></div>
+    <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;margin:4px 24px">
+      <div id="gen-progress-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s"></div>
+    </div>
+    <span style="font-size:12px;opacity:0.6">This takes a few minutes (scanning tiles on disk)</span>
+  </div>`;
+
+  // Start polling for progress
+  const progressInterval = setInterval(async () => {
+    try {
+      const pr = await fetch('/api/generate-progress');
+      const pg = await pr.json();
+      if (pg.active && pg.detail) {
+        const bar = document.getElementById('gen-progress-bar');
+        const detail = document.getElementById('gen-progress-detail');
+        if (detail) detail.textContent = pg.detail;
+        if (bar && pg.pct != null) bar.style.width = Math.round(pg.pct * 100) + '%';
+      }
+    } catch {}
+  }, 2000);
+
+  try {
+    const resp = await fetch('/api/generate-packet', { method: 'POST' });
+    clearInterval(progressInterval);
+    const data = await resp.json();
+    if (data.status === 'created' && data.packet_id) {
+      showToast(`New packet ready: ${data.packet_id}`);
+      // Auto-open the new packet
+      setTimeout(() => startAnnotation(data.packet_id), 500);
+    } else {
+      showToast('No more candidates — all exclusions applied');
+      navigateTo('packets');
+    }
+  } catch (err) {
+    clearInterval(progressInterval);
+    showToast('Generation failed: ' + err.message);
+    navigateTo('packets');
+  }
 }
 
 function flashScreen(color) {
@@ -811,6 +1207,89 @@ document.getElementById('crop-canvas').addEventListener('touchend', function(e) 
 }, { passive: true });
 
 // ========== Stats ==========
+async function loadExclusions() {
+  const container = document.getElementById('exclusions-content');
+  container.innerHTML = '<div class="loading">Loading exclusions...</div>';
+  try {
+    const resp = await fetch(API + '/api/exclusions');
+    const data = await resp.json();
+
+    let html = '';
+
+    // Summary card
+    html += `<div class="excl-summary">
+      <div class="big-num">${data.total_annotated_exclusions}</div>
+      <div class="label">frames excluded from future packets</div>
+    </div>`;
+
+    // Warmup ranges
+    if (data.warmup_ranges.length > 0) {
+      html += '<div class="excl-section"><h2>Warmup Periods</h2>';
+      for (const w of data.warmup_ranges) {
+        const mins = Math.floor(w.cutoff_secs / 60);
+        const secs = Math.floor(w.cutoff_secs % 60);
+        html += `<div class="excl-card">
+          <div class="excl-title">${w.game_id}</div>
+          <div class="excl-meta">
+            Skip first ${mins}:${secs.toString().padStart(2,'0')} (${w.cutoff_mins} min) &mdash; ${w.frame_count} frames marked
+          </div>
+          <div class="excl-thumbs">
+            ${w.samples.map(s => `<img src="${s.thumb_url}" loading="lazy">`).join('')}
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Game-over ranges
+    if (data.gameover_ranges && data.gameover_ranges.length > 0) {
+      html += '<div class="excl-section"><h2>Game Over (Post-Game)</h2>';
+      for (const g of data.gameover_ranges) {
+        const mins = Math.floor(g.cutoff_secs / 60);
+        const secs = Math.floor(g.cutoff_secs % 60);
+        html += `<div class="excl-card">
+          <div class="excl-title">${g.game_id}</div>
+          <div class="excl-meta">
+            Skip after ${mins}:${secs.toString().padStart(2,'0')} (${g.cutoff_mins} min) &mdash; ${g.frame_count} frames marked
+          </div>
+          <div class="excl-thumbs">
+            ${g.samples.map(s => `<img src="${s.thumb_url}" loading="lazy">`).join('')}
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Static balls
+    if (data.static_balls.length > 0) {
+      html += '<div class="excl-section"><h2>Static / Out-of-Play Balls</h2>';
+      for (const sb of data.static_balls) {
+        const minT = Math.floor(sb.time_range.min_secs / 60);
+        const maxT = Math.floor(sb.time_range.max_secs / 60);
+        html += `<div class="excl-card">
+          <div class="excl-title">${sb.position_key}</div>
+          <div class="excl-meta">
+            ${sb.frame_count} frames, ${minT}-${maxT} min into game
+          </div>
+          <div class="excl-thumbs">
+            ${sb.samples.map(s => `<img src="${s.thumb_url}" loading="lazy">`).join('')}
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    if (data.warmup_ranges.length === 0 && (!data.gameover_ranges || data.gameover_ranges.length === 0) && data.static_balls.length === 0) {
+      html += '<div class="empty-state"><div class="icon">&#x2728;</div><div>No exclusions yet</div><div style="margin-top:12px;font-size:13px">Mark frames as "Other" or "Warmup" while annotating to build exclusions</div></div>';
+    }
+
+
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+}
+
 async function loadStats() {
   const container = document.getElementById('stats-content');
   container.innerHTML = '<div class="loading">Loading stats...</div>';
@@ -917,6 +1396,820 @@ if ('serviceWorker' in navigator) {
 
 window.addEventListener('hashchange', handleHash);
 handleHash();
+
+// ========== Tracking Lab ==========
+let labManifest = null;
+let labFrameIdx = 0;       // index into labManifest.frames
+let labTileImg = null;
+let labFeedback = {};       // frame_idx -> feedback object
+let labUserMarks = {};      // frame_idx -> {row, col, x, y} user-identified ball
+let labExcluded = {};       // "frame_idx:row:col" -> true
+let labCurrentTile = null;  // {row, col} currently shown tile
+let labAvailableTiles = []; // [{row, col}] for current frame
+let labTileIdx = 0;         // index into labAvailableTiles
+let labLastConfirmedTile = null; // {row, col} from last confirmed/marked frame
+
+async function loadTrackingLab() {
+  const container = document.getElementById('lab-content');
+  container.innerHTML = '<div class="loading">Loading tracking lab...</div>';
+
+  try {
+    const resp = await fetch(API + '/api/tracking-lab');
+    if (!resp.ok) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F3AF;</div><div>No tracking lab session</div><div style="margin-top:12px;font-size:13px">Generate one with:<br><code>python -m training.annotation.tracking_lab</code></div></div>';
+      return;
+    }
+    labManifest = await resp.json();
+
+    // Load existing feedback and rebuild user marks
+    try {
+      const fbResp = await fetch(API + '/api/tracking-lab/feedback');
+      const fbList = await fbResp.json();
+      labFeedback = {};
+      labUserMarks = {};
+      for (const fb of fbList) {
+        labFeedback[fb.frame_idx] = fb;
+        if (fb.action === 'mark_ball' && fb.row != null && fb.col != null) {
+          labUserMarks[fb.frame_idx] = { row: fb.row, col: fb.col, x: fb.x, y: fb.y };
+        }
+      }
+    } catch {}
+
+    renderTrackingLab();
+  } catch (e) {
+    container.innerHTML = '<div class="loading">Failed to load tracking lab</div>';
+  }
+}
+
+function labCoverageWithUserMarks() {
+  if (!labManifest) return labManifest ? labManifest.coverage_pct : 0;
+  const total = labManifest.frames.length;
+  let tracked = 0;
+  for (const f of labManifest.frames) {
+    if (f.has_ball || labUserMarks[f.frame_idx]) tracked++;
+  }
+  return total > 0 ? Math.round(tracked / total * 1000) / 10 : 0;
+}
+
+function renderTrackingLab() {
+  const m = labManifest;
+  const container = document.getElementById('lab-content');
+  const covPct = labCoverageWithUserMarks();
+
+  container.innerHTML = `
+    <div class="lab-header">
+      <div class="lab-title">${m.game_id} / ${m.segment_prefix || m.segment.substring(0,17)}</div>
+      <div class="lab-stats" id="lab-stats-line">
+        <span id="lab-cov-text">${covPct}% tracked</span> |
+        ${m.moving_trajectories} trajectories |
+        ${Math.round(m.duration_secs/60)} min
+      </div>
+      <div class="lab-coverage-bar">
+        <div class="lab-coverage-fill" id="lab-cov-bar" style="width:${covPct}%"></div>
+      </div>
+    </div>
+
+    <div class="lab-timeline" id="lab-timeline" ontouchstart="labTimelineTouch(event)" ontouchmove="labTimelineTouch(event)" onclick="labTimelineClick(event)">
+      <canvas id="lab-timeline-canvas"></canvas>
+    </div>
+
+    <div style="display:flex;gap:6px;padding:4px 14px;justify-content:center">
+      <button onclick="labNavFrame(-1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:14px">&larr; Prev</button>
+      <button onclick="labNavDetection(-1)" style="flex:1;padding:8px;background:#1a3a1a;color:#4ade80;border:none;border-radius:6px;font-size:12px">&laquo; Prev Det</button>
+      <button onclick="labNavDetection(1)" style="flex:1;padding:8px;background:#1a3a1a;color:#4ade80;border:none;border-radius:6px;font-size:12px">Next Det &raquo;</button>
+      <button onclick="labNavFrame(1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:14px">Next &rarr;</button>
+    </div>
+
+    <div class="lab-info" id="lab-info"></div>
+    <div class="lab-tile-view" id="lab-tile-view">
+      <canvas id="lab-tile-canvas" width="640" height="640" onclick="labTileClick(event)"></canvas>
+    </div>
+
+    <div style="display:flex;gap:6px;padding:4px 14px;justify-content:center">
+      <button onclick="labCycleTile(-1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:13px">&larr; Prev Tile</button>
+      <span id="lab-tile-pos" style="flex:1;text-align:center;padding:8px;color:var(--text-dim);font-size:13px">r1c0</span>
+      <button onclick="labCycleTile(1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:13px">Next Tile &rarr;</button>
+    </div>
+
+    <div class="lab-actions">
+      <button class="lab-btn-correct" onclick="labFeedbackAction('correct')">Correct</button>
+      <button class="lab-btn-wrong" id="lab-btn-nothere" onclick="labFeedbackAction('wrong')">Not Here</button>
+      <button class="lab-btn-note" onclick="labFeedbackAction('note')">Note</button>
+    </div>
+    <div class="lab-notes" id="lab-notes-area" style="display:none">
+      <textarea id="lab-note-input" placeholder="What do you see? What's wrong?"></textarea>
+      <button style="margin-top:4px;padding:6px 16px;background:var(--blue);color:white;border:none;border-radius:6px;font-size:13px" onclick="labSaveNote()">Save Note</button>
+      <div class="saved" id="lab-note-saved"></div>
+    </div>
+
+    <div style="padding:8px 14px;border-top:1px solid #333;margin-top:8px">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">Messages to Claude (I'll read these!)</div>
+      <div id="lab-msg-log" style="max-height:120px;overflow-y:auto;font-size:12px;color:var(--text-dim);margin-bottom:6px"></div>
+      <div style="display:flex;gap:6px">
+        <input id="lab-msg-input" type="text" placeholder="Type a message or instruction..."
+          style="flex:1;background:var(--surface);border:1px solid #333;color:var(--text);border-radius:8px;padding:8px;font-size:13px"
+          onkeydown="if(event.key==='Enter')labSendMessage()">
+        <button onclick="labSendMessage()" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:8px;font-size:13px;white-space:nowrap">Send</button>
+      </div>
+    </div>
+
+    <div class="lab-charts" id="lab-charts"></div>
+  `;
+
+  drawLabTimeline();
+  drawLabCharts();
+  labLoadMessages();
+  labShowFrame(0);
+}
+
+function drawLabTimeline() {
+  const canvas = document.getElementById('lab-timeline-canvas');
+  if (!canvas || !labManifest) return;
+  const frames = labManifest.frames;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = 80;
+  canvas.style.height = '40px';
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0, 0, w, h);
+
+  const n = frames.length;
+  if (n === 0) return;
+
+  // Draw detection density
+  for (let i = 0; i < n; i++) {
+    const x = (i / n) * w;
+    const pw = Math.max(w / n, 1);
+    const f = frames[i];
+
+    const hasUserMark = !!labUserMarks[f.frame_idx];
+
+    if (hasUserMark) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(x, 0, pw, h * 0.7);
+    } else if (f.has_ball && f.is_predicted) {
+      ctx.fillStyle = '#a78bfa';
+      ctx.fillRect(x, 0, pw, h * 0.5);
+    } else if (f.has_ball) {
+      ctx.fillStyle = '#22c55e';
+      ctx.fillRect(x, 0, pw, h * 0.6);
+    } else if (f.detection_count > 0) {
+      ctx.fillStyle = '#eab308';
+      ctx.fillRect(x, 0, pw, h * 0.4);
+    } else {
+      ctx.fillStyle = '#333';
+      ctx.fillRect(x, 0, pw, h * 0.2);
+    }
+
+    // Show feedback markers
+    if (labFeedback[f.frame_idx]) {
+      const fb = labFeedback[f.frame_idx];
+      ctx.fillStyle = fb.action === 'correct' ? '#4ade80' : fb.action === 'mark_ball' ? '#f59e0b' : fb.action === 'wrong' ? '#f87171' : '#60a5fa';
+      ctx.fillRect(x, h * 0.7, pw, h * 0.3);
+    }
+  }
+
+  // Draw current position
+  const cx = (labFrameIdx / n) * w;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(cx - 1, 0, 3, h);
+}
+
+function labTimelineClick(e) {
+  const canvas = document.getElementById('lab-timeline-canvas');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  const idx = Math.max(0, Math.min(labManifest.frames.length - 1, Math.floor(x * labManifest.frames.length)));
+  labShowFrame(idx);
+}
+
+function labTimelineTouch(e) {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = (touch.clientX - rect.left) / rect.width;
+  const idx = Math.max(0, Math.min(labManifest.frames.length - 1, Math.floor(x * labManifest.frames.length)));
+  labShowFrame(idx);
+}
+
+function labNavFrame(delta) {
+  const newIdx = Math.max(0, Math.min(labManifest.frames.length - 1, labFrameIdx + delta));
+  labShowFrame(newIdx);
+}
+
+function labNavDetection(direction) {
+  // Jump to next/prev frame that has a detection or user mark
+  let idx = labFrameIdx + direction;
+  while (idx >= 0 && idx < labManifest.frames.length) {
+    const f = labManifest.frames[idx];
+    if (f.has_ball || f.detection_count > 0 || labUserMarks[f.frame_idx]) {
+      labShowFrame(idx);
+      return;
+    }
+    idx += direction;
+  }
+  showToast('No more detections');
+}
+
+async function labShowFrame(idx) {
+  labFrameIdx = idx;
+  const frame = labManifest.frames[idx];
+  if (!frame) return;
+
+  // Fetch available tiles for this frame
+  try {
+    const resp = await fetch(`/api/tracking-lab/tiles/${frame.frame_idx}`);
+    labAvailableTiles = await resp.json();
+  } catch {
+    labAvailableTiles = [];
+  }
+
+  const timeMins = Math.floor(frame.time_secs / 60);
+  const timeSecs = Math.floor(frame.time_secs % 60);
+  const timeStr = `${timeMins}:${timeSecs.toString().padStart(2, '0')}`;
+
+  const info = document.getElementById('lab-info');
+  const best = frame.best_candidate;
+  const userMark = labUserMarks[frame.frame_idx];
+  let trajInfo = '';
+  if (best && best.traj_id != null) {
+    const traj = labManifest.trajectories.find(t => t.traj_id === best.traj_id);
+    if (traj) trajInfo = ` | traj #${best.traj_id} (${traj.length}f)`;
+  }
+
+  const fbMark = labFeedback[frame.frame_idx] ? ` [${labFeedback[frame.frame_idx].action}]` : '';
+  const userMarkText = userMark ? ` | YOU: r${userMark.row}c${userMark.col}` : '';
+  const isPredicted = frame.is_predicted;
+  const status = userMark ? 'MANUAL DETECTION' : (best && isPredicted) ? 'PREDICTED' : best ? 'TRACKED' : (frame.detection_count > 0 ? 'UNTRACKED (has dets)' : 'NO DETECTIONS');
+  const statusColor = userMark ? '#f59e0b' : isPredicted ? '#a78bfa' : best ? '#4ade80' : (frame.detection_count > 0 ? '#eab308' : '#ef4444');
+
+  info.innerHTML = `
+    <div class="lab-time">${timeStr} <span style="font-size:12px;color:var(--text-dim)">(${idx+1}/${labManifest.frames.length})</span>
+      <span style="font-size:12px;color:${statusColor};margin-left:8px">${status}</span></div>
+    <div class="lab-dets">${frame.detection_count} auto-dets | ${labAvailableTiles.length} tiles${trajInfo}${userMarkText}${fbMark}</div>
+  `;
+
+  // Decide which tile to show first
+  if (userMark) {
+    labTileIdx = labAvailableTiles.findIndex(t => t.row === userMark.row && t.col === userMark.col);
+    if (labTileIdx < 0) labTileIdx = 0;
+  } else if (best) {
+    labTileIdx = labAvailableTiles.findIndex(t => t.row === best.row && t.col === best.col);
+    if (labTileIdx < 0) labTileIdx = 0;
+  } else if (labLastConfirmedTile) {
+    // Continuity: show same tile position as last confirmed frame
+    labTileIdx = labAvailableTiles.findIndex(t => t.row === labLastConfirmedTile.row && t.col === labLastConfirmedTile.col);
+    if (labTileIdx < 0) labTileIdx = 0;
+  } else {
+    labTileIdx = 0;
+  }
+
+  labLoadCurrentTile();
+  drawLabTimeline();
+  labUpdateNotHereBtn();
+}
+
+function labCycleTile(delta) {
+  if (labAvailableTiles.length === 0) return;
+  labTileIdx = (labTileIdx + delta + labAvailableTiles.length) % labAvailableTiles.length;
+  labLoadCurrentTile();
+}
+
+function labLoadCurrentTile() {
+  if (labAvailableTiles.length === 0) {
+    labCurrentTile = null;
+    const canvas = document.getElementById('lab-tile-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 640; canvas.height = 640;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, 640, 640);
+    ctx.fillStyle = '#555';
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No tiles for this frame', 320, 320);
+    return;
+  }
+
+  const tile = labAvailableTiles[labTileIdx];
+  labCurrentTile = tile;
+  const frame = labManifest.frames[labFrameIdx];
+
+  // Update tile position label
+  const posEl = document.getElementById('lab-tile-pos');
+  const excKey = `${frame.frame_idx}:${tile.row}:${tile.col}`;
+  const isExcluded = labExcluded[excKey];
+  if (posEl) posEl.innerHTML = `r${tile.row}c${tile.col} (${labTileIdx+1}/${labAvailableTiles.length})${isExcluded ? ' <span style="color:#ef4444">EXCLUDED</span>' : ''}`;
+
+  const img = new Image();
+  img.onload = () => {
+    labTileImg = img;
+    drawLabTileInteractive();
+  };
+  img.src = `/api/tracking-lab/tile/${frame.frame_idx}?row=${tile.row}&col=${tile.col}`;
+}
+
+function drawLabTileInteractive() {
+  const canvas = document.getElementById('lab-tile-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 640; canvas.height = 640;
+
+  if (labTileImg) {
+    ctx.drawImage(labTileImg, 0, 0, 640, 640);
+  }
+
+  const frame = labManifest.frames[labFrameIdx];
+  const tile = labCurrentTile;
+  if (!frame || !tile) return;
+
+  // Draw auto-detections in this tile
+  for (const d of (frame.detections || [])) {
+    if (d.row !== tile.row || d.col !== tile.col) continue;
+    const isBest = frame.best_candidate && d.row === frame.best_candidate.row && d.col === frame.best_candidate.col && d.tile_x === frame.best_candidate.tile_x;
+    ctx.strokeStyle = isBest ? '#22c55e' : '#3b82f6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(d.tile_x, d.tile_y, 15, 0, Math.PI * 2);
+    ctx.stroke();
+    if (isBest) {
+      ctx.beginPath();
+      ctx.moveTo(d.tile_x - 25, d.tile_y); ctx.lineTo(d.tile_x + 25, d.tile_y);
+      ctx.moveTo(d.tile_x, d.tile_y - 25); ctx.lineTo(d.tile_x, d.tile_y + 25);
+      ctx.stroke();
+    }
+  }
+
+  // Draw Kalman predicted position (purple dashed) if this is a predicted frame
+  const bc = frame.best_candidate;
+  if (bc && bc.predicted && bc.row === tile.row && bc.col === tile.col) {
+    ctx.strokeStyle = '#a78bfa';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(bc.tile_x, bc.tile_y, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(bc.tile_x - 25, bc.tile_y); ctx.lineTo(bc.tile_x + 25, bc.tile_y);
+    ctx.moveTo(bc.tile_x, bc.tile_y - 25); ctx.lineTo(bc.tile_x, bc.tile_y + 25);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#a78bfa';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('PREDICTED', bc.tile_x + 22, bc.tile_y - 22);
+  }
+
+  // Draw previous frame's detection as a dim reference
+  if (labFrameIdx > 0) {
+    const prevFrame = labManifest.frames[labFrameIdx - 1];
+    const prevMark = prevFrame ? labUserMarks[prevFrame.frame_idx] : null;
+    const prevBest = prevFrame ? prevFrame.best_candidate : null;
+    const prev = prevMark || prevBest;
+    if (prev && prev.row === tile.row && prev.col === tile.col) {
+      const px = prev.x != null ? prev.x : prev.tile_x;
+      const py = prev.y != null ? prev.y : prev.tile_y;
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(px, py, 18, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px - 22, py); ctx.lineTo(px + 22, py);
+      ctx.moveTo(px, py - 22); ctx.lineTo(px, py + 22);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = '#888';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('prev', px + 22, py - 22);
+    }
+  }
+
+  // Draw user mark if this is the marked tile
+  const userMark = labUserMarks[frame.frame_idx];
+  if (userMark && userMark.row === tile.row && userMark.col === tile.col) {
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(userMark.x, userMark.y, 20, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(userMark.x - 30, userMark.y); ctx.lineTo(userMark.x + 30, userMark.y);
+    ctx.moveTo(userMark.x, userMark.y - 30); ctx.lineTo(userMark.x, userMark.y + 30);
+    ctx.stroke();
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('YOUR MARK', userMark.x + 25, userMark.y - 25);
+  }
+}
+
+function labTileClick(event) {
+  const canvas = document.getElementById('lab-tile-canvas');
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = 640 / rect.width;
+  const scaleY = 640 / rect.height;
+  const x = Math.round((event.clientX - rect.left) * scaleX);
+  const y = Math.round((event.clientY - rect.top) * scaleY);
+
+  const frame = labManifest.frames[labFrameIdx];
+  const tile = labCurrentTile;
+  if (!frame || !tile) return;
+
+  // Save user mark
+  labUserMarks[frame.frame_idx] = {
+    row: tile.row, col: tile.col, x: x, y: y
+  };
+
+  // Save as feedback
+  const fb = {
+    frame_idx: frame.frame_idx,
+    time_secs: frame.time_secs,
+    action: 'mark_ball',
+    row: tile.row, col: tile.col, x: x, y: y,
+    timestamp: Date.now(),
+  };
+  labFeedback[frame.frame_idx] = fb;
+  fetch(API + '/api/tracking-lab/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fb),
+  }).catch(() => {});
+
+  showToast(`Ball at (${x},${y}) - tap to refine, Correct to advance`);
+  drawLabTileInteractive();
+  drawLabTimeline();
+  updateLabCoverage();
+  labUpdateNotHereBtn();
+}
+
+function labUpdateNotHereBtn() {
+  const btn = document.getElementById('lab-btn-nothere');
+  if (!btn) return;
+  const frame = labManifest.frames[labFrameIdx];
+  const hasUserMark = frame && labUserMarks[frame.frame_idx];
+  btn.textContent = hasUserMark ? 'Clear' : 'Not Here';
+}
+
+function updateLabCoverage() {
+  const covPct = labCoverageWithUserMarks();
+  const covText = document.getElementById('lab-cov-text');
+  const covBar = document.getElementById('lab-cov-bar');
+  if (covText) covText.textContent = covPct + '% tracked';
+  if (covBar) covBar.style.width = covPct + '%';
+}
+
+async function labFeedbackAction(action) {
+  const frame = labManifest.frames[labFrameIdx];
+  if (!frame) return;
+
+  if (action === 'note') {
+    const area = document.getElementById('lab-notes-area');
+    area.style.display = area.style.display === 'none' ? 'block' : 'none';
+    if (area.style.display === 'block') {
+      const existing = labFeedback[frame.frame_idx];
+      if (existing && existing.note) {
+        document.getElementById('lab-note-input').value = existing.note;
+      }
+    }
+    return;
+  }
+
+  if (action === 'wrong') {
+    const hasUserMark = !!labUserMarks[frame.frame_idx];
+    if (hasUserMark) {
+      // Clear mode: just remove the user mark
+      delete labUserMarks[frame.frame_idx];
+      delete labFeedback[frame.frame_idx];
+      showToast('Mark cleared');
+      drawLabTileInteractive();
+      drawLabTimeline();
+      updateLabCoverage();
+      labUpdateNotHereBtn();
+      return;
+    }
+    // Not Here mode: exclude this tile
+    if (labCurrentTile) {
+      const excKey = `${frame.frame_idx}:${labCurrentTile.row}:${labCurrentTile.col}`;
+      labExcluded[excKey] = true;
+      if (frame.best_candidate && frame.best_candidate.row === labCurrentTile.row && frame.best_candidate.col === labCurrentTile.col) {
+        frame.best_candidate = null;
+        frame.has_ball = false;
+      }
+    }
+  }
+
+  const fb = {
+    frame_idx: frame.frame_idx,
+    time_secs: frame.time_secs,
+    action: action,
+    tile: labCurrentTile ? { row: labCurrentTile.row, col: labCurrentTile.col } : null,
+    best_candidate: frame.best_candidate,
+    detection_count: frame.detection_count,
+    timestamp: Date.now(),
+  };
+
+  labFeedback[frame.frame_idx] = fb;
+
+  try {
+    await fetch(API + '/api/tracking-lab/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fb),
+    });
+  } catch {}
+
+  if (action === 'correct') {
+    // Remember tile position for continuity
+    const um = labUserMarks[frame.frame_idx];
+    if (um) {
+      labLastConfirmedTile = { row: um.row, col: um.col };
+    } else if (frame.best_candidate) {
+      labLastConfirmedTile = { row: frame.best_candidate.row, col: frame.best_candidate.col };
+    } else if (labCurrentTile) {
+      labLastConfirmedTile = { row: labCurrentTile.row, col: labCurrentTile.col };
+    }
+    showToast('Marked correct');
+    drawLabTimeline();
+    updateLabCoverage();
+    // Auto-advance to next frame
+    setTimeout(() => {
+      if (labFrameIdx < labManifest.frames.length - 1) {
+        labShowFrame(labFrameIdx + 1);
+      }
+    }, 300);
+    return;
+  } else if (action === 'wrong') {
+    showToast('Not here - excluded');
+    // Auto-advance to next tile
+    labCycleTile(1);
+  }
+
+  drawLabTimeline();
+  updateLabCoverage();
+}
+
+async function labSaveNote() {
+  const frame = labManifest.frames[labFrameIdx];
+  const note = document.getElementById('lab-note-input').value.trim();
+  if (!note || !frame) return;
+
+  const fb = {
+    frame_idx: frame.frame_idx,
+    time_secs: frame.time_secs,
+    action: 'note',
+    note: note,
+    best_candidate: frame.best_candidate,
+    detection_count: frame.detection_count,
+    timestamp: Date.now(),
+  };
+
+  labFeedback[frame.frame_idx] = fb;
+
+  try {
+    await fetch(API + '/api/tracking-lab/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fb),
+    });
+    document.getElementById('lab-note-saved').textContent = 'Note saved!';
+    setTimeout(() => { document.getElementById('lab-note-saved').textContent = ''; }, 2000);
+  } catch {}
+
+  drawLabTimeline();
+}
+
+function drawLabCharts() {
+  const container = document.getElementById('lab-charts');
+  if (!labManifest) return;
+
+  const frames = labManifest.frames;
+  const n = frames.length;
+
+  // Chart 1: Detection count over time
+  container.innerHTML = `
+    <div class="lab-chart-card">
+      <h3>Detections Over Time</h3>
+      <canvas id="lab-chart-dets" height="120"></canvas>
+    </div>
+    <div class="lab-chart-card">
+      <h3>Ball Tracking Coverage</h3>
+      <canvas id="lab-chart-coverage" height="120"></canvas>
+    </div>
+    <div class="lab-chart-card">
+      <h3>Trajectory Length Distribution</h3>
+      <canvas id="lab-chart-trajs" height="120"></canvas>
+    </div>
+  `;
+
+  // Draw detection count chart
+  const detCanvas = document.getElementById('lab-chart-dets');
+  if (detCanvas) {
+    const ctx = detCanvas.getContext('2d');
+    const w = detCanvas.parentElement.clientWidth - 24;
+    detCanvas.width = w * 2;
+    detCanvas.height = 240;
+    detCanvas.style.width = w + 'px';
+    detCanvas.style.height = '120px';
+
+    const cw = detCanvas.width, ch = detCanvas.height;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Bin frames into ~100 buckets
+    const buckets = 100;
+    const bucketSize = Math.ceil(n / buckets);
+    const maxDet = Math.max(...frames.map(f => f.detection_count));
+
+    for (let b = 0; b < buckets; b++) {
+      const start = b * bucketSize;
+      const end = Math.min(start + bucketSize, n);
+      const slice = frames.slice(start, end);
+      const avgDet = slice.reduce((s, f) => s + f.detection_count, 0) / slice.length;
+      const hasBall = slice.filter(f => f.has_ball).length / slice.length;
+
+      const x = (b / buckets) * cw;
+      const bw = cw / buckets;
+
+      // Detection count bar
+      const dh = (avgDet / maxDet) * ch * 0.8;
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(x, ch - dh, bw - 1, dh);
+
+      // Tracked overlay
+      const th = hasBall * ch * 0.8;
+      ctx.fillStyle = '#22c55e80';
+      ctx.fillRect(x, ch - th, bw - 1, th);
+    }
+
+    // Legend
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('gray=all dets  green=tracked', 10, 24);
+  }
+
+  // Draw coverage chart (rolling window)
+  const covCanvas = document.getElementById('lab-chart-coverage');
+  if (covCanvas) {
+    const ctx = covCanvas.getContext('2d');
+    const w = covCanvas.parentElement.clientWidth - 24;
+    covCanvas.width = w * 2;
+    covCanvas.height = 240;
+    covCanvas.style.width = w + 'px';
+    covCanvas.style.height = '120px';
+
+    const cw = covCanvas.width, ch = covCanvas.height;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Rolling coverage (30-frame window)
+    const windowSize = 30;
+    const points = [];
+    for (let i = 0; i < n; i++) {
+      const start = Math.max(0, i - windowSize);
+      const end = Math.min(n, i + windowSize);
+      const slice = frames.slice(start, end);
+      const cov = slice.filter(f => f.has_ball).length / slice.length;
+      points.push(cov);
+    }
+
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const x = (i / points.length) * cw;
+      const y = ch - points[i] * ch * 0.9 - ch * 0.05;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // 90% target line
+    ctx.strokeStyle = '#eab30880';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+    const targetY = ch - 0.9 * ch * 0.9 - ch * 0.05;
+    ctx.beginPath();
+    ctx.moveTo(0, targetY);
+    ctx.lineTo(cw, targetY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#eab308';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('90% target', 10, targetY - 5);
+  }
+
+  // Draw trajectory distribution chart
+  const trajCanvas = document.getElementById('lab-chart-trajs');
+  if (trajCanvas && labManifest.trajectories.length > 0) {
+    const ctx = trajCanvas.getContext('2d');
+    const w = trajCanvas.parentElement.clientWidth - 24;
+    trajCanvas.width = w * 2;
+    trajCanvas.height = 240;
+    trajCanvas.style.width = w + 'px';
+    trajCanvas.style.height = '120px';
+
+    const cw = trajCanvas.width, ch = trajCanvas.height;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Bucket trajectories by length
+    const buckets = [
+      { label: '2-5', min: 2, max: 5 },
+      { label: '6-10', min: 6, max: 10 },
+      { label: '11-20', min: 11, max: 20 },
+      { label: '21-50', min: 21, max: 50 },
+      { label: '51-100', min: 51, max: 100 },
+      { label: '100+', min: 101, max: 99999 },
+    ];
+
+    const trajs = labManifest.trajectories;
+    const bucketCounts = buckets.map(b => ({
+      label: b.label,
+      moving: trajs.filter(t => t.length >= b.min && t.length <= b.max && t.is_moving).length,
+      static: trajs.filter(t => t.length >= b.min && t.length <= b.max && !t.is_moving).length,
+    }));
+
+    const maxCount = Math.max(...bucketCounts.map(b => b.moving + b.static), 1);
+    const barW = cw / bucketCounts.length;
+
+    for (let i = 0; i < bucketCounts.length; i++) {
+      const b = bucketCounts[i];
+      const x = i * barW + barW * 0.1;
+      const bw = barW * 0.8;
+
+      // Static bar
+      const sh = (b.static / maxCount) * ch * 0.75;
+      ctx.fillStyle = '#555';
+      ctx.fillRect(x, ch - sh - ch * 0.12, bw, sh);
+
+      // Moving bar on top
+      const mh = (b.moving / maxCount) * ch * 0.75;
+      ctx.fillStyle = '#22c55e';
+      ctx.fillRect(x, ch - sh - mh - ch * 0.12, bw, mh);
+
+      // Label
+      ctx.fillStyle = '#888';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(b.label, x + bw / 2, ch - 4);
+    }
+
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('green=moving  gray=static', 10, 24);
+  }
+}
+
+async function labLoadMessages() {
+  try {
+    const resp = await fetch(API + '/api/tracking-lab/messages');
+    const msgs = await resp.json();
+    const log = document.getElementById('lab-msg-log');
+    if (!log) return;
+    if (msgs.length === 0) {
+      log.innerHTML = '<span style="opacity:0.5">No messages yet. Tell me what you see!</span>';
+      return;
+    }
+    log.innerHTML = msgs.map(m => {
+      const d = new Date(m.timestamp * 1000);
+      const time = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const frameRef = m.frame_idx != null ? ` <span style="opacity:0.5">[frame ${m.frame_idx}]</span>` : '';
+      const tileRef = m.tile ? ` <span style="opacity:0.5">[r${m.tile.row}c${m.tile.col}]</span>` : '';
+      return `<div style="margin-bottom:4px"><span style="color:var(--blue)">${time}</span>${frameRef}${tileRef} ${m.text}</div>`;
+    }).join('');
+    log.scrollTop = log.scrollHeight;
+  } catch {}
+}
+
+async function labSendMessage() {
+  const input = document.getElementById('lab-msg-input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const frame = labManifest ? labManifest.frames[labFrameIdx] : null;
+  const msg = {
+    text: text,
+    frame_idx: frame ? frame.frame_idx : null,
+    tile: labCurrentTile ? { row: labCurrentTile.row, col: labCurrentTile.col } : null,
+  };
+
+  input.value = '';
+
+  try {
+    await fetch(API + '/api/tracking-lab/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msg),
+    });
+    labLoadMessages();
+  } catch {
+    showToast('Failed to send message');
+  }
+}
 </script>
 </body>
 </html>
