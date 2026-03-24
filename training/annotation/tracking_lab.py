@@ -39,6 +39,7 @@ def build_tracking_lab(
     segment_prefix: str,
     output_dir: Path,
     max_link_distance: float = MAX_LINK_DISTANCE,
+    external_detections: Path | None = None,
 ) -> Path | None:
     """Build a tracking lab session for one segment.
 
@@ -63,28 +64,61 @@ def build_tracking_lab(
 
     # Phase 1: Parse all detections for this segment
     frame_dets: dict[int, list[dict]] = defaultdict(list)
-    for lp in sorted(labels_dir.glob("*.txt")):
-        parsed = parse_tile_filename(lp.stem)
-        if not parsed or parsed[0] != seg_name:
-            continue
-        seg, fi, row, col = parsed
-        for cx_norm, cy_norm, line in _parse_detection(lp):
-            px, py = _tile_to_pano(cx_norm, cy_norm, row, col)
-            parts = line.split()
-            w_norm = float(parts[3]) if len(parts) > 3 else 0.02
-            h_norm = float(parts[4]) if len(parts) > 4 else 0.02
+
+    if external_detections and external_detections.exists():
+        # Load from external detector JSON (panoramic coordinates)
+        with open(external_detections) as f:
+            ext_dets = json.load(f)
+        for d in ext_dets:
+            fi = d["frame_idx"]
+            cx, cy = d["cx"], d["cy"]
+            w = d.get("w", 15)
+            h = d.get("h", 15)
+            # Convert panoramic to tile coords
+            col = max(0, min(6, int(cx / 576)))
+            row = max(0, min(2, int(cy / 580)))
+            tile_x = int(cx - col * 576)
+            tile_y = int(cy - row * 580)
+            tile_x = max(0, min(TILE_SIZE - 1, tile_x))
+            tile_y = max(0, min(TILE_SIZE - 1, tile_y))
             frame_dets[fi].append({
-                "pano_x": round(px, 1),
-                "pano_y": round(py, 1),
+                "pano_x": round(cx, 1),
+                "pano_y": round(cy, 1),
                 "row": row,
                 "col": col,
-                "cx_norm": round(cx_norm, 4),
-                "cy_norm": round(cy_norm, 4),
-                "w_norm": round(w_norm, 4),
-                "h_norm": round(h_norm, 4),
-                "tile_x": int(cx_norm * TILE_SIZE),
-                "tile_y": int(cy_norm * TILE_SIZE),
+                "cx_norm": round(tile_x / TILE_SIZE, 4),
+                "cy_norm": round(tile_y / TILE_SIZE, 4),
+                "w_norm": round(w / TILE_SIZE, 4),
+                "h_norm": round(h / TILE_SIZE, 4),
+                "tile_x": tile_x,
+                "tile_y": tile_y,
+                "conf": d.get("conf", 0),
             })
+        logger.info("Loaded %d external detections", len(ext_dets))
+    else:
+        # Load from bootstrap YOLO tile labels
+        for lp in sorted(labels_dir.glob("*.txt")):
+            parsed = parse_tile_filename(lp.stem)
+            if not parsed or parsed[0] != seg_name:
+                continue
+            seg, fi, row, col = parsed
+            for cx_norm, cy_norm, line in _parse_detection(lp):
+                px, py = _tile_to_pano(cx_norm, cy_norm, row, col)
+                parts = line.split()
+                w_norm = float(parts[3]) if len(parts) > 3 else 0.02
+                h_norm = float(parts[4]) if len(parts) > 4 else 0.02
+                frame_dets[fi].append({
+                    "pano_x": round(px, 1),
+                    "pano_y": round(py, 1),
+                    "row": row,
+                    "col": col,
+                    "cx_norm": round(cx_norm, 4),
+                    "cy_norm": round(cy_norm, 4),
+                    "w_norm": round(w_norm, 4),
+                    "h_norm": round(h_norm, 4),
+                    "tile_x": int(cx_norm * TILE_SIZE),
+                    "tile_y": int(cy_norm * TILE_SIZE),
+                })
 
     # Phase 2: Find all frame timestamps (including no-detection frames)
     all_frame_indices = set()
@@ -399,6 +433,12 @@ def main():
         default=Path("review_packets/tracking_lab"),
         help="Output directory for the lab session",
     )
+    parser.add_argument(
+        "--detections",
+        type=Path,
+        default=None,
+        help="External detections JSON (panoramic coords, pre-filtered)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -409,6 +449,7 @@ def main():
         game_id=args.game,
         segment_prefix=args.segment,
         output_dir=args.output,
+        external_detections=args.detections,
     )
 
 
