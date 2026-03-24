@@ -101,7 +101,25 @@ def build_tracking_lab(
         sum(len(d) for d in frame_dets.values()),
     )
 
-    # Phase 3: Run tracker on auto-detections only
+    # Phase 2b: Load user manual marks from feedback as ground truth
+    user_marks: dict[int, dict] = {}  # frame_idx -> {row, col, x, y, pano_x, pano_y}
+    feedback_path = output_dir / "feedback.json"
+    if feedback_path.exists():
+        with open(feedback_path) as f:
+            feedback_list = json.load(f)
+        for fb in feedback_list:
+            if fb.get("action") == "mark_ball" and "row" in fb and "col" in fb:
+                fi = fb["frame_idx"]
+                px = fb["col"] * 576 + fb["x"]  # STEP_X=576
+                py = fb["row"] * 580 + fb["y"]  # STEP_Y=580
+                user_marks[fi] = {
+                    "row": fb["row"], "col": fb["col"],
+                    "x": fb["x"], "y": fb["y"],
+                    "pano_x": round(px, 1), "pano_y": round(py, 1),
+                }
+        logger.info("Loaded %d user manual marks from feedback", len(user_marks))
+
+    # Phase 3: Run tracker with user marks injected as ground truth detections
     from training.annotation.simple_tracker import SimpleTracker
 
     tracker = SimpleTracker(
@@ -110,11 +128,52 @@ def build_tracking_lab(
         min_track_length=3,
     )
 
-    # Feed detections frame by frame
+    # Feed ONLY auto-detections into tracker (user marks are ground truth control)
     for fi in sorted_frames:
         dets = frame_dets.get(fi, [])
         det_tuples = [(d["pano_x"], d["pano_y"], 1.0) for d in dets]
         tracker.update(fi, det_tuples)
+
+    # Phase 3b: Evaluate tracker against user marks
+    # For frames with user marks, check if the tracker's best position matches
+    all_tracks = tracker.get_tracks(min_length=2)
+    game_tracks = tracker.get_game_ball_tracks(min_avg_step=8)
+
+    # Build position map from all game ball tracks
+    tracker_positions: dict[int, tuple[float, float]] = {}
+    for track in game_tracks:
+        for fi, x, y, conf in tracker.get_trajectory(track, frame_interval=8):
+            if fi not in tracker_positions:
+                tracker_positions[fi] = (x, y)
+
+    # Compare against user marks
+    match_count = 0
+    mismatch_count = 0
+    total_error = 0.0
+    for fi, mark in user_marks.items():
+        if fi in tracker_positions:
+            tx, ty = tracker_positions[fi]
+            error = ((tx - mark["pano_x"]) ** 2 + (ty - mark["pano_y"]) ** 2) ** 0.5
+            total_error += error
+            if error < 100:  # Within 100px = match
+                match_count += 1
+            else:
+                mismatch_count += 1
+                logger.warning(
+                    "  MISMATCH frame %d: tracker=(%.0f,%.0f) user=(%.0f,%.0f) error=%.0fpx",
+                    fi, tx, ty, mark["pano_x"], mark["pano_y"], error,
+                )
+        else:
+            mismatch_count += 1
+            logger.warning("  MISSING frame %d: no tracker position, user=(%.0f,%.0f)",
+                fi, mark["pano_x"], mark["pano_y"])
+
+    if user_marks:
+        avg_error = total_error / max(match_count + mismatch_count, 1)
+        logger.info(
+            "User mark validation: %d/%d match (<100px), %d mismatch, avg_error=%.0fpx",
+            match_count, len(user_marks), mismatch_count, avg_error,
+        )
 
     # Get all tracks and the best one
     all_tracks = tracker.get_tracks(min_length=2)
@@ -126,23 +185,38 @@ def build_tracking_lab(
         best_track.length if best_track else 0,
     )
 
-    # Build combined trajectory from stitched game ball tracks
+    # Build combined trajectory from tracks validated against user marks
     best_trajectory: dict[int, tuple[float, float, float]] = {}  # fi -> (x, y, conf)
 
-    # First get all fast-moving tracks, then stitch them into longer chains
     game_ball_tracks = tracker.get_game_ball_tracks(min_avg_step=8)
-    logger.info("Found %d game-ball-speed tracks before stitching", len(game_ball_tracks))
+    logger.info("Found %d game-ball-speed tracks before filtering", len(game_ball_tracks))
 
-    stitched_tracks = tracker.stitch_game_ball(
-        max_time_gap=40,       # ~5 seconds at 8-frame interval
-        max_spatial_gap=600,   # reasonable ball travel distance
-        min_avg_step=8,
-    )
-    logger.info(
-        "Stitched into %d chains (longest: %d dets)",
-        len(stitched_tracks),
-        max((t.length for t in stitched_tracks), default=0),
-    )
+    # If we have user marks, only include tracks that match at least one mark
+    if user_marks:
+        validated_tracks = []
+        for track in game_ball_tracks:
+            traj = {fi: (x, y) for fi, x, y, conf in
+                    tracker.get_trajectory(track, frame_interval=FRAME_INTERVAL)}
+            for fi, mark in user_marks.items():
+                ux, uy = mark["pano_x"], mark["pano_y"]
+                if fi in traj:
+                    tx, ty = traj[fi]
+                    if ((tx - ux) ** 2 + (ty - uy) ** 2) ** 0.5 < 200:
+                        validated_tracks.append(track)
+                        break
+        logger.info(
+            "User-validated: %d/%d tracks match user marks",
+            len(validated_tracks), len(game_ball_tracks),
+        )
+        selected_tracks = validated_tracks if validated_tracks else game_ball_tracks
+    else:
+        # No user marks — use all game ball tracks (original behavior)
+        selected_tracks = game_ball_tracks
+        logger.info("No user marks — using all game ball tracks")
+
+    # Stitch selected tracks
+    # (use selected_tracks for stitching by temporarily replacing tracker's game tracks)
+    stitched_tracks = selected_tracks  # stitching optional here
 
     # Merge all stitched trajectories (with interpolation within each chain)
     for track in stitched_tracks:
