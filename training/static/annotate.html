@@ -1494,6 +1494,7 @@ function renderTrackingLab() {
     <div class="lab-actions">
       <button class="lab-btn-correct" onclick="labFeedbackAction('correct')">Correct</button>
       <button class="lab-btn-wrong" id="lab-btn-nothere" onclick="labFeedbackAction('wrong')">Not Here</button>
+      <button style="background:#3b3b1d;color:#eab308;flex:1;padding:10px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="labFeedbackAction('occluded')">Can't Tell</button>
       <button class="lab-btn-note" onclick="labFeedbackAction('note')">Note</button>
     </div>
     <div class="lab-notes" id="lab-notes-area" style="display:none">
@@ -1567,7 +1568,7 @@ function drawLabTimeline() {
     // Show feedback markers
     if (labFeedback[f.frame_idx]) {
       const fb = labFeedback[f.frame_idx];
-      ctx.fillStyle = fb.action === 'correct' ? '#4ade80' : fb.action === 'mark_ball' ? '#f59e0b' : fb.action === 'wrong' ? '#f87171' : '#60a5fa';
+      ctx.fillStyle = fb.action === 'correct' ? '#4ade80' : fb.action === 'mark_ball' ? '#f59e0b' : fb.action === 'wrong' ? '#f87171' : fb.action === 'occluded' ? '#eab308' : '#60a5fa';
       ctx.fillRect(x, h * 0.7, pw, h * 0.3);
     }
   }
@@ -1945,6 +1946,17 @@ async function labFeedbackAction(action) {
     showToast('Not here - excluded');
     // Auto-advance to next tile
     labCycleTile(1);
+  } else if (action === 'occluded') {
+    showToast('Marked as occluded/not visible');
+    drawLabTimeline();
+    updateLabCoverage();
+    // Auto-advance to next frame
+    setTimeout(() => {
+      if (labFrameIdx < labManifest.frames.length - 1) {
+        labShowFrame(labFrameIdx + 1);
+      }
+    }, 300);
+    return;
   }
 
   drawLabTimeline();
