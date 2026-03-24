@@ -593,7 +593,15 @@ async def get_tracking_lab_tile(frame_idx: int, row: int, col: int):
         tile_path = tiles_root / (base + ".excluded")
     if not tile_path.exists():
         raise HTTPException(404, f"Tile not found: {base}")
-    return FileResponse(tile_path, media_type="image/jpeg")
+    return FileResponse(
+        tile_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/tracking-lab/tiles/{frame_idx}")
@@ -673,6 +681,46 @@ async def post_lab_message(message: dict):
         json.dump(existing, f, indent=2)
 
     return {"status": "saved", "total": len(existing)}
+
+
+@app.post("/api/tracking-lab/regenerate")
+async def regenerate_tracking_lab():
+    """Regenerate the tracking lab manifest using current feedback."""
+    manifest_path = TRACKING_LAB_DIR / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "No tracking lab session")
+    with open(manifest_path) as f:
+        old = json.load(f)
+
+    from training.annotation.tracking_lab import build_tracking_lab
+
+    game_id = old["game_id"]
+    segment = old.get("segment_prefix", old["segment"][:17])
+
+    # Find external detections file
+    det_files = sorted(Path("F:/training_data").glob("ext_detections_*_clean.json"))
+    ext_det = det_files[-1] if det_files else None
+
+    result = await asyncio.to_thread(
+        build_tracking_lab,
+        tiles_dir=Path("F:/training_data/tiles_640") / game_id,
+        labels_dir=Path("F:/training_data/labels_640_filtered") / game_id,
+        game_id=game_id,
+        segment_prefix=segment,
+        output_dir=TRACKING_LAB_DIR,
+        external_detections=ext_det,
+    )
+
+    if result:
+        with open(result) as f:
+            manifest = json.load(f)
+        return {
+            "status": "regenerated",
+            "tracked_frames": manifest["tracked_frames"],
+            "total_frames": manifest["total_frames"],
+            "coverage_pct": manifest["coverage_pct"],
+        }
+    return {"status": "failed"}
 
 
 @app.get("/sw.js")

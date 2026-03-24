@@ -1482,7 +1482,10 @@ function renderTrackingLab() {
 
     <div class="lab-info" id="lab-info"></div>
     <div class="lab-tile-view" id="lab-tile-view">
-      <canvas id="lab-tile-canvas" width="640" height="640" onclick="labTileClick(event)"></canvas>
+      <canvas id="lab-tile-canvas" width="640" height="640"
+        ontouchstart="labTilePointerDown(event)" ontouchmove="labTilePointerMove(event)" ontouchend="labTilePointerUp(event)"
+        onpointerdown="labTilePointerDown(event)" onpointermove="labTilePointerMove(event)" onpointerup="labTilePointerUp(event)"
+        style="touch-action:none"></canvas>
     </div>
 
     <div style="display:flex;gap:6px;padding:4px 14px;justify-content:center">
@@ -1597,6 +1600,10 @@ function labTimelineTouch(e) {
 }
 
 function labNavFrame(delta) {
+  // Remember current tile position before navigating
+  if (labCurrentTile) {
+    labLastConfirmedTile = { row: labCurrentTile.row, col: labCurrentTile.col };
+  }
   const newIdx = Math.max(0, Math.min(labManifest.frames.length - 1, labFrameIdx + delta));
   labShowFrame(newIdx);
 }
@@ -1709,7 +1716,8 @@ function labLoadCurrentTile() {
     labTileImg = img;
     drawLabTileInteractive();
   };
-  img.src = `/api/tracking-lab/tile/${frame.frame_idx}?row=${tile.row}&col=${tile.col}`;
+  const seg = labManifest.segment || '';
+  img.src = `/api/tracking-lab/tile/${frame.frame_idx}?row=${tile.row}&col=${tile.col}&seg=${encodeURIComponent(seg)}`;
 }
 
 function drawLabTileInteractive() {
@@ -1807,43 +1815,110 @@ function drawLabTileInteractive() {
   }
 }
 
-function labTileClick(event) {
+let labDragging = false;
+let labMarksSinceRegen = 0;
+let labRegenerating = false;
+
+function labGetTileCoords(event) {
   const canvas = document.getElementById('lab-tile-canvas');
   const rect = canvas.getBoundingClientRect();
   const scaleX = 640 / rect.width;
   const scaleY = 640 / rect.height;
-  const x = Math.round((event.clientX - rect.left) * scaleX);
-  const y = Math.round((event.clientY - rect.top) * scaleY);
+  let clientX, clientY;
+  if (event.touches && event.touches.length > 0) {
+    clientX = event.touches[0].clientX;
+    clientY = event.touches[0].clientY;
+  } else if (event.changedTouches && event.changedTouches.length > 0) {
+    clientX = event.changedTouches[0].clientX;
+    clientY = event.changedTouches[0].clientY;
+  } else {
+    clientX = event.clientX;
+    clientY = event.clientY;
+  }
+  return {
+    x: Math.max(0, Math.min(639, Math.round((clientX - rect.left) * scaleX))),
+    y: Math.max(0, Math.min(639, Math.round((clientY - rect.top) * scaleY))),
+  };
+}
 
+function labTilePointerDown(event) {
+  event.preventDefault();
+  labDragging = true;
+  const {x, y} = labGetTileCoords(event);
+  labPlaceMark(x, y);
+}
+
+function labTilePointerMove(event) {
+  if (!labDragging) return;
+  event.preventDefault();
+  const {x, y} = labGetTileCoords(event);
+  labPlaceMark(x, y);
+}
+
+function labTilePointerUp(event) {
+  if (!labDragging) return;
+  labDragging = false;
+  const {x, y} = labGetTileCoords(event);
+  labPlaceMark(x, y, true);
+}
+
+function labPlaceMark(x, y, save) {
   const frame = labManifest.frames[labFrameIdx];
   const tile = labCurrentTile;
   if (!frame || !tile) return;
 
-  // Save user mark
   labUserMarks[frame.frame_idx] = {
     row: tile.row, col: tile.col, x: x, y: y
   };
 
-  // Save as feedback
-  const fb = {
-    frame_idx: frame.frame_idx,
-    time_secs: frame.time_secs,
-    action: 'mark_ball',
-    row: tile.row, col: tile.col, x: x, y: y,
-    timestamp: Date.now(),
-  };
-  labFeedback[frame.frame_idx] = fb;
-  fetch(API + '/api/tracking-lab/feedback', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(fb),
-  }).catch(() => {});
-
-  showToast(`Ball at (${x},${y}) - tap to refine, Correct to advance`);
   drawLabTileInteractive();
-  drawLabTimeline();
-  updateLabCoverage();
-  labUpdateNotHereBtn();
+
+  if (save) {
+    const fb = {
+      frame_idx: frame.frame_idx,
+      time_secs: frame.time_secs,
+      action: 'mark_ball',
+      row: tile.row, col: tile.col, x: x, y: y,
+      timestamp: Date.now(),
+    };
+    labFeedback[frame.frame_idx] = fb;
+    fetch(API + '/api/tracking-lab/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fb),
+    }).catch(() => {});
+
+    showToast(`Ball at (${x},${y})`);
+    drawLabTimeline();
+    updateLabCoverage();
+    labUpdateNotHereBtn();
+
+    // Auto-regenerate guide path every 10 marks
+    labMarksSinceRegen++;
+    if (labMarksSinceRegen >= 10 && !labRegenerating) {
+      labRegenerate();
+    }
+  }
+}
+
+async function labRegenerate() {
+  labRegenerating = true;
+  labMarksSinceRegen = 0;
+  showToast('Regenerating guide path...');
+  try {
+    const resp = await fetch(API + '/api/tracking-lab/regenerate', { method: 'POST' });
+    const data = await resp.json();
+    if (data.status === 'regenerated') {
+      // Reload manifest
+      const mResp = await fetch(API + '/api/tracking-lab');
+      labManifest = await mResp.json();
+      showToast(`Guide updated: ${data.coverage_pct}% tracked`);
+      drawLabTimeline();
+    }
+  } catch (e) {
+    showToast('Regen failed: ' + e.message);
+  }
+  labRegenerating = false;
 }
 
 function labUpdateNotHereBtn() {

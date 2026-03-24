@@ -209,9 +209,19 @@ def build_tracking_lab(
                 # No detection near guide — use interpolated position as prediction
                 guided_results[fi] = (gx, gy, 0.0)
 
-    logger.info("Guided selection: %d detection matches + %d interpolated + %d user marks",
-                matched_count, len(guide_positions) - matched_count - len(user_marks),
-                len(user_marks))
+    # Fallback: for frames outside the guide range, show highest-confidence detection
+    for fi in sorted_frames:
+        if fi not in guided_results:
+            dets = frame_dets.get(fi, [])
+            if dets:
+                best = max(dets, key=lambda d: d.get("conf", 0))
+                guided_results[fi] = (best["pano_x"], best["pano_y"], best.get("conf", 0.5))
+
+    logger.info("Guided selection: %d detection matches + %d interpolated + %d user marks + %d fallback",
+                matched_count,
+                max(0, len(guide_positions) - matched_count - len(user_marks)),
+                len(user_marks),
+                len(guided_results) - matched_count - len(user_marks))
 
     # Backwards compatibility: build tracker_positions from guided results
     tracker_positions = {fi: (x, y) for fi, (x, y, _) in guided_results.items()}
