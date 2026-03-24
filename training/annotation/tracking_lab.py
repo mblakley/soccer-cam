@@ -153,32 +153,68 @@ def build_tracking_lab(
                 }
         logger.info("Loaded %d user manual marks from feedback", len(user_marks))
 
-    # Phase 3: Run tracker with user marks injected as ground truth detections
-    from training.annotation.simple_tracker import SimpleTracker
+    # Phase 3: User-guided detection selection
+    # Instead of a blind tracker that commits to one hypothesis,
+    # interpolate between user marks and pick the nearest detection.
+    # This gets better as the user marks more frames.
 
-    tracker = SimpleTracker(
-        gate_distance=300,     # 300px gate for following ball through kicks
-        max_missing=90,        # Predict through ~30 seconds of no detections
-        min_track_length=3,
+    # Build guide path by interpolating between user marks
+    guide_positions: dict[int, tuple[float, float]] = {}
+    sorted_mark_items = sorted(
+        ((fi, m["pano_x"], m["pano_y"]) for fi, m in user_marks.items())
     )
 
-    # Feed ONLY auto-detections into tracker (user marks are ground truth control)
+    if len(sorted_mark_items) >= 2:
+        for i in range(len(sorted_mark_items) - 1):
+            fi_a, xa, ya = sorted_mark_items[i]
+            fi_b, xb, yb = sorted_mark_items[i + 1]
+            for fi in range(fi_a, fi_b + 1, FRAME_INTERVAL):
+                t = (fi - fi_a) / max(fi_b - fi_a, 1)
+                guide_positions[fi] = (xa + t * (xb - xa), ya + t * (yb - ya))
+    elif len(sorted_mark_items) == 1:
+        fi_a, xa, ya = sorted_mark_items[0]
+        guide_positions[fi_a] = (xa, ya)
+
+    logger.info("Guide path: %d interpolated positions from %d marks",
+                len(guide_positions), len(user_marks))
+
+    # For each frame, pick the detection closest to the guide (if within range)
+    GUIDE_RADIUS = 300  # Accept detections within 300px of guide position
+    guided_results: dict[int, tuple[float, float, float]] = {}  # fi -> (x, y, conf)
+
+    matched_count = 0
     for fi in sorted_frames:
-        dets = frame_dets.get(fi, [])
-        det_tuples = [(d["pano_x"], d["pano_y"], 1.0) for d in dets]
-        tracker.update(fi, det_tuples)
+        # User marks are always included as-is
+        if fi in user_marks:
+            m = user_marks[fi]
+            guided_results[fi] = (m["pano_x"], m["pano_y"], 1.0)
+            continue
 
-    # Phase 3b: Evaluate tracker against user marks
-    # For frames with user marks, check if the tracker's best position matches
-    all_tracks = tracker.get_tracks(min_length=2)
-    game_tracks = tracker.get_game_ball_tracks(min_avg_step=8)
+        # If we have a guide position, find nearest detection
+        if fi in guide_positions:
+            gx, gy = guide_positions[fi]
+            dets = frame_dets.get(fi, [])
+            best = None
+            best_dist = float("inf")
+            for d in dets:
+                dist = ((d["pano_x"] - gx) ** 2 + (d["pano_y"] - gy) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best = d
 
-    # Build position map from all game ball tracks
-    tracker_positions: dict[int, tuple[float, float]] = {}
-    for track in game_tracks:
-        for fi, x, y, conf in tracker.get_trajectory(track, frame_interval=8):
-            if fi not in tracker_positions:
-                tracker_positions[fi] = (x, y)
+            if best and best_dist < GUIDE_RADIUS:
+                guided_results[fi] = (best["pano_x"], best["pano_y"], 0.5)
+                matched_count += 1
+            else:
+                # No detection near guide — use interpolated position as prediction
+                guided_results[fi] = (gx, gy, 0.0)
+
+    logger.info("Guided selection: %d detection matches + %d interpolated + %d user marks",
+                matched_count, len(guide_positions) - matched_count - len(user_marks),
+                len(user_marks))
+
+    # Backwards compatibility: build tracker_positions from guided results
+    tracker_positions = {fi: (x, y) for fi, (x, y, _) in guided_results.items()}
 
     # Compare against user marks
     match_count = 0
@@ -209,54 +245,10 @@ def build_tracking_lab(
             match_count, len(user_marks), mismatch_count, avg_error,
         )
 
-    # Get all tracks and the best one
-    all_tracks = tracker.get_tracks(min_length=2)
-    best_track = tracker.get_best_track()
-
-    logger.info(
-        "Kalman tracker: %d tracks, best has %d detections",
-        len(all_tracks),
-        best_track.length if best_track else 0,
-    )
-
-    # Build combined trajectory from tracks validated against user marks
-    best_trajectory: dict[int, tuple[float, float, float]] = {}  # fi -> (x, y, conf)
-
-    game_ball_tracks = tracker.get_game_ball_tracks(min_avg_step=8)
-    logger.info("Found %d game-ball-speed tracks before filtering", len(game_ball_tracks))
-
-    # If we have user marks, only include tracks that match at least one mark
-    if user_marks:
-        validated_tracks = []
-        for track in game_ball_tracks:
-            traj = {fi: (x, y) for fi, x, y, conf in
-                    tracker.get_trajectory(track, frame_interval=FRAME_INTERVAL)}
-            for fi, mark in user_marks.items():
-                ux, uy = mark["pano_x"], mark["pano_y"]
-                if fi in traj:
-                    tx, ty = traj[fi]
-                    if ((tx - ux) ** 2 + (ty - uy) ** 2) ** 0.5 < 200:
-                        validated_tracks.append(track)
-                        break
-        logger.info(
-            "User-validated: %d/%d tracks match user marks",
-            len(validated_tracks), len(game_ball_tracks),
-        )
-        selected_tracks = validated_tracks if validated_tracks else game_ball_tracks
-    else:
-        # No user marks — use all game ball tracks (original behavior)
-        selected_tracks = game_ball_tracks
-        logger.info("No user marks — using all game ball tracks")
-
-    # Stitch selected tracks
-    # (use selected_tracks for stitching by temporarily replacing tracker's game tracks)
-    stitched_tracks = selected_tracks  # stitching optional here
-
-    # Merge all stitched trajectories (with interpolation within each chain)
-    for track in stitched_tracks:
-        for fi, x, y, conf in tracker.get_trajectory(track, frame_interval=FRAME_INTERVAL):
-            if fi not in best_trajectory:
-                best_trajectory[fi] = (x, y, conf)
+    best_trajectory = guided_results
+    all_tracks = []
+    best_track = None
+    # (user marks + interpolated guide + matched detections)
 
     # Build summary of all tracks
     trajectory_list = []
