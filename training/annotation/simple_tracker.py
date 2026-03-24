@@ -226,3 +226,148 @@ class SimpleTracker:
                     trajectory.append((fi, prev_det.x + track.vx * dt, prev_det.y + track.vy * dt, 0.0))
 
         return trajectory
+
+    def get_game_ball_tracks(
+        self, min_avg_step: float = 8.0
+    ) -> list[SimpleTrack]:
+        """Get all tracks that move fast enough to be the game ball."""
+        result = []
+        for t in self.get_tracks():
+            if len(t.detections) < 2:
+                continue
+            total_path = sum(
+                ((t.detections[i].x - t.detections[i - 1].x) ** 2
+                 + (t.detections[i].y - t.detections[i - 1].y) ** 2) ** 0.5
+                for i in range(1, len(t.detections))
+            )
+            if total_path / len(t.detections) >= min_avg_step:
+                result.append(t)
+        return result
+
+    def stitch_game_ball(
+        self,
+        max_time_gap: int = 40,
+        max_spatial_gap: float = 600.0,
+        min_avg_step: float = 8.0,
+    ) -> list[SimpleTrack]:
+        """Stitch game ball track fragments into longer chains.
+
+        After tracking, the game ball creates many short tracks (25-50 frames)
+        because the detector loses it briefly (occlusion, tile boundary, etc).
+        This method chains those fragments together when they're close enough
+        in time and space to be the same ball.
+
+        Args:
+            max_time_gap: Maximum frame gap between end of one track and
+                start of next (40 = ~5 seconds at 8-frame interval)
+            max_spatial_gap: Maximum panoramic pixel distance between
+                the end of one track and start of the next
+            min_avg_step: Minimum average displacement per detection to
+                qualify as a game ball track
+
+        Returns:
+            List of stitched tracks (may be fewer and longer than input)
+        """
+        candidates = self.get_game_ball_tracks(min_avg_step)
+        if not candidates:
+            return []
+
+        # Sort by first detection frame
+        candidates.sort(key=lambda t: t.detections[0].frame_idx)
+
+        stitched = []
+        used = [False] * len(candidates)
+
+        for i in range(len(candidates)):
+            if used[i]:
+                continue
+
+            chain = candidates[i]
+            used[i] = True
+
+            # Greedily extend the chain forward
+            changed = True
+            while changed:
+                changed = False
+                chain_end = chain.detections[-1]
+                end_fi = chain_end.frame_idx
+                end_x, end_y = chain_end.x, chain_end.y
+                # Use velocity to predict where the ball will be
+                pred_x = end_x + chain.vx * 8  # one frame step prediction
+                pred_y = end_y + chain.vy * 8
+
+                best_j = -1
+                best_time_gap = float("inf")
+
+                for j in range(len(candidates)):
+                    if used[j]:
+                        continue
+                    cand = candidates[j]
+                    cand_start = cand.detections[0]
+                    start_fi = cand_start.frame_idx
+
+                    time_gap = start_fi - end_fi
+
+                    # Allow negative gaps (overlapping tracks from adjacent tiles)
+                    # and positive gaps (ball briefly lost)
+                    if time_gap > max_time_gap:
+                        continue
+                    # For overlapping tracks, check if they're near each other
+                    # at their overlap point
+                    if time_gap < -max_time_gap:
+                        continue
+
+                    if time_gap > 0:
+                        # Forward gap: check predicted distance
+                        steps = max(time_gap / 8, 1)
+                        dx = cand_start.x - pred_x
+                        dy = cand_start.y - pred_y
+                        spatial_dist = (dx**2 + dy**2) ** 0.5
+                        effective_max = min(max_spatial_gap, 100 * steps)
+                    else:
+                        # Overlapping: check distance between endpoints
+                        # that are closest in time
+                        dx = cand_start.x - end_x
+                        dy = cand_start.y - end_y
+                        spatial_dist = (dx**2 + dy**2) ** 0.5
+                        effective_max = 200  # overlapping tracks should be close
+
+                    if spatial_dist > effective_max:
+                        continue
+
+                    # Prefer smallest absolute time gap
+                    abs_gap = abs(time_gap)
+                    if abs_gap < best_time_gap:
+                        best_time_gap = abs_gap
+                        best_j = j
+
+                if best_j >= 0:
+                    # Merge: combine detections, deduplicate by frame
+                    all_dets = chain.detections + candidates[best_j].detections
+                    # Keep one detection per frame (prefer from the longer track)
+                    by_frame: dict[int, SimpleDetection] = {}
+                    for d in all_dets:
+                        if d.frame_idx not in by_frame:
+                            by_frame[d.frame_idx] = d
+                    merged_dets = sorted(by_frame.values(), key=lambda d: d.frame_idx)
+                    new_chain = SimpleTrack(
+                        track_id=chain.track_id,
+                        detections=merged_dets,
+                        x=merged_dets[-1].x,
+                        y=merged_dets[-1].y,
+                    )
+                    # Recompute velocity from last few detections
+                    if len(merged_dets) >= 2:
+                        d_prev = merged_dets[-2]
+                        d_last = merged_dets[-1]
+                        dt = d_last.frame_idx - d_prev.frame_idx
+                        if dt > 0:
+                            new_chain.vx = (d_last.x - d_prev.x) / dt
+                            new_chain.vy = (d_last.y - d_prev.y) / dt
+                    chain = new_chain
+                    used[best_j] = True
+                    changed = True
+
+            stitched.append(chain)
+
+        return stitched

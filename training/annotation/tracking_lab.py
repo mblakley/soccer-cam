@@ -126,31 +126,26 @@ def build_tracking_lab(
         best_track.length if best_track else 0,
     )
 
-    # Build combined trajectory from ALL fast-moving tracks (not just the best)
-    # This captures all game ball fragments even when the tracker loses the ball
+    # Build combined trajectory from stitched game ball tracks
     best_trajectory: dict[int, tuple[float, float, float]] = {}  # fi -> (x, y, conf)
 
-    # Collect all moving tracks with decent average velocity
-    game_ball_tracks = []
-    for track in all_tracks:
-        if len(track.detections) < 2:
-            continue
-        total_path = sum(
-            ((track.detections[i].x - track.detections[i - 1].x) ** 2
-             + (track.detections[i].y - track.detections[i - 1].y) ** 2) ** 0.5
-            for i in range(1, len(track.detections))
-        )
-        avg_step = total_path / len(track.detections)
-        if avg_step >= 8:  # Fast enough to be a game ball
-            game_ball_tracks.append(track)
+    # First get all fast-moving tracks, then stitch them into longer chains
+    game_ball_tracks = tracker.get_game_ball_tracks(min_avg_step=8)
+    logger.info("Found %d game-ball-speed tracks before stitching", len(game_ball_tracks))
 
+    stitched_tracks = tracker.stitch_game_ball(
+        max_time_gap=40,       # ~5 seconds at 8-frame interval
+        max_spatial_gap=600,   # reasonable ball travel distance
+        min_avg_step=8,
+    )
     logger.info(
-        "Found %d game-ball-speed tracks (avg_step >= 8px/f)",
-        len(game_ball_tracks),
+        "Stitched into %d chains (longest: %d dets)",
+        len(stitched_tracks),
+        max((t.length for t in stitched_tracks), default=0),
     )
 
-    # Merge all their trajectories (with interpolation within each track)
-    for track in game_ball_tracks:
+    # Merge all stitched trajectories (with interpolation within each chain)
+    for track in stitched_tracks:
         for fi, x, y, conf in tracker.get_trajectory(track, frame_interval=FRAME_INTERVAL):
             if fi not in best_trajectory:
                 best_trajectory[fi] = (x, y, conf)
