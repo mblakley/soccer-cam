@@ -165,12 +165,59 @@ def build_tracking_lab(
     )
 
     if len(sorted_mark_items) >= 2:
+        # Interpolate between consecutive marks
         for i in range(len(sorted_mark_items) - 1):
             fi_a, xa, ya = sorted_mark_items[i]
             fi_b, xb, yb = sorted_mark_items[i + 1]
             for fi in range(fi_a, fi_b + 1, FRAME_INTERVAL):
                 t = (fi - fi_a) / max(fi_b - fi_a, 1)
                 guide_positions[fi] = (xa + t * (xb - xa), ya + t * (yb - ya))
+
+        # Extrapolate FORWARD from last mark using recent velocity
+        last_fi, last_x, last_y = sorted_mark_items[-1]
+        if len(sorted_mark_items) >= 3:
+            prev_fi, prev_x, prev_y = sorted_mark_items[-3]
+        else:
+            prev_fi, prev_x, prev_y = sorted_mark_items[-2]
+        dt = last_fi - prev_fi
+        if dt > 0:
+            vx = (last_x - prev_x) / dt * FRAME_INTERVAL
+            vy = (last_y - prev_y) / dt * FRAME_INTERVAL
+            # Extrapolate up to 30 frames (~10 seconds) with decaying confidence
+            for step in range(1, 31):
+                fi = last_fi + step * FRAME_INTERVAL
+                if fi > sorted_frames[-1]:
+                    break
+                # Velocity decays over time (ball slows down)
+                decay = 0.9 ** step
+                ex = last_x + vx * step * decay
+                ey = last_y + vy * step * decay
+                # Clamp to field bounds
+                ex = max(0, min(4096, ex))
+                ey = max(0, min(1800, ey))
+                guide_positions[fi] = (ex, ey)
+
+        # Extrapolate BACKWARD from first mark
+        first_fi, first_x, first_y = sorted_mark_items[0]
+        if len(sorted_mark_items) >= 3:
+            next_fi, next_x, next_y = sorted_mark_items[2]
+        else:
+            next_fi, next_x, next_y = sorted_mark_items[1]
+        dt = next_fi - first_fi
+        if dt > 0:
+            vx = (first_x - next_x) / dt * FRAME_INTERVAL
+            vy = (first_y - next_y) / dt * FRAME_INTERVAL
+            for step in range(1, 31):
+                fi = first_fi - step * FRAME_INTERVAL
+                if fi < 0:
+                    break
+                decay = 0.9 ** step
+                ex = first_x + vx * step * decay
+                ey = first_y + vy * step * decay
+                ex = max(0, min(4096, ex))
+                ey = max(0, min(1800, ey))
+                guide_positions[fi] = (ex, ey)
+
     elif len(sorted_mark_items) == 1:
         fi_a, xa, ya = sorted_mark_items[0]
         guide_positions[fi_a] = (xa, ya)
@@ -179,7 +226,7 @@ def build_tracking_lab(
                 len(guide_positions), len(user_marks))
 
     # For each frame, pick the detection closest to the guide (if within range)
-    GUIDE_RADIUS = 300  # Accept detections within 300px of guide position
+    GUIDE_RADIUS = 500  # Accept detections within 500px (ball moves fast during kicks)
     guided_results: dict[int, tuple[float, float, float]] = {}  # fi -> (x, y, conf)
 
     matched_count = 0
