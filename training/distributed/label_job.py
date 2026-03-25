@@ -208,19 +208,16 @@ def run_label_job(
     """Run labeling on all segments in a video directory."""
     providers = []
     if use_gpu:
-        # Try to set up CUDA DLLs
-        try:
-            import ultralytics  # noqa: sets up CUDA DLL paths on Windows
-        except ImportError:
-            pass
         providers.append("CUDAExecutionProvider")
+        providers.append("DmlExecutionProvider")
     providers.append("CPUExecutionProvider")
 
     sess = ort.InferenceSession(str(model_path), providers=providers)
     actual = sess.get_providers()
     logger.info("ONNX providers: %s", actual)
 
-    segments = sorted([p for p in video_dir.glob("*.mp4") if "[F][0@0]" in p.name])
+    # Search for segment videos (may be in subdirectories for tournaments)
+    segments = sorted([p for p in video_dir.rglob("*.mp4") if "[F][0@0]" in p.name])
     if not segments:
         logger.error("No segments found in %s", video_dir)
         return
