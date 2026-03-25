@@ -119,16 +119,28 @@ def detect_balls(
         conf_threshold, nms_iou,
     )
 
+    # Get mask coefficients from output[2] for surviving detections
+    mask_data = outputs[2][0] if len(outputs) > 2 else None  # (N, 33)
+
     results = []
     for i in indices:
         row = filtered[i]
-        results.append({
+        det = {
             "cx": float(row[0]),
             "cy": float(row[1]),
             "w": float(row[2]),
             "h": float(row[3]),
             "conf": float(row[5]),
-        })
+        }
+
+        # Store mask coefficients if available (32 floats per detection)
+        if mask_data is not None:
+            # Map filtered index back to original index
+            orig_indices = np.where(mask)[0]
+            orig_idx = int(orig_indices[i])
+            det["mask_coeffs"] = mask_data[orig_idx, 1:].tolist()  # skip col 0
+
+        results.append(det)
 
     return results
 
