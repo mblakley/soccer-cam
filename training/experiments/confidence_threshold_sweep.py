@@ -50,7 +50,12 @@ def sweep_thresholds(
 
     Returns list of {threshold, recall_100, recall_200, avg_dist, ...}
     """
-    from training.inference.external_field_detector import is_on_field_curved
+    # Inline field check to avoid cv2 dependency
+    def is_on_field_curved(x, y, margin=50.0):
+        pano_cx = 2048.0
+        y_top = 310.0 + 0.0000285 * (x - pano_cx) ** 2 - margin
+        y_bot = 1600.0 - 0.0000220 * (x - pano_cx) ** 2 + margin
+        return y_top <= y <= y_bot
 
     # Group detections by frame
     by_frame: dict[int, list[dict]] = defaultdict(list)

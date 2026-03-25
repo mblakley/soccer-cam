@@ -39,8 +39,9 @@ logger = logging.getLogger(__name__)
 # Model paths
 DEFAULT_MODEL = Path("F:/test/***REDACTED***/model.onnx")
 
-# Detection parameters
-CONF_THRESHOLD = 0.25
+# Detection parameters — conf=0.10 based on threshold sweep experiment
+# (74.5% recall@200px, 2.1 FP/frame — best balance for our fisheye camera)
+CONF_THRESHOLD = 0.10
 NMS_IOU_THRESHOLD = 0.5
 
 # Tile layout (for converting panoramic coords to tile coords)
