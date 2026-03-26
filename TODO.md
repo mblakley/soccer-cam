@@ -1,8 +1,8 @@
 # Ball Tracking TODO List
 
 ## Currently Running
-- [ ] **FP16 batch labeling** — Running on all 9 games with FP16 model (model.onnx, conf=0.05)
-  - Background task ID: b7xcp2ult
+- [ ] **FP16 batch labeling** — Running on all 9 games with FP16 model (model.onnx, conf=0.25)
+  - Background task ID: bysoyntpt
   - Output: F:/training_data/labels_640_ext/{game}/
   - Pipeline: detect at 4096x1800 → field filter → static removal → per-tile YOLO labels
   - ETA: ~5 days at current rate (0.4 f/s on GTX 1060)
