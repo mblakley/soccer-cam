@@ -6,6 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Soccer-cam (video-grouper) is an automated pipeline for downloading, processing, and uploading soccer game videos from Dahua IP cameras. It runs as a Windows service with a PyQt6 system tray GUI, or via Docker on Linux.
 
+## File Organization Rules
+
+**Do not create files without considering where they belong.** Follow these rules:
+
+1. **No one-off scripts.** If you need to run something once, use inline Python via `uv run python -c` or a heredoc. Do not create `.py` or `.bat` files for throwaway tasks.
+2. **No test/debug files in the codebase.** Files like `test_share_access.py`, `run_heat2.py`, temp scripts — these go in `/tmp` or are run inline, never committed.
+3. **Every new file needs a home.** Before creating a file, identify which directory it belongs in based on the project structure below. If it doesn't fit anywhere, reconsider whether it's needed.
+4. **Prefer editing existing files** over creating new ones. A new function in an existing module beats a new module.
+5. **Clean up after yourself.** If a file was scaffolding or is superseded, delete it in the same session.
+
+### Project Structure (training/)
+
+```
+training/
+  annotation/         # Tracking lab, annotation tools
+  data_prep/          # Dataset preparation, tiling, frame extraction
+  distributed/        # Dask cluster: coordinator, worker, plugins, label_job
+  experiments/        # Threshold sweeps, analysis scripts
+  inference/          # Detection models (external ball detector, field filter)
+  configs/            # YAML configs for training runs
+  static/             # Web UI assets
+  annotation_server.py  # FastAPI server
+```
+
 ## Build & Development Commands
 
 Package manager: `uv` (not pip)
