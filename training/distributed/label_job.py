@@ -303,9 +303,13 @@ def run_label_job(
         return 0
 
     # Skip segments that already have labels
+    # glob.escape needed because filenames contain [F][0@0] which are glob chars
+    import glob as glob_mod
+
     unlabeled = []
     for seg in segments:
-        existing = list(output_dir.glob(f"{seg.stem}_frame_*.txt"))
+        escaped = glob_mod.escape(seg.stem)
+        existing = list(output_dir.glob(f"{escaped}_frame_*.txt"))
         if existing:
             logger.info("  Skipping %s (%d labels exist)", seg.stem[:50], len(existing))
         else:
