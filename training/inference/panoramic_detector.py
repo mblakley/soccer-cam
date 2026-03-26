@@ -4,11 +4,14 @@ For each panoramic frame:
 1. Tiles into 7x3 grid (reuses tile_frames.py layout)
 2. For each tile position, loads current + previous + next frame tiles
 3. Runs temporal model → heatmap per tile
-4. Stitches heatmaps into full panoramic heatmap (overlap zones averaged)
-5. Finds peaks → ball candidates with confidence
+4. Applies row-based confidence adjustment (row 2 near sideline penalized)
+5. Stitches heatmaps into full panoramic heatmap (overlap zones averaged)
+6. Applies soft field mask (penalty for off-field, not hard cutoff)
+7. Finds peaks → ball candidates with confidence (top-N limit)
 """
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -30,6 +33,15 @@ STEP_Y = (PANO_H - TILE_SIZE) // (N_ROWS - 1)  # 580
 # Peak detection
 MIN_PEAK_VALUE = 0.3  # Minimum heatmap confidence for a detection
 PEAK_RADIUS = 10  # Non-maximum suppression radius in pixels
+MAX_DETECTIONS = 3  # Top-N peaks to return (1 game ball + margin for tracker)
+
+# QA found row 2 (near sideline) produces the most FPs.
+# Mild penalty only — the ball is legitimately near the sideline during play.
+ROW_2_CONFIDENCE_WEIGHT = 0.8
+
+# Soft field mask: off-field regions get reduced confidence, not zeroed
+# (ball leaves the field during throw-ins, goal kicks, high kicks)
+OFF_FIELD_WEIGHT = 0.3
 
 
 def _extract_tile(frame: np.ndarray, row: int, col: int) -> np.ndarray:
@@ -80,12 +92,13 @@ def _find_peaks(
     heatmap: np.ndarray,
     min_value: float = MIN_PEAK_VALUE,
     radius: int = PEAK_RADIUS,
+    max_detections: int = MAX_DETECTIONS,
 ) -> list[tuple[int, int, float]]:
     """Find peaks in a heatmap using non-maximum suppression.
 
-    Returns list of (x, y, confidence) sorted by confidence descending.
+    Returns list of (x, y, confidence) sorted by confidence descending,
+    limited to max_detections results.
     """
-    # Apply NMS via max pooling
     from scipy.ndimage import maximum_filter
 
     local_max = maximum_filter(heatmap, size=2 * radius + 1)
@@ -94,11 +107,39 @@ def _find_peaks(
     ys, xs = np.where(peaks_mask)
     confidences = heatmap[ys, xs]
 
-    # Sort by confidence descending
     order = np.argsort(-confidences)
+    if max_detections > 0:
+        order = order[:max_detections]
     results = [(int(xs[i]), int(ys[i]), float(confidences[i])) for i in order]
 
     return results
+
+
+def build_field_mask(
+    polygon: list[list[float]],
+    off_field_weight: float = OFF_FIELD_WEIGHT,
+) -> np.ndarray:
+    """Build a soft field mask from a polygon.
+
+    Returns a (PANO_H, PANO_W) array where on-field is 1.0 and
+    off-field is off_field_weight (not 0.0 — ball can leave the field).
+    """
+    mask = np.full((PANO_H, PANO_W), off_field_weight, dtype=np.float32)
+    pts = np.array(polygon, dtype=np.int32)
+    cv2.fillPoly(mask, [pts], 1.0)
+    return mask
+
+
+def load_field_mask(mask_path: str | Path) -> np.ndarray | None:
+    """Load a field mask from a JSON polygon file.
+
+    Returns a soft mask array or None if the file doesn't exist.
+    """
+    mask_path = Path(mask_path)
+    if not mask_path.exists():
+        return None
+    polygon = json.loads(mask_path.read_text())
+    return build_field_mask(polygon)
 
 
 def detect_ball_panoramic(
@@ -108,6 +149,8 @@ def detect_ball_panoramic(
     next_frame: np.ndarray,
     device: torch.device,
     min_confidence: float = MIN_PEAK_VALUE,
+    field_mask: np.ndarray | None = None,
+    max_detections: int = MAX_DETECTIONS,
 ) -> tuple[np.ndarray, list[tuple[int, int, float]]]:
     """Detect ball in a panoramic frame using the temporal model.
 
@@ -118,6 +161,8 @@ def detect_ball_panoramic(
         next_frame: Next panoramic frame (BGR, H×W×3)
         device: Torch device
         min_confidence: Minimum peak confidence
+        field_mask: Soft field mask (1.0 on field, 0.3 off field). None = no mask.
+        max_detections: Maximum number of peaks to return (0 = unlimited)
 
     Returns:
         (panoramic_heatmap, detections) where detections is list of (x, y, conf)
@@ -148,11 +193,21 @@ def detect_ball_panoramic(
                 heatmap = model(tensor)  # (1, 1, H, W)
                 heatmap_np = heatmap[0, 0].cpu().numpy()
 
+                if row == 2:
+                    heatmap_np = heatmap_np * ROW_2_CONFIDENCE_WEIGHT
+
                 tile_heatmaps[(row, col)] = heatmap_np
 
-    # Stitch and find peaks
     pano_heatmap = _stitch_heatmaps(tile_heatmaps)
-    detections = _find_peaks(pano_heatmap, min_value=min_confidence)
+
+    if field_mask is not None:
+        pano_heatmap = pano_heatmap * field_mask
+
+    detections = _find_peaks(
+        pano_heatmap,
+        min_value=min_confidence,
+        max_detections=max_detections,
+    )
 
     return pano_heatmap, detections
 
@@ -163,6 +218,8 @@ def run_on_frames(
     output_dir: Path,
     device: str = "0",
     min_confidence: float = MIN_PEAK_VALUE,
+    field_mask_path: str | Path | None = None,
+    max_detections: int = MAX_DETECTIONS,
 ):
     """Run panoramic detection on a directory of frames.
 
@@ -172,6 +229,8 @@ def run_on_frames(
         output_dir: Directory for detection results
         device: CUDA device or "cpu"
         min_confidence: Minimum detection confidence
+        field_mask_path: Path to field_mask.json (polygon). None = no mask.
+        max_detections: Max detections per frame (0 = unlimited)
     """
     from training.train_temporal import TemporalBallNet
 
@@ -184,6 +243,13 @@ def run_on_frames(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load field mask if provided
+    field_mask = None
+    if field_mask_path:
+        field_mask = load_field_mask(field_mask_path)
+        if field_mask is not None:
+            logger.info("Loaded field mask from %s", field_mask_path)
 
     # Load frames sorted by name
     frame_paths = sorted(frames_dir.glob("*.jpg"))
@@ -204,7 +270,14 @@ def run_on_frames(
             continue
 
         _heatmap, detections = detect_ball_panoramic(
-            model, prev_frame, curr_frame, next_frame, dev, min_confidence
+            model,
+            prev_frame,
+            curr_frame,
+            next_frame,
+            dev,
+            min_confidence,
+            field_mask=field_mask,
+            max_detections=max_detections,
         )
 
         frame_name = frame_paths[i].stem
@@ -219,9 +292,6 @@ def run_on_frames(
                 detections[0][1],
                 detections[0][2],
             )
-
-    # Write results
-    import json
 
     results_path = output_dir / "detections.json"
     with open(results_path, "w") as f:
@@ -251,11 +321,29 @@ def main():
     )
     parser.add_argument("--device", default="0")
     parser.add_argument("--min-confidence", type=float, default=MIN_PEAK_VALUE)
+    parser.add_argument(
+        "--field-mask",
+        type=Path,
+        default=None,
+        help="Path to field_mask.json (polygon for soft field mask)",
+    )
+    parser.add_argument(
+        "--max-detections",
+        type=int,
+        default=MAX_DETECTIONS,
+        help="Max detections per frame (0 = unlimited)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     run_on_frames(
-        args.model, args.frames, args.output, args.device, args.min_confidence
+        args.model,
+        args.frames,
+        args.output,
+        args.device,
+        args.min_confidence,
+        field_mask_path=args.field_mask,
+        max_detections=args.max_detections,
     )
 
 

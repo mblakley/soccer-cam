@@ -10,6 +10,7 @@ in panoramic pixel coordinates.
 import logging
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
 from filterpy.kalman import KalmanFilter
 
@@ -17,8 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Tracker configuration
 MAX_MISSING_FRAMES = 15  # Kill track after this many frames without detection
-GATE_DISTANCE = 200  # Max Mahalanobis-like distance for association (pixels)
-MIN_TRACK_LENGTH = 3  # Minimum detections to consider a valid track
+GATE_DISTANCE = 150  # Max distance for association when on-field (pixels)
+GATE_DISTANCE_REENTRY = 800  # Wide gate for re-entry — punts can go 2/3 of the field
+MIN_TRACK_LENGTH = 5  # Minimum detections to consider a valid track
+MIN_AVG_CONFIDENCE = 0.4  # Minimum average confidence for get_best_track()
 PROCESS_NOISE_POS = 5.0  # Position process noise
 PROCESS_NOISE_VEL = 10.0  # Velocity process noise
 PROCESS_NOISE_ACC = 20.0  # Acceleration process noise
@@ -47,6 +50,11 @@ class Track:
     kf: KalmanFilter | None = field(default=None, repr=False)
     missing_frames: int = 0
     active: bool = True
+    # Out-of-play tracking state
+    is_off_field: bool = False
+    exit_point: tuple[float, float] | None = None
+    exit_velocity: tuple[float, float] | None = None
+    off_field_frames: int = 0
 
     @property
     def length(self) -> int:
@@ -59,6 +67,13 @@ class Track:
         if self.detections:
             d = self.detections[-1]
             return d.x, d.y
+        return 0.0, 0.0
+
+    @property
+    def velocity(self) -> tuple[float, float]:
+        """Current velocity estimate from Kalman filter."""
+        if self.kf is not None:
+            return float(self.kf.x[2]), float(self.kf.x[3])
         return 0.0, 0.0
 
 
@@ -129,14 +144,30 @@ class BallTracker:
     def __init__(
         self,
         gate_distance: float = GATE_DISTANCE,
+        gate_distance_reentry: float = GATE_DISTANCE_REENTRY,
         max_missing: int = MAX_MISSING_FRAMES,
         min_track_length: int = MIN_TRACK_LENGTH,
+        field_polygon: np.ndarray | None = None,
     ):
         self.gate_distance = gate_distance
+        self.gate_distance_reentry = gate_distance_reentry
         self.max_missing = max_missing
         self.min_track_length = min_track_length
+        # Pre-reshape polygon for cv2.pointPolygonTest (called per detection)
+        self._field_poly_cv2: np.ndarray | None = None
+        if field_polygon is not None:
+            self._field_poly_cv2 = np.asarray(field_polygon, dtype=np.float32).reshape(
+                -1, 1, 2
+            )
         self.tracks: list[Track] = []
         self._next_id = 0
+
+    def _is_on_field(self, x: float, y: float, margin: float = 50.0) -> bool:
+        """Check if a point is on the playing field."""
+        if self._field_poly_cv2 is None:
+            return True
+        dist = cv2.pointPolygonTest(self._field_poly_cv2, (x, y), measureDist=True)
+        return dist >= -margin
 
     def _new_track(self, det: Detection) -> Track:
         track = Track(
@@ -177,15 +208,19 @@ class BallTracker:
         used_dets = set()
         used_tracks = set()
 
-        # Build cost matrix
+        # Build cost matrix with field-aware gating
         costs = []
         for ti, track in enumerate(self.tracks):
             if not track.active:
                 continue
             tx, ty = track.last_position
+            # Widen gate when track is off-field (expecting re-entry)
+            gate = (
+                self.gate_distance_reentry if track.is_off_field else self.gate_distance
+            )
             for di, det in enumerate(dets):
                 dist = ((det.x - tx) ** 2 + (det.y - ty) ** 2) ** 0.5
-                if dist < self.gate_distance:
+                if dist < gate:
                     costs.append((dist, ti, di))
 
         # Sort by distance and greedily assign
@@ -199,6 +234,21 @@ class BallTracker:
             track.kf.update(np.array([det.x, det.y]))
             track.detections.append(det)
             track.missing_frames = 0
+
+            # Update field boundary state
+            on_field = self._is_on_field(det.x, det.y)
+            if on_field:
+                track.is_off_field = False
+                track.off_field_frames = 0
+            elif not track.is_off_field:
+                # Ball just left the field — record exit state
+                track.is_off_field = True
+                track.exit_point = (det.x, det.y)
+                track.exit_velocity = track.velocity
+                track.off_field_frames = 0
+            else:
+                track.off_field_frames += 1
+
             used_tracks.add(ti)
             used_dets.add(di)
 
@@ -208,6 +258,8 @@ class BallTracker:
                 continue
             if ti not in used_tracks:
                 track.missing_frames += 1
+                if track.is_off_field:
+                    track.off_field_frames += 1
                 if track.missing_frames > self.max_missing:
                     track.active = False
 
@@ -224,22 +276,29 @@ class BallTracker:
             min_length = self.min_track_length
         return [t for t in self.tracks if t.length >= min_length]
 
-    def get_best_track(self) -> Track | None:
+    def get_best_track(
+        self, min_avg_confidence: float = MIN_AVG_CONFIDENCE
+    ) -> Track | None:
         """Get the single most likely ball track.
 
-        Scores by: track length × average confidence.
+        Filters by minimum average confidence, then scores by
+        track length * average confidence.
         """
         valid = self.get_tracks()
         if not valid:
             return None
 
-        def score(t: Track) -> float:
-            avg_conf = sum(d.confidence for d in t.detections) / max(
-                len(t.detections), 1
-            )
-            return t.length * avg_conf
+        # Compute avg confidence once, filter, then score
+        scored = []
+        for t in valid:
+            avg_conf = sum(d.confidence for d in t.detections) / len(t.detections)
+            if avg_conf >= min_avg_confidence:
+                scored.append((t, t.length * avg_conf))
 
-        return max(valid, key=score)
+        if not scored:
+            return None
+
+        return max(scored, key=lambda x: x[1])[0]
 
     def get_trajectory(self, track: Track) -> list[tuple[int, float, float, float]]:
         """Get interpolated trajectory for a track.
