@@ -303,56 +303,8 @@ def build_tracking_lab(
         )
 
     best_trajectory = guided_results
-    all_tracks = []
-    best_track = None
-    # (user marks + interpolated guide + matched detections)
-
-    # Build summary of all tracks
     trajectory_list = []
-    for track in all_tracks:
-        if not track.detections:
-            continue
-        d0 = track.detections[0]
-        dl = track.detections[-1]
-        max_disp = max(
-            ((d.x - d0.x) ** 2 + (d.y - d0.y) ** 2) ** 0.5
-            for d in track.detections[1:]
-        ) if len(track.detections) > 1 else 0.0
-
-        total_path = 0.0
-        for i in range(1, len(track.detections)):
-            dx = track.detections[i].x - track.detections[i - 1].x
-            dy = track.detections[i].y - track.detections[i - 1].y
-            total_path += (dx**2 + dy**2) ** 0.5
-
-        duration = (dl.frame_idx - d0.frame_idx) / FPS
-        trajectory_list.append({
-            "traj_id": track.track_id,
-            "length": track.length,
-            "max_displacement": round(max_disp, 1),
-            "total_path": round(total_path, 1),
-            "duration_secs": round(duration, 1),
-            "avg_velocity": round(total_path / duration, 1) if duration > 0 else 0,
-            "is_moving": max_disp >= 30,
-            "start_frame": d0.frame_idx,
-            "end_frame": dl.frame_idx,
-            "is_best": best_track is not None and track.track_id == best_track.track_id,
-        })
-
-    trajectory_list.sort(
-        key=lambda t: t["length"] * t["max_displacement"], reverse=True
-    )
-
-    # Build detection-to-track mapping
     det_track_map: dict[tuple[int, int], int] = {}
-    for track in all_tracks:
-        for det in track.detections:
-            # Find which det_idx this detection corresponds to
-            fi_dets = frame_dets.get(det.frame_idx, [])
-            for di, d in enumerate(fi_dets):
-                if abs(d["pano_x"] - det.x) < 1 and abs(d["pano_y"] - det.y) < 1:
-                    det_track_map[(det.frame_idx, di)] = track.track_id
-                    break
 
     # Phase 4: Build the manifest — one entry per frame
     frames = []
@@ -399,7 +351,7 @@ def build_tracking_lab(
                     "tile_x": tile_x,
                     "tile_y": tile_y,
                     "predicted": is_predicted,
-                    "traj_id": best_track.track_id if best_track else None,
+                    "traj_id": None,
                 }
 
         frames.append({
