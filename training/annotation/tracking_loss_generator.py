@@ -281,7 +281,10 @@ def _build_tile_indices(
                 dur = (segs[-1][1] - segs[0][0]) / 60
                 logger.info(
                     "  %s game %d: %d segments, %.0f min",
-                    game_id, ci, len(segs), dur,
+                    game_id,
+                    ci,
+                    len(segs),
+                    dur,
                 )
 
         # Index labeled frames from all label dirs for this game
@@ -372,8 +375,8 @@ def find_tracking_losses(
                 loss_tile_path = frame_map[next_frame]
 
                 # Compute game-level time (across all segments)
-                time_into_game, pct_through_game, game_duration = (
-                    _compute_game_time(segment, next_frame, segment_game_map)
+                time_into_game, pct_through_game, game_duration = _compute_game_time(
+                    segment, next_frame, segment_game_map
                 )
 
                 losses.append(
@@ -457,7 +460,9 @@ def _priority_score(
 
 def _learn_exclusions(
     output_dir: Path,
-) -> tuple[dict[str, float], dict[str, float], list[tuple[str, int, int, int, int]], set[str]]:
+) -> tuple[
+    dict[str, float], dict[str, float], list[tuple[str, int, int, int, int]], set[str]
+]:
     """Learn what to exclude from previously annotated tracking loss packets.
 
     Reads all annotation_results.json + manifest.json from completed packets.
@@ -678,7 +683,9 @@ def generate_next_tracking_loss_packet(
     next_num = max(existing_nums, default=0) + 1
     packet_id = f"tracking_loss_{next_num:03d}"
 
-    _report_progress("creating", f"Creating {packet_id} with {len(selected)} tiles...", 0.95)
+    _report_progress(
+        "creating", f"Creating {packet_id} with {len(selected)} tiles...", 0.95
+    )
 
     manifest_path = _create_packet(output_dir, packet_id, selected)
     logger.info("Created packet %s with %d tiles", packet_id, len(selected))
