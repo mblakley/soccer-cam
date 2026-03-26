@@ -261,6 +261,7 @@ def main():
         host="0.0.0.0",
         memory_limit=0,
         name="local-gtx1060",
+        local_directory="F:/tmp/dask",  # keep scratch off C: drive
     )
     client = Client(cluster)
 
