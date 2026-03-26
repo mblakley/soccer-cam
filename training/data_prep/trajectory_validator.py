@@ -107,7 +107,10 @@ def validate_game(
         all_frame_indices.add(fi)
     sorted_all = sorted(all_frame_indices)
     if len(sorted_all) >= 2:
-        gaps = [sorted_all[i + 1] - sorted_all[i] for i in range(min(100, len(sorted_all) - 1))]
+        gaps = [
+            sorted_all[i + 1] - sorted_all[i]
+            for i in range(min(100, len(sorted_all) - 1))
+        ]
         gaps = [g for g in gaps if g > 0]
         frame_interval = min(gaps) if gaps else 8
     else:
