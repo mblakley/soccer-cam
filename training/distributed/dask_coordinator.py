@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -106,8 +107,7 @@ def tile_segment(video_path, game_id, tiles_base, frame_interval):
     tiles_dir = Path(tiles_base) / game_id
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
-    TILE_SIZE = 640
-    COLS, ROWS = 7, 3
+    from label_job import TILE_SIZE, NUM_COLS, NUM_ROWS, STEP_X, STEP_Y
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
@@ -122,11 +122,6 @@ def tile_segment(video_path, game_id, tiles_base, frame_interval):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fi = 0
     n_tiles = 0
-
-    # Compute tile offsets
-    img_w, img_h = 4096, 1800
-    step_x = (img_w - TILE_SIZE) // (COLS - 1) if COLS > 1 else 0
-    step_y = (img_h - TILE_SIZE) // (ROWS - 1) if ROWS > 1 else 0
 
     # Background writer thread — writes JPEGs to share while CPU decodes next frame
     write_queue = queue.Queue()
@@ -162,10 +157,10 @@ def tile_segment(video_path, game_id, tiles_base, frame_interval):
             if ret and frame is not None:
                 try:
                     frame_tiles = []
-                    for row in range(ROWS):
-                        for col in range(COLS):
-                            x0 = col * step_x
-                            y0 = row * step_y
+                    for row in range(NUM_ROWS):
+                        for col in range(NUM_COLS):
+                            x0 = col * STEP_X
+                            y0 = row * STEP_Y
                             tile = frame[y0 : y0 + TILE_SIZE, x0 : x0 + TILE_SIZE]
                             fname = f"{seg_id}_frame_{fi:06d}_r{row}_c{col}.jpg"
                             _, jpg = cv2.imencode(
@@ -177,7 +172,7 @@ def tile_segment(video_path, game_id, tiles_base, frame_interval):
                 except Exception as e:
                     log.warning("Frame %d failed: %s", fi, e)
 
-            if len(batch) >= FLUSH_EVERY * COLS * ROWS:
+            if len(batch) >= FLUSH_EVERY * NUM_COLS * NUM_ROWS:
                 write_queue.put(batch)
                 batch = []
         fi += 1
@@ -299,12 +294,19 @@ def main():
                 args.wait_for_workers,
             )
 
-    # Determine which games to label
-    games_to_label = (
+    # Determine which games to label (skip already-labeled games)
+    candidates = (
         {g: UNC_GAMES[g] for g in args.games if g in UNC_GAMES}
         if args.games
         else dict(UNC_GAMES)
     )
+    games_to_label = {}
+    for game_id, video_src in candidates.items():
+        label_dir = LABEL_OUTPUT_DIR / game_id
+        if label_dir.exists() and len(list(label_dir.glob("*.txt"))) > 0:
+            logger.info("Skipping %s (already labeled)", game_id)
+            continue
+        games_to_label[game_id] = video_src
 
     futures = {}
 
@@ -354,7 +356,8 @@ def main():
                 [p for p in video_dir.rglob("*.mp4") if "[F][0@0]" in p.name]
             )
             for seg in segments:
-                key = f"tile-{game_id}-{seg.stem[:30]}"
+                stem_hash = hashlib.md5(seg.stem.encode()).hexdigest()[:8]
+                key = f"tile-{game_id}-{stem_hash}"
                 fut = client.submit(
                     tile_segment,
                     str(seg),

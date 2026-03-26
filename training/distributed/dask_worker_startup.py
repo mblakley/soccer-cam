@@ -7,19 +7,18 @@ Usage on remote node:
     python dask_worker_startup.py
 """
 
-import subprocess
 import asyncio
-
-SCHEDULER = "tcp://192.168.86.152:8786"
-SHARE_UNC = r"\\192.168.86.152\video"
-SHARE_USER = r"DESKTOP-5L867J8\training"
-SHARE_PASS = "amy4ever"
-WORKER_NAME = "laptop-rtx4070"
-WORKER_PORT = 0  # auto-assign — more resilient to restarts
-PYTHON_PATH = r"C:\Python313\python.exe"
-
 import logging
+import os
+import subprocess
 import time
+
+SCHEDULER = os.environ.get("DASK_SCHEDULER", "tcp://192.168.86.152:8786")
+SHARE_UNC = r"\\192.168.86.152\video"
+SHARE_USER = os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training")
+SHARE_PASS = os.environ.get("SHARE_PASS")
+WORKER_NAME = os.environ.get("DASK_WORKER_NAME", "laptop-rtx4070")
+WORKER_PORT = 0  # auto-assign — more resilient to restarts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +32,14 @@ log = logging.getLogger("worker-startup")
 
 def map_share():
     """Ensure network share is connected."""
-    subprocess.run(["net", "use", "*", "/delete", "/y"], capture_output=True)
+    if not SHARE_PASS:
+        log.error("SHARE_PASS env var not set — cannot map network share")
+        return False
+    # Disconnect only our specific share (not all mapped drives)
+    subprocess.run(
+        ["net", "use", SHARE_UNC, "/delete", "/y"],
+        capture_output=True,
+    )
     time.sleep(2)
     result = subprocess.run(
         ["net", "use", SHARE_UNC, f"/user:{SHARE_USER}", SHARE_PASS],
