@@ -178,6 +178,7 @@ class EnhancedTracker:
                 # First detection — initialize
                 state.x = selected.x
                 state.y = selected.y
+                state.buffer.append((selected.raw_x, selected.raw_y, selected.conf))
                 state.vx = 0.0
                 state.vy = 0.0
                 state.initialized = True
@@ -190,38 +191,38 @@ class EnhancedTracker:
                 state.vx = self.velocity_ema * state.vx + (1 - self.velocity_ema) * raw_vx
                 state.vy = self.velocity_ema * state.vy + (1 - self.velocity_ema) * raw_vy
 
-                # Add to detection buffer
-                state.buffer.append((selected.raw_x, selected.raw_y, selected.conf))
-
-                # Compute weighted average of buffer
-                if len(state.buffer) >= 2:
-                    total_w = 0.0
-                    avg_x = 0.0
-                    avg_y = 0.0
-                    for i, (bx, by, bc) in enumerate(state.buffer):
-                        # More recent detections get higher weight
-                        recency = (i + 1) / len(state.buffer)
-                        w = bc * recency  # weight = confidence * recency
-                        avg_x += bx * w
-                        avg_y += by * w
-                        total_w += w
-                    if total_w > 0:
-                        avg_x /= total_w
-                        avg_y /= total_w
-                        # Use buffer average as the detection position
-                        selected.x = avg_x
-                        selected.y = avg_y
-
-                # Smooth position with EMA
+                # User marks bypass buffer averaging and EMA — snap immediately
                 if selected.source == "user":
-                    # User marks snap position immediately (no EMA)
-                    state.x = selected.x
-                    state.y = selected.y
+                    state.x = selected.raw_x
+                    state.y = selected.raw_y
+                    state.buffer.clear()  # Reset buffer to user's position
+                    state.buffer.append((selected.raw_x, selected.raw_y, selected.conf))
                 else:
+                    # Add to detection buffer
+                    state.buffer.append((selected.raw_x, selected.raw_y, selected.conf))
+
+                    # Compute weighted average of buffer
+                    if len(state.buffer) >= 2:
+                        total_w = 0.0
+                        avg_x = 0.0
+                        avg_y = 0.0
+                        for i, (bx, by, bc) in enumerate(state.buffer):
+                            recency = (i + 1) / len(state.buffer)
+                            w = bc * recency
+                            avg_x += bx * w
+                            avg_y += by * w
+                            total_w += w
+                        if total_w > 0:
+                            avg_x /= total_w
+                            avg_y /= total_w
+                            selected.x = avg_x
+                            selected.y = avg_y
+
+                    # Smooth position with EMA
                     state.x = self.position_ema * state.x + (1 - self.position_ema) * selected.x
                     state.y = self.position_ema * state.y + (1 - self.position_ema) * selected.y
 
-                # Update selected with smoothed position
+                # Update selected with final smoothed position
                 selected.x = state.x
                 selected.y = state.y
 
