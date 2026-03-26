@@ -3,13 +3,13 @@
 Checks both local and remote GPU labeling jobs.
 When all games are labeled, updates dataset junctions and starts training.
 """
+
 import subprocess
 import time
-import json
 import logging
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger()
 
 LABELS_DIR = Path("F:/training_data/labels_640_ext")
@@ -26,6 +26,7 @@ EXPECTED_GAMES = [
     "heat__Heat_Tournament",
 ]
 
+
 def check_labels():
     """Check how many games have labels."""
     done = {}
@@ -37,6 +38,7 @@ def check_labels():
         else:
             done[game] = 0
     return done
+
 
 def update_junctions():
     """Repoint dataset label junctions to ext labels."""
@@ -52,23 +54,37 @@ def update_junctions():
                     # Windows junction
                     subprocess.run(
                         ["cmd", "/c", "mklink", "/J", str(game_dir), str(ext_dir)],
-                        capture_output=True
+                        capture_output=True,
                     )
                     logger.info("Repointed %s/%s -> %s", split, game_name, ext_dir)
+
 
 def start_training():
     """Start YOLO training."""
     logger.info("Starting training...")
-    subprocess.Popen([
-        "uv", "run", "python", "-m", "training.train",
-        "--data", "training/configs/ball_dataset_640.yaml",
-        "--model", "yolo11m.pt",
-        "--epochs", "100",
-        "--batch", "4",
-        "--project", "F:/training_data/runs",
-        "--name", "ball_ext_labels",
-    ])
+    subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "training.train",
+            "--data",
+            "training/configs/ball_dataset_640.yaml",
+            "--model",
+            "yolo11m.pt",
+            "--epochs",
+            "100",
+            "--batch",
+            "4",
+            "--project",
+            "F:/training_data/runs",
+            "--name",
+            "ball_ext_labels",
+        ]
+    )
     logger.info("Training started!")
+
 
 if __name__ == "__main__":
     while True:
@@ -76,16 +92,21 @@ if __name__ == "__main__":
         total_games = len(EXPECTED_GAMES)
         done_games = sum(1 for v in labels.values() if v > 100)
         total_labels = sum(labels.values())
-        
-        logger.info("Labels: %d/%d games done, %d total labels", done_games, total_games, total_labels)
+
+        logger.info(
+            "Labels: %d/%d games done, %d total labels",
+            done_games,
+            total_games,
+            total_labels,
+        )
         for game, count in sorted(labels.items()):
             status = "DONE" if count > 100 else "pending" if count == 0 else "partial"
             logger.info("  %s: %d (%s)", game, count, status)
-        
+
         if done_games >= total_games:
             logger.info("ALL GAMES LABELED! Starting training pipeline...")
             update_junctions()
             start_training()
             break
-        
+
         time.sleep(300)  # Check every 5 minutes

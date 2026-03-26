@@ -77,7 +77,9 @@ def detect_balls(frame_bgr, sess, conf_threshold=CONF_THRESHOLD):
 
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     if pad_h > 0 or pad_w > 0:
-        rgb = cv2.copyMakeBorder(rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        rgb = cv2.copyMakeBorder(
+            rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0)
+        )
 
     blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
     outputs = sess.run(None, {"images": blob})
@@ -95,14 +97,20 @@ def detect_balls(frame_bgr, sess, conf_threshold=CONF_THRESHOLD):
     boxes[:, 3] = filtered[:, 1] + filtered[:, 3] / 2
 
     indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(), filtered[:, 5].tolist(),
-        conf_threshold, NMS_IOU_THRESHOLD,
+        boxes.tolist(),
+        filtered[:, 5].tolist(),
+        conf_threshold,
+        NMS_IOU_THRESHOLD,
     )
 
     return [
-        {"cx": float(filtered[i][0]), "cy": float(filtered[i][1]),
-         "w": float(filtered[i][2]), "h": float(filtered[i][3]),
-         "conf": float(filtered[i][5])}
+        {
+            "cx": float(filtered[i][0]),
+            "cy": float(filtered[i][1]),
+            "w": float(filtered[i][2]),
+            "h": float(filtered[i][3]),
+            "conf": float(filtered[i][5]),
+        }
         for i in indices
     ]
 
@@ -117,19 +125,26 @@ def pano_to_tile_labels(cx, cy, w, h):
             tcx = cx - tile_x0
             tcy = cy - tile_y0
             if 0 <= tcx < TILE_SIZE and 0 <= tcy < TILE_SIZE:
-                labels.append({
-                    "row": row, "col": col,
-                    "cx_norm": tcx / TILE_SIZE,
-                    "cy_norm": tcy / TILE_SIZE,
-                    "w_norm": w / TILE_SIZE,
-                    "h_norm": h / TILE_SIZE,
-                })
+                labels.append(
+                    {
+                        "row": row,
+                        "col": col,
+                        "cx_norm": tcx / TILE_SIZE,
+                        "cy_norm": tcy / TILE_SIZE,
+                        "w_norm": w / TILE_SIZE,
+                        "h_norm": h / TILE_SIZE,
+                    }
+                )
     return labels
 
 
 def process_segment(
-    video_path, sess, output_dir, frame_interval=FRAME_INTERVAL,
-    conf_threshold=CONF_THRESHOLD, static_threshold=200,
+    video_path,
+    sess,
+    output_dir,
+    frame_interval=FRAME_INTERVAL,
+    conf_threshold=CONF_THRESHOLD,
+    static_threshold=200,
 ):
     """Process one video segment and write per-tile YOLO labels."""
     seg_name = video_path.stem
@@ -169,8 +184,11 @@ def process_segment(
         key = (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50)
         pos_counts[key] += 1
     static = {k for k, v in pos_counts.items() if v > static_threshold}
-    clean = [d for d in field_dets if
-             (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50) not in static]
+    clean = [
+        d
+        for d in field_dets
+        if (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50) not in static
+    ]
 
     # Write per-tile labels
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -195,14 +213,22 @@ def process_segment(
             files_written += 1
 
     elapsed = time.time() - start
-    logger.info("    %d raw -> %d clean -> %d files in %.0fs",
-                len(detections), len(clean), files_written, elapsed)
+    logger.info(
+        "    %d raw -> %d clean -> %d files in %.0fs",
+        len(detections),
+        len(clean),
+        files_written,
+        elapsed,
+    )
     return files_written
 
 
 def run_label_job(
-    video_dir, model_path, output_dir,
-    conf=CONF_THRESHOLD, frame_interval=FRAME_INTERVAL,
+    video_dir,
+    model_path,
+    output_dir,
+    conf=CONF_THRESHOLD,
+    frame_interval=FRAME_INTERVAL,
     use_gpu=True,
 ):
     """Run labeling on all segments in a video directory."""
@@ -227,7 +253,11 @@ def run_label_job(
     total_files = 0
     for seg in segments:
         total_files += process_segment(
-            seg, sess, output_dir, frame_interval, conf,
+            seg,
+            sess,
+            output_dir,
+            frame_interval,
+            conf,
             static_threshold=200 if frame_interval <= 4 else 100,
         )
 
@@ -237,13 +267,17 @@ def run_label_job(
 
 def main():
     parser = argparse.ArgumentParser(description="Run ball detection labeling job")
-    parser.add_argument("--video-dir", type=Path, help="Directory with segment .mp4 files")
+    parser.add_argument(
+        "--video-dir", type=Path, help="Directory with segment .mp4 files"
+    )
     parser.add_argument("--model", type=Path, default=Path("model.onnx"))
     parser.add_argument("--output", type=Path, help="Output labels directory")
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
     parser.add_argument("--frame-interval", type=int, default=FRAME_INTERVAL)
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
-    parser.add_argument("--config", type=Path, help="Job config JSON (overrides other args)")
+    parser.add_argument(
+        "--config", type=Path, help="Job config JSON (overrides other args)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -259,8 +293,11 @@ def main():
         args.cpu = cfg.get("cpu", False)
 
     run_label_job(
-        args.video_dir, args.model, args.output,
-        args.conf, args.frame_interval,
+        args.video_dir,
+        args.model,
+        args.output,
+        args.conf,
+        args.frame_interval,
         use_gpu=not args.cpu,
     )
 

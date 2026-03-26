@@ -20,7 +20,7 @@ Usage:
 import argparse
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from training.data_prep.organize_dataset import parse_tile_filename
@@ -103,7 +103,9 @@ def _build_trajectories(
         all_fi.add(fi)
     sorted_fi = sorted(all_fi)
     if len(sorted_fi) >= 2:
-        gaps = [sorted_fi[i + 1] - sorted_fi[i] for i in range(min(100, len(sorted_fi) - 1))]
+        gaps = [
+            sorted_fi[i + 1] - sorted_fi[i] for i in range(min(100, len(sorted_fi) - 1))
+        ]
         gaps = [g for g in gaps if g > 0]
         frame_interval = min(gaps) if gaps else FRAME_INTERVAL
     else:
@@ -295,10 +297,14 @@ def _stitch_trajectories(
             chain.duration_secs = (fi_last - fi_first) / FPS_ESTIMATE
 
             x0, y0 = chain.frames[0][1], chain.frames[0][2]
-            chain.max_displacement = max(
-                ((t[1] - x0) ** 2 + (t[2] - y0) ** 2) ** 0.5
-                for t in chain.frames[1:]
-            ) if len(chain.frames) > 1 else 0.0
+            chain.max_displacement = (
+                max(
+                    ((t[1] - x0) ** 2 + (t[2] - y0) ** 2) ** 0.5
+                    for t in chain.frames[1:]
+                )
+                if len(chain.frames) > 1
+                else 0.0
+            )
 
             total = 0.0
             for k in range(1, len(chain.frames)):
@@ -390,16 +396,24 @@ def _run_experiment(
     # Approximate coverage: unique frames * interval / fps
     covered_time = len(covered_frames) * FRAME_INTERVAL / FPS_ESTIMATE
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {name}")
-    print(f"{'='*60}")
-    print(f"  Trajectories: {len(trajectories)} -> {len(kept)} ({len(kept)/max(len(trajectories),1)*100:.1f}% kept)")
-    print(f"  Labels:       {total_labels} -> {kept_labels} ({kept_labels/max(total_labels,1)*100:.1f}% kept)")
-    print(f"  Time coverage: {covered_time:.0f}s / {total_time:.0f}s ({covered_time/max(total_time,1)*100:.1f}%)")
+    print(f"{'=' * 60}")
+    print(
+        f"  Trajectories: {len(trajectories)} -> {len(kept)} ({len(kept) / max(len(trajectories), 1) * 100:.1f}% kept)"
+    )
+    print(
+        f"  Labels:       {total_labels} -> {kept_labels} ({kept_labels / max(total_labels, 1) * 100:.1f}% kept)"
+    )
+    print(
+        f"  Time coverage: {covered_time:.0f}s / {total_time:.0f}s ({covered_time / max(total_time, 1) * 100:.1f}%)"
+    )
 
     if kept:
-        print(f"\n  Top 5 KEPT trajectories:")
-        for t in sorted(kept, key=lambda x: x.length * x.max_displacement, reverse=True)[:5]:
+        print("\n  Top 5 KEPT trajectories:")
+        for t in sorted(
+            kept, key=lambda x: x.length * x.max_displacement, reverse=True
+        )[:5]:
             print(
                 f"    len={t.length:4d}  disp={t.max_displacement:6.0f}px  "
                 f"path={t.total_path_length:7.0f}px  dur={t.duration_secs:5.1f}s  "
@@ -409,8 +423,10 @@ def _run_experiment(
 
     if discarded:
         # Show top discarded to check we're not losing real balls
-        print(f"\n  Top 5 DISCARDED (check for false negatives):")
-        for t in sorted(discarded, key=lambda x: x.length * x.max_displacement, reverse=True)[:5]:
+        print("\n  Top 5 DISCARDED (check for false negatives):")
+        for t in sorted(
+            discarded, key=lambda x: x.length * x.max_displacement, reverse=True
+        )[:5]:
             print(
                 f"    len={t.length:4d}  disp={t.max_displacement:6.0f}px  "
                 f"path={t.total_path_length:7.0f}px  dur={t.duration_secs:5.1f}s  "
@@ -427,9 +443,9 @@ def analyze_game(
     persons_dir: Path | None = None,
 ):
     """Run all experiments on a single game."""
-    print(f"\n{'#'*60}")
+    print(f"\n{'#' * 60}")
     print(f"  TRAJECTORY ANALYSIS: {game_id}")
-    print(f"{'#'*60}")
+    print(f"{'#' * 60}")
 
     # Build trajectories
     print("\nBuilding trajectories...")
@@ -464,29 +480,47 @@ def analyze_game(
         print("No person data (skipping player correlation experiments)")
 
     # Summary statistics
-    print(f"\n--- Trajectory Summary ---")
+    print("\n--- Trajectory Summary ---")
     lengths = [t.length for t in trajectories]
     disps = [t.max_displacement for t in trajectories]
-    print(f"  Length:       min={min(lengths)}, median={sorted(lengths)[len(lengths)//2]}, max={max(lengths)}, mean={sum(lengths)/len(lengths):.1f}")
-    print(f"  Displacement: min={min(disps):.0f}, median={sorted(disps)[len(disps)//2]:.0f}, max={max(disps):.0f}, mean={sum(disps)/len(disps):.1f}")
+    print(
+        f"  Length:       min={min(lengths)}, median={sorted(lengths)[len(lengths) // 2]}, max={max(lengths)}, mean={sum(lengths) / len(lengths):.1f}"
+    )
+    print(
+        f"  Displacement: min={min(disps):.0f}, median={sorted(disps)[len(disps) // 2]:.0f}, max={max(disps):.0f}, mean={sum(disps) / len(disps):.1f}"
+    )
 
     static = sum(1 for d in disps if d < 30)
-    print(f"  Static (<30px): {static} ({static/len(disps)*100:.1f}%)")
+    print(f"  Static (<30px): {static} ({static / len(disps) * 100:.1f}%)")
     moving = sum(1 for d in disps if d >= 30)
-    print(f"  Moving (>=30px): {moving} ({moving/len(disps)*100:.1f}%)")
+    print(f"  Moving (>=30px): {moving} ({moving / len(disps) * 100:.1f}%)")
 
     if has_persons:
         players = [t.player_correlation for t in trajectories]
-        print(f"  Player corr:  min={min(players):.1f}, median={sorted(players)[len(players)//2]:.1f}, max={max(players):.1f}, mean={sum(players)/len(players):.1f}")
+        print(
+            f"  Player corr:  min={min(players):.1f}, median={sorted(players)[len(players) // 2]:.1f}, max={max(players):.1f}, mean={sum(players) / len(players):.1f}"
+        )
 
     # Length distribution
-    print(f"\n--- Length Distribution ---")
-    for lo, hi in [(3, 5), (6, 10), (11, 20), (21, 50), (51, 100), (101, 500), (501, 99999)]:
+    print("\n--- Length Distribution ---")
+    for lo, hi in [
+        (3, 5),
+        (6, 10),
+        (11, 20),
+        (21, 50),
+        (51, 100),
+        (101, 500),
+        (501, 99999),
+    ]:
         n = sum(1 for t in trajectories if lo <= t.length <= hi)
-        n_static = sum(1 for t in trajectories if lo <= t.length <= hi and t.max_displacement < 30)
+        n_static = sum(
+            1 for t in trajectories if lo <= t.length <= hi and t.max_displacement < 30
+        )
         label = f"{lo}-{hi}" if hi < 99999 else f"{lo}+"
         if n > 0:
-            print(f"  {label:>7s}: {n:5d} ({n_static:4d} static, {n-n_static:4d} moving)")
+            print(
+                f"  {label:>7s}: {n:5d} ({n_static:4d} static, {n - n_static:4d} moving)"
+            )
 
     # ===== EXPERIMENT A: Movement threshold only =====
     for thresh in [15, 30, 50]:
@@ -502,7 +536,9 @@ def analyze_game(
         _run_experiment(
             f"Exp B: Length >= {min_len} AND displacement > {min_disp}px",
             trajectories,
-            lambda t, ml=min_len, md=min_disp: t.length >= ml and t.max_displacement >= md,
+            lambda t, ml=min_len, md=min_disp: (
+                t.length >= ml and t.max_displacement >= md
+            ),
             segment_durations,
         )
 
@@ -515,7 +551,9 @@ def analyze_game(
 
         dominant_set: set[int] = set()
         for seg, seg_ts in seg_trajs.items():
-            ranked = sorted(seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True)
+            ranked = sorted(
+                seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True
+            )
             for t in ranked[:top_k]:
                 dominant_set.add(id(t))
 
@@ -573,11 +611,15 @@ def analyze_game(
 
     for max_gap in [3.0, 5.0, 8.0]:
         stitched = _stitch_trajectories(moving_trajs, max_time_gap_secs=max_gap)
-        print(f"\n  Stitch gap={max_gap}s: {len(moving_trajs)} -> {len(stitched)} trajectories")
+        print(
+            f"\n  Stitch gap={max_gap}s: {len(moving_trajs)} -> {len(stitched)} trajectories"
+        )
 
         if stitched:
-            top5 = sorted(stitched, key=lambda x: x.length * x.max_displacement, reverse=True)[:5]
-            print(f"  Top 5 stitched trajectories:")
+            top5 = sorted(
+                stitched, key=lambda x: x.length * x.max_displacement, reverse=True
+            )[:5]
+            print("  Top 5 stitched trajectories:")
             for t in top5:
                 print(
                     f"    len={t.length:4d}  disp={t.max_displacement:6.0f}px  "
@@ -592,7 +634,9 @@ def analyze_game(
 
             stitch_set: set[int] = set()
             for seg, seg_ts in seg_trajs_f.items():
-                ranked = sorted(seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True)
+                ranked = sorted(
+                    seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True
+                )
                 for t in ranked[:top_k]:
                     stitch_set.add(id(t))
 
@@ -603,9 +647,9 @@ def analyze_game(
                 segment_durations,
             )
 
-    print(f"\n{'#'*60}")
+    print(f"\n{'#' * 60}")
     print(f"  ANALYSIS COMPLETE: {game_id}")
-    print(f"{'#'*60}\n")
+    print(f"{'#' * 60}\n")
 
 
 def main():
