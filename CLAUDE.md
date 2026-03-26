@@ -111,16 +111,17 @@ All modules run via `uv run python -m training.<module>` or `uv run python -m tr
 
 ```
 Video → Extract Frames → Tile → Bootstrap Labels → Clean Labels → Train Model
-                                                        ↑                ↓
-                                            QA Verdicts ← Sonnet Spot-Check
-                                           (+ async human review for disagreements)
+                                       ↑                               ↓
+                           QA Verdicts ← Sonnet Spot-Check ← Detect on Games
+                          (+ async human review for disagreements)
 ```
 
 Each training iteration:
 1. **Label** — bootstrap + heuristic filter + trajectory validation + field mask filter
-2. **Sample** — smart sampling with hard negatives, confuser negatives (QA FPs), row 2 oversampling
-3. **Train** — YOLO or temporal model on cleaned/sampled data
-4. **Spot-check** — Sonnet agents review 10% of model output
+2. **Organize** — `organize_dataset.py --labels labels_640_field_filtered` to update junctions
+3. **Sample** — smart sampling with hard negatives, confuser negatives (QA FPs), row 2 oversampling
+4. **Train** — YOLO or temporal model on cleaned/sampled data
+5. **Spot-check** — Sonnet agents review 10% of model output
 5. **Apply verdicts** — three-tier system: automated consensus, Sonnet-only, async human escalation
 6. **Repeat** — cleaned labels feed the next training run
 
@@ -189,7 +190,46 @@ QA database: `F:/training_data/label_qa/tile_cache.db`. Field mask polygons: `F:
 
 #### Training Data Location
 
-`F:\training_data\` — frames, tiles_640, labels_640, labels_640_clean, labels_640_ext, labels_640_field_filtered, ball_dataset_640, label_qa, runs. Top-row (r0) tiles excluded via .excluded rename. Dataset uses NTFS junctions for zero-copy train/val split.
+`F:\training_data\` — Top-row (r0) tiles excluded via .excluded rename. Dataset uses NTFS junctions for zero-copy train/val split.
+
+Label directory versions (pipeline flows left to right):
+```
+labels_640 → labels_640_filtered → labels_640_clean → labels_640_field_filtered
+(bootstrap)   (heuristic filter)    (trajectory val)    (field mask + QA verdicts)
+```
+- `labels_640_ext/` — External model detections from jared-laptop (separate from bootstrap pipeline). QA was performed on these.
+- `ball_dataset_640/` — Organized training dataset. `labels/` junctions point to whichever label version is current.
+- `label_qa/` — SQLite cache, field mask polygons, composite grids, Sonnet agent results, reports.
+- `runs/` — Training run outputs (ball_v1, v2, v3, etc.)
+
+#### Running the Next Training Iteration
+
+```bash
+# 1. Apply QA verdicts to labels database
+uv run python -m training.data_prep.qa_verdict_ingester
+uv run python -m training.data_prep.qa_verdict_ingester --export F:/training_data/label_qa/verdicts_by_label.json
+
+# 2. Filter labels with field masks (soft filter — keeps near-off-field at 20%)
+uv run python -m training.data_prep.field_mask_filter
+
+# 3. Re-organize dataset with filtered labels
+uv run python -m training.data_prep.organize_dataset --labels F:/training_data/labels_640_field_filtered
+
+# 4. Smart sample with confuser negatives from QA
+uv run python -m training.data_prep.smart_sampler --confuser-verdicts F:/training_data/label_qa/verdicts_by_label.json
+
+# 5. Train (YOLO)
+uv run python -m training.train --data training/configs/ball_dataset_640.yaml --name ball_v4
+
+# 6. Or train temporal model with position encoding
+uv run python -m training.train_temporal --manifest F:/training_data/temporal_triplets.jsonl --position-encoding --focal-alpha 3.0
+
+# 7. After training, run spot-check
+uv run python -m training.label_qa_spot_check --run-id ball_v4
+
+# 8. Calibrate confidence threshold
+uv run python -m training.calibrate_confidence
+```
 
 ### Test Conventions
 
