@@ -18,6 +18,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!mobile/lib/
 lib64/
 parts/
 sdist/
@@ -167,12 +168,6 @@ cython_debug/
 /shared_data/*
 !/shared_data/.gitkeep
 
-/shared_data_simulator/*
-!/shared_data_simulator/config.ini
-
-simulator_clips_staging/
-.simulator_test_backup.json
-
 tests/e2e/test_data/*
 tests/e2e/test_logs/*
 tests/e2e/test_pids.json
@@ -180,10 +175,10 @@ tests/e2e/test_clips/
 
 # Ralph Wiggum loop state (temporary)
 .claude/ralph-state.json
-
-# Claude Code worktrees
-.claude/worktrees/
-
-# Large media / experiment files
-*.mp4
-*.jsonl
+training/data/*
+training/runs/*
+review_packets/*
+*.pt
+*.onnx
+*.tflite
+*.mlpackage
