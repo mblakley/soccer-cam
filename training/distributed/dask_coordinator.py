@@ -300,17 +300,37 @@ def main():
         if args.games
         else dict(UNC_GAMES)
     )
+    # label_job.py handles segment-level skip, so check which games
+    # have ALL segments labeled (count labels vs expected segments)
     games_to_label = {}
     for game_id, video_src in candidates.items():
-        label_dir = LABEL_OUTPUT_DIR / game_id
-        if label_dir.exists() and len(list(label_dir.glob("*.txt"))) > 0:
-            logger.info("Skipping %s (already labeled)", game_id)
+        video_dir = Path(video_src)
+        if not video_dir.exists():
+            logger.warning("Video dir not found: %s", video_src)
             continue
-        games_to_label[game_id] = video_src
+        segments = [p for p in video_dir.rglob("*.mp4") if "[F][0@0]" in p.name]
+        label_dir = LABEL_OUTPUT_DIR / game_id
+        labeled_segs = set()
+        if label_dir.exists():
+            for lf in label_dir.glob("*.txt"):
+                parts = lf.stem.rsplit("_frame_", 1)
+                if parts:
+                    labeled_segs.add(parts[0])
+        unlabeled = [s for s in segments if s.stem not in labeled_segs]
+        if not unlabeled:
+            logger.info("Skipping %s (all %d segments labeled)", game_id, len(segments))
+        else:
+            logger.info(
+                "Queuing %s (%d/%d segments need labeling)",
+                game_id,
+                len(unlabeled),
+                len(segments),
+            )
+            games_to_label[game_id] = video_src
 
     futures = {}
 
-    # Distribute labeling tasks (GPU) evenly across workers
+    # Distribute labeling tasks — prioritize faster workers (laptop)
     if games_to_label:
         info = client.scheduler_info()
         gpu_workers = [
@@ -320,13 +340,24 @@ def main():
         ]
         if not gpu_workers:
             gpu_workers = list(info["workers"].keys())
+
+        # Sort workers: remote (laptop) first, local last
+        gpu_workers.sort(key=lambda a: "0" if "192.168.86.24" in a else "1")
+
+        # Weighted distribution: give 2/3 to the first (faster) worker
+        game_list = list(games_to_label.items())
+        if len(gpu_workers) >= 2:
+            split = (len(game_list) * 2 + 2) // 3  # 2/3 to laptop
+        else:
+            split = len(game_list)
+
         logger.info(
             "Submitting %d labeling jobs across %d GPU workers...",
             len(games_to_label),
             len(gpu_workers),
         )
-        for i, (game_id, video_src) in enumerate(games_to_label.items()):
-            worker = gpu_workers[i % len(gpu_workers)]
+        for i, (game_id, video_src) in enumerate(game_list):
+            worker = gpu_workers[0] if i < split else gpu_workers[1]
             worker_name = info["workers"][worker].get("name", worker)
             logger.info("  label: %s -> %s", game_id, worker_name)
             fut = client.submit(
