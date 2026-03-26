@@ -163,6 +163,8 @@ def train_temporal(
     num_workers: int = 0,
     val_manifest: Path | None = None,
     resume: Path | None = None,
+    use_position_encoding: bool = False,
+    focal_alpha: float = 2.0,
 ):
     """Train the temporal ball detection model.
 
@@ -176,6 +178,9 @@ def train_temporal(
         num_workers: DataLoader workers (0 for Windows/low RAM)
         val_manifest: Optional validation manifest path
         resume: Path to checkpoint to resume from
+        use_position_encoding: Add 2 tile position channels (row, col) to input
+        focal_alpha: Alpha parameter for WeightedFocalLoss (higher = penalize
+            confident wrong predictions more aggressively)
     """
     from training.temporal_dataset import TemporalBallDataset
 
@@ -189,8 +194,14 @@ def train_temporal(
         dev = torch.device(f"cuda:{device}")
     logger.info("Using device: %s", dev)
 
+    in_channels = 11 if use_position_encoding else 9
+    if use_position_encoding:
+        logger.info("Position encoding enabled: %d input channels", in_channels)
+
     # Dataset and dataloader
-    train_dataset = TemporalBallDataset(manifest_path, augment=True)
+    train_dataset = TemporalBallDataset(
+        manifest_path, augment=True, use_position_encoding=use_position_encoding
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -202,7 +213,9 @@ def train_temporal(
 
     val_loader = None
     if val_manifest and Path(val_manifest).exists():
-        val_dataset = TemporalBallDataset(val_manifest, augment=False)
+        val_dataset = TemporalBallDataset(
+            val_manifest, augment=False, use_position_encoding=use_position_encoding
+        )
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
@@ -212,8 +225,8 @@ def train_temporal(
         )
 
     # Model, loss, optimizer
-    model = TemporalBallNet(in_channels=9).to(dev)
-    criterion = WeightedFocalLoss()
+    model = TemporalBallNet(in_channels=in_channels).to(dev)
+    criterion = WeightedFocalLoss(alpha=focal_alpha)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
@@ -348,6 +361,17 @@ def main():
     parser.add_argument(
         "--resume", type=Path, default=None, help="Checkpoint to resume from"
     )
+    parser.add_argument(
+        "--position-encoding",
+        action="store_true",
+        help="Add 2 tile position channels (row, col) to help suppress sideline FPs",
+    )
+    parser.add_argument(
+        "--focal-alpha",
+        type=float,
+        default=2.0,
+        help="Focal loss alpha (higher = more penalty on confident wrong predictions)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -361,6 +385,8 @@ def main():
         args.workers,
         args.val_manifest,
         args.resume,
+        use_position_encoding=args.position_encoding,
+        focal_alpha=args.focal_alpha,
     )
 
 

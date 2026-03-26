@@ -236,10 +236,19 @@ def run_on_frames(
 
     # Setup
     dev = torch.device(f"cuda:{device}" if device != "cpu" else "cpu")
-    model = TemporalBallNet(in_channels=9)
-    model.load_state_dict(torch.load(model_path, map_location=dev, weights_only=True))
+
+    # Detect model channel count from state dict
+    state_dict = torch.load(model_path, map_location=dev, weights_only=True)
+    first_conv_weight = state_dict.get("enc1.conv.0.weight")
+    in_channels = first_conv_weight.shape[1] if first_conv_weight is not None else 9
+
+    model = TemporalBallNet(in_channels=in_channels)
+    model.load_state_dict(state_dict)
     model = model.to(dev)
     model.eval()
+    uses_position = in_channels > 9
+    if uses_position:
+        logger.info("Model uses position encoding (%d channels)", in_channels)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
