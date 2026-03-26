@@ -667,13 +667,15 @@ def generate_next_tracking_loss_packet(
         sum(1 for t in selected if t["row"] == 2),
     )
 
-    # Find next packet number
-    existing = [
-        d.name
-        for d in output_dir.iterdir()
-        if d.is_dir() and d.name.startswith("tracking_loss_")
-    ]
-    next_num = len(existing) + 1
+    # Find next packet number (use max existing number, not count, to avoid collisions)
+    existing_nums = []
+    for d in output_dir.iterdir():
+        if d.is_dir() and d.name.startswith("tracking_loss_"):
+            try:
+                existing_nums.append(int(d.name.split("_")[-1]))
+            except ValueError:
+                pass
+    next_num = max(existing_nums, default=0) + 1
     packet_id = f"tracking_loss_{next_num:03d}"
 
     _report_progress("creating", f"Creating {packet_id} with {len(selected)} tiles...", 0.95)
