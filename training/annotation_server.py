@@ -14,6 +14,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -512,29 +513,38 @@ async def generation_progress():
         return {"active": False}
 
 
+_generate_lock = Lock()
+
+
 @app.post("/api/generate-packet")
 async def generate_packet():
     """Generate the next tracking loss packet using learned exclusions.
 
     Reads annotations from completed packets to learn warmup cutoffs
     and static ball positions, then generates a filtered packet.
+    Only one generation can run at a time.
     """
+    if not _generate_lock.acquire(blocking=False):
+        return {"status": "busy", "packet_id": None}
     from training.annotation.tracking_loss_generator import (
         generate_next_tracking_loss_packet,
     )
 
-    manifest = await asyncio.to_thread(
-        generate_next_tracking_loss_packet,
-        dataset_path=Path("F:/training_data/ball_dataset_640"),
-        tiles_path=Path("F:/training_data/tiles_640"),
-        output_dir=REVIEW_PACKETS_DIR,
-        packet_size=100,
-    )
+    try:
+        manifest = await asyncio.to_thread(
+            generate_next_tracking_loss_packet,
+            dataset_path=Path("F:/training_data/ball_dataset_640"),
+            tiles_path=Path("F:/training_data/tiles_640"),
+            output_dir=REVIEW_PACKETS_DIR,
+            packet_size=100,
+        )
 
-    if manifest:
-        packet_id = manifest.parent.name
-        return {"status": "created", "packet_id": packet_id}
-    return {"status": "exhausted", "packet_id": None}
+        if manifest:
+            packet_id = manifest.parent.name
+            return {"status": "created", "packet_id": packet_id}
+        return {"status": "exhausted", "packet_id": None}
+    finally:
+        _generate_lock.release()
 
 
 @app.post("/api/ingest")
