@@ -155,22 +155,6 @@ def _format_frame_labels(seg_name, frame_idx, dets):
     return files
 
 
-def _writer_thread(write_queue, output_dir):
-    """Background thread that writes label files from a queue."""
-    files_written = 0
-    while True:
-        item = write_queue.get()
-        if item is None:  # poison pill
-            write_queue.task_done()
-            break
-        for fname, content in item:
-            with open(output_dir / fname, "w") as f:
-                f.write(content)
-            files_written += 1
-        write_queue.task_done()
-    return files_written
-
-
 def process_segment(
     video_path,
     sess,
@@ -229,8 +213,11 @@ def process_segment(
                             "Network write failed, falling back to %s",
                             local_fallback_dir,
                         )
-                    with open(local_fallback_dir / fname, "w") as f:
-                        f.write(content)
+                    try:
+                        with open(local_fallback_dir / fname, "w") as f:
+                            f.write(content)
+                    except OSError:
+                        logger.error("Fallback write also failed for %s", fname)
                 writer_count[0] += 1
             write_queue.task_done()
 
@@ -313,7 +300,7 @@ def run_label_job(
     segments = sorted([p for p in video_dir.rglob("*.mp4") if "[F][0@0]" in p.name])
     if not segments:
         logger.error("No segments found in %s", video_dir)
-        return
+        return 0
 
     logger.info("=== %s: %d segments ===", video_dir.name, len(segments))
 
