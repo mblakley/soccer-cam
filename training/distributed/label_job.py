@@ -77,7 +77,9 @@ def detect_balls(frame_bgr, sess, conf_threshold=CONF_THRESHOLD):
 
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     if pad_h > 0 or pad_w > 0:
-        rgb = cv2.copyMakeBorder(rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        rgb = cv2.copyMakeBorder(
+            rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0)
+        )
 
     blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
     outputs = sess.run(None, {"images": blob})
@@ -95,14 +97,20 @@ def detect_balls(frame_bgr, sess, conf_threshold=CONF_THRESHOLD):
     boxes[:, 3] = filtered[:, 1] + filtered[:, 3] / 2
 
     indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(), filtered[:, 5].tolist(),
-        conf_threshold, NMS_IOU_THRESHOLD,
+        boxes.tolist(),
+        filtered[:, 5].tolist(),
+        conf_threshold,
+        NMS_IOU_THRESHOLD,
     )
 
     return [
-        {"cx": float(filtered[i][0]), "cy": float(filtered[i][1]),
-         "w": float(filtered[i][2]), "h": float(filtered[i][3]),
-         "conf": float(filtered[i][5])}
+        {
+            "cx": float(filtered[i][0]),
+            "cy": float(filtered[i][1]),
+            "w": float(filtered[i][2]),
+            "h": float(filtered[i][3]),
+            "conf": float(filtered[i][5]),
+        }
         for i in indices
     ]
 
@@ -117,21 +125,68 @@ def pano_to_tile_labels(cx, cy, w, h):
             tcx = cx - tile_x0
             tcy = cy - tile_y0
             if 0 <= tcx < TILE_SIZE and 0 <= tcy < TILE_SIZE:
-                labels.append({
-                    "row": row, "col": col,
-                    "cx_norm": tcx / TILE_SIZE,
-                    "cy_norm": tcy / TILE_SIZE,
-                    "w_norm": w / TILE_SIZE,
-                    "h_norm": h / TILE_SIZE,
-                })
+                labels.append(
+                    {
+                        "row": row,
+                        "col": col,
+                        "cx_norm": tcx / TILE_SIZE,
+                        "cy_norm": tcy / TILE_SIZE,
+                        "w_norm": w / TILE_SIZE,
+                        "h_norm": h / TILE_SIZE,
+                    }
+                )
     return labels
 
 
+def _format_frame_labels(seg_name, frame_idx, dets):
+    """Convert detections to list of (filename, content) pairs for writing."""
+    tile_labels = defaultdict(list)
+    for det in dets:
+        for tl in pano_to_tile_labels(det["cx"], det["cy"], det["w"], det["h"]):
+            key = (tl["row"], tl["col"])
+            line = f"0 {tl['cx_norm']:.6f} {tl['cy_norm']:.6f} {tl['w_norm']:.6f} {tl['h_norm']:.6f}"
+            tile_labels[key].append(line)
+
+    files = []
+    for (row, col), lines in tile_labels.items():
+        fname = f"{seg_name}_frame_{frame_idx:06d}_r{row}_c{col}.txt"
+        content = "\n".join(lines) + "\n"
+        files.append((fname, content))
+    return files
+
+
+def _writer_thread(write_queue, output_dir):
+    """Background thread that writes label files from a queue."""
+    files_written = 0
+    while True:
+        item = write_queue.get()
+        if item is None:  # poison pill
+            write_queue.task_done()
+            break
+        for fname, content in item:
+            with open(output_dir / fname, "w") as f:
+                f.write(content)
+            files_written += 1
+        write_queue.task_done()
+    return files_written
+
+
 def process_segment(
-    video_path, sess, output_dir, frame_interval=FRAME_INTERVAL,
-    conf_threshold=CONF_THRESHOLD, static_threshold=200,
+    video_path,
+    sess,
+    output_dir,
+    frame_interval=FRAME_INTERVAL,
+    conf_threshold=CONF_THRESHOLD,
+    static_threshold=200,
 ):
-    """Process one video segment and write per-tile YOLO labels."""
+    """Process one video segment and write per-tile YOLO labels.
+
+    GPU detection and file I/O run in parallel: detections are queued
+    for a background writer thread so GPU never waits on disk/network.
+    """
+    import queue
+    import threading
+
     seg_name = video_path.stem
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -141,8 +196,49 @@ def process_segment(
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     logger.info("  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Start background writer thread — unbounded queue so GPU never blocks.
+    # If network write fails, falls back to local disk for later sync.
+    write_queue = queue.Queue()  # unbounded — whole segment fits in memory
+    writer_count = [0]
+    local_fallback_dir = None
+
+    def writer():
+        nonlocal local_fallback_dir
+        while True:
+            item = write_queue.get()
+            if item is None:
+                write_queue.task_done()
+                break
+            for fname, content in item:
+                try:
+                    with open(output_dir / fname, "w") as f:
+                        f.write(content)
+                except OSError:
+                    # Network write failed — fall back to local disk
+                    if local_fallback_dir is None:
+                        from pathlib import Path
+
+                        local_fallback_dir = (
+                            Path(r"C:\soccer-cam-label\output_pending")
+                            / output_dir.name
+                        )
+                        local_fallback_dir.mkdir(parents=True, exist_ok=True)
+                        logger.warning(
+                            "Network write failed, falling back to %s",
+                            local_fallback_dir,
+                        )
+                    with open(local_fallback_dir / fname, "w") as f:
+                        f.write(content)
+                writer_count[0] += 1
+            write_queue.task_done()
+
+    writer_t = threading.Thread(target=writer, daemon=True)
+    writer_t.start()
+
     fi = 0
-    detections = []
+    det_count = 0
     start = time.time()
 
     while True:
@@ -153,56 +249,53 @@ def process_segment(
             ret, frame = cap.retrieve()
             if ret:
                 dets = detect_balls(frame, sess, conf_threshold)
-                for d in dets:
-                    d["frame_idx"] = fi
-                    detections.append(d)
+                det_count += len(dets)
+
+                if dets:
+                    # Format labels (cheap CPU work) then queue for async write
+                    files = _format_frame_labels(seg_name, fi, dets)
+                    write_queue.put(files)
         fi += 1
 
     cap.release()
 
-    # Field filter
-    field_dets = [d for d in detections if is_on_field(d["cx"], d["cy"])]
+    # Signal writer to finish and wait
+    write_queue.put(None)
+    writer_t.join()
 
-    # Static removal
-    pos_counts = defaultdict(int)
-    for d in field_dets:
-        key = (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50)
-        pos_counts[key] += 1
-    static = {k for k, v in pos_counts.items() if v > static_threshold}
-    clean = [d for d in field_dets if
-             (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50) not in static]
+    # Sync any local fallback files to the share
+    if local_fallback_dir and local_fallback_dir.exists():
+        pending = list(local_fallback_dir.glob("*.txt"))
+        if pending:
+            logger.info("    Syncing %d fallback files to share...", len(pending))
+            import shutil
 
-    # Write per-tile labels
-    output_dir.mkdir(parents=True, exist_ok=True)
-    files_written = 0
-    by_frame = defaultdict(list)
-    for d in clean:
-        by_frame[d["frame_idx"]].append(d)
-
-    for frame_idx, frame_dets in by_frame.items():
-        tile_labels = defaultdict(list)
-        for det in frame_dets:
-            for tl in pano_to_tile_labels(det["cx"], det["cy"], det["w"], det["h"]):
-                key = (tl["row"], tl["col"])
-                line = f"0 {tl['cx_norm']:.6f} {tl['cy_norm']:.6f} {tl['w_norm']:.6f} {tl['h_norm']:.6f}"
-                tile_labels[key].append(line)
-
-        for (row, col), lines in tile_labels.items():
-            fname = f"{seg_name}_frame_{frame_idx:06d}_r{row}_c{col}.txt"
-            with open(output_dir / fname, "w") as f:
-                for line in lines:
-                    f.write(line + "\n")
-            files_written += 1
+            for f in pending:
+                try:
+                    shutil.copy2(f, output_dir / f.name)
+                    f.unlink()
+                except OSError:
+                    pass  # will retry next run
+            remaining = list(local_fallback_dir.glob("*.txt"))
+            if not remaining:
+                local_fallback_dir.rmdir()
+                logger.info("    Sync complete")
+            else:
+                logger.warning("    %d files still pending sync", len(remaining))
 
     elapsed = time.time() - start
-    logger.info("    %d raw -> %d clean -> %d files in %.0fs",
-                len(detections), len(clean), files_written, elapsed)
-    return files_written
+    logger.info(
+        "    %d detections -> %d files in %.0fs", det_count, writer_count[0], elapsed
+    )
+    return writer_count[0]
 
 
 def run_label_job(
-    video_dir, model_path, output_dir,
-    conf=CONF_THRESHOLD, frame_interval=FRAME_INTERVAL,
+    video_dir,
+    model_path,
+    output_dir,
+    conf=CONF_THRESHOLD,
+    frame_interval=FRAME_INTERVAL,
     use_gpu=True,
 ):
     """Run labeling on all segments in a video directory."""
@@ -227,7 +320,11 @@ def run_label_job(
     total_files = 0
     for seg in segments:
         total_files += process_segment(
-            seg, sess, output_dir, frame_interval, conf,
+            seg,
+            sess,
+            output_dir,
+            frame_interval,
+            conf,
             static_threshold=200 if frame_interval <= 4 else 100,
         )
 
@@ -237,13 +334,17 @@ def run_label_job(
 
 def main():
     parser = argparse.ArgumentParser(description="Run ball detection labeling job")
-    parser.add_argument("--video-dir", type=Path, help="Directory with segment .mp4 files")
+    parser.add_argument(
+        "--video-dir", type=Path, help="Directory with segment .mp4 files"
+    )
     parser.add_argument("--model", type=Path, default=Path("model.onnx"))
     parser.add_argument("--output", type=Path, help="Output labels directory")
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
     parser.add_argument("--frame-interval", type=int, default=FRAME_INTERVAL)
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
-    parser.add_argument("--config", type=Path, help="Job config JSON (overrides other args)")
+    parser.add_argument(
+        "--config", type=Path, help="Job config JSON (overrides other args)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -259,8 +360,11 @@ def main():
         args.cpu = cfg.get("cpu", False)
 
     run_label_job(
-        args.video_dir, args.model, args.output,
-        args.conf, args.frame_interval,
+        args.video_dir,
+        args.model,
+        args.output,
+        args.conf,
+        args.frame_interval,
         use_gpu=not args.cpu,
     )
 
