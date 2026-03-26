@@ -1,0 +1,7 @@
+# Tiny dataset for smoke testing
+path: F:\training_data\ball_dataset_640
+train: train_tiny.txt
+val: val_tiny.txt
+
+nc: 1
+names: ["ball"]
