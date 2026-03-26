@@ -302,10 +302,25 @@ def run_label_job(
         logger.error("No segments found in %s", video_dir)
         return 0
 
-    logger.info("=== %s: %d segments ===", video_dir.name, len(segments))
+    # Skip segments that already have labels
+    unlabeled = []
+    for seg in segments:
+        existing = list(output_dir.glob(f"{seg.stem}_frame_*.txt"))
+        if existing:
+            logger.info("  Skipping %s (%d labels exist)", seg.stem[:50], len(existing))
+        else:
+            unlabeled.append(seg)
+
+    logger.info(
+        "=== %s: %d segments (%d already labeled, %d to do) ===",
+        video_dir.name,
+        len(segments),
+        len(segments) - len(unlabeled),
+        len(unlabeled),
+    )
 
     total_files = 0
-    for seg in segments:
+    for seg in unlabeled:
         total_files += process_segment(
             seg,
             sess,
