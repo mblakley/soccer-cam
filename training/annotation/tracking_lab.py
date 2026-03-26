@@ -57,7 +57,9 @@ def build_tracking_lab(
             break
 
     if not seg_name:
-        logger.error("Segment matching '%s' not found in %s", segment_prefix, labels_dir)
+        logger.error(
+            "Segment matching '%s' not found in %s", segment_prefix, labels_dir
+        )
         return None
 
     logger.info("Building tracking lab for %s / %s", game_id, seg_name)
@@ -81,19 +83,21 @@ def build_tracking_lab(
             tile_y = int(cy - row * 580)
             tile_x = max(0, min(TILE_SIZE - 1, tile_x))
             tile_y = max(0, min(TILE_SIZE - 1, tile_y))
-            frame_dets[fi].append({
-                "pano_x": round(cx, 1),
-                "pano_y": round(cy, 1),
-                "row": row,
-                "col": col,
-                "cx_norm": round(tile_x / TILE_SIZE, 4),
-                "cy_norm": round(tile_y / TILE_SIZE, 4),
-                "w_norm": round(w / TILE_SIZE, 4),
-                "h_norm": round(h / TILE_SIZE, 4),
-                "tile_x": tile_x,
-                "tile_y": tile_y,
-                "conf": d.get("conf", 0),
-            })
+            frame_dets[fi].append(
+                {
+                    "pano_x": round(cx, 1),
+                    "pano_y": round(cy, 1),
+                    "row": row,
+                    "col": col,
+                    "cx_norm": round(tile_x / TILE_SIZE, 4),
+                    "cy_norm": round(tile_y / TILE_SIZE, 4),
+                    "w_norm": round(w / TILE_SIZE, 4),
+                    "h_norm": round(h / TILE_SIZE, 4),
+                    "tile_x": tile_x,
+                    "tile_y": tile_y,
+                    "conf": d.get("conf", 0),
+                }
+            )
         logger.info("Loaded %d external detections", len(ext_dets))
     else:
         # Load from bootstrap YOLO tile labels
@@ -107,18 +111,20 @@ def build_tracking_lab(
                 parts = line.split()
                 w_norm = float(parts[3]) if len(parts) > 3 else 0.02
                 h_norm = float(parts[4]) if len(parts) > 4 else 0.02
-                frame_dets[fi].append({
-                    "pano_x": round(px, 1),
-                    "pano_y": round(py, 1),
-                    "row": row,
-                    "col": col,
-                    "cx_norm": round(cx_norm, 4),
-                    "cy_norm": round(cy_norm, 4),
-                    "w_norm": round(w_norm, 4),
-                    "h_norm": round(h_norm, 4),
-                    "tile_x": int(cx_norm * TILE_SIZE),
-                    "tile_y": int(cy_norm * TILE_SIZE),
-                })
+                frame_dets[fi].append(
+                    {
+                        "pano_x": round(px, 1),
+                        "pano_y": round(py, 1),
+                        "row": row,
+                        "col": col,
+                        "cx_norm": round(cx_norm, 4),
+                        "cy_norm": round(cy_norm, 4),
+                        "w_norm": round(w_norm, 4),
+                        "h_norm": round(h_norm, 4),
+                        "tile_x": int(cx_norm * TILE_SIZE),
+                        "tile_y": int(cy_norm * TILE_SIZE),
+                    }
+                )
 
     # Phase 2: Find all frame timestamps (including no-detection frames)
     all_frame_indices = set()
@@ -147,9 +153,12 @@ def build_tracking_lab(
                 px = fb["col"] * 576 + fb["x"]  # STEP_X=576
                 py = fb["row"] * 580 + fb["y"]  # STEP_Y=580
                 user_marks[fi] = {
-                    "row": fb["row"], "col": fb["col"],
-                    "x": fb["x"], "y": fb["y"],
-                    "pano_x": round(px, 1), "pano_y": round(py, 1),
+                    "row": fb["row"],
+                    "col": fb["col"],
+                    "x": fb["x"],
+                    "y": fb["y"],
+                    "pano_x": round(px, 1),
+                    "pano_y": round(py, 1),
                 }
         logger.info("Loaded %d user manual marks from feedback", len(user_marks))
 
@@ -189,7 +198,7 @@ def build_tracking_lab(
                 if fi > sorted_frames[-1]:
                     break
                 # Velocity decays over time (ball slows down)
-                decay = 0.9 ** step
+                decay = 0.9**step
                 ex = last_x + vx * step * decay
                 ey = last_y + vy * step * decay
                 # Clamp to field bounds
@@ -211,7 +220,7 @@ def build_tracking_lab(
                 fi = first_fi - step * FRAME_INTERVAL
                 if fi < 0:
                     break
-                decay = 0.9 ** step
+                decay = 0.9**step
                 ex = first_x + vx * step * decay
                 ey = first_y + vy * step * decay
                 ex = max(0, min(4096, ex))
@@ -222,8 +231,11 @@ def build_tracking_lab(
         fi_a, xa, ya = sorted_mark_items[0]
         guide_positions[fi_a] = (xa, ya)
 
-    logger.info("Guide path: %d interpolated positions from %d marks",
-                len(guide_positions), len(user_marks))
+    logger.info(
+        "Guide path: %d interpolated positions from %d marks",
+        len(guide_positions),
+        len(user_marks),
+    )
 
     # For each frame, pick the detection closest to the guide (if within range)
     GUIDE_RADIUS = 500  # Accept detections within 500px (ball moves fast during kicks)
@@ -262,13 +274,19 @@ def build_tracking_lab(
             dets = frame_dets.get(fi, [])
             if dets:
                 best = max(dets, key=lambda d: d.get("conf", 0))
-                guided_results[fi] = (best["pano_x"], best["pano_y"], best.get("conf", 0.5))
+                guided_results[fi] = (
+                    best["pano_x"],
+                    best["pano_y"],
+                    best.get("conf", 0.5),
+                )
 
-    logger.info("Guided selection: %d detection matches + %d interpolated + %d user marks + %d fallback",
-                matched_count,
-                max(0, len(guide_positions) - matched_count - len(user_marks)),
-                len(user_marks),
-                len(guided_results) - matched_count - len(user_marks))
+    logger.info(
+        "Guided selection: %d detection matches + %d interpolated + %d user marks + %d fallback",
+        matched_count,
+        max(0, len(guide_positions) - matched_count - len(user_marks)),
+        len(user_marks),
+        len(guided_results) - matched_count - len(user_marks),
+    )
 
     # Backwards compatibility: build tracker_positions from guided results
     tracker_positions = {fi: (x, y) for fi, (x, y, _) in guided_results.items()}
@@ -288,18 +306,30 @@ def build_tracking_lab(
                 mismatch_count += 1
                 logger.warning(
                     "  MISMATCH frame %d: tracker=(%.0f,%.0f) user=(%.0f,%.0f) error=%.0fpx",
-                    fi, tx, ty, mark["pano_x"], mark["pano_y"], error,
+                    fi,
+                    tx,
+                    ty,
+                    mark["pano_x"],
+                    mark["pano_y"],
+                    error,
                 )
         else:
             mismatch_count += 1
-            logger.warning("  MISSING frame %d: no tracker position, user=(%.0f,%.0f)",
-                fi, mark["pano_x"], mark["pano_y"])
+            logger.warning(
+                "  MISSING frame %d: no tracker position, user=(%.0f,%.0f)",
+                fi,
+                mark["pano_x"],
+                mark["pano_y"],
+            )
 
     if user_marks:
         avg_error = total_error / max(match_count + mismatch_count, 1)
         logger.info(
             "User mark validation: %d/%d match (<100px), %d mismatch, avg_error=%.0fpx",
-            match_count, len(user_marks), mismatch_count, avg_error,
+            match_count,
+            len(user_marks),
+            mismatch_count,
+            avg_error,
         )
 
     best_trajectory = guided_results
@@ -336,6 +366,7 @@ def build_tracking_lab(
                 # Predicted position or no exact match — create a synthetic entry
                 # Convert panoramic back to tile coords
                 from training.data_prep.trajectory_validator import STEP_X, STEP_Y
+
                 # Find best tile for this panoramic position
                 best_row = max(0, min(2, int(by / STEP_Y)))
                 best_col = max(0, min(6, int(bx / STEP_X)))
@@ -354,15 +385,17 @@ def build_tracking_lab(
                     "traj_id": None,
                 }
 
-        frames.append({
-            "frame_idx": fi,
-            "time_secs": time_secs,
-            "detections": annotated_dets,
-            "detection_count": len(annotated_dets),
-            "best_candidate": best_det,
-            "has_ball": best_det is not None,
-            "is_predicted": is_predicted,
-        })
+        frames.append(
+            {
+                "frame_idx": fi,
+                "time_secs": time_secs,
+                "detections": annotated_dets,
+                "detection_count": len(annotated_dets),
+                "best_candidate": best_det,
+                "has_ball": best_det is not None,
+                "is_predicted": is_predicted,
+            }
+        )
 
     # Phase 6: Compute coverage stats
     total_frames = len(frames)
@@ -410,11 +443,11 @@ def build_tracking_lab(
 
 def main():
     parser = argparse.ArgumentParser(description="Build tracking lab session")
+    parser.add_argument("--game", required=True, help="Game ID (directory name)")
     parser.add_argument(
-        "--game", required=True, help="Game ID (directory name)"
-    )
-    parser.add_argument(
-        "--segment", required=True, help="Segment time prefix (e.g., '08.35.21-08.52.16')"
+        "--segment",
+        required=True,
+        help="Segment time prefix (e.g., '08.35.21-08.52.16')",
     )
     parser.add_argument(
         "--tiles",
