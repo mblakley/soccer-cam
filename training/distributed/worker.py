@@ -330,36 +330,74 @@ def do_tile(game_id: str, video_path: Path, frame_interval: int = 4):
     )
 
 
+# ---- Job execution dispatch ----
+
+
+def execute_job(job: dict):
+    """Execute a job based on its type."""
+    job_type = job["type"]
+
+    if job_type == "label":
+        do_label(job["game_id"], Path(job["video_path"]))
+
+    elif job_type == "tile":
+        do_tile(job["game_id"], Path(job["video_path"]))
+
+    elif job_type == "train":
+        do_train(job)
+
+    else:
+        raise ValueError(f"Unknown job type: {job_type}")
+
+
+def do_train(job: dict):
+    """Run a training job."""
+    import subprocess
+
+    config = job.get("config_path", "")
+    logger.info("Training with config: %s", config)
+    result = subprocess.run(
+        ["uv", "run", "python", "-m", "training.train", "--config", config],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Training failed: {result.stderr[:500]}")
+    logger.info("Training complete")
+
+
 # ---- Main loop ----
 
 
 def main():
     parser = argparse.ArgumentParser(description="Independent GPU/CPU worker")
-    parser.add_argument("--label-only", action="store_true")
-    parser.add_argument("--tile-only", action="store_true")
+    parser.add_argument(
+        "--capabilities",
+        nargs="*",
+        default=["gpu"],
+        help="Worker capabilities (default: gpu). Jobs requiring capabilities not listed here will be skipped.",
+    )
     parser.add_argument(
         "--idle-threshold",
         type=int,
         default=0,
         help="Pause if user idle < N seconds (0=disabled, 300=5min)",
     )
-    parser.add_argument("--once", action="store_true", help="Process one task and exit")
+    parser.add_argument("--once", action="store_true", help="Process one job and exit")
     args = parser.parse_args()
 
     hostname = socket.gethostname()
-    logger.info("Worker starting on %s", hostname)
+    logger.info("Worker starting on %s (capabilities: %s)", hostname, args.capabilities)
 
     # Map share if needed (remote workers)
     if not ensure_share():
         logger.error("Cannot access share, exiting")
         return
 
-    # Ensure locks directory exists
-    locks_dir = Path(LOCKS_DIR)
     try:
-        locks_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass  # may already exist but we lack stat permission
+        from training.distributed.jobs import claim_job, complete_job, fail_job
+    except ImportError:
+        from jobs import claim_job, complete_job, fail_job
 
     idle_count = 0
     while True:
@@ -368,62 +406,32 @@ def main():
             time.sleep(30)
             continue
 
-        # Find work
-        work_found = False
+        # Claim next job from queue
+        claimed = claim_job(capabilities=args.capabilities)
 
-        # Labels first (GPU-bound, higher priority)
-        if not args.tile_only:
-            segments = find_unlabeled_segments()
-            for game_id, seg_stem, video_path in segments:
-                lock_path = locks_dir / f"label_{game_id}_{seg_stem}.lock"
-
-                # Clean stale locks
-                if lock_path.exists() and is_lock_stale(lock_path):
-                    logger.warning("Clearing stale lock: %s", lock_path.name)
-                    release_lock(lock_path)
-
-                if try_lock(lock_path):
-                    logger.info("LABEL: %s/%s", game_id, seg_stem[:40])
-                    try:
-                        do_label(game_id, video_path)
-                    except Exception as e:
-                        logger.error("Label failed: %s", e, exc_info=True)
-                    finally:
-                        release_lock(lock_path)
-                    work_found = True
-                    break  # re-scan for next task
-
-        # Tiles (CPU-bound)
-        if not args.label_only and not work_found:
-            segments = find_untiled_segments()
-            for game_id, seg_stem, video_path in segments:
-                lock_path = locks_dir / f"tile_{game_id}_{seg_stem}.lock"
-
-                if lock_path.exists() and is_lock_stale(lock_path):
-                    logger.warning("Clearing stale lock: %s", lock_path.name)
-                    release_lock(lock_path)
-
-                if try_lock(lock_path):
-                    logger.info("TILE: %s/%s", game_id, seg_stem[:40])
-                    try:
-                        do_tile(game_id, video_path)
-                    except Exception as e:
-                        logger.error("Tile failed: %s", e, exc_info=True)
-                    finally:
-                        release_lock(lock_path)
-                    work_found = True
-                    break
+        if claimed:
+            job, job_path = claimed
+            idle_count = 0
+            logger.info(
+                "[%s] %s/%s",
+                job["type"].upper(),
+                job.get("game_id", ""),
+                job.get("segment", job.get("config_path", ""))[:40],
+            )
+            try:
+                execute_job(job)
+                complete_job(job_path, {"hostname": hostname})
+            except Exception as e:
+                logger.error("Job failed: %s", e, exc_info=True)
+                fail_job(job_path, str(e))
+        else:
+            idle_count += 1
+            if idle_count == 1:
+                logger.info("No jobs in queue. Polling every 30s...")
+            time.sleep(30)
 
         if args.once:
             break
-
-        if not work_found:
-            idle_count += 1
-            if idle_count == 1:
-                logger.info("No work available. Polling every 60s...")
-            time.sleep(60)
-        else:
-            idle_count = 0
 
 
 if __name__ == "__main__":
