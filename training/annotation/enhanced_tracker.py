@@ -15,7 +15,6 @@ Plus our additions:
 """
 
 import logging
-import math
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -24,8 +23,8 @@ logger = logging.getLogger(__name__)
 # Autocam-derived defaults
 DEFAULT_CONF_THRESHOLD = 0.45
 BUFFER_SECONDS = 3.0
-POSITION_EMA = 0.975       # 97.5% previous + 2.5% new (very smooth)
-VELOCITY_EMA = 0.75        # 75% smoothing on velocity
+POSITION_EMA = 0.975  # 97.5% previous + 2.5% new (very smooth)
+VELOCITY_EMA = 0.75  # 75% smoothing on velocity
 FRAME_INTERVAL = 8
 FPS = 25.0
 FRAMES_PER_SECOND = FPS / FRAME_INTERVAL  # ~3.125 detection frames per second
@@ -35,18 +34,20 @@ BUFFER_SIZE = int(BUFFER_SECONDS * FRAMES_PER_SECOND)  # ~9-10 frames
 @dataclass
 class TrackedPosition:
     """A single tracked ball position with metadata."""
+
     frame_idx: int
-    x: float              # panoramic x
-    y: float              # panoramic y
-    conf: float           # detection confidence (0-1)
-    source: str = "det"   # "det", "user", "interp", "extrap", "diff"
-    raw_x: float = 0.0    # raw detection x before smoothing
-    raw_y: float = 0.0    # raw detection y before smoothing
+    x: float  # panoramic x
+    y: float  # panoramic y
+    conf: float  # detection confidence (0-1)
+    source: str = "det"  # "det", "user", "interp", "extrap", "diff"
+    raw_x: float = 0.0  # raw detection x before smoothing
+    raw_y: float = 0.0  # raw detection y before smoothing
 
 
 @dataclass
 class EnhancedTrackerState:
     """Current state of the enhanced tracker."""
+
     # Smoothed position (EMA)
     x: float = 0.0
     y: float = 0.0
@@ -106,9 +107,7 @@ class EnhancedTracker:
         self.max_missing_frames = max_missing_frames
         self.field_filter = field_filter
 
-        self.state = EnhancedTrackerState(
-            buffer=deque(maxlen=self.buffer_size)
-        )
+        self.state = EnhancedTrackerState(buffer=deque(maxlen=self.buffer_size))
 
     def update(
         self,
@@ -135,9 +134,12 @@ class EnhancedTracker:
             # User mark always wins
             selected = TrackedPosition(
                 frame_idx=frame_idx,
-                x=user_mark[0], y=user_mark[1],
-                conf=1.0, source="user",
-                raw_x=user_mark[0], raw_y=user_mark[1],
+                x=user_mark[0],
+                y=user_mark[1],
+                conf=1.0,
+                source="user",
+                raw_x=user_mark[0],
+                raw_y=user_mark[1],
             )
         else:
             # Filter detections by confidence and field boundary
@@ -153,21 +155,30 @@ class EnhancedTracker:
                 # Pick detection closest to predicted position
                 pred_x = state.x + state.vx
                 pred_y = state.y + state.vy
-                best = min(candidates, key=lambda d: (d[0] - pred_x) ** 2 + (d[1] - pred_y) ** 2)
+                best = min(
+                    candidates,
+                    key=lambda d: (d[0] - pred_x) ** 2 + (d[1] - pred_y) ** 2,
+                )
                 selected = TrackedPosition(
                     frame_idx=frame_idx,
-                    x=best[0], y=best[1],
-                    conf=best[2], source="det",
-                    raw_x=best[0], raw_y=best[1],
+                    x=best[0],
+                    y=best[1],
+                    conf=best[2],
+                    source="det",
+                    raw_x=best[0],
+                    raw_y=best[1],
                 )
             elif candidates:
                 # Not yet initialized — pick highest confidence
                 best = max(candidates, key=lambda d: d[2])
                 selected = TrackedPosition(
                     frame_idx=frame_idx,
-                    x=best[0], y=best[1],
-                    conf=best[2], source="det",
-                    raw_x=best[0], raw_y=best[1],
+                    x=best[0],
+                    y=best[1],
+                    conf=best[2],
+                    source="det",
+                    raw_x=best[0],
+                    raw_y=best[1],
                 )
 
         # Step 2: Update tracker state
@@ -188,8 +199,12 @@ class EnhancedTracker:
                 raw_vy = selected.raw_y - state.y
 
                 # Smooth velocity with EMA
-                state.vx = self.velocity_ema * state.vx + (1 - self.velocity_ema) * raw_vx
-                state.vy = self.velocity_ema * state.vy + (1 - self.velocity_ema) * raw_vy
+                state.vx = (
+                    self.velocity_ema * state.vx + (1 - self.velocity_ema) * raw_vx
+                )
+                state.vy = (
+                    self.velocity_ema * state.vy + (1 - self.velocity_ema) * raw_vy
+                )
 
                 # User marks bypass buffer averaging and EMA — snap immediately
                 if selected.source == "user":
@@ -219,8 +234,14 @@ class EnhancedTracker:
                             selected.y = avg_y
 
                     # Smooth position with EMA
-                    state.x = self.position_ema * state.x + (1 - self.position_ema) * selected.x
-                    state.y = self.position_ema * state.y + (1 - self.position_ema) * selected.y
+                    state.x = (
+                        self.position_ema * state.x
+                        + (1 - self.position_ema) * selected.x
+                    )
+                    state.y = (
+                        self.position_ema * state.y
+                        + (1 - self.position_ema) * selected.y
+                    )
 
                 # Update selected with final smoothed position
                 selected.x = state.x
@@ -234,18 +255,23 @@ class EnhancedTracker:
             # No detection — predict using velocity
             state.frames_without_detection += 1
 
-            if state.initialized and state.frames_without_detection <= self.max_missing_frames:
+            if (
+                state.initialized
+                and state.frames_without_detection <= self.max_missing_frames
+            ):
                 # Extrapolate with decaying velocity
-                decay = 0.95 ** state.frames_without_detection
+                decay = 0.95**state.frames_without_detection
                 state.x += state.vx * decay
                 state.y += state.vy * decay
 
                 predicted = TrackedPosition(
                     frame_idx=frame_idx,
-                    x=state.x, y=state.y,
+                    x=state.x,
+                    y=state.y,
                     conf=0.0,
                     source="extrap",
-                    raw_x=state.x, raw_y=state.y,
+                    raw_x=state.x,
+                    raw_y=state.y,
                 )
                 state.history.append(predicted)
                 self._update_adaptive_rate(predicted)
@@ -262,10 +288,7 @@ class EnhancedTracker:
         self, frame_interval: int = FRAME_INTERVAL
     ) -> list[tuple[int, float, float, float, str]]:
         """Get trajectory as (frame_idx, x, y, conf, source) tuples."""
-        return [
-            (p.frame_idx, p.x, p.y, p.conf, p.source)
-            for p in self.state.history
-        ]
+        return [(p.frame_idx, p.x, p.y, p.conf, p.source) for p in self.state.history]
 
     def get_detection_interval(self) -> int:
         """Get the recommended frame interval for the next detection run.
@@ -317,6 +340,4 @@ class EnhancedTracker:
 
     def reset(self):
         """Reset tracker state."""
-        self.state = EnhancedTrackerState(
-            buffer=deque(maxlen=self.buffer_size)
-        )
+        self.state = EnhancedTrackerState(buffer=deque(maxlen=self.buffer_size))

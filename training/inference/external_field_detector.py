@@ -74,7 +74,7 @@ def detect_field_keypoints(
     blob = (resized.astype(np.float16) / 255.0).transpose(2, 0, 1)[np.newaxis]
 
     kpts, scores = sess.run(None, {"input": blob})
-    kpts = kpts[0]      # (10, 2)
+    kpts = kpts[0]  # (10, 2)
     scores = scores[0]  # (10,)
 
     results = []
@@ -106,7 +106,9 @@ def build_field_polygon(
     far = [(kp[0], kp[1]) for kp in keypoints[5:] if kp[0] is not None]
 
     if len(near) < 2 or len(far) < 2:
-        logger.warning("Too few keypoints for field polygon: %d near, %d far", len(near), len(far))
+        logger.warning(
+            "Too few keypoints for field polygon: %d near, %d far", len(near), len(far)
+        )
         return None
 
     # Build polygon: near left-to-right, then far right-to-left (already ordered 5->9 = R->L)
@@ -203,9 +205,7 @@ def field_y_near(x: float) -> float:
     return 1600.0 - 0.0000220 * (x - PANO_CENTER_X) ** 2
 
 
-def is_on_field_curved(
-    x: float, y: float, margin: float = 50.0
-) -> bool:
+def is_on_field_curved(x: float, y: float, margin: float = 50.0) -> bool:
     """Check if a point is inside the curved field boundary.
 
     Args:
@@ -238,6 +238,8 @@ def filter_detections_field(
     filtered = [d for d in detections if is_on_field_curved(d["cx"], d["cy"], margin)]
     logger.info(
         "Curved field filter: %d -> %d detections (margin=%dpx)",
-        len(detections), len(filtered), margin,
+        len(detections),
+        len(filtered),
+        margin,
     )
     return filtered
