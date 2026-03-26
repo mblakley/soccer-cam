@@ -229,6 +229,12 @@ def main():
     parser.add_argument(
         "--no-tiles", action="store_true", help="Skip tile generation tasks"
     )
+    parser.add_argument(
+        "--wait-for-workers",
+        type=int,
+        default=2,
+        help="Wait for N workers before submitting GPU tasks (default: 2)",
+    )
     args = parser.parse_args()
 
     if args.list_games:
@@ -272,6 +278,27 @@ def main():
     logger.info("Scheduler: %s", client.scheduler.address)
     logger.info("Workers: %d", len(client.scheduler_info()["workers"]))
 
+    # Wait for all expected workers before submitting GPU tasks
+    if args.wait_for_workers > 1:
+        logger.info(
+            "Waiting for %d workers before submitting GPU tasks...",
+            args.wait_for_workers,
+        )
+        for _ in range(120):  # up to 2 min
+            info = client.scheduler_info()
+            n = len(info["workers"])
+            if n >= args.wait_for_workers:
+                logger.info("All %d workers connected!", n)
+                break
+            time.sleep(1)
+        else:
+            info = client.scheduler_info()
+            logger.warning(
+                "Only %d/%d workers connected, proceeding anyway",
+                len(info["workers"]),
+                args.wait_for_workers,
+            )
+
     # Determine which games to label
     games_to_label = (
         {g: UNC_GAMES[g] for g in args.games if g in UNC_GAMES}
@@ -281,11 +308,25 @@ def main():
 
     futures = {}
 
-    # Submit labeling tasks (GPU)
+    # Distribute labeling tasks (GPU) evenly across workers
     if games_to_label:
-        logger.info("Submitting %d labeling jobs (GPU)...", len(games_to_label))
-        for game_id, video_src in games_to_label.items():
-            logger.info("  label: %s", game_id)
+        info = client.scheduler_info()
+        gpu_workers = [
+            addr
+            for addr, w in info["workers"].items()
+            if w.get("resources", {}).get("GPU", 0) > 0
+        ]
+        if not gpu_workers:
+            gpu_workers = list(info["workers"].keys())
+        logger.info(
+            "Submitting %d labeling jobs across %d GPU workers...",
+            len(games_to_label),
+            len(gpu_workers),
+        )
+        for i, (game_id, video_src) in enumerate(games_to_label.items()):
+            worker = gpu_workers[i % len(gpu_workers)]
+            worker_name = info["workers"][worker].get("name", worker)
+            logger.info("  label: %s -> %s", game_id, worker_name)
             fut = client.submit(
                 label_game,
                 game_id,
@@ -296,6 +337,8 @@ def main():
                 args.frame_interval,
                 key=f"label-{game_id}",
                 resources={"GPU": 1},
+                workers=[worker],
+                allow_other_workers=True,
                 pure=False,
             )
             futures[f"label-{game_id}"] = fut
