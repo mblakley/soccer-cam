@@ -32,7 +32,7 @@ SHARE = os.environ.get("SHARE_PATH", "//192.168.86.152/video")
 MODEL_PATH = f"{SHARE}/test/onnx_models/decrypted/balldet_fp16.onnx"
 LABELS_DIR = f"{SHARE}/training_data/labels_640_ext"
 TILES_DIR = f"{SHARE}/training_data/tiles_640"
-LOCKS_DIR = f"{SHARE}/training_data/.locks"
+LOCKS_DIR = f"{SHARE}/training_data/worker_locks"
 
 GAMES = {
     "flash__06.01.2024_vs_IYSA_home": f"{SHARE}/Flash_2013s/06.01.2024 - vs IYSA (home)",
@@ -45,6 +45,45 @@ GAMES = {
     "heat__Clarence_Tournament": f"{SHARE}/Heat_2012s/07.20.2024-07.21.2024 - Clarence Tournament",
     "heat__Heat_Tournament": f"{SHARE}/Heat_2012s/06.07.2024-06.09.2024 - Heat Tournament",
 }
+
+
+# ---- Share mapping (for remote workers) ----
+
+SHARE_UNC = r"\\192.168.86.152\video"
+
+
+def ensure_share():
+    """Map network share if not already accessible (remote workers only)."""
+    import subprocess
+
+    # Quick check — try listing the share root
+    result = subprocess.run(
+        ["cmd", "/c", f"dir {SHARE_UNC} >nul 2>&1"],
+        capture_output=True,
+        timeout=5,
+    )
+    if result.returncode == 0:
+        return True
+
+    share_user = os.environ.get("SHARE_USER")
+    share_pass = os.environ.get("SHARE_PASS")
+    if not share_user or not share_pass:
+        logger.warning("Share not accessible and SHARE_USER/SHARE_PASS not set")
+        return False
+
+    subprocess.run(["net", "use", SHARE_UNC, "/delete", "/y"], capture_output=True)
+    time.sleep(1)
+    result = subprocess.run(
+        ["net", "use", SHARE_UNC, f"/user:{share_user}", share_pass],
+        capture_output=True,
+        text=True,
+    )
+    logger.info(
+        "Share map: rc=%d %s",
+        result.returncode,
+        result.stdout.strip() or result.stderr.strip(),
+    )
+    return result.returncode == 0
 
 
 # ---- Lock file coordination ----
@@ -171,7 +210,10 @@ def find_untiled_segments() -> list[tuple[str, str, Path]]:
 
 def do_label(game_id: str, video_path: Path):
     """Label one segment."""
-    from training.distributed.label_job import process_segment
+    try:
+        from training.distributed.label_job import process_segment
+    except ImportError:
+        from label_job import process_segment
 
     import onnxruntime as ort
 
@@ -202,13 +244,16 @@ def do_tile(game_id: str, video_path: Path, frame_interval: int = 4):
 
     import cv2
 
-    from training.distributed.label_job import (
-        TILE_SIZE,
-        NUM_COLS,
-        NUM_ROWS,
-        STEP_X,
-        STEP_Y,
-    )
+    try:
+        from training.distributed.label_job import (
+            TILE_SIZE,
+            NUM_COLS,
+            NUM_ROWS,
+            STEP_X,
+            STEP_Y,
+        )
+    except ImportError:
+        from label_job import TILE_SIZE, NUM_COLS, NUM_ROWS, STEP_X, STEP_Y
 
     seg_id = video_path.stem
     tiles_dir = Path(TILES_DIR) / game_id
@@ -304,9 +349,17 @@ def main():
     hostname = socket.gethostname()
     logger.info("Worker starting on %s", hostname)
 
+    # Map share if needed (remote workers)
+    if not ensure_share():
+        logger.error("Cannot access share, exiting")
+        return
+
     # Ensure locks directory exists
     locks_dir = Path(LOCKS_DIR)
-    locks_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        locks_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # may already exist but we lack stat permission
 
     idle_count = 0
     while True:
