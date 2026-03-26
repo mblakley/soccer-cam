@@ -28,10 +28,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ---- Camera calibration (from dewarp_viewer.html) ----
-SRC_HFOV = math.pi          # 180 degrees horizontal field of view
+SRC_HFOV = math.pi  # 180 degrees horizontal field of view
 SRC_WIDTH = 4096
 SRC_HEIGHT = 1800
-CAMERA_TILT = 0.55           # radians (~31 degrees down from horizontal)
+CAMERA_TILT = 0.55  # radians (~31 degrees down from horizontal)
 SRC_VRANGE = SRC_HFOV * (SRC_HEIGHT / SRC_WIDTH)  # vertical range on unit cylinder
 
 # ---- Output tile size ----
@@ -116,9 +116,13 @@ def _build_dewarp_map(
 
 
 def pano_to_virtual(
-    pano_x: float, pano_y: float,
-    yaw: float, pitch: float, vfov_deg: float,
-    out_w: int = TILE_SIZE, out_h: int = TILE_SIZE,
+    pano_x: float,
+    pano_y: float,
+    yaw: float,
+    pitch: float,
+    vfov_deg: float,
+    out_w: int = TILE_SIZE,
+    out_h: int = TILE_SIZE,
 ) -> tuple[float, float] | None:
     """Convert panoramic pixel coordinates to virtual camera pixel coordinates.
 
@@ -182,12 +186,12 @@ EDGE_VIEWS = [
     ("dw_L_far", -1.30, 0.35, 30),
     ("dw_L_mid", -1.10, 0.45, 30),
     # Right edge - far field (goal area, sun side)
-    ("dw_R_far",  1.30, 0.35, 30),
-    ("dw_R_mid",  1.10, 0.45, 30),
+    ("dw_R_far", 1.30, 0.35, 30),
+    ("dw_R_mid", 1.10, 0.45, 30),
     # Left edge - near field
     ("dw_L_near", -1.30, 0.70, 30),
     # Right edge - near field
-    ("dw_R_near",  1.30, 0.70, 30),
+    ("dw_R_near", 1.30, 0.70, 30),
 ]
 
 # Center views (less distortion, but useful for completeness)
@@ -223,7 +227,9 @@ def dewarp_frame(
                 precomputed_maps[name] = (map_x, map_y)
 
         tile = cv2.remap(
-            frame, map_x, map_y,
+            frame,
+            map_x,
+            map_y,
             interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(0, 0, 0),
@@ -262,11 +268,12 @@ def dewarp_segment(
     if not frame_paths:
         # Try with wildcard matching
         frame_paths = sorted(
-            p for p in frames_dir.glob("*.jpg")
-            if segment_prefix in p.name
+            p for p in frames_dir.glob("*.jpg") if segment_prefix in p.name
         )
 
-    logger.info("Found %d frames matching segment '%s'", len(frame_paths), segment_prefix)
+    logger.info(
+        "Found %d frames matching segment '%s'", len(frame_paths), segment_prefix
+    )
 
     stats = {"frames_processed": 0, "tiles_generated": 0}
     precomputed_maps: dict[str, tuple] = {}
@@ -311,19 +318,27 @@ def main():
         description="Generate dewarped tiles from panoramic frames"
     )
     parser.add_argument(
-        "--input", type=Path, required=True,
+        "--input",
+        type=Path,
+        required=True,
         help="Directory containing panoramic frame images",
     )
     parser.add_argument(
-        "--output", type=Path, required=True,
+        "--output",
+        type=Path,
+        required=True,
         help="Output directory for dewarped tiles",
     )
     parser.add_argument(
-        "--segment", type=str, default="",
+        "--segment",
+        type=str,
+        default="",
         help="Segment prefix to filter frames (empty = all)",
     )
     parser.add_argument(
-        "--views", choices=["edges", "center", "all"], default="edges",
+        "--views",
+        choices=["edges", "center", "all"],
+        default="edges",
         help="Which virtual camera views to generate",
     )
     args = parser.parse_args()
