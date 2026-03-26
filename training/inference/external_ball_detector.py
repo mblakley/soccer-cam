@@ -54,7 +54,9 @@ PANO_W = 4096
 PANO_H = 1800
 
 
-def create_session(model_path: Path = DEFAULT_MODEL, use_gpu: bool = True) -> ort.InferenceSession:
+def create_session(
+    model_path: Path = DEFAULT_MODEL, use_gpu: bool = True
+) -> ort.InferenceSession:
     """Create an ONNX inference session, trying GPU first."""
     providers = []
     if use_gpu:
@@ -94,7 +96,9 @@ def detect_balls(
     # Preprocess: BGR -> RGB, normalize to [0, 1]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     if pad_h > 0 or pad_w > 0:
-        rgb = cv2.copyMakeBorder(rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        rgb = cv2.copyMakeBorder(
+            rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0)
+        )
 
     blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
 
@@ -116,8 +120,10 @@ def detect_balls(
     boxes[:, 3] = filtered[:, 1] + filtered[:, 3] / 2  # y2
 
     indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(), filtered[:, 5].tolist(),
-        conf_threshold, nms_iou,
+        boxes.tolist(),
+        filtered[:, 5].tolist(),
+        conf_threshold,
+        nms_iou,
     )
 
     # Get mask coefficients from output[2] for surviving detections
@@ -167,14 +173,16 @@ def pano_to_tile(cx: float, cy: float, w: float, h: float) -> list[dict]:
 
             # Check if detection center falls within this tile
             if 0 <= tcx < TILE_SIZE and 0 <= tcy < TILE_SIZE:
-                labels.append({
-                    "row": row,
-                    "col": col,
-                    "cx_norm": tcx / TILE_SIZE,
-                    "cy_norm": tcy / TILE_SIZE,
-                    "w_norm": w / TILE_SIZE,
-                    "h_norm": h / TILE_SIZE,
-                })
+                labels.append(
+                    {
+                        "row": row,
+                        "col": col,
+                        "cx_norm": tcx / TILE_SIZE,
+                        "cy_norm": tcy / TILE_SIZE,
+                        "w_norm": w / TILE_SIZE,
+                        "h_norm": h / TILE_SIZE,
+                    }
+                )
 
     return labels
 
@@ -221,7 +229,10 @@ def detect_video(
                 det_count = len(detections)
                 logger.info(
                     "%d/%d frames (%.1f f/s) | %d detections",
-                    frame_idx, total_frames, rate, det_count,
+                    frame_idx,
+                    total_frames,
+                    rate,
+                    det_count,
                 )
 
         frame_idx += 1
@@ -232,7 +243,10 @@ def detect_video(
     frames_with_dets = len(set(d["frame_idx"] for d in detections))
     logger.info(
         "DONE: %d frames processed, %d detections (%d frames with dets) in %.0fs (%.1f f/s)",
-        frames_processed, len(detections), frames_with_dets, elapsed,
+        frames_processed,
+        len(detections),
+        frames_with_dets,
+        elapsed,
         frames_processed / elapsed if elapsed > 0 else 0,
     )
 
@@ -283,7 +297,9 @@ def save_tile_labels(
 
     logger.info(
         "Wrote %d label files (%d labels) to %s",
-        files_written, labels_written, labels_dir,
+        files_written,
+        labels_written,
+        labels_dir,
     )
 
 
@@ -294,10 +310,18 @@ def main():
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--frame-interval", type=int, default=8)
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
-    parser.add_argument("--labels-dir", type=Path, default=None,
-                        help="Output dir for per-tile YOLO labels")
-    parser.add_argument("--segment-name", type=str, default=None,
-                        help="Segment name prefix for label filenames")
+    parser.add_argument(
+        "--labels-dir",
+        type=Path,
+        default=None,
+        help="Output dir for per-tile YOLO labels",
+    )
+    parser.add_argument(
+        "--segment-name",
+        type=str,
+        default=None,
+        help="Segment name prefix for label filenames",
+    )
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
     args = parser.parse_args()
 
