@@ -4,13 +4,18 @@ Reads from the junction-based dataset structure at ball_dataset_640/ and writes
 train.txt and val.txt with a smart mix of:
 - All positive tiles (tiles with cleaned labels)
 - Hard negatives (spatially/temporally adjacent to positives)
+- Confuser negatives (tiles the QA pipeline marked as FP — player bodies, sideline)
 - Random negatives (uniform sample for coverage)
+
+Row 2 (near sideline) negatives are oversampled 2x to counteract the higher
+false positive rate in that region (from QA findings).
 
 Paths in the output txt files go through ball_dataset_640/images/{split}/ so
 that Ultralytics can find matching labels via ball_dataset_640/labels/{split}/.
 """
 
 import argparse
+import json
 import logging
 import os
 import random
@@ -22,6 +27,7 @@ from training.data_prep.organize_dataset import parse_tile_filename, parse_tile_
 logger = logging.getLogger(__name__)
 
 DEFAULT_NEG_RATIO = 1.0  # negative tiles per positive tile
+ROW_2_OVERSAMPLE = 2  # 2x oversampling for row 2 negatives (sideline FP hotspot)
 
 
 def _scan_split(
@@ -111,11 +117,34 @@ def _find_hard_negatives(
     return hard_neg_stems
 
 
+def _load_confuser_stems(verdicts_path: Path) -> set[str]:
+    """Load tile stems marked as false positives by QA review.
+
+    Reads a verdicts-by-label JSON (from qa_verdict_ingester --export)
+    and returns stems for tiles classified as FP_NOT_BALL or FP_OFF_FIELD.
+    These become confuser negatives in training.
+    """
+    if not verdicts_path.exists():
+        return set()
+
+    verdicts = json.loads(verdicts_path.read_text())
+    fp_verdicts = {"FP_NOT_BALL", "FP_OFF_FIELD", "FP_NOT_GAME_BALL"}
+    stems = set()
+    for label_path, verdict in verdicts.items():
+        if verdict in fp_verdicts:
+            # Extract game_id/tile_stem from the label path
+            p = Path(label_path)
+            game_id = p.parent.name
+            stems.add(f"{game_id}/{p.stem}")
+    return stems
+
+
 def smart_sample(
     dataset_dir: Path,
     neg_ratio: float = DEFAULT_NEG_RATIO,
     seed: int = 42,
     exclude_rows: set[int] | None = None,
+    confuser_verdicts_path: Path | None = None,
 ) -> dict[str, int]:
     """Create smart-sampled train.txt and val.txt from dataset folder structure.
 
@@ -127,6 +156,8 @@ def smart_sample(
         neg_ratio: Ratio of negative to positive tiles
         seed: Random seed
         exclude_rows: Tile rows to exclude (e.g., {0} for sky)
+        confuser_verdicts_path: Path to verdicts_by_label.json from QA pipeline.
+            Tiles marked FP are included as confuser negatives.
 
     Returns:
         Dict with counts.
@@ -153,12 +184,22 @@ def smart_sample(
     val_tiles, val_labels = _scan_split(dataset_dir, "val", exclude_rows)
     logger.info("  %d tiles, %d labels", len(val_tiles), len(val_labels))
 
+    # Load confuser stems (QA-identified false positives)
+    confuser_stems: set[str] = set()
+    if confuser_verdicts_path:
+        confuser_stems = _load_confuser_stems(confuser_verdicts_path)
+        logger.info("Loaded %d confuser stems from QA verdicts", len(confuser_stems))
+
     # --- Train sampling ---
     train_positives = train_labels & set(train_tiles.keys())
     logger.info("Train positives: %d", len(train_positives))
 
     hard_negatives = _find_hard_negatives(train_positives, train_tiles)
     logger.info("Hard negatives: %d", len(hard_negatives))
+
+    # Confuser negatives: tiles the QA marked as FP (player bodies, sideline, etc.)
+    confuser_negatives = confuser_stems & set(train_tiles.keys()) - train_positives
+    logger.info("Confuser negatives (from QA): %d", len(confuser_negatives))
 
     train_paths = []
 
@@ -167,21 +208,36 @@ def smart_sample(
         train_paths.append(str(train_tiles[stem]))
         stats["train_positive"] += 1
 
-    # Hard negatives
+    # Hard negatives (with row 2 oversampling)
     for stem in sorted(hard_negatives):
+        if stem not in train_tiles:
+            continue
+        path = str(train_tiles[stem])
+        pos = parse_tile_position(stem.split("/")[-1])
+        repeat = ROW_2_OVERSAMPLE if (pos and pos[0] == 2) else 1
+        for _ in range(repeat):
+            train_paths.append(path)
+        stats["train_hard_neg"] += 1
+
+    # Confuser negatives (QA-identified FPs as explicit hard examples)
+    stats["train_confuser_neg"] = 0
+    for stem in sorted(confuser_negatives):
         if stem in train_tiles:
             train_paths.append(str(train_tiles[stem]))
-            stats["train_hard_neg"] += 1
+            stats["train_confuser_neg"] += 1
 
     # Random negatives to reach target ratio
     target_negatives = int(stats["train_positive"] * neg_ratio)
-    remaining_needed = target_negatives - stats["train_hard_neg"]
+    used_negatives = stats["train_hard_neg"] + stats["train_confuser_neg"]
+    remaining_needed = target_negatives - used_negatives
 
     if remaining_needed > 0:
         random_pool = [
             stem
             for stem in train_tiles
-            if stem not in train_positives and stem not in hard_negatives
+            if stem not in train_positives
+            and stem not in hard_negatives
+            and stem not in confuser_negatives
         ]
         n_random = min(remaining_needed, len(random_pool))
         if n_random > 0:
@@ -222,12 +278,13 @@ def smart_sample(
     elapsed = time.time() - start_time
     logger.info(
         "=== COMPLETE in %.0fs ===\n"
-        "  Train: %d positive, %d hard negative, %d random negative = %d total\n"
+        "  Train: %d positive, %d hard neg, %d confuser neg, %d random neg = %d total\n"
         "  Val: %d positive, %d negative = %d total\n"
         "  Wrote %s and %s",
         elapsed,
         stats["train_positive"],
         stats["train_hard_neg"],
+        stats.get("train_confuser_neg", 0),
         stats["train_random_neg"],
         len(train_paths),
         stats["val_positive"],
@@ -256,10 +313,21 @@ def main():
         help="Ratio of negative to positive tiles",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--confuser-verdicts",
+        type=Path,
+        default=None,
+        help="Path to verdicts_by_label.json from QA pipeline (for confuser negatives)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    smart_sample(args.dataset, args.neg_ratio, args.seed)
+    smart_sample(
+        args.dataset,
+        args.neg_ratio,
+        args.seed,
+        confuser_verdicts_path=args.confuser_verdicts,
+    )
 
 
 if __name__ == "__main__":
