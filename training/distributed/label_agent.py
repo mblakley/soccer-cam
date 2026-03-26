@@ -105,7 +105,7 @@ async def get_log(lines: int = 20, x_api_key: str = Header(default="")):
         return {"log": "No log file"}
     with open(log_path) as f:
         all_lines = f.readlines()
-    return {"log": "".join(all_lines[-min(lines, 100):])}
+    return {"log": "".join(all_lines[-min(lines, 100) :])}
 
 
 if __name__ == "__main__":

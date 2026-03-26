@@ -158,9 +158,7 @@ def main():
         default=Path("F:/training_data/labels_640_persons"),
         help="Output labels dir",
     )
-    parser.add_argument(
-        "--model", default="yolo11m.pt", help="Pretrained YOLO model"
-    )
+    parser.add_argument("--model", default="yolo11m.pt", help="Pretrained YOLO model")
     parser.add_argument(
         "--confidence",
         type=float,
