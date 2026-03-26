@@ -24,8 +24,6 @@ dependencies = [
     "webdriver-manager>=4.0.1",
     "pycryptodome>=3.20.0",
     "pillow>=11.3.0",
-    "av>=13.0.0",
-    "packaging>=23.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +42,18 @@ dev = [
     "ruff>=0.5.5",
     "pre-commit>=3.7.1",
     "pyinstaller>=6.0.0",
+]
+ml = [
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "ultralytics>=8.3.70",
+    "opencv-python>=4.13.0",
+    "numpy>=2.2.0",
+    "supervision>=0.26.0",
+    "lapx>=0.5.0",
+    "filterpy>=1.4.5",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
 ]
 
 [build-system]
