@@ -1,0 +1,9 @@
+# YOLO dataset config for ball detection (ext labels, 5 games)
+# Usage: uv run python -m training.train --data training/configs/ball_dataset_v1.yaml
+
+path: F:\training_data\ball_dataset_v1
+train: images/train
+val: images/val
+
+nc: 1
+names: ["ball"]

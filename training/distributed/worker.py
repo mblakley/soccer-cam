@@ -394,6 +394,13 @@ def main():
         logger.error("Cannot access share, exiting")
         return
 
+    # Ensure script directory is on sys.path for standalone deploys
+    import sys
+
+    script_dir = str(Path(__file__).resolve().parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
     try:
         from training.distributed.jobs import claim_job, complete_job, fail_job
     except ImportError:
