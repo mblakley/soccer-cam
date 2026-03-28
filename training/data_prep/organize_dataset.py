@@ -89,6 +89,7 @@ def organize_dataset(
     include_negatives: bool = True,
     exclude_rows: set[int] | None = None,
     tile_weights: dict[tuple[int, int], int] | None = None,
+    filter_games: list[str] | None = None,
 ) -> dict[str, int]:
     """Organize tiles and labels into YOLO dataset format.
 
@@ -118,6 +119,8 @@ def organize_dataset(
         [d for d in tiles_dir.iterdir() if d.is_dir()],
         key=lambda d: d.name,
     )
+    if filter_games:
+        game_dirs = [d for d in game_dirs if d.name in filter_games]
     if not game_dirs:
         # Flat structure — treat tiles_dir itself as a single game
         game_dirs = [tiles_dir]
@@ -335,6 +338,11 @@ def main():
         action="store_true",
         help="Don't exclude any tile rows",
     )
+    parser.add_argument(
+        "--games",
+        nargs="*",
+        help="Only process these game subdirectories (default: all)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -346,6 +354,7 @@ def main():
         include_negatives=not args.no_negatives,
         exclude_rows=set() if args.no_exclude else DEFAULT_EXCLUDE_ROWS,
         tile_weights=None if args.no_weights else DEFAULT_TILE_WEIGHTS,
+        filter_games=args.games,
     )
 
 
