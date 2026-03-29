@@ -1,0 +1,6 @@
+path: F:\training_data\ball_dataset_v2
+train: images/train
+val: images/val
+
+nc: 3
+names: ["game_ball", "static_ball", "not_ball"]
