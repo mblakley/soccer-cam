@@ -1,6 +1,6 @@
-path: //192.168.86.152/video/training_data/ball_dataset_v1
+path: //192.168.86.152/video/training_data/ball_dataset_v2
 train: images/train
 val: images/val
 
-nc: 1
-names: ["ball"]
+nc: 3
+names: ["game_ball", "static_ball", "not_ball"]
