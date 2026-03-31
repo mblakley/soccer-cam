@@ -227,20 +227,26 @@ def measure_all_games(
 ) -> list[dict]:
     """Measure coverage for all games. If games is None, scan labels_dir."""
     if games is None:
+        if not labels_dir.exists():
+            logger.error("Labels directory not found: %s", labels_dir)
+            return []
         games = sorted(d.name for d in labels_dir.iterdir() if d.is_dir())
 
     results = []
     for game_id in games:
         result = measure_game_coverage(game_id, labels_dir)
         results.append(result)
-        logger.info(
-            "%s: %.1f%% coverage, %d gaps (%d long, %d very long)",
-            game_id,
-            result["coverage"] * 100,
-            result["gap_count"],
-            result["long_gaps"],
-            result["very_long_gaps"],
-        )
+        if result.get("error"):
+            logger.warning("%s: %s", game_id, result["error"])
+        else:
+            logger.info(
+                "%s: %.1f%% coverage, %d gaps (%d long, %d very long)",
+                game_id,
+                result["coverage"] * 100,
+                result.get("gap_count", 0),
+                result.get("long_gaps", 0),
+                result.get("very_long_gaps", 0),
+            )
 
     # Summary
     avg_coverage = sum(r["coverage"] for r in results) / max(len(results), 1)
