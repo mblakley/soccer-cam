@@ -50,6 +50,19 @@ For frames with high-confidence labels (in trajectory + Sonnet verified), use `c
 ### Position-aware label weighting
 Sonnet QA showed r1_c5 and r1_c6 have highest FP rates (sun glare). Instead of treating all labels equally, weight by expected quality based on tile position. Labels from clean positions get full weight in training; labels from noisy positions get reduced weight (0.5x) or require extra verification before inclusion.
 
+### Gap-focused label mining (1 detection per 50 frames minimum)
+The viewport tracking doesn't need perfect frame-by-frame detection — it needs to never go blind for more than ~2 seconds. Target: at least 1 detection every 50 frames during active play. For any gap longer than 50 frames:
+1. Run all available detectors (ONNX low-conf, frame diff, optical flow) on frames within the gap
+2. If any candidate found, verify with Sonnet or human
+3. Even 1 verified detection in a 100-frame gap cuts the "lost" period in half
+
+For big kicks (ball crosses most of the field during a gap), the viewport should snap to the next detection rather than slowly panning. This means the label mining should be biased toward finding where the ball ENDS UP, not interpolating through the gap. Specifically:
+- Search backward from the next known detection, not forward from the last one
+- A single detection near the end of a long gap is more valuable than one in the middle
+- If the gap spans >500px of panoramic movement, don't interpolate — just find the landing point
+
+This directly addresses the biggest UX problem: the autocam looking "lost" and panning aimlessly.
+
 ### Heuristic pre-filtering
 Filter bootstrap detections by ball physics before training:
 - Aspect ratio ~0.7-1.4 (ball is round, reject elongated detections)
