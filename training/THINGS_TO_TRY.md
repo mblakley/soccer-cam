@@ -50,18 +50,22 @@ For frames with high-confidence labels (in trajectory + Sonnet verified), use `c
 ### Position-aware label weighting
 Sonnet QA showed r1_c5 and r1_c6 have highest FP rates (sun glare). Instead of treating all labels equally, weight by expected quality based on tile position. Labels from clean positions get full weight in training; labels from noisy positions get reduced weight (0.5x) or require extra verification before inclusion.
 
-### Gap-focused label mining (1 detection per 50 frames minimum)
-The viewport tracking doesn't need perfect frame-by-frame detection — it needs to never go blind for more than ~2 seconds. Target: at least 1 detection every 50 frames during active play. For any gap longer than 50 frames:
-1. Run all available detectors (ONNX low-conf, frame diff, optical flow) on frames within the gap
-2. If any candidate found, verify with Sonnet or human
-3. Even 1 verified detection in a 100-frame gap cuts the "lost" period in half
+### Adaptive gap mining (variable density based on ball speed)
+This is batch processing on recorded video — we can look forward AND backward, take as long as we need, and use full context. Accuracy over speed.
 
-For big kicks (ball crosses most of the field during a gap), the viewport should snap to the next detection rather than slowly panning. This means the label mining should be biased toward finding where the ball ENDS UP, not interpolating through the gap. Specifically:
-- Search backward from the next known detection, not forward from the last one
-- A single detection near the end of a long gap is more valuable than one in the middle
-- If the gap spans >500px of panoramic movement, don't interpolate — just find the landing point
+**Core idea:** When we detect a "teleport" (large position jump between detections), that means we missed a fast-moving ball. Go back and look harder in the gap — extract MORE frames, run detection at lower confidence, use frame differencing, try optical flow. The number of frames we examine should scale with how fast the ball was moving.
 
-This directly addresses the biggest UX problem: the autocam looking "lost" and panning aimlessly.
+**Algorithm:**
+1. Build initial trajectory from standard detections (every 4th frame)
+2. For each gap, compute the displacement between last detection and next detection
+3. If displacement is small (<100px): ball was slow, sparse detections are fine
+4. If displacement is large (>500px): ball was kicked hard — go back to the raw video and extract EVERY frame in the gap, run full detection pipeline on each
+5. For each gap frame, search both forward (from last known position with velocity) and backward (from next known position)
+6. Build the trajectory through the gap — a long kick should show a smooth arc, not a teleport
+
+**Why this matters for labels:** A "teleport" in training data teaches the model nothing about fast ball motion. Filling in the arc teaches the model what a kicked ball looks like at every point in its flight — including the small, blurry, fast-moving frames that are hardest to detect. These are exactly the frames the model needs to learn.
+
+**Target:** No gap longer than 50 frames (~2 seconds) during active play. For gaps caused by fast kicks, aim for continuous tracking through the full arc.
 
 ### Heuristic pre-filtering
 Filter bootstrap detections by ball physics before training:
