@@ -4,6 +4,15 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-03-31: Distributed tiling — laptop CPU helps while GPU trains
+
+**Context:** 26 games need tiling, server takes ~30 min/game = ~13 hours alone. Laptop GPU is busy training but CPU is idle.
+**Decision:** mass_tile.py supports `--remote` mode. Laptop reads video from network share, tiles locally, writes tiles to server's D: via share. Lock files (`.locks/{game_id}.lock`) prevent both machines from tiling the same game. 2-hour stale lock timeout.
+**Trade-off:** Network I/O (~100 MB/s gigabit) is slower than local D: for video reads, but it's free CPU cycles. H.264 decode is CPU-bound anyway.
+**Commands:**
+- Server: `uv run python -m training.data_prep.mass_tile`
+- Laptop: `uv run python -m training.data_prep.mass_tile --remote \\192.168.86.152\video \\192.168.86.152\training`
+
 ## 2026-03-31: Use YOLO26 for v3 training (upgrade from YOLO11)
 
 **Context:** YOLO26 (Jan 2026) adds Small-Target-Aware Label Assignment (STAL) and Progressive Loss (ProgLoss) — built-in improvements for small object detection. Our ball is 8-40px, exactly the target scenario. SoccerDETR paper showed +3.2% ball mAP from scale-aware loss.
