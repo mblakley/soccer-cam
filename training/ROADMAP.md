@@ -68,32 +68,73 @@
 7. **Coverage varies by segment** (30-70%) — weight training samples by segment difficulty
 
 ### v3 Dataset Improvements
+- [ ] Tile all 35 games (mass_tile.py, 26 remaining)
+- [ ] Bootstrap label new games with ONNX detector
 - [ ] Include r0 tiles with verified labels (797 from experiments + ongoing)
-- [ ] Run gap detection + frame diff on ALL segments (not just test games)
-- [ ] Use v2 model (once trained) to re-detect all games at lower confidence
-- [ ] Run frame diff across ALL rows, not just r0, to find missed balls everywhere
-- [ ] Merge new detections with existing labels via trajectory fusion
+- [ ] Apply single-ball constraint during active play phases
+- [ ] Run gap detection on ALL games, ALL rows
+- [ ] Automated gap filling (ONNX low-conf, frame diff, optical flow)
+- [ ] Adaptive density gap mining for fast kicks (every frame in gap)
+- [ ] Sonnet triage of gaps >= 2 seconds
+- [ ] Human review via prioritized queue (Sonnet failures first)
+- [ ] v2 model re-detection + disagreement review with ONNX
 - [ ] Weight r0 positives at 4x, difficult segments at 2x
-- [ ] Sonnet-verify all new detections before inclusion
+- [ ] Per-game coverage tracking (target: 95% during active play)
 
 ### v3 Training Configuration
 - [ ] Include r0 in training (remove `DEFAULT_EXCLUDE_ROWS = {0}`)
+- [ ] Include corrected/flipped upside-down games
 - [ ] Train temporal model (3-frame input) alongside single-frame YOLO
 - [ ] Add player bbox as auxiliary negative signal (suppress detections on players)
 - [ ] Reduce augmentation brightness jitter to preserve ball/grass contrast
-- [ ] Epoch rotation with 3 negative sampling variants
 - [ ] Per-row confidence thresholds at inference (lower for r0)
+- [ ] Continuous training: rebuild dataset as human labels arrive, resume training
 
-### Label Improvement Pipeline (runs while v2 trains)
+### v3 Training Loop (continuous improvement, not one-shot)
+
+The v3 process is a loop, not a pipeline. Training starts with imperfect labels and improves as human + Sonnet labels arrive. Each cycle produces a better model that finds more balls, reducing gaps and human workload.
+
 ```
-For each game segment:
-  1. Run ONNX at conf=0.45 (existing labels)
-  2. Build trajectories, find gaps
-  3. At each gap: targeted frame diff to confirm ball presence
-  4. Sonnet-verify new candidates in batches
-  5. Export verified labels to labels_640_exp/
-  6. Merge into v3 dataset
+┌─────────────────────────────────────────────────────────┐
+│  PHASE 1: Automated labeling (all 35 games)             │
+│  ├── Tile all games (mass_tile.py)                      │
+│  ├── ONNX bootstrap at conf=0.45                        │
+│  ├── Trajectory linking + 3-class classification        │
+│  ├── Single-ball constraint (remove multi-ball in play) │
+│  └── Gap detection: find all gaps > 50 frames           │
+│                         ↓                               │
+│  PHASE 2: Automated gap filling                         │
+│  ├── Gaps < 2s: ONNX low-conf + frame diff + opt flow  │
+│  ├── Adaptive density for fast kicks (every frame)      │
+│  └── v2 model re-detection at lower confidence          │
+│                         ↓                               │
+│  PHASE 3: Sonnet triage                                 │
+│  ├── Review all gaps >= 2s                              │
+│  ├── Verify automated gap fills                         │
+│  ├── Review v2-vs-ONNX disagreements                    │
+│  └── Result: gaps filled OR escalated to human          │
+│                         ↓                               │
+│  PHASE 4: Human review (prioritized queue)              │
+│  ├── #1: Sonnet failures (AI can't find ball)           │
+│  ├── #2: Longest gaps during active play                │
+│  ├── #3: High-quality tracks that broke                 │
+│  └── Annotation app shows context + priority score      │
+│                         ↓                               │
+│  PHASE 5: Train → Evaluate → Repeat                    │
+│  ├── Build dataset from current best labels             │
+│  ├── Train v3 model                                     │
+│  ├── Measure coverage per game (target: 95%)            │
+│  ├── Run v3 model on all games → find NEW gaps          │
+│  └── New gaps feed back into Phase 2 ──────→ LOOP       │
+└─────────────────────────────────────────────────────────┘
 ```
+
+**Key principles:**
+- Training doesn't wait for perfect labels — start with what we have
+- Human time goes to highest-value gaps (Sonnet failures, longest gaps)
+- Each model iteration finds more balls → fewer gaps → less human work
+- Per-game coverage tracking: when a game hits 95%, deprioritize it
+- The loop converges: v3 model finds gaps v2 missed, v4 finds gaps v3 missed
 
 ## Future Enhancements (Commercial Parity)
 
