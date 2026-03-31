@@ -4,6 +4,12 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-03-31: Use YOLO26 for v3 training (upgrade from YOLO11)
+
+**Context:** YOLO26 (Jan 2026) adds Small-Target-Aware Label Assignment (STAL) and Progressive Loss (ProgLoss) — built-in improvements for small object detection. Our ball is 8-40px, exactly the target scenario. SoccerDETR paper showed +3.2% ball mAP from scale-aware loss.
+**Decision:** Switch from `yolo11n.pt` to `yolo26n.pt` for v3. Already available in our ultralytics 8.4.27 install — no package changes needed.
+**Alternatives:** Custom Scale-Aware Focal Loss on YOLO11 — rejected because YOLO26 provides this natively.
+
 ## 2026-03-31: v3 is a continuous improvement loop, not a one-shot build
 
 **Context:** Previous versions (v1, v2) tried to get labels right THEN train. This led to weeks of label work before any training started.
