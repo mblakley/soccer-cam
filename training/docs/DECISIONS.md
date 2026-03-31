@@ -4,6 +4,12 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-03-31: v3 is a continuous improvement loop, not a one-shot build
+
+**Context:** Previous versions (v1, v2) tried to get labels right THEN train. This led to weeks of label work before any training started.
+**Decision:** v3 starts training with imperfect labels from all 35 games. Human-in-the-loop and Sonnet fill gaps as training runs. Each model iteration finds more balls, reducing gaps. The loop converges naturally.
+**Reason:** 4x more data with okay labels beats 1x data with perfect labels. The continuous loop means label quality improves alongside model quality.
+
 ## 2026-03-31: Game IDs include timestamp suffix for same-date games
 
 **Context:** Two Flash games on 2025.05.04 produced duplicate game_ids (`flash__2025.05.04`).
