@@ -38,7 +38,7 @@ PENDING_LABELS_DIR = Path("D:/training_data/pending_labels")
 HUMAN_LABELS_DIR = Path("D:/training_data/human_labels")
 RUNS_DIR = Path("D:/training_data/runs")
 COVERAGE_TARGET = 0.95
-MODEL_NAME = "yolo26m.pt"  # medium: best accuracy/speed tradeoff for our GPUs
+MODEL_NAME = "yolo26l.pt"  # large: training on RTX 4070 8GB only
 TRAIN_EPOCHS = 50  # per cycle — resume from checkpoint each cycle
 
 
