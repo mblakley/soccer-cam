@@ -7,6 +7,30 @@
 | Process | Machine | Status | ETA |
 |---------|---------|--------|-----|
 | v2 training (YOLO11n, 3-class) | Laptop RTX 4070 | Epoch ~47/100, 2.4 it/s | ~18 hrs |
+| Mass tiling (25 games) | Server CPU | Game 1/25, copying segments | ~13 hrs |
+| OnceAutocam archive (D:→F:) | Server | ~4/77 files | ~15 hrs |
+
+## Laptop Setup (jared-laptop)
+
+Training user: `training`. Python: `C:\Python313\python.exe`. Scripts: `C:\soccer-cam-label\`.
+No git, no uv — standalone scripts deployed via PS remoting + WNet share mapping.
+
+**How to deploy new scripts:**
+1. Copy files to `D:\training_data\_deploy\` on server (exposed as `\\192.168.86.152\training\_deploy\`)
+2. PS remote to laptop, map share with `map_share.py` (WNet API), copy files to `C:\soccer-cam-label\`
+3. Run via WMI `Start-Process` for persistent processes
+
+**How to start remote tiling:**
+```powershell
+# From server PS remoting session:
+$cred = Get-Credential training
+Invoke-Command -ComputerName jared-laptop -Credential $cred -ScriptBlock {
+    # Files should already be in C:\soccer-cam-label\ from deployment
+    Start-Process -FilePath "C:\Python313\python.exe" -ArgumentList "-u","C:\soccer-cam-label\tile_remote.py" -NoNewWindow
+}
+```
+
+**Training process:** PID 7804 running `C:\Python313\python.exe -u C:\soccer-cam-label\train_now.py`
 
 ## Next Steps
 
