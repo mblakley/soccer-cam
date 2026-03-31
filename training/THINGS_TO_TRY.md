@@ -65,6 +65,10 @@ This is batch processing on recorded video — we can look forward AND backward,
 
 **Why this matters for labels:** A "teleport" in training data teaches the model nothing about fast ball motion. Filling in the arc teaches the model what a kicked ball looks like at every point in its flight — including the small, blurry, fast-moving frames that are hardest to detect. These are exactly the frames the model needs to learn.
 
+**Escalation policy:**
+- Gap < 2 seconds: automated pipeline only (ONNX low-conf, frame diff, optical flow)
+- Gap >= 2 seconds: send to Sonnet Vision AND queue for human review via annotation app. Show both the gap context (last/next detections, predicted area) and the raw frames. Both Sonnet and human attempt to locate the ball. Agreement = high-confidence label, disagreement = flag for closer review.
+
 **Target:** No gap longer than 50 frames (~2 seconds) during active play. For gaps caused by fast kicks, aim for continuous tracking through the full arc.
 
 ### Heuristic pre-filtering
