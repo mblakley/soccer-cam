@@ -56,6 +56,45 @@
 - [ ] Training metrics dashboard
 - [ ] Automated model comparison (v1 vs v2 vs v3 side-by-side)
 
+## v3 Training Plan (Informed by Small Ball Experiments)
+
+### Key Findings from Experiments
+1. **Far field balls ARE detectable** — 88% of ONNX trajectory gaps had visible motion, 78% Sonnet-verified as real balls
+2. **r0 was excluded from all training** — model has never seen far-field tiles. Including r0 with 797 verified labels at 4x weight is the biggest single improvement
+3. **Brightness is a strong signal** — verified balls avg brightness 134, false positives are dimmer. Augmentation should preserve ball/grass brightness contrast
+4. **Trajectory context is the real discriminator** — single-frame can't distinguish 12px ball from white sock. 3-frame temporal model (train_temporal.py) would natively capture this
+5. **Player exclusion zones** — 18% of FPs are on player body parts. Train with player bbox awareness
+6. **Overall detection coverage is only 37.5%** — need v2 model re-detection + gap filling for 95% continuous tracking
+7. **Coverage varies by segment** (30-70%) — weight training samples by segment difficulty
+
+### v3 Dataset Improvements
+- [ ] Include r0 tiles with verified labels (797 from experiments + ongoing)
+- [ ] Run gap detection + frame diff on ALL segments (not just test games)
+- [ ] Use v2 model (once trained) to re-detect all games at lower confidence
+- [ ] Run frame diff across ALL rows, not just r0, to find missed balls everywhere
+- [ ] Merge new detections with existing labels via trajectory fusion
+- [ ] Weight r0 positives at 4x, difficult segments at 2x
+- [ ] Sonnet-verify all new detections before inclusion
+
+### v3 Training Configuration
+- [ ] Include r0 in training (remove `DEFAULT_EXCLUDE_ROWS = {0}`)
+- [ ] Train temporal model (3-frame input) alongside single-frame YOLO
+- [ ] Add player bbox as auxiliary negative signal (suppress detections on players)
+- [ ] Reduce augmentation brightness jitter to preserve ball/grass contrast
+- [ ] Epoch rotation with 3 negative sampling variants
+- [ ] Per-row confidence thresholds at inference (lower for r0)
+
+### Label Improvement Pipeline (runs while v2 trains)
+```
+For each game segment:
+  1. Run ONNX at conf=0.45 (existing labels)
+  2. Build trajectories, find gaps
+  3. At each gap: targeted frame diff to confirm ball presence
+  4. Sonnet-verify new candidates in batches
+  5. Export verified labels to labels_640_exp/
+  6. Merge into v3 dataset
+```
+
 ## Future Enhancements (Commercial Parity)
 
 ### High Priority (Next 3 months)
