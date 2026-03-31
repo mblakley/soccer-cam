@@ -4,14 +4,6 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-008: Mass tiling with D: staging (2026-03-31)
-
-**Hypothesis:** Copying video from F: (USB) to D: (internal HDD) before tiling eliminates USB as I/O bottleneck.
-**Method:** `mass_tile.py` stages video to `D:/training_data/staging/`, extracts frames + tiles to `D:/training_data/tiles_640/`. Pipelined: copies next game while tiling current.
-**Result:** Test game (Byron Bergen, 4 segments, ~7.3 GB video): copy 3.5 min over USB, segment 1 extract+tile = 32 min (1,313 frames → 27,573 tiles). Processing is CPU-bound (H.264 decode + JPEG encode).
-**Conclusion:** Staging confirmed effective. USB only touched for sequential video copy (~60-100 MB/s). Processing speed is ~120 tiles/sec on D:, limited by CPU not disk.
-**Code:** `training/data_prep/mass_tile.py`
-
 ## EXP-007: Game phase detection from multi-ball patterns (2026-03-30)
 
 **Hypothesis:** Warmup/halftime/postgame have multiple scattered ball detections; active play has a single ball trajectory.
