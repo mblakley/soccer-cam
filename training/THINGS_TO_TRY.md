@@ -1,5 +1,33 @@
 # Things to Try — Ball Detection Model
 
+## Human-in-the-Loop Track Recovery
+
+When the tracker has a solid ball trajectory (10+ seconds of continuous tracking) and then loses the ball mid-play (no detection in predicted area, ball didn't cross sideline), queue the event for human annotation:
+
+**Show the human:**
+1. Last ~3 seconds of tracked ball (context + momentum)
+2. The frame(s) where tracking was lost, with predicted search area highlighted
+3. A few frames forward showing where the ball reappears (if it does)
+
+**Human provides:**
+- Click/tap ball location in the "lost" frames
+- Or classify: "out of play" / "occluded by player" / "can't find it"
+
+**Value:**
+- Ground truth labels for the HARDEST frames (exactly where the model fails)
+- Occlusion annotations become training data (ball-behind-player scenarios)
+- Stitches tracks back together for continuous coverage
+- Every answer improves both the current game AND future model training
+- Much higher value per human-second than reviewing random tiles
+
+**Priority queue:** Rank lost-ball events by: (1) track length before loss (longer = higher value), (2) whether ball reappears nearby (likely findable), (3) game phase (active play > warmup).
+
+**Implementation notes:**
+- Extend annotation app with "track assist" mode showing sequential frames
+- Tracker queues events via API to annotation server
+- Results feed back into both track reconstruction AND v3+ training labels
+- These are the hardest negatives/positives — exactly what active learning would select
+
 ## Label Quality Improvements
 
 ### Heuristic pre-filtering
