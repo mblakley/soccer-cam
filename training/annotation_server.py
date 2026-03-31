@@ -723,6 +723,103 @@ async def regenerate_tracking_lab():
     return {"status": "failed"}
 
 
+# --- Ball Verification endpoints ---
+
+BALL_VERIFY_DIR = REVIEW_PACKETS_DIR / "ball_verify"
+
+
+@app.get("/api/ball-verify")
+async def get_ball_verify():
+    """Get the ball verification manifest."""
+    manifest_path = BALL_VERIFY_DIR / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "No ball verification packet found")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    results = _load_ball_verify_results()
+    reviewed_ids = {r["frame_idx"] for r in results}
+    unreviewed = [f for f in manifest["frames"] if f["frame_idx"] not in reviewed_ids]
+
+    return {
+        **manifest,
+        "reviewed_count": len(results),
+        "remaining_count": len(unreviewed),
+        "next_frame": unreviewed[0] if unreviewed else None,
+        "stats": _ball_verify_stats(results),
+    }
+
+
+@app.get("/api/ball-verify/crop/{candidate_id}")
+async def get_ball_verify_crop(candidate_id: int):
+    """Serve the cropped image for a candidate."""
+    crop_path = BALL_VERIFY_DIR / "crops" / f"crop_{candidate_id:05d}.jpg"
+    if not crop_path.exists():
+        raise HTTPException(404, "Crop not found")
+    return FileResponse(crop_path, media_type="image/jpeg")
+
+
+@app.get("/api/ball-verify/full/{candidate_id}")
+async def get_ball_verify_full(candidate_id: int):
+    """Serve the full panoramic frame for a candidate."""
+    full_path = BALL_VERIFY_DIR / "full_frames" / f"full_{candidate_id:05d}.jpg"
+    if not full_path.exists():
+        raise HTTPException(404, "Full frame not found")
+    return FileResponse(full_path, media_type="image/jpeg")
+
+
+@app.post("/api/ball-verify/result")
+async def submit_ball_verify_result(result: dict):
+    """Submit a verification result for one candidate.
+
+    Expected: {"frame_idx": int, "verdict": "ball"|"not_ball"|"unclear"}
+    """
+    results = _load_ball_verify_results()
+    results = [r for r in results if r["frame_idx"] != result["frame_idx"]]
+    results.append({
+        "frame_idx": result["frame_idx"],
+        "verdict": result["verdict"],
+        "notes": result.get("notes", ""),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    })
+    results.sort(key=lambda r: r["frame_idx"])
+    _save_ball_verify_results(results)
+
+    return {
+        "accepted": True,
+        "total_reviewed": len(results),
+        "stats": _ball_verify_stats(results),
+    }
+
+
+def _load_ball_verify_results() -> list[dict]:
+    results_path = BALL_VERIFY_DIR / "verification_results.json"
+    if not results_path.exists():
+        return []
+    with open(results_path) as f:
+        return json.load(f)
+
+
+def _save_ball_verify_results(results: list[dict]):
+    results_path = BALL_VERIFY_DIR / "verification_results.json"
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+
+def _ball_verify_stats(results: list[dict]) -> dict:
+    ball = sum(1 for r in results if r["verdict"] == "ball")
+    not_ball = sum(1 for r in results if r["verdict"] == "not_ball")
+    unclear = sum(1 for r in results if r["verdict"] == "unclear")
+    total = len(results)
+    return {
+        "ball": ball,
+        "not_ball": not_ball,
+        "unclear": unclear,
+        "total": total,
+        "precision": round(ball / max(ball + not_ball, 1), 3),
+    }
+
+
 @app.get("/sw.js")
 async def service_worker():
     """Serve SW from root so it can control all pages."""
