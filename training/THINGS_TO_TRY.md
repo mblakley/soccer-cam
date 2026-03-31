@@ -67,7 +67,17 @@ This is batch processing on recorded video — we can look forward AND backward,
 
 **Escalation policy:**
 - Gap < 2 seconds: automated pipeline only (ONNX low-conf, frame diff, optical flow)
-- Gap >= 2 seconds: send to Sonnet Vision AND queue for human review via annotation app. Show both the gap context (last/next detections, predicted area) and the raw frames. Both Sonnet and human attempt to locate the ball. Agreement = high-confidence label, disagreement = flag for closer review.
+- Gap >= 2 seconds: send to Sonnet Vision first. If Sonnet finds the ball, add label. If Sonnet can't find it, escalate to human.
+
+**Human review priority queue:**
+Human time is the scarcest resource. Always work on the highest-value item first. Priority score based on:
+1. **Sonnet failed to find ball** (highest priority) — if the AI can't find it, only a human can. These are the hardest cases and the most valuable training data.
+2. **Gap length** — longer gaps = more lost tracking time. A 10-second gap is worth 5x more than a 2-second gap.
+3. **Active play context** — gaps during active play (near other players, mid-possession) are higher value than gaps during dead balls or stoppages.
+4. **Track quality before the gap** — if we had 30+ seconds of solid tracking before losing the ball, this is a high-quality trajectory being broken. Worth more than a trajectory that was already spotty.
+5. **Sonnet disagreement** — cases where Sonnet said "ball" but with low confidence, or where automated methods found a candidate but Sonnet rejected it. These edge cases are the decision boundary the model needs to learn.
+
+The annotation app should show the priority score and why each item is ranked where it is, so the human can make informed decisions about what to review.
 
 **Target:** No gap longer than 50 frames (~2 seconds) during active play. For gaps caused by fast kicks, aim for continuous tracking through the full arc.
 
