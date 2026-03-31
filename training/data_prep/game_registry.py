@@ -13,7 +13,7 @@ OLD_TO_NEW = {
     "flash__06.01.2024_vs_IYSA_home": "flash__2024.06.01_vs_IYSA_home",
     "flash__09.27.2024_vs_RNYFC_Black_home": "flash__2024.09.27_vs_RNYFC_Black_home",
     "flash__09.30.2024_vs_Chili_home": "flash__2024.09.30_vs_Chili_home",
-    "flash__2025.06.02": "flash__2025.06.02",
+    "flash__2025.06.02": "flash__2025.06.02_181603",
     "heat__05.31.2024_vs_Fairport_home": "heat__2024.05.31_vs_Fairport_home",
     "heat__06.20.2024_vs_Chili_away": "heat__2024.06.20_vs_Chili_away",
     "heat__07.17.2024_vs_Fairport_away": "heat__2024.07.17_vs_Fairport_away",
@@ -34,9 +34,13 @@ def _make_game_id(team: str, folder_name: str) -> str:
     import re
 
     # Handle date-only names like '2025.06.02-18.16.03'
-    m = re.match(r"^(\d{4}\.\d{2}\.\d{2})", folder_name)
+    # Include time suffix to disambiguate multiple recordings on same date
+    m = re.match(r"^(\d{4}\.\d{2}\.\d{2})(?:-(\d{2}\.\d{2}\.\d{2}))?", folder_name)
     if m and " - " not in folder_name:
-        return f"{team}__{m.group(1)}"
+        game_id = f"{team}__{m.group(1)}"
+        if m.group(2):
+            game_id += f"_{m.group(2).replace('.', '')}"
+        return game_id
 
     # Handle tournament names: '07.20.2024-07.21.2024 - Clarence Tournament'
     m = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})(?:-\d{2}\.\d{2}\.\d{4})?\s*-\s*(.+)", folder_name)
@@ -89,9 +93,9 @@ def build_registry() -> list[dict]:
             if not gdir.is_dir():
                 continue
 
-            # Find [F] video segments
+            # Find [F] video segments (recursive for tournament sub-game folders)
             segments = sorted(
-                [f for f in gdir.iterdir() if f.suffix == ".mp4" and "[F]" in f.name]
+                [f for f in gdir.rglob("*.mp4") if "[F]" in f.name]
             )
             if not segments:
                 continue
@@ -121,13 +125,16 @@ def build_registry() -> list[dict]:
             # {team}__{YYYY.MM.DD}_vs_{opponent}_{location}
             game_id = _make_game_id(team, name)
 
-            # Check existing tiles
-            tiles_dir = Path("F:/training_data/tiles_640") / game_id
-            has_tiles = tiles_dir.exists() and any(tiles_dir.glob("*.jpg"))
+            # Check existing tiles (D: is primary, F: is fallback)
+            # Use dir existence as proxy — glob on USB is very slow
+            tiles_dir_d = Path("D:/training_data/tiles_640") / game_id
+            tiles_dir_f = Path("F:/training_data/tiles_640") / game_id
+            has_tiles = tiles_dir_d.exists() or tiles_dir_f.exists()
 
             # Check existing labels
-            labels_dir = Path("F:/training_data/labels_640_ext") / game_id
-            has_labels = labels_dir.exists() and any(labels_dir.glob("*.txt"))
+            labels_dir_d = Path("D:/training_data/labels_640_ext") / game_id
+            labels_dir_f = Path("F:/training_data/labels_640_ext") / game_id
+            has_labels = labels_dir_d.exists() or labels_dir_f.exists()
 
             games.append({
                 "game_id": game_id,

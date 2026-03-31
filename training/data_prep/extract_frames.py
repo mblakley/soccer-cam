@@ -25,6 +25,7 @@ def extract_frames(
     diff_threshold: float = DEFAULT_DIFF_THRESHOLD,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     frame_interval: int | None = None,
+    flip: bool = False,
 ) -> int:
     """Extract frames from a video file at regular intervals.
 
@@ -35,6 +36,7 @@ def extract_frames(
         diff_threshold: Minimum mean absolute pixel difference to keep a frame
         jpeg_quality: JPEG compression quality (0-100)
         frame_interval: Extract every N-th frame (overrides interval_sec)
+        flip: Rotate frame 180° (for upside-down camera recordings)
 
     Returns:
         Number of frames extracted
@@ -69,6 +71,9 @@ def extract_frames(
             break
 
         if frame_idx % frame_interval == 0:
+            if flip:
+                frame = cv2.flip(frame, -1)
+
             if prev_frame is not None:
                 diff = np.mean(
                     np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))
