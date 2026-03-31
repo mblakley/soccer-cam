@@ -30,6 +30,26 @@ When the tracker has a solid ball trajectory (10+ seconds of continuous tracking
 
 ## Label Quality Improvements
 
+### Single-ball constraint during active play
+During a game there is exactly ONE ball on the field. If we detect multiple "game_ball" in the same panoramic frame during active play (not warmup/halftime), at least N-1 are wrong. Use game phase labels + this constraint to automatically flag multi-ball frames. For flagged frames, keep only the detection most consistent with the trajectory. Free quality improvement — no model needed, just logic on existing labels + game phases.
+
+### v2 model re-labeling + disagreement review
+After v2 training, run it on all tiles alongside original ONNX labels. Three cases:
+- **Both agree** → high confidence, keep the label
+- **ONNX says ball, v2 says no** → likely FP, send to Sonnet/human review
+- **v2 says ball, ONNX missed it** → likely FN, new training data candidate
+
+Disagreements are the most informative samples. Much higher value than reviewing random tiles. This is essentially active learning but driven by model consensus instead of confidence thresholds.
+
+### Per-sample training loss analysis
+Track which samples have persistently high loss during training. A correctly-labeled sample should eventually have low loss. If a sample still has high loss after 50+ epochs, the model is "fighting" the label — it's likely mislabeled. Export high-loss samples for review. Could add a validation pass that logs per-image loss after each epoch.
+
+### Optical flow label propagation
+For frames with high-confidence labels (in trajectory + Sonnet verified), use `cv2.calcOpticalFlowPyrLK` to track the ball point to adjacent frames that have no detection. This generates labels for frames the model missed, derived from frames we trust. Quality check: if optical flow position diverges from trajectory prediction by >50px, discard.
+
+### Position-aware label weighting
+Sonnet QA showed r1_c5 and r1_c6 have highest FP rates (sun glare). Instead of treating all labels equally, weight by expected quality based on tile position. Labels from clean positions get full weight in training; labels from noisy positions get reduced weight (0.5x) or require extra verification before inclusion.
+
 ### Heuristic pre-filtering
 Filter bootstrap detections by ball physics before training:
 - Aspect ratio ~0.7-1.4 (ball is round, reject elongated detections)
