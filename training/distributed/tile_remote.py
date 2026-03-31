@@ -52,8 +52,9 @@ def setup_shares():
     """Map network shares using WNet API."""
     map_share(f"\\\\{SERVER}\\training", SHARE_USER, SHARE_PASS)
     logger.info("Training share mapped")
-    map_share(f"\\\\{SERVER}\\video", SHARE_USER, SHARE_PASS)
-    logger.info("Video share mapped")
+    # Video is served from D: staging, NOT from F: (USB).
+    # Server copies video to D:/training_data/staging/ before tiling.
+    # Laptop reads from there via training share.
 
 
 def load_registry():
@@ -90,30 +91,20 @@ def release_game(game_id: str, tiles_base: Path):
 
 
 def find_videos(game: dict) -> list[Path]:
-    """Find video segments on the video share."""
-    game_path = Path(game["path"])
-    video_base = Path(f"//{SERVER}/video")
+    """Find video segments in server's D: staging directory.
 
-    # Map game path to share (F:/Flash_2013s/... -> //server/video/Flash_2013s/...)
-    for i, part in enumerate(game_path.parts):
-        if "Flash" in part or "Heat" in part:
-            source_dir = video_base / Path(*game_path.parts[i:])
-            break
-    else:
-        source_dir = video_base / game_path.name
+    Server copies video from F: to D:/training_data/staging/{game_id}/
+    before tiling. Laptop reads from there via training share.
+    F: (USB) should NEVER be read directly over the network.
+    """
+    game_id = game["game_id"]
+    staging_dir = Path(f"//{SERVER}/training/staging/{game_id}")
 
-    videos = []
-    if game.get("video_source") == "corrected" and game.get("corrected_video"):
-        # Corrected video is in the game directory
-        corrected_name = Path(game["corrected_video"]).name
-        matches = list(source_dir.rglob(corrected_name))
-        if matches:
-            return [matches[0]]
+    if not staging_dir.exists():
+        logger.info("  Staging not ready for %s (server hasn't copied yet)", game_id)
+        return []
 
-    for seg_name in game["segments"]:
-        matches = list(source_dir.rglob(seg_name))
-        if matches:
-            videos.append(matches[0])
+    videos = sorted(staging_dir.glob("*.mp4"))
     return videos
 
 
