@@ -346,11 +346,8 @@ def mass_tile(
             # Tile this game
             result = tile_game(game, videos, tiles_dir)
 
-            # Cleanup staging (local mode only)
-            if not remote_mode:
-                game_staging = staging_dir / game_id
-                if game_staging.exists():
-                    shutil.rmtree(game_staging)
+            # Don't delete staging — laptop may still need it for remote tiling.
+            # Staging cleanup happens separately after all machines are done.
 
             # Release lock
             release_game(game_id, tiles_dir)
