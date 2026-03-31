@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import glob
+import json
 import logging
 import os
 import shutil
@@ -388,6 +389,10 @@ def main():
         "--remote", nargs=2, metavar=("VIDEO_SHARE", "TRAINING_SHARE"),
         help="Remote mode: read video from VIDEO_SHARE, write tiles to TRAINING_SHARE/tiles_640",
     )
+    parser.add_argument(
+        "--games-file", type=Path,
+        help="JSON file with list of game_ids to process (for splitting work between machines)",
+    )
     args = parser.parse_args()
 
     video_share = None
@@ -397,11 +402,21 @@ def main():
         video_share = Path(args.remote[0])
         tiles_dir = Path(args.remote[1]) / "tiles_640"
 
+    # Load game filter from file if provided
+    game_filter = args.game
+    games = None
+    if args.games_file:
+        with open(args.games_file) as f:
+            game_ids = json.load(f)
+        registry = load_registry()
+        games = [g for g in registry if g["game_id"] in game_ids]
+
     mass_tile(
+        games=games,
         staging_dir=args.staging_dir,
         tiles_dir=tiles_dir,
         dry_run=args.dry_run,
-        game_filter=args.game,
+        game_filter=game_filter,
         video_share=video_share,
     )
 
