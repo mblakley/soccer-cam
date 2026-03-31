@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Ball Verification</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
+  --yellow: #eab308; --bg: #111; --surface: #1a1a1a; --text: #f0f0f0;
+}
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--bg); color: var(--text);
+  height: 100%; overflow: hidden; touch-action: manipulation;
+}
+.header {
+  display: flex; align-items: center; padding: 12px 16px;
+  background: var(--surface); border-bottom: 1px solid #333;
+}
+.header h1 { font-size: 16px; font-weight: 600; flex: 1; }
+.stats { font-size: 12px; color: #888; }
+.image-container {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 8px; overflow: hidden; position: relative;
+}
+.image-container img {
+  max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;
+  touch-action: pinch-zoom;
+}
+.info-bar {
+  padding: 8px 16px; background: var(--surface);
+  font-size: 12px; color: #888; text-align: center;
+}
+.buttons {
+  display: flex; gap: 12px; padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid #333;
+}
+.btn {
+  flex: 1; padding: 16px; border: none; border-radius: 12px;
+  font-size: 18px; font-weight: 700; cursor: pointer;
+  transition: transform 0.1s;
+}
+.btn:active { transform: scale(0.95); }
+.btn-ball { background: var(--green); color: #000; }
+.btn-not { background: var(--red); color: #fff; }
+.btn-unclear { background: var(--yellow); color: #000; }
+.btn-toggle {
+  position: absolute; top: 8px; right: 8px;
+  background: rgba(0,0,0,0.7); color: #fff; border: 1px solid #555;
+  padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+.container { display: flex; flex-direction: column; height: 100%; }
+.loading { text-align: center; padding: 40px; color: #888; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🎯 Ball Verification</h1>
+    <span class="stats" id="stats">Loading...</span>
+  </div>
+  <div class="image-container" id="imageContainer">
+    <img id="mainImage" src="" alt="Loading...">
+    <button class="btn-toggle" id="toggleBtn" onclick="toggleView()">Show Full</button>
+  </div>
+  <div class="info-bar" id="infoBar">—</div>
+  <div style="padding: 4px 16px;">
+    <input type="text" id="notes" placeholder="Notes (optional)"
+      style="width:100%; padding:8px 12px; background:#222; border:1px solid #444;
+      border-radius:8px; color:#fff; font-size:14px;">
+  </div>
+  <div class="buttons">
+    <button class="btn btn-ball" onclick="submit('ball')">⚽ Ball</button>
+    <button class="btn" style="background:#f97316;color:#000" onclick="submit('ball_out')">⚽ Out</button>
+    <button class="btn btn-unclear" onclick="submit('unclear')">❓</button>
+    <button class="btn btn-not" onclick="submit('not_ball')">✖ Not</button>
+  </div>
+</div>
+
+<script>
+let currentFrame = null;
+let showingFull = false;
+let manifest = null;
+
+async function load() {
+  try {
+    const resp = await fetch('/api/ball-verify');
+    manifest = await resp.json();
+    updateStats(manifest);
+    if (manifest.next_frame) {
+      showFrame(manifest.next_frame);
+    } else {
+      document.getElementById('mainImage').alt = 'All reviewed!';
+      document.getElementById('infoBar').textContent = 'All candidates reviewed. Thank you!';
+    }
+  } catch (e) {
+    document.getElementById('mainImage').alt = 'Error loading';
+  }
+}
+
+function showFrame(frame) {
+  currentFrame = frame;
+  showingFull = false;
+  const img = document.getElementById('mainImage');
+  img.src = `/api/ball-verify/crop/${frame.frame_idx}`;
+  document.getElementById('toggleBtn').textContent = 'Show Full';
+
+  const row = frame.row || '?';
+  const game = (frame.game_id || '').substring(0, 25);
+  const dist = frame.distance ? `d=${Math.round(frame.distance)}` : '';
+  const bright = frame.brightness ? `b=${Math.round(frame.brightness)}` : '';
+  document.getElementById('infoBar').textContent = `${game} | ${row} | ${dist} ${bright}`;
+}
+
+function toggleView() {
+  if (!currentFrame) return;
+  const img = document.getElementById('mainImage');
+  const btn = document.getElementById('toggleBtn');
+  if (showingFull) {
+    img.src = `/api/ball-verify/crop/${currentFrame.frame_idx}`;
+    btn.textContent = 'Show Full';
+  } else {
+    img.src = `/api/ball-verify/full/${currentFrame.frame_idx}`;
+    btn.textContent = 'Show Crop';
+  }
+  showingFull = !showingFull;
+}
+
+async function submit(verdict) {
+  if (!currentFrame) return;
+  try {
+    const resp = await fetch('/api/ball-verify/result', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        frame_idx: currentFrame.frame_idx,
+        verdict,
+        notes: document.getElementById('notes').value,
+      }),
+    });
+    const data = await resp.json();
+    updateStats({stats: data.stats, reviewed_count: data.total_reviewed,
+                 remaining_count: (manifest.frames || []).length - data.total_reviewed});
+
+    document.getElementById('notes').value = '';
+    // Load next unreviewed frame
+    const reviewed = new Set();
+    // Fetch updated manifest to get next
+    const mResp = await fetch('/api/ball-verify');
+    manifest = await mResp.json();
+    if (manifest.next_frame) {
+      showFrame(manifest.next_frame);
+    } else {
+      document.getElementById('mainImage').src = '';
+      document.getElementById('mainImage').alt = 'All reviewed!';
+      document.getElementById('infoBar').textContent = 'All candidates reviewed!';
+    }
+  } catch (e) {
+    alert('Error submitting: ' + e.message);
+  }
+}
+
+function updateStats(data) {
+  const s = data.stats || {};
+  const total = data.reviewed_count || 0;
+  const remaining = data.remaining_count || 0;
+  document.getElementById('stats').textContent =
+    `${total} done | ${remaining} left | ⚽${s.ball||0} ✖${s.not_ball||0} ❓${s.unclear||0}`;
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (e.key === '1' || e.key === 'b') submit('ball');
+  if (e.key === '2' || e.key === 'o') submit('ball_out');
+  if (e.key === '3' || e.key === 'u') submit('unclear');
+  if (e.key === '4' || e.key === 'n') submit('not_ball');
+  if (e.key === 'f' || e.key === ' ') toggleView();
+});
+
+load();
+</script>
+</body>
+</html>
