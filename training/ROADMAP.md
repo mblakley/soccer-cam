@@ -136,6 +136,47 @@ The v3 process is a loop, not a pipeline. Training starts with imperfect labels 
 - Per-game coverage tracking: when a game hits 95%, deprioritize it
 - The loop converges: v3 model finds gaps v2 missed, v4 finds gaps v3 missed
 
+### Flywheel Implementation
+
+The flywheel is a long-running process that orchestrates cycles automatically. Each cycle runs to completion, then the next cycle starts with the improved model. Human review happens asynchronously — the flywheel doesn't block on it, just picks up whatever labels are available.
+
+```
+training/flywheel/
+  runner.py          — Long-running orchestrator, manages cycles
+  coverage.py        — Measure per-game tracking coverage + find gaps
+  gap_filler.py      — Automated gap filling (ONNX low-conf, frame diff, optical flow)
+  sonnet_triage.py   — Send gaps >= 2s to Sonnet, rank failures for human
+  label_merger.py    — Merge new labels from any source into main set
+  priority_queue.py  — Prioritized human review queue, serves annotation app
+```
+
+**Runner lifecycle:**
+```
+runner.py (long-running, restartable)
+  │
+  ├── On startup: read state from flywheel_state.json
+  │   (which cycle, which step, what's pending)
+  │
+  ├── CYCLE N:
+  │   ├── Step 1: Run current model on all tiles → detections
+  │   ├── Step 2: Build trajectories, measure coverage, find gaps
+  │   ├── Step 3: Auto-fill gaps < 2s
+  │   ├── Step 4: Sonnet triage gaps >= 2s (async, batched)
+  │   ├── Step 5: Merge all available labels (auto + Sonnet + human)
+  │   ├── Step 6: Rebuild dataset from merged labels
+  │   ├── Step 7: Train model (resume from last checkpoint)
+  │   ├── Step 8: Evaluate: per-game coverage, total gaps, improvement
+  │   └── Step 9: If coverage < 95% → start CYCLE N+1
+  │
+  ├── Between cycles: pick up any human labels that arrived
+  │
+  └── On completion (all games >= 95%): notify human, stop
+```
+
+**State persistence:** `flywheel_state.json` tracks current cycle, step, per-game coverage, pending human reviews. Runner can be killed and restarted — it picks up where it left off.
+
+**Human review runs in parallel:** The annotation app serves from the priority queue. Human labels land in a directory that label_merger picks up at the start of each cycle. No blocking.
+
 ## Future Enhancements (Commercial Parity)
 
 ### High Priority (Next 3 months)
