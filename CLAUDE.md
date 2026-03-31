@@ -181,6 +181,28 @@ Always verify changes before committing:
 
 Use `/verify` to run all checks at once.
 
+## Documentation Rules
+
+The git repo is the source of truth for all project knowledge. Claude memory is for user preferences only — project state goes in these files under `training/docs/`:
+
+| File | Purpose | When to update |
+|------|---------|----------------|
+| `STATUS.md` | What's happening right now | Start AND end of every work session |
+| `DECISIONS.md` | Why we chose X over Y | When choosing between approaches |
+| `EXPERIMENTS.md` | What we tried, what happened | After every experiment or significant test |
+| `GAMES.md` | Per-game quality observations | When learning something about a specific game |
+| `ROADMAP.md` | High-level plan with checkboxes | When tasks complete (add dates) |
+
+### Rules
+
+- **Read STATUS.md before starting work** — don't duplicate effort or miss context from prior sessions.
+- **Never store project state in Claude memory** — if it's about the project (not user preferences), it goes in a doc file and gets committed.
+- **Failed experiments are required reading** — before trying something, check EXPERIMENTS.md. Don't repeat failures.
+- **Decisions are permanent** — never delete a DECISIONS.md entry. If reversed, add a new entry explaining why.
+- **Dates on everything** — every STATUS.md update, every experiment, every decision gets a date.
+- **Commit docs with code** — documentation updates should be committed alongside the code changes they describe.
+- **Don't document chores** — data cleanup, disk space management, file copies, directory renames are operational work. Only document things that affect the project's direction: architectural choices, experiment results, dataset changes, model improvements.
+
 ## Workflow
 
 - Start sessions in Plan mode (Shift+Tab twice) for non-trivial changes
