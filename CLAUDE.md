@@ -6,6 +6,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Soccer-cam (video-grouper) is an automated pipeline for downloading, processing, and uploading soccer game videos from Dahua IP cameras. It runs as a Windows service with a PyQt6 system tray GUI, or via Docker on Linux.
 
+## Task Execution Rules
+
+**Every task must be verified end-to-end before reporting success.**
+
+1. **Define done before starting.** Before launching anything, state what "success" looks like — a specific output, a process running with expected logs, a file that exists with expected content.
+
+2. **Verify each step before proceeding to the next.** Never chain steps on assumption. After step A completes, confirm its output is correct before starting step B. If A produces files, verify they exist and are valid. If A starts a process, confirm it's running AND producing expected output.
+
+3. **Wait for real evidence.** "Launched" is not "running". "Running" is not "producing results". Check actual output — log lines, result files, GPU utilization, process status. If you can't verify within 60 seconds, set up a check and come back.
+
+4. **Never report success prematurely.** Don't say "training started" until you see the first batch processing. Don't say "file transferred" until you verify the size/checksum matches. Don't say "process is working" from a single log line — wait for sustained progress.
+
+5. **When something fails, fix the root cause.** Don't retry blindly. Understand WHY it failed (permissions? corrupt file? wrong path? process died?) and fix the underlying issue. If the same failure pattern has happened before, fix it permanently.
+
+6. **Track what's actually running.** Maintain awareness of every background process. Know their PIDs, what they're doing, and when they last produced output. A process that hasn't logged in 10 minutes may be dead.
+
+## Game Naming Convention
+
+All games use this format everywhere — tiles, labels, shards, manifests, configs:
+
+```
+{team}__{date}_vs_{opponent}_{location}
+```
+
+Examples:
+- `flash__2024.06.01_vs_IYSA_home`
+- `heat__2024.05.31_vs_Fairport_home`
+- `flash__2024.09.27_vs_RNYFC_Black_home`
+- `heat__2024.07.20_Clarence_Tournament`
+
+Rules:
+- Team prefix: `flash` or `heat` (lowercase)
+- Double underscore `__` separates team from date
+- Date format: `YYYY.MM.DD` (sortable, unambiguous)
+- Single underscore `_` between words
+- Location: `home`, `away`, or omitted for tournaments
+- No spaces, no parentheses, no dashes in game IDs
+- Tournament names: `{team}__{date}_{Tournament_Name}`
+
+The game registry (`F:/training_data/game_registry.json`) is the source of truth for all game IDs and their video source paths.
+
 ## File Organization Rules
 
 **Do not create files without considering where they belong.** Follow these rules:
