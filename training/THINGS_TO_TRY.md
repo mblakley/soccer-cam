@@ -110,6 +110,15 @@ After training v1, run it on unlabeled tiles. Send low-confidence detections (mo
 
 ## Training Improvements
 
+### Scale-Aware Focal Loss (from SoccerDETR paper, MDPI 2026)
+Standard focal loss treats all positive samples equally regardless of object size. Scale-Aware Focal Loss (SAFL) explicitly up-weights loss for small objects. SoccerDETR showed +3.2% ball detection improvement (85.2% → 88.4% mAP) just from this loss change. Our ball is 8-40px in panoramic view — exactly the scenario SAFL targets. Could implement as a custom loss callback in ultralytics training, weighting loss by inverse bounding box area. See: https://www.mdpi.com/2227-7080/14/3/142
+
+### Dynamic multi-scale feature fusion (from SoccerDETR)
+Instead of YOLO's fixed FPN weights for combining multi-scale features, use content-aware fusion that adjusts weights based on input. The ball looks very different at r0 (8px blob) vs r2 (30px circle) — dynamic fusion adapts to this per-frame. SoccerDETR's SDFM module uses channel attention for fusion weights. May require custom model architecture changes rather than just training config.
+
+### Consider Mamba-based detector for inference
+SoccerDETR achieves 78 FPS with 94.2% mAP using MobileMamba backbone — linear complexity instead of quadratic attention. Worth evaluating for real-time autocam inference where we need 30+ FPS. Not urgent for label improvement (batch processing), but relevant for deployment.
+
 ### Increase batch size after testing
 Current batch=6 OOMs on GTX 1060 with yolo11m. Try batch=4 as a stable default. If model is switched to yolo11n, batch=16+ should work.
 
