@@ -66,18 +66,31 @@ def extract_frames(
     frame_idx = 0
 
     while True:
-        ret, frame = cap.read()
+        try:
+            ret, frame = cap.read()
+        except Exception:
+            # Corrupt frame — skip
+            frame_idx += 1
+            continue
         if not ret:
             break
+        if frame is None:
+            frame_idx += 1
+            continue
 
         if frame_idx % frame_interval == 0:
             if flip:
                 frame = cv2.flip(frame, -1)
 
             if prev_frame is not None:
-                diff = np.mean(
-                    np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))
-                )
+                try:
+                    diff = np.mean(
+                        np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))
+                    )
+                except (MemoryError, ValueError):
+                    # Frame size mismatch or OOM — skip
+                    frame_idx += 1
+                    continue
                 if diff < diff_threshold:
                     frame_idx += 1
                     continue
