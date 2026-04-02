@@ -288,7 +288,11 @@ class TestVideoGrouperAppRefactored:
             # All processors should be stopped initially (except optional processors
             # which may be disabled, and StateAuditor which is startup-only)
             for processor_name, processor_status in status.items():
-                if processor_name in ("ntfy_processor", "clip_request_processor"):
+                if processor_name in (
+                    "ntfy_processor",
+                    "clip_request_processor",
+                    "ttt_job_processor",
+                ):
                     # Optional processors can be "stopped" or "disabled" depending on config
                     assert processor_status in ["stopped", "disabled"]
                 elif processor_name == "state_auditor":

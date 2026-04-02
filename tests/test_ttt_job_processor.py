@@ -42,12 +42,15 @@ def ttt_storage():
 def ttt_config(ttt_storage):
     """Create a configuration with TTT enabled."""
     return Config(
-        camera=CameraConfig(
-            type="dahua",
-            device_ip="127.0.0.1",
-            username="admin",
-            password="password",
-        ),
+        cameras=[
+            CameraConfig(
+                name="test-camera",
+                type="dahua",
+                device_ip="127.0.0.1",
+                username="admin",
+                password="password",
+            )
+        ],
         storage=StorageConfig(path=ttt_storage),
         recording=RecordingConfig(),
         processing=ProcessingConfig(),
@@ -174,12 +177,15 @@ class TestServiceRegistration:
         self, ttt_storage, mock_ttt_client
     ):
         config = Config(
-            camera=CameraConfig(
-                type="dahua",
-                device_ip="127.0.0.1",
-                username="admin",
-                password="password",
-            ),
+            cameras=[
+                CameraConfig(
+                    name="test-camera",
+                    type="dahua",
+                    device_ip="127.0.0.1",
+                    username="admin",
+                    password="password",
+                )
+            ],
             storage=StorageConfig(path=ttt_storage),
             recording=RecordingConfig(),
             processing=ProcessingConfig(),
