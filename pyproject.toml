@@ -25,7 +25,7 @@ dependencies = [
     "pycryptodome>=3.20.0",
     "pillow>=11.3.0",
     "ultralytics>=8.4.27",
-    "onnxruntime-directml>=1.24.4",
+    "onnxruntime-directml>=1.24.4; sys_platform == 'win32'",
     "uvicorn>=0.42.0",
     "fastapi>=0.135.2",
     "av>=17.0.0",
@@ -118,6 +118,7 @@ asyncio_mode = "strict"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
