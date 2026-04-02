@@ -82,11 +82,34 @@
 - [ ] Per-game coverage tracking (target: 95% during active play)
 
 ### v3 Training Configuration
+
+#### Model
+- [ ] Switch to **YOLO26l** — built-in STAL (Scale-Aware Task Alignment) and ProgLoss for small-object detection, which should directly address the low recall problem seen in v2
+- [ ] Benchmark VRAM usage — YOLO26l is significantly larger than YOLO11s; expect batch=4-8 on RTX 4070 (down from 16)
+
+#### Hyperparameters (informed by v2 `ball_v23` training analysis)
+v2 training showed clear overfitting (val box_loss diverging from epoch 10 onward) and a severe recall problem (0.293 recall vs 0.946 precision — missing ~70% of balls). mAP50-95 peaked at epoch 10 (0.248) then declined. These changes target those specific issues:
+
+- [ ] **Enable cosine LR annealing** (`cos_lr=True`) — v2 used flat LR decay which contributed to overfitting after the initial learning phase
+- [ ] **Lower initial learning rate** — try `lr0=0.001` to `0.005` (v2 used 0.01 which may be too aggressive for a larger model, and contributed to the epoch 4-5 metric collapse during warmup)
+- [ ] **Reduce patience to 15** — v2 used patience=30, but mAP plateaued by epoch 11; training 20+ extra epochs just deepened overfitting
+- [ ] **Increase `cls` loss weight** (`cls=1.5` or higher, v2 used 0.5) — with 3 classes and severe recall issues, the model needs stronger classification gradient to actually find balls rather than just precisely localizing the few it does find
+- [ ] **Enable multi-scale training** (`multi_scale=0.5`) — balls range from 8px (r0) to 30px (r2); v2 trained at fixed 640 only
+- [ ] **Tune mosaic down** (`mosaic=0.5`) — at 1.0, most mosaic tiles are negative since ~80% of tiles have no ball, diluting the positive signal
+- [ ] **Enable copy-paste augmentation** (`copy_paste=0.3`) — v2 had it at 0.0; synthetically placing balls increases positive example density
+- [ ] **Freeze backbone for first 5-10 epochs** — YOLO26l has a strong pretrained backbone; freezing early layers reduces overfitting risk on our relatively small positive sample count
+- [ ] **Run Optuna sweep before full training** — 20-30 short trials (10-15 epochs each) on LR, cls weight, mosaic, copy_paste, and freeze depth to find a good starting config rather than guessing
+
+#### Dataset & Labels
 - [ ] Include r0 in training (remove `DEFAULT_EXCLUDE_ROWS = {0}`)
 - [ ] Include corrected/flipped upside-down games
+- [ ] Weight r0 positives at 4x to counteract their scarcity
+- [ ] Reduce negative example ratio or use smarter negative mining (v2 had ~80% empty tiles)
+
+#### Architecture & Training Strategy
 - [ ] Train temporal model (3-frame input) alongside single-frame YOLO
 - [ ] Add player bbox as auxiliary negative signal (suppress detections on players)
-- [ ] Reduce augmentation brightness jitter to preserve ball/grass contrast
+- [ ] Reduce augmentation brightness jitter to preserve ball/grass contrast (v2 `hsv_v=0.4` may be too high)
 - [ ] Per-row confidence thresholds at inference (lower for r0)
 - [ ] Continuous training: rebuild dataset as human labels arrive, resume training
 
@@ -224,7 +247,7 @@ Video segments (.mp4)
   → Trajectory classification (game_ball / static_ball / not_ball)
   → Sonnet QA verification (spot-check 10% of labels)
   → Tar shards (organized by game/zone, ~200 MB each)
-  → Training (YOLO11n/s, 3-class detection)
+  → Training (YOLO26l for v3, 3-class detection)
 ```
 
 ### Training Iteration Loop
