@@ -8,11 +8,17 @@ on:
     paths:
       - 'video_grouper/**'
       - 'docker-compose.yaml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
   pull_request:
     branches: [ main ]
     paths:
       - 'video_grouper/**'
       - 'docker-compose.yaml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
 
 jobs:
   build:
