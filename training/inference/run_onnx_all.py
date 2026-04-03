@@ -257,23 +257,36 @@ while True:
         break
 
     game_labels = labels_dir / gid
+    local_labels = Path(rf"C:\soccer-cam-label\labels_local\{gid}")
     logger.info("=== %s (%d segments, flip=%s) ===",
                 gid, len(game_entry["segments"]), game_entry["needs_flip"])
 
     try:
+        local_labels.mkdir(parents=True, exist_ok=True)
+
         for seg_file in game_entry["segments"]:
             seg_name = seg_file.replace(".mp4", "")
             video_path = staging_dir / gid / seg_file
             logger.info("  Segment: %s", seg_name)
 
-            # Cache locally
+            # Cache video locally
             local_video = LOCAL_CACHE / seg_file
             if not local_video.exists():
                 logger.info("  Downloading %s (%.1f GB)...", seg_file, video_path.stat().st_size / 1e9)
                 shutil.copy2(str(video_path), str(local_video))
 
-            nf, nl = process_segment(local_video, seg_name, game_labels, game_entry["needs_flip"])
+            # Write labels locally (fast SSD writes)
+            nf, nl = process_segment(local_video, seg_name, local_labels, game_entry["needs_flip"])
             local_video.unlink(missing_ok=True)
+
+        # Batch transfer labels to F: (one directory copy instead of thousands of small SMB writes)
+        logger.info("  Transferring %d label files to %s...", len(list(local_labels.glob("*.txt"))), game_labels)
+        game_labels.mkdir(parents=True, exist_ok=True)
+        for f in local_labels.iterdir():
+            if f.name == ".lock":
+                continue
+            shutil.copy2(str(f), str(game_labels / f.name))
+        shutil.rmtree(local_labels, ignore_errors=True)
 
         # Remove lock — labels prove completion
         (game_labels / ".lock").unlink(missing_ok=True)
@@ -284,6 +297,7 @@ while True:
 
     except Exception as e:
         logger.exception("FAILED %s: %s", gid, e)
+        shutil.rmtree(local_labels, ignore_errors=True)
         try:
             (game_labels / ".lock").unlink(missing_ok=True)
             if not any(game_labels.glob("*.txt")):
