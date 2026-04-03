@@ -66,7 +66,7 @@ except ImportError:
 import onnxruntime as ort
 
 logger.info("Loading ONNX model from %s", model_path)
-providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+providers = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
 sess = ort.InferenceSession(str(model_path), providers=providers)
 actual_provider = sess.get_providers()[0]
 logger.info("ONNX provider: %s", actual_provider)
