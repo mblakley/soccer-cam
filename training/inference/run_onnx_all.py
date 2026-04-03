@@ -1,10 +1,10 @@
-"""Run ONNX ball detection on all games that don't have labels yet.
+"""Run ONNX ball detection on all games via shared queue.
 
-Uses the existing external_ball_detector module directly.
-Reads video segments from staging, writes per-tile YOLO labels.
+Multiple workers (across machines) claim games atomically via mkdir.
+Each worker takes a WORKER_ID for log file naming.
 
 Usage:
-    python -u run_onnx_all.py
+    python -u run_onnx_all.py [WORKER_ID]
 """
 import json
 import logging
@@ -14,18 +14,17 @@ import sys
 import time
 from pathlib import Path
 
+WORKER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
 sys.path.insert(0, r"C:\soccer-cam-label")
 from map_share import map_share
 
-# Also need the project on the path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(message)s",
+    format=f"%(asctime)s [W{WORKER_ID}] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(r"C:\soccer-cam-label\onnx_detection.log"),
+        logging.FileHandler(rf"C:\soccer-cam-label\onnx_w{WORKER_ID}.log"),
     ],
 )
 logger = logging.getLogger()
@@ -218,52 +217,90 @@ logger.info("Registry: %d games", len(registry))
 start = time.time()
 done = 0
 
-reverse = os.environ.get("REVERSE_ORDER", "").lower() in ("1", "true", "yes")
-game_order = sorted(registry, reverse=reverse)
-logger.info("Processing order: %s (%d games)", "reverse" if reverse else "forward", len(game_order))
+def get_unlabeled_games():
+    """Return games that are staged, ready, and don't have labels yet."""
+    unlabeled = []
+    for gid in sorted(registry):
+        game_dir = staging / gid
+        if not game_dir.exists() or not (game_dir / "READY").exists():
+            continue
+        if not list(game_dir.glob("*.mp4")):
+            continue
+        game_labels = labels_dir / gid
+        if game_labels.exists():
+            continue  # Claimed or complete
+        unlabeled.append(gid)
+    return unlabeled
 
-for gid in game_order:
-    game_labels = labels_dir / gid
-    if game_labels.exists() and any(game_labels.glob("*.txt")):
-        logger.info("Already labeled: %s", gid)
-        continue
+
+def claim_label_game(gid):
+    """Atomically claim a game for labeling by creating its labels directory."""
+    try:
+        (labels_dir / gid).mkdir(parents=True, exist_ok=False)
+        return True
+    except FileExistsError:
+        return False
+
+
+while True:
+    unlabeled = get_unlabeled_games()
+    if not unlabeled:
+        logger.info("No more games to label. Done.")
+        break
+
+    logger.info("%d unlabeled games remaining", len(unlabeled))
+
+    gid = None
+    for candidate in unlabeled:
+        if claim_label_game(candidate):
+            gid = candidate
+            break
+        logger.info("Already claimed: %s", candidate)
+
+    if gid is None:
+        logger.info("All games claimed by other workers. Done.")
+        break
 
     game_dir = staging / gid
-    if not game_dir.exists() or not (game_dir / "READY").exists():
-        logger.info("Not staged: %s", gid)
-        continue
-
     videos = sorted(game_dir.glob("*.mp4"))
-    if not videos:
-        logger.info("No videos: %s", gid)
-        continue
-
     game = registry.get(gid, {})
     needs_flip = game.get("needs_flip", False)
     logger.info("=== %s (%d segments, flip=%s) ===", gid, len(videos), needs_flip)
 
+    game_labels = labels_dir / gid
     total_frames = 0
     total_labels = 0
 
-    for video in videos:
-        seg_name = video.stem
-        logger.info("  Segment: %s", seg_name)
+    try:
+        for video in videos:
+            seg_name = video.stem
+            logger.info("  Segment: %s", seg_name)
 
-        # Copy locally for faster decode
-        local_video = LOCAL_CACHE / video.name
-        if not local_video.exists():
-            logger.info("  Downloading %s (%.1f GB)...", video.name, video.stat().st_size / 1e9)
-            shutil.copy2(str(video), str(local_video))
+            # Copy locally for faster decode
+            local_video = LOCAL_CACHE / video.name
+            if not local_video.exists():
+                logger.info("  Downloading %s (%.1f GB)...", video.name, video.stat().st_size / 1e9)
+                shutil.copy2(str(video), str(local_video))
 
-        nf, nl = process_segment(local_video, seg_name, game_labels, needs_flip)
-        total_frames += nf
-        total_labels += nl
-        local_video.unlink(missing_ok=True)
+            nf, nl = process_segment(local_video, seg_name, game_labels, needs_flip)
+            total_frames += nf
+            total_labels += nl
+            local_video.unlink(missing_ok=True)
 
-    done += 1
-    elapsed = time.time() - start
-    logger.info("DONE %s: %d frames, %d labels | %d games in %.0f min",
-                gid, total_frames, total_labels, done, elapsed / 60)
+        done += 1
+        elapsed = time.time() - start
+        logger.info("DONE %s: %d frames, %d labels | %d games in %.0f min",
+                    gid, total_frames, total_labels, done, elapsed / 60)
+
+    except Exception as e:
+        logger.exception("FAILED %s: %s", gid, e)
+        # Release claim so another worker can retry
+        try:
+            shutil.rmtree(game_labels, ignore_errors=True)
+        except Exception:
+            pass
+
+    # Loop back for next game
 
 elapsed = time.time() - start
 logger.info("=== Complete: %d games in %.0f min ===", done, elapsed / 60)
