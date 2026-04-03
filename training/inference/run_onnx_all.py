@@ -40,12 +40,12 @@ try:
 except Exception as e:
     logger.warning("Share mapping: %s", e)
 
-# Paths
-staging = Path(f"//{SERVER}/training/staging")
-labels_dir = Path(f"//{SERVER}/training/labels_640_ext")
-registry_path = Path(f"//{SERVER}/training/game_registry.json")
-model_path = Path(f"//{SERVER}/video/test/onnx_models/decrypted/balldet_fp16.onnx")
-LOCAL_CACHE = Path(r"C:\soccer-cam-label\video_cache")
+# Paths — configurable via env vars so same script runs on server and laptop
+staging = Path(os.environ.get("STAGING_DIR", f"//{SERVER}/training/staging"))
+labels_dir = Path(os.environ.get("LABELS_DIR", f"//{SERVER}/training/labels_640_ext"))
+registry_path = Path(os.environ.get("REGISTRY", f"//{SERVER}/training/game_registry.json"))
+model_path = Path(os.environ.get("ONNX_MODEL", f"//{SERVER}/video/test/onnx_models/decrypted/balldet_fp16.onnx"))
+LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", r"C:\soccer-cam-label\video_cache"))
 LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
 
 FRAME_INTERVAL = 4  # Match tiling interval
@@ -218,7 +218,11 @@ logger.info("Registry: %d games", len(registry))
 start = time.time()
 done = 0
 
-for gid in sorted(registry):
+reverse = os.environ.get("REVERSE_ORDER", "").lower() in ("1", "true", "yes")
+game_order = sorted(registry, reverse=reverse)
+logger.info("Processing order: %s (%d games)", "reverse" if reverse else "forward", len(game_order))
+
+for gid in game_order:
     game_labels = labels_dir / gid
     if game_labels.exists() and any(game_labels.glob("*.txt")):
         logger.info("Already labeled: %s", gid)
