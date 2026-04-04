@@ -133,8 +133,11 @@ F_LABELS = Path(f"//{SERVER}/video/training_data/labels_640_ext")
 
 
 def is_complete(gid):
-    """Check if a game already has labels on D: or F:."""
+    """Check if a game already has labels on D: or F: (dir with .txt or pending zip)."""
     for base in [labels_dir, F_LABELS]:
+        # Check for pending zip (transferred but not yet extracted)
+        if (base / f"{gid}_labels.zip").exists():
+            return True
         game_labels = base / gid
         if not game_labels.exists():
             continue
@@ -354,13 +357,10 @@ while True:
         logger.info("  Transferring %.1f MB zip...", zip_size)
         remote_zip = labels_dir / f"{gid}_labels.zip"
         shutil.copy2(str(zip_path), str(remote_zip))
-        # Extract on remote
-        with zf_mod.ZipFile(str(remote_zip), "r") as zf:
-            zf.extractall(str(labels_dir))
-        remote_zip.unlink()
+        # Don't extract over SMB — server-side extractor handles it
         zip_path.unlink()
         shutil.rmtree(local_labels, ignore_errors=True)
-        logger.info("  Transfer complete (%.1f MB)", zip_size)
+        logger.info("  Transfer complete (%.1f MB) — server will extract", zip_size)
 
         # Remove lock — labels prove completion
         (game_labels / ".lock").unlink(missing_ok=True)
