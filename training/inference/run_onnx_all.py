@@ -338,13 +338,24 @@ while True:
             seg_marker.write_text(f"{nf} frames, {nl} labels")
             logger.info("  Segment done: %d frames, %d labels", nf, nl)
 
-        # Batch transfer labels to F:
+        # Zip labels locally, transfer one file, extract on F:
+        import zipfile as zf_mod
         label_files = [f for f in local_labels.iterdir() if f.suffix == ".txt"]
-        logger.info("  Transferring %d label files to %s...", len(label_files), game_labels)
-        game_labels.mkdir(parents=True, exist_ok=True)
-        for f in label_files:
-            shutil.copy2(str(f), str(game_labels / f.name))
+        zip_path = local_labels.parent / f"{gid}_labels.zip"
+        logger.info("  Zipping %d label files...", len(label_files))
+        with zf_mod.ZipFile(zip_path, "w", zf_mod.ZIP_STORED) as zf:
+            for f in label_files:
+                zf.write(str(f), f"{gid}/{f.name}")
+        logger.info("  Transferring %.1f MB zip to %s...", zip_path.stat().st_size / 1e6, labels_dir)
+        remote_zip = labels_dir / f"{gid}_labels.zip"
+        shutil.copy2(str(zip_path), str(remote_zip))
+        # Extract on F:
+        with zf_mod.ZipFile(str(remote_zip), "r") as zf:
+            zf.extractall(str(labels_dir))
+        remote_zip.unlink()
+        zip_path.unlink()
         shutil.rmtree(local_labels, ignore_errors=True)
+        logger.info("  Transfer complete")
 
         # Remove lock — labels prove completion
         (game_labels / ".lock").unlink(missing_ok=True)
