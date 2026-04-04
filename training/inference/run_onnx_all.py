@@ -57,6 +57,8 @@ LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", r"C:\soccer-cam-label\video_cac
 LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
 
 FRAME_INTERVAL = 4
+IDLE_CHECK_GAMES = os.environ.get("IDLE_CHECK_GAMES", "").split(",") if os.environ.get("IDLE_CHECK_GAMES") else []
+IDLE_CHECK_INTERVAL = 60  # seconds between idle checks while paused
 CONF_THRESHOLD = 0.45
 NMS_IOU_THRESHOLD = 0.5
 TILE_SIZE = 640
@@ -90,6 +92,27 @@ logger.info("Loading ONNX model...")
 providers = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
 sess = ort.InferenceSession(str(model_path), providers=providers)
 logger.info("ONNX provider: %s", sess.get_providers()[0])
+
+
+def wait_for_idle():
+    """If IDLE_CHECK_GAMES is set, pause while any listed process is running."""
+    if not IDLE_CHECK_GAMES:
+        return
+    import psutil
+    while True:
+        running = []
+        for proc in psutil.process_iter(["name"]):
+            try:
+                name = proc.info["name"].lower()
+                for game in IDLE_CHECK_GAMES:
+                    if game.strip().lower() in name:
+                        running.append(proc.info["name"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        if not running:
+            return
+        logger.info("Paused — game running: %s. Checking in %ds...", running[0], IDLE_CHECK_INTERVAL)
+        time.sleep(IDLE_CHECK_INTERVAL)
 
 
 def claim_game(gid):
@@ -267,6 +290,7 @@ while True:
         for seg_file in game_entry["segments"]:
             seg_name = seg_file.replace(".mp4", "")
             video_path = staging_dir / gid / seg_file
+            wait_for_idle()
             logger.info("  Segment: %s", seg_name)
 
             # Cache video locally
