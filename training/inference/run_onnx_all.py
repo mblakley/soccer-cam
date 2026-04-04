@@ -53,7 +53,7 @@ queue_file = Path(os.environ.get("QUEUE_FILE", f"//{SERVER}/video/training_data/
 labels_dir = Path(os.environ.get("LABELS_DIR", f"//{SERVER}/training/labels_640_ext"))
 staging_dir = Path(os.environ.get("STAGING_DIR", f"//{SERVER}/training/staging"))
 model_path = Path(os.environ.get("ONNX_MODEL", f"//{SERVER}/video/test/***REDACTED***/model.onnx"))
-LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", r"C:\soccer-cam-label\video_cache"))
+LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", rf"C:\soccer-cam-label\video_cache_w{WORKER_ID}"))
 LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
 
 FRAME_INTERVAL = 4
