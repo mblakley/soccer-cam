@@ -261,19 +261,43 @@ def process_segment(video_path, segment_name, game_labels_dir, needs_flip=False)
     return frames_processed, files_written
 
 
+# Resume support: check for in-progress local labels from a previous crash
+LOCAL_LABELS_BASE = Path(r"C:\soccer-cam-label\labels_local")
+LOCAL_LABELS_BASE.mkdir(parents=True, exist_ok=True)
+
+
+def find_resumable_game():
+    """Check if we have a partially-completed game from a previous run."""
+    for d in LOCAL_LABELS_BASE.iterdir():
+        if not d.is_dir():
+            continue
+        gid = d.name
+        # Must have at least one .done_ marker (completed segment)
+        if any(f.name.startswith(".done_") for f in d.iterdir()):
+            # Find the matching queue entry
+            for entry in queue:
+                if entry["game_id"] == gid:
+                    logger.info("Resuming interrupted game: %s", gid)
+                    return gid, entry
+    return None, None
+
+
 # Main loop — claim from queue
 start = time.time()
 done = 0
 
 while True:
-    # Find next unclaimed game from queue
-    gid = None
-    for entry in queue:
-        if not is_complete(entry["game_id"]):
-            if claim_game(entry["game_id"]):
-                gid = entry["game_id"]
-                game_entry = entry
-                break
+    # First check for resumable games from a previous crash
+    gid, game_entry = find_resumable_game()
+
+    if gid is None:
+        # Claim a new game
+        for entry in queue:
+            if not is_complete(entry["game_id"]):
+                if claim_game(entry["game_id"]):
+                    gid = entry["game_id"]
+                    game_entry = entry
+                    break
 
     if gid is None:
         logger.info("No more games to claim. Done.")
@@ -290,6 +314,13 @@ while True:
         for seg_file in game_entry["segments"]:
             seg_name = seg_file.replace(".mp4", "")
             video_path = staging_dir / gid / seg_file
+
+            # Resume support: skip segments that already have local labels
+            seg_marker = local_labels / f".done_{seg_name}"
+            if seg_marker.exists():
+                logger.info("  Skipping %s (already done locally)", seg_name)
+                continue
+
             wait_for_idle()
             logger.info("  Segment: %s", seg_name)
 
@@ -303,12 +334,15 @@ while True:
             nf, nl = process_segment(local_video, seg_name, local_labels, game_entry["needs_flip"])
             local_video.unlink(missing_ok=True)
 
-        # Batch transfer labels to F: (one directory copy instead of thousands of small SMB writes)
-        logger.info("  Transferring %d label files to %s...", len(list(local_labels.glob("*.txt"))), game_labels)
+            # Mark segment done so we can resume if killed
+            seg_marker.write_text(f"{nf} frames, {nl} labels")
+            logger.info("  Segment done: %d frames, %d labels", nf, nl)
+
+        # Batch transfer labels to F:
+        label_files = [f for f in local_labels.iterdir() if f.suffix == ".txt"]
+        logger.info("  Transferring %d label files to %s...", len(label_files), game_labels)
         game_labels.mkdir(parents=True, exist_ok=True)
-        for f in local_labels.iterdir():
-            if f.name == ".lock":
-                continue
+        for f in label_files:
             shutil.copy2(str(f), str(game_labels / f.name))
         shutil.rmtree(local_labels, ignore_errors=True)
 
