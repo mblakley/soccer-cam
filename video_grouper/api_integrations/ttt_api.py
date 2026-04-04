@@ -327,7 +327,7 @@ class TTTApiClient:
         game_date: str,
         opponent_name: str,
         video_youtube_id: Optional[str] = None,
-        status: str = "recording_complete",
+        status: str = "processing",
     ) -> dict[str, Any]:
         """Create a new game session.
 
@@ -662,12 +662,12 @@ class TTTApiClient:
     def send_heartbeat(self, service_id: str, status: str = "online") -> Any:
         """Send heartbeat to TTT.
 
-        PATCH {api_base_url}/api/device-link/heartbeat
+        PATCH {api_base_url}/api/device-link/heartbeat?service_id={service_id}
         """
         url = f"{self.api_base_url}/api/device-link/heartbeat"
-        body = {"service_id": service_id, "status": status}
+        params = {"service_id": service_id}
         logger.debug("Sending heartbeat for service %s", service_id)
-        return self._request("PATCH", url, json=body)
+        return self._request("PATCH", url, params=params)
 
     # ------------------------------------------------------------------
     # Processing jobs
