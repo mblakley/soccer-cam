@@ -50,7 +50,7 @@ except Exception as e:
 
 # Paths
 queue_file = Path(os.environ.get("QUEUE_FILE", f"//{SERVER}/video/training_data/onnx_queue.json"))
-labels_dir = Path(os.environ.get("LABELS_DIR", f"//{SERVER}/video/training_data/labels_640_ext"))
+labels_dir = Path(os.environ.get("LABELS_DIR", f"//{SERVER}/training/labels_640_ext"))
 staging_dir = Path(os.environ.get("STAGING_DIR", f"//{SERVER}/training/staging"))
 model_path = Path(os.environ.get("ONNX_MODEL", f"//{SERVER}/video/test/onnx_models/decrypted/balldet_fp16.onnx"))
 LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", r"C:\soccer-cam-label\video_cache"))
@@ -129,19 +129,23 @@ def claim_game(gid):
         return False
 
 
+F_LABELS = Path(f"//{SERVER}/video/training_data/labels_640_ext")
+
+
 def is_complete(gid):
-    """Check if a game already has labels (no scanning — just check for .lock or .txt)."""
-    game_labels = labels_dir / gid
-    if not game_labels.exists():
-        return False
-    # Has lock = in progress by someone
-    if (game_labels / ".lock").exists():
-        return True
-    # Has txt files = done
-    try:
-        return any(f.endswith(".txt") for f in os.listdir(game_labels)[:5])
-    except OSError:
-        return False
+    """Check if a game already has labels on D: or F:."""
+    for base in [labels_dir, F_LABELS]:
+        game_labels = base / gid
+        if not game_labels.exists():
+            continue
+        if (game_labels / ".lock").exists():
+            return True
+        try:
+            if any(f.endswith(".txt") for f in os.listdir(game_labels)[:5]):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def detect_balls(frame_bgr):
@@ -338,7 +342,7 @@ while True:
             seg_marker.write_text(f"{nf} frames, {nl} labels")
             logger.info("  Segment done: %d frames, %d labels", nf, nl)
 
-        # Zip labels locally, transfer one file, extract on F:
+        # Zip labels locally, transfer one zip file, extract on server
         import zipfile as zf_mod
         label_files = [f for f in local_labels.iterdir() if f.suffix == ".txt"]
         zip_path = local_labels.parent / f"{gid}_labels.zip"
@@ -346,16 +350,17 @@ while True:
         with zf_mod.ZipFile(zip_path, "w", zf_mod.ZIP_STORED) as zf:
             for f in label_files:
                 zf.write(str(f), f"{gid}/{f.name}")
-        logger.info("  Transferring %.1f MB zip to %s...", zip_path.stat().st_size / 1e6, labels_dir)
+        zip_size = zip_path.stat().st_size / 1e6
+        logger.info("  Transferring %.1f MB zip...", zip_size)
         remote_zip = labels_dir / f"{gid}_labels.zip"
         shutil.copy2(str(zip_path), str(remote_zip))
-        # Extract on F:
+        # Extract on remote
         with zf_mod.ZipFile(str(remote_zip), "r") as zf:
             zf.extractall(str(labels_dir))
         remote_zip.unlink()
         zip_path.unlink()
         shutil.rmtree(local_labels, ignore_errors=True)
-        logger.info("  Transfer complete")
+        logger.info("  Transfer complete (%.1f MB)", zip_size)
 
         # Remove lock — labels prove completion
         (game_labels / ".lock").unlink(missing_ok=True)
