@@ -287,20 +287,21 @@ class TestTTTPathWalkthrough:
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_STORAGE
 
     def test_ttt_path_auto_generates_ntfy_topic(self, wizard, qtbot):
-        """TTT path should auto-generate NTFY topic when reaching that page."""
+        """TTT path should auto-generate NTFY topic when reaching summary."""
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("ttt")
 
         wizard._ttt_enabled = True
         wizard._ttt_device_config = None
 
-        # Navigate: TTT signin -> storage -> camera -> youtube -> ntfy
+        # Navigate: TTT signin -> storage -> camera -> youtube -> summary
+        # (NTFY page is skipped in TTT path; topic auto-generated at summary)
         wizard._navigate_to(OnboardingWizard.PAGE_STORAGE)
         wizard._navigate_to(OnboardingWizard.PAGE_CAMERA)
         wizard._navigate_to(OnboardingWizard.PAGE_YOUTUBE)
-        wizard._navigate_to(OnboardingWizard.PAGE_NTFY)
+        wizard._navigate_to(OnboardingWizard.PAGE_SUMMARY)
 
-        topic = wizard._ntfy_topic_input.text()
+        topic = wizard._ntfy_topic
         assert topic.startswith("soccer-cam-")
         assert len(topic) > len("soccer-cam-")
 
