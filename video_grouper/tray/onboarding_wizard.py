@@ -106,6 +106,7 @@ class OnboardingWizard(QDialog):
         self._camera_configured = False
         self._camera_settings_applied = False
         self._camera_settings_results: list[dict] = []
+        self._camera_serial = ""
         self._camera_factory_defaults = False
         self._youtube_enabled = False
         self._youtube_authenticated = False
@@ -1181,11 +1182,14 @@ class OnboardingWizard(QDialog):
                         self._camera_password = password
                         self._camera_type = camera_type
 
-                        # Show device info
+                        # Show device info and capture serial
                         if info:
                             model = info.get("model", "")
                             fw = info.get("firmware_version", "")
                             mac = info.get("mac_address", "")
+                            serial = info.get("serial_number", "")
+                            if serial:
+                                self._camera_serial = serial
                             parts = [p for p in [model, fw, mac] if p]
                             self._cam_device_info.setText(
                                 "  ".join(parts) if parts else ""
@@ -1523,6 +1527,7 @@ class OnboardingWizard(QDialog):
                 device_ip=self._camera_ip,
                 username=self._camera_username,
                 password=self._camera_password,
+                serial=self._camera_serial,
             )
             config.cameras = [cam]
 
