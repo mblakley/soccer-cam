@@ -9,7 +9,7 @@ from typing import List, Tuple, Dict, Any, Optional
 
 import pytz
 
-from .base import Camera, DeviceInfo
+from .base import Camera, ConfigResult, DeviceInfo
 from . import register_camera
 from .reolink_download import download_and_mux
 from video_grouper.models import ConnectionEvent
@@ -692,6 +692,481 @@ class ReolinkCamera(Camera):
     @property
     def is_connected(self) -> bool:
         return self._is_connected
+
+    # ── Configuration push ──────────────────────────────────────────
+
+    @staticmethod
+    def _get_reolink_tz_offset() -> int | None:
+        """Get Reolink timezone offset from the local system clock.
+
+        Reolink uses positive values for west of UTC (inverted sign):
+        US Eastern (UTC-5) = 18000, US Central (UTC-6) = 21600, etc.
+        Uses stdlib only -- no pytz/tzlocal dependency needed.
+        """
+        try:
+            from datetime import timezone as dt_tz
+
+            offset = datetime.now(dt_tz.utc).astimezone().utcoffset()
+            if offset is None:
+                return None
+            return -int(offset.total_seconds())
+        except Exception:
+            return None
+
+    async def get_current_settings(self) -> list[ConfigResult]:
+        results: list[ConfigResult] = []
+        client, close_client = self._get_client()
+        try:
+            # Recording
+            data = await self._api_call(
+                client,
+                "GetRecV20",
+                {"channel": self.channel},
+                log_name="get_settings_rec",
+            )
+            if data and data[0].get("code") == 0:
+                rec = data[0].get("value", {}).get("Rec", {})
+                enabled = rec.get("enable", 0) == 1
+                timing = rec.get("schedule", {}).get("table", {}).get("TIMING", "")
+                all_on = timing == "1" * 168
+                if enabled and all_on:
+                    rec_str = "Always on (24/7)"
+                elif enabled:
+                    rec_str = "Enabled (partial schedule)"
+                else:
+                    rec_str = "Disabled"
+                results.append(
+                    ConfigResult(
+                        setting="recording",
+                        success=True,
+                        current_value=rec_str,
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="recording",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetRecV20",
+                    )
+                )
+
+            # NTP
+            data = await self._api_call(
+                client,
+                "GetNtp",
+                {},
+                log_name="get_settings_ntp",
+            )
+            if data and data[0].get("code") == 0:
+                ntp = data[0].get("value", {}).get("Ntp", {})
+                enabled = ntp.get("enable", 0) == 1
+                server = ntp.get("server", "")
+                ntp_str = f"{'Enabled' if enabled else 'Disabled'}"
+                if server:
+                    ntp_str += f", server={server}"
+                results.append(
+                    ConfigResult(
+                        setting="ntp",
+                        success=True,
+                        current_value=ntp_str,
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="ntp",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetNtp",
+                    )
+                )
+
+            # Encoding
+            data = await self._api_call(
+                client,
+                "GetEnc",
+                {"channel": self.channel},
+                action=1,
+                log_name="get_settings_enc",
+            )
+            if data and data[0].get("code") == 0:
+                enc = data[0].get("value", {}).get("Enc", {})
+                main = enc.get("mainStream", {})
+                codec = main.get("vType", "?")
+                bitrate = main.get("bitRate", "?")
+                fps = main.get("frameRate", "?")
+                size = main.get("size", "?")
+                gop = main.get("gop", "?")
+                profile = main.get("profile", "?")
+                results.append(
+                    ConfigResult(
+                        setting="encoding",
+                        success=True,
+                        current_value=(
+                            f"{codec} {size} {bitrate}kbps {fps}fps GOP={gop} {profile}"
+                        ),
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="encoding",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetEnc",
+                    )
+                )
+            # DST
+            data = await self._api_call(
+                client,
+                "GetTime",
+                {},
+                log_name="get_settings_time",
+            )
+            if data and data[0].get("code") == 0:
+                dst = data[0].get("value", {}).get("Dst", {})
+                dst_enabled = dst.get("enable", 0) == 1
+                results.append(
+                    ConfigResult(
+                        setting="dst",
+                        success=True,
+                        current_value="Enabled" if dst_enabled else "Disabled",
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="dst",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetTime",
+                    )
+                )
+
+            # Network
+            data = await self._api_call(
+                client,
+                "GetLocalLink",
+                {},
+                log_name="get_settings_net",
+            )
+            if data and data[0].get("code") == 0:
+                link = data[0].get("value", {}).get("LocalLink", {})
+                net_type = link.get("type", "?")
+                ip = link.get("static", {}).get("ip", "?")
+                net_str = "DHCP" if net_type == "DHCP" else f"Static ({ip})"
+                results.append(
+                    ConfigResult(
+                        setting="network",
+                        success=True,
+                        current_value=net_str,
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="network",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetLocalLink",
+                    )
+                )
+        finally:
+            if close_client:
+                await client.aclose()
+
+        return results
+
+    async def apply_optimal_settings(self, timezone: str = "") -> list[ConfigResult]:
+        results: list[ConfigResult] = []
+        client, close_client = self._get_client()
+        try:
+            # 1. Recording: enable + continuous TIMING schedule
+            data = await self._api_call(
+                client,
+                "SetRecV20",
+                {
+                    "Rec": {
+                        "channel": self.channel,
+                        "enable": 1,
+                        "schedule": {
+                            "channel": self.channel,
+                            "table": {"TIMING": "1" * 168},
+                        },
+                    }
+                },
+                log_name="apply_settings_rec",
+            )
+            ok = data is not None and data[0].get("code") == 0
+            results.append(
+                ConfigResult(
+                    setting="recording",
+                    success=ok,
+                    current_value="",
+                    applied_value="Always on (24/7)",
+                    error="" if ok else "SetRecV20 failed",
+                )
+            )
+
+            # 2. NTP + timezone
+            data = await self._api_call(
+                client,
+                "SetNtp",
+                {
+                    "Ntp": {
+                        "enable": 1,
+                        "server": "pool.ntp.org",
+                        "port": 123,
+                        "interval": 1440,
+                    }
+                },
+                log_name="apply_settings_ntp",
+            )
+            ntp_ok = data is not None and data[0].get("code") == 0
+
+            # Set timezone via SetTime (auto-detect from system clock)
+            tz_ok = True
+            tz_note = ""
+            tz_offset = self._get_reolink_tz_offset()
+            if tz_offset is not None:
+                data = await self._api_call(
+                    client,
+                    "SetTime",
+                    {"Time": {"timeZone": tz_offset}},
+                    log_name="apply_settings_tz",
+                )
+                tz_ok = data is not None and data[0].get("code") == 0
+                tz_note = f", tz offset={tz_offset}s"
+
+            ok = ntp_ok and tz_ok
+            results.append(
+                ConfigResult(
+                    setting="ntp",
+                    success=ok,
+                    current_value="",
+                    applied_value=f"Enabled, pool.ntp.org{tz_note}",
+                    error="" if ok else "SetNtp/SetTime failed",
+                )
+            )
+
+            # 3. Encoding: read-modify-write for optimal soccer recording
+            # Target: 20fps, 8192kbps, GOP=40 (2x FPS), High profile
+            data = await self._api_call(
+                client,
+                "GetEnc",
+                {"channel": self.channel},
+                action=1,
+                log_name="apply_settings_get_enc",
+            )
+            if data and data[0].get("code") == 0:
+                enc = data[0]["value"]["Enc"]
+                main = enc.get("mainStream", {})
+                changes = []
+                current_bitrate = main.get("bitRate", 0)
+                current_fps = main.get("frameRate", 0)
+                current_gop = main.get("gop", 0)
+                current_profile = main.get("profile", "")
+
+                if current_fps < 20:
+                    main["frameRate"] = 20
+                    changes.append(f"FPS {current_fps}->20")
+                if current_bitrate < 12288:
+                    main["bitRate"] = 12288
+                    changes.append(f"bitrate {current_bitrate}->12288kbps")
+                if current_gop != 40:
+                    main["gop"] = 40
+                    changes.append(f"GOP {current_gop}->40")
+                if current_profile != "High":
+                    main["profile"] = "High"
+                    changes.append(f"profile {current_profile}->High")
+
+                if changes:
+                    data = await self._api_call(
+                        client,
+                        "SetEnc",
+                        {"Enc": enc},
+                        log_name="apply_settings_set_enc",
+                    )
+                    ok = data is not None and data[0].get("code") == 0
+                    results.append(
+                        ConfigResult(
+                            setting="encoding",
+                            success=ok,
+                            current_value="",
+                            applied_value=", ".join(changes),
+                            error="" if ok else "SetEnc failed",
+                        )
+                    )
+                else:
+                    results.append(
+                        ConfigResult(
+                            setting="encoding",
+                            success=True,
+                            current_value="",
+                            applied_value="No changes needed",
+                            error="",
+                        )
+                    )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="encoding",
+                        success=False,
+                        current_value="",
+                        applied_value="",
+                        error="Failed to read current encoding",
+                    )
+                )
+
+            # 4. DST: US rules (2nd Sunday March 2AM -> 1st Sunday Nov 2AM)
+            # Read current time settings first, then merge DST fields
+            data = await self._api_call(
+                client,
+                "GetTime",
+                {},
+                log_name="apply_settings_get_time",
+            )
+            time_param: dict = {}
+            if data and data[0].get("code") == 0:
+                time_param = data[0].get("value", {})
+
+            time_param["Dst"] = {
+                "enable": 1,
+                "offset": 1,
+                "startMon": 3,
+                "startWeek": 2,
+                "startWeekday": 0,
+                "startHour": 2,
+                "startMin": 0,
+                "startSec": 0,
+                "endMon": 11,
+                "endWeek": 1,
+                "endWeekday": 0,
+                "endHour": 2,
+                "endMin": 0,
+                "endSec": 0,
+            }
+            data = await self._api_call(
+                client,
+                "SetTime",
+                time_param,
+                log_name="apply_settings_dst",
+            )
+            ok = data is not None and data[0].get("code") == 0
+            results.append(
+                ConfigResult(
+                    setting="dst",
+                    success=ok,
+                    current_value="",
+                    applied_value="US DST (Mar 2nd Sun -> Nov 1st Sun)",
+                    error="" if ok else "SetTime DST failed",
+                )
+            )
+
+            # 5. Static IP: lock the current IP so it doesn't change
+            data = await self._api_call(
+                client,
+                "GetLocalLink",
+                {},
+                log_name="apply_settings_get_net",
+            )
+            if data and data[0].get("code") == 0:
+                link = data[0].get("value", {}).get("LocalLink", {})
+                current_type = link.get("type", "DHCP")
+                if current_type == "DHCP":
+                    # Switch to static with current IP
+                    ip_parts = self.device_ip.split(":")[0]
+                    static = link.get("static", {})
+                    static["ip"] = ip_parts
+                    link["type"] = "Static"
+                    link["dns"]["auto"] = 0
+                    if not link["dns"].get("dns1"):
+                        link["dns"]["dns1"] = "8.8.8.8"
+                        link["dns"]["dns2"] = "8.8.4.4"
+                    data = await self._api_call(
+                        client,
+                        "SetLocalLink",
+                        {"LocalLink": link},
+                        log_name="apply_settings_set_net",
+                    )
+                    ok = data is not None and data[0].get("code") == 0
+                    results.append(
+                        ConfigResult(
+                            setting="network",
+                            success=ok,
+                            current_value="DHCP",
+                            applied_value=f"Static IP {ip_parts}",
+                            error="" if ok else "SetLocalLink failed",
+                        )
+                    )
+                else:
+                    results.append(
+                        ConfigResult(
+                            setting="network",
+                            success=True,
+                            current_value="Static",
+                            applied_value="Already static",
+                            error="",
+                        )
+                    )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="network",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read network config",
+                    )
+                )
+        finally:
+            if close_client:
+                await client.aclose()
+
+        return results
+
+    async def change_camera_password(
+        self, current_password: str, new_password: str
+    ) -> bool:
+        try:
+            client, close_client = self._get_client()
+            try:
+                data = await self._api_call(
+                    client,
+                    "ModifyUser",
+                    {"User": {"userName": self.username, "password": new_password}},
+                    log_name="change_password",
+                )
+                if data is not None and data[0].get("code") == 0:
+                    self.password = new_password
+                    # Invalidate token so next call re-authenticates with new password
+                    self._token = None
+                    self._token_expiry = 0
+                    return True
+                return False
+            finally:
+                if close_client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error changing password: {e}")
+            return False
 
     async def close(self):
         logger.info("Closing ReolinkCamera resources")

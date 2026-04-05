@@ -215,6 +215,44 @@ async def probe_reolink(
         return None
 
 
+async def probe_dahua(ip: str, username: str, password: str) -> DiscoveredCamera | None:
+    """Probe a Dahua camera at the given IP for device info.
+
+    Attempts Digest-authenticated getSystemInfo. Returns a DiscoveredCamera
+    on success, None on failure.
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=5.0)
+        ) as client:
+            url = f"http://{ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
+            response = await client.get(url, auth=httpx.DigestAuth(username, password))
+            if response.status_code != 200:
+                return None
+
+            info: dict[str, str] = {}
+            for line in response.text.strip().split("\n"):
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    info[key.strip()] = value.strip()
+
+            return DiscoveredCamera(
+                ip=ip,
+                name=info.get("deviceName", ""),
+                model=info.get("model", ""),
+                mac=info.get("macAddress", ""),
+                firmware=info.get("firmwareVersion", ""),
+                serial=info.get("serialNumber", ""),
+                manufacturer="Dahua",
+            )
+    except (httpx.ConnectError, httpx.RequestError) as e:
+        logger.debug(f"Could not connect to {ip}: {e}")
+        return None
+    except Exception as e:
+        logger.debug(f"Error probing Dahua at {ip}: {e}")
+        return None
+
+
 async def configure_always_record(
     ip: str, username: str, password: str, channel: int = 0
 ) -> bool:
