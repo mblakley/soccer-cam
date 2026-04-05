@@ -22,7 +22,7 @@ from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.utils.config import load_config, Config
+from video_grouper.utils.config import load_config, save_config, Config
 from video_grouper.task_processors import AutocamProcessor
 from video_grouper.task_processors.register_tasks import register_all_tasks
 from typing import Optional
@@ -348,6 +348,23 @@ class SystemTrayIcon(QSystemTrayIcon):
         menu.addAction(self.recording_action)
         self._recording_enabled = True
 
+        # Per-camera enable/disable
+        if self.config and len(self.config.cameras) > 0:
+            cameras_menu = QMenu("Cameras", self)
+            for cam_config in self.config.cameras:
+                cam_action = QAction(
+                    f"{cam_config.name} ({cam_config.device_ip})", self
+                )
+                cam_action.setCheckable(True)
+                cam_action.setChecked(cam_config.enabled)
+                cam_action.triggered.connect(
+                    lambda checked, name=cam_config.name: self._toggle_camera(
+                        name, checked
+                    )
+                )
+                cameras_menu.addAction(cam_action)
+            menu.addMenu(cameras_menu)
+
         menu.addSeparator()
 
         # Configuration action
@@ -465,6 +482,37 @@ class SystemTrayIcon(QSystemTrayIcon):
             logger.error(f"Error toggling recording: {e}")
             self.showMessage(
                 "Recording",
+                f"Error: {str(e)}",
+                QSystemTrayIcon.MessageIcon.Critical.value,
+            )
+
+    def _toggle_camera(self, camera_name: str, enabled: bool):
+        """Enable or disable a camera and save to config."""
+        try:
+            config = load_config(self.config_path)
+            for cam in config.cameras:
+                if cam.name == camera_name:
+                    cam.enabled = enabled
+                    break
+            else:
+                logger.warning("Camera %s not found in config", camera_name)
+                return
+
+            from video_grouper.utils.locking import FileLock
+
+            with FileLock(self.config_path):
+                save_config(config, self.config_path)
+
+            state = "enabled" if enabled else "disabled"
+            self.showMessage(
+                "Camera",
+                f"{camera_name} {state}. Restart the service to apply.",
+            )
+            logger.info("Camera %s %s", camera_name, state)
+        except Exception as e:
+            logger.error("Error toggling camera %s: %s", camera_name, e)
+            self.showMessage(
+                "Camera",
                 f"Error: {str(e)}",
                 QSystemTrayIcon.MessageIcon.Critical.value,
             )

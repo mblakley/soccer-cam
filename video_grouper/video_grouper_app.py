@@ -91,6 +91,10 @@ class VideoGrouperApp:
         for cam_config in config.cameras:
             cam_name = cam_config.name
 
+            if not cam_config.enabled:
+                logger.info("Camera %s is disabled, skipping", cam_name)
+                continue
+
             if cam_name in provided_cameras:
                 cam = provided_cameras[cam_name]
             else:
