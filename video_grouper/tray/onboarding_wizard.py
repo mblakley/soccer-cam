@@ -7,6 +7,7 @@ NTFY, and Team Tech Tools.  Two paths: TTT (auto-configured) and Manual.
 import asyncio
 import logging
 import os
+import platform
 import secrets
 import threading
 from pathlib import Path
@@ -77,6 +78,8 @@ class OnboardingWizard(QDialog):
     # Manual-only page
     PAGE_MANUAL_TTT = 8
     PAGE_SUMMARY = 9
+    # TTT machine setup (inserted after camera in TTT path)
+    PAGE_MACHINE_SETUP = 10
 
     def __init__(self, config_path: Path, parent=None):
         super().__init__(parent)
@@ -120,6 +123,10 @@ class OnboardingWizard(QDialog):
         self._ttt_client = None
         self._ttt_teams = []
         self._ttt_device_config: Optional[dict] = None
+        self._machine_id = ""
+        self._machine_name = ""
+        self._other_machines: list[dict] = []
+        self._machine_setup_done = False
 
         # Navigation history (for Back button across paths)
         self._nav_history: list[int] = []
@@ -145,6 +152,7 @@ class OnboardingWizard(QDialog):
         self._stack.addWidget(self._build_ntfy_page())  # 7
         self._stack.addWidget(self._build_manual_ttt_page())  # 8
         self._stack.addWidget(self._build_summary_page())  # 9
+        self._stack.addWidget(self._build_machine_setup_page())  # 10
 
         # Navigation bar
         nav_bar = QWidget()
@@ -606,6 +614,40 @@ class OnboardingWizard(QDialog):
         layout.addStretch()
         return page
 
+    def _build_machine_setup_page(self) -> QWidget:
+        """Machine registration and camera conflict detection for TTT users."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 30, 40, 20)
+
+        title = QLabel("Computer Setup")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        self._machine_status_label = QLabel("Registering this computer...")
+        self._machine_status_label.setWordWrap(True)
+        layout.addWidget(self._machine_status_label)
+
+        layout.addSpacing(10)
+
+        # Machine name input
+        form = QFormLayout()
+        self._machine_name_input = QLineEdit(platform.node())
+        form.addRow("Computer Name:", self._machine_name_input)
+        layout.addLayout(form)
+
+        layout.addSpacing(10)
+
+        # Other machines info (populated dynamically)
+        self._other_machines_label = QLabel("")
+        self._other_machines_label.setWordWrap(True)
+        layout.addWidget(self._other_machines_label)
+
+        layout.addStretch()
+        return page
+
     def _build_manual_ttt_page(self) -> QWidget:
         """Optional TTT step for the manual path."""
         page = QWidget()
@@ -739,10 +781,12 @@ class OnboardingWizard(QDialog):
             ]
             # Restore page is conditionally inserted in _go_next
             # NTFY page is skipped for TTT users -- topic is auto-configured
+            # Machine setup is conditionally shown (only if other machines exist)
             seq.extend(
                 [
                     self.PAGE_STORAGE,
                     self.PAGE_CAMERA,
+                    self.PAGE_MACHINE_SETUP,
                     self.PAGE_YOUTUBE,
                     self.PAGE_SUMMARY,
                 ]
@@ -823,6 +867,10 @@ class OnboardingWizard(QDialog):
         if page_index == self.PAGE_NTFY and self._mode != "ttt":
             if not self._ntfy_topic_input.text().strip():
                 self._generate_ntfy_topic()
+
+        # Machine setup: register and check for other machines
+        if page_index == self.PAGE_MACHINE_SETUP and self._mode == "ttt":
+            self._register_machine()
 
         self._nav_history.append(self._stack.currentIndex())
         self._stack.setCurrentIndex(page_index)
@@ -1410,6 +1458,77 @@ class OnboardingWizard(QDialog):
     # ------------------------------------------------------------------
     # NTFY
     # ------------------------------------------------------------------
+
+    def _register_machine(self):
+        """Register this machine with TTT and check for other machines."""
+        if not self._ttt_client or self._machine_setup_done:
+            return
+
+        self._machine_status_label.setText("Registering this computer...")
+
+        def do_register():
+            try:
+                from video_grouper.utils.machine_id import get_or_create_machine_id
+
+                machine_id = get_or_create_machine_id(self._storage_path)
+                machine_name = (
+                    self._machine_name_input.text().strip() or platform.node()
+                )
+
+                result = self._ttt_client.register_machine(machine_id, machine_name)
+                other_machines = self._ttt_client.list_machines()
+                # Filter out this machine
+                others = [
+                    m for m in other_machines if m.get("machine_id") != machine_id
+                ]
+
+                def on_success(
+                    mid=machine_id, mname=machine_name, ms=others, reg=result
+                ):
+                    self._machine_id = mid
+                    self._machine_name = mname
+                    self._other_machines = ms
+                    self._machine_setup_done = True
+
+                    if ms:
+                        lines = ["Other computers linked to this account:\n"]
+                        for m in ms:
+                            name = m.get("machine_name", "Unknown")
+                            last = m.get("last_seen", "never")
+                            lines.append(f"  - {name} (last seen: {last})")
+                        lines.append(
+                            "\nYou can manage camera assignments in the "
+                            "Team Tech Tools website."
+                        )
+                        self._other_machines_label.setText("\n".join(lines))
+                        self._machine_status_label.setText(
+                            f"Registered as '{mname}'. "
+                            f"{len(ms)} other computer(s) found."
+                        )
+                    else:
+                        self._other_machines_label.setText("")
+                        self._machine_status_label.setText(
+                            f"Registered as '{mname}'. "
+                            "This is the only computer on this account."
+                        )
+
+                QTimer.singleShot(0, on_success)
+
+            except Exception as exc:
+                logger.error("Machine registration failed: %s", exc)
+
+                def on_error(err=str(exc)):
+                    self._machine_status_label.setText(
+                        f"Registration failed: {err}\n"
+                        "You can continue setup -- machine management "
+                        "can be configured later."
+                    )
+                    self._machine_setup_done = True
+
+                QTimer.singleShot(0, on_error)
+
+        thread = threading.Thread(target=do_register, daemon=True)
+        thread.start()
 
     def _generate_ntfy_topic(self):
         topic = f"soccer-cam-{secrets.token_hex(4)}"

@@ -748,3 +748,53 @@ class TTTApiClient:
         url = f"{self.api_base_url}/api/device-link/config"
         logger.debug("Saving device config to %s", url)
         return self._request("PUT", url, json=data)
+
+    # ------------------------------------------------------------------
+    # Machine management
+    # ------------------------------------------------------------------
+
+    def list_machines(self) -> list[dict[str, Any]]:
+        """List all registered machines for this camera manager."""
+        url = f"{self.api_base_url}/api/device-link/machines"
+        return self._request("GET", url)
+
+    def register_machine(self, machine_id: str, machine_name: str) -> dict[str, Any]:
+        """Register or update a machine during onboarding.
+
+        POST {api_base_url}/api/device-link/machines/register
+        """
+        url = f"{self.api_base_url}/api/device-link/machines/register"
+        return self._request(
+            "POST", url, json={"machine_id": machine_id, "machine_name": machine_name}
+        )
+
+    def list_machine_cameras(self) -> list[dict[str, Any]]:
+        """Get per-camera enable state across all machines."""
+        url = f"{self.api_base_url}/api/device-link/machine-cameras"
+        return self._request("GET", url)
+
+    def enable_camera_on_machine(
+        self, camera_id: str, machine_id: str
+    ) -> dict[str, Any]:
+        """Enable a camera on a machine. Returns conflict info."""
+        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/enable"
+        return self._request("PATCH", url, json={"machine_id": machine_id})
+
+    def disable_camera_on_machine(self, camera_id: str, machine_id: str) -> None:
+        """Disable a camera on a machine."""
+        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/disable"
+        self._request("PATCH", url, json={"machine_id": machine_id})
+
+    def confirm_camera_transfer(
+        self, camera_id: str, from_machine_id: str, to_machine_id: str
+    ) -> None:
+        """Transfer a camera: disable on old machine, enable on new."""
+        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/confirm-transfer"
+        self._request(
+            "POST",
+            url,
+            json={
+                "from_machine_id": from_machine_id,
+                "to_machine_id": to_machine_id,
+            },
+        )
