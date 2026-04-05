@@ -185,7 +185,7 @@ class TestTTTApiClient(unittest.TestCase):
         self.assertEqual(result["id"], "gs1")
         body = self.client._http.request.call_args[1]["json"]
         self.assertEqual(body["opponent_name"], "Falcons")
-        self.assertEqual(body["status"], "recording_complete")
+        self.assertEqual(body["status"], "processing")
         self.assertNotIn("video_youtube_id", body)
 
     def test_create_game_session_with_youtube_id(self):
