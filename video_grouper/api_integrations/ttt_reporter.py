@@ -22,6 +22,7 @@ class TTTReporter:
         config,
         error_tracker: ErrorTracker | None = None,
         command_executor=None,
+        machine_id: str | None = None,
     ):
         """
         Args:
@@ -29,6 +30,7 @@ class TTTReporter:
             config: App config object.
             error_tracker: Optional shared ErrorTracker for recording pipeline errors.
             command_executor: Optional CommandExecutor for executing remote commands.
+            machine_id: UUID of this machine installation (for multi-computer awareness).
         """
         self.client = ttt_client
         self.config = config
@@ -39,6 +41,11 @@ class TTTReporter:
         self._cached_team_id: str | None = None
         self.error_tracker = error_tracker or ErrorTracker()
         self._command_executor = command_executor
+        self.machine_id = machine_id
+
+        # Per-camera enabled state from TTT (populated during heartbeat)
+        # Maps camera_name -> enabled. Empty dict means "no TTT data, allow all".
+        self._camera_enabled_state: dict[str, bool] = {}
 
     async def start(self):
         """Start periodic heartbeat reporting. No-op if TTT not configured."""
@@ -188,12 +195,57 @@ class TTTReporter:
         except Exception as e:
             logger.warning("TTT: Heartbeat failed: %s", e)
 
+    def is_camera_enabled(self, camera_name: str) -> bool:
+        """Check if a camera is enabled on this machine according to TTT.
+
+        Returns True if:
+        - TTT is not configured (no restriction)
+        - No machine_id is set (can't check)
+        - No camera data has been fetched yet (allow by default)
+        - Camera is explicitly enabled for this machine
+        """
+        if not self.enabled or not self.machine_id:
+            return True
+        if not self._camera_enabled_state:
+            return True  # No data yet, allow all
+        return self._camera_enabled_state.get(camera_name, True)
+
+    async def _sync_camera_enabled_state(self) -> None:
+        """Fetch per-camera enabled state for this machine from TTT."""
+        if not self.enabled or not self.machine_id:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            entries = await loop.run_in_executor(None, self.client.list_machine_cameras)
+            new_state = {}
+            for entry in entries or []:
+                camera_name = entry.get("camera_name", "")
+                machines = entry.get("machines", [])
+                enabled = False
+                for m in machines:
+                    if m.get("machine_id") == self.machine_id and m.get("enabled"):
+                        enabled = True
+                        break
+                if camera_name:
+                    new_state[camera_name] = enabled
+
+            if new_state != self._camera_enabled_state:
+                for name, was_enabled in self._camera_enabled_state.items():
+                    if was_enabled and not new_state.get(name, True):
+                        logger.info("TTT: Camera %s disabled on this machine", name)
+                self._camera_enabled_state = new_state
+        except Exception as e:
+            logger.warning("TTT: Failed to sync camera enabled state: %s", e)
+
     async def _heartbeat_loop(self, interval: int):
         """Periodic heartbeat + command polling — runs until cancelled."""
         while True:
             try:
                 await asyncio.sleep(interval)
                 await self.report_heartbeat()
+
+                # Sync camera enabled state from TTT
+                await self._sync_camera_enabled_state()
 
                 # Poll for commands every heartbeat cycle
                 commands = await self.poll_pending_commands()
