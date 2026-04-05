@@ -92,7 +92,13 @@ class OnboardingWizard(QDialog):
 
         # Wizard state
         self._mode: Optional[str] = None  # "ttt" or "manual"
-        self._storage_path = str(get_shared_data_path())
+        # Default storage: %LOCALAPPDATA%/SoccerCam (portable across machines).
+        # Falls back to get_shared_data_path() only for dev/non-installed runs.
+        _localappdata = os.environ.get("LOCALAPPDATA", "")
+        if _localappdata:
+            self._storage_path = str(Path(_localappdata) / "SoccerCam")
+        else:
+            self._storage_path = str(get_shared_data_path())
         self._camera_ip = ""
         self._camera_username = "admin"
         self._camera_password = ""
