@@ -685,6 +685,39 @@ class OnboardingWizard(QDialog):
 
         layout.addSpacing(10)
 
+        # Advanced NTFY settings (collapsed by default for TTT users)
+        self._advanced_ntfy_group = QGroupBox("Advanced: Notification Settings")
+        self._advanced_ntfy_group.setCheckable(False)
+        self._advanced_ntfy_group.setVisible(False)
+        adv_layout = QVBoxLayout(self._advanced_ntfy_group)
+
+        self._advanced_ntfy_toggle = QPushButton("Change notification topic...")
+        self._advanced_ntfy_toggle.setFlat(True)
+        self._advanced_ntfy_toggle.setStyleSheet(
+            "text-align: left; color: #0066cc; text-decoration: underline;"
+        )
+        self._advanced_ntfy_toggle.clicked.connect(self._toggle_advanced_ntfy)
+        layout.addWidget(self._advanced_ntfy_toggle)
+
+        adv_form = QFormLayout()
+        self._summary_ntfy_topic_input = QLineEdit()
+        self._summary_ntfy_topic_input.setPlaceholderText("soccer-cam-xxxxxxxx")
+        adv_form.addRow("NTFY Topic:", self._summary_ntfy_topic_input)
+        self._summary_ntfy_server_input = QLineEdit("https://ntfy.sh")
+        adv_form.addRow("Server URL:", self._summary_ntfy_server_input)
+        adv_layout.addLayout(adv_form)
+
+        adv_note = QLabel(
+            "To receive notifications on your phone, install the ntfy app "
+            "and subscribe to this topic."
+        )
+        adv_note.setWordWrap(True)
+        adv_layout.addWidget(adv_note)
+
+        layout.addWidget(self._advanced_ntfy_group)
+
+        layout.addSpacing(10)
+
         rerun_label = QLabel("You can always re-run this wizard from the tray menu.")
         layout.addWidget(rerun_label)
 
@@ -704,12 +737,12 @@ class OnboardingWizard(QDialog):
                 self.PAGE_TTT_SIGNIN,
             ]
             # Restore page is conditionally inserted in _go_next
+            # NTFY page is skipped for TTT users -- topic is auto-configured
             seq.extend(
                 [
                     self.PAGE_STORAGE,
                     self.PAGE_CAMERA,
                     self.PAGE_YOUTUBE,
-                    self.PAGE_NTFY,
                     self.PAGE_SUMMARY,
                 ]
             )
@@ -779,10 +812,14 @@ class OnboardingWizard(QDialog):
         # Populate summary when reaching that page
         if page_index == self.PAGE_SUMMARY:
             self._collect_page_data(self._stack.currentIndex())
+            # Auto-generate NTFY topic for TTT path if not already set
+            if self._mode == "ttt" and not self._ntfy_topic:
+                self._ntfy_topic = f"soccer-cam-{secrets.token_hex(4)}"
+                self._ntfy_enabled = True
             self._populate_summary()
 
-        # Auto-generate NTFY topic for TTT path
-        if page_index == self.PAGE_NTFY and self._mode == "ttt":
+        # Auto-generate NTFY topic for manual path
+        if page_index == self.PAGE_NTFY and self._mode != "ttt":
             if not self._ntfy_topic_input.text().strip():
                 self._generate_ntfy_topic()
 
@@ -887,7 +924,14 @@ class OnboardingWizard(QDialog):
             )
 
         elif page_index == self.PAGE_SUMMARY:
-            pass  # Nothing to collect
+            # Read back advanced NTFY edits if the user changed them
+            if self._mode == "ttt" and self._advanced_ntfy_group.isVisible():
+                topic = self._summary_ntfy_topic_input.text().strip()
+                server = self._summary_ntfy_server_input.text().strip()
+                if topic:
+                    self._ntfy_topic = topic
+                if server:
+                    self._ntfy_server_url = server
 
     # ------------------------------------------------------------------
     # TTT sign-in
@@ -931,6 +975,14 @@ class OnboardingWizard(QDialog):
                     self._ttt_signin_status.setText(
                         f"Signed in -- {len(teams)} team(s): {', '.join(team_names)}"
                     )
+
+                    # Auto-populate NTFY from TTT device config
+                    if device_config and device_config.get("ntfy_topic"):
+                        self._ntfy_topic = device_config["ntfy_topic"]
+                        self._ntfy_server_url = device_config.get(
+                            "ntfy_server_url", "https://ntfy.sh"
+                        )
+                        self._ntfy_enabled = True
 
                 QTimer.singleShot(0, on_success)
 
@@ -1359,6 +1411,14 @@ class OnboardingWizard(QDialog):
         topic = f"soccer-cam-{secrets.token_hex(4)}"
         self._ntfy_topic_input.setText(topic)
 
+    def _toggle_advanced_ntfy(self):
+        """Toggle visibility of the advanced NTFY settings on summary page."""
+        visible = not self._advanced_ntfy_group.isVisible()
+        self._advanced_ntfy_group.setVisible(visible)
+        self._advanced_ntfy_toggle.setText(
+            "Hide notification settings" if visible else "Change notification topic..."
+        )
+
     # ------------------------------------------------------------------
     # Summary & Finish
     # ------------------------------------------------------------------
@@ -1425,6 +1485,16 @@ class OnboardingWizard(QDialog):
             self._next_steps_label.setText("\n".join(next_lines))
         else:
             self._next_steps_group.setVisible(False)
+
+        # Advanced NTFY settings on summary page (for TTT users who skipped NTFY page)
+        if self._mode == "ttt" and self._ntfy_enabled:
+            self._summary_ntfy_topic_input.setText(self._ntfy_topic)
+            self._summary_ntfy_server_input.setText(self._ntfy_server_url)
+            self._advanced_ntfy_toggle.setVisible(True)
+            self._advanced_ntfy_group.setVisible(False)  # collapsed by default
+        else:
+            self._advanced_ntfy_toggle.setVisible(False)
+            self._advanced_ntfy_group.setVisible(False)
 
     def _finish(self):
         """Save configuration and close the wizard."""
