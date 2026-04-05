@@ -16,6 +16,16 @@ class DeviceInfo(TypedDict):
     manufacturer: str
 
 
+class ConfigResult(TypedDict):
+    """Result of reading or applying a single camera configuration setting."""
+
+    setting: str  # "recording", "ntp", "encoding"
+    success: bool
+    current_value: str  # Human-readable current state
+    applied_value: str  # What was applied (or proposed)
+    error: str  # Empty string if no error
+
+
 class Camera(ABC):
     """Base class for camera implementations.
 
@@ -126,3 +136,37 @@ class Camera(ABC):
     def is_connected(self) -> bool:
         """Get connection status."""
         pass
+
+    # ── Configuration push (optional) ─────────────────────────────────
+
+    async def get_current_settings(self) -> List["ConfigResult"]:
+        """Read current camera configuration for display.
+
+        Returns a list of ConfigResult dicts describing the current state
+        of each configurable setting (recording, NTP, encoding).
+        """
+        return []
+
+    async def apply_optimal_settings(self, timezone: str = "") -> List["ConfigResult"]:
+        """Push optimal settings for 24/7 soccer recording.
+
+        Args:
+            timezone: IANA timezone string (e.g. "America/New_York").
+                      Used to configure camera clock/NTP.
+
+        Returns a list of ConfigResult dicts with per-setting success/failure.
+        """
+        return []
+
+    async def change_camera_password(
+        self, current_password: str, new_password: str
+    ) -> bool:
+        """Change the camera's login password.
+
+        Args:
+            current_password: The current password (needed by some cameras).
+            new_password: The desired new password.
+
+        Returns True on success, False on failure or if unsupported.
+        """
+        return False

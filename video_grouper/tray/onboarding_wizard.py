@@ -4,6 +4,7 @@ Guides first-time users through configuring storage, camera, YouTube,
 NTFY, and Team Tech Tools.  Two paths: TTT (auto-configured) and Manual.
 """
 
+import asyncio
 import logging
 import os
 import secrets
@@ -19,11 +20,14 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -94,6 +98,9 @@ class OnboardingWizard(QDialog):
         self._camera_password = ""
         self._camera_type = "reolink"
         self._camera_configured = False
+        self._camera_settings_applied = False
+        self._camera_settings_results: list[dict] = []
+        self._camera_factory_defaults = False
         self._youtube_enabled = False
         self._youtube_authenticated = False
         self._gcp_project_id: Optional[str] = None
@@ -356,23 +363,27 @@ class OnboardingWizard(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(40, 30, 40, 20)
 
-        title = QLabel("Camera Connection")
+        title = QLabel("Camera Setup")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(title)
 
         layout.addSpacing(10)
 
+        # ── Phase A: Connection ──────────────────────────────────────
+        self._cam_phase_a = QWidget()
+        phase_a_layout = QVBoxLayout(self._cam_phase_a)
+        phase_a_layout.setContentsMargins(0, 0, 0, 0)
+
         desc = QLabel(
-            "Enter your camera's IP address and credentials. "
-            "You can also discover cameras on your network."
+            "Connect to your camera to configure it for 24/7 recording. "
+            "If you don't have your camera connected yet, skip this step."
         )
         desc.setWordWrap(True)
-        layout.addWidget(desc)
+        phase_a_layout.addWidget(desc)
 
-        layout.addSpacing(10)
+        phase_a_layout.addSpacing(10)
 
         form = QFormLayout()
-
         self._camera_type_combo = QComboBox()
         self._camera_type_combo.addItems(["reolink", "dahua"])
         form.addRow("Camera Type:", self._camera_type_combo)
@@ -387,18 +398,80 @@ class OnboardingWizard(QDialog):
         self._camera_pass_input = QLineEdit()
         self._camera_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Password:", self._camera_pass_input)
+        phase_a_layout.addLayout(form)
 
-        layout.addLayout(form)
-
-        # Test connection button + status
         btn_layout = QHBoxLayout()
-        self._camera_test_btn = QPushButton("Test Connection")
+        self._camera_test_btn = QPushButton("Connect")
         self._camera_test_btn.clicked.connect(self._test_camera)
         btn_layout.addWidget(self._camera_test_btn)
 
         self._camera_test_status = QLabel("")
         btn_layout.addWidget(self._camera_test_status, 1)
-        layout.addLayout(btn_layout)
+        phase_a_layout.addLayout(btn_layout)
+
+        # Device info (hidden until connected)
+        self._cam_device_info = QLabel("")
+        self._cam_device_info.setStyleSheet("color: #555;")
+        self._cam_device_info.setVisible(False)
+        phase_a_layout.addWidget(self._cam_device_info)
+
+        layout.addWidget(self._cam_phase_a)
+
+        # ── Phase B: Password ────────────────────────────────────────
+        self._cam_phase_b = QGroupBox("Camera Password")
+        phase_b_layout = QVBoxLayout(self._cam_phase_b)
+
+        self._cam_pass_desc = QLabel("")
+        self._cam_pass_desc.setWordWrap(True)
+        phase_b_layout.addWidget(self._cam_pass_desc)
+
+        pass_form = QFormLayout()
+        self._cam_new_pass = QLineEdit()
+        self._cam_new_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        pass_form.addRow("New Password:", self._cam_new_pass)
+
+        self._cam_confirm_pass = QLineEdit()
+        self._cam_confirm_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        pass_form.addRow("Confirm:", self._cam_confirm_pass)
+        phase_b_layout.addLayout(pass_form)
+
+        pass_btn_layout = QHBoxLayout()
+        self._cam_set_pass_btn = QPushButton("Set Password")
+        self._cam_set_pass_btn.clicked.connect(self._set_camera_password)
+        pass_btn_layout.addWidget(self._cam_set_pass_btn)
+        self._cam_pass_status = QLabel("")
+        pass_btn_layout.addWidget(self._cam_pass_status, 1)
+        phase_b_layout.addLayout(pass_btn_layout)
+
+        self._cam_phase_b.setVisible(False)
+        layout.addWidget(self._cam_phase_b)
+
+        # ── Phase C: Configuration ───────────────────────────────────
+        self._cam_phase_c = QGroupBox("Camera Configuration")
+        phase_c_layout = QVBoxLayout(self._cam_phase_c)
+
+        self._cam_config_table = QTableWidget(0, 3)
+        self._cam_config_table.setHorizontalHeaderLabels(
+            ["Setting", "Current", "Proposed"]
+        )
+        self._cam_config_table.horizontalHeader().setStretchLastSection(True)
+        self._cam_config_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._cam_config_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._cam_config_table.verticalHeader().setVisible(False)
+        phase_c_layout.addWidget(self._cam_config_table)
+
+        config_btn_layout = QHBoxLayout()
+        self._cam_apply_btn = QPushButton("Apply Optimal Settings")
+        self._cam_apply_btn.clicked.connect(self._apply_camera_settings)
+        config_btn_layout.addWidget(self._cam_apply_btn)
+        self._cam_config_status = QLabel("")
+        config_btn_layout.addWidget(self._cam_config_status, 1)
+        phase_c_layout.addLayout(config_btn_layout)
+
+        self._cam_phase_c.setVisible(False)
+        layout.addWidget(self._cam_phase_c)
 
         layout.addStretch()
         return page
@@ -985,6 +1058,27 @@ class OnboardingWizard(QDialog):
     # Camera
     # ------------------------------------------------------------------
 
+    def _create_camera_instance(self, ip, username, password, camera_type):
+        """Create a camera instance with proper CameraConfig."""
+        from video_grouper.utils.config import CameraConfig
+
+        config = CameraConfig(
+            name=camera_type,
+            type=camera_type,
+            device_ip=ip,
+            username=username,
+            password=password,
+        )
+        storage = self._storage_path or str(get_shared_data_path())
+        if camera_type == "reolink":
+            from video_grouper.cameras.reolink import ReolinkCamera
+
+            return ReolinkCamera(config, storage)
+        else:
+            from video_grouper.cameras.dahua import DahuaCamera
+
+            return DahuaCamera(config, storage)
+
     def _test_camera(self):
         ip = self._camera_ip_input.text().strip()
         username = self._camera_user_input.text().strip()
@@ -998,26 +1092,62 @@ class OnboardingWizard(QDialog):
             return
 
         self._camera_test_btn.setEnabled(False)
-        self._camera_test_status.setText("Testing...")
+        self._camera_test_status.setText("Connecting...")
 
         def do_test():
             try:
-                if camera_type == "reolink":
-                    from video_grouper.cameras.reolink import ReolinkCamera
+                cam = self._create_camera_instance(ip, username, password, camera_type)
+                available = asyncio.run(cam.check_availability())
+                device_info = None
+                if available:
+                    try:
+                        device_info = asyncio.run(cam.get_device_info())
+                    except Exception:
+                        pass
 
-                    cam = ReolinkCamera(ip, username, password)
-                else:
-                    from video_grouper.cameras.dahua import DahuaCamera
+                # Read current settings for Phase C
+                settings = []
+                if available:
+                    try:
+                        settings = asyncio.run(cam.get_current_settings())
+                    except Exception as e:
+                        logger.warning("Failed to read camera settings: %s", e)
 
-                    cam = DahuaCamera(ip, username, password)
-
-                available = cam.check_availability()
-
-                def on_result(ok=available):
+                def on_result(ok=available, info=device_info, cfg=settings):
                     self._camera_test_btn.setEnabled(True)
                     if ok:
-                        self._camera_test_status.setText("Connection successful")
+                        self._camera_test_status.setText("Connected!")
                         self._camera_configured = True
+                        self._camera_ip = ip
+                        self._camera_username = username
+                        self._camera_password = password
+                        self._camera_type = camera_type
+
+                        # Show device info
+                        if info:
+                            model = info.get("model", "")
+                            fw = info.get("firmware_version", "")
+                            mac = info.get("mac_address", "")
+                            parts = [p for p in [model, fw, mac] if p]
+                            self._cam_device_info.setText(
+                                "  ".join(parts) if parts else ""
+                            )
+                            self._cam_device_info.setVisible(bool(parts))
+
+                        # Show Phase B (password) for factory defaults
+                        if password == "admin" or password == "":
+                            self._camera_factory_defaults = True
+                            self._cam_pass_desc.setText(
+                                "This camera has factory default credentials. "
+                                "Set a secure password to protect your camera."
+                            )
+                            self._cam_phase_b.setVisible(True)
+                        else:
+                            self._cam_phase_b.setVisible(False)
+
+                        # Show Phase C (config) with current settings
+                        self._show_config_preview(cfg)
+                        self._cam_phase_c.setVisible(True)
                     else:
                         self._camera_test_status.setText("Connection failed")
 
@@ -1033,6 +1163,142 @@ class OnboardingWizard(QDialog):
                 QTimer.singleShot(0, on_error)
 
         thread = threading.Thread(target=do_test, daemon=True)
+        thread.start()
+
+    def _show_config_preview(self, settings):
+        """Populate Phase C table with current settings and proposed values."""
+        proposed = {
+            "recording": "Always on (24/7)",
+            "ntp": "Enabled, pool.ntp.org",
+            "encoding": "Verify / optimize",
+        }
+        self._cam_config_table.setRowCount(len(settings) if settings else 3)
+
+        if not settings:
+            # Show defaults if we couldn't read
+            for row, (name, prop) in enumerate(proposed.items()):
+                self._cam_config_table.setItem(
+                    row, 0, QTableWidgetItem(name.capitalize())
+                )
+                self._cam_config_table.setItem(row, 1, QTableWidgetItem("Unknown"))
+                self._cam_config_table.setItem(row, 2, QTableWidgetItem(prop))
+            return
+
+        for row, result in enumerate(settings):
+            setting = result.get("setting", "")
+            current = result.get("current_value", "Unknown")
+            prop = proposed.get(setting, "")
+            self._cam_config_table.setItem(
+                row, 0, QTableWidgetItem(setting.capitalize())
+            )
+            self._cam_config_table.setItem(row, 1, QTableWidgetItem(current))
+            self._cam_config_table.setItem(row, 2, QTableWidgetItem(prop))
+
+    def _set_camera_password(self):
+        """Phase B: Change camera password."""
+        new_pass = self._cam_new_pass.text()
+        confirm = self._cam_confirm_pass.text()
+
+        if not new_pass:
+            QMessageBox.warning(self, "Error", "Password cannot be empty.")
+            return
+        if new_pass != confirm:
+            QMessageBox.warning(self, "Error", "Passwords do not match.")
+            return
+
+        self._cam_set_pass_btn.setEnabled(False)
+        self._cam_pass_status.setText("Changing password...")
+
+        ip = self._camera_ip
+        username = self._camera_username
+        old_pass = self._camera_password
+        camera_type = self._camera_type
+
+        def do_change():
+            try:
+                cam = self._create_camera_instance(ip, username, old_pass, camera_type)
+                ok = asyncio.run(cam.change_camera_password(old_pass, new_pass))
+
+                def on_result(success=ok):
+                    self._cam_set_pass_btn.setEnabled(True)
+                    if success:
+                        self._camera_password = new_pass
+                        self._cam_pass_status.setText("Password changed!")
+                        self._cam_phase_b.setVisible(False)
+                    else:
+                        self._cam_pass_status.setText("Failed to change password")
+
+                QTimer.singleShot(0, on_result)
+            except Exception as exc:
+                logger.error("Password change failed: %s", exc)
+
+                def on_error(err=str(exc)):
+                    self._cam_set_pass_btn.setEnabled(True)
+                    self._cam_pass_status.setText(f"Error: {err}")
+
+                QTimer.singleShot(0, on_error)
+
+        thread = threading.Thread(target=do_change, daemon=True)
+        thread.start()
+
+    def _apply_camera_settings(self):
+        """Phase C: Apply optimal settings to the camera."""
+        self._cam_apply_btn.setEnabled(False)
+        self._cam_config_status.setText("Applying settings...")
+
+        ip = self._camera_ip
+        username = self._camera_username
+        password = self._camera_password
+        camera_type = self._camera_type
+
+        def do_apply():
+            # Timezone auto-detected from system clock inside camera classes.
+            # Pass empty string -- each camera's apply method handles detection.
+            tz = ""
+
+            try:
+                cam = self._create_camera_instance(ip, username, password, camera_type)
+                results = asyncio.run(cam.apply_optimal_settings(timezone=tz))
+
+                def on_result(res=results):
+                    self._cam_apply_btn.setEnabled(True)
+                    self._camera_settings_applied = True
+                    self._camera_settings_results = res
+
+                    # Update table with results
+                    all_ok = True
+                    for row, r in enumerate(res):
+                        if row < self._cam_config_table.rowCount():
+                            status = "[OK]" if r.get("success") else "[FAIL]"
+                            applied = r.get("applied_value", "")
+                            error = r.get("error", "")
+                            display = applied if r.get("success") else error
+                            self._cam_config_table.setItem(
+                                row, 2, QTableWidgetItem(f"{status} {display}")
+                            )
+                            if not r.get("success"):
+                                all_ok = False
+
+                    if all_ok:
+                        self._cam_config_status.setText(
+                            "All settings applied successfully!"
+                        )
+                    else:
+                        self._cam_config_status.setText(
+                            "Some settings failed (see table above)"
+                        )
+
+                QTimer.singleShot(0, on_result)
+            except Exception as exc:
+                logger.error("Apply settings failed: %s", exc)
+
+                def on_error(err=str(exc)):
+                    self._cam_apply_btn.setEnabled(True)
+                    self._cam_config_status.setText(f"Error: {err}")
+
+                QTimer.singleShot(0, on_error)
+
+        thread = threading.Thread(target=do_apply, daemon=True)
         thread.start()
 
     # ------------------------------------------------------------------
@@ -1101,7 +1367,14 @@ class OnboardingWizard(QDialog):
 
         # Camera
         if self._camera_configured and self._camera_ip:
-            configured.append(f"Camera: {self._camera_ip} ({self._camera_type})")
+            cam_line = f"Camera: {self._camera_ip} ({self._camera_type})"
+            if self._camera_settings_applied:
+                ok_count = sum(
+                    1 for r in self._camera_settings_results if r.get("success")
+                )
+                total = len(self._camera_settings_results)
+                cam_line += f" -- settings applied ({ok_count}/{total})"
+            configured.append(cam_line)
         else:
             skipped.append(
                 "Camera: Open Settings > Camera Settings to configure your camera"

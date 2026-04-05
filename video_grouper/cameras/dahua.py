@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
 import pytz
 
-from .base import Camera, DeviceInfo
+from .base import Camera, ConfigResult, DeviceInfo
 from . import register_camera
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
@@ -594,6 +594,475 @@ class DahuaCamera(Camera):
     def is_connected(self) -> bool:
         """Get connection status."""
         return self._is_connected
+
+    # ── Configuration push ──────────────────────────────────────────
+
+    # Dahua proprietary timezone index mapping.
+    # Keyed by IANA name and also by standard UTC offset hours for auto-detect.
+    # Full table is undocumented; for unknown zones we leave the camera's
+    # current value unchanged.
+    _IANA_TO_DAHUA_TZ: dict[str, int] = {
+        "America/New_York": 25,
+        "America/Detroit": 25,
+        "US/Eastern": 25,
+        "America/Chicago": 26,
+        "US/Central": 26,
+        "America/Denver": 27,
+        "US/Mountain": 27,
+        "America/Los_Angeles": 28,
+        "US/Pacific": 28,
+        "America/Anchorage": 28,
+        "US/Alaska": 28,
+        "America/Phoenix": 27,
+        "US/Arizona": 27,
+    }
+
+    # Fallback: map standard UTC offset (hours) to Dahua index.
+    # Uses the non-DST (standard time) offset.
+    _UTC_OFFSET_TO_DAHUA_TZ: dict[int, int] = {
+        -5: 25,  # Eastern
+        -6: 26,  # Central
+        -7: 27,  # Mountain
+        -8: 28,  # Pacific
+        -9: 28,  # Alaska (same Dahua index as Pacific)
+        -10: 29,  # Hawaii
+    }
+
+    @classmethod
+    def _get_dahua_tz_index(cls, timezone: str = "") -> int | None:
+        """Get Dahua timezone index, trying IANA name then system clock offset."""
+        # Try IANA name first
+        if timezone:
+            idx = cls._IANA_TO_DAHUA_TZ.get(timezone)
+            if idx is not None:
+                return idx
+
+        # Fall back to auto-detect from system clock UTC offset
+        try:
+            from datetime import timezone as dt_tz
+
+            offset = datetime.now(dt_tz.utc).astimezone().utcoffset()
+            if offset is not None:
+                offset_hours = int(offset.total_seconds() / 3600)
+                return cls._UTC_OFFSET_TO_DAHUA_TZ.get(offset_hours)
+        except Exception:
+            pass
+        return None
+
+    async def _cgi_get_config(self, name: str) -> dict[str, str] | None:
+        """Read a configManager section, returning parsed key=value pairs."""
+        try:
+            url = (
+                f"http://{self.device_ip}/cgi-bin/configManager.cgi"
+                f"?action=getConfig&name={name}"
+            )
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
+            try:
+                response = await client.get(
+                    url, auth=httpx.DigestAuth(self.username, self.password)
+                )
+                await self._log_http_call(
+                    f"getConfig_{name}", response.request, response
+                )
+                if response.status_code != 200:
+                    return None
+                result = {}
+                for line in response.text.strip().split("\n"):
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        # Strip "table." prefix if present
+                        key = key.strip()
+                        if key.startswith("table."):
+                            key = key[len("table.") :]
+                        result[key] = value.strip()
+                return result
+            finally:
+                if not self._client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error reading config {name}: {e}")
+            return None
+
+    async def _cgi_set_config(self, params: str) -> bool:
+        """Write config via configManager setConfig. params is the query string."""
+        try:
+            url = (
+                f"http://{self.device_ip}/cgi-bin/configManager.cgi"
+                f"?action=setConfig&{params}"
+            )
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
+            try:
+                response = await client.get(
+                    url, auth=httpx.DigestAuth(self.username, self.password)
+                )
+                await self._log_http_call("setConfig", response.request, response)
+                return response.status_code == 200
+            finally:
+                if not self._client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error writing config: {e}")
+            return False
+
+    async def get_current_settings(self) -> list[ConfigResult]:
+        results: list[ConfigResult] = []
+
+        # Recording
+        rec = await self._cgi_get_config("RecordMode")
+        if rec is not None:
+            mode = rec.get("RecordMode[0].Mode", "?")
+            mode_labels = {"0": "Auto (schedule)", "1": "Always on", "2": "Off"}
+            results.append(
+                ConfigResult(
+                    setting="recording",
+                    success=True,
+                    current_value=mode_labels.get(mode, f"Mode {mode}"),
+                    applied_value="",
+                    error="",
+                )
+            )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="recording",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read RecordMode",
+                )
+            )
+
+        # NTP
+        ntp = await self._cgi_get_config("NTP")
+        if ntp is not None:
+            enabled = ntp.get("NTP.Enable", "false")
+            server = ntp.get("NTP.Address", "")
+            tz_desc = ntp.get("NTP.TimeZoneDesc", "")
+            ntp_str = f"{'Enabled' if enabled == 'true' else 'Disabled'}"
+            if server:
+                ntp_str += f", server={server}"
+            if tz_desc:
+                ntp_str += f", tz={tz_desc}"
+            results.append(
+                ConfigResult(
+                    setting="ntp",
+                    success=True,
+                    current_value=ntp_str,
+                    applied_value="",
+                    error="",
+                )
+            )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="ntp",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read NTP config",
+                )
+            )
+
+        # Encoding
+        enc = await self._cgi_get_config("Encode")
+        if enc is not None:
+            codec = enc.get("Encode[0].MainFormat[0].Video.Compression", "?")
+            bitrate = enc.get("Encode[0].MainFormat[0].Video.BitRate", "?")
+            fps = enc.get("Encode[0].MainFormat[0].Video.FPS", "?")
+            resolution = enc.get("Encode[0].MainFormat[0].Video.resolution", "?")
+            gop = enc.get("Encode[0].MainFormat[0].Video.GOP", "?")
+            brc = enc.get("Encode[0].MainFormat[0].Video.BitRateControl", "?")
+            profile = enc.get("Encode[0].MainFormat[0].Video.Profile", "?")
+            results.append(
+                ConfigResult(
+                    setting="encoding",
+                    success=True,
+                    current_value=(
+                        f"{codec} {resolution} {bitrate}kbps {fps}fps "
+                        f"GOP={gop} {brc} {profile}"
+                    ),
+                    applied_value="",
+                    error="",
+                )
+            )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="encoding",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read Encode config",
+                )
+            )
+
+        # DST
+        locales = await self._cgi_get_config("Locales")
+        if locales is not None:
+            dst_enabled = locales.get("Locales.DSTEnable", "false")
+            results.append(
+                ConfigResult(
+                    setting="dst",
+                    success=True,
+                    current_value="Enabled" if dst_enabled == "true" else "Disabled",
+                    applied_value="",
+                    error="",
+                )
+            )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="dst",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read Locales config",
+                )
+            )
+
+        # Network
+        net = await self._cgi_get_config("Network")
+        if net is not None:
+            dhcp = net.get("Network.eth0.DhcpEnable", "?")
+            ip = net.get("Network.eth0.IPAddress", "?")
+            net_str = "DHCP" if dhcp == "true" else f"Static ({ip})"
+            results.append(
+                ConfigResult(
+                    setting="network",
+                    success=True,
+                    current_value=net_str,
+                    applied_value="",
+                    error="",
+                )
+            )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="network",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read Network config",
+                )
+            )
+
+        return results
+
+    async def apply_optimal_settings(self, timezone: str = "") -> list[ConfigResult]:
+        results: list[ConfigResult] = []
+
+        # 1. Recording: always-on
+        ok = await self._cgi_set_config("RecordMode[0].Mode=1")
+        results.append(
+            ConfigResult(
+                setting="recording",
+                success=ok,
+                current_value="",
+                applied_value="Always on (Mode=1)",
+                error="" if ok else "Failed to set RecordMode",
+            )
+        )
+
+        # 2. NTP: enable with pool.ntp.org + auto-detect timezone
+        ntp_params = (
+            "NTP.Enable=true&NTP.Address=pool.ntp.org&NTP.Port=123&NTP.UpdatePeriod=720"
+        )
+        tz_index = self._get_dahua_tz_index(timezone)
+        tz_note = ""
+        if tz_index is not None:
+            ntp_params += f"&NTP.TimeZone={tz_index}"
+            tz_note = f", tz index={tz_index}"
+        else:
+            logger.warning(
+                "Could not determine Dahua timezone index (iana=%s), "
+                "leaving camera timezone unchanged",
+                timezone,
+            )
+        ok = await self._cgi_set_config(ntp_params)
+        results.append(
+            ConfigResult(
+                setting="ntp",
+                success=ok,
+                current_value="",
+                applied_value=f"Enabled, pool.ntp.org{tz_note}",
+                error="" if ok else "Failed to set NTP config",
+            )
+        )
+
+        # 3. Encoding: set optimal values for soccer recording
+        # Target: 25fps, 8192kbps (max for B180) CBR, High profile, GOP=50
+        enc = await self._cgi_get_config("Encode")
+        if enc is not None:
+            changes = []
+            pfx = "Encode[0].MainFormat[0].Video"
+            current_fps = enc.get(f"{pfx}.FPS", "")
+            current_bitrate = enc.get(f"{pfx}.BitRate", "")
+            current_gop = enc.get(f"{pfx}.GOP", "")
+            current_brc = enc.get(f"{pfx}.BitRateControl", "")
+            current_profile = enc.get(f"{pfx}.Profile", "")
+            current_codec = enc.get(f"{pfx}.Compression", "")
+
+            enc_params = []
+            try:
+                if current_fps and int(current_fps) != 25:
+                    enc_params.append(f"{pfx}.FPS=25")
+                    changes.append(f"FPS {current_fps}->25")
+            except ValueError:
+                pass
+            try:
+                if current_bitrate and int(current_bitrate) < 8192:
+                    enc_params.append(f"{pfx}.BitRate=8192")
+                    changes.append(f"bitrate {current_bitrate}->8192kbps")
+            except ValueError:
+                pass
+            try:
+                if current_gop and int(current_gop) != 50:
+                    enc_params.append(f"{pfx}.GOP=50")
+                    changes.append(f"GOP {current_gop}->50")
+            except ValueError:
+                pass
+            if current_brc and current_brc != "CBR":
+                enc_params.append(f"{pfx}.BitRateControl=CBR")
+                changes.append(f"BitRateControl {current_brc}->CBR")
+            if current_profile and current_profile != "High":
+                enc_params.append(f"{pfx}.Profile=High")
+                changes.append(f"Profile {current_profile}->High")
+            if current_codec and current_codec not in ("H.264", "H.265"):
+                enc_params.append(f"{pfx}.Compression=H.264")
+                changes.append(f"Codec {current_codec}->H.264")
+
+            if enc_params:
+                ok = await self._cgi_set_config("&".join(enc_params))
+                results.append(
+                    ConfigResult(
+                        setting="encoding",
+                        success=ok,
+                        current_value="",
+                        applied_value=", ".join(changes),
+                        error="" if ok else "Failed to set encoding",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="encoding",
+                        success=True,
+                        current_value="",
+                        applied_value="No changes needed",
+                        error="",
+                    )
+                )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="encoding",
+                    success=False,
+                    current_value="",
+                    applied_value="",
+                    error="Failed to read current encoding",
+                )
+            )
+
+        # 4. DST: US rules (2nd Sunday March 2AM -> 1st Sunday November 2AM)
+        dst_params = (
+            "Locales.DSTEnable=true"
+            "&Locales.DSTStart.Month=3&Locales.DSTStart.Week=2"
+            "&Locales.DSTStart.Day=0&Locales.DSTStart.Hour=2"
+            "&Locales.DSTStart.Minute=0"
+            "&Locales.DSTEnd.Month=11&Locales.DSTEnd.Week=1"
+            "&Locales.DSTEnd.Day=0&Locales.DSTEnd.Hour=2"
+            "&Locales.DSTEnd.Minute=0"
+        )
+        ok = await self._cgi_set_config(dst_params)
+        results.append(
+            ConfigResult(
+                setting="dst",
+                success=ok,
+                current_value="",
+                applied_value="US DST (Mar 2nd Sun -> Nov 1st Sun)",
+                error="" if ok else "Failed to set DST",
+            )
+        )
+
+        # 5. Static IP: lock the current IP so it doesn't change on reboot
+        net = await self._cgi_get_config("Network")
+        if net is not None:
+            current_dhcp = net.get("Network.eth0.DhcpEnable", "true")
+            if current_dhcp == "true":
+                # Currently DHCP -- set to static with the IP we connected to
+                ip_parts = self.device_ip.split(":")[0]  # strip port if present
+                net_params = (
+                    f"Network.eth0.DhcpEnable=false&Network.eth0.IPAddress={ip_parts}"
+                )
+                # Preserve existing subnet/gateway if available
+                subnet = net.get("Network.eth0.SubnetMask", "255.255.255.0")
+                gateway = net.get("Network.eth0.DefaultGateway", "")
+                net_params += f"&Network.eth0.SubnetMask={subnet}"
+                if gateway:
+                    net_params += f"&Network.eth0.DefaultGateway={gateway}"
+                ok = await self._cgi_set_config(net_params)
+                results.append(
+                    ConfigResult(
+                        setting="network",
+                        success=ok,
+                        current_value="DHCP",
+                        applied_value=f"Static IP {ip_parts}",
+                        error="" if ok else "Failed to set static IP",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="network",
+                        success=True,
+                        current_value="Static",
+                        applied_value="Already static",
+                        error="",
+                    )
+                )
+        else:
+            results.append(
+                ConfigResult(
+                    setting="network",
+                    success=False,
+                    current_value="Unknown",
+                    applied_value="",
+                    error="Failed to read network config",
+                )
+            )
+
+        return results
+
+    async def change_camera_password(
+        self, current_password: str, new_password: str
+    ) -> bool:
+        try:
+            url = (
+                f"http://{self.device_ip}/cgi-bin/userManager.cgi"
+                f"?action=modifyPassword"
+                f"&name={self.username}"
+                f"&pwd={new_password}"
+                f"&pwdOld={current_password}"
+            )
+            client = self._client or httpx.AsyncClient(timeout=CAMERA_HTTP_TIMEOUT)
+            try:
+                response = await client.get(
+                    url, auth=httpx.DigestAuth(self.username, current_password)
+                )
+                await self._log_http_call("change_password", response.request, response)
+                if response.status_code == 200 and response.text.strip().startswith(
+                    "OK"
+                ):
+                    self.password = new_password
+                    return True
+                logger.error("Password change failed: %s", response.text.strip())
+                return False
+            finally:
+                if not self._client:
+                    await client.aclose()
+        except Exception as e:
+            logger.error(f"Error changing password: {e}")
+            return False
 
     async def close(self):
         """Close any open resources."""
