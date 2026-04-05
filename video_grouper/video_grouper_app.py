@@ -350,12 +350,23 @@ class VideoGrouperApp:
                 ttt_reporter_client = self.clip_request_processor.ttt_client
             except AttributeError:
                 pass
+        # Load machine ID for multi-computer awareness
+        machine_id = None
+        if self.config.ttt.enabled:
+            try:
+                from video_grouper.utils.machine_id import get_or_create_machine_id
+
+                machine_id = get_or_create_machine_id(self.storage_path)
+            except Exception:
+                pass
+
         command_executor = CommandExecutor(self)
         self.ttt_reporter = TTTReporter(
             ttt_client=ttt_reporter_client,
             config=self.config,
             error_tracker=self.error_tracker,
             command_executor=command_executor,
+            machine_id=machine_id,
         )
 
         # Wire ttt_reporter into all processors for best-effort pipeline reporting

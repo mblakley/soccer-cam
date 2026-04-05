@@ -105,6 +105,16 @@ class CameraPoller(PollingProcessor):
         Poll camera for new files and group them into directories.
         """
         try:
+            # Check if this camera is enabled on this machine (TTT multi-computer)
+            if self.ttt_reporter and not self.ttt_reporter.is_camera_enabled(
+                self.camera.name
+            ):
+                logger.debug(
+                    "CAMERA_POLLER: Camera %s disabled on this machine, skipping",
+                    self.camera.name,
+                )
+                return
+
             # Check if camera is available
             is_available = await self.camera.check_availability()
             if not is_available:
