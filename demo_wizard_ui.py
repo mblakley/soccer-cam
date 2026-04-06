@@ -176,6 +176,7 @@ class WizardDriver:
         # ── Continue through remaining pages ────────────────────
         self.steps.append(("Click Next (camera done)", self._click_next))
         self.steps.append(("Skip YouTube", self._click_skip))
+        self.steps.append(("Viewing NTFY setup...", lambda: None))
         self.steps.append(("Skip NTFY", self._click_skip))
 
         # ── Summary ─────────────────────────────────────────────
