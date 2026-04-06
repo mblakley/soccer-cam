@@ -25,6 +25,11 @@ from PyQt6.QtWidgets import QApplication, QPushButton
 SCREENSHOT_DIR = Path("docs/screenshots/wizard")
 CAPTURE_SCREENSHOTS = "--screenshots" in sys.argv
 
+if CAPTURE_SCREENSHOTS:
+    import platform
+
+    platform.node = lambda: "coaches-laptop"
+
 # Patch the wizard to use local TTT infrastructure before importing
 import video_grouper.tray.onboarding_wizard as wizard_module  # noqa: E402
 
@@ -109,19 +114,33 @@ class WizardDriver:
 
         self.steps.append(("Handle restore page", handle_restore_or_continue))
 
-        # ── Storage -> skip ─────────────────────────────────────
+        # ── Storage ─────────────────────────────────────────────
+        def set_storage_path():
+            if CAPTURE_SCREENSHOTS:
+                w._storage_path_input.setText(
+                    "C:\\Users\\Coach\\AppData\\Local\\SoccerCam"
+                )
+
+        self.steps.append(("Set storage path", set_storage_path))
         self.steps.append(("Skip storage setup", self._click_skip))
 
         # ── Camera Setup: Reolink ───────────────────────────────
         def fill_reolink():
             w._camera_type_combo.setCurrentText("reolink")
-            w._camera_ip_input.setText("127.0.0.1:8180")
+            display_ip = "192.168.1.100" if CAPTURE_SCREENSHOTS else "127.0.0.1:8180"
+            w._camera_ip_input.setText(display_ip)
             w._camera_user_input.setText("admin")
             w._camera_pass_input.setText("admin")
 
-        self.steps.append(
-            ("Fill Reolink camera (127.0.0.1:8180, admin/admin)", fill_reolink)
-        )
+        self.steps.append(("Fill Reolink camera", fill_reolink))
+
+        # Extra pause so next screenshot captures the filled form with display IP
+        def pause_then_fix_ip():
+            # After screenshot is captured, switch to real simulator for connection
+            if CAPTURE_SCREENSHOTS:
+                w._camera_ip_input.setText("127.0.0.1:8180")
+
+        self.steps.append(("Camera details filled", pause_then_fix_ip))
 
         self.steps.append(("Click Connect", lambda: w._camera_test_btn.click()))
         self.steps.append(("Connecting to camera...", lambda: None))
@@ -198,6 +217,11 @@ class WizardDriver:
             f"  [{self._step_index + 1:2d}/{len(self.steps)}] [{page_name:12s}] {label}"
         )
 
+        try:
+            action()
+        except Exception as e:
+            print(f"           Error: {e}")
+
         if CAPTURE_SCREENSHOTS:
             SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
             filename = (
@@ -206,11 +230,6 @@ class WizardDriver:
             pixmap = self.wizard.grab()
             pixmap.save(str(SCREENSHOT_DIR / filename))
             print(f"           -> Saved {filename}")
-
-        try:
-            action()
-        except Exception as e:
-            print(f"           Error: {e}")
 
         self._step_index += 1
         QTimer.singleShot(STEP_DELAY, self._run_step)
