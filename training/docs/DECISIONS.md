@@ -4,6 +4,28 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-07: SQLite manifest + pack files replace loose tile/label files
+
+**Context:** 7.7M loose JPEG tiles across 39 games on HDD. `os.listdir` on 300K-file directories takes 5+ minutes. Label files (500K .txt) are equally slow to scan. Everything is I/O-bound on HDD random reads.
+**Decision:** Single `manifest.db` (SQLite WAL mode) as the source of truth for all tiles and labels.
+- Schema: `games → segments → frames → tiles → labels` hierarchy
+- Tile inventory: every .jpg cataloged with game_id, segment, frame_idx, row, col
+- Pack files: all tiles for a segment concatenated into one `.pack` binary file, manifest stores (pack_file, pack_offset, pack_size) per tile
+- Labels: YOLO bounding boxes stored in labels table (replaces 500K .txt files)
+- Verification: `verify_tiles.py` queries manifest instead of scanning filesystem (~2ms vs ~5 min/game)
+- Benchmark: pack file reads 245x faster than loose file reads on HDD (21K tiles/sec vs 29/sec cold)
+**Trade-off:** One-time migration cost (~5hrs catalog + ~20hrs pack). DB is ~2GB. Pack files are same total size as loose files but 6 files per game instead of 300K.
+**Files:** `training/data_prep/manifest.py`, `training/data_prep/verify_tiles.py`
+
+## 2026-04-07: ONNX labeling writes to local manifest.db, merged on server
+
+**Context:** Remote machines (FORTNITE-OP, laptop) run ONNX detection but can't directly write to the server's manifest.db.
+**Decision:** `label_job.py` writes detections to a local `manifest.db` on the remote machine. After labeling completes, transfer the DB to the server and merge via `manifest merge`. Auto-backup before merge.
+**Trade-off:** Extra transfer + merge step, but keeps the remote script self-contained (no network DB dependency during inference).
+**Files:** `training/distributed/label_job.py`, `training/data_prep/manifest.py` (backup_db, merge_labels_from)
+
+---
+
 ## 2026-03-31: Distributed tiling — laptop CPU helps while GPU trains
 
 **Context:** 26 games need tiling, server takes ~30 min/game = ~13 hours alone. Laptop GPU is busy training but CPU is idle.
