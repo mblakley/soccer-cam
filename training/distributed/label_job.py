@@ -31,6 +31,7 @@ After completion, transfer the local manifest.db to the server and merge:
 import argparse
 import json
 import logging
+import os
 import sqlite3
 import time
 from collections import defaultdict
@@ -51,6 +52,60 @@ logger = logging.getLogger(__name__)
 CONF_THRESHOLD = 0.45
 NMS_IOU_THRESHOLD = 0.5
 FRAME_INTERVAL = 4
+
+# ---- Idle detection for shared gaming PCs ----
+# Set IDLE_CHECK_GAMES="FortniteClient,RobloxPlayerBeta,RocketLeague" to pause
+# when games are running. Checks between segments and every N frames during processing.
+IDLE_CHECK_GAMES = [
+    g.strip().lower() for g in
+    os.environ.get("IDLE_CHECK_GAMES", "FortniteClient,RobloxPlayerBeta,RocketLeague").split(",")
+    if g.strip()
+]
+IDLE_CHECK_INTERVAL = 60  # seconds between checks while paused
+IDLE_CHECK_FRAME_INTERVAL = 500  # check every N processed frames during a segment
+
+def _is_game_running() -> str | None:
+    """Check if any known game process is running. Returns process name or None."""
+    try:
+        import psutil
+    except ImportError:
+        # psutil not available — check via tasklist (Windows)
+        import subprocess
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True
+        )
+        for line in result.stdout.splitlines():
+            name = line.split(",")[0].strip('"').lower()
+            for game in IDLE_CHECK_GAMES:
+                if game in name:
+                    return line.split(",")[0].strip('"')
+        return None
+
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = proc.info["name"].lower()
+            for game in IDLE_CHECK_GAMES:
+                if game in name:
+                    return proc.info["name"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return None
+
+
+def wait_for_idle():
+    """Pause while any game is running on this machine."""
+    game = _is_game_running()
+    if not game:
+        return
+    logger.info("PAUSED — game running: %s. Will resume when idle.", game)
+    while True:
+        time.sleep(IDLE_CHECK_INTERVAL)
+        game = _is_game_running()
+        if not game:
+            logger.info("RESUMED — no games detected.")
+            return
+        logger.info("  Still paused — %s running. Checking in %ds...", game, IDLE_CHECK_INTERVAL)
+
 
 # ---- Field boundary (fisheye panoramic, 4096x1800) ----
 PANO_CENTER_X = 2048.0
@@ -234,6 +289,7 @@ def process_segment(
 
     fi = 0
     det_count = 0
+    processed = 0
     all_rows = []  # collect all label rows for batch insert
     start = time.time()
 
@@ -248,6 +304,9 @@ def process_segment(
                 det_count += len(dets)
                 if dets:
                     all_rows.extend(_collect_frame_labels(seg_name, fi, dets))
+                processed += 1
+                if processed % IDLE_CHECK_FRAME_INTERVAL == 0:
+                    wait_for_idle()
         fi += 1
 
     cap.release()
@@ -335,6 +394,7 @@ def run_label_job(
 
     total_rows = 0
     for seg in unlabeled:
+        wait_for_idle()
         total_rows += process_segment(
             seg, sess, conn, game_id, frame_interval, conf,
         )
