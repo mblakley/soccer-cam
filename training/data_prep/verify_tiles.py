@@ -1,8 +1,11 @@
 """Verify tile completeness and integrity for all games.
 
+Uses the SQLite manifest as the single source of truth for tile inventory.
+Games not yet cataloged are scanned from disk and added to the manifest.
+
 Checks:
-1. Zip integrity (F:/tile_zips/) — testzip() for corruption
-2. Tile directory completeness (D:/tiles_640/) — all segments, 21 tiles/frame
+1. Tile completeness via manifest (segments, frames, 21 tiles/frame)
+2. Zip integrity (F:/tile_zips/) — testzip() for corruption
 3. Cross-reference against game_registry.json
 4. Reports gaps that need re-tiling
 
@@ -10,18 +13,20 @@ Usage:
     python -u training/data_prep/verify_tiles.py [--tiles-dir D:/training_data/tiles_640]
                                                   [--zips-dir F:/tile_zips]
                                                   [--registry D:/training_data/game_registry.json]
-                                                  [--fix]  # re-tile gaps (not yet implemented)
+                                                  [--db D:/training_data/manifest.db]
+                                                  [--rescan]  # force re-catalog all games
 """
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from training.data_prep import manifest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,9 +42,7 @@ EXPECTED_ROWS = 3
 EXPECTED_COLS = 7
 TILES_PER_FRAME = EXPECTED_ROWS * EXPECTED_COLS  # 21
 
-# Regex to parse tile filenames:
-#   {segment_stem}_frame_{NNNNNN}_r{R}_c{C}.jpg
-# segment_stem can contain brackets, dots, dashes, underscores — everything up to _frame_
+# Regex to parse tile filenames (used only for zip verification)
 TILE_RE = re.compile(
     r"^(?P<segment>.+)_frame_(?P<frame>\d{6})_r(?P<row>\d+)_c(?P<col>\d+)\.jpg$"
 )
@@ -47,29 +50,143 @@ TILE_RE = re.compile(
 
 @dataclass
 class SegmentReport:
-    segment_id: str  # stem of the .mp4 filename
+    segment_id: str
     frame_count: int = 0
     tile_count: int = 0
-    incomplete_frames: list = field(default_factory=list)  # frames with <21 tiles
-    missing_tiles: list = field(default_factory=list)  # (frame, row, col) tuples
-    frame_indices: list = field(default_factory=list)  # sorted list of frame numbers
-    max_gap: int = 0  # largest gap between consecutive frames (in frame indices)
+    incomplete_frames: list = field(default_factory=list)
+    missing_tiles: list = field(default_factory=list)
+    frame_indices: list = field(default_factory=list)
+    max_gap: int = 0
 
 
 @dataclass
 class GameReport:
     game_id: str
-    source: str = ""  # "tiles_dir" or "zip"
+    source: str = ""
     segments_expected: list = field(default_factory=list)
     segments_found: list = field(default_factory=list)
     segments_missing: list = field(default_factory=list)
-    segment_reports: dict = field(default_factory=dict)  # segment_id -> SegmentReport
+    segment_reports: dict = field(default_factory=dict)
     total_frames: int = 0
     total_tiles: int = 0
     issues: list = field(default_factory=list)
     zip_corrupt: bool = False
     zip_bad_file: str = ""
 
+
+def segment_stem(mp4_name: str) -> str:
+    """Get the stem used in tile filenames from an mp4 filename."""
+    return mp4_name.replace(".mp4", "")
+
+
+# ---------------------------------------------------------------------------
+# Manifest-based verification (Phase 1)
+# ---------------------------------------------------------------------------
+
+def verify_from_manifest(conn, game_id: str, expected_segments: list[str]) -> GameReport:
+    """Verify a game's tiles using the manifest DB — no filesystem access needed."""
+    report = GameReport(game_id=game_id, source="manifest")
+    report.segments_expected = [segment_stem(s) for s in expected_segments]
+
+    # Check if game is cataloged
+    if not manifest.is_game_cataloged(conn, game_id):
+        report.issues.append("NOT_CATALOGED: game tiles not in manifest")
+        report.segments_missing = report.segments_expected[:]
+        return report
+
+    # Get segments from manifest
+    segments_found = manifest.get_segments_for_game(conn, game_id)
+    if not segments_found:
+        report.issues.append("EMPTY: game cataloged but has no segments")
+        report.segments_missing = report.segments_expected[:]
+        return report
+
+    # Build per-segment reports from manifest
+    seg_reports = {}
+    for seg_summary in manifest.get_frame_summary(conn, game_id):
+        seg_id = seg_summary["segment"]
+        sr = SegmentReport(segment_id=seg_id)
+        sr.frame_count = seg_summary["frame_count"]
+        sr.tile_count = seg_summary["tile_count"]
+        sr.max_gap = seg_summary["max_gap"]
+        sr.frame_indices = manifest.get_frame_indices(conn, game_id, seg_id)
+        seg_reports[seg_id] = sr
+
+    # Check incomplete frames from manifest
+    for seg_id, frame_idx, tile_count in manifest.get_incomplete_frames(conn, game_id):
+        if seg_id in seg_reports:
+            seg_reports[seg_id].incomplete_frames.append(frame_idx)
+            # Get specific missing tiles
+            missing = manifest.get_missing_tiles_for_frame(
+                conn, game_id, seg_id, frame_idx
+            )
+            for r, c in missing:
+                seg_reports[seg_id].missing_tiles.append((frame_idx, r, c))
+
+    report.segment_reports = seg_reports
+    report.segments_found = list(seg_reports.keys())
+
+    # Check segment coverage vs registry
+    expected_stems = set(report.segments_expected)
+    found_stems = set(report.segments_found)
+    report.segments_missing = sorted(expected_stems - found_stems)
+
+    # Handle extra segments (raw-zip pattern, fuzzy matching)
+    extra = found_stems - expected_stems
+    if extra:
+        unmatched_extra = set()
+        for e in extra:
+            matched = False
+            for exp in expected_stems:
+                if e in exp or exp in e:
+                    matched = True
+                    break
+            if not matched:
+                unmatched_extra.add(e)
+
+        # Raw-zip pattern: single combined video tiled under one stem
+        if len(unmatched_extra) == 1 and len(report.segments_missing) == len(expected_stems):
+            raw_stem = list(unmatched_extra)[0]
+            logger.info("    (raw-zip game: all tiles under stem '%s')", raw_stem)
+            report.segments_missing = []
+        elif unmatched_extra:
+            report.issues.append(
+                f"EXTRA: {len(unmatched_extra)} segment(s) not in registry: "
+                f"{sorted(unmatched_extra)[:3]}"
+            )
+
+    if report.segments_missing:
+        report.issues.append(
+            f"MISSING_SEGMENTS: {len(report.segments_missing)} of {len(expected_stems)} "
+            f"segments not found: {report.segments_missing[:3]}"
+            f"{'...' if len(report.segments_missing) > 3 else ''}"
+        )
+
+    # Aggregate stats and detect issues
+    for sr in seg_reports.values():
+        report.total_frames += sr.frame_count
+        report.total_tiles += sr.tile_count
+        if sr.incomplete_frames:
+            report.issues.append(
+                f"INCOMPLETE_FRAMES: {sr.segment_id} has {len(sr.incomplete_frames)} "
+                f"frames with <{TILES_PER_FRAME} tiles"
+            )
+        if sr.max_gap > 100:
+            report.issues.append(
+                f"LARGE_GAP: {sr.segment_id} has a gap of {sr.max_gap} frames "
+                f"(frame range {sr.frame_indices[0]}-{sr.frame_indices[-1]})"
+            )
+        if sr.frame_count < 10:
+            report.issues.append(
+                f"SUSPICIOUSLY_LOW: {sr.segment_id} only has {sr.frame_count} frames"
+            )
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Zip verification (Phase 2) — kept as-is, uses in-memory analysis
+# ---------------------------------------------------------------------------
 
 def parse_tile_name(name: str) -> dict | None:
     """Parse a tile filename into its components."""
@@ -84,20 +201,15 @@ def parse_tile_name(name: str) -> dict | None:
     }
 
 
-def segment_stem(mp4_name: str) -> str:
-    """Get the stem used in tile filenames from an mp4 filename."""
-    return mp4_name.replace(".mp4", "")
-
-
 def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentReport]:
-    """Analyze a list of tile filenames and return per-segment reports."""
-    # Group tiles by segment and frame
-    # seg -> frame -> set of (row, col)
+    """Analyze a list of tile filenames and return per-segment reports.
+
+    Used only for zip verification — disk tiles use the manifest.
+    """
     seg_frames = defaultdict(lambda: defaultdict(set))
     unparsed = []
 
     for name in tile_names:
-        # Strip game_id prefix if present (zips store as game_id/filename)
         if name.startswith(game_id + "/"):
             name = name[len(game_id) + 1:]
 
@@ -119,7 +231,6 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
         report.frame_count = len(frames)
         report.frame_indices = sorted(frames.keys())
 
-        # Check for large gaps
         if len(report.frame_indices) > 1:
             gaps = [
                 report.frame_indices[i + 1] - report.frame_indices[i]
@@ -127,7 +238,6 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
             ]
             report.max_gap = max(gaps)
 
-        # Check tile completeness per frame
         expected_tiles = {(r, c) for r in range(EXPECTED_ROWS) for c in range(EXPECTED_COLS)}
         for frame_idx in sorted(frames.keys()):
             tiles = frames[frame_idx]
@@ -139,104 +249,11 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
                 for r, c in missing:
                     report.missing_tiles.append((frame_idx, r, c))
                 if extra:
-                    logger.warning(
-                        "  %s frame %d: unexpected tiles %s",
-                        seg_id, frame_idx, extra,
-                    )
+                    logger.warning("  %s frame %d: unexpected tiles %s", seg_id, frame_idx, extra)
 
         reports[seg_id] = report
 
     return reports
-
-
-def verify_tile_directory(tiles_dir: Path, game_id: str, expected_segments: list[str]) -> GameReport:
-    """Verify a tile directory on disk."""
-    report = GameReport(game_id=game_id, source="tiles_dir")
-    report.segments_expected = [segment_stem(s) for s in expected_segments]
-
-    game_dir = tiles_dir / game_id
-    if not game_dir.exists():
-        report.issues.append("MISSING: tile directory does not exist")
-        report.segments_missing = report.segments_expected[:]
-        return report
-
-    # List all files — use os.listdir for speed on large directories (90K+ files)
-    logger.info("  Scanning %s...", game_id)
-    tile_names = [f for f in os.listdir(game_dir) if f.endswith(".jpg")]
-    logger.info("  %s: %d tile files found", game_id, len(tile_names))
-    if not tile_names:
-        report.issues.append("EMPTY: tile directory exists but has no .jpg files")
-        report.segments_missing = report.segments_expected[:]
-        return report
-
-    # Analyze tiles
-    seg_reports = analyze_tiles(tile_names, game_id)
-    report.segment_reports = seg_reports
-    report.segments_found = list(seg_reports.keys())
-
-    # Check segment coverage
-    expected_stems = set(report.segments_expected)
-    found_stems = set(report.segments_found)
-    report.segments_missing = sorted(expected_stems - found_stems)
-
-    # Extra segments (tiled but not in registry — could be from a raw zip or renamed source)
-    extra = found_stems - expected_stems
-    if extra:
-        # Try fuzzy matching — sometimes the registry has the full name but tiling used a shorter form
-        unmatched_extra = set()
-        for e in extra:
-            matched = False
-            for exp in expected_stems:
-                if e in exp or exp in e:
-                    matched = True
-                    break
-            if not matched:
-                unmatched_extra.add(e)
-
-        # Raw-zip pattern: game was tiled from a single combined video file instead of
-        # individual camera segments. All expected segment data is present in one tile stem.
-        # If we have 1 unmatched extra stem and ALL expected stems are missing, this is a
-        # raw-zip game — the data is complete, just named differently.
-        if len(unmatched_extra) == 1 and len(report.segments_missing) == len(expected_stems):
-            raw_stem = list(unmatched_extra)[0]
-            raw_report = seg_reports[raw_stem]
-            logger.info("    (raw-zip game: all tiles under stem '%s')", raw_stem)
-            report.segments_missing = []  # Not actually missing
-        elif unmatched_extra:
-            report.issues.append(
-                f"EXTRA: {len(unmatched_extra)} segment(s) not in registry: {sorted(unmatched_extra)[:3]}"
-            )
-
-    if report.segments_missing:
-        report.issues.append(
-            f"MISSING_SEGMENTS: {len(report.segments_missing)} of {len(expected_stems)} "
-            f"segments not found: {report.segments_missing[:3]}{'...' if len(report.segments_missing) > 3 else ''}"
-        )
-
-    # Aggregate stats
-    for sr in seg_reports.values():
-        report.total_frames += sr.frame_count
-        report.total_tiles += sr.tile_count
-        if sr.incomplete_frames:
-            report.issues.append(
-                f"INCOMPLETE_FRAMES: {sr.segment_id} has {len(sr.incomplete_frames)} "
-                f"frames with <{TILES_PER_FRAME} tiles"
-            )
-        if sr.max_gap > 100:
-            report.issues.append(
-                f"LARGE_GAP: {sr.segment_id} has a gap of {sr.max_gap} frames "
-                f"(frame range {sr.frame_indices[0]}-{sr.frame_indices[-1]})"
-            )
-
-    # Sanity check: typical game ~15-20 min per segment at 25fps/4 = ~5600 frames/seg after diff
-    # But diff filtering removes a lot, so 500-3000 frames/seg is reasonable
-    for sr in seg_reports.values():
-        if sr.frame_count < 10:
-            report.issues.append(
-                f"SUSPICIOUSLY_LOW: {sr.segment_id} only has {sr.frame_count} frames"
-            )
-
-    return report
 
 
 def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> GameReport:
@@ -250,7 +267,6 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            # Integrity check
             bad = zf.testzip()
             if bad is not None:
                 report.zip_corrupt = True
@@ -258,13 +274,11 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
                 report.issues.append(f"CORRUPT: first bad file in zip: {bad}")
                 return report
 
-            # Catalog contents
             names = zf.namelist()
             if not names:
                 report.issues.append("EMPTY: zip has no files")
                 return report
 
-            # Filter to .jpg only
             tile_names = [n for n in names if n.endswith(".jpg")]
             seg_reports = analyze_tiles(tile_names, game_id)
             report.segment_reports = seg_reports
@@ -278,7 +292,6 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
         report.issues.append(f"ERROR: {type(e).__name__}: {e}")
         return report
 
-    # Check segment coverage
     expected_stems = set(report.segments_expected)
     found_stems = set(report.segments_found)
     report.segments_missing = sorted(expected_stems - found_stems)
@@ -289,7 +302,6 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
             f"segments not found"
         )
 
-    # Aggregate
     for sr in seg_reports.values():
         report.total_frames += sr.frame_count
         report.total_tiles += sr.tile_count
@@ -306,16 +318,9 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
     return report
 
 
-def find_zips_for_game(zips_dir: Path, game_id: str) -> list[Path]:
-    """Find all zip files belonging to a game."""
-    if not zips_dir.exists():
-        return []
-    matches = []
-    for zf in sorted(zips_dir.iterdir()):
-        if zf.suffix == ".zip" and zf.name.startswith(game_id):
-            matches.append(zf)
-    return matches
-
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
 
 def print_report(report: GameReport, verbose: bool = False):
     """Print a game verification report."""
@@ -352,7 +357,7 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
             continue
 
         for issue in report.issues:
-            if issue.startswith("MISSING:") or issue.startswith("EMPTY:"):
+            if issue.startswith("MISSING:") or issue.startswith("EMPTY:") or issue.startswith("NOT_CATALOGED:"):
                 gaps.append({
                     "game_id": report.game_id,
                     "type": "full_game",
@@ -413,7 +418,6 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
             logger.info("    %s — %s", item["game_id"], item["detail"])
         logger.info("")
 
-    # Write gaps to JSON for the gap-filler to consume
     gaps_file = Path("tile_gaps.json")
     with open(gaps_file, "w") as f:
         json.dump(gaps, f, indent=2)
@@ -421,6 +425,10 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
 
     return gaps
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Verify tile completeness")
@@ -430,13 +438,21 @@ def main():
                         help="Directory containing tile zip archives")
     parser.add_argument("--registry", default="D:/training_data/game_registry.json",
                         help="Path to game_registry.json")
+    parser.add_argument("--db", default="D:/training_data/manifest.db",
+                        help="Path to manifest.db")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show per-segment detail")
     parser.add_argument("--game", help="Verify a single game only")
+    parser.add_argument("--rescan", action="store_true",
+                        help="Force re-catalog all games from disk")
     args = parser.parse_args()
 
     tiles_dir = Path(args.tiles_dir)
     zips_dir = Path(args.zips_dir)
+    db_path = Path(args.db)
+
+    # Open manifest (create if needed)
+    conn = manifest.open_db(db_path, create=True)
 
     # Load registry
     with open(args.registry) as f:
@@ -446,7 +462,6 @@ def main():
     for g in registry_list:
         gid = g["game_id"]
         if gid in registry:
-            # Duplicate game_id — merge segments
             registry[gid]["segments"].extend(g.get("segments", []))
         else:
             registry[gid] = g
@@ -461,6 +476,7 @@ def main():
 
     logger.info("=== TILE VERIFICATION ===")
     logger.info("Tiles dir: %s", tiles_dir)
+    logger.info("Manifest:  %s", db_path)
     logger.info("Zips dir:  %s", zips_dir)
     logger.info("Games:     %d", len(games_to_check))
     logger.info("")
@@ -469,8 +485,8 @@ def main():
     total_ok = 0
     total_issues = 0
 
-    # Phase 1: Verify tile directories on disk
-    logger.info("--- Phase 1: Verify tile directories on D: ---")
+    # Phase 1: Verify tile directories via manifest
+    logger.info("--- Phase 1: Verify tiles via manifest ---")
     games_with_tiles = set()
     for gid in sorted(games_to_check):
         game_dir = tiles_dir / gid
@@ -479,7 +495,19 @@ def main():
         games_with_tiles.add(gid)
         game = games_to_check[gid]
         expected_segs = game.get("segments", [])
-        report = verify_tile_directory(tiles_dir, gid, expected_segs)
+
+        # Catalog if not yet in manifest (or if --rescan)
+        if not manifest.is_game_cataloged(conn, gid) or args.rescan:
+            logger.info("  Cataloging %s (one-time scan)...", gid)
+            stats = manifest.catalog_game_tiles(conn, gid, game_dir)
+            logger.info(
+                "  Cataloged: %d segs, %d frames, %d tiles (%.1fs)%s",
+                stats["segments"], stats["frames"], stats["tiles"], stats["elapsed"],
+                f" ({stats['unparsed']} unparsed)" if stats["unparsed"] else "",
+            )
+
+        # Verify from manifest (instant)
+        report = verify_from_manifest(conn, gid, expected_segs)
         all_reports.append(report)
         print_report(report, verbose=args.verbose)
         if report.issues:
@@ -498,12 +526,10 @@ def main():
     games_in_zips = set()
 
     if zips_dir.exists():
-        # Group zips by game
-        zip_map = defaultdict(list)  # game_id -> [zip_paths]
+        zip_map = defaultdict(list)
         for zf in sorted(zips_dir.iterdir()):
             if zf.suffix != ".zip":
                 continue
-            # Match zip name to a game_id
             for gid in games_to_check:
                 if zf.name.startswith(gid):
                     zip_map[gid].append(zf)
@@ -518,10 +544,8 @@ def main():
             zip_paths = zip_map[gid]
 
             if len(zip_paths) == 1:
-                # Single zip for game
                 report = verify_zip(zip_paths[0], gid, expected_segs)
             else:
-                # Multiple segment zips — verify each, then combine
                 combined = GameReport(game_id=gid, source=f"zips:{len(zip_paths)}")
                 combined.segments_expected = [segment_stem(s) for s in expected_segs]
                 all_seg_reports = {}
@@ -540,7 +564,6 @@ def main():
                 combined.segments_found = list(all_seg_reports.keys())
                 combined.zip_corrupt = any_corrupt
 
-                # Check segment coverage across all zips
                 expected_stems = set(combined.segments_expected)
                 found_stems = set(combined.segments_found)
                 combined.segments_missing = sorted(expected_stems - found_stems)
@@ -550,7 +573,6 @@ def main():
                         f"{len(expected_stems)} segments not found across {len(zip_paths)} zips"
                     )
 
-                # Propagate per-segment issues
                 for sr in all_seg_reports.values():
                     if sr.incomplete_frames:
                         combined.issues.append(
@@ -613,6 +635,7 @@ def main():
     # Gap summary
     gaps = print_gap_summary(all_reports, registry)
 
+    conn.close()
     return 1 if gaps else 0
 
 

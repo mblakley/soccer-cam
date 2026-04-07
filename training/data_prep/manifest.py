@@ -1,13 +1,20 @@
-"""SQLite manifest for label storage — replaces ~500K small .txt files.
+"""SQLite manifest — single source of truth for tiles and labels.
 
-Schema stores YOLO-format bounding boxes per tile, with game-level metadata.
-One database per dataset: manifest.db
+Schema hierarchy: games → segments → frames → tiles → labels
+- tiles table: complete census of every .jpg tile on disk
+- labels table: YOLO-format bounding boxes per tile
+- segments/frames: pre-aggregated stats for fast verification queries
 
 Usage:
     # Migrate existing .txt labels into manifest.db
     uv run python -m training.data_prep.manifest migrate
     uv run python -m training.data_prep.manifest migrate --games flash__2024.05.01_vs_RNYFC_away
     uv run python -m training.data_prep.manifest migrate --rebuild
+
+    # Catalog tiles from disk into manifest (one-time scan per game)
+    uv run python -m training.data_prep.manifest catalog
+    uv run python -m training.data_prep.manifest catalog --games flash__2024.05.01_vs_RNYFC_away
+    uv run python -m training.data_prep.manifest catalog --rescan
 
     # Show stats
     uv run python -m training.data_prep.manifest stats
@@ -40,7 +47,8 @@ CREATE TABLE IF NOT EXISTS games (
     tile_count INTEGER DEFAULT 0,
     labeled_count INTEGER DEFAULT 0,
     tile_dir TEXT,
-    last_updated REAL
+    last_updated REAL,
+    tiles_cataloged REAL
 );
 
 CREATE TABLE IF NOT EXISTS labels (
@@ -61,6 +69,43 @@ CREATE INDEX IF NOT EXISTS idx_labels_game ON labels(game_id);
 CREATE INDEX IF NOT EXISTS idx_labels_stem ON labels(tile_stem);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_unique
     ON labels(game_id, tile_stem, class_id, cx, cy);
+
+CREATE TABLE IF NOT EXISTS segments (
+    game_id TEXT NOT NULL,
+    segment TEXT NOT NULL,
+    frame_count INTEGER DEFAULT 0,
+    tile_count INTEGER DEFAULT 0,
+    frame_min INTEGER,
+    frame_max INTEGER,
+    max_gap INTEGER DEFAULT 0,
+    PRIMARY KEY (game_id, segment),
+    FOREIGN KEY (game_id) REFERENCES games(game_id)
+);
+
+CREATE TABLE IF NOT EXISTS frames (
+    game_id TEXT NOT NULL,
+    segment TEXT NOT NULL,
+    frame_idx INTEGER NOT NULL,
+    tile_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (game_id, segment, frame_idx),
+    FOREIGN KEY (game_id, segment) REFERENCES segments(game_id, segment)
+);
+
+CREATE TABLE IF NOT EXISTS tiles (
+    game_id TEXT NOT NULL,
+    segment TEXT NOT NULL,
+    frame_idx INTEGER NOT NULL,
+    row INTEGER NOT NULL,
+    col INTEGER NOT NULL,
+    pack_file TEXT,
+    pack_offset INTEGER,
+    pack_size INTEGER,
+    PRIMARY KEY (game_id, segment, frame_idx, row, col),
+    FOREIGN KEY (game_id, segment, frame_idx) REFERENCES frames(game_id, segment, frame_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_frames_game ON frames(game_id);
+CREATE INDEX IF NOT EXISTS idx_tiles_game ON tiles(game_id);
 """
 
 
@@ -68,8 +113,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_unique
 # Connection helpers
 # ---------------------------------------------------------------------------
 
+def _ensure_schema_v2(conn: sqlite3.Connection) -> None:
+    """Add segments/frames/tiles tables and new columns if missing.
+
+    Purely additive — safe to run on existing databases. Idempotent.
+    """
+    # New tables use CREATE IF NOT EXISTS in SCHEMA_SQL, so just re-run it
+    conn.executescript(SCHEMA_SQL)
+    # Add new columns to existing tables (each wrapped in try/except for idempotency)
+    for alter in [
+        "ALTER TABLE games ADD COLUMN tiles_cataloged REAL",
+        "ALTER TABLE tiles ADD COLUMN pack_file TEXT",
+        "ALTER TABLE tiles ADD COLUMN pack_offset INTEGER",
+        "ALTER TABLE tiles ADD COLUMN pack_size INTEGER",
+    ]:
+        try:
+            conn.execute(alter)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    conn.commit()
+
+
 def open_db(db_path: Path = DEFAULT_DB_PATH, *, create: bool = False) -> sqlite3.Connection:
-    """Open manifest database. Creates schema if *create* is True."""
+    """Open manifest database. Creates/upgrades schema as needed."""
     if not create and not db_path.exists():
         raise FileNotFoundError(f"Manifest database not found: {db_path}")
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +146,7 @@ def open_db(db_path: Path = DEFAULT_DB_PATH, *, create: bool = False) -> sqlite3
     if create:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
+    _ensure_schema_v2(conn)
     return conn
 
 
@@ -215,6 +282,499 @@ def list_games(conn: sqlite3.Connection) -> list[dict]:
     ).fetchall()
     conn.row_factory = None
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Tile catalog — census of every .jpg tile on disk
+# ---------------------------------------------------------------------------
+
+def is_game_cataloged(conn: sqlite3.Connection, game_id: str) -> bool:
+    """Check if a game's tiles have been cataloged into the manifest."""
+    row = conn.execute(
+        "SELECT tiles_cataloged FROM games WHERE game_id = ?", (game_id,)
+    ).fetchone()
+    return row is not None and row[0] is not None
+
+
+def catalog_game_tiles(
+    conn: sqlite3.Connection,
+    game_id: str,
+    tile_dir: Path,
+) -> dict:
+    """Scan a tile directory and insert every tile into the manifest.
+
+    This is a complete census: every .jpg file gets a row in the tiles table.
+    Existing data for this game is deleted first (idempotent rescan).
+    Segments and frames tables are populated with pre-aggregated stats.
+
+    Returns: {segments, frames, tiles, unparsed, elapsed}
+    """
+    t0 = time.time()
+    tile_dir = Path(tile_dir)
+
+    # Delete existing catalog for this game (within transaction)
+    conn.execute("DELETE FROM tiles WHERE game_id = ?", (game_id,))
+    conn.execute("DELETE FROM frames WHERE game_id = ?", (game_id,))
+    conn.execute("DELETE FROM segments WHERE game_id = ?", (game_id,))
+
+    # Scan directory — every .jpg is a tile
+    filenames = [f for f in os.listdir(tile_dir) if f.endswith(".jpg")]
+
+    # Parse filenames and collect tile rows
+    # seg_frames: segment -> frame_idx -> set of (row, col)
+    from collections import defaultdict
+    seg_frames: dict[str, dict[int, set[tuple[int, int]]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    tile_rows = []
+    unparsed = 0
+
+    for fname in filenames:
+        stem = fname[:-4]  # strip .jpg
+        m = _TILE_RE.match(stem)
+        if not m:
+            unparsed += 1
+            continue
+        segment, frame_idx = m.group(1), int(m.group(2))
+        row, col = int(m.group(3)), int(m.group(4))
+        tile_rows.append((game_id, segment, frame_idx, row, col))
+        seg_frames[segment][frame_idx].add((row, col))
+
+    # Insert in FK order: game → segments → frames → tiles
+    total_tiles = len(tile_rows)
+
+    # 1. Game (parent for segments FK)
+    conn.execute(
+        """INSERT INTO games (game_id, tile_dir, tile_count, tiles_cataloged, last_updated)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(game_id)
+           DO UPDATE SET tile_dir=excluded.tile_dir,
+                         tile_count=excluded.tile_count,
+                         tiles_cataloged=excluded.tiles_cataloged,
+                         last_updated=excluded.last_updated""",
+        (game_id, str(tile_dir), total_tiles, time.time(), time.time()),
+    )
+
+    # 2. Segments (parent for frames FK)
+    for segment in sorted(seg_frames):
+        frames_dict = seg_frames[segment]
+        frame_indices = sorted(frames_dict.keys())
+        frame_count = len(frame_indices)
+        tile_count = sum(len(tiles) for tiles in frames_dict.values())
+        frame_min = frame_indices[0] if frame_indices else 0
+        frame_max = frame_indices[-1] if frame_indices else 0
+
+        max_gap = 0
+        if len(frame_indices) > 1:
+            max_gap = max(
+                frame_indices[i + 1] - frame_indices[i]
+                for i in range(len(frame_indices) - 1)
+            )
+
+        conn.execute(
+            "INSERT INTO segments (game_id, segment, frame_count, tile_count, "
+            "frame_min, frame_max, max_gap) VALUES (?,?,?,?,?,?,?)",
+            (game_id, segment, frame_count, tile_count, frame_min, frame_max, max_gap),
+        )
+
+    # 3. Frames (parent for tiles FK)
+    frame_rows = []
+    for segment in sorted(seg_frames):
+        for frame_idx in sorted(seg_frames[segment]):
+            tile_count = len(seg_frames[segment][frame_idx])
+            frame_rows.append((game_id, segment, frame_idx, tile_count))
+
+    if frame_rows:
+        conn.executemany(
+            "INSERT INTO frames (game_id, segment, frame_idx, tile_count) VALUES (?,?,?,?)",
+            frame_rows,
+        )
+
+    # 4. Tiles
+    if tile_rows:
+        conn.executemany(
+            "INSERT INTO tiles (game_id, segment, frame_idx, row, col) VALUES (?,?,?,?,?)",
+            tile_rows,
+        )
+
+    conn.commit()
+
+    elapsed = time.time() - t0
+    return {
+        "segments": len(seg_frames),
+        "frames": len(frame_rows),
+        "tiles": total_tiles,
+        "unparsed": unparsed,
+        "elapsed": elapsed,
+    }
+
+
+def get_segments_for_game(conn: sqlite3.Connection, game_id: str) -> list[str]:
+    """Return distinct segment stems cataloged for a game."""
+    rows = conn.execute(
+        "SELECT segment FROM segments WHERE game_id = ? ORDER BY segment",
+        (game_id,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_frame_summary(conn: sqlite3.Connection, game_id: str) -> list[dict]:
+    """Return per-segment summary from pre-aggregated segments table.
+
+    Each dict: {segment, frame_count, tile_count, frame_min, frame_max, max_gap}
+    """
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT segment, frame_count, tile_count, frame_min, frame_max, max_gap "
+        "FROM segments WHERE game_id = ? ORDER BY segment",
+        (game_id,),
+    ).fetchall()
+    conn.row_factory = None
+    return [dict(r) for r in rows]
+
+
+def get_incomplete_frames(
+    conn: sqlite3.Connection, game_id: str, expected_tiles: int = 21
+) -> list[tuple[str, int, int]]:
+    """Return (segment, frame_idx, tile_count) for frames with fewer than expected tiles."""
+    return conn.execute(
+        "SELECT segment, frame_idx, tile_count FROM frames "
+        "WHERE game_id = ? AND tile_count < ? ORDER BY segment, frame_idx",
+        (game_id, expected_tiles),
+    ).fetchall()
+
+
+def get_frame_indices(
+    conn: sqlite3.Connection, game_id: str, segment: str
+) -> list[int]:
+    """Return sorted frame indices for a segment (for gap detection)."""
+    rows = conn.execute(
+        "SELECT frame_idx FROM frames WHERE game_id = ? AND segment = ? ORDER BY frame_idx",
+        (game_id, segment),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_missing_tiles_for_frame(
+    conn: sqlite3.Connection,
+    game_id: str,
+    segment: str,
+    frame_idx: int,
+    expected_rows: int = 3,
+    expected_cols: int = 7,
+) -> list[tuple[int, int]]:
+    """Return list of (row, col) that are missing from a specific frame."""
+    existing = set(
+        conn.execute(
+            "SELECT row, col FROM tiles "
+            "WHERE game_id = ? AND segment = ? AND frame_idx = ?",
+            (game_id, segment, frame_idx),
+        ).fetchall()
+    )
+    expected = {(r, c) for r in range(expected_rows) for c in range(expected_cols)}
+    return sorted(expected - existing)
+
+
+def tile_exists(
+    conn: sqlite3.Connection,
+    game_id: str,
+    segment: str,
+    frame_idx: int,
+    row: int,
+    col: int,
+) -> bool:
+    """Check if a specific tile exists in the manifest."""
+    row_result = conn.execute(
+        "SELECT 1 FROM tiles WHERE game_id=? AND segment=? AND frame_idx=? AND row=? AND col=?",
+        (game_id, segment, frame_idx, row, col),
+    ).fetchone()
+    return row_result is not None
+
+
+def catalog_all_games(
+    conn: sqlite3.Connection,
+    tiles_dir: Path = DEFAULT_TILES_DIR,
+    rescan: bool = False,
+    games: list[str] | None = None,
+) -> None:
+    """Catalog tiles for all game directories found in tiles_dir."""
+    game_dirs = sorted(
+        d.name for d in tiles_dir.iterdir()
+        if d.is_dir() and (games is None or d.name in games)
+    )
+    logger.info("Cataloging %d games from %s", len(game_dirs), tiles_dir)
+
+    for game_id in game_dirs:
+        if not rescan and is_game_cataloged(conn, game_id):
+            logger.info("  %s: already cataloged, skipping", game_id)
+            continue
+
+        game_dir = tiles_dir / game_id
+        logger.info("  %s: scanning...", game_id)
+        stats = catalog_game_tiles(conn, game_id, game_dir)
+        logger.info(
+            "  %s: %d segments, %d frames, %d tiles (%.1fs)%s",
+            game_id,
+            stats["segments"],
+            stats["frames"],
+            stats["tiles"],
+            stats["elapsed"],
+            f" ({stats['unparsed']} unparsed)" if stats["unparsed"] else "",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pack files — segment-level binary archives for fast tile reads
+# ---------------------------------------------------------------------------
+
+DEFAULT_PACK_DIR = Path("D:/training_data/tile_packs")
+
+
+def pack_segment(
+    conn: sqlite3.Connection,
+    game_id: str,
+    segment: str,
+    tiles_dir: Path = DEFAULT_TILES_DIR,
+    pack_dir: Path = DEFAULT_PACK_DIR,
+    delete_loose: bool = False,
+) -> dict:
+    """Pack all tiles for one segment into a single .pack file.
+
+    Reads loose JPEGs from tiles_dir, concatenates them into
+    {pack_dir}/{game_id}/{segment}.pack, and updates the tiles table
+    with (pack_file, pack_offset, pack_size) for each tile.
+
+    If delete_loose=True, removes loose .jpg files after verifying the pack.
+
+    Returns: {tiles_packed, pack_size, loose_deleted, elapsed}
+    """
+    t0 = time.time()
+    game_tile_dir = tiles_dir / game_id
+    out_dir = pack_dir / game_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pack_path = out_dir / f"{segment}.pack"
+
+    # Get all tiles for this segment from manifest (sorted for deterministic packing)
+    rows = conn.execute(
+        "SELECT frame_idx, row, col FROM tiles "
+        "WHERE game_id = ? AND segment = ? ORDER BY frame_idx, row, col",
+        (game_id, segment),
+    ).fetchall()
+
+    updates = []
+    source_paths = []
+    source_sizes_sum = 0
+    offset = 0
+    pack_path_str = str(pack_path)
+
+    with open(pack_path, "wb") as pf:
+        for frame_idx, row, col in rows:
+            stem = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
+            src = game_tile_dir / f"{stem}.jpg"
+            data = src.read_bytes()
+            pf.write(data)
+            size = len(data)
+            source_sizes_sum += size
+            source_paths.append(src)
+            updates.append((pack_path_str, offset, size, game_id, segment, frame_idx, row, col))
+            offset += size
+
+    # Verify pack file size matches sum of source files
+    actual_size = os.path.getsize(pack_path)
+    if actual_size != source_sizes_sum:
+        raise RuntimeError(
+            f"Pack verification failed for {game_id}/{segment}: "
+            f"expected {source_sizes_sum} bytes, got {actual_size}"
+        )
+
+    # Batch update tiles table with pack info
+    conn.executemany(
+        "UPDATE tiles SET pack_file=?, pack_offset=?, pack_size=? "
+        "WHERE game_id=? AND segment=? AND frame_idx=? AND row=? AND col=?",
+        updates,
+    )
+    conn.commit()
+
+    # Delete loose files after successful pack + DB update
+    deleted = 0
+    if delete_loose:
+        for src in source_paths:
+            src.unlink()
+            deleted += 1
+
+    elapsed = time.time() - t0
+    return {
+        "tiles_packed": len(rows),
+        "pack_size": offset,
+        "loose_deleted": deleted,
+        "elapsed": elapsed,
+    }
+
+
+def pack_game(
+    conn: sqlite3.Connection,
+    game_id: str,
+    tiles_dir: Path = DEFAULT_TILES_DIR,
+    pack_dir: Path = DEFAULT_PACK_DIR,
+    delete_loose: bool = False,
+) -> dict:
+    """Pack all segments for a game. Returns aggregate stats."""
+    segments = get_segments_for_game(conn, game_id)
+    total = {
+        "tiles_packed": 0, "pack_size": 0, "loose_deleted": 0,
+        "elapsed": 0.0, "segments": 0,
+    }
+
+    for segment in segments:
+        stats = pack_segment(
+            conn, game_id, segment, tiles_dir, pack_dir, delete_loose=delete_loose
+        )
+        total["tiles_packed"] += stats["tiles_packed"]
+        total["pack_size"] += stats["pack_size"]
+        total["loose_deleted"] += stats["loose_deleted"]
+        total["elapsed"] += stats["elapsed"]
+        total["segments"] += 1
+        deleted_info = f", {stats['loose_deleted']} deleted" if delete_loose else ""
+        logger.info(
+            "    %s: %d tiles, %.1fMB (%.1fs)%s",
+            segment, stats["tiles_packed"],
+            stats["pack_size"] / 1024 / 1024, stats["elapsed"], deleted_info,
+        )
+
+    return total
+
+
+def pack_all_games(
+    conn: sqlite3.Connection,
+    tiles_dir: Path = DEFAULT_TILES_DIR,
+    pack_dir: Path = DEFAULT_PACK_DIR,
+    games: list[str] | None = None,
+    delete_loose: bool = False,
+) -> None:
+    """Pack all cataloged games into segment pack files.
+
+    If delete_loose=True, removes loose .jpg files after packing each segment.
+    This keeps peak additional disk usage to ~one segment size.
+    """
+    game_rows = conn.execute(
+        "SELECT DISTINCT game_id FROM segments ORDER BY game_id"
+    ).fetchall()
+    game_ids = [r[0] for r in game_rows]
+    if games:
+        game_ids = [g for g in game_ids if g in games]
+
+    logger.info("Packing %d games into %s (delete_loose=%s)", len(game_ids), pack_dir, delete_loose)
+
+    for game_id in game_ids:
+        # Check if already packed
+        row = conn.execute(
+            "SELECT COUNT(*) FROM tiles WHERE game_id = ? AND pack_file IS NULL",
+            (game_id,),
+        ).fetchone()
+        if row[0] == 0:
+            logger.info("  %s: already packed, skipping", game_id)
+            continue
+
+        logger.info("  %s: packing...", game_id)
+        stats = pack_game(conn, game_id, tiles_dir, pack_dir, delete_loose=delete_loose)
+        logger.info(
+            "  %s: %d segments, %d tiles, %.1fMB (%.1fs)",
+            game_id, stats["segments"], stats["tiles_packed"],
+            stats["pack_size"] / 1024 / 1024, stats["elapsed"],
+        )
+
+
+def read_tile_bytes(
+    conn: sqlite3.Connection,
+    game_id: str,
+    segment: str,
+    frame_idx: int,
+    row: int,
+    col: int,
+) -> bytes:
+    """Read a single tile's JPEG bytes from its pack file.
+
+    Falls back to reading the loose file if pack info is not available.
+    """
+    result = conn.execute(
+        "SELECT pack_file, pack_offset, pack_size FROM tiles "
+        "WHERE game_id=? AND segment=? AND frame_idx=? AND row=? AND col=?",
+        (game_id, segment, frame_idx, row, col),
+    ).fetchone()
+
+    if result is None:
+        raise FileNotFoundError(
+            f"Tile not in manifest: {game_id}/{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
+        )
+
+    pack_file, pack_offset, pack_size = result
+    if pack_file and pack_offset is not None:
+        with open(pack_file, "rb") as f:
+            f.seek(pack_offset)
+            return f.read(pack_size)
+
+    # Fallback: read loose file
+    game_meta = get_game(conn, game_id)
+    if not game_meta or not game_meta.get("tile_dir"):
+        raise FileNotFoundError(f"No tile_dir for game {game_id}")
+    stem = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
+    path = Path(game_meta["tile_dir"]) / f"{stem}.jpg"
+    return path.read_bytes()
+
+
+def read_tiles_batch(
+    conn: sqlite3.Connection,
+    game_id: str,
+    tile_keys: list[tuple[str, int, int, int]],
+) -> list[tuple[tuple[str, int, int, int], bytes]]:
+    """Read multiple tiles efficiently, sorted by pack offset for sequential HDD reads.
+
+    tile_keys: list of (segment, frame_idx, row, col)
+    Returns: list of ((segment, frame_idx, row, col), jpeg_bytes)
+    """
+    if not tile_keys:
+        return []
+
+    # Batch lookup
+    results = []
+    for seg, fidx, r, c in tile_keys:
+        row = conn.execute(
+            "SELECT pack_file, pack_offset, pack_size FROM tiles "
+            "WHERE game_id=? AND segment=? AND frame_idx=? AND row=? AND col=?",
+            (game_id, seg, fidx, r, c),
+        ).fetchone()
+        if row:
+            results.append(((seg, fidx, r, c), row[0], row[1], row[2]))
+
+    # Sort by pack_file then offset for sequential reads
+    results.sort(key=lambda x: (x[1] or "", x[2] or 0))
+
+    output = []
+    current_fh = None
+    current_path = None
+    try:
+        for key, pack_file, pack_offset, pack_size in results:
+            if pack_file and pack_offset is not None:
+                if pack_file != current_path:
+                    if current_fh:
+                        current_fh.close()
+                    current_fh = open(pack_file, "rb")
+                    current_path = pack_file
+                current_fh.seek(pack_offset)
+                data = current_fh.read(pack_size)
+            else:
+                # Fallback to loose file
+                game_meta = get_game(conn, game_id)
+                seg, fidx, r, c = key
+                stem = f"{seg}_frame_{fidx:06d}_r{r}_c{c}"
+                path = Path(game_meta["tile_dir"]) / f"{stem}.jpg"
+                data = path.read_bytes()
+            output.append((key, data))
+    finally:
+        if current_fh:
+            current_fh.close()
+
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +1312,92 @@ def build_dataset(
 
 
 # ---------------------------------------------------------------------------
+# Backup and merge
+# ---------------------------------------------------------------------------
+
+def backup_db(db_path: Path = DEFAULT_DB_PATH) -> Path:
+    """Create a timestamped backup of the manifest database.
+
+    Returns the backup path.
+    """
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    backup_path = db_path.parent / f"{db_path.stem}_backup_{timestamp}{db_path.suffix}"
+    # Use SQLite backup API for a consistent snapshot (safe even during WAL writes)
+    src = sqlite3.connect(str(db_path))
+    dst = sqlite3.connect(str(backup_path))
+    src.backup(dst)
+    dst.close()
+    src.close()
+    logger.info("Backup created: %s (%.1fMB)", backup_path, backup_path.stat().st_size / 1024 / 1024)
+    return backup_path
+
+
+def merge_labels_from(
+    conn: sqlite3.Connection,
+    remote_db_path: Path,
+) -> dict:
+    """Merge labels from a remote manifest.db into this one.
+
+    Reads all labels from remote_db_path and inserts them into conn
+    using INSERT OR IGNORE (skips duplicates on the unique constraint).
+    Also merges game metadata if games don't exist locally.
+
+    Returns: {games_merged, labels_inserted, labels_skipped}
+    """
+    remote = sqlite3.connect(str(remote_db_path))
+    remote.execute("PRAGMA journal_mode=WAL")
+
+    # Get all labels from remote
+    remote_labels = remote.execute(
+        "SELECT game_id, tile_stem, class_id, cx, cy, w, h, source, confidence FROM labels"
+    ).fetchall()
+
+    # Ensure game rows exist for any new game_ids
+    remote_games = remote.execute("SELECT DISTINCT game_id FROM labels").fetchall()
+    games_merged = 0
+    for (gid,) in remote_games:
+        existing = conn.execute("SELECT 1 FROM games WHERE game_id = ?", (gid,)).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO games (game_id, last_updated) VALUES (?, ?)",
+                (gid, time.time()),
+            )
+            games_merged += 1
+
+    # Bulk insert labels (skips duplicates)
+    before = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
+    conn.executemany(
+        """INSERT OR IGNORE INTO labels
+           (game_id, tile_stem, class_id, cx, cy, w, h, source, confidence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        remote_labels,
+    )
+    conn.commit()
+    after = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
+
+    # Update labeled_count for affected games
+    for (gid,) in remote_games:
+        labeled = conn.execute(
+            "SELECT COUNT(DISTINCT tile_stem) FROM labels WHERE game_id = ?", (gid,)
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE games SET labeled_count = ?, last_updated = ? WHERE game_id = ?",
+            (labeled, time.time(), gid),
+        )
+    conn.commit()
+
+    remote.close()
+
+    inserted = after - before
+    skipped = len(remote_labels) - inserted
+    logger.info(
+        "Merged from %s: %d labels inserted, %d skipped (duplicates), %d new games",
+        remote_db_path, inserted, skipped, games_merged,
+    )
+    return {"games_merged": games_merged, "labels_inserted": inserted, "labels_skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 
@@ -762,24 +1408,46 @@ def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
     total_labels = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
     total_games = conn.execute("SELECT COUNT(*) FROM games").fetchone()[0]
     distinct_stems = conn.execute("SELECT COUNT(DISTINCT tile_stem) FROM labels").fetchone()[0]
+    total_tiles_cat = conn.execute("SELECT COUNT(*) FROM tiles").fetchone()[0]
+    total_frames_cat = conn.execute("SELECT COUNT(*) FROM frames").fetchone()[0]
+    total_segments_cat = conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    packed_tiles = conn.execute(
+        "SELECT COUNT(*) FROM tiles WHERE pack_file IS NOT NULL"
+    ).fetchone()[0]
 
     print(f"\nManifest: {db_path}")
     print(f"  Games:          {total_games}")
-    print(f"  Labeled tiles:  {distinct_stems}")
-    print(f"  Total labels:   {total_labels}")
+    print(f"  Segments:       {total_segments_cat}")
+    print(f"  Frames:         {total_frames_cat:,}")
+    print(f"  Tiles:          {total_tiles_cat:,}")
+    print(f"  Packed tiles:   {packed_tiles:,}")
+    print(f"  Labeled tiles:  {distinct_stems:,}")
+    print(f"  Total labels:   {total_labels:,}")
     print()
 
     games = list_games(conn)
     if games:
-        print(f"  {'Game':<55} {'Tiles':>8} {'Labeled':>8} {'Labels':>8}")
-        print(f"  {'-'*55} {'-'*8} {'-'*8} {'-'*8}")
+        print(f"  {'Game':<50} {'Segs':>5} {'Tiles':>10} {'Packed':>8} {'Labels':>8}")
+        print(f"  {'-'*50} {'-'*5} {'-'*10} {'-'*8} {'-'*8}")
         for g in games:
-            label_count = conn.execute(
-                "SELECT COUNT(*) FROM labels WHERE game_id = ?", (g["game_id"],)
+            gid = g["game_id"]
+            seg_count = conn.execute(
+                "SELECT COUNT(*) FROM segments WHERE game_id = ?", (gid,)
             ).fetchone()[0]
+            tile_count = conn.execute(
+                "SELECT COUNT(*) FROM tiles WHERE game_id = ?", (gid,)
+            ).fetchone()[0]
+            pack_count = conn.execute(
+                "SELECT COUNT(*) FROM tiles WHERE game_id = ? AND pack_file IS NOT NULL",
+                (gid,),
+            ).fetchone()[0]
+            label_count = conn.execute(
+                "SELECT COUNT(*) FROM labels WHERE game_id = ?", (gid,)
+            ).fetchone()[0]
+            cataloged = "Y" if g.get("tiles_cataloged") else " "
             print(
-                f"  {g['game_id']:<55} {g['tile_count'] or 0:>8} "
-                f"{g['labeled_count'] or 0:>8} {label_count:>8}"
+                f"  {gid:<50} {seg_count:>5} {tile_count:>10,} "
+                f"{pack_count:>8,} {label_count:>8,}"
             )
     print()
     conn.close()
@@ -823,6 +1491,35 @@ def main():
     bld.add_argument("--no-weights", action="store_true", help="Disable spatial weighting")
     bld.add_argument("--no-exclude", action="store_true", help="Don't exclude any tile rows")
 
+    # catalog
+    cat = sub.add_parser("catalog", help="Catalog tiles from disk into manifest")
+    cat.add_argument(
+        "--tiles", type=Path, default=DEFAULT_TILES_DIR, help="Tiles directory"
+    )
+    cat.add_argument("--rescan", action="store_true", help="Force re-catalog all games")
+    cat.add_argument("--games", nargs="+", help="Only catalog specific games")
+
+    # pack
+    pak = sub.add_parser("pack", help="Build segment pack files from loose tiles")
+    pak.add_argument(
+        "--tiles", type=Path, default=DEFAULT_TILES_DIR, help="Tiles directory"
+    )
+    pak.add_argument(
+        "--pack-dir", type=Path, default=DEFAULT_PACK_DIR, help="Pack output directory"
+    )
+    pak.add_argument("--games", nargs="+", help="Only pack specific games")
+    pak.add_argument(
+        "--delete-loose", action="store_true",
+        help="Delete loose .jpg files after packing each segment (saves disk space)",
+    )
+
+    # backup
+    sub.add_parser("backup", help="Create a timestamped backup of the manifest database")
+
+    # merge
+    mrg = sub.add_parser("merge", help="Merge labels from a remote manifest.db")
+    mrg.add_argument("remote_db", type=Path, help="Path to remote manifest.db to merge from")
+
     # stats
     sub.add_parser("stats", help="Show manifest statistics")
 
@@ -847,6 +1544,17 @@ def main():
             rebuild=args.rebuild,
             games=args.games,
         )
+    elif args.command == "catalog":
+        conn = open_db(args.db, create=True)
+        catalog_all_games(conn, tiles_dir=args.tiles, rescan=args.rescan, games=args.games)
+        conn.close()
+    elif args.command == "pack":
+        conn = open_db(args.db)
+        pack_all_games(
+            conn, tiles_dir=args.tiles, pack_dir=args.pack_dir,
+            games=args.games, delete_loose=args.delete_loose,
+        )
+        conn.close()
     elif args.command == "build-dataset":
         conn = open_db(args.db)
         build_dataset(
@@ -862,6 +1570,15 @@ def main():
             include_negatives=not args.no_negatives,
         )
         conn.close()
+    elif args.command == "backup":
+        backup_db(args.db)
+    elif args.command == "merge":
+        backup_db(args.db)  # Always backup before merge
+        conn = open_db(args.db)
+        result = merge_labels_from(conn, args.remote_db)
+        conn.close()
+        print(f"Merged: {result['labels_inserted']} labels inserted, "
+              f"{result['labels_skipped']} skipped, {result['games_merged']} new games")
     elif args.command == "stats":
         print_stats(args.db)
     elif args.command == "export":

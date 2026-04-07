@@ -1,7 +1,10 @@
 """Distributed labeling job for node agents.
 
 Self-contained script that runs on a remote node to label one game's
-video segments using the external ball detector. Requires only:
+video segments using the external ball detector. Writes detections to
+a local manifest.db which can be merged into the server's master manifest.
+
+Requires only:
 - onnxruntime (or onnxruntime-gpu)
 - opencv-python
 - numpy
@@ -11,19 +14,24 @@ Does NOT require ultralytics, torch, or the full training codebase.
 
 Usage (on the node):
     python label_job.py \
-        --video-dir "D:/videos/09.30.2024 - vs Chili (home)" \
-        --model "D:/onnx_models/model.onnx" \
-        --output "D:/labels/flash__09.30.2024_vs_Chili_home" \
+        --video-dir "D:/videos/flash__2024.09.30_vs_Chili_home" \
+        --game-id "flash__2024.09.30_vs_Chili_home" \
+        --model "C:/soccer-cam-label/models/model.onnx" \
+        --db "D:/labels/manifest.db" \
         --conf 0.45 \
         --frame-interval 4
 
     # Or receive job config from coordinator:
     python label_job.py --config job_config.json
+
+After completion, transfer the local manifest.db to the server and merge:
+    uv run python -m training.data_prep.manifest merge D:/labels/manifest.db
 """
 
 import argparse
 import json
 import logging
+import sqlite3
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -66,6 +74,49 @@ STEP_X = 576
 STEP_Y = 580
 NUM_COLS = 7
 NUM_ROWS = 3
+
+
+# ---- Embedded manifest schema (minimal, for label storage only) ----
+LABEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS games (
+    game_id TEXT PRIMARY KEY,
+    tile_count INTEGER DEFAULT 0,
+    labeled_count INTEGER DEFAULT 0,
+    tile_dir TEXT,
+    last_updated REAL,
+    tiles_cataloged REAL
+);
+
+CREATE TABLE IF NOT EXISTS labels (
+    id INTEGER PRIMARY KEY,
+    game_id TEXT NOT NULL,
+    tile_stem TEXT NOT NULL,
+    class_id INTEGER DEFAULT 0,
+    cx REAL NOT NULL,
+    cy REAL NOT NULL,
+    w REAL NOT NULL,
+    h REAL NOT NULL,
+    source TEXT,
+    confidence REAL,
+    FOREIGN KEY (game_id) REFERENCES games(game_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_labels_game ON labels(game_id);
+CREATE INDEX IF NOT EXISTS idx_labels_stem ON labels(tile_stem);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_unique
+    ON labels(game_id, tile_stem, class_id, cx, cy);
+"""
+
+
+def open_label_db(db_path: Path) -> sqlite3.Connection:
+    """Open or create a local manifest.db for label output."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript(LABEL_SCHEMA)
+    conn.commit()
+    return conn
 
 
 def detect_balls(frame_bgr, sess, conf_threshold=CONF_THRESHOLD):
@@ -138,39 +189,40 @@ def pano_to_tile_labels(cx, cy, w, h):
     return labels
 
 
-def _format_frame_labels(seg_name, frame_idx, dets):
-    """Convert detections to list of (filename, content) pairs for writing."""
-    tile_labels = defaultdict(list)
+def _collect_frame_labels(seg_name, frame_idx, dets):
+    """Convert detections to manifest label rows.
+
+    Returns list of (tile_stem, class_id, cx, cy, w, h, confidence).
+    """
+    rows = []
     for det in dets:
         for tl in pano_to_tile_labels(det["cx"], det["cy"], det["w"], det["h"]):
-            key = (tl["row"], tl["col"])
-            line = f"0 {tl['cx_norm']:.6f} {tl['cy_norm']:.6f} {tl['w_norm']:.6f} {tl['h_norm']:.6f}"
-            tile_labels[key].append(line)
-
-    files = []
-    for (row, col), lines in tile_labels.items():
-        fname = f"{seg_name}_frame_{frame_idx:06d}_r{row}_c{col}.txt"
-        content = "\n".join(lines) + "\n"
-        files.append((fname, content))
-    return files
+            tile_stem = f"{seg_name}_frame_{frame_idx:06d}_r{tl['row']}_c{tl['col']}"
+            rows.append((
+                tile_stem,
+                0,  # class_id (ball)
+                tl["cx_norm"],
+                tl["cy_norm"],
+                tl["w_norm"],
+                tl["h_norm"],
+                det["conf"],
+            ))
+    return rows
 
 
 def process_segment(
     video_path,
     sess,
-    output_dir,
+    conn,
+    game_id,
     frame_interval=FRAME_INTERVAL,
     conf_threshold=CONF_THRESHOLD,
-    static_threshold=200,
 ):
-    """Process one video segment and write per-tile YOLO labels.
+    """Process one video segment and write labels to manifest.db.
 
-    GPU detection and file I/O run in parallel: detections are queued
-    for a background writer thread so GPU never waits on disk/network.
+    GPU detection runs frame-by-frame; labels are batch-inserted into
+    SQLite after each segment completes.
     """
-    import queue
-    import threading
-
     seg_name = video_path.stem
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -180,52 +232,9 @@ def process_segment(
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     logger.info("  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Start background writer thread — unbounded queue so GPU never blocks.
-    # If network write fails, falls back to local disk for later sync.
-    write_queue = queue.Queue()  # unbounded — whole segment fits in memory
-    writer_count = [0]
-    local_fallback_dir = None
-
-    def writer():
-        nonlocal local_fallback_dir
-        while True:
-            item = write_queue.get()
-            if item is None:
-                write_queue.task_done()
-                break
-            for fname, content in item:
-                try:
-                    with open(output_dir / fname, "w") as f:
-                        f.write(content)
-                except OSError:
-                    # Network write failed — fall back to local disk
-                    if local_fallback_dir is None:
-                        from pathlib import Path
-
-                        local_fallback_dir = (
-                            Path(r"C:\soccer-cam-label\output_pending")
-                            / output_dir.name
-                        )
-                        local_fallback_dir.mkdir(parents=True, exist_ok=True)
-                        logger.warning(
-                            "Network write failed, falling back to %s",
-                            local_fallback_dir,
-                        )
-                    try:
-                        with open(local_fallback_dir / fname, "w") as f:
-                            f.write(content)
-                    except OSError:
-                        logger.error("Fallback write also failed for %s", fname)
-                writer_count[0] += 1
-            write_queue.task_done()
-
-    writer_t = threading.Thread(target=writer, daemon=True)
-    writer_t.start()
-
     fi = 0
     det_count = 0
+    all_rows = []  # collect all label rows for batch insert
     start = time.time()
 
     while True:
@@ -237,50 +246,35 @@ def process_segment(
             if ret:
                 dets = detect_balls(frame, sess, conf_threshold)
                 det_count += len(dets)
-
                 if dets:
-                    # Format labels (cheap CPU work) then queue for async write
-                    files = _format_frame_labels(seg_name, fi, dets)
-                    write_queue.put(files)
+                    all_rows.extend(_collect_frame_labels(seg_name, fi, dets))
         fi += 1
 
     cap.release()
 
-    # Signal writer to finish and wait
-    write_queue.put(None)
-    writer_t.join()
-
-    # Sync any local fallback files to the share
-    if local_fallback_dir and local_fallback_dir.exists():
-        pending = list(local_fallback_dir.glob("*.txt"))
-        if pending:
-            logger.info("    Syncing %d fallback files to share...", len(pending))
-            import shutil
-
-            for f in pending:
-                try:
-                    shutil.copy2(f, output_dir / f.name)
-                    f.unlink()
-                except OSError:
-                    pass  # will retry next run
-            remaining = list(local_fallback_dir.glob("*.txt"))
-            if not remaining:
-                local_fallback_dir.rmdir()
-                logger.info("    Sync complete")
-            else:
-                logger.warning("    %d files still pending sync", len(remaining))
+    # Batch insert into manifest
+    if all_rows:
+        conn.executemany(
+            """INSERT OR IGNORE INTO labels
+               (game_id, tile_stem, class_id, cx, cy, w, h, source, confidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(game_id, stem, cls, cx, cy, w, h, "onnx", conf)
+             for stem, cls, cx, cy, w, h, conf in all_rows],
+        )
+        conn.commit()
 
     elapsed = time.time() - start
     logger.info(
-        "    %d detections -> %d files in %.0fs", det_count, writer_count[0], elapsed
+        "    %d detections -> %d label rows in %.0fs", det_count, len(all_rows), elapsed
     )
-    return writer_count[0]
+    return len(all_rows)
 
 
 def run_label_job(
     video_dir,
+    game_id,
     model_path,
-    output_dir,
+    db_path,
     conf=CONF_THRESHOLD,
     frame_interval=FRAME_INTERVAL,
     use_gpu=True,
@@ -296,46 +290,68 @@ def run_label_job(
     actual = sess.get_providers()
     logger.info("ONNX providers: %s", actual)
 
-    # Search for segment videos (may be in subdirectories for tournaments)
+    # Open local manifest for output
+    conn = open_label_db(db_path)
+
+    # Ensure game row exists
+    conn.execute(
+        "INSERT OR IGNORE INTO games (game_id, last_updated) VALUES (?, ?)",
+        (game_id, time.time()),
+    )
+    conn.commit()
+
+    # Search for segment videos
     segments = sorted([p for p in video_dir.rglob("*.mp4") if "[F][0@0]" in p.name])
     if not segments:
         logger.error("No segments found in %s", video_dir)
+        conn.close()
         return 0
 
-    # Skip segments that already have labels
-    # glob.escape needed because filenames contain [F][0@0] which are glob chars
-    import glob as glob_mod
+    # Check which segments already have labels in our manifest
+    existing_stems = set()
+    rows = conn.execute(
+        "SELECT DISTINCT tile_stem FROM labels WHERE game_id = ?", (game_id,)
+    ).fetchall()
+    for (stem,) in rows:
+        # Extract segment name from tile_stem (everything before _frame_)
+        parts = stem.rsplit("_frame_", 1)
+        if parts:
+            existing_stems.add(parts[0])
 
     unlabeled = []
     for seg in segments:
-        escaped = glob_mod.escape(seg.stem)
-        existing = list(output_dir.glob(f"{escaped}_frame_*.txt"))
-        if existing:
-            logger.info("  Skipping %s (%d labels exist)", seg.stem[:50], len(existing))
+        if seg.stem in existing_stems:
+            logger.info("  Skipping %s (labels exist in manifest)", seg.stem[:50])
         else:
             unlabeled.append(seg)
 
     logger.info(
         "=== %s: %d segments (%d already labeled, %d to do) ===",
-        video_dir.name,
+        game_id,
         len(segments),
         len(segments) - len(unlabeled),
         len(unlabeled),
     )
 
-    total_files = 0
+    total_rows = 0
     for seg in unlabeled:
-        total_files += process_segment(
-            seg,
-            sess,
-            output_dir,
-            frame_interval,
-            conf,
-            static_threshold=200 if frame_interval <= 4 else 100,
+        total_rows += process_segment(
+            seg, sess, conn, game_id, frame_interval, conf,
         )
 
-    logger.info("=== DONE: %d label files ===", total_files)
-    return total_files
+    # Update game metadata
+    labeled_count = conn.execute(
+        "SELECT COUNT(DISTINCT tile_stem) FROM labels WHERE game_id = ?", (game_id,)
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE games SET labeled_count = ?, last_updated = ? WHERE game_id = ?",
+        (labeled_count, time.time(), game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    logger.info("=== DONE: %d label rows written to %s ===", total_rows, db_path)
+    return total_rows
 
 
 def main():
@@ -343,8 +359,14 @@ def main():
     parser.add_argument(
         "--video-dir", type=Path, help="Directory with segment .mp4 files"
     )
+    parser.add_argument(
+        "--game-id", type=str, help="Game ID for manifest labels"
+    )
     parser.add_argument("--model", type=Path, default=Path("model.onnx"))
-    parser.add_argument("--output", type=Path, help="Output labels directory")
+    parser.add_argument(
+        "--db", type=Path, default=Path("manifest.db"),
+        help="Local manifest.db to write labels into",
+    )
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
     parser.add_argument("--frame-interval", type=int, default=FRAME_INTERVAL)
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
@@ -359,16 +381,22 @@ def main():
         with open(args.config) as f:
             cfg = json.load(f)
         args.video_dir = Path(cfg["video_dir"])
+        args.game_id = cfg["game_id"]
         args.model = Path(cfg["model"])
-        args.output = Path(cfg["output"])
+        args.db = Path(cfg.get("db", "manifest.db"))
         args.conf = cfg.get("conf", CONF_THRESHOLD)
         args.frame_interval = cfg.get("frame_interval", FRAME_INTERVAL)
         args.cpu = cfg.get("cpu", False)
 
+    if not args.game_id:
+        # Infer game_id from video_dir name
+        args.game_id = args.video_dir.name
+
     run_label_job(
         args.video_dir,
+        args.game_id,
         args.model,
-        args.output,
+        args.db,
         args.conf,
         args.frame_interval,
         use_gpu=not args.cpu,
