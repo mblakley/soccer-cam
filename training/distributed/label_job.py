@@ -265,6 +265,45 @@ def _collect_frame_labels(seg_name, frame_idx, dets):
     return rows
 
 
+FLUSH_INTERVAL = 100  # flush labels to DB every N processed frames
+
+
+def _flush_labels(conn, game_id, rows):
+    """Write accumulated label rows to manifest and clear the buffer."""
+    if not rows:
+        return 0
+    conn.executemany(
+        """INSERT OR IGNORE INTO labels
+           (game_id, tile_stem, class_id, cx, cy, w, h, source, confidence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [(game_id, stem, cls, cx, cy, w, h, "onnx", conf)
+         for stem, cls, cx, cy, w, h, conf in rows],
+    )
+    conn.commit()
+    count = len(rows)
+    rows.clear()
+    return count
+
+
+def _get_resume_frame(conn, game_id, seg_name):
+    """Get the highest frame_idx already labeled for this segment.
+
+    Returns the frame index to resume after, or -1 if no labels exist.
+    """
+    row = conn.execute(
+        """SELECT tile_stem FROM labels
+           WHERE game_id = ? AND tile_stem LIKE ?
+           ORDER BY tile_stem DESC LIMIT 1""",
+        (game_id, f"{seg_name}_frame_%"),
+    ).fetchone()
+    if not row:
+        return -1
+    # Parse frame index from tile_stem: {seg}_frame_{NNNNNN}_r{R}_c{C}
+    import re
+    m = re.search(r"_frame_(\d{6})_r", row[0])
+    return int(m.group(1)) if m else -1
+
+
 def process_segment(
     video_path,
     sess,
@@ -275,22 +314,33 @@ def process_segment(
 ):
     """Process one video segment and write labels to manifest.db.
 
-    GPU detection runs frame-by-frame; labels are batch-inserted into
-    SQLite after each segment completes.
+    Supports resuming from the last labeled frame if interrupted.
+    Flushes labels to DB periodically so progress is never lost.
+    Yields to games — if a game is detected mid-segment, flushes and returns.
     """
     seg_name = video_path.stem
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error("Cannot open: %s", video_path)
-        return 0
+        return 0, False  # (rows, completed)
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    logger.info("  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval)
 
-    fi = 0
+    # Check for resume point
+    resume_after = _get_resume_frame(conn, game_id, seg_name)
+    if resume_after >= 0:
+        logger.info("  %s (%d frames) — resuming after frame %d",
+                     seg_name[:50], total, resume_after)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, resume_after + 1)
+        fi = resume_after + 1
+    else:
+        logger.info("  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval)
+        fi = 0
+
     det_count = 0
     processed = 0
-    all_rows = []  # collect all label rows for batch insert
+    pending_rows = []
+    total_rows = 0
     start = time.time()
 
     while True:
@@ -303,30 +353,29 @@ def process_segment(
                 dets = detect_balls(frame, sess, conf_threshold)
                 det_count += len(dets)
                 if dets:
-                    all_rows.extend(_collect_frame_labels(seg_name, fi, dets))
+                    pending_rows.extend(_collect_frame_labels(seg_name, fi, dets))
                 processed += 1
+
+                # Periodic flush — save progress to DB
+                if processed % FLUSH_INTERVAL == 0:
+                    total_rows += _flush_labels(conn, game_id, pending_rows)
+
+                # Idle check — flush progress, then pause until game exits
                 if processed % IDLE_CHECK_FRAME_INTERVAL == 0:
+                    total_rows += _flush_labels(conn, game_id, pending_rows)
                     wait_for_idle()
         fi += 1
 
     cap.release()
 
-    # Batch insert into manifest
-    if all_rows:
-        conn.executemany(
-            """INSERT OR IGNORE INTO labels
-               (game_id, tile_stem, class_id, cx, cy, w, h, source, confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [(game_id, stem, cls, cx, cy, w, h, "onnx", conf)
-             for stem, cls, cx, cy, w, h, conf in all_rows],
-        )
-        conn.commit()
+    # Final flush
+    total_rows += _flush_labels(conn, game_id, pending_rows)
 
     elapsed = time.time() - start
     logger.info(
-        "    %d detections -> %d label rows in %.0fs", det_count, len(all_rows), elapsed
+        "    %d detections -> %d label rows in %.0fs", det_count, total_rows, elapsed
     )
-    return len(all_rows)
+    return total_rows
 
 
 def run_label_job(
@@ -366,23 +415,28 @@ def run_label_job(
         conn.close()
         return 0
 
-    # Check which segments already have labels in our manifest
-    existing_stems = set()
-    rows = conn.execute(
-        "SELECT DISTINCT tile_stem FROM labels WHERE game_id = ?", (game_id,)
-    ).fetchall()
-    for (stem,) in rows:
-        # Extract segment name from tile_stem (everything before _frame_)
-        parts = stem.rsplit("_frame_", 1)
-        if parts:
-            existing_stems.add(parts[0])
-
-    unlabeled = []
+    # Check which segments are fully labeled vs partially/not labeled.
+    # A segment is "complete" if it has labels and the last labeled frame
+    # is near the end of the video. Partially labeled segments get resumed.
+    to_process = []
     for seg in segments:
-        if seg.stem in existing_stems:
-            logger.info("  Skipping %s (labels exist in manifest)", seg.stem[:50])
+        resume_frame = _get_resume_frame(conn, game_id, seg.stem)
+        if resume_frame < 0:
+            to_process.append(seg)  # no labels at all
         else:
-            unlabeled.append(seg)
+            # Check if near the end — open video briefly to get frame count
+            cap = cv2.VideoCapture(str(seg))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+            cap.release()
+            if total_frames > 0 and resume_frame >= total_frames - frame_interval * 2:
+                logger.info("  Skipping %s (fully labeled, last frame %d/%d)",
+                           seg.stem[:50], resume_frame, total_frames)
+            else:
+                logger.info("  Resuming %s (from frame %d/%d)",
+                           seg.stem[:50], resume_frame, total_frames)
+                to_process.append(seg)
+
+    unlabeled = to_process
 
     logger.info(
         "=== %s: %d segments (%d already labeled, %d to do) ===",
