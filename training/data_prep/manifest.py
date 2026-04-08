@@ -569,17 +569,43 @@ def pack_segment(
     offset = 0
     pack_path_str = str(pack_path)
 
+    # Build file list upfront
+    file_list = []
+    for frame_idx, row, col in rows:
+        stem = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
+        src = game_tile_dir / f"{stem}.jpg"
+        file_list.append((src, frame_idx, row, col))
+
+    # Read files concurrently with a thread pool for better HDD scheduling,
+    # but write sequentially to maintain deterministic pack order.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    READAHEAD = 32  # number of concurrent file reads
+
+    def _read_file(item):
+        src, fidx, r, c = item
+        return (fidx, r, c, src, src.read_bytes())
+
     with open(pack_path, "wb") as pf:
-        for frame_idx, row, col in rows:
-            stem = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
-            src = game_tile_dir / f"{stem}.jpg"
-            data = src.read_bytes()
-            pf.write(data)
-            size = len(data)
-            source_sizes_sum += size
-            source_paths.append(src)
-            updates.append((pack_path_str, offset, size, game_id, segment, frame_idx, row, col))
-            offset += size
+        # Process in batches to keep memory bounded
+        for batch_start in range(0, len(file_list), READAHEAD * 4):
+            batch = file_list[batch_start:batch_start + READAHEAD * 4]
+            # Read batch concurrently
+            results = {}
+            with ThreadPoolExecutor(max_workers=READAHEAD) as pool:
+                futures = {pool.submit(_read_file, item): i for i, item in enumerate(batch)}
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    results[idx] = future.result()
+
+            # Write in order
+            for i in range(len(batch)):
+                fidx, r, c, src, data = results[i]
+                pf.write(data)
+                size = len(data)
+                source_sizes_sum += size
+                source_paths.append(src)
+                updates.append((pack_path_str, offset, size, game_id, segment, fidx, r, c))
+                offset += size
 
     # Verify pack file size matches sum of source files
     actual_size = os.path.getsize(pack_path)
