@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Build arguments for versioning
 ARG VERSION=0.0.0
