@@ -3,6 +3,7 @@
 For each gap from Exp 1, seek to that frame, check for motion blob
 near the predicted position. Record matches with color/shape analysis.
 """
+
 import cv2
 import json
 import logging
@@ -70,9 +71,7 @@ def find_video(game_id: str, segment: str) -> Path | None:
     return None
 
 
-def verify_gaps_in_segment(
-    video_path: Path, segment_gaps: list[dict]
-) -> list[dict]:
+def verify_gaps_in_segment(video_path: Path, segment_gaps: list[dict]) -> list[dict]:
     """Verify gap positions with frame diff for one segment."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -214,9 +213,9 @@ def main():
 
     # Findings
     findings = [
-        f"Exp 3b Full Scale Results",
+        "Exp 3b Full Scale Results",
         f"Time: {elapsed:.0f}s",
-        f"Total verified: {len(all_results)} / {len(gaps)} gaps ({len(all_results)/max(len(gaps),1)*100:.0f}%)",
+        f"Total verified: {len(all_results)} / {len(gaps)} gaps ({len(all_results) / max(len(gaps), 1) * 100:.0f}%)",
         "",
         "Per-game breakdown:",
     ]
@@ -229,7 +228,9 @@ def main():
         total_high += s["high_conf"]
 
     findings.append(f"\nTotal high-confidence: {total_high}")
-    findings.append(f"Target: >= 200 total. {'PASSED' if total_high >= 200 else 'NEED MORE'}")
+    findings.append(
+        f"Target: >= 200 total. {'PASSED' if total_high >= 200 else 'NEED MORE'}"
+    )
 
     with open(FINDINGS, "w") as f:
         f.write("\n".join(findings))

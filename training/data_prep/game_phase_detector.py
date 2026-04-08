@@ -17,7 +17,6 @@ Detection signals:
   - Detection gap (>2 min no detections) = phase boundary
 """
 
-import argparse
 import json
 import logging
 import time
@@ -106,9 +105,7 @@ def detect_phases(game_id: str) -> dict:
         windows = []
         for start_fi in range(min_fi, max_fi, WINDOW_FRAMES // 2):
             end_fi = start_fi + WINDOW_FRAMES
-            window_frames = [
-                fi for fi in seg_frames if start_fi <= fi < end_fi
-            ]
+            window_frames = [fi for fi in seg_frames if start_fi <= fi < end_fi]
 
             multi_ball_count = 0
             total_dets = 0
@@ -129,14 +126,18 @@ def detect_phases(game_id: str) -> dict:
             else:
                 abs_time = window_time_sec
 
-            windows.append({
-                "start_frame": start_fi,
-                "time_sec": round(abs_time),
-                "time_str": f"{int(abs_time//3600):02d}:{int((abs_time%3600)//60):02d}:{int(abs_time%60):02d}",
-                "det_count": total_dets,
-                "multi_ball_pct": round(multi_ball_count / max(len(window_frames), 1), 2),
-                "frame_count": len(window_frames),
-            })
+            windows.append(
+                {
+                    "start_frame": start_fi,
+                    "time_sec": round(abs_time),
+                    "time_str": f"{int(abs_time // 3600):02d}:{int((abs_time % 3600) // 60):02d}:{int(abs_time % 60):02d}",
+                    "det_count": total_dets,
+                    "multi_ball_pct": round(
+                        multi_ball_count / max(len(window_frames), 1), 2
+                    ),
+                    "frame_count": len(window_frames),
+                }
+            )
 
         segment_info[seg] = {
             "start_time": seg_time[0] if seg_time else 0,
@@ -173,86 +174,101 @@ def detect_phases(game_id: str) -> dict:
 
         elif current_phase == "warmup":
             if not is_multi and not is_gap:
-                phases.append({
-                    "phase": "warmup",
-                    "start_sec": phase_start,
-                    "end_sec": w["time_sec"],
-                    "start_str": _fmt_time(phase_start),
-                    "end_str": _fmt_time(w["time_sec"]),
-                    "confirmed": False,
-                })
+                phases.append(
+                    {
+                        "phase": "warmup",
+                        "start_sec": phase_start,
+                        "end_sec": w["time_sec"],
+                        "start_str": _fmt_time(phase_start),
+                        "end_str": _fmt_time(w["time_sec"]),
+                        "confirmed": False,
+                    }
+                )
                 current_phase = "first_half"
                 phase_start = w["time_sec"]
 
         elif current_phase == "first_half":
             if is_gap or (is_multi and i > len(all_windows) * 0.3):
-                phases.append({
-                    "phase": "first_half",
-                    "start_sec": phase_start,
-                    "end_sec": w["time_sec"],
-                    "start_str": _fmt_time(phase_start),
-                    "end_str": _fmt_time(w["time_sec"]),
-                    "confirmed": False,
-                })
+                phases.append(
+                    {
+                        "phase": "first_half",
+                        "start_sec": phase_start,
+                        "end_sec": w["time_sec"],
+                        "start_str": _fmt_time(phase_start),
+                        "end_str": _fmt_time(w["time_sec"]),
+                        "confirmed": False,
+                    }
+                )
                 current_phase = "halftime"
                 phase_start = w["time_sec"]
 
         elif current_phase == "halftime":
             if not is_multi and not is_gap:
-                phases.append({
-                    "phase": "halftime",
-                    "start_sec": phase_start,
-                    "end_sec": w["time_sec"],
-                    "start_str": _fmt_time(phase_start),
-                    "end_str": _fmt_time(w["time_sec"]),
-                    "confirmed": False,
-                })
+                phases.append(
+                    {
+                        "phase": "halftime",
+                        "start_sec": phase_start,
+                        "end_sec": w["time_sec"],
+                        "start_str": _fmt_time(phase_start),
+                        "end_str": _fmt_time(w["time_sec"]),
+                        "confirmed": False,
+                    }
+                )
                 current_phase = "second_half"
                 phase_start = w["time_sec"]
 
         elif current_phase == "second_half":
             if is_multi and i > len(all_windows) * 0.7:
-                phases.append({
-                    "phase": "second_half",
-                    "start_sec": phase_start,
-                    "end_sec": w["time_sec"],
-                    "start_str": _fmt_time(phase_start),
-                    "end_str": _fmt_time(w["time_sec"]),
-                    "confirmed": False,
-                })
+                phases.append(
+                    {
+                        "phase": "second_half",
+                        "start_sec": phase_start,
+                        "end_sec": w["time_sec"],
+                        "start_str": _fmt_time(phase_start),
+                        "end_str": _fmt_time(w["time_sec"]),
+                        "confirmed": False,
+                    }
+                )
                 current_phase = "postgame"
                 phase_start = w["time_sec"]
 
     # Close final phase
     if all_windows and current_phase != "unknown":
-        phases.append({
-            "phase": current_phase,
-            "start_sec": phase_start,
-            "end_sec": all_windows[-1]["time_sec"],
-            "start_str": _fmt_time(phase_start),
-            "end_str": _fmt_time(all_windows[-1]["time_sec"]),
-            "confirmed": False,
-        })
+        phases.append(
+            {
+                "phase": current_phase,
+                "start_sec": phase_start,
+                "end_sec": all_windows[-1]["time_sec"],
+                "start_str": _fmt_time(phase_start),
+                "end_str": _fmt_time(all_windows[-1]["time_sec"]),
+                "confirmed": False,
+            }
+        )
 
     # Build game manifest
     video_dir = GAME_VIDEO_DIRS.get(game_id, "")
     video_segments = []
     for seg in sorted(segments):
         info = segment_info.get(seg, {})
-        video_segments.append({
-            "segment": seg,
-            "start_time": info.get("start_time", 0),
-            "start_str": _fmt_time(info.get("start_time", 0)),
-            "video_link": f"https://trainer.goat-rattlesnake.ts.net:8642/api/tracking-lab/tile/0?row=1&col=3",
-        })
+        video_segments.append(
+            {
+                "segment": seg,
+                "start_time": info.get("start_time", 0),
+                "start_str": _fmt_time(info.get("start_time", 0)),
+                "video_link": "https://trainer.goat-rattlesnake.ts.net:8642/api/tracking-lab/tile/0?row=1&col=3",
+            }
+        )
 
     return {
         "game_id": game_id,
         "video_dir": video_dir,
-        "orientation": "upside_down" if game_id in {
+        "orientation": "upside_down"
+        if game_id
+        in {
             "flash__06.01.2024_vs_IYSA_home",
             "heat__05.31.2024_vs_Fairport_home",
-        } else "right_side_up",
+        }
+        else "right_side_up",
         "segments": video_segments,
         "phases": phases,
         "events": [],  # user adds: goals, corners, PKs, etc.

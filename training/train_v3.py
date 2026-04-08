@@ -6,13 +6,11 @@ Builds a YOLO dataset with train/val split, then trains YOLO26l.
 Usage:
     python -u train_v3.py
 """
+
 import json
 import logging
-import os
 import random
-import shutil
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, r"C:\soccer-cam-label")
@@ -32,8 +30,8 @@ SERVER = "192.168.86.152"
 
 # Map shares
 try:
-    map_share(f"\\\\{SERVER}\\training", f"DESKTOP-5L867J8\\training", "amy4ever")
-    map_share(f"\\\\{SERVER}\\video", f"DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(f"\\\\{SERVER}\\training", "DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(f"\\\\{SERVER}\\video", "DESKTOP-5L867J8\\training", "amy4ever")
     logger.info("Shares mapped")
 except Exception as e:
     logger.warning("Share mapping: %s", e)

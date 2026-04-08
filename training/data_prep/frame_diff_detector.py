@@ -26,11 +26,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Detection parameters
-MIN_BLOB_AREA = 20       # Minimum blob area in pixels (ball ~8-12px = ~50-100 area)
-MAX_BLOB_AREA = 2000     # Maximum blob area (reject large moving objects like players)
-DIFF_THRESHOLD = 30      # Pixel intensity threshold for difference image
-MORPH_KERNEL_SIZE = 3    # Morphological operation kernel size
-GAUSSIAN_BLUR = 5        # Blur kernel for noise reduction
+MIN_BLOB_AREA = 20  # Minimum blob area in pixels (ball ~8-12px = ~50-100 area)
+MAX_BLOB_AREA = 2000  # Maximum blob area (reject large moving objects like players)
+DIFF_THRESHOLD = 30  # Pixel intensity threshold for difference image
+MORPH_KERNEL_SIZE = 3  # Morphological operation kernel size
+GAUSSIAN_BLUR = 5  # Blur kernel for noise reduction
 
 
 def detect_motion_blobs(
@@ -95,12 +95,14 @@ def detect_motion_blobs(
         cv2.drawContours(mask, [contour], -1, 255, -1)
         intensity = float(cv2.mean(diff, mask=mask)[0])
 
-        blobs.append({
-            "x": cx,
-            "y": cy,
-            "area": int(area),
-            "intensity": round(intensity, 1),
-        })
+        blobs.append(
+            {
+                "x": cx,
+                "y": cy,
+                "area": int(area),
+                "intensity": round(intensity, 1),
+            }
+        )
 
     # Sort by intensity (brightest = most movement)
     blobs.sort(key=lambda b: b["intensity"], reverse=True)
@@ -161,13 +163,15 @@ def detect_ball_from_video(
                 blobs = detect_motion_blobs(crop_prev, crop_curr)
 
                 for blob in blobs:
-                    detections.append({
-                        "frame_idx": frame_idx,
-                        "x": blob["x"] + offset_x,
-                        "y": blob["y"] + offset_y,
-                        "area": blob["area"],
-                        "intensity": blob["intensity"],
-                    })
+                    detections.append(
+                        {
+                            "frame_idx": frame_idx,
+                            "x": blob["x"] + offset_x,
+                            "y": blob["y"] + offset_y,
+                            "area": blob["area"],
+                            "intensity": blob["intensity"],
+                        }
+                    )
 
                 frames_processed += 1
 
@@ -180,14 +184,19 @@ def detect_ball_from_video(
             rate = frames_processed / elapsed
             logger.info(
                 "%d/%d frames, %d detections (%.1f f/s)",
-                frame_idx, total_frames, len(detections), rate,
+                frame_idx,
+                total_frames,
+                len(detections),
+                rate,
             )
 
     cap.release()
     elapsed = time.time() - start
     logger.info(
         "DONE: %d frames processed, %d detections in %.0fs",
-        frames_processed, len(detections), elapsed,
+        frames_processed,
+        len(detections),
+        elapsed,
     )
 
     return detections
@@ -230,15 +239,21 @@ def main():
         description="Detect moving ball using frame differencing"
     )
     parser.add_argument(
-        "--video", type=Path, required=True,
+        "--video",
+        type=Path,
+        required=True,
         help="Path to video file",
     )
     parser.add_argument(
-        "--output", type=Path, default=None,
+        "--output",
+        type=Path,
+        default=None,
         help="Output JSON file for detections",
     )
     parser.add_argument(
-        "--frame-interval", type=int, default=8,
+        "--frame-interval",
+        type=int,
+        default=8,
         help="Process every Nth frame",
     )
     args = parser.parse_args()
@@ -255,11 +270,15 @@ def main():
     else:
         # Print summary
         frames_with_dets = len(set(d["frame_idx"] for d in detections))
-        logger.info("Summary: %d detections across %d frames", len(detections), frames_with_dets)
+        logger.info(
+            "Summary: %d detections across %d frames", len(detections), frames_with_dets
+        )
         if detections:
             avg_intensity = sum(d["intensity"] for d in detections) / len(detections)
             avg_area = sum(d["area"] for d in detections) / len(detections)
-            logger.info("  Avg intensity: %.1f, Avg area: %.1f", avg_intensity, avg_area)
+            logger.info(
+                "  Avg intensity: %.1f, Avg area: %.1f", avg_intensity, avg_area
+            )
 
 
 if __name__ == "__main__":

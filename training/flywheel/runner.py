@@ -75,7 +75,9 @@ def print_status(state: dict):
     print(f"Flywheel cycle: {state['cycle']}")
     print(f"Current step: {state['step']} (index {state['step_index']})")
     print(f"Last updated: {state['last_updated']}")
-    print(f"Model: {state['model_path'] or 'none (will use pretrained ' + MODEL_NAME + ')'}")
+    print(
+        f"Model: {state['model_path'] or 'none (will use pretrained ' + MODEL_NAME + ')'}"
+    )
     print(f"Total gaps: {state['total_gaps']} ({state['long_gaps']} long)")
     print(f"Human queue: {state['human_queue_size']} items")
 
@@ -83,7 +85,9 @@ def print_status(state: dict):
         coverages = list(state["per_game_coverage"].values())
         avg = sum(coverages) / len(coverages)
         below_target = sum(1 for c in coverages if c < COVERAGE_TARGET)
-        print(f"Coverage: {avg:.1%} avg, {below_target}/{len(coverages)} games below {COVERAGE_TARGET:.0%}")
+        print(
+            f"Coverage: {avg:.1%} avg, {below_target}/{len(coverages)} games below {COVERAGE_TARGET:.0%}"
+        )
         print("\nPer-game:")
         for game, cov in sorted(state["per_game_coverage"].items()):
             flag = " <--" if cov < COVERAGE_TARGET else ""
@@ -99,13 +103,13 @@ def print_status(state: dict):
 
 
 STEPS = [
-    "coverage",       # Measure current coverage, find gaps
-    "auto_fill",      # Fill short gaps automatically
+    "coverage",  # Measure current coverage, find gaps
+    "auto_fill",  # Fill short gaps automatically
     "sonnet_triage",  # Send long gaps to Sonnet
-    "merge_labels",   # Merge all new labels (auto + Sonnet + human)
+    "merge_labels",  # Merge all new labels (auto + Sonnet + human)
     "build_dataset",  # Rebuild YOLO dataset from merged labels
-    "train",          # Train model (resume from checkpoint)
-    "evaluate",       # Evaluate new model, measure improvement
+    "train",  # Train model (resume from checkpoint)
+    "evaluate",  # Evaluate new model, measure improvement
 ]
 
 
@@ -123,7 +127,9 @@ def step_coverage(state: dict) -> dict:
     results = measure_all_games(labels_dir)
 
     # Update state
-    state["per_game_coverage"] = {r["game_id"]: r["coverage"] for r in results if not r.get("error")}
+    state["per_game_coverage"] = {
+        r["game_id"]: r["coverage"] for r in results if not r.get("error")
+    }
     state["total_gaps"] = sum(r.get("gap_count", 0) for r in results)
     state["long_gaps"] = sum(r.get("long_gaps", 0) for r in results)
 
@@ -155,7 +161,11 @@ def step_auto_fill(state: dict) -> dict:
 
     short_gaps = [g for g in all_gaps if g["gap_frames"] <= 50]
     long_gaps = [g for g in all_gaps if g["gap_frames"] > 50]
-    logger.info("%d short gaps to auto-fill, %d long gaps for Sonnet/human", len(short_gaps), len(long_gaps))
+    logger.info(
+        "%d short gaps to auto-fill, %d long gaps for Sonnet/human",
+        len(short_gaps),
+        len(long_gaps),
+    )
 
     if not short_gaps:
         logger.info("No short gaps to fill")
@@ -163,6 +173,7 @@ def step_auto_fill(state: dict) -> dict:
 
     # Group gaps by game+segment for efficient processing
     from collections import defaultdict
+
     seg_gaps: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for gap in short_gaps:
         seg_gaps[(gap["game_id"], gap["segment"])].append(gap)
@@ -198,7 +209,9 @@ def step_auto_fill(state: dict) -> dict:
                     "displacement": gap["displacement"],
                 }
 
-                label_file = PENDING_LABELS_DIR / f"{game_id}_{segment}_{interp_fi:06d}.json"
+                label_file = (
+                    PENDING_LABELS_DIR / f"{game_id}_{segment}_{interp_fi:06d}.json"
+                )
                 with open(label_file, "w") as f:
                     json.dump(label, f)
                 filled += 1
@@ -231,10 +244,12 @@ def step_sonnet_triage(state: dict) -> dict:
         json.dump(long_gaps, f, indent=2)
     state["human_queue_size"] = len(long_gaps)
 
-    logger.info("Queued %d gaps for review (priority range: %.1f - %.1f)",
-                len(long_gaps),
-                long_gaps[-1]["priority"] if long_gaps else 0,
-                long_gaps[0]["priority"] if long_gaps else 0)
+    logger.info(
+        "Queued %d gaps for review (priority range: %.1f - %.1f)",
+        len(long_gaps),
+        long_gaps[-1]["priority"] if long_gaps else 0,
+        long_gaps[0]["priority"] if long_gaps else 0,
+    )
     return state
 
 
@@ -270,7 +285,10 @@ def step_merge_labels(state: dict) -> dict:
                     tile_x_end = tile_x_start + TILE_SIZE
                     tile_y_end = tile_y_start + TILE_SIZE
 
-                    if tile_x_start <= pano_x < tile_x_end and tile_y_start <= pano_y < tile_y_end:
+                    if (
+                        tile_x_start <= pano_x < tile_x_end
+                        and tile_y_start <= pano_y < tile_y_end
+                    ):
                         # Convert to normalized tile coords
                         cx_norm = (pano_x - tile_x_start) / TILE_SIZE
                         cy_norm = (pano_y - tile_y_start) / TILE_SIZE
@@ -286,7 +304,9 @@ def step_merge_labels(state: dict) -> dict:
 
                         # Append if exists (don't overwrite existing detections)
                         with open(label_path, "a") as lf:
-                            lf.write(f"0 {cx_norm:.6f} {cy_norm:.6f} {w_norm:.6f} {h_norm:.6f}\n")
+                            lf.write(
+                                f"0 {cx_norm:.6f} {cy_norm:.6f} {w_norm:.6f} {h_norm:.6f}\n"
+                            )
                         merged += 1
 
     # Clean up processed pending labels
@@ -368,23 +388,25 @@ def step_train(state: dict) -> dict:
     if model_path and Path(model_path).exists():
         # Resume from previous cycle's best weights
         cmd = [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             f"from ultralytics import YOLO; "
             f"model = YOLO('{model_path}'); "
             f"model.train(data='{yaml_path}', epochs={TRAIN_EPOCHS}, "
             f"imgsz=640, batch=8, workers=0, device=0, "
             f"project='{RUNS_DIR}', name='{run_name}', "
-            f"resume=False, pretrained=True)"
+            f"resume=False, pretrained=True)",
         ]
     else:
         # First cycle: start from pretrained YOLO26
         cmd = [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             f"from ultralytics import YOLO; "
             f"model = YOLO('{MODEL_NAME}'); "
             f"model.train(data='{yaml_path}', epochs={TRAIN_EPOCHS}, "
             f"imgsz=640, batch=8, workers=0, device=0, "
-            f"project='{RUNS_DIR}', name='{run_name}')"
+            f"project='{RUNS_DIR}', name='{run_name}')",
         ]
 
     logger.info("Running: %s", run_name)
@@ -415,24 +437,31 @@ def step_evaluate(state: dict) -> dict:
     """Step 7: Evaluate model and record improvement."""
     logger.info("=== EVALUATE: Measuring improvement ===")
 
-    avg_coverage = sum(state["per_game_coverage"].values()) / max(len(state["per_game_coverage"]), 1)
+    avg_coverage = sum(state["per_game_coverage"].values()) / max(
+        len(state["per_game_coverage"]), 1
+    )
 
-    state["history"].append({
-        "cycle": state["cycle"],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "coverage": avg_coverage,
-        "total_gaps": state["total_gaps"],
-        "long_gaps": state["long_gaps"],
-        "human_queue_size": state["human_queue_size"],
-        "model_path": state["model_path"],
-        "auto_filled": state.get("auto_filled", 0),
-        "merged_labels": state.get("merged_labels", 0),
-    })
+    state["history"].append(
+        {
+            "cycle": state["cycle"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "coverage": avg_coverage,
+            "total_gaps": state["total_gaps"],
+            "long_gaps": state["long_gaps"],
+            "human_queue_size": state["human_queue_size"],
+            "model_path": state["model_path"],
+            "auto_filled": state.get("auto_filled", 0),
+            "merged_labels": state.get("merged_labels", 0),
+        }
+    )
 
     logger.info(
         "Cycle %d complete: %.1f%% coverage, %d gaps (%d long), %d in human queue",
-        state["cycle"], avg_coverage * 100,
-        state["total_gaps"], state["long_gaps"], state["human_queue_size"],
+        state["cycle"],
+        avg_coverage * 100,
+        state["total_gaps"],
+        state["long_gaps"],
+        state["human_queue_size"],
     )
 
     if state.get("model_path"):
@@ -488,22 +517,38 @@ def run_loop(state: dict, max_cycles: int = 10):
         state = run_cycle(state)
         save_state(state)
 
-        avg_coverage = sum(state["per_game_coverage"].values()) / max(len(state["per_game_coverage"]), 1)
+        avg_coverage = sum(state["per_game_coverage"].values()) / max(
+            len(state["per_game_coverage"]), 1
+        )
         if avg_coverage >= COVERAGE_TARGET:
-            logger.info("Target reached: %.1f%% >= %.0f%%", avg_coverage * 100, COVERAGE_TARGET * 100)
+            logger.info(
+                "Target reached: %.1f%% >= %.0f%%",
+                avg_coverage * 100,
+                COVERAGE_TARGET * 100,
+            )
             break
 
         state["step_index"] = 0
-        logger.info("Coverage %.1f%% < %.0f%% — starting next cycle", avg_coverage * 100, COVERAGE_TARGET * 100)
+        logger.info(
+            "Coverage %.1f%% < %.0f%% — starting next cycle",
+            avg_coverage * 100,
+            COVERAGE_TARGET * 100,
+        )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Flywheel: continuous label improvement")
+    parser = argparse.ArgumentParser(
+        description="Flywheel: continuous label improvement"
+    )
     parser.add_argument("--status", action="store_true", help="Show current state")
     parser.add_argument("--step", choices=STEPS, help="Run a single step")
     parser.add_argument("--cycle", action="store_true", help="Run one full cycle")
-    parser.add_argument("--loop", action="store_true", help="Run cycles until target coverage")
-    parser.add_argument("--max-cycles", type=int, default=10, help="Max cycles for --loop")
+    parser.add_argument(
+        "--loop", action="store_true", help="Run cycles until target coverage"
+    )
+    parser.add_argument(
+        "--max-cycles", type=int, default=10, help="Max cycles for --loop"
+    )
     args = parser.parse_args()
 
     state = load_state()

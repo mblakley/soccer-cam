@@ -113,6 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_tiles_game ON tiles(game_id);
 # Connection helpers
 # ---------------------------------------------------------------------------
 
+
 def _ensure_schema_v2(conn: sqlite3.Connection) -> None:
     """Add segments/frames/tiles tables and new columns if missing.
 
@@ -134,7 +135,9 @@ def _ensure_schema_v2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def open_db(db_path: Path = DEFAULT_DB_PATH, *, create: bool = False) -> sqlite3.Connection:
+def open_db(
+    db_path: Path = DEFAULT_DB_PATH, *, create: bool = False
+) -> sqlite3.Connection:
     """Open manifest database. Creates/upgrades schema as needed."""
     if not create and not db_path.exists():
         raise FileNotFoundError(f"Manifest database not found: {db_path}")
@@ -160,6 +163,7 @@ def reset_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 # CRUD — labels
 # ---------------------------------------------------------------------------
+
 
 def upsert_label(
     conn: sqlite3.Connection,
@@ -246,6 +250,7 @@ def delete_labels_for_game(conn: sqlite3.Connection, game_id: str) -> int:
 # CRUD — games
 # ---------------------------------------------------------------------------
 
+
 def upsert_game(
     conn: sqlite3.Connection,
     game_id: str,
@@ -277,9 +282,7 @@ def get_game(conn: sqlite3.Connection, game_id: str) -> dict | None:
 def list_games(conn: sqlite3.Connection) -> list[dict]:
     """Return all games with their metadata."""
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM games ORDER BY game_id"
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM games ORDER BY game_id").fetchall()
     conn.row_factory = None
     return [dict(r) for r in rows]
 
@@ -287,6 +290,7 @@ def list_games(conn: sqlite3.Connection) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Tile catalog — census of every .jpg tile on disk
 # ---------------------------------------------------------------------------
+
 
 def is_game_cataloged(conn: sqlite3.Connection, game_id: str) -> bool:
     """Check if a game's tiles have been cataloged into the manifest."""
@@ -323,6 +327,7 @@ def catalog_game_tiles(
     # Parse filenames and collect tile rows
     # seg_frames: segment -> frame_idx -> set of (row, col)
     from collections import defaultdict
+
     seg_frames: dict[str, dict[int, set[tuple[int, int]]]] = defaultdict(
         lambda: defaultdict(set)
     )
@@ -499,7 +504,8 @@ def catalog_all_games(
 ) -> None:
     """Catalog tiles for all game directories found in tiles_dir."""
     game_dirs = sorted(
-        d.name for d in tiles_dir.iterdir()
+        d.name
+        for d in tiles_dir.iterdir()
         if d.is_dir() and (games is None or d.name in games)
     )
     logger.info("Cataloging %d games from %s", len(game_dirs), tiles_dir)
@@ -579,6 +585,7 @@ def pack_segment(
     # Read files concurrently with a thread pool for better HDD scheduling,
     # but write sequentially to maintain deterministic pack order.
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
     READAHEAD = 32  # number of concurrent file reads
 
     def _read_file(item):
@@ -588,11 +595,13 @@ def pack_segment(
     with open(pack_path, "wb") as pf:
         # Process in batches to keep memory bounded
         for batch_start in range(0, len(file_list), READAHEAD * 4):
-            batch = file_list[batch_start:batch_start + READAHEAD * 4]
+            batch = file_list[batch_start : batch_start + READAHEAD * 4]
             # Read batch concurrently
             results = {}
             with ThreadPoolExecutor(max_workers=READAHEAD) as pool:
-                futures = {pool.submit(_read_file, item): i for i, item in enumerate(batch)}
+                futures = {
+                    pool.submit(_read_file, item): i for i, item in enumerate(batch)
+                }
                 for future in as_completed(futures):
                     idx = futures[future]
                     results[idx] = future.result()
@@ -604,7 +613,9 @@ def pack_segment(
                 size = len(data)
                 source_sizes_sum += size
                 source_paths.append(src)
-                updates.append((pack_path_str, offset, size, game_id, segment, fidx, r, c))
+                updates.append(
+                    (pack_path_str, offset, size, game_id, segment, fidx, r, c)
+                )
                 offset += size
 
     # Verify pack file size matches sum of source files
@@ -654,14 +665,18 @@ def pack_game(
     """
     segments = get_segments_for_game(conn, game_id)
     total = {
-        "tiles_packed": 0, "pack_size": 0, "loose_deleted": 0,
-        "elapsed": 0.0, "segments": 0,
+        "tiles_packed": 0,
+        "pack_size": 0,
+        "loose_deleted": 0,
+        "elapsed": 0.0,
+        "segments": 0,
     }
 
     source_dir = None
     if ssd_staging:
         import shutil
         import subprocess
+
         ssd_game_dir = ssd_staging / game_id
         hdd_game_dir = tiles_dir / game_id
         if hdd_game_dir.exists():
@@ -669,19 +684,41 @@ def pack_game(
             t_stage = time.time()
             # robocopy is fastest for bulk file copy on Windows
             result = subprocess.run(
-                ["robocopy", str(hdd_game_dir), str(ssd_game_dir),
-                 "*.jpg", "/E", "/J", "/MT:4", "/R:1", "/W:1", "/NP", "/NFL", "/NDL"],
-                capture_output=True, text=True,
+                [
+                    "robocopy",
+                    str(hdd_game_dir),
+                    str(ssd_game_dir),
+                    "*.jpg",
+                    "/E",
+                    "/J",
+                    "/MT:4",
+                    "/R:1",
+                    "/W:1",
+                    "/NP",
+                    "/NFL",
+                    "/NDL",
+                ],
+                capture_output=True,
+                text=True,
             )
             stage_elapsed = time.time() - t_stage
-            n_files = sum(1 for _ in ssd_game_dir.glob("*.jpg")) if ssd_game_dir.exists() else 0
+            n_files = (
+                sum(1 for _ in ssd_game_dir.glob("*.jpg"))
+                if ssd_game_dir.exists()
+                else 0
+            )
             logger.info("    Staged %d files to SSD in %.0fs", n_files, stage_elapsed)
             source_dir = ssd_game_dir
 
     for segment in segments:
         stats = pack_segment(
-            conn, game_id, segment, tiles_dir, pack_dir,
-            delete_loose=delete_loose, source_override=source_dir,
+            conn,
+            game_id,
+            segment,
+            tiles_dir,
+            pack_dir,
+            delete_loose=delete_loose,
+            source_override=source_dir,
         )
         total["tiles_packed"] += stats["tiles_packed"]
         total["pack_size"] += stats["pack_size"]
@@ -691,13 +728,17 @@ def pack_game(
         deleted_info = f", {stats['loose_deleted']} deleted" if delete_loose else ""
         logger.info(
             "    %s: %d tiles, %.1fMB (%.1fs)%s",
-            segment, stats["tiles_packed"],
-            stats["pack_size"] / 1024 / 1024, stats["elapsed"], deleted_info,
+            segment,
+            stats["tiles_packed"],
+            stats["pack_size"] / 1024 / 1024,
+            stats["elapsed"],
+            deleted_info,
         )
 
     # Clean up SSD staging
     if source_dir and source_dir.exists():
         import shutil
+
         shutil.rmtree(source_dir, ignore_errors=True)
         logger.info("    Cleaned SSD staging for %s", game_id)
 
@@ -724,8 +765,13 @@ def pack_all_games(
     if games:
         game_ids = [g for g in game_ids if g in games]
 
-    logger.info("Packing %d games into %s (delete_loose=%s, ssd=%s)",
-                len(game_ids), pack_dir, delete_loose, ssd_staging)
+    logger.info(
+        "Packing %d games into %s (delete_loose=%s, ssd=%s)",
+        len(game_ids),
+        pack_dir,
+        delete_loose,
+        ssd_staging,
+    )
 
     for game_id in game_ids:
         # Check if already packed
@@ -739,13 +785,20 @@ def pack_all_games(
 
         logger.info("  %s: packing...", game_id)
         stats = pack_game(
-            conn, game_id, tiles_dir, pack_dir,
-            delete_loose=delete_loose, ssd_staging=ssd_staging,
+            conn,
+            game_id,
+            tiles_dir,
+            pack_dir,
+            delete_loose=delete_loose,
+            ssd_staging=ssd_staging,
         )
         logger.info(
             "  %s: %d segments, %d tiles, %.1fMB (%.1fs)",
-            game_id, stats["segments"], stats["tiles_packed"],
-            stats["pack_size"] / 1024 / 1024, stats["elapsed"],
+            game_id,
+            stats["segments"],
+            stats["tiles_packed"],
+            stats["pack_size"] / 1024 / 1024,
+            stats["elapsed"],
         )
 
 
@@ -846,6 +899,7 @@ def read_tiles_batch(
 # CRUD — query helpers for dataset building
 # ---------------------------------------------------------------------------
 
+
 def generate_train_list(
     conn: sqlite3.Connection,
     game_ids: list[str] | None = None,
@@ -888,7 +942,9 @@ def export_labels_to_txt(
         by_stem.setdefault(tile_stem, []).append((class_id, cx, cy, w, h))
 
     for tile_stem, detections in by_stem.items():
-        lines = [f"{c} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}" for c, cx, cy, w, h in detections]
+        lines = [
+            f"{c} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}" for c, cx, cy, w, h in detections
+        ]
         (out_dir / f"{tile_stem}.txt").write_text("\n".join(lines) + "\n")
 
     return len(by_stem)
@@ -897,6 +953,7 @@ def export_labels_to_txt(
 # ---------------------------------------------------------------------------
 # Migration — ingest existing .txt label files
 # ---------------------------------------------------------------------------
+
 
 def _parse_label_file(path: Path) -> list[tuple[int, float, float, float, float]]:
     """Parse a YOLO .txt label file into list of (class_id, cx, cy, w, h)."""
@@ -907,13 +964,15 @@ def _parse_label_file(path: Path) -> list[tuple[int, float, float, float, float]
     for line in content.splitlines():
         parts = line.split()
         if len(parts) >= 5:
-            detections.append((
-                int(parts[0]),
-                float(parts[1]),
-                float(parts[2]),
-                float(parts[3]),
-                float(parts[4]),
-            ))
+            detections.append(
+                (
+                    int(parts[0]),
+                    float(parts[1]),
+                    float(parts[2]),
+                    float(parts[3]),
+                    float(parts[4]),
+                )
+            )
     return detections
 
 
@@ -931,7 +990,12 @@ def migrate_game(
     game_dir = labels_dir / game_id
     if not game_dir.is_dir():
         logger.warning("Label directory not found: %s", game_dir)
-        return {"total_files": 0, "positive_files": 0, "labels_inserted": 0, "skipped": 0}
+        return {
+            "total_files": 0,
+            "positive_files": 0,
+            "labels_inserted": 0,
+            "skipped": 0,
+        }
 
     stats = {"total_files": 0, "positive_files": 0, "labels_inserted": 0, "skipped": 0}
     batch = []
@@ -984,7 +1048,8 @@ def migrate_all(
 
     # Discover games
     game_dirs = sorted(
-        d.name for d in labels_dir.iterdir()
+        d.name
+        for d in labels_dir.iterdir()
         if d.is_dir() and (games is None or d.name in games)
     )
     logger.info("Migrating %d games from %s", len(game_dirs), labels_dir)
@@ -997,7 +1062,11 @@ def migrate_all(
         if not rebuild:
             existing = get_game(conn, game_id)
             if existing and existing["labeled_count"] and existing["labeled_count"] > 0:
-                logger.info("Skipping %s (already migrated: %d labeled)", game_id, existing["labeled_count"])
+                logger.info(
+                    "Skipping %s (already migrated: %d labeled)",
+                    game_id,
+                    existing["labeled_count"],
+                )
                 continue
 
         t0 = time.time()
@@ -1037,8 +1106,20 @@ _TILE_POS_RE = re.compile(r"_r(\d+)_c(\d+)$")
 
 DEFAULT_EXCLUDE_ROWS = {0}
 DEFAULT_TILE_WEIGHTS = {
-    (1, 0): 3, (1, 1): 2, (1, 2): 2, (1, 3): 2, (1, 4): 2, (1, 5): 2, (1, 6): 3,
-    (2, 0): 1, (2, 1): 2, (2, 2): 2, (2, 3): 2, (2, 4): 2, (2, 5): 2, (2, 6): 1,
+    (1, 0): 3,
+    (1, 1): 2,
+    (1, 2): 2,
+    (1, 3): 2,
+    (1, 4): 2,
+    (1, 5): 2,
+    (1, 6): 3,
+    (2, 0): 1,
+    (2, 1): 2,
+    (2, 2): 2,
+    (2, 3): 2,
+    (2, 4): 2,
+    (2, 5): 2,
+    (2, 6): 1,
 }
 DEFAULT_VAL_SPLIT = 0.15
 DEFAULT_NEG_RATIO = 1.0
@@ -1193,7 +1274,9 @@ def build_dataset(
     scan_time = time.time() - t0
     logger.info(
         "Collected %d tiles in %.1fs (%d excluded, mode=%s)",
-        total_tiles, scan_time, total_excluded,
+        total_tiles,
+        scan_time,
+        total_excluded,
         "positives-only" if not include_negatives else "full-scan",
     )
 
@@ -1225,9 +1308,12 @@ def build_dataset(
         (output_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
     stats = {
-        "train_images": 0, "val_images": 0,
-        "train_labeled": 0, "val_labeled": 0,
-        "train_hard_neg": 0, "train_random_neg": 0,
+        "train_images": 0,
+        "val_images": 0,
+        "train_labeled": 0,
+        "val_labeled": 0,
+        "train_hard_neg": 0,
+        "train_random_neg": 0,
     }
 
     # --- Link tiles and write labels ---
@@ -1248,7 +1334,9 @@ def build_dataset(
             labels_for_game = get_labels_for_game(conn, gid)
             labels_by_stem: dict[str, list[tuple[int, float, float, float, float]]] = {}
             for tile_stem, class_id, cx, cy, w, h in labels_for_game:
-                labels_by_stem.setdefault(tile_stem, []).append((class_id, cx, cy, w, h))
+                labels_by_stem.setdefault(tile_stem, []).append(
+                    (class_id, cx, cy, w, h)
+                )
 
             for tile_path, stem, has_label in game_tiles[gid]:
                 dst_img = img_dir / f"{stem}.jpg"
@@ -1306,7 +1394,8 @@ def build_dataset(
     remaining = target_negatives - len(hard_negs)
     if remaining > 0:
         random_pool = [
-            k for k in all_train_stems
+            k
+            for k in all_train_stems
             if k not in train_positive_stems and k not in hard_negs
         ]
         n_random = min(remaining, len(random_pool))
@@ -1362,16 +1451,22 @@ def build_dataset(
         "  Val: %d positive, %d negative = %d entries\n"
         "  Dataset: %s",
         sample_time,
-        stats["train_labeled"], stats["train_hard_neg"], stats.get("train_random_neg", 0),
+        stats["train_labeled"],
+        stats["train_hard_neg"],
+        stats.get("train_random_neg", 0),
         len(train_paths),
-        len(val_positives), n_val_neg, len(val_paths),
+        len(val_positives),
+        n_val_neg,
+        len(val_paths),
         output_dir / "dataset.yaml",
     )
 
     logger.info(
         "Dataset built: train=%d images (%d labeled), val=%d images (%d labeled)",
-        stats["train_images"], stats["train_labeled"],
-        stats["val_images"], stats["val_labeled"],
+        stats["train_images"],
+        stats["train_labeled"],
+        stats["val_images"],
+        stats["val_labeled"],
     )
     return stats
 
@@ -1379,6 +1474,7 @@ def build_dataset(
 # ---------------------------------------------------------------------------
 # Backup and merge
 # ---------------------------------------------------------------------------
+
 
 def backup_db(db_path: Path = DEFAULT_DB_PATH) -> Path:
     """Create a timestamped backup of the manifest database.
@@ -1393,7 +1489,11 @@ def backup_db(db_path: Path = DEFAULT_DB_PATH) -> Path:
     src.backup(dst)
     dst.close()
     src.close()
-    logger.info("Backup created: %s (%.1fMB)", backup_path, backup_path.stat().st_size / 1024 / 1024)
+    logger.info(
+        "Backup created: %s (%.1fMB)",
+        backup_path,
+        backup_path.stat().st_size / 1024 / 1024,
+    )
     return backup_path
 
 
@@ -1421,7 +1521,9 @@ def merge_labels_from(
     remote_games = remote.execute("SELECT DISTINCT game_id FROM labels").fetchall()
     games_merged = 0
     for (gid,) in remote_games:
-        existing = conn.execute("SELECT 1 FROM games WHERE game_id = ?", (gid,)).fetchone()
+        existing = conn.execute(
+            "SELECT 1 FROM games WHERE game_id = ?", (gid,)
+        ).fetchone()
         if not existing:
             conn.execute(
                 "INSERT INTO games (game_id, last_updated) VALUES (?, ?)",
@@ -1457,14 +1559,22 @@ def merge_labels_from(
     skipped = len(remote_labels) - inserted
     logger.info(
         "Merged from %s: %d labels inserted, %d skipped (duplicates), %d new games",
-        remote_db_path, inserted, skipped, games_merged,
+        remote_db_path,
+        inserted,
+        skipped,
+        games_merged,
     )
-    return {"games_merged": games_merged, "labels_inserted": inserted, "labels_skipped": skipped}
+    return {
+        "games_merged": games_merged,
+        "labels_inserted": inserted,
+        "labels_skipped": skipped,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
+
 
 def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
     """Print summary statistics from the manifest."""
@@ -1472,7 +1582,9 @@ def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
 
     total_labels = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
     total_games = conn.execute("SELECT COUNT(*) FROM games").fetchone()[0]
-    distinct_stems = conn.execute("SELECT COUNT(DISTINCT tile_stem) FROM labels").fetchone()[0]
+    distinct_stems = conn.execute(
+        "SELECT COUNT(DISTINCT tile_stem) FROM labels"
+    ).fetchone()[0]
     total_tiles_cat = conn.execute("SELECT COUNT(*) FROM tiles").fetchone()[0]
     total_frames_cat = conn.execute("SELECT COUNT(*) FROM frames").fetchone()[0]
     total_segments_cat = conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
@@ -1493,7 +1605,7 @@ def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
     games = list_games(conn)
     if games:
         print(f"  {'Game':<50} {'Segs':>5} {'Tiles':>10} {'Packed':>8} {'Labels':>8}")
-        print(f"  {'-'*50} {'-'*5} {'-'*10} {'-'*8} {'-'*8}")
+        print(f"  {'-' * 50} {'-' * 5} {'-' * 10} {'-' * 8} {'-' * 8}")
         for g in games:
             gid = g["game_id"]
             seg_count = conn.execute(
@@ -1522,10 +1634,14 @@ def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="SQLite manifest for YOLO labels")
     parser.add_argument(
-        "--db", type=Path, default=DEFAULT_DB_PATH, help="Database path (default: %(default)s)"
+        "--db",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help="Database path (default: %(default)s)",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -1537,7 +1653,9 @@ def main():
     mig.add_argument(
         "--tiles", type=Path, default=DEFAULT_TILES_DIR, help="Tiles directory"
     )
-    mig.add_argument("--rebuild", action="store_true", help="Drop and rebuild from scratch")
+    mig.add_argument(
+        "--rebuild", action="store_true", help="Drop and rebuild from scratch"
+    )
     mig.add_argument("--games", nargs="+", help="Only migrate specific games")
 
     # build-dataset
@@ -1552,9 +1670,15 @@ def main():
     bld.add_argument("--neg-ratio", type=float, default=DEFAULT_NEG_RATIO)
     bld.add_argument("--seed", type=int, default=42)
     bld.add_argument("--games", nargs="+", help="Only include these games")
-    bld.add_argument("--no-negatives", action="store_true", help="Exclude unlabeled tiles")
-    bld.add_argument("--no-weights", action="store_true", help="Disable spatial weighting")
-    bld.add_argument("--no-exclude", action="store_true", help="Don't exclude any tile rows")
+    bld.add_argument(
+        "--no-negatives", action="store_true", help="Exclude unlabeled tiles"
+    )
+    bld.add_argument(
+        "--no-weights", action="store_true", help="Disable spatial weighting"
+    )
+    bld.add_argument(
+        "--no-exclude", action="store_true", help="Don't exclude any tile rows"
+    )
 
     # catalog
     cat = sub.add_parser("catalog", help="Catalog tiles from disk into manifest")
@@ -1574,20 +1698,27 @@ def main():
     )
     pak.add_argument("--games", nargs="+", help="Only pack specific games")
     pak.add_argument(
-        "--delete-loose", action="store_true",
+        "--delete-loose",
+        action="store_true",
         help="Delete loose .jpg files after packing each segment (saves disk space)",
     )
     pak.add_argument(
-        "--ssd", type=Path, default=None,
+        "--ssd",
+        type=Path,
+        default=None,
         help="SSD staging directory — copies tiles here before packing for faster reads",
     )
 
     # backup
-    sub.add_parser("backup", help="Create a timestamped backup of the manifest database")
+    sub.add_parser(
+        "backup", help="Create a timestamped backup of the manifest database"
+    )
 
     # merge
     mrg = sub.add_parser("merge", help="Merge labels from a remote manifest.db")
-    mrg.add_argument("remote_db", type=Path, help="Path to remote manifest.db to merge from")
+    mrg.add_argument(
+        "remote_db", type=Path, help="Path to remote manifest.db to merge from"
+    )
 
     # stats
     sub.add_parser("stats", help="Show manifest statistics")
@@ -1615,13 +1746,18 @@ def main():
         )
     elif args.command == "catalog":
         conn = open_db(args.db, create=True)
-        catalog_all_games(conn, tiles_dir=args.tiles, rescan=args.rescan, games=args.games)
+        catalog_all_games(
+            conn, tiles_dir=args.tiles, rescan=args.rescan, games=args.games
+        )
         conn.close()
     elif args.command == "pack":
         conn = open_db(args.db)
         pack_all_games(
-            conn, tiles_dir=args.tiles, pack_dir=args.pack_dir,
-            games=args.games, delete_loose=args.delete_loose,
+            conn,
+            tiles_dir=args.tiles,
+            pack_dir=args.pack_dir,
+            games=args.games,
+            delete_loose=args.delete_loose,
             ssd_staging=args.ssd,
         )
         conn.close()
@@ -1647,8 +1783,10 @@ def main():
         conn = open_db(args.db)
         result = merge_labels_from(conn, args.remote_db)
         conn.close()
-        print(f"Merged: {result['labels_inserted']} labels inserted, "
-              f"{result['labels_skipped']} skipped, {result['games_merged']} new games")
+        print(
+            f"Merged: {result['labels_inserted']} labels inserted, "
+            f"{result['labels_skipped']} skipped, {result['games_merged']} new games"
+        )
     elif args.command == "stats":
         print_stats(args.db)
     elif args.command == "export":
