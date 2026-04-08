@@ -40,7 +40,13 @@ def main():
     if args.project is None:
         args.project = args.data.parent / "runs"
 
-    from training.data_prep.manifest_dataset import ManifestTrainer
+    # Try project import, fall back to local (standalone laptop deploy)
+    try:
+        from training.data_prep.manifest_dataset import ManifestTrainer
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).parent))
+        sys.path.insert(0, ".")
+        from manifest_dataset import ManifestTrainer
     from ultralytics import YOLO
 
     model_path = str(args.resume) if args.resume else args.model
