@@ -537,19 +537,21 @@ def pack_segment(
     tiles_dir: Path = DEFAULT_TILES_DIR,
     pack_dir: Path = DEFAULT_PACK_DIR,
     delete_loose: bool = False,
+    source_override: Path | None = None,
 ) -> dict:
     """Pack all tiles for one segment into a single .pack file.
 
-    Reads loose JPEGs from tiles_dir, concatenates them into
-    {pack_dir}/{game_id}/{segment}.pack, and updates the tiles table
-    with (pack_file, pack_offset, pack_size) for each tile.
+    Reads loose JPEGs from tiles_dir (or source_override if provided),
+    concatenates them into {pack_dir}/{game_id}/{segment}.pack, and updates
+    the tiles table with (pack_file, pack_offset, pack_size) for each tile.
 
-    If delete_loose=True, removes loose .jpg files after verifying the pack.
+    If delete_loose=True, removes loose .jpg files from tiles_dir (the
+    original location, not source_override).
 
     Returns: {tiles_packed, pack_size, loose_deleted, elapsed}
     """
     t0 = time.time()
-    game_tile_dir = tiles_dir / game_id
+    game_tile_dir = source_override if source_override else (tiles_dir / game_id)
     out_dir = pack_dir / game_id
     out_dir.mkdir(parents=True, exist_ok=True)
     pack_path = out_dir / f"{segment}.pack"
@@ -617,17 +619,43 @@ def pack_game(
     tiles_dir: Path = DEFAULT_TILES_DIR,
     pack_dir: Path = DEFAULT_PACK_DIR,
     delete_loose: bool = False,
+    ssd_staging: Path | None = None,
 ) -> dict:
-    """Pack all segments for a game. Returns aggregate stats."""
+    """Pack all segments for a game. Returns aggregate stats.
+
+    If ssd_staging is provided, copies tiles to SSD first for faster reads,
+    packs from there, then cleans up the SSD copy.
+    """
     segments = get_segments_for_game(conn, game_id)
     total = {
         "tiles_packed": 0, "pack_size": 0, "loose_deleted": 0,
         "elapsed": 0.0, "segments": 0,
     }
 
+    source_dir = None
+    if ssd_staging:
+        import shutil
+        import subprocess
+        ssd_game_dir = ssd_staging / game_id
+        hdd_game_dir = tiles_dir / game_id
+        if hdd_game_dir.exists():
+            logger.info("    Staging %s to SSD (%s)...", game_id, ssd_staging)
+            t_stage = time.time()
+            # robocopy is fastest for bulk file copy on Windows
+            result = subprocess.run(
+                ["robocopy", str(hdd_game_dir), str(ssd_game_dir),
+                 "*.jpg", "/E", "/J", "/MT:4", "/R:1", "/W:1", "/NP", "/NFL", "/NDL"],
+                capture_output=True, text=True,
+            )
+            stage_elapsed = time.time() - t_stage
+            n_files = sum(1 for _ in ssd_game_dir.glob("*.jpg")) if ssd_game_dir.exists() else 0
+            logger.info("    Staged %d files to SSD in %.0fs", n_files, stage_elapsed)
+            source_dir = ssd_game_dir
+
     for segment in segments:
         stats = pack_segment(
-            conn, game_id, segment, tiles_dir, pack_dir, delete_loose=delete_loose
+            conn, game_id, segment, tiles_dir, pack_dir,
+            delete_loose=delete_loose, source_override=source_dir,
         )
         total["tiles_packed"] += stats["tiles_packed"]
         total["pack_size"] += stats["pack_size"]
@@ -641,6 +669,12 @@ def pack_game(
             stats["pack_size"] / 1024 / 1024, stats["elapsed"], deleted_info,
         )
 
+    # Clean up SSD staging
+    if source_dir and source_dir.exists():
+        import shutil
+        shutil.rmtree(source_dir, ignore_errors=True)
+        logger.info("    Cleaned SSD staging for %s", game_id)
+
     return total
 
 
@@ -650,11 +684,12 @@ def pack_all_games(
     pack_dir: Path = DEFAULT_PACK_DIR,
     games: list[str] | None = None,
     delete_loose: bool = False,
+    ssd_staging: Path | None = None,
 ) -> None:
     """Pack all cataloged games into segment pack files.
 
     If delete_loose=True, removes loose .jpg files after packing each segment.
-    This keeps peak additional disk usage to ~one segment size.
+    If ssd_staging is set, copies tiles to SSD before packing for faster reads.
     """
     game_rows = conn.execute(
         "SELECT DISTINCT game_id FROM segments ORDER BY game_id"
@@ -663,7 +698,8 @@ def pack_all_games(
     if games:
         game_ids = [g for g in game_ids if g in games]
 
-    logger.info("Packing %d games into %s (delete_loose=%s)", len(game_ids), pack_dir, delete_loose)
+    logger.info("Packing %d games into %s (delete_loose=%s, ssd=%s)",
+                len(game_ids), pack_dir, delete_loose, ssd_staging)
 
     for game_id in game_ids:
         # Check if already packed
@@ -676,7 +712,10 @@ def pack_all_games(
             continue
 
         logger.info("  %s: packing...", game_id)
-        stats = pack_game(conn, game_id, tiles_dir, pack_dir, delete_loose=delete_loose)
+        stats = pack_game(
+            conn, game_id, tiles_dir, pack_dir,
+            delete_loose=delete_loose, ssd_staging=ssd_staging,
+        )
         logger.info(
             "  %s: %d segments, %d tiles, %.1fMB (%.1fs)",
             game_id, stats["segments"], stats["tiles_packed"],
@@ -1512,6 +1551,10 @@ def main():
         "--delete-loose", action="store_true",
         help="Delete loose .jpg files after packing each segment (saves disk space)",
     )
+    pak.add_argument(
+        "--ssd", type=Path, default=None,
+        help="SSD staging directory — copies tiles here before packing for faster reads",
+    )
 
     # backup
     sub.add_parser("backup", help="Create a timestamped backup of the manifest database")
@@ -1553,6 +1596,7 @@ def main():
         pack_all_games(
             conn, tiles_dir=args.tiles, pack_dir=args.pack_dir,
             games=args.games, delete_loose=args.delete_loose,
+            ssd_staging=args.ssd,
         )
         conn.close()
     elif args.command == "build-dataset":
