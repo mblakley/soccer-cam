@@ -341,11 +341,9 @@ def step_build_dataset(state: dict) -> dict:
         f"path: {DATASET_DIR}\n"
         f"train: images/train\n"
         f"val: images/val\n"
-        f"nc: 3\n"
+        f"nc: 1\n"
         f"names:\n"
-        f"  0: game_ball\n"
-        f"  1: static_ball\n"
-        f"  2: not_ball\n"
+        f"  0: ball\n"
     )
     state["dataset_yaml"] = str(yaml_path)
     state["dataset_stats"] = result
