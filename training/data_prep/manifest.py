@@ -579,7 +579,7 @@ def pack_segment(
     # Read files concurrently with a thread pool for better HDD scheduling,
     # but write sequentially to maintain deterministic pack order.
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    READAHEAD = 32  # number of concurrent file reads
+    READAHEAD = 8  # number of concurrent file reads (keep low for HDD)
 
     def _read_file(item):
         src, fidx, r, c = item
