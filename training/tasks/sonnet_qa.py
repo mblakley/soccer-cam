@@ -179,14 +179,18 @@ def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
         pack_name = Path(pack_path_str).name
         src = server_packs / pack_name
         dest = task_io.local_packs / pack_name
-        if not dest.exists() and src.exists():
-            size_gb = src.stat().st_size / (1024**3)
+        src_size = src.stat().st_size if src.exists() else 0
+        if dest.exists() and dest.stat().st_size == src_size:
+            logger.info("Pack %s already on SSD (%.1f GB), skipping copy", pack_name, src_size / (1024**3))
+        elif src.exists():
+            size_gb = src_size / (1024**3)
+            if dest.exists():
+                logger.info("Pack %s on SSD is wrong size, re-copying...", pack_name)
+                dest.unlink()
             logger.info("Copying %s (%.1f GB) to SSD...", pack_name, size_gb)
             shutil.copy2(str(src), str(dest))
             copied += 1
             logger.info("Copied %s (%.1f GB)", pack_name, size_gb)
-        elif dest.exists():
-            logger.info("Pack %s already on SSD, skipping", pack_name)
         else:
             logger.warning("Pack source not found: %s", src)
     logger.info("Pulled %d/%d needed pack files to SSD", copied, len(pack_files))
