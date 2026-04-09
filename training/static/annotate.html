@@ -282,11 +282,11 @@ html, body {
     <button class="nav-tab active" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
     </button>
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
+    </button>
     <button class="nav-tab" onclick="navigateTo('tracking-lab')">
       <span>&#x1F3AF;</span>Lab
-    </button>
-    <button class="nav-tab" onclick="navigateTo('exclusions')">
-      <span>&#x1F6AB;</span>Excluded
     </button>
     <button class="nav-tab" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
@@ -337,8 +337,8 @@ html, body {
     <button class="nav-tab" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
     </button>
-    <button class="nav-tab" onclick="navigateTo('exclusions')">
-      <span>&#x1F6AB;</span>Excluded
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
     </button>
     <button class="nav-tab active" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
@@ -358,6 +358,9 @@ html, body {
   <div class="nav-tabs">
     <button class="nav-tab" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
     </button>
     <button class="nav-tab active" onclick="navigateTo('tracking-lab')">
       <span>&#x1F3AF;</span>Lab
@@ -379,12 +382,69 @@ html, body {
     <button class="nav-tab" onclick="navigateTo('packets')">
       <span>&#x1F4CB;</span>Packets
     </button>
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
+    </button>
     <button class="nav-tab active" onclick="navigateTo('exclusions')">
       <span>&#x1F6AB;</span>Excluded
     </button>
     <button class="nav-tab" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
     </button>
+  </div>
+</div>
+
+<!-- Gap Review List Page -->
+<div id="gap-review-page" class="page">
+  <div class="header">
+    <h1>Gap Review</h1>
+  </div>
+  <div class="content" id="gap-list"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
+    </button>
+    <button class="nav-tab" onclick="navigateTo('tracking-lab')">
+      <span>&#x1F3AF;</span>Lab
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
+<!-- Gap Annotate Page (reviewing individual gaps) -->
+<div id="gap-annotate-page" class="page">
+  <div class="annotate-header">
+    <button class="back-btn" onclick="leaveGapReview()">&larr;</button>
+    <span class="progress-text" id="gap-progress-text">0/0</span>
+    <div class="progress-track"><div class="progress-inner" id="gap-progress-bar"></div></div>
+  </div>
+  <div class="annotate-body">
+    <div class="frame-reason" id="gap-info">Trajectory gap</div>
+    <div style="padding:4px 12px; overflow-x:auto; flex:1; display:flex; align-items:center;">
+      <img id="gap-filmstrip" style="max-height:100%; border-radius:8px;" />
+    </div>
+    <div style="padding:4px 12px; overflow:hidden; display:flex; align-items:center; justify-content:center; max-height:40%;">
+      <canvas id="gap-tile-canvas" style="max-width:100%; max-height:100%; border-radius:8px; touch-action:none;"></canvas>
+    </div>
+    <div class="action-bar">
+      <button class="action-btn btn-confirm" onclick="gapAction('locate')" style="background:var(--green);color:#000;">
+        <span class="icon">&#x1F3AF;</span>Ball Here
+      </button>
+      <button class="action-btn btn-reject" onclick="gapAction('out_of_play')" style="background:var(--red);color:#fff;">
+        <span class="icon">&#x2197;</span>Out
+      </button>
+      <button class="action-btn btn-not-visible" onclick="gapAction('obscured')" style="background:var(--blue);color:#fff;">
+        <span class="icon">&#x1F441;</span>Hidden
+      </button>
+      <button class="action-btn btn-skip" onclick="gapAction('cant_tell')">
+        <span class="icon">&rarr;</span>Skip
+      </button>
+    </div>
   </div>
 </div>
 
@@ -424,6 +484,14 @@ function navigateTo(page, param) {
     document.getElementById('tracking-lab-page').classList.add('active');
     location.hash = '#tracking-lab';
     loadTrackingLab();
+  } else if (page === 'gap-review') {
+    document.getElementById('gap-review-page').classList.add('active');
+    location.hash = '#gap-review';
+    loadGapReviews();
+  } else if (page === 'gap-annotate' && param) {
+    document.getElementById('gap-annotate-page').classList.add('active');
+    location.hash = '#gap-annotate/' + param;
+    startGapReview(param);
   } else if (page === 'stats') {
     document.getElementById('stats-page').classList.add('active');
     location.hash = '#stats';
@@ -446,6 +514,11 @@ function handleHash() {
     navigateTo('exclusions');
   } else if (hash === '#tracking-lab') {
     navigateTo('tracking-lab');
+  } else if (hash === '#gap-review') {
+    navigateTo('gap-review');
+  } else if (hash.startsWith('#gap-annotate/')) {
+    const packetId = hash.replace('#gap-annotate/', '');
+    navigateTo('gap-annotate', packetId);
   } else if (hash === '#stats') {
     navigateTo('stats');
   } else {
@@ -2297,6 +2370,196 @@ async function labSendMessage() {
     showToast('Failed to send message');
   }
 }
+// ========== Gap Review ==========
+let gapPacketId = null;
+let gapManifest = null;
+let gapItems = [];
+let gapReviewedSet = new Set();
+let gapCurrentIndex = 0;
+let gapTapPos = null;  // {x, y} in tile pixel coords (0-640)
+
+async function loadGapReviews() {
+  const container = document.getElementById('gap-list');
+  container.innerHTML = '<div class="loading">Loading gap reviews...</div>';
+  try {
+    const resp = await fetch(API + '/api/gap-reviews');
+    const packets = await resp.json();
+    if (packets.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">&#x26BD;</div><div>No trajectory gaps to review</div><div style="margin-top:12px;font-size:13px">Gaps appear after Sonnet QA runs on games</div></div>';
+      return;
+    }
+    container.innerHTML = packets.map(p => `
+      <div class="packet-card" onclick="navigateTo('gap-annotate', '${p.packet_id}')" style="padding:16px;margin:8px;background:var(--surface);border-radius:12px;cursor:pointer;border:1px solid #333;">
+        <div style="font-weight:600;margin-bottom:4px;">${p.game_id}</div>
+        <div style="font-size:13px;color:#888;">
+          ${p.remaining} gaps remaining / ${p.total_gaps} total
+          ${p.reviewed > 0 ? ' (' + p.reviewed + ' reviewed)' : ''}
+        </div>
+        <div style="margin-top:8px;height:4px;background:#333;border-radius:2px;overflow:hidden;">
+          <div style="height:100%;background:var(--green);width:${Math.round(p.reviewed/Math.max(p.total_gaps,1)*100)}%;border-radius:2px;"></div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = '<div class="empty-state">Error loading gap reviews</div>';
+  }
+}
+
+async function startGapReview(packetId) {
+  gapPacketId = packetId;
+  gapTapPos = null;
+  try {
+    const resp = await fetch(API + `/api/gap-reviews/${packetId}`);
+    gapManifest = await resp.json();
+    gapItems = gapManifest.gap_items || [];
+    gapReviewedSet = new Set();
+    // Mark already-reviewed items
+    const detailResp = await fetch(API + `/api/gap-reviews/${packetId}`);
+    const detail = await detailResp.json();
+    gapCurrentIndex = 0;
+    // Skip to first unreviewed
+    const reviewed = detail.reviewed_count || 0;
+    gapCurrentIndex = reviewed;
+    if (gapCurrentIndex >= gapItems.length) gapCurrentIndex = gapItems.length - 1;
+    updateGapDisplay();
+  } catch (err) {
+    document.getElementById('gap-info').textContent = 'Error loading gap review';
+  }
+}
+
+function updateGapDisplay() {
+  if (!gapItems.length) return;
+  const item = gapItems[gapCurrentIndex];
+  if (!item) return;
+
+  // Progress
+  document.getElementById('gap-progress-text').textContent = `${gapCurrentIndex + 1}/${gapItems.length}`;
+  const pct = Math.round((gapCurrentIndex + 1) / gapItems.length * 100);
+  document.getElementById('gap-progress-bar').style.width = pct + '%';
+
+  // Info
+  const ctx = item.gap_context || {};
+  const gapType = ctx.gap_type || 'unknown';
+  const trajLen = ctx.trajectory_length || '?';
+  document.getElementById('gap-info').textContent =
+    `${gapType === 'track_end' ? 'Ball disappeared' : 'Mid-trajectory gap'} (trajectory: ${trajLen} frames)`;
+
+  // Load filmstrip
+  const filmstrip = document.getElementById('gap-filmstrip');
+  filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/filmstrip/${encodeURIComponent(item.tile_stem)}`;
+  filmstrip.onerror = () => { filmstrip.style.display = 'none'; };
+  filmstrip.onload = () => { filmstrip.style.display = 'block'; };
+
+  // Load tile image on canvas (for tap-to-locate)
+  const canvas = document.getElementById('gap-tile-canvas');
+  const ctx2d = canvas.getContext('2d');
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx2d.drawImage(img, 0, 0);
+    // Draw expected position marker (yellow circle)
+    if (ctx.tile_local_x !== undefined) {
+      const ex = ctx.tile_local_x * img.width;
+      const ey = ctx.tile_local_y * img.height;
+      ctx2d.strokeStyle = '#ffcc00';
+      ctx2d.lineWidth = 3;
+      ctx2d.beginPath();
+      ctx2d.arc(ex, ey, 25, 0, Math.PI * 2);
+      ctx2d.stroke();
+      ctx2d.fillStyle = '#ffcc00';
+      ctx2d.font = '20px sans-serif';
+      ctx2d.fillText('?', ex - 6, ey + 7);
+    }
+    gapTapPos = null;
+  };
+  img.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
+
+  // Enable tap-to-locate on canvas
+  canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    gapTapPos = { x, y };
+    // Redraw with tap marker
+    const tmpImg = new Image();
+    tmpImg.onload = () => {
+      ctx2d.drawImage(tmpImg, 0, 0);
+      // Expected position (yellow)
+      if (ctx.tile_local_x !== undefined) {
+        const ex = ctx.tile_local_x * canvas.width;
+        const ey = ctx.tile_local_y * canvas.height;
+        ctx2d.strokeStyle = '#ffcc00';
+        ctx2d.lineWidth = 2;
+        ctx2d.beginPath();
+        ctx2d.arc(ex, ey, 25, 0, Math.PI * 2);
+        ctx2d.stroke();
+      }
+      // Tap position (green)
+      ctx2d.strokeStyle = '#22ff22';
+      ctx2d.lineWidth = 3;
+      ctx2d.beginPath();
+      ctx2d.arc(x, y, 20, 0, Math.PI * 2);
+      ctx2d.stroke();
+      ctx2d.beginPath();
+      ctx2d.arc(x, y, 3, 0, Math.PI * 2);
+      ctx2d.fill();
+    };
+    tmpImg.src = img.src;
+    showToast(`Ball marked at (${x}, ${y}) - tap "Ball Here" to confirm`);
+  };
+}
+
+async function gapAction(action) {
+  if (!gapItems.length || gapCurrentIndex >= gapItems.length) return;
+  const item = gapItems[gapCurrentIndex];
+
+  const payload = {
+    tile_stem: item.tile_stem,
+    action: action,
+    ball_position: (action === 'locate' && gapTapPos) ? gapTapPos : null,
+  };
+
+  // If "locate" but no tap position, prompt user
+  if (action === 'locate' && !gapTapPos) {
+    showToast('Tap the ball location on the tile first!');
+    return;
+  }
+
+  try {
+    const resp = await fetch(API + `/api/gap-reviews/${gapPacketId}/result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await resp.json();
+
+    const colors = { locate: 'var(--green)', out_of_play: 'var(--red)', obscured: 'var(--blue)', cant_tell: '#666' };
+    showToast(action === 'locate' ? 'Ball located!' : action.replace('_', ' '), colors[action]);
+
+    // Advance to next
+    gapTapPos = null;
+    gapCurrentIndex++;
+    if (gapCurrentIndex >= gapItems.length) {
+      showToast('All gaps reviewed!');
+      setTimeout(() => navigateTo('gap-review'), 1000);
+    } else {
+      updateGapDisplay();
+    }
+  } catch (err) {
+    showToast('Error submitting result');
+  }
+}
+
+function leaveGapReview() {
+  gapPacketId = null;
+  gapManifest = null;
+  gapItems = [];
+  navigateTo('gap-review');
+}
+
 </script>
 </body>
 </html>

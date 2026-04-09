@@ -837,6 +837,144 @@ async def root_redirect():
     return RedirectResponse(url="/static/annotate.html")
 
 
+# --- Gap Review endpoints (trajectory gaps for human review) ---
+
+
+@app.get("/api/gap-reviews")
+async def get_gap_reviews():
+    """List all pending gap review packets."""
+    packets = []
+    if not REVIEW_PACKETS_DIR.exists():
+        return packets
+
+    for packet_dir in sorted(REVIEW_PACKETS_DIR.iterdir()):
+        if not packet_dir.is_dir() or packet_dir.name.startswith("_"):
+            continue
+        manifest_path = packet_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        with open(manifest_path) as f:
+            m = json.load(f)
+        # Only include packets that have gap review items
+        gap_items = [i for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap")]
+        if not gap_items:
+            continue
+
+        results_path = packet_dir / "annotation_results.json"
+        reviewed = 0
+        if results_path.exists():
+            with open(results_path) as f:
+                reviewed = len(json.load(f))
+
+        packets.append({
+            "packet_id": packet_dir.name,
+            "game_id": m.get("game_id", ""),
+            "total_gaps": len(gap_items),
+            "reviewed": reviewed,
+            "remaining": len(gap_items) - reviewed,
+            "created_at": m.get("created_at", 0),
+        })
+
+    packets.sort(key=lambda p: p["remaining"], reverse=True)
+    return packets
+
+
+@app.get("/api/gap-reviews/{packet_id}")
+async def get_gap_review_detail(packet_id: str):
+    """Get full gap review packet with items and review status."""
+    packet_dir = REVIEW_PACKETS_DIR / packet_id
+    manifest_path = packet_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "Packet not found")
+
+    with open(manifest_path) as f:
+        m = json.load(f)
+
+    # Load existing results
+    results_path = packet_dir / "annotation_results.json"
+    results = []
+    if results_path.exists():
+        with open(results_path) as f:
+            results = json.load(f)
+    reviewed_stems = {r.get("tile_stem") for r in results}
+
+    # Find next unreviewed gap item
+    gap_items = [i for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap")]
+    unreviewed = [i for i in gap_items if i["tile_stem"] not in reviewed_stems]
+
+    return {
+        **m,
+        "gap_items": gap_items,
+        "reviewed_count": len(reviewed_stems),
+        "remaining_count": len(unreviewed),
+        "next_item": unreviewed[0] if unreviewed else None,
+    }
+
+
+@app.get("/api/gap-reviews/{packet_id}/tile/{tile_stem:path}")
+async def get_gap_tile(packet_id: str, tile_stem: str):
+    """Serve a tile image from a gap review packet."""
+    tile_path = REVIEW_PACKETS_DIR / packet_id / f"{tile_stem}.jpg"
+    if not tile_path.exists():
+        raise HTTPException(404, "Tile image not found")
+    return FileResponse(tile_path, media_type="image/jpeg")
+
+
+@app.get("/api/gap-reviews/{packet_id}/filmstrip/{tile_stem:path}")
+async def get_gap_filmstrip(packet_id: str, tile_stem: str):
+    """Serve the filmstrip composite for a gap tile."""
+    filmstrip_path = REVIEW_PACKETS_DIR / packet_id / "filmstrips" / f"{tile_stem}_filmstrip.jpg"
+    if not filmstrip_path.exists():
+        raise HTTPException(404, "Filmstrip not found")
+    return FileResponse(filmstrip_path, media_type="image/jpeg")
+
+
+@app.post("/api/gap-reviews/{packet_id}/result")
+async def submit_gap_result(packet_id: str, result: dict):
+    """Submit a gap review result.
+
+    Expected: {
+        "tile_stem": str,
+        "action": "locate"|"out_of_play"|"obscured"|"cant_tell",
+        "ball_position": {"x": int, "y": int} | null,  (for "locate")
+    }
+    """
+    packet_dir = REVIEW_PACKETS_DIR / packet_id
+    results_path = packet_dir / "annotation_results.json"
+
+    results = []
+    if results_path.exists():
+        with open(results_path) as f:
+            results = json.load(f)
+
+    # Replace existing result for same tile_stem
+    tile_stem = result.get("tile_stem", "")
+    results = [r for r in results if r.get("tile_stem") != tile_stem]
+    results.append({
+        "tile_stem": tile_stem,
+        "action": result.get("action", ""),
+        "ball_position": result.get("ball_position"),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    # Return updated status
+    manifest_path = packet_dir / "manifest.json"
+    total_gaps = 0
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            m = json.load(f)
+        total_gaps = sum(1 for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap"))
+
+    return {
+        "accepted": True,
+        "reviewed": len(results),
+        "remaining": total_gaps - len(results),
+    }
+
+
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
     "/static",
