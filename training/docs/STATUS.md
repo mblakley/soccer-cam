@@ -1,91 +1,143 @@
 # Current Status
 
-*Last updated: 2026-04-09 14:35*
+*Last updated: 2026-04-09 14:45*
 
-## Pipeline Architecture
+## What's Running Right Now
 
-Three server processes + remote workers, all communicating via HTTP API:
+Three server processes + one remote worker, all communicating via HTTP API:
 
-```
-PipelineAPI (port 8643)       — FastAPI, sole SQLite accessor
-PipelineOrchestrator          — populates queues via API every 60s
-PipelineWorker (server)       — pulls stage/tile/QA tasks via API
-FORTNITE-OP worker (remote)   — pulls label/tile tasks via API, pauses for games
-```
+| Process | Machine | Status | What it does |
+|---------|---------|--------|-------------|
+| PipelineAPI | Server (port 8643) | Running | FastAPI, sole SQLite accessor |
+| PipelineOrchestrator | Server | Running | Populates work queues via API every 60s |
+| PipelineWorker | Server | Running | Pulls stage/tile/QA tasks |
+| PipelineWorker | FORTNITE-OP | Running | Pulls label/tile tasks, pauses for games |
 
-**Key paths:**
-- Registry DB: `G:/pipeline_db/registry.db` (SSD, 39 games)
-- Work Queue DB: `G:/pipeline_db/work_queue.db` (SSD)
-- Per-Game Manifests: `D:/training_data/games/{game_id}/manifest.db`
-- Pack files: `D:/training_data/tile_packs/{game_id}/` (legacy location, ~756GB)
-- Config: `training/pipeline/config.toml`
+**Restart all server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
 
-**Services (Windows Scheduled Tasks, run as jared Interactive):**
-- `PipelineAPI` — `uv run python -m training.pipeline serve`
-- `PipelineOrchestrator` — `uv run python -m training.pipeline run`
-- `PipelineWorker` — `uv run python -m training.worker run --config training/worker/server_worker_config.toml`
-- FORTNITE-OP: `PipelineWorker` scheduled task under jared, talks to API at http://192.168.86.152:8643
+## Key Paths
 
-**Install/restart:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
+| What | Where | Why there |
+|------|-------|-----------|
+| Registry DB | `G:/pipeline_db/registry.db` | SSD for fast access |
+| Work Queue DB | `G:/pipeline_db/work_queue.db` | SSD for fast access |
+| Per-game manifests | `D:/training_data/games/{game_id}/manifest.db` | HDD, one per game |
+| Pack files (tiles) | `D:/training_data/tile_packs/{game_id}/` | HDD, legacy location |
+| Worker SSD cache | `G:/pipeline_work/` | SSD for processing |
+| Config | `training/pipeline/config.toml` | All paths/machines/thresholds |
+| FORTNITE-OP worker code | `C:\soccer-cam-label\project\` on FORTNITE-OP | Deployed via PS session |
+| FORTNITE-OP config | `C:\soccer-cam-label\project\worker_config.toml` | Uses single-quoted UNC paths |
 
-## Game States
+## Game Pipeline State
 
-| State | Count | Next Action |
-|-------|-------|-------------|
-| LABELED | 25 | Sonnet QA (queued, server worker handles) |
-| STAGING | 1 | Tile (video verified, ready for tiling) |
-| REGISTERED | 1 | Stage (verify video on F:) |
-| EXCLUDED | 7 | 6 futsal + 1 indoor dome |
-| FAILED:STAGING | 4 | Need retry (were disk-full failures, D: now has 148GB free) |
-| FAILED:TILED | 1 | Need retry |
+| State | Count | What happens next |
+|-------|-------|-------------------|
+| LABELED | 25 | **Blocked on Sonnet QA** - tasks queued, server worker has capability |
+| STAGING | 1 | Video verified, waiting for tile task |
+| REGISTERED | 1 | Needs staging (video path lookup on F:) |
+| EXCLUDED | 7 | 6 futsal + 1 indoor dome, not trainable |
+| FAILED:STAGING | 4 | Need retry - were disk-full failures, D: now has 148GB free |
+| FAILED:TILED | 1 | Needs retry |
 
-## What's Working
+## What Needs to Happen Next (in priority order)
 
-- API server responds instantly (DBs on SSD)
-- FORTNITE-OP worker connected via HTTP, claiming tasks, idle detection active
-- Server worker tiling games (pulling video from F:, processing on G: SSD, pushing packs to D:)
-- Orchestrator enqueuing work, advancing game states
-- NTFY notifications for failures/milestones
-- All game IDs consistent (no more camera__ prefix, futsal tracked via game_type field)
+### 1. Get Sonnet QA working (unblocks 25 games)
 
-## What Needs Work Next (Flywheel Priority)
+The `sonnet_qa` task (`training/tasks/sonnet_qa.py`) is fully implemented and queued for all 25 LABELED games. The server worker has `sonnet_qa` in its capabilities. It needs end-to-end testing:
 
-### 1. Sonnet QA — 25 games blocked
-The sonnet_qa task exists (`training/tasks/sonnet_qa.py`) and is queued for all 25 LABELED games. The server worker has `sonnet_qa` in its capabilities. It needs:
-- Verify the `claude` CLI call works from the worker (PATH is set since running as jared)
-- Test one game end-to-end: claim QA task, build composite grids, call claude, parse BALL/NOT_BALL, write verdicts
-- May need to adjust rate limiting (100 batches/hr in config)
+- Task claims a QA job via API
+- Pulls pack files + manifest to local SSD
+- Extracts tiles with labels but no `qa_verdict`
+- Builds 3x2 composite grid images
+- Calls `claude` CLI: `claude -p "..." --output-format json <image>`
+- Parses BALL/NOT_BALL verdicts
+- Writes `qa_verdict` to per-game manifest
+- Pushes manifest back to server
+- Game advances: LABELED -> QA_PENDING -> QA_DONE
 
-### 2. Generate review packets + NTFY
-After QA, uncertain tiles need human review. The `generate_review` task packages them and sends NTFY notification. Needs testing.
+**Test with one game first.** Manually enqueue: `uv run python -m training.pipeline enqueue sonnet_qa --game flash__2024.06.01_vs_IYSA_home --priority 1`
 
-### 3. Ingest reviews → TRAINABLE
-After human reviews, `ingest_reviews` writes verdicts back and games advance to TRAINABLE. Needs testing.
+### 2. Generate review packets + NTFY (after QA)
 
-### 4. Training trigger
-Once enough games reach TRAINABLE (min 2 per config), orchestrator auto-enqueues training. The `train` task builds a training set from per-game manifests and runs YOLO26l. Laptop worker (not yet deployed) would handle this.
+`training/tasks/generate_review.py` packages uncertain tiles (Sonnet disagreements, low confidence) and sends NTFY notification with link to annotation server.
+
+### 3. Ingest human reviews -> TRAINABLE
+
+`training/tasks/ingest_reviews.py` reads verdicts from annotation server, writes to manifest, advances games to TRAINABLE.
+
+### 4. Auto-trigger training
+
+Once 2+ games reach TRAINABLE, orchestrator auto-enqueues `train` task (targeted to laptop). The `training/tasks/train.py` builds training set from per-game manifests + runs YOLO26l.
 
 ### 5. Deploy laptop worker
-Same approach as FORTNITE-OP: push worker files via PS session, `cmdkey` for share auth, HTTP API for queue. Capabilities: train, label, tile.
 
-### 6. Retry failed games
-4 FAILED:STAGING + 1 FAILED:TILED from earlier disk-full era. D: now has 148GB free. Just need `uv run python -m training.pipeline retry <game_id>` for each.
+Same pattern as FORTNITE-OP. Files go to `C:\soccer-cam-label\project\`, `cmdkey` for share auth (run once at keyboard), worker talks to API at http://192.168.86.152:8643. Capabilities: train, label, tile.
 
-### 7. Duplicate worker_status rows
-The orchestrator creates a second DESKTOP-5L867J8 row each session. The `worker_status` table primary key constraint should prevent this but something's off. Minor — clean up and investigate.
+### 6. Retry 5 failed games
 
-## Dataset v3.1 Stats (prior training run)
+```
+uv run python -m training.pipeline retry heat__2024.05.28_vs_Chili_home
+uv run python -m training.pipeline retry heat__2024.06.04_vs_Spencerport_home
+uv run python -m training.pipeline retry heat__2024.06.25_vs_Pittsford_home
+uv run python -m training.pipeline retry heat__2024.06.27_vs_Pittsford_away
+uv run python -m training.pipeline retry flash__2025.05.31_vs_IYSA_away
+```
 
-- 75,598 positives + 79,594 negatives = 155,192 tiles
-- 6 train Flash games + 1 val + 2 camera negative games
-- Training was on laptop RTX 4070 (YOLO26l, epoch 1/50 when paused)
+## Architecture (for context)
 
-## Architecture Decisions (this session)
+```
+Remote Workers                    Server (192.168.86.152)
++-----------+                    +---------------------------+
+| Worker    |--- HTTP claim ---->| PipelineAPI (:8643)       |
+| (any PC)  |--- HTTP heartbeat->|   WorkQueue (SSD SQLite)  |
+|           |--- HTTP complete ->|   GameRegistry (SSD SQLite)|
+|           |                    +---------------------------+
+|           |--- SMB copy ------>| \\server\training\games\* |
+| (local    |    (pack files,    | (bulk files only,         |
+|  SSD)     |     video, weights)|  never databases)         |
++-----------+                    +---------------------------+
+```
 
-- **HTTP API for all DB access** — SQLite over SMB doesn't work, only API process touches DBs
-- **DBs on SSD (G:)** — eliminates API contention from HDD random I/O
-- **SMB for bulk file transfer only** — pack files, video, weights
-- **Per-game manifests** — replaced 2.6GB monolithic manifest.db
-- **Pull-based workers** — claim from queue via HTTP, not pushed by orchestrator
-- **`cmdkey`** stores share credentials on remote machines (run once in jared's console)
-- **3 separate processes** on server — API, orchestrator, worker (avoids SQLite threading issues)
+**Key rule:** Only the API process touches SQLite. Everything else uses HTTP. SMB is for bulk file transfer only.
+
+## TOML Config Gotcha
+
+UNC paths with backslashes MUST use single quotes in TOML:
+- WRONG: `server_share = "\\192.168.86.152\training"` (TOML interprets `\t` as tab)
+- RIGHT: `server_share = '\\192.168.86.152\training'` (literal string)
+
+## Files Created This Session
+
+```
+training/pipeline/
+  api.py              # FastAPI server (sole DB accessor)
+  client.py           # stdlib HTTP client (no deps for remote machines)
+  config.toml         # Single config for all paths/machines
+  config.py           # Config loader
+  queue.py            # SQLite work queue
+  registry.py         # Game registry DB
+  state_machine.py    # Pipeline state transitions
+  migrate.py          # One-time monolithic -> per-game migration (done)
+  install_service.ps1 # Register 3 Windows scheduled tasks
+  __main__.py         # CLI: serve, run, status, games, queue, retry, skip, enqueue
+
+training/worker/
+  worker.py           # Pull-based worker loop (HTTP API client)
+  resources.py        # GPU/CPU/disk/idle monitoring
+  __main__.py         # Worker CLI
+  server_worker_config.toml
+  worker_config.toml  # Template for remote machines
+
+training/tasks/
+  io.py               # Shared TaskIO for pull-local-process-push
+  stage.py            # Verify video exists on F:
+  tile.py             # Extract frames -> tile -> pack files
+  label.py            # ONNX inference on tiles
+  train.py            # Build training set + YOLO training
+  sonnet_qa.py        # Claude CLI vision QA
+  generate_review.py  # Package uncertain tiles for human review
+  ingest_reviews.py   # Collect human verdicts
+
+training/data_prep/
+  game_manifest.py    # Per-game SQLite manifest
+```
