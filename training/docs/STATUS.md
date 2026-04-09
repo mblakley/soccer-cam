@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-04-09 17:30*
+*Last updated: 2026-04-09 18:10*
 
 ## What's Running Right Now
 
@@ -12,7 +12,8 @@ Four server processes + one remote worker, all communicating via HTTP API:
 | PipelineOrchestrator | Server | Running | Populates work queues via API every 60s |
 | PipelineWorker | Server | Running | Pulls stage/tile/QA tasks |
 | PipelineWorker | FORTNITE-OP | Running | Pulls label/tile tasks, pauses for games |
-| AnnotationServer | Server (port 8642) | NEW | Human review UI via Tailscale |
+| AnnotationServer | Server (port 8642) | Running | Human review UI via Tailscale |
+| PipelineWorker | jared-laptop | Running | Tile/label/train tasks |
 
 **Restart all server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
 
