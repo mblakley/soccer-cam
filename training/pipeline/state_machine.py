@@ -59,8 +59,8 @@ STATE_TO_TASK = {
     "LABELING": None,       # labeling in progress, wait for completion
     "LABELED": "sonnet_qa",
     "QA_PENDING": None,     # QA in progress
-    "QA_DONE": "generate_review",
-    "REVIEW_PENDING": None,  # waiting for human review
+    "QA_DONE": "generate_review",  # auto-enqueue, but doesn't block training
+    "REVIEW_PENDING": None,        # human review is async, doesn't block
 }
 
 # What state a game enters when a task type starts
@@ -69,7 +69,7 @@ TASK_START_STATE = {
     "tile": "STAGING",
     "label": "LABELING",
     "sonnet_qa": "QA_PENDING",
-    "generate_review": "REVIEW_PENDING",
+    "generate_review": "QA_DONE",  # stays in QA_DONE during review generation
 }
 
 # What state a game enters when a task type completes
@@ -78,8 +78,8 @@ TASK_COMPLETE_STATE = {
     "tile": "TILED",
     "label": "LABELED",
     "sonnet_qa": "QA_DONE",
-    "generate_review": "REVIEW_PENDING",
-    "ingest_reviews": "TRAINABLE",
+    "generate_review": "TRAINABLE",  # game is trainable immediately, human review is async
+    "ingest_reviews": "TRAINABLE",   # human verdicts improve labels for next training run
 }
 
 
