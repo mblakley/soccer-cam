@@ -1,0 +1,19 @@
+# Laptop worker config — jared-laptop
+# Connects to server API, pulls work to local SSD, pushes results back.
+
+[worker]
+hostname = "jared-laptop"
+capabilities = ["tile", "label", "train"]
+api_url = "http://192.168.86.152:8643"
+server_share = '\\192.168.86.152\training'
+local_work_dir = "C:/soccer-cam-label/work"
+local_models_dir = "C:/soccer-cam-label/models"
+
+[resources]
+max_gpu_temp = 85
+min_disk_free_gb = 20
+gpu_device = 0
+idle_games = []
+
+[heartbeat]
+interval = 30

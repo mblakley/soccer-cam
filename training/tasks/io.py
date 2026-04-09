@@ -88,11 +88,13 @@ class TaskIO:
         return packs  # default even if empty
 
     def video_path(self) -> Path | None:
-        """Find original video files — check registry for path on F:."""
-        from training.pipeline.registry import GameRegistry
-        reg = GameRegistry(self.cfg.paths.registry_db)
-        game = reg.get_game(self.game_id)
-        reg.close()
+        """Find original video files — uses API to look up video path."""
+        from training.pipeline.client import PipelineClient
+
+        api_url = self.cfg.server.ip
+        # Use worker's API URL if available, otherwise construct from config
+        client = PipelineClient(f"http://{api_url}:8643")
+        game = client.get_game(self.game_id)
 
         if not game or not game.get("video_path"):
             return None
