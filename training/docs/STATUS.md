@@ -1,10 +1,10 @@
 # Current Status
 
-*Last updated: 2026-04-09 14:45*
+*Last updated: 2026-04-09 17:30*
 
 ## What's Running Right Now
 
-Three server processes + one remote worker, all communicating via HTTP API:
+Four server processes + one remote worker, all communicating via HTTP API:
 
 | Process | Machine | Status | What it does |
 |---------|---------|--------|-------------|
@@ -12,6 +12,7 @@ Three server processes + one remote worker, all communicating via HTTP API:
 | PipelineOrchestrator | Server | Running | Populates work queues via API every 60s |
 | PipelineWorker | Server | Running | Pulls stage/tile/QA tasks |
 | PipelineWorker | FORTNITE-OP | Running | Pulls label/tile tasks, pauses for games |
+| AnnotationServer | Server (port 8642) | NEW | Human review UI via Tailscale |
 
 **Restart all server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
 
@@ -41,39 +42,45 @@ Three server processes + one remote worker, all communicating via HTTP API:
 
 ## What Needs to Happen Next (in priority order)
 
-### 1. Get Sonnet QA working (unblocks 25 games)
+### 1. Sonnet QA flywheel (WORKING)
 
-The `sonnet_qa` task (`training/tasks/sonnet_qa.py`) is fully implemented and queued for all 25 LABELED games. The server worker has `sonnet_qa` in its capabilities. It needs end-to-end testing:
+**Verified working.** 26 sonnet_qa tasks queued at P45, running after tile/label tasks complete.
 
-- Task claims a QA job via API
-- Pulls pack files + manifest to local SSD
-- Extracts tiles with labels but no `qa_verdict`
-- Builds 3x2 composite grid images
-- Calls `claude` CLI: `claude -p "..." --output-format json <image>`
-- Parses BALL/NOT_BALL verdicts
-- Writes `qa_verdict` to per-game manifest
-- Pushes manifest back to server
-- Game advances: LABELED -> QA_PENDING -> QA_DONE
+Sonnet QA now has two phases:
+- **Phase 1**: Verify ONNX detections (BALL/NOT_BALL) — 120 tiles per game, ~4 min
+- **Phase 2**: Trajectory gap detection — builds trajectories from verified labels, finds gaps, asks Sonnet with filmstrip context (before + gap + after frames), ~3.5 min
 
-**Test with one game first.** Manually enqueue: `uv run python -m training.pipeline enqueue sonnet_qa --game flash__2024.06.01_vs_IYSA_home --priority 1`
+Results: `true_positive`, `false_positive`, `gap_ball_found`, `gap_no_ball`
 
-### 2. Generate review packets + NTFY (after QA)
+### 2. Pipeline flow: QA_DONE -> generate_review -> TRAINABLE (BUILT)
 
-`training/tasks/generate_review.py` packages uncertain tiles (Sonnet disagreements, low confidence) and sends NTFY notification with link to annotation server.
+State machine now: `LABELED -> sonnet_qa -> QA_DONE -> generate_review -> TRAINABLE`
 
-### 3. Ingest human reviews -> TRAINABLE
+- `generate_review` packages trajectory gaps where Sonnet failed, sends NTFY via Tailscale
+- Human review is ASYNC — doesn't block training
+- `ingest_reviews` applies human verdicts for next training run
+- Human actions: "Ball Here" (tap position), "Out of Play", "Hidden", "Skip"
 
-`training/tasks/ingest_reviews.py` reads verdicts from annotation server, writes to manifest, advances games to TRAINABLE.
+### 3. Annotation server + Gap Review UI (BUILT)
 
-### 4. Auto-trigger training
+- Server at port 8642, Tailscale: https://trainer.goat-rattlesnake.ts.net/
+- New "Gaps" tab in annotation app with filmstrip view + tap-to-locate
+- API endpoints: `/api/gap-reviews`, `/api/gap-reviews/{id}/filmstrip/{stem}`, etc.
+- Added to install_service.ps1 as 4th scheduled task
 
-Once 2+ games reach TRAINABLE, orchestrator auto-enqueues `train` task (targeted to laptop). The `training/tasks/train.py` builds training set from per-game manifests + runs YOLO26l.
+### 4. Deploy annotation server + restart services
+
+Run: `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
 
 ### 5. Deploy laptop worker
 
-Same pattern as FORTNITE-OP. Files go to `C:\soccer-cam-label\project\`, `cmdkey` for share auth (run once at keyboard), worker talks to API at http://192.168.86.152:8643. Capabilities: train, label, tile.
+Same pattern as FORTNITE-OP. Capabilities: train, label, tile.
 
-### 6. Retry 5 failed games
+### 6. Auto-trigger training
+
+Once 2+ games reach TRAINABLE, orchestrator auto-enqueues `train` task.
+
+### 7. Retry 5 failed games
 
 ```
 uv run python -m training.pipeline retry heat__2024.05.28_vs_Chili_home
