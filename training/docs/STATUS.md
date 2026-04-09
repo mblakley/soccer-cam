@@ -1,25 +1,37 @@
 # Current Status
 
-*Last updated: 2026-04-08 20:10*
+*Last updated: 2026-04-09 11:35*
+
+## Pipeline Architecture (NEW)
+
+The monolithic orchestrator has been replaced with a **pull-based work queue system**:
+
+- **Registry DB**: `D:/training_data/registry.db` (40 games, 28KB, pipeline state per game)
+- **Work Queue DB**: `D:/training_data/work_queue.db` (SQLite, atomic claiming, heartbeats)
+- **Per-Game Manifests**: `D:/training_data/games/{game_id}/manifest.db` (~20-80MB each)
+- **Orchestrator**: `uv run python -m training.pipeline run` (populates queues, monitors health)
+- **Workers**: `uv run python -m training.worker run` (pull work, execute, push results)
+- **CLI**: `uv run python -m training.pipeline status|games|queue|machines|...`
+
+### Game States (as of migration)
+
+| State | Count | Next Action |
+|-------|-------|-------------|
+| LABELED | 27 | Sonnet QA → QA_DONE → TRAINABLE |
+| TILED | 6 | ONNX labeling (any GPU machine) |
+| REGISTERED | 7 | Stage video from F: → D: |
+
+### Queue Status
+
+40 work items enqueued: 6 label (P20), 7 stage (P40), 27 sonnet_qa (P45)
 
 ## Running Processes
 
 | Process | Machine | Status | Detail |
 |---------|---------|--------|--------|
 | Pack job (loose to pack) | Server | Running | Game 13+/23, 8-thread concurrent reads |
-| Orchestrator | Server | Running | Checks every 5 min, manages FORTNITE-OP + laptop |
 | YOLO26l training v3.1 | Laptop RTX 4070 | Epoch 1/50 | 155K tiles, 5.6s/batch, ManifestDataset from packs |
-| ONNX labeling | FORTNITE-OP | Paused (kid gaming) | Auto-resume when idle, checkpoint resume works |
-
-## Architecture
-
-- Manifest DB: D:/training_data/manifest.db (7.7M tiles, 1M+ labels, pack offsets)
-- Pack files: D:/training_data/tile_packs/{game}/{segment}.pack (~756GB, 14 games packed)
-- Orchestrator: training/pipeline/orchestrator.py (auto-manages all machines)
-- ManifestDataset: training/data_prep/manifest_dataset.py (reads from packs + SQLite)
-- Curated training sets: D:/training_data/training_sets/v3.1/ (28GB, archived to F:)
-- Label job: training/distributed/label_job.py (idle detection + checkpoint resume)
-- Human review: training/pipeline/generate_review.py (trajectory breaks, Sonnet QA filter)
+| ONNX labeling | FORTNITE-OP | Paused (kid gaming) | Auto-resume when idle |
 
 ## Dataset v3.1 Stats
 
@@ -29,8 +41,8 @@
 
 ## Next Steps
 
-1. Add Sonnet Vision QA filter for human review candidates
-2. Generate review packets and start human review of trajectory breaks
-3. Wire review verdicts back into manifest
-4. Build v3.2 with corrections + new ONNX labels + Heat games
-5. Resume training with expanded data
+1. Deploy worker configs to laptop and FORTNITE-OP
+2. Install orchestrator as Windows Service (nssm) for auto-start
+3. Implement flywheel tasks (sonnet_qa, generate_review, ingest_reviews)
+4. Move pack files to per-game directories (currently still in tile_packs/)
+5. Build v3.2 with expanded data once more games reach TRAINABLE
