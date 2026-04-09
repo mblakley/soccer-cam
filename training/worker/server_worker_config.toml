@@ -1,20 +1,19 @@
 # Server worker config — DESKTOP-5L867J8
-# The server handles staging, tiling, QA, and review tasks.
-# Uses G: (SSD) for local processing, D: for storage.
+# Uses local API (same process), local file paths.
 
 [worker]
 hostname = "DESKTOP-5L867J8"
 capabilities = ["stage", "tile", "sonnet_qa", "generate_review", "ingest_reviews"]
-server_share = ""                  # server accesses D: directly, no share needed
-queue_db = "D:/training_data/work_queue.db"
+api_url = "http://127.0.0.1:8643"
+server_share = ""
 local_work_dir = "G:/pipeline_work"
 local_models_dir = "D:/training_data/models"
 
 [resources]
 max_gpu_temp = 85
-min_disk_free_gb = 10              # G: drive has less space
+min_disk_free_gb = 10
 gpu_device = 0
-idle_games = []                    # server is always available
+idle_games = []
 
 [heartbeat]
 interval = 30

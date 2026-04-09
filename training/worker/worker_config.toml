@@ -1,15 +1,15 @@
 # Worker configuration template
 # Copy to each machine and customize hostname/capabilities.
 #
-# Server:    capabilities = ["stage", "tile", "sonnet_qa", "ingest_reviews", "generate_review"]
+# Server:    capabilities = ["stage", "tile", "sonnet_qa", "generate_review", "ingest_reviews"]
 # Laptop:    capabilities = ["tile", "label", "train"]
 # FORTNITE:  capabilities = ["label", "tile"]
 
 [worker]
-hostname = ""                      # set to machine hostname (e.g., "jared-laptop")
+hostname = ""                      # set to machine hostname
 capabilities = []                  # set per machine (see above)
-server_share = "\\\\192.168.86.152\\training"
-queue_db = "\\\\192.168.86.152\\training\\work_queue.db"
+api_url = "http://192.168.86.152:8643"
+server_share = "\\\\192.168.86.152\\training"  # SMB for bulk file copy only
 local_work_dir = "C:/soccer-cam-label/work"
 local_models_dir = "C:/soccer-cam-label/models"
 

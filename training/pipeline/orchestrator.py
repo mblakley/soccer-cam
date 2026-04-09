@@ -49,6 +49,11 @@ class Orchestrator:
 
     def run(self, once: bool = False):
         """Main orchestrator loop."""
+        # Start the HTTP API server in a background thread
+        if not self.dry_run:
+            from training.pipeline.api import start_api
+            start_api(self.queue, self.registry, self.cfg, port=8643)
+
         logger.info("Orchestrator starting (interval=%ds, dry_run=%s)",
                      self.cfg.orchestrator.check_interval, self.dry_run)
 

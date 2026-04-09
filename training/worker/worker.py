@@ -3,9 +3,9 @@
 Each machine runs one worker process. The worker:
 1. Checks if the machine is idle (no games running)
 2. Checks resource availability (GPU temp, disk space)
-3. Claims the highest-priority work item it can handle
+3. Claims the highest-priority work item via HTTP API
 4. Pulls data to local SSD, processes, pushes results back
-5. Reports status and heartbeat to the queue DB
+5. Reports status and heartbeat via HTTP API
 
 Usage:
     uv run python -m training.worker run
@@ -14,15 +14,15 @@ Usage:
 """
 
 import logging
+import os
 import platform
 import signal
-import sys
 import threading
 import time
 import tomllib
 from pathlib import Path
 
-from training.pipeline.queue import WorkQueue
+from training.pipeline.client import PipelineClient
 from training.worker.resources import ResourceMonitor, ResourceState
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class Worker:
         self,
         hostname: str,
         capabilities: list[str],
-        queue_db: str,
+        api_url: str,
         local_work_dir: str,
         server_share: str = "",
         local_models_dir: str = "",
@@ -55,9 +55,9 @@ class Worker:
     ):
         self.hostname = hostname
         self.capabilities = capabilities
-        self.queue = WorkQueue(queue_db)
-        self.local_work_dir = Path(local_work_dir)
+        self.api = PipelineClient(api_url)
         self.server_share = server_share
+        self.local_work_dir = Path(local_work_dir)
         self.local_models_dir = Path(local_models_dir) if local_models_dir else None
         self.max_gpu_temp = max_gpu_temp
         self.min_disk_free_gb = min_disk_free_gb
@@ -87,7 +87,7 @@ class Worker:
         return cls(
             hostname=w.get("hostname", platform.node()),
             capabilities=w.get("capabilities", []),
-            queue_db=w.get("queue_db", ""),
+            api_url=w.get("api_url", "http://192.168.86.152:8643"),
             local_work_dir=w.get("local_work_dir", "C:/soccer-cam-label/work"),
             server_share=w.get("server_share", ""),
             local_models_dir=w.get("local_models_dir", ""),
@@ -108,10 +108,16 @@ class Worker:
         signal.signal(signal.SIGTERM, _handle_signal)
 
         logger.info(
-            "Worker %s starting (capabilities: %s)",
+            "Worker %s starting (capabilities: %s, api: %s)",
             self.hostname,
             ", ".join(self.capabilities),
+            self.api.base_url,
         )
+
+        # Wait for API to be available
+        while not _shutdown.is_set() and not self.api.is_available():
+            logger.info("Waiting for API server...")
+            _shutdown.wait(timeout=10)
 
         while not _shutdown.is_set():
             try:
@@ -123,11 +129,9 @@ class Worker:
             if once:
                 break
 
-            # Sleep with shutdown awareness
             _shutdown.wait(timeout=10)
 
         logger.info("Worker %s stopped", self.hostname)
-        self.queue.close()
 
     def _tick(self):
         """One iteration of the worker loop."""
@@ -164,8 +168,8 @@ class Worker:
             _shutdown.wait(timeout=30)
             return
 
-        # 5. Claim work
-        item = self.queue.claim(available, self.hostname)
+        # 5. Claim work via API
+        item = self.api.claim(available, self.hostname)
         if item is None:
             logger.debug("No work available, sleeping...")
             self._report_status(state, status="idle")
@@ -179,7 +183,6 @@ class Worker:
         """Filter capabilities based on current resource state."""
         available = []
         for cap in self.capabilities:
-            # GPU-intensive tasks need low GPU utilization
             if cap in ("train", "label") and state.gpu_util_pct > 50:
                 continue
             available.append(cap)
@@ -197,21 +200,18 @@ class Worker:
 
         logger.info("Starting %s for %s (id=%d)", task_type, game_id, item_id)
 
-        # Mark as running
-        self.queue.start(item_id)
+        self.api.start(item_id)
         self._current_task_id = item_id
         self._report_status(state, status="working", task_id=item_id)
-
-        # Start heartbeat thread
         self._start_heartbeat(item_id)
 
         try:
             result = self._run_task(task_type, item)
-            self.queue.complete(item_id, result=result)
+            self.api.complete(item_id, result)
             logger.info("Completed %s for %s (id=%d)", task_type, game_id, item_id)
         except Exception as e:
             logger.exception("Failed %s for %s (id=%d)", task_type, game_id, item_id)
-            self.queue.fail(item_id, str(e))
+            self.api.fail(item_id, str(e))
         finally:
             self._stop_heartbeat()
             self._current_task_id = None
@@ -239,7 +239,6 @@ class Worker:
             game_work = self.local_work_dir / game_id
             if game_work.exists():
                 import shutil
-
                 try:
                     shutil.rmtree(game_work)
                     logger.debug("Cleaned up %s", game_work)
@@ -257,7 +256,7 @@ class Worker:
         def _beat():
             while not _shutdown.is_set():
                 try:
-                    self.queue.heartbeat(item_id)
+                    self.api.heartbeat(item_id)
                 except Exception as e:
                     logger.warning("Heartbeat failed: %s", e)
                 _shutdown.wait(timeout=self.heartbeat_interval)
@@ -284,9 +283,9 @@ class Worker:
         status: str = "idle",
         task_id: int | None = None,
     ):
-        """Report worker status to the queue DB."""
+        """Report worker status via API."""
         try:
-            self.queue.update_worker_status(
+            self.api.report_status(
                 self.hostname,
                 status=status,
                 current_task_id=task_id or self._current_task_id,
