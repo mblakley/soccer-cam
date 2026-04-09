@@ -252,6 +252,34 @@ def cmd_enqueue(args):
     q.close()
 
 
+def cmd_priority(args):
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:8643/api/queue/{args.item_id}/priority",
+        data=json.dumps({"priority": args.priority}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    resp = urllib.request.urlopen(req)
+    print(f"#{args.item_id} priority -> {args.priority}")
+
+
+def cmd_delete(args):
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:8643/api/queue/{args.item_id}",
+        method="DELETE",
+    )
+    try:
+        urllib.request.urlopen(req)
+        print(f"Deleted #{args.item_id}")
+    except Exception as e:
+        print(f"Failed: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="training.pipeline", description="Pipeline orchestrator")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -290,6 +318,13 @@ def main():
     p_enqueue.add_argument("--machine", help="Target machine hostname")
     p_enqueue.add_argument("--priority", type=int, default=50)
 
+    p_priority = sub.add_parser("priority", help="Change queue item priority")
+    p_priority.add_argument("item_id", type=int, help="Queue item ID")
+    p_priority.add_argument("priority", type=int, help="New priority (lower = higher)")
+
+    p_delete = sub.add_parser("delete", help="Delete a queue item")
+    p_delete.add_argument("item_id", type=int, help="Queue item ID")
+
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -310,6 +345,8 @@ def main():
         "skip": cmd_skip,
         "unskip": cmd_unskip,
         "enqueue": cmd_enqueue,
+        "priority": cmd_priority,
+        "delete": cmd_delete,
     }
 
     if args.command in commands:

@@ -223,6 +223,32 @@ def enqueue(req: EnqueueRequest):
     return {"id": item_id}
 
 
+@app.patch("/api/queue/{item_id}/priority")
+def update_priority(item_id: int, req: dict):
+    priority = req.get("priority")
+    if priority is None:
+        raise HTTPException(400, "Missing 'priority'")
+    q = _get_queue()
+    conn = q._get_conn()
+    conn.execute("UPDATE work_items SET priority = ? WHERE id = ?", (priority, item_id))
+    conn.commit()
+    return {"ok": True, "id": item_id, "priority": priority}
+
+
+@app.delete("/api/queue/{item_id}")
+def delete_queue_item(item_id: int):
+    q = _get_queue()
+    conn = q._get_conn()
+    row = conn.execute("SELECT status FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Item not found")
+    if row["status"] == "running":
+        raise HTTPException(409, "Cannot delete a running item — fail it first")
+    conn.execute("DELETE FROM work_items WHERE id = ?", (item_id,))
+    conn.commit()
+    return {"ok": True, "id": item_id, "deleted": True}
+
+
 @app.get("/api/has-active/{task_type}")
 def has_active(task_type: str, game_id: str | None = None):
     return {"active": _get_queue().has_active_item(task_type, game_id)}
