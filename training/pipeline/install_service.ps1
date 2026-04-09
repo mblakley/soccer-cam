@@ -1,12 +1,9 @@
-# Install pipeline orchestrator and server worker as Windows Scheduled Tasks.
-# Run from an elevated (admin) PowerShell prompt.
+# Install pipeline services as Windows Scheduled Tasks.
+# Three separate processes: API server, orchestrator, server worker.
+# All run as jared (Interactive) for access to claude CLI and user PATH.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1
-#
-# To uninstall:
-#   Unregister-ScheduledTask -TaskName "PipelineOrchestrator" -Confirm:$false
-#   Unregister-ScheduledTask -TaskName "PipelineWorker" -Confirm:$false
 
 $ProjectDir = "C:\Users\jared\projects\soccer-cam-annotation"
 $UvPath = (Get-Command uv -ErrorAction SilentlyContinue).Source
@@ -17,14 +14,10 @@ if (-not $UvPath) {
 Write-Host "Project dir: $ProjectDir"
 Write-Host "uv path: $UvPath"
 
-# --- Orchestrator ---
-$OrchestratorAction = New-ScheduledTaskAction `
-    -Execute $UvPath `
-    -Argument "run python -m training.pipeline run" `
-    -WorkingDirectory $ProjectDir
+Stop-Process -Name python -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 
-$OrchestratorTrigger = New-ScheduledTaskTrigger -AtStartup
-$OrchestratorSettings = New-ScheduledTaskSettingsSet `
+$CommonSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -32,55 +25,52 @@ $OrchestratorSettings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Days 365)
 
-# Remove existing task if present
+$Principal = New-ScheduledTaskPrincipal -UserId "jared" -LogonType Interactive
+$Trigger = New-ScheduledTaskTrigger -AtLogon -User "jared"
+
+# --- 1. API Server (must start first -owns the DBs) ---
+Unregister-ScheduledTask -TaskName "PipelineAPI" -Confirm:$false -ErrorAction SilentlyContinue
+
+Register-ScheduledTask `
+    -TaskName "PipelineAPI" `
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -m training.pipeline serve" -WorkingDirectory $ProjectDir) `
+    -Trigger $Trigger `
+    -Settings $CommonSettings `
+    -Principal $Principal `
+    -Description "Pipeline API server (port 8643) -sole DB accessor"
+
+Write-Host "Registered PipelineAPI"
+
+# --- 2. Orchestrator (populates queues via API) ---
 Unregister-ScheduledTask -TaskName "PipelineOrchestrator" -Confirm:$false -ErrorAction SilentlyContinue
 
 Register-ScheduledTask `
     -TaskName "PipelineOrchestrator" `
-    -Action $OrchestratorAction `
-    -Trigger $OrchestratorTrigger `
-    -Settings $OrchestratorSettings `
-    -Description "Soccer-cam pipeline orchestrator - populates work queues and monitors health" `
-    -RunLevel Highest `
-    -User "SYSTEM"
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -m training.pipeline run" -WorkingDirectory $ProjectDir) `
+    -Trigger $Trigger `
+    -Settings $CommonSettings `
+    -Principal $Principal `
+    -Description "Pipeline orchestrator -queue management via API"
 
-Write-Host "Registered PipelineOrchestrator (runs at startup, auto-restarts)"
+Write-Host "Registered PipelineOrchestrator"
 
-# --- Server Worker ---
-$WorkerAction = New-ScheduledTaskAction `
-    -Execute $UvPath `
-    -Argument "run python -m training.worker run --config training\worker\server_worker_config.toml" `
-    -WorkingDirectory $ProjectDir
-
-$WorkerTrigger = New-ScheduledTaskTrigger -AtStartup
-$WorkerSettings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -RestartCount 999 `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Days 365)
-
+# --- 3. Server Worker (pulls tasks via API) ---
 Unregister-ScheduledTask -TaskName "PipelineWorker" -Confirm:$false -ErrorAction SilentlyContinue
 
 Register-ScheduledTask `
     -TaskName "PipelineWorker" `
-    -Action $WorkerAction `
-    -Trigger $WorkerTrigger `
-    -Settings $WorkerSettings `
-    -Description "Soccer-cam pipeline worker - pulls and executes tasks from work queue" `
-    -RunLevel Highest `
-    -User "SYSTEM"
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -m training.worker run --config training\worker\server_worker_config.toml" -WorkingDirectory $ProjectDir) `
+    -Trigger $Trigger `
+    -Settings $CommonSettings `
+    -Principal $Principal `
+    -Description "Server pipeline worker"
 
-Write-Host "Registered PipelineWorker (runs at startup, auto-restarts)"
+Write-Host "Registered PipelineWorker"
 
-# --- Start both now ---
-Write-Host ""
-Write-Host "Starting tasks..."
+# Start in order: API first, then others
+Start-ScheduledTask -TaskName "PipelineAPI"
+Start-Sleep -Seconds 5
 Start-ScheduledTask -TaskName "PipelineOrchestrator"
 Start-ScheduledTask -TaskName "PipelineWorker"
 
-Write-Host "Done. Check status with:"
-Write-Host "  Get-ScheduledTask -TaskName 'PipelineOrchestrator' | Select-Object State"
-Write-Host "  Get-ScheduledTask -TaskName 'PipelineWorker' | Select-Object State"
-Write-Host "  uv run python -m training.pipeline status"
+Write-Host "`nAll started. Check: curl http://127.0.0.1:8643/api/status"

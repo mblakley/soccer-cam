@@ -139,3 +139,68 @@ class PipelineClient:
             return result is not None
         except Exception:
             return False
+
+    # --- Orchestrator operations ---
+
+    def enqueue(
+        self,
+        task_type: str,
+        *,
+        game_id: str | None = None,
+        priority: int = 50,
+        target_machine: str | None = None,
+        payload: dict | None = None,
+        max_attempts: int = 3,
+    ) -> int | None:
+        """Enqueue a work item. Returns item ID."""
+        result = self._post("/api/enqueue", {
+            "task_type": task_type,
+            "game_id": game_id,
+            "priority": priority,
+            "target_machine": target_machine,
+            "payload": payload,
+            "max_attempts": max_attempts,
+        })
+        return result.get("id") if result else None
+
+    def has_active_item(self, task_type: str, game_id: str | None = None) -> bool:
+        """Check if a queued/claimed/running item exists."""
+        params = f"?game_id={game_id}" if game_id else ""
+        result = self._get(f"/api/has-active/{task_type}{params}")
+        return result.get("active", False) if result else False
+
+    def reclaim_stale(self, timeout: int = 7200) -> list:
+        """Reclaim stale work items."""
+        result = self._post(f"/api/reclaim-stale?timeout={timeout}")
+        return result.get("items", []) if result else []
+
+    def set_game_state(self, game_id: str, state: str, error: str | None = None):
+        """Set pipeline state for a game."""
+        self._post(f"/api/game/{game_id}/state", {"state": state, "error": error})
+
+    def reset_attempts(self, game_id: str):
+        self._post(f"/api/game/{game_id}/reset-attempts")
+
+    def increment_attempts(self, game_id: str):
+        self._post(f"/api/game/{game_id}/increment-attempts")
+
+    def update_game_stats(self, game_id: str, **stats):
+        self._post(f"/api/game/{game_id}/stats", stats)
+
+    def get_games_needing_work(self) -> list:
+        return self._get("/api/games/needing-work") or []
+
+    def get_trainable_games(self) -> list:
+        return self._get("/api/games/trainable") or []
+
+    def get_state_counts(self) -> dict:
+        return self._get("/api/state-counts") or {}
+
+    def get_queue_items(self, status: str | None = None, limit: int = 50) -> list:
+        params = f"?limit={limit}"
+        if status:
+            params += f"&status={status}"
+        return self._get(f"/api/queue{params}") or []
+
+    def log_event(self, level: str, message: str, **kwargs):
+        self._post("/api/log-event", {"level": level, "message": message, **kwargs})

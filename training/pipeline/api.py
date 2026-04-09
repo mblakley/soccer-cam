@@ -193,6 +193,98 @@ def queue_items(status: str | None = None, limit: int = 50):
     return _get_queue().get_items(status=status, limit=limit)
 
 
+# --- Orchestrator endpoints (used by orchestrator loop via API) ---
+
+
+class EnqueueRequest(BaseModel):
+    task_type: str
+    game_id: str | None = None
+    priority: int = 50
+    target_machine: str | None = None
+    payload: dict | None = None
+    max_attempts: int = 3
+
+
+class SetStateRequest(BaseModel):
+    state: str
+    error: str | None = None
+
+
+@app.post("/api/enqueue")
+def enqueue(req: EnqueueRequest):
+    item_id = _get_queue().enqueue(
+        req.task_type,
+        game_id=req.game_id,
+        priority=req.priority,
+        target_machine=req.target_machine,
+        payload=req.payload,
+        max_attempts=req.max_attempts,
+    )
+    return {"id": item_id}
+
+
+@app.get("/api/has-active/{task_type}")
+def has_active(task_type: str, game_id: str | None = None):
+    return {"active": _get_queue().has_active_item(task_type, game_id)}
+
+
+@app.post("/api/reclaim-stale")
+def reclaim_stale(timeout: int = 7200):
+    reclaimed = _get_queue().reclaim_stale(timeout)
+    return {"reclaimed": len(reclaimed), "items": reclaimed}
+
+
+@app.post("/api/game/{game_id}/state")
+def set_game_state(game_id: str, req: SetStateRequest):
+    _get_registry().set_state(game_id, req.state, error=req.error)
+    return {"ok": True}
+
+
+@app.post("/api/game/{game_id}/reset-attempts")
+def reset_attempts(game_id: str):
+    _get_registry().reset_attempts(game_id)
+    return {"ok": True}
+
+
+@app.post("/api/game/{game_id}/increment-attempts")
+def increment_attempts(game_id: str):
+    _get_registry().increment_attempts(game_id)
+    return {"ok": True}
+
+
+@app.post("/api/game/{game_id}/stats")
+def update_stats(game_id: str, stats: dict):
+    _get_registry().update_stats(game_id, **stats)
+    return {"ok": True}
+
+
+@app.get("/api/games/needing-work")
+def games_needing_work():
+    return _get_registry().get_games_needing_work()
+
+
+@app.get("/api/games/trainable")
+def trainable_games():
+    return _get_registry().get_trainable_games()
+
+
+@app.get("/api/state-counts")
+def state_counts():
+    return _get_registry().get_state_counts()
+
+
+@app.post("/api/log-event")
+def log_event(event: dict):
+    _get_queue().log_event(
+        event.get("level", "info"),
+        event.get("message", ""),
+        category=event.get("category"),
+        game_id=event.get("game_id"),
+        hostname=event.get("hostname"),
+    )
+    return {"ok": True}
+
+
 # --- Server management ---
 
 
@@ -201,12 +293,14 @@ def start_api(queue: WorkQueue, registry: GameRegistry, cfg=None, port: int = 86
     init_app(queue, registry, cfg)
 
     def _run():
-        uvicorn.run(
+        config = uvicorn.Config(
             app,
             host="0.0.0.0",
             port=port,
             log_level="warning",
         )
+        server = uvicorn.Server(config)
+        server.run()
 
     thread = threading.Thread(target=_run, daemon=True, name="pipeline-api")
     thread.start()

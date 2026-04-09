@@ -81,14 +81,29 @@ def cmd_status(args):
     reg.close()
 
 
+def cmd_serve(args):
+    """Run the API server (must be running before orchestrator/workers)."""
+    import uvicorn
+
+    from training.pipeline.api import app, init_app
+    from training.pipeline.config import load_config
+    from training.pipeline.queue import WorkQueue
+    from training.pipeline.registry import GameRegistry
+
+    cfg = load_config()
+    queue = WorkQueue(cfg.paths.work_queue_db)
+    registry = GameRegistry(cfg.paths.registry_db)
+    init_app(queue, registry, cfg)
+
+    print(f"Starting Pipeline API on port {args.port}...")
+    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
+
+
 def cmd_run(args):
     from training.pipeline.orchestrator import Orchestrator
 
     orch = Orchestrator(dry_run=args.dry_run)
-    try:
-        orch.run(once=args.once)
-    finally:
-        orch.close()
+    orch.run(once=args.once)
 
 
 def cmd_games(args):
@@ -242,6 +257,9 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
 
+    p_serve = sub.add_parser("serve", help="Start API server (run first)")
+    p_serve.add_argument("--port", type=int, default=8643)
+
     sub.add_parser("status", help="Show pipeline dashboard")
 
     p_run = sub.add_parser("run", help="Start orchestrator loop")
@@ -282,6 +300,7 @@ def main():
     )
 
     commands = {
+        "serve": cmd_serve,
         "status": cmd_status,
         "run": cmd_run,
         "games": cmd_games,
