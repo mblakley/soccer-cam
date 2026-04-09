@@ -34,20 +34,40 @@ def run_tile(
     from training.pipeline.config import load_config
     cfg = load_config()
 
-    # Source: video files in per-game dir on server
-    server_game_dir = Path(cfg.paths.games_dir) / game_id
-    video_dir = server_game_dir / "video"
+    # Source: video files at the original path (F: on server, video share for remote)
+    # The stage task verified the path and stored it in the registry
+    video_path_str = payload.get("video_path", "")
 
-    # If running on a remote machine, access via share
-    if server_share and not video_dir.exists():
-        video_dir = Path(server_share) / "games" / game_id / "video"
+    if not video_path_str:
+        # Fall back to registry
+        from training.pipeline.registry import GameRegistry
+        reg = GameRegistry(cfg.paths.registry_db)
+        game = reg.get_game(game_id)
+        reg.close()
+        video_path_str = (game or {}).get("video_path", "")
+
+    if not video_path_str:
+        raise ValueError(f"No video_path for {game_id}")
+
+    video_dir = Path(video_path_str)
+
+    # Remote workers access via video share
+    if not video_dir.exists() and server_share:
+        # F:\... -> \\server\video\...
+        # Try common mappings
+        for prefix, share in [("F:\\", cfg.server.share_video + "\\"), ("F:/", cfg.server.share_video + "/")]:
+            if video_path_str.startswith(prefix):
+                video_dir = Path(video_path_str.replace(prefix, share, 1))
+                break
 
     if not video_dir.exists():
         raise FileNotFoundError(f"Video dir not found: {video_dir}")
 
-    video_files = sorted(video_dir.glob("*.mp4"))
+    video_files = sorted(video_dir.glob("*.mp4")) + sorted(video_dir.glob("*.dav"))
     if not video_files:
-        raise FileNotFoundError(f"No .mp4 files in {video_dir}")
+        video_files = sorted(video_dir.rglob("*.mp4"))
+    if not video_files:
+        raise FileNotFoundError(f"No video files in {video_dir}")
 
     # Local working directory
     local_game = local_work_dir / game_id
@@ -78,7 +98,8 @@ def run_tile(
     total_tiles = 0
     total_pack_bytes = 0
 
-    for video_path in sorted(local_video.glob("*.mp4")):
+    local_videos = sorted(local_video.glob("*.mp4")) + sorted(local_video.glob("*.dav"))
+    for video_path in local_videos:
         segment = video_path.stem
         logger.info("  Tiling segment: %s", segment)
 
@@ -106,11 +127,10 @@ def run_tile(
 
     local_manifest.rebuild_segment_stats()
     local_manifest.set_metadata("tiled_at", str(time.time()))
-    local_manifest.close()
 
-    # Step 3: Push results back to server
-    dest_game_dir = server_game_dir
-    if server_share and not server_game_dir.exists():
+    # Step 3: Push results back to server per-game dir on D:
+    dest_game_dir = Path(cfg.paths.games_dir) / game_id
+    if server_share and not dest_game_dir.exists():
         dest_game_dir = Path(server_share) / "games" / game_id
 
     dest_packs = dest_game_dir / "tile_packs"
@@ -120,6 +140,14 @@ def run_tile(
     for pack_file in local_packs.glob("*.pack"):
         dest = dest_packs / pack_file.name
         shutil.copy2(str(pack_file), str(dest))
+
+    # Rewrite pack_file paths in manifest to point to server destination
+    local_manifest.conn.execute(
+        "UPDATE tiles SET pack_file = REPLACE(pack_file, ?, ?)",
+        (str(local_packs), str(dest_packs)),
+    )
+    local_manifest.conn.commit()
+    local_manifest.close()
 
     # Push manifest.db
     dest_manifest = dest_game_dir / "manifest.db"
