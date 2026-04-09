@@ -72,7 +72,7 @@ Unregister-ScheduledTask -TaskName "AnnotationServer" -Confirm:$false -ErrorActi
 
 Register-ScheduledTask `
     -TaskName "AnnotationServer" `
-    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -m training.annotation_server --port 8642" -WorkingDirectory $ProjectDir) `
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run uvicorn training.annotation_server:app --host 0.0.0.0 --port 8642" -WorkingDirectory $ProjectDir) `
     -Trigger $Trigger `
     -Settings $CommonSettings `
     -Principal $Principal `

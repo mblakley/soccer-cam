@@ -136,8 +136,12 @@ def advance_state(current: str, task_type: str, success: bool) -> str:
         return f"FAILED:{current}"
 
     new_state = TASK_COMPLETE_STATE.get(task_type)
-    if new_state and can_transition(current, new_state):
-        return new_state
+    if new_state:
+        # Same state = no-op (stale task completion for already-advanced game)
+        if new_state == current:
+            return current
+        if can_transition(current, new_state):
+            return new_state
 
     # If no explicit transition, stay in current state
     logger.warning(
