@@ -5,7 +5,7 @@ advances states based on completed work items. Workers never touch state.
 
 States:
     REGISTERED → STAGING → TILED → LABELING → LABELED →
-    QA_PENDING → QA_DONE → TRAINABLE
+    QA_PENDING → QA_DONE → REVIEW_PENDING → TRAINABLE
 
     EXCLUDED  — not trainable (futsal, indoor, gopro)
     FAILED:{stage} — failed at a stage, awaiting retry
@@ -27,6 +27,7 @@ STATES = {
     "LABELED",
     "QA_PENDING",
     "QA_DONE",
+    "REVIEW_PENDING",
     "TRAINABLE",
     "EXCLUDED",
     "HOLD",
@@ -40,12 +41,13 @@ TRANSITIONS = {
     "LABELING": {"LABELED", "HOLD"},
     "LABELED": {"QA_PENDING", "TRAINABLE", "HOLD"},  # can skip QA
     "QA_PENDING": {"QA_DONE", "HOLD"},
-    "QA_DONE": {"TRAINABLE", "HOLD"},
+    "QA_DONE": {"REVIEW_PENDING", "TRAINABLE", "HOLD"},
+    "REVIEW_PENDING": {"TRAINABLE", "HOLD"},
     "TRAINABLE": {"HOLD"},  # can go back for re-training later
     "EXCLUDED": {"REGISTERED"},  # can un-exclude
     "HOLD": {  # can resume to any stage
         "REGISTERED", "STAGING", "TILED", "LABELING",
-        "LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE",
+        "LABELED", "QA_PENDING", "QA_DONE", "REVIEW_PENDING", "TRAINABLE",
     },
 }
 
@@ -57,7 +59,8 @@ STATE_TO_TASK = {
     "LABELING": None,       # labeling in progress, wait for completion
     "LABELED": "sonnet_qa",
     "QA_PENDING": None,     # QA in progress
-    "QA_DONE": None,        # ready for training set inclusion
+    "QA_DONE": "generate_review",
+    "REVIEW_PENDING": None,  # waiting for human review
 }
 
 # What state a game enters when a task type starts
@@ -66,6 +69,7 @@ TASK_START_STATE = {
     "tile": "STAGING",
     "label": "LABELING",
     "sonnet_qa": "QA_PENDING",
+    "generate_review": "REVIEW_PENDING",
 }
 
 # What state a game enters when a task type completes
@@ -74,6 +78,7 @@ TASK_COMPLETE_STATE = {
     "tile": "TILED",
     "label": "LABELED",
     "sonnet_qa": "QA_DONE",
+    "generate_review": "REVIEW_PENDING",
     "ingest_reviews": "TRAINABLE",
 }
 
