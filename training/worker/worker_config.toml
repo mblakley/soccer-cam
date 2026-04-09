@@ -9,7 +9,7 @@
 hostname = ""                      # set to machine hostname
 capabilities = []                  # set per machine (see above)
 api_url = "http://192.168.86.152:8643"
-server_share = "\\\\192.168.86.152\\training"  # SMB for bulk file copy only
+server_share = '\\192.168.86.152\training'  # SMB for bulk file copy only (single quotes = literal)
 local_work_dir = "C:/soccer-cam-label/work"
 local_models_dir = "C:/soccer-cam-label/models"
 
