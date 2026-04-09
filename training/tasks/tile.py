@@ -58,6 +58,15 @@ def run_tile(
     local_videos = sorted(io.local_video.glob("*.mp4")) + sorted(io.local_video.glob("*.dav"))
     for video_path in local_videos:
         segment = video_path.stem
+
+        # Check disk space before each segment (~20GB per segment)
+        import shutil
+        _, _, free = shutil.disk_usage(str(io.local_work_dir))
+        free_gb = free / (1024**3)
+        if free_gb < 10:
+            logger.error("Disk critically low (%.1fGB free), stopping tiling early", free_gb)
+            break
+
         logger.info("  Tiling segment: %s", segment)
 
         t0 = time.time()
