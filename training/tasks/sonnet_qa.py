@@ -127,20 +127,158 @@ def run_sonnet_qa(
             # Brief pause between API calls
             time.sleep(2)
 
+    # ================================================================
+    # Phase 2: Trajectory gap detection — find where ball disappeared
+    # ================================================================
+    gap_verdicts = {"found": 0, "not_found": 0, "error": 0}
+
+    try:
+        from training.data_prep.trajectory_gaps import (
+            build_trajectories_from_manifest,
+            find_gap_candidates,
+            filter_static_gaps,
+            get_gap_context_frames,
+            build_gap_filmstrip,
+        )
+
+        trajectories = build_trajectories_from_manifest(
+            manifest.conn,
+            min_length=cfg.qa.min_trajectory_length,
+        )
+
+        if trajectories:
+            all_gaps = find_gap_candidates(trajectories, frame_interval=cfg.tiling.frame_interval)
+            all_gaps = filter_static_gaps(all_gaps, manifest.conn)
+
+            gap_budget = cfg.qa.gap_budget
+            gaps_to_check = all_gaps[:gap_budget]
+
+            if gaps_to_check:
+                # Pull any additional packs needed for gap context frames
+                gap_segments = set()
+                for gap in gaps_to_check:
+                    gap_segments.add(gap["segment"])
+                    if gap.get("context_before"):
+                        gap_segments.add(gap["segment"])
+                gap_pack_files = set()
+                for seg in gap_segments:
+                    rows = manifest.conn.execute(
+                        "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
+                        (seg,),
+                    ).fetchall()
+                    for r in rows:
+                        gap_pack_files.add(r[0])
+                _pull_selective_packs(task_io, gap_pack_files)
+
+                logger.info("Phase 2: checking %d trajectory gaps (%d trajectories, %d total gaps)",
+                            len(gaps_to_check), len(trajectories), len(all_gaps))
+
+                for gap_idx, gap in enumerate(gaps_to_check):
+                    traj = trajectories[gap["trajectory_idx"]]
+                    context = get_gap_context_frames(gap, traj, n_before=3, n_after=2)
+
+                    if len(context) < 2:
+                        continue
+
+                    filmstrip_path = task_io.local_game / f"gap_filmstrip_{gap_idx}.jpg"
+                    ok = build_gap_filmstrip(context, manifest, packs_dir, filmstrip_path)
+                    if not ok:
+                        gap_verdicts["error"] += 1
+                        continue
+
+                    logger.info(
+                        "Gap %d/%d (%s): fi=%d traj_len=%d, calling Claude...",
+                        gap_idx + 1, len(gaps_to_check), gap["gap_type"],
+                        gap["frame_idx"], gap["trajectory_length"],
+                    )
+
+                    try:
+                        t0 = time.time()
+                        result = _call_claude_gap(filmstrip_path, context)
+                        elapsed = time.time() - t0
+
+                        # Find the gap frame's tile_stem
+                        gap_frame = next((f for f in context if f["role"] == "gap"), None)
+                        if gap_frame and result:
+                            tile_stem = gap_frame["tile_stem"]
+                            if result == "FOUND":
+                                manifest.set_qa_verdict(tile_stem, "gap_ball_found")
+                                gap_verdicts["found"] += 1
+                            else:
+                                manifest.set_qa_verdict(tile_stem, "gap_no_ball")
+                                gap_verdicts["not_found"] += 1
+
+                                # Tentatively mark as out_of_play for track ends
+                                if gap["gap_type"] == "track_end":
+                                    manifest.insert_ball_event(
+                                        segment=gap["segment"],
+                                        frame_idx=gap["frame_idx"],
+                                        event_type="out_of_play",
+                                        pano_x=gap["pano_x"],
+                                        pano_y=gap["pano_y"],
+                                        trajectory_id=gap["trajectory_idx"],
+                                        source="sonnet_qa",
+                                    )
+
+                            logger.info(
+                                "Gap %d: %s in %.1fs",
+                                gap_idx + 1, result, elapsed,
+                            )
+                        else:
+                            gap_verdicts["error"] += 1
+
+                    except Exception as e:
+                        logger.exception("Gap %d Claude call failed: %s", gap_idx + 1, e)
+                        gap_verdicts["error"] += 1
+
+                    time.sleep(2)
+
+                # Store gap metadata for generate_review
+                gap_positions = {}
+                for gap in gaps_to_check:
+                    gap_frame = None
+                    traj = trajectories[gap["trajectory_idx"]]
+                    context = get_gap_context_frames(gap, traj, n_before=0, n_after=0)
+                    if context:
+                        gap_frame = context[0]
+                        gap_positions[gap_frame["tile_stem"]] = {
+                            "pano_x": gap["pano_x"],
+                            "pano_y": gap["pano_y"],
+                            "tile_local_x": gap_frame["tile_local_x"],
+                            "tile_local_y": gap_frame["tile_local_y"],
+                            "gap_type": gap["gap_type"],
+                            "trajectory_length": gap["trajectory_length"],
+                        }
+                manifest.set_metadata("gap_positions", json.dumps(gap_positions))
+
+                logger.info(
+                    "Phase 2 complete: %d gaps checked (found=%d, not_found=%d, error=%d)",
+                    len(gaps_to_check), gap_verdicts["found"],
+                    gap_verdicts["not_found"], gap_verdicts["error"],
+                )
+        else:
+            logger.info("Phase 2: no trajectories found, skipping gap detection")
+
+    except Exception as e:
+        logger.exception("Phase 2 failed: %s", e)
+
     manifest.set_metadata("qa_at", str(time.time()))
     manifest.close()
 
-    # Step 5: Push updated manifest back
+    # Step 6: Push updated manifest back
     task_io.push_manifest()
 
     logger.info(
-        "QA complete for %s: %d reviewed (ball=%d, not_ball=%d, error=%d)",
-        game_id, total_reviewed, verdicts["ball"], verdicts["not_ball"], verdicts["error"],
+        "QA complete for %s: Phase1=%d tiles (ball=%d, not_ball=%d), Phase2=%d gaps (found=%d, not_found=%d)",
+        game_id, total_reviewed, verdicts["ball"], verdicts["not_ball"],
+        gap_verdicts["found"] + gap_verdicts["not_found"],
+        gap_verdicts["found"], gap_verdicts["not_found"],
     )
 
     return {
         "tiles_reviewed": total_reviewed,
         "verdicts": verdicts,
+        "gap_verdicts": gap_verdicts,
     }
 
 
@@ -427,3 +565,71 @@ def _extract_json(text: str) -> dict | None:
             pass
 
     return None
+
+
+def _call_claude_gap(filmstrip_path: Path, context_frames: list[dict]) -> str | None:
+    """Call Claude with a trajectory gap filmstrip.
+
+    Shows Sonnet a sequence of frames with ball positions marked, plus
+    the gap frame where the ball should be. Returns "FOUND" or "NOT_FOUND".
+    """
+    n_frames = len(context_frames)
+    n_before = sum(1 for f in context_frames if f["role"] == "before")
+    gap_frame_num = n_before + 1  # 1-indexed position of the gap frame
+
+    prompt = (
+        f"Read the image at {filmstrip_path} and analyze it. "
+        f"This filmstrip shows {n_frames} consecutive frames from a soccer camera tracking a ball. "
+        f"The frames are arranged left to right in time order. "
+        f"Red circles mark where the ball was confirmed in earlier frames. "
+        f"The yellow circle with '?' in frame {gap_frame_num} marks where the ball SHOULD be "
+        f"based on its trajectory, but the detector lost it. "
+        f"Look carefully near the yellow marker — can you see a soccer ball there? "
+        f"It would be 8-40 pixels, white/black, roughly circular. "
+        f"Respond with ONLY the word FOUND or NOT_FOUND."
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--model", "sonnet",
+                "--allowedTools", "Read",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            logger.warning("claude CLI gap call failed (rc=%d): %s",
+                           result.returncode, result.stderr[:200])
+            return None
+
+        output = result.stdout.strip()
+        if not output:
+            return None
+
+        # Parse the response — extract FOUND/NOT_FOUND from JSON wrapper
+        data = _extract_json(output)
+        if data and isinstance(data, dict):
+            text = data.get("result", "")
+        else:
+            text = output
+
+        text = str(text).upper().strip()
+        if "FOUND" in text and "NOT" not in text:
+            return "FOUND"
+        elif "NOT_FOUND" in text or "NOT FOUND" in text:
+            return "NOT_FOUND"
+        else:
+            logger.warning("Unexpected gap response: %s", text[:100])
+            return "NOT_FOUND"
+
+    except subprocess.TimeoutExpired:
+        logger.warning("claude CLI gap call timed out")
+        return None
+    except Exception as e:
+        logger.warning("claude CLI gap call error: %s", e)
+        return None
