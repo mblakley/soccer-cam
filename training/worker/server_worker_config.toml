@@ -11,7 +11,7 @@ local_models_dir = "D:/training_data/models"
 
 [resources]
 max_gpu_temp = 85
-min_disk_free_gb = 10
+min_disk_free_gb = 25
 gpu_device = 0
 idle_games = []
 
