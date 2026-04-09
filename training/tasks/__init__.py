@@ -57,6 +57,18 @@ def _load_handlers():
         from training.tasks import train  # noqa: F401
     except ImportError:
         pass
+    try:
+        from training.tasks import sonnet_qa  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        from training.tasks import generate_review  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        from training.tasks import ingest_reviews  # noqa: F401
+    except ImportError:
+        pass
 
 
 def list_tasks() -> list[str]:

@@ -25,7 +25,7 @@ def cmd_run(args):
         for candidate in [
             Path("worker_config.toml"),
             Path("C:/soccer-cam-label/worker_config.toml"),
-            Path(__file__).parent.parent / "pipeline" / "config.toml",
+            Path(__file__).parent / "server_worker_config.toml",  # server default
         ]:
             if candidate.exists():
                 worker = Worker.from_config(candidate)
