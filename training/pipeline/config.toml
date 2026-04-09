@@ -1,0 +1,74 @@
+# Unified Pipeline Configuration
+# All paths, machines, thresholds in one place.
+
+[paths]
+# Server data directories (D: is HDD — sequential OK, avoid random I/O)
+registry_db = "D:/training_data/registry.db"
+work_queue_db = "D:/training_data/work_queue.db"
+games_dir = "D:/training_data/games"          # per-game dirs: manifest.db + tile_packs/
+staging = "D:/training_data/staging"
+training_sets = "D:/training_data/training_sets"
+game_registry = "D:/training_data/game_registry.json"
+log_file = "D:/training_data/pipeline.log"
+# Server local SSD for processing (pull-local-process-push)
+server_work_dir = "G:/pipeline_work"
+
+[paths.archive]
+# F: is USB archive — read-only source for original videos, write for backups
+root = "F:/"
+video_sources = "F:/training_data"
+checkpoints = "F:/training_checkpoints"
+backups = "F:/training_backups"
+
+[server]
+hostname = "DESKTOP-5L867J8"
+ip = "192.168.86.152"
+share_training = "\\\\192.168.86.152\\training"
+share_video = "\\\\192.168.86.152\\video"
+
+[orchestrator]
+check_interval = 60           # seconds between passes
+stale_heartbeat = 7200        # 2 hours → assume worker died
+max_staging_concurrent = 1    # one game staging at a time (HDD)
+min_new_games_for_retrain = 2 # games reaching TRAINABLE before re-training
+min_new_labels_for_retrain = 5000
+
+[machines.laptop]
+hostname = "jared-laptop"
+gpu = "RTX 4070"
+capabilities = ["tile", "label", "train"]
+deploy_dir = "C:/soccer-cam-label"
+
+[machines.fortnite]
+hostname = "FORTNITE-OP"
+gpu = "RTX 3060 Ti"
+capabilities = ["label", "tile"]
+deploy_dir = "C:/soccer-cam-label"
+
+[tiling]
+frame_interval = 4
+diff_threshold = 2.0
+tile_cols = 7
+tile_rows = 3
+tile_size = 640
+
+[labeling]
+onnx_model = "model.onnx"
+confidence = 0.45
+nms_iou = 0.5
+
+[training]
+model_base = "yolo26l.pt"
+epochs = 50
+batch_size = 16
+imgsz = 640
+neg_ratio = 1.0
+patience = 30
+
+[qa]
+sonnet_batch_limit = 100      # batches per hour
+sonnet_batch_size = 20        # tiles per batch (3x2 grids → ~3 images)
+
+[ntfy]
+topic = "video_grouper_mblakley43431"
+enabled = true
