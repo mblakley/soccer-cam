@@ -91,8 +91,10 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class QAConfig:
-    sonnet_batch_limit: int = 100
-    sonnet_batch_size: int = 20
+    sonnet_batch_limit: int = 20
+    sonnet_batch_size: int = 6
+    gap_budget: int = 20
+    min_trajectory_length: int = 5
 
 
 @dataclass(frozen=True)

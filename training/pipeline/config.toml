@@ -68,6 +68,8 @@ patience = 30
 [qa]
 sonnet_batch_limit = 20       # max grids per game (20 grids = 120 tiles, ~7 min)
 sonnet_batch_size = 6         # tiles per grid (matches 3x2 layout)
+gap_budget = 20               # max filmstrips for trajectory gap checking (Phase 2)
+min_trajectory_length = 5     # min frames to consider a trajectory for gap analysis
 
 [ntfy]
 topic = "video_grouper_mblakley43431"

@@ -80,6 +80,19 @@ CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ball_events (
+    id INTEGER PRIMARY KEY,
+    segment TEXT NOT NULL,
+    frame_idx INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    pano_x REAL,
+    pano_y REAL,
+    trajectory_id INTEGER,
+    source TEXT,
+    created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_ball_events_seg ON ball_events(segment, frame_idx);
 """
 
 
@@ -347,6 +360,53 @@ class GameManifest:
             verdicts,
         )
         self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Ball events (out-of-play / back-in-play)
+    # ------------------------------------------------------------------
+
+    def insert_ball_event(
+        self,
+        segment: str,
+        frame_idx: int,
+        event_type: str,
+        pano_x: float | None = None,
+        pano_y: float | None = None,
+        trajectory_id: int | None = None,
+        source: str | None = None,
+    ):
+        """Insert a ball event (out_of_play, back_in_play, etc.)."""
+        import time
+
+        self.conn.execute(
+            """INSERT INTO ball_events
+               (segment, frame_idx, event_type, pano_x, pano_y, trajectory_id, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (segment, frame_idx, event_type, pano_x, pano_y, trajectory_id, source, time.time()),
+        )
+        self.conn.commit()
+
+    def get_ball_events(
+        self, segment: str | None = None, event_type: str | None = None
+    ) -> list[dict]:
+        """Query ball events, optionally filtered."""
+        query = "SELECT * FROM ball_events WHERE 1=1"
+        params: list = []
+        if segment:
+            query += " AND segment = ?"
+            params.append(segment)
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        query += " ORDER BY segment, frame_idx"
+
+        rows = self.conn.execute(query, params).fetchall()
+        cols = [d[0] for d in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()]
+        # Handle case where table doesn't exist yet (older manifests)
+        if not cols:
+            return []
+        col_names = [c[1] for c in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()]
+        return [dict(zip(col_names, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # Stats
