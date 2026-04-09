@@ -16,8 +16,8 @@ Write-Host ""
 
 # Step 1: Map network shares
 Write-Host "[1/5] Mapping network shares..."
-net use \\$ServerIP\training /user:training amy4ever /persistent:yes 2>$null
-net use \\$ServerIP\video /user:training amy4ever /persistent:yes 2>$null
+net use \\$ServerIP\training /user:trainer amy4ever /persistent:yes 2>$null
+net use \\$ServerIP\video /user:trainer amy4ever /persistent:yes 2>$null
 
 if (Test-Path "\\$ServerIP\training\work_queue.db") {
     Write-Host "  Training share: OK"
