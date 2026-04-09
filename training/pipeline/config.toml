@@ -3,8 +3,8 @@
 
 [paths]
 # Server data directories (D: is HDD — sequential OK, avoid random I/O)
-registry_db = "D:/training_data/registry.db"
-work_queue_db = "D:/training_data/work_queue.db"
+registry_db = "G:/pipeline_db/registry.db"
+work_queue_db = "G:/pipeline_db/work_queue.db"
 games_dir = "D:/training_data/games"          # per-game dirs: manifest.db + tile_packs/
 staging = "D:/training_data/staging"
 training_sets = "D:/training_data/training_sets"
