@@ -16,13 +16,13 @@ import io
 import json
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 from training.tasks import register_task
+from training.tasks.io import TaskIO
 
 logger = logging.getLogger(__name__)
 
@@ -48,40 +48,16 @@ def run_sonnet_qa(
 
     cfg = load_config()
 
-    # Locate game data
-    server_game_dir = Path(cfg.paths.games_dir) / game_id
-    if server_share and not server_game_dir.exists():
-        server_game_dir = Path(server_share) / "games" / game_id
-
     # Step 1: Pull manifest + packs to local SSD
-    local_game = local_work_dir / game_id
-    local_game.mkdir(parents=True, exist_ok=True)
-
-    server_manifest = server_game_dir / "manifest.db"
-    if not server_manifest.exists():
-        raise FileNotFoundError(f"Manifest not found: {server_manifest}")
-
-    shutil.copy2(str(server_manifest), str(local_game / "manifest.db"))
-
-    # Copy pack files
-    server_packs = server_game_dir / "tile_packs"
-    local_packs = local_game / "tile_packs"
-
-    # Also check old pack location
-    old_pack_dir = Path(cfg.paths.games_dir).parent / "tile_packs" / game_id
-    pack_source = server_packs if server_packs.exists() else old_pack_dir
-
-    if pack_source.exists():
-        local_packs.mkdir(parents=True, exist_ok=True)
-        for pack_file in pack_source.glob("*.pack"):
-            dest = local_packs / pack_file.name
-            if not dest.exists():
-                shutil.copy2(str(pack_file), str(dest))
+    io = TaskIO(game_id, local_work_dir, server_share)
+    io.ensure_space(needed_gb=3)
+    io.pull_manifest()
+    io.pull_packs()
 
     # Step 2: Get tiles that need QA
     from training.data_prep.game_manifest import GameManifest
 
-    manifest = GameManifest(local_game)
+    manifest = GameManifest(io.local_game)
     manifest.open(create=False)
 
     candidates = _get_qa_candidates(manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size)
@@ -107,7 +83,7 @@ def run_sonnet_qa(
         batch = candidates[batch_idx : batch_idx + batch_size]
 
         # Build composite grids
-        grids = _build_grids(batch, manifest, local_packs)
+        grids = _build_grids(batch, manifest, io.local_packs)
 
         for grid_info in grids:
             try:
@@ -135,7 +111,7 @@ def run_sonnet_qa(
     manifest.close()
 
     # Step 4: Push updated manifest back
-    shutil.copy2(str(local_game / "manifest.db"), str(server_manifest))
+    io.push_manifest()
 
     logger.info(
         "QA complete for %s: %d reviewed (ball=%d, not_ball=%d, error=%d)",

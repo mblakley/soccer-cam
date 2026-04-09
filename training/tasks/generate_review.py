@@ -12,12 +12,12 @@ Pull-local-process-push pattern:
 
 import json
 import logging
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
 from training.tasks import register_task
+from training.tasks.io import TaskIO
 
 logger = logging.getLogger(__name__)
 
@@ -38,32 +38,15 @@ def run_generate_review(
 
     cfg = load_config()
 
-    # Locate game data
-    server_game_dir = Path(cfg.paths.games_dir) / game_id
-    if server_share and not server_game_dir.exists():
-        server_game_dir = Path(server_share) / "games" / game_id
-
-    # Pull manifest
-    local_game = local_work_dir / game_id
-    local_game.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(server_game_dir / "manifest.db"), str(local_game / "manifest.db"))
-
-    # Copy packs
-    local_packs = local_game / "tile_packs"
-    local_packs.mkdir(parents=True, exist_ok=True)
-    pack_source = server_game_dir / "tile_packs"
-    old_pack_dir = Path(cfg.paths.games_dir).parent / "tile_packs" / game_id
-    if not pack_source.exists():
-        pack_source = old_pack_dir
-    if pack_source.exists():
-        for pf in pack_source.glob("*.pack"):
-            dest = local_packs / pf.name
-            if not dest.exists():
-                shutil.copy2(str(pf), str(dest))
+    # Pull manifest + packs to local SSD
+    io = TaskIO(game_id, local_work_dir, server_share)
+    io.ensure_space(needed_gb=3)
+    io.pull_manifest()
+    io.pull_packs()
 
     from training.data_prep.game_manifest import GameManifest
 
-    manifest = GameManifest(local_game)
+    manifest = GameManifest(io.local_game)
     manifest.open(create=False)
 
     # Find tiles needing human review (prioritized)
@@ -84,7 +67,7 @@ def run_generate_review(
     for cand in candidates:
         from training.tasks.sonnet_qa import _read_tile_from_packs
 
-        jpeg_bytes = _read_tile_from_packs(manifest, cand["tile_stem"], local_packs)
+        jpeg_bytes = _read_tile_from_packs(manifest, cand["tile_stem"], io.local_packs)
         if jpeg_bytes is None:
             continue
 
