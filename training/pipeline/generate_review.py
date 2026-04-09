@@ -274,10 +274,13 @@ def generate_review_packet(count=500, game_filter=None):
 
     # Generate crops
     frames = []
-    for i, cand in enumerate(candidates):
+    written = 0
+    for cand in candidates:
         tile_img = read_tile_from_pack(conn, cand["game_id"], cand["tile_stem"])
         if tile_img is None:
             continue
+
+        i = written  # sequential index for filenames
 
         # Save full tile
         full_path = full_dir / f"full_{i:05d}.jpg"
@@ -321,8 +324,9 @@ def generate_review_packet(count=500, game_filter=None):
             "col": cand["col"],
         })
 
-        if (i + 1) % 50 == 0:
-            logger.info("  Generated %d/%d crops", i + 1, len(candidates))
+        written += 1
+        if written % 50 == 0:
+            logger.info("  Generated %d crops", written)
 
     # Write manifest
     manifest = {
