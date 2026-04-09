@@ -66,8 +66,8 @@ neg_ratio = 1.0
 patience = 30
 
 [qa]
-sonnet_batch_limit = 100      # batches per hour
-sonnet_batch_size = 20        # tiles per batch (3x2 grids → ~3 images)
+sonnet_batch_limit = 20       # max grids per game (20 grids = 120 tiles, ~7 min)
+sonnet_batch_size = 6         # tiles per grid (matches 3x2 layout)
 
 [ntfy]
 topic = "video_grouper_mblakley43431"

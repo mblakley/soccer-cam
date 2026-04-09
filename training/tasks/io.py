@@ -140,6 +140,11 @@ class TaskIO:
         if not src.exists():
             raise FileNotFoundError(f"Server manifest not found: {src}")
         self.local_game.mkdir(parents=True, exist_ok=True)
+        # Remove stale WAL/SHM from previous runs before copying fresh manifest
+        for suffix in ("-wal", "-shm"):
+            stale = Path(str(self.local_manifest_path) + suffix)
+            if stale.exists():
+                stale.unlink()
         shutil.copy2(str(src), str(self.local_manifest_path))
         logger.debug("Pulled manifest.db for %s (%.1f MB)",
                      self.game_id, os.path.getsize(str(self.local_manifest_path)) / 1e6)

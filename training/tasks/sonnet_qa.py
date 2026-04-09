@@ -12,7 +12,6 @@ Pull-local-process-push pattern:
 Usage (as task): enqueued by orchestrator for LABELED games
 """
 
-import io
 import json
 import logging
 import os
@@ -48,16 +47,15 @@ def run_sonnet_qa(
 
     cfg = load_config()
 
-    # Step 1: Pull manifest + packs to local SSD
-    io = TaskIO(game_id, local_work_dir, server_share)
-    io.ensure_space(needed_gb=3)
-    io.pull_manifest()
-    io.pull_packs()
+    # Step 1: Pull manifest to local SSD (lightweight — ~200MB)
+    task_io = TaskIO(game_id, local_work_dir, server_share)
+    task_io.ensure_space(needed_gb=3)
+    task_io.pull_manifest()
 
-    # Step 2: Get tiles that need QA
+    # Step 2: Get tiles that need QA (before pulling packs)
     from training.data_prep.game_manifest import GameManifest
 
-    manifest = GameManifest(io.local_game)
+    manifest = GameManifest(task_io.local_game)
     manifest.open(create=False)
 
     candidates = _get_qa_candidates(manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size)
@@ -69,12 +67,18 @@ def run_sonnet_qa(
 
     logger.info("QA: %d candidate tiles for %s", len(candidates), game_id)
 
-    # Step 3: Process in batches
+    # Step 3: Pull only the pack files that QA candidates reference to SSD
+    needed_packs = _find_needed_packs(candidates, manifest)
+    _pull_selective_packs(task_io, needed_packs)
+    packs_dir = task_io.local_packs
+
+    # Step 4: Process in batches
     batch_size = cfg.qa.sonnet_batch_size
     max_batches = cfg.qa.sonnet_batch_limit
     total_reviewed = 0
     verdicts = {"ball": 0, "not_ball": 0, "error": 0}
 
+    grid_num = 0
     for batch_idx in range(0, len(candidates), batch_size):
         if batch_idx // batch_size >= max_batches:
             logger.info("Rate limit reached (%d batches), stopping", max_batches)
@@ -82,17 +86,27 @@ def run_sonnet_qa(
 
         batch = candidates[batch_idx : batch_idx + batch_size]
 
-        # Build composite grids
-        grids = _build_grids(batch, manifest, io.local_packs)
+        # Build composite grids (save to local work dir for claude to read)
+        grids = _build_grids(batch, manifest, packs_dir, task_io.local_game)
 
         for grid_info in grids:
+            grid_num += 1
+            n_tiles = len(grid_info["tile_stems"])
+            logger.info(
+                "Grid %d/%d: calling Claude on %d tiles (%s)...",
+                grid_num, max_batches, n_tiles, grid_info["image_path"].name,
+            )
             try:
+                t0 = time.time()
                 results = _call_claude(grid_info["image_path"], grid_info["tile_stems"])
+                elapsed = time.time() - t0
 
+                balls = 0
                 for stem, verdict in results.items():
                     if verdict in ("BALL", "TRUE_POSITIVE"):
                         manifest.set_qa_verdict(stem, "true_positive")
                         verdicts["ball"] += 1
+                        balls += 1
                     elif verdict in ("NOT_BALL", "FALSE_POSITIVE"):
                         manifest.set_qa_verdict(stem, "false_positive")
                         verdicts["not_ball"] += 1
@@ -100,9 +114,15 @@ def run_sonnet_qa(
                         verdicts["error"] += 1
                     total_reviewed += 1
 
+                logger.info(
+                    "Grid %d: %d/%d BALL in %.1fs (total: %d reviewed, %d ball, %d not_ball)",
+                    grid_num, balls, n_tiles, elapsed,
+                    total_reviewed, verdicts["ball"], verdicts["not_ball"],
+                )
+
             except Exception as e:
-                logger.warning("Claude QA batch failed: %s", e)
-                verdicts["error"] += len(grid_info["tile_stems"])
+                logger.exception("Claude QA grid %d failed: %s", grid_num, e)
+                verdicts["error"] += n_tiles
 
             # Brief pause between API calls
             time.sleep(2)
@@ -110,8 +130,8 @@ def run_sonnet_qa(
     manifest.set_metadata("qa_at", str(time.time()))
     manifest.close()
 
-    # Step 4: Push updated manifest back
-    io.push_manifest()
+    # Step 5: Push updated manifest back
+    task_io.push_manifest()
 
     logger.info(
         "QA complete for %s: %d reviewed (ball=%d, not_ball=%d, error=%d)",
@@ -122,6 +142,54 @@ def run_sonnet_qa(
         "tiles_reviewed": total_reviewed,
         "verdicts": verdicts,
     }
+
+
+def _find_needed_packs(candidates: list[dict], manifest) -> set[str]:
+    """Determine which pack files contain tiles we need to QA."""
+    import re
+
+    segments = set()
+    for cand in candidates:
+        m = re.match(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$", cand["tile_stem"])
+        if m:
+            segments.add(m.group(1))
+
+    # Query manifest for the pack files these segments reference
+    conn = manifest.conn
+    pack_files = set()
+    for segment in segments:
+        rows = conn.execute(
+            "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
+            (segment,),
+        ).fetchall()
+        for r in rows:
+            pack_files.add(r[0])
+
+    return pack_files
+
+
+def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
+    """Copy only the specific pack files needed for QA."""
+    import shutil
+
+    task_io.local_packs.mkdir(parents=True, exist_ok=True)
+    server_packs = task_io.server_packs()
+    copied = 0
+    for pack_path_str in pack_files:
+        pack_name = Path(pack_path_str).name
+        src = server_packs / pack_name
+        dest = task_io.local_packs / pack_name
+        if not dest.exists() and src.exists():
+            size_gb = src.stat().st_size / (1024**3)
+            logger.info("Copying %s (%.1f GB) to SSD...", pack_name, size_gb)
+            shutil.copy2(str(src), str(dest))
+            copied += 1
+            logger.info("Copied %s (%.1f GB)", pack_name, size_gb)
+        elif dest.exists():
+            logger.info("Pack %s already on SSD, skipping", pack_name)
+        else:
+            logger.warning("Pack source not found: %s", src)
+    logger.info("Pulled %d/%d needed pack files to SSD", copied, len(pack_files))
 
 
 def _get_qa_candidates(manifest, max_tiles: int = 2000) -> list[dict]:
@@ -150,7 +218,8 @@ def _get_qa_candidates(manifest, max_tiles: int = 2000) -> list[dict]:
 def _build_grids(
     candidates: list[dict],
     manifest,
-    local_packs: Path,
+    packs_dir: Path,
+    output_dir: Path,
 ) -> list[dict]:
     """Build composite grid images from tile candidates.
 
@@ -162,6 +231,7 @@ def _build_grids(
 
     grids = []
     tile_size = 640
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for grid_start in range(0, len(candidates), TILES_PER_GRID):
         batch = candidates[grid_start : grid_start + TILES_PER_GRID]
@@ -180,7 +250,7 @@ def _build_grids(
             tile_stem = cand["tile_stem"]
             tile_stems.append(tile_stem)
 
-            jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, local_packs)
+            jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
             if jpeg_bytes is None:
                 continue
 
@@ -208,8 +278,8 @@ def _build_grids(
                 3,
             )
 
-        # Save composite
-        grid_path = local_packs.parent / f"qa_grid_{grid_start}.jpg"
+        # Save composite to local work dir
+        grid_path = output_dir / f"qa_grid_{grid_start}.jpg"
         cv2.imwrite(str(grid_path), composite, [cv2.IMWRITE_JPEG_QUALITY, 85])
         grids.append({"image_path": grid_path, "tile_stems": tile_stems})
 
@@ -257,7 +327,9 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
     Returns dict mapping tile_stem -> "BALL" or "NOT_BALL".
     """
     n = len(tile_stems)
+    # Include file path in prompt so Claude uses Read tool to view the image
     prompt = (
+        f"Read the image at {image_path} and analyze it. "
         f"This image shows a {GRID_COLS}x{GRID_ROWS} grid of {n} numbered soccer field tiles. "
         f"Each tile is 640x640 pixels from a panoramic camera. "
         f"For each numbered tile (1-{n}), determine if there is a soccer ball visible. "
@@ -269,23 +341,32 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
 
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "json", str(image_path)],
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--model", "sonnet",
+                "--allowedTools", "Read",
+            ],
             capture_output=True,
             text=True,
             timeout=120,
         )
 
         if result.returncode != 0:
-            logger.warning("claude CLI failed: %s", result.stderr[:200])
+            logger.warning("claude CLI failed (rc=%d): stderr=%s stdout=%s",
+                           result.returncode, result.stderr[:300], result.stdout[:300])
             return {}
 
         # Parse response — extract JSON from output
         output = result.stdout.strip()
+        if not output:
+            logger.warning("claude CLI returned empty output")
+            return {}
 
         # Try to find JSON in the output
         response_data = _extract_json(output)
         if not response_data:
-            logger.warning("Could not parse claude response: %s", output[:200])
+            logger.warning("Could not parse claude response (len=%d): %s", len(output), output[:500])
             return {}
 
         # Map numbered results back to tile_stems
@@ -308,6 +389,8 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
 
 def _extract_json(text: str) -> dict | None:
     """Extract a JSON object from potentially messy CLI output."""
+    import re
+
     # Try direct parse
     try:
         data = json.loads(text)
@@ -322,9 +405,16 @@ def _extract_json(text: str) -> dict | None:
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # Try to find JSON object in the text
-    import re
+    # Strip markdown code fences (```json ... ```)
+    stripped = re.sub(r"```(?:json)?\s*", "", text).strip()
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, TypeError):
+        pass
 
+    # Try to find JSON object in the text
     match = re.search(r"\{[^{}]+\}", text)
     if match:
         try:
