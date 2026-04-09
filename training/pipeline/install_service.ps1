@@ -67,10 +67,25 @@ Register-ScheduledTask `
 
 Write-Host "Registered PipelineWorker"
 
+# --- 4. Annotation Server (human review UI, port 8642) ---
+Unregister-ScheduledTask -TaskName "AnnotationServer" -Confirm:$false -ErrorAction SilentlyContinue
+
+Register-ScheduledTask `
+    -TaskName "AnnotationServer" `
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -m training.annotation_server --port 8642" -WorkingDirectory $ProjectDir) `
+    -Trigger $Trigger `
+    -Settings $CommonSettings `
+    -Principal $Principal `
+    -Description "Annotation server for human review (port 8642, Tailscale: trainer.goat-rattlesnake.ts.net)"
+
+Write-Host "Registered AnnotationServer"
+
 # Start in order: API first, then others
 Start-ScheduledTask -TaskName "PipelineAPI"
 Start-Sleep -Seconds 5
 Start-ScheduledTask -TaskName "PipelineOrchestrator"
 Start-ScheduledTask -TaskName "PipelineWorker"
+Start-ScheduledTask -TaskName "AnnotationServer"
 
 Write-Host "`nAll started. Check: curl http://127.0.0.1:8643/api/status"
+Write-Host "Annotation server: https://trainer.goat-rattlesnake.ts.net/"
