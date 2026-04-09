@@ -89,14 +89,17 @@ class WorkQueue:
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Only create parent dirs for local paths (not UNC shares)
+        if not str(self.db_path).startswith("\\\\"):
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             self._conn = sqlite3.connect(
                 str(self.db_path),
-                timeout=30,  # wait up to 30s for lock (network share contention)
+                timeout=30,
+                check_same_thread=False,  # API + orchestrator share connection from different threads
             )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")

@@ -33,18 +33,26 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Pipeline API", version="1.0.0")
 
-# These get set by start_api() before the server starts
-_queue: WorkQueue | None = None
-_registry: GameRegistry | None = None
+# Paths get set by start_api(); API creates its own DB connections per-request
+_queue_db_path: str = ""
+_registry_db_path: str = ""
 _cfg = None
 
 
 def init_app(queue: WorkQueue, registry: GameRegistry, cfg=None):
-    """Initialize the API with shared WorkQueue and GameRegistry instances."""
-    global _queue, _registry, _cfg
-    _queue = queue
-    _registry = registry
+    """Store DB paths so the API can create its own connections (thread-safe)."""
+    global _queue_db_path, _registry_db_path, _cfg
+    _queue_db_path = str(queue.db_path)
+    _registry_db_path = str(registry.db_path)
     _cfg = cfg
+
+
+def _get_queue() -> WorkQueue:
+    return WorkQueue(_queue_db_path)
+
+
+def _get_registry() -> GameRegistry:
+    return GameRegistry(_registry_db_path)
 
 
 # --- Request models ---
@@ -84,7 +92,7 @@ class WorkerStatusRequest(BaseModel):
 
 @app.post("/api/claim")
 def claim(req: ClaimRequest):
-    item = _queue.claim(req.capabilities, req.hostname)
+    item = _get_queue().claim(req.capabilities, req.hostname)
     if item is None:
         return JSONResponse(status_code=204, content=None)
     return item
@@ -92,25 +100,25 @@ def claim(req: ClaimRequest):
 
 @app.post("/api/start/{item_id}")
 def start(item_id: int):
-    _queue.start(item_id)
+    _get_queue().start(item_id)
     return {"ok": True}
 
 
 @app.post("/api/heartbeat/{item_id}")
 def heartbeat(item_id: int):
-    _queue.heartbeat(item_id)
+    _get_queue().heartbeat(item_id)
     return {"ok": True}
 
 
 @app.post("/api/complete/{item_id}")
 def complete(item_id: int, req: CompleteRequest):
-    _queue.complete(item_id, result=req.result)
+    _get_queue().complete(item_id, result=req.result)
     return {"ok": True}
 
 
 @app.post("/api/fail/{item_id}")
 def fail(item_id: int, req: FailRequest):
-    _queue.fail(item_id, req.error)
+    _get_queue().fail(item_id, req.error)
     return {"ok": True}
 
 
@@ -119,7 +127,7 @@ def fail(item_id: int, req: FailRequest):
 
 @app.post("/api/worker-status")
 def worker_status(req: WorkerStatusRequest):
-    _queue.update_worker_status(
+    _get_queue().update_worker_status(
         req.hostname,
         status=req.status,
         current_task_id=req.current_task_id,
@@ -139,10 +147,11 @@ def worker_status(req: WorkerStatusRequest):
 
 @app.get("/api/status")
 def status():
-    workers = _queue.get_worker_status()
-    queue_stats = _queue.get_queue_stats()
-    state_counts = _registry.get_state_counts()
-    events = _queue.get_recent_events(limit=20)
+    q = _get_queue()
+    workers = q.get_worker_status()
+    queue_stats = q.get_queue_stats()
+    state_counts = _get_registry().get_state_counts()
+    events = q.get_recent_events(limit=20)
     return {
         "workers": workers,
         "queue": queue_stats,
@@ -153,12 +162,12 @@ def status():
 
 @app.get("/api/games")
 def games():
-    return _registry.get_all_games()
+    return _get_registry().get_all_games()
 
 
 @app.get("/api/game/{game_id}")
 def game_detail(game_id: str):
-    game = _registry.get_game(game_id)
+    game = _get_registry().get_game(game_id)
     if not game:
         raise HTTPException(404, f"Game not found: {game_id}")
 
@@ -181,7 +190,7 @@ def game_detail(game_id: str):
 
 @app.get("/api/queue")
 def queue_items(status: str | None = None, limit: int = 50):
-    return _queue.get_items(status=status, limit=limit)
+    return _get_queue().get_items(status=status, limit=limit)
 
 
 # --- Server management ---
