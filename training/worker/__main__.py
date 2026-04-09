@@ -121,11 +121,11 @@ def main():
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    # Use explicit StreamHandler with flush to ensure logs appear in redirected output
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s", datefmt="%H:%M:%S"))
+    handler.flush = lambda: handler.stream.flush()
+    logging.basicConfig(level=level, handlers=[handler])
 
     if args.command == "run":
         cmd_run(args)
