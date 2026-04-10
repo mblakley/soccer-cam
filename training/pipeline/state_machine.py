@@ -39,7 +39,7 @@ TRANSITIONS = {
     "STAGING": {"TILED", "HOLD"},
     "TILED": {"LABELING", "HOLD"},
     "LABELING": {"LABELED", "HOLD"},
-    "LABELED": {"QA_PENDING", "TRAINABLE", "HOLD"},  # can skip QA
+    "LABELED": {"QA_PENDING", "QA_DONE", "TRAINABLE", "HOLD"},
     "QA_PENDING": {"QA_DONE", "HOLD"},
     "QA_DONE": {"REVIEW_PENDING", "TRAINABLE", "HOLD"},
     "REVIEW_PENDING": {"TRAINABLE", "HOLD"},
@@ -97,10 +97,14 @@ def get_failed_stage(state: str) -> str | None:
 
 def can_transition(from_state: str, to_state: str) -> bool:
     """Check if a state transition is valid."""
-    # FAILED states can go back to the failed stage for retry
+    # FAILED states can go back to the failed stage OR advance forward
     if is_failed(from_state):
         failed_stage = get_failed_stage(from_state)
-        return to_state == failed_stage or to_state == "HOLD"
+        if to_state == failed_stage or to_state == "HOLD":
+            return True
+        # Also allow advancing past the failed stage (task succeeded)
+        allowed_from_failed = TRANSITIONS.get(failed_stage, set())
+        return to_state in allowed_from_failed
 
     allowed = TRANSITIONS.get(from_state, set())
     # Also allow FAILED transitions from any active state
