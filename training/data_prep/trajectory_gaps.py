@@ -112,6 +112,7 @@ def build_trajectories_from_manifest(
 
     # Greedy trajectory linking per segment
     all_trajectories = []
+    static_count = 0
 
     for segment, frame_indices in seg_frames.items():
         active: list[list[tuple[int, str, float, float]]] = []
@@ -157,14 +158,30 @@ def build_trajectories_from_manifest(
 
         finished.extend(active)
 
-        # Filter by minimum length
+        # Filter by minimum length AND motion (reject static balls)
         for traj in finished:
-            if len(traj) >= min_length:
-                all_trajectories.append(traj)
+            if len(traj) < min_length:
+                continue
+
+            # Compute displacement: max distance from first point to any other
+            x0, y0 = traj[0][2], traj[0][3]
+            max_disp = max(
+                ((p[2] - x0) ** 2 + (p[3] - y0) ** 2) ** 0.5
+                for p in traj[1:]
+            )
+
+            # Static ball threshold: 50px panoramic (same as label_classifier)
+            if max_disp < 50:
+                static_count += 1
+                continue
+
+            all_trajectories.append(traj)
 
     logger.info(
-        "Built %d trajectories (>=%d frames) from %d detections across %d segments",
-        len(all_trajectories), min_length, len(frame_dets), len(seg_frames),
+        "Built %d moving trajectories (>=%d frames, rejected %d static) "
+        "from %d detections across %d segments",
+        len(all_trajectories), min_length, static_count,
+        len(frame_dets), len(seg_frames),
     )
     return all_trajectories
 
