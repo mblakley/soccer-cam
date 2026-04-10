@@ -67,7 +67,17 @@ def run_tile(
             logger.error("Disk critically low (%.1fGB free), stopping tiling early", free_gb)
             break
 
-        logger.info("  Tiling segment: %s", segment)
+        # Check if this segment already has tiles (resume from last tiled frame)
+        max_frame_row = manifest.conn.execute(
+            "SELECT MAX(frame_idx) FROM tiles WHERE segment = ?", (segment,)
+        ).fetchone()
+        max_frame = max_frame_row[0] if max_frame_row and max_frame_row[0] is not None else None
+        start_frame = (max_frame + frame_interval) if max_frame is not None else 0
+
+        if start_frame > 0:
+            logger.info("  Resuming %s from frame %d (was tiled to %d)", segment, start_frame, max_frame)
+        else:
+            logger.info("  Tiling segment: %s", segment)
 
         t0 = time.time()
         pack_path = io.local_packs / f"{segment}.pack"
@@ -81,6 +91,7 @@ def run_tile(
             tile_rows=tile_rows,
             tile_size=tile_size,
             flip=needs_flip,
+            start_frame=start_frame,
         )
 
         total_tiles += stats["tiles"]
@@ -124,10 +135,12 @@ def _tile_segment_to_pack(
     tile_rows: int = 3,
     tile_size: int = 640,
     flip: bool = False,
+    start_frame: int = 0,
 ) -> dict:
     """Extract frames from video, tile them, write to a pack file.
 
     All processing in memory — no loose tile files on disk.
+    If start_frame > 0, seeks to that position first (for resume tiling).
     """
     import cv2
     import numpy as np
@@ -135,6 +148,9 @@ def _tile_segment_to_pack(
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
+
+    if start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -147,8 +163,12 @@ def _tile_segment_to_pack(
     tile_rows_db = []
     pack_updates = []
 
-    with open(pack_path, "wb") as pf:
-        frame_idx = 0
+    open_mode = "ab" if start_frame > 0 and pack_path.exists() else "wb"
+    if open_mode == "ab":
+        pack_offset = pack_path.stat().st_size
+
+    with open(pack_path, open_mode) as pf:
+        frame_idx = start_frame
         while True:
             ret, frame = cap.read()
             if not ret:
