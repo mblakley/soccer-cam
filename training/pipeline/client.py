@@ -88,6 +88,10 @@ class PipelineClient:
         """Mark task as failed."""
         self._post(f"/api/fail/{item_id}", {"error": error})
 
+    def archive(self, item_id: int):
+        """Move a done item to archived status."""
+        self._post(f"/api/archive/{item_id}")
+
     # --- Status ---
 
     def report_status(

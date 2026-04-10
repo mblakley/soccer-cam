@@ -35,6 +35,7 @@ class Orchestrator:
         self.api = PipelineClient("http://127.0.0.1:8643")
         self._last_qa_time = 0.0
         self._qa_count_this_hour = 0
+        self._alerted_workers: set[str] = set()
 
     def run(self, once: bool = False):
         """Main orchestrator loop. Requires API server to be running separately."""
@@ -111,9 +112,9 @@ class Orchestrator:
                             game_id=game_id,
                         )
 
-            # Archive processed items
+            # Archive processed items so they don't get re-processed
             if not self.dry_run:
-                self.api.complete(item["id"], {"_archived": True})
+                self.api.archive(item["id"])
 
         # Check failed items
         failed = self.api.get_queue_items(status="failed")
@@ -279,16 +280,30 @@ class Orchestrator:
             return
         now = time.time()
         for w in status.get("workers", []):
+            hostname = w.get("hostname", "?")
+            worker_status = w.get("status", "")
             age = now - (w.get("last_seen") or 0)
-            if age > 300:
-                self._ntfy(
-                    f"Worker {w['hostname']} hasn't reported in {age / 60:.0f} min",
-                    title="Worker Down?",
-                    priority="high",
-                )
+
+            # Don't alert for workers that yielded for games — that's expected
+            if worker_status == "yielded":
+                continue
+
+            # Only alert once per worker (track in _alerted_workers set)
+            if age > self.cfg.orchestrator.stale_heartbeat:
+                if hostname not in self._alerted_workers:
+                    self._alerted_workers.add(hostname)
+                    self._ntfy(
+                        f"Worker {hostname} hasn't reported in {age / 60:.0f} min",
+                        title="Worker Down?",
+                        priority="high",
+                    )
+            else:
+                # Worker recovered — clear alert
+                self._alerted_workers.discard(hostname)
+
             if (w.get("gpu_temp_c") or 0) > 90:
                 self._ntfy(
-                    f"Worker {w['hostname']} GPU at {w['gpu_temp_c']}C!",
+                    f"Worker {hostname} GPU at {w['gpu_temp_c']}C!",
                     title="GPU Overheating",
                     priority="urgent",
                 )

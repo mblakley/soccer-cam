@@ -223,6 +223,26 @@ def enqueue(req: EnqueueRequest):
     return {"id": item_id}
 
 
+@app.post("/api/archive/{item_id}")
+def archive_item(item_id: int):
+    """Move a done item to archived status so it's not re-processed."""
+    q = _get_queue()
+    conn = q._get_conn()
+    conn.execute("UPDATE work_items SET status = 'archived' WHERE id = ? AND status = 'done'", (item_id,))
+    conn.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/workers/{hostname}")
+def delete_worker(hostname: str):
+    """Remove a stale worker status entry."""
+    q = _get_queue()
+    conn = q._get_conn()
+    conn.execute("DELETE FROM worker_status WHERE hostname = ?", (hostname,))
+    conn.commit()
+    return {"ok": True, "hostname": hostname}
+
+
 @app.patch("/api/queue/{item_id}/priority")
 def update_priority(item_id: int, req: dict):
     priority = req.get("priority")
