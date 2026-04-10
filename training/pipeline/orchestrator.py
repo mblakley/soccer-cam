@@ -62,16 +62,8 @@ class Orchestrator:
     def _tick(self):
         """One pass of the orchestrator loop."""
         self._collect_results()
-        stale = self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
-        for item in stale:
-            self._ntfy(
-                f"Stale task reclaimed: {item.get('task_type', '?')} "
-                f"{item.get('game_id', '')} (was on {item.get('claimed_by', '?')})",
-                title="Worker Stale",
-                priority="high",
-            )
+        self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
         self._enqueue_work()
-        self._check_workers()
 
     # ------------------------------------------------------------------
     # Collect results
