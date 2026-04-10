@@ -454,3 +454,126 @@ class GameManifest:
 
         if current_stem and lines:
             (output_dir / f"{current_stem}.txt").write_text("\n".join(lines) + "\n")
+
+
+def remap_legacy_labels(conn, video_dir, frame_interval: int = 4):
+    """Remap labels from raw.mp4 frame numbering to per-segment frame indices.
+
+    Legacy labels reference a concatenated "raw" video. This function remaps
+    them to use individual segment names and segment-local frame indices,
+    matching the per-segment tile/pack structure.
+
+    Also remaps existing tiles if they reference the raw segment name.
+
+    Args:
+        conn: SQLite connection to the game manifest
+        video_dir: Path to the directory containing individual .mp4 segments
+        frame_interval: Frame extraction interval (typically 4)
+
+    Returns:
+        dict with remap stats
+    """
+    import cv2
+    import re
+    from pathlib import Path
+
+    video_dir = Path(video_dir)
+    tile_re = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
+
+    # Find individual segment files (not raw, not highlight clips)
+    segment_files = sorted([
+        f for f in video_dir.glob("*.mp4")
+        if "[F]" in f.name or "[0@0]" in f.name
+    ])
+
+    if not segment_files:
+        return {"error": "No segment files found", "remapped": 0}
+
+    # Build cumulative offset table
+    offsets = []  # (raw_start, raw_end, segment_name)
+    cumulative = 0
+    for seg_file in segment_files:
+        cap = cv2.VideoCapture(str(seg_file))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        offsets.append((cumulative, cumulative + frame_count - 1, seg_file.stem))
+        cumulative += frame_count
+
+    # Find legacy segment names (raw.mp4 based)
+    legacy_segments = set()
+    rows = conn.execute("SELECT DISTINCT tile_stem FROM labels").fetchall()
+    for (stem,) in rows:
+        m = tile_re.match(stem)
+        if m:
+            seg_name = m.group(1)
+            # Legacy if it's not one of the individual segment names
+            if seg_name not in {o[2] for o in offsets}:
+                legacy_segments.add(seg_name)
+
+    if not legacy_segments:
+        return {"remapped": 0, "note": "No legacy labels to remap"}
+
+    # Remap labels
+    remapped_labels = 0
+    remapped_tiles = 0
+
+    for legacy_seg in legacy_segments:
+        # Get all labels with this legacy segment
+        label_rows = conn.execute(
+            "SELECT id, tile_stem FROM labels WHERE tile_stem LIKE ?",
+            (legacy_seg + "_frame_%",),
+        ).fetchall()
+
+        for label_id, old_stem in label_rows:
+            m = tile_re.match(old_stem)
+            if not m:
+                continue
+            raw_fi = int(m.group(2))
+            row = m.group(3)
+            col = m.group(4)
+
+            # Find which segment this frame belongs to
+            new_seg = None
+            local_fi = None
+            for start, end, seg_name in offsets:
+                if start <= raw_fi <= end:
+                    new_seg = seg_name
+                    local_fi = raw_fi - start
+                    break
+
+            if new_seg is None:
+                continue  # frame beyond all segments
+
+            new_stem = f"{new_seg}_frame_{local_fi:06d}_r{row}_c{col}"
+            conn.execute(
+                "UPDATE labels SET tile_stem = ? WHERE id = ?",
+                (new_stem, label_id),
+            )
+            remapped_labels += 1
+
+        # Also remap tiles with this legacy segment
+        tile_rows = conn.execute(
+            "SELECT rowid, segment, frame_idx FROM tiles WHERE segment = ?",
+            (legacy_seg,),
+        ).fetchall()
+
+        for rowid, _, raw_fi in tile_rows:
+            for start, end, seg_name in offsets:
+                if start <= raw_fi <= end:
+                    local_fi = raw_fi - start
+                    conn.execute(
+                        "UPDATE tiles SET segment = ?, frame_idx = ? WHERE rowid = ?",
+                        (seg_name, local_fi, rowid),
+                    )
+                    remapped_tiles += 1
+                    break
+
+    conn.commit()
+
+    return {
+        "remapped_labels": remapped_labels,
+        "remapped_tiles": remapped_tiles,
+        "legacy_segments": list(legacy_segments),
+        "new_segments": [o[2] for o in offsets],
+        "offset_table": [(s, e, n) for s, e, n in offsets],
+    }
