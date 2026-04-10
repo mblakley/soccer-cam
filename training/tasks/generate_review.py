@@ -62,18 +62,8 @@ def run_generate_review(
     ).fetchone()
     track_points = json.loads(track_points_raw[0]) if track_points_raw else []
 
-    # Pull needed packs for filmstrip
-    from training.tasks.sonnet_qa import _pull_selective_packs
-
-    segment = track_info["segment"]
-    pack_files = set()
-    rows = manifest.conn.execute(
-        "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
-        (segment,),
-    ).fetchall()
-    for r in rows:
-        pack_files.add(r[0])
-    _pull_selective_packs(task_io, pack_files)
+    # Resolve pack location (read directly, no copy — only need a few tiles)
+    packs_dir = task_io.server_packs()
 
     # Build review packet
     review_dir = Path(cfg.paths.games_dir).parent / "review_packets" / f"{game_id}_{int(time.time())}"
@@ -88,7 +78,7 @@ def run_generate_review(
 
     filmstrip_path = review_dir / "game_ball_track.jpg"
     if sample_frames:
-        build_gap_filmstrip(sample_frames, manifest, task_io.local_packs, filmstrip_path)
+        build_gap_filmstrip(sample_frames, manifest, packs_dir, filmstrip_path)
 
     # Also extract individual tile images for the track samples
     from training.tasks.sonnet_qa import _read_tile_from_packs
@@ -96,7 +86,7 @@ def run_generate_review(
     tile_images = []
     for frame in sample_frames:
         tile_stem = frame["tile_stem"]
-        jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, task_io.local_packs)
+        jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
         if jpeg_bytes:
             tile_path = review_dir / f"{tile_stem}.jpg"
             tile_path.write_bytes(jpeg_bytes)
