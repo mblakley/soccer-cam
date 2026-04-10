@@ -53,30 +53,26 @@ def build_trajectories_from_manifest(
     min_length: int = 5,
     max_link_distance: float = MAX_LINK_DISTANCE,
 ) -> list[list[tuple[int, str, float, float]]]:
-    """Build ball trajectories from verified labels in the manifest.
+    """Build ball trajectories from labels in the manifest.
 
-    Queries labels with qa_verdict='true_positive' OR all labels if no QA
-    has been done yet (for initial trajectory building). Converts tile
-    coordinates to panoramic, groups by segment, runs greedy linking.
+    Uses all class_id=0 labels (not just verified ones) to build complete
+    trajectories. Filters aggressively for game-ball-like motion:
+    - Rows 0-1 only (far/mid field — game ball is on the field, not sideline)
+    - Displacement > 200px (game ball moves fast, not stationary)
+    - Rejects false_positive labels if QA'd
 
     Returns list of trajectories. Each trajectory is a sorted list of
     (frame_idx, segment, pano_x, pano_y) tuples.
     """
-    # Get labels that are likely real ball detections
-    # Prefer QA-verified true_positives; fall back to all class_id=0 labels
+    # Use all labels, excluding known false positives
     rows = conn.execute(
         """SELECT tile_stem, cx, cy FROM labels
-           WHERE qa_verdict = 'true_positive' AND class_id = 0"""
+           WHERE class_id = 0
+             AND (qa_verdict IS NULL OR qa_verdict IN ('true_positive', 'gap_ball_found'))"""
     ).fetchall()
 
-    if len(rows) < min_length:
-        # Not enough verified labels — use all game_ball labels
-        rows = conn.execute(
-            """SELECT tile_stem, cx, cy FROM labels WHERE class_id = 0"""
-        ).fetchall()
-
     # Parse tile_stems and convert to panoramic coordinates
-    # Key: (segment, frame_idx) -> list of (pano_x, pano_y)
+    # ONLY rows 0-1 (far/mid field) — row 2 is near-field/sideline, almost never game ball
     frame_dets: dict[tuple[str, int], list[tuple[float, float]]] = defaultdict(list)
 
     for tile_stem, cx, cy in rows:
@@ -87,6 +83,11 @@ def build_trajectories_from_manifest(
         frame_idx = int(m.group(2))
         row = int(m.group(3))
         col = int(m.group(4))
+
+        # Skip row 2 (near field / sideline) — game ball is almost never here
+        if row >= 2:
+            continue
+
         pano_x, pano_y = _tile_to_pano(cx, cy, row, col)
         frame_dets[(segment, frame_idx)].append((pano_x, pano_y))
 
@@ -170,8 +171,9 @@ def build_trajectories_from_manifest(
                 for p in traj[1:]
             )
 
-            # Static ball threshold: 50px panoramic (same as label_classifier)
-            if max_disp < 50:
+            # Game ball threshold: must move significantly (200px panoramic)
+            # Static balls, equipment, and slow-moving false positives filtered out
+            if max_disp < 200:
                 static_count += 1
                 continue
 

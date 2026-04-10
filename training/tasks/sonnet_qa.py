@@ -155,38 +155,67 @@ def run_sonnet_qa(
         )
 
         if trajectories:
-            # Only check gaps in the dominant track (the game ball)
-            # Use top 3 longest tracks at most — the game ball + maybe a few play segments
-            game_ball_tracks = trajectories[:3]
-            all_gaps = find_gap_candidates(
-                game_ball_tracks,
-                frame_interval=cfg.tiling.frame_interval,
-                max_gap_seconds=3.0,
-            )
-            all_gaps = filter_static_gaps(all_gaps, manifest.conn)
+            # Only check the dominant track (longest = most likely game ball)
+            # Verify each candidate track with Sonnet before checking gaps
+            game_ball_tracks = []
 
-            gap_budget = cfg.qa.gap_budget
-            gaps_to_check = all_gaps[:gap_budget]
+            # Pull packs for trajectory verification
+            traj_segments = {t[0][1] for t in trajectories[:5]}
+            traj_pack_files = set()
+            for seg in traj_segments:
+                rows_q = manifest.conn.execute(
+                    "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
+                    (seg,),
+                ).fetchall()
+                for r in rows_q:
+                    traj_pack_files.add(r[0])
+            _pull_selective_packs(task_io, traj_pack_files)
+
+            # Verify top tracks with Sonnet: "is this actually a game ball?"
+            for traj_idx, traj in enumerate(trajectories[:5]):
+                if len(game_ball_tracks) >= 1:
+                    break  # only need the dominant game ball track
+
+                # Build a verification filmstrip from evenly-spaced frames
+                verify_frames = _get_trajectory_sample_frames(traj, n_samples=5)
+                if len(verify_frames) < 3:
+                    continue
+
+                verify_path = task_io.local_game / f"traj_verify_{traj_idx}.jpg"
+                ok = build_gap_filmstrip(verify_frames, manifest, packs_dir, verify_path)
+                if not ok:
+                    continue
+
+                logger.info(
+                    "Phase 2: verifying trajectory %d (%d frames, disp=%.0fpx)...",
+                    traj_idx, len(traj),
+                    max(((p[2]-traj[0][2])**2 + (p[3]-traj[0][3])**2)**0.5 for p in traj[1:]),
+                )
+
+                is_game_ball = _verify_trajectory_with_sonnet(verify_path, len(traj))
+                logger.info("Phase 2: trajectory %d -> %s", traj_idx,
+                            "GAME_BALL" if is_game_ball else "NOT_GAME_BALL")
+
+                if is_game_ball:
+                    game_ball_tracks.append(traj)
+
+            gaps_to_check = []
+            if not game_ball_tracks:
+                logger.info("Phase 2: no confirmed game ball tracks, skipping gap detection")
+            else:
+                all_gaps = find_gap_candidates(
+                    game_ball_tracks,
+                    frame_interval=cfg.tiling.frame_interval,
+                    max_gap_seconds=3.0,
+                )
+                all_gaps = filter_static_gaps(all_gaps, manifest.conn)
+
+                gap_budget = cfg.qa.gap_budget
+                gaps_to_check = all_gaps[:gap_budget]
 
             if gaps_to_check:
-                # Pull any additional packs needed for gap context frames
-                gap_segments = set()
-                for gap in gaps_to_check:
-                    gap_segments.add(gap["segment"])
-                    if gap.get("context_before"):
-                        gap_segments.add(gap["segment"])
-                gap_pack_files = set()
-                for seg in gap_segments:
-                    rows = manifest.conn.execute(
-                        "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
-                        (seg,),
-                    ).fetchall()
-                    for r in rows:
-                        gap_pack_files.add(r[0])
-                _pull_selective_packs(task_io, gap_pack_files)
-
-                logger.info("Phase 2: checking %d trajectory gaps (%d trajectories, %d total gaps)",
-                            len(gaps_to_check), len(trajectories), len(all_gaps))
+                logger.info("Phase 2: checking %d gaps in %d confirmed game ball track(s)",
+                            len(gaps_to_check), len(game_ball_tracks))
 
                 for gap_idx, gap in enumerate(gaps_to_check):
                     traj = game_ball_tracks[gap["trajectory_idx"]]
@@ -648,3 +677,94 @@ def _call_claude_gap(filmstrip_path: Path, context_frames: list[dict]) -> str | 
     except Exception as e:
         logger.warning("claude CLI gap call error: %s", e)
         return None
+
+
+def _get_trajectory_sample_frames(
+    traj: list[tuple[int, str, float, float]],
+    n_samples: int = 5,
+) -> list[dict]:
+    """Get evenly-spaced frames from a trajectory for verification.
+
+    Returns frame dicts compatible with build_gap_filmstrip (role='before').
+    """
+    from training.data_prep.trajectory_gaps import _pano_to_tile
+
+    if len(traj) < 3:
+        return []
+
+    # Pick evenly-spaced indices
+    step = max(1, (len(traj) - 1) // (n_samples - 1))
+    indices = list(range(0, len(traj), step))[:n_samples]
+    if indices[-1] != len(traj) - 1:
+        indices[-1] = len(traj) - 1
+
+    frames = []
+    for idx in indices:
+        fi, seg, px, py = traj[idx]
+        tile_info = _pano_to_tile(px, py)
+        if tile_info is None:
+            continue
+        row, col, cx_norm, cy_norm = tile_info
+        frames.append({
+            "frame_idx": fi,
+            "segment": seg,
+            "pano_x": px,
+            "pano_y": py,
+            "role": "before",  # all marked as detected (red circles)
+            "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
+            "tile_local_x": cx_norm,
+            "tile_local_y": cy_norm,
+        })
+
+    return frames
+
+
+def _verify_trajectory_with_sonnet(filmstrip_path: Path, traj_length: int) -> bool:
+    """Ask Sonnet to verify that a trajectory filmstrip shows a game ball.
+
+    Returns True if Sonnet confirms this is a soccer ball moving on the field.
+    """
+    prompt = (
+        f"Read the image at {filmstrip_path} and analyze it. "
+        f"This filmstrip shows {min(5, traj_length)} frames from a panoramic soccer camera. "
+        f"Red circles mark detected objects across consecutive frames. "
+        f"Is this a SOCCER BALL moving across the playing field during a game? "
+        f"Consider: A real game ball moves significantly between frames, is 8-40 pixels, "
+        f"white/black, and is ON the playing field (green grass), not on the sideline. "
+        f"Reject if it's: a static ball, equipment, player, shadow, or anything off the field. "
+        f"Respond with ONLY the word GAME_BALL or NOT_GAME_BALL."
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--model", "sonnet",
+                "--allowedTools", "Read",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            logger.warning("Trajectory verify failed (rc=%d)", result.returncode)
+            return False
+
+        output = result.stdout.strip()
+        if not output:
+            return False
+
+        data = _extract_json(output)
+        if data and isinstance(data, dict):
+            text = str(data.get("result", ""))
+        else:
+            text = output
+
+        text = text.upper().strip()
+        return "GAME_BALL" in text and "NOT_GAME_BALL" not in text
+
+    except Exception as e:
+        logger.warning("Trajectory verify error: %s", e)
+        return False
