@@ -135,19 +135,34 @@ def run_sonnet_qa(
     try:
         from training.data_prep.trajectory_gaps import (
             build_trajectories_from_manifest,
+            stitch_game_ball_track,
             find_gap_candidates,
             filter_static_gaps,
             get_gap_context_frames,
             build_gap_filmstrip,
         )
 
-        trajectories = build_trajectories_from_manifest(
+        raw_trajectories = build_trajectories_from_manifest(
             manifest.conn,
             min_length=cfg.qa.min_trajectory_length,
         )
 
+        # Stitch fragments into continuous game ball tracks
+        trajectories = stitch_game_ball_track(
+            raw_trajectories,
+            max_gap_seconds=3.0,
+            frame_interval=cfg.tiling.frame_interval,
+        )
+
         if trajectories:
-            all_gaps = find_gap_candidates(trajectories, frame_interval=cfg.tiling.frame_interval)
+            # Only check gaps in the dominant track (the game ball)
+            # Use top 3 longest tracks at most — the game ball + maybe a few play segments
+            game_ball_tracks = trajectories[:3]
+            all_gaps = find_gap_candidates(
+                game_ball_tracks,
+                frame_interval=cfg.tiling.frame_interval,
+                max_gap_seconds=3.0,
+            )
             all_gaps = filter_static_gaps(all_gaps, manifest.conn)
 
             gap_budget = cfg.qa.gap_budget
@@ -174,7 +189,7 @@ def run_sonnet_qa(
                             len(gaps_to_check), len(trajectories), len(all_gaps))
 
                 for gap_idx, gap in enumerate(gaps_to_check):
-                    traj = trajectories[gap["trajectory_idx"]]
+                    traj = game_ball_tracks[gap["trajectory_idx"]]
                     context = get_gap_context_frames(gap, traj, n_before=3, n_after=2)
 
                     if len(context) < 2:
@@ -237,7 +252,7 @@ def run_sonnet_qa(
                 gap_positions = {}
                 for gap in gaps_to_check:
                     gap_frame = None
-                    traj = trajectories[gap["trajectory_idx"]]
+                    traj = game_ball_tracks[gap["trajectory_idx"]]
                     context = get_gap_context_frames(gap, traj, n_before=0, n_after=0)
                     if context:
                         gap_frame = context[0]

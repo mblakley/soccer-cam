@@ -186,20 +186,80 @@ def build_trajectories_from_manifest(
     return all_trajectories
 
 
+def stitch_game_ball_track(
+    trajectories: list[list[tuple[int, str, float, float]]],
+    max_gap_seconds: float = 3.0,
+    max_stitch_distance: float = 400.0,
+    fps: float = 25.0,
+    frame_interval: int = 4,
+) -> list[list[tuple[int, str, float, float]]]:
+    """Stitch moving trajectory fragments into continuous game ball tracks.
+
+    The game has exactly one ball in play at a time. Nearby trajectory
+    fragments (< max_gap_seconds apart, < max_stitch_distance px) are
+    likely the same ball and get merged.
+
+    Returns stitched trajectories sorted by total length (longest = game ball).
+    """
+    if not trajectories:
+        return []
+
+    max_gap_frames = int(max_gap_seconds * fps / frame_interval) * frame_interval
+
+    # Sort fragments by start frame within each segment
+    by_segment: dict[str, list] = {}
+    for traj_idx, traj in enumerate(trajectories):
+        seg = traj[0][1]
+        by_segment.setdefault(seg, []).append((traj_idx, traj))
+
+    stitched = []
+    for seg, frags in by_segment.items():
+        frags.sort(key=lambda f: f[1][0][0])  # sort by first frame_idx
+
+        chains: list[list[tuple[int, str, float, float]]] = []
+        for _, frag in frags:
+            merged = False
+            for chain in chains:
+                last = chain[-1]
+                first_new = frag[0]
+                time_gap = first_new[0] - last[0]
+                dist = ((first_new[2] - last[2]) ** 2 + (first_new[3] - last[3]) ** 2) ** 0.5
+
+                if 0 < time_gap <= max_gap_frames and dist < max_stitch_distance:
+                    chain.extend(frag)
+                    merged = True
+                    break
+
+            if not merged:
+                chains.append(list(frag))
+
+        stitched.extend(chains)
+
+    # Sort by length (longest first = most likely game ball)
+    stitched.sort(key=lambda t: len(t), reverse=True)
+
+    logger.info(
+        "Stitched %d fragments into %d tracks (longest: %d frames)",
+        len(trajectories), len(stitched),
+        len(stitched[0]) if stitched else 0,
+    )
+    return stitched
+
+
 def find_gap_candidates(
     trajectories: list[list[tuple[int, str, float, float]]],
     frame_interval: int = 4,
+    max_gap_seconds: float = 3.0,
+    fps: float = 25.0,
 ) -> list[dict]:
-    """Find trajectory endpoints and mid-trajectory gaps.
+    """Find gaps in the game ball track where the detector lost the ball.
 
-    For each trajectory:
-    - Mid-gaps: consecutive points where frame_gap > frame_interval
-    - Track ends: last detection in trajectories >= 10 frames
-    - Track starts: first detection in trajectories >= 10 frames (ball appearing)
+    Only considers gaps shorter than max_gap_seconds — longer gaps mean
+    the ball went out of play (tracked as ball_events, not shown to human).
 
-    Returns list of gap dicts sorted by priority (longer trajectories first,
-    track_end over mid_gap).
+    Returns gap candidates sorted by priority.
     """
+    max_gap_frames = int(max_gap_seconds * fps / frame_interval) * frame_interval
     gaps = []
 
     for traj_idx, traj in enumerate(trajectories):
@@ -213,6 +273,10 @@ def find_gap_candidates(
 
             if gap_frames <= frame_interval:
                 continue  # no gap
+
+            if gap_frames > max_gap_frames:
+                # Ball was out of play for > 3 seconds — not a detection gap
+                continue
 
             n_missing = (gap_frames // frame_interval) - 1
             for k in range(1, n_missing + 1):
@@ -234,12 +298,10 @@ def find_gap_candidates(
                     "context_after": (fi_curr, x_curr, y_curr),
                 })
 
-        # Track endpoints (for longer trajectories only)
+        # Track endpoints — where ball left play
         if len(traj) >= 10:
-            # Track end — where ball disappeared
             last = traj[-1]
             prev = traj[-2]
-            # Extrapolate one frame_interval past the last detection
             dx = last[2] - prev[2]
             dy = last[3] - prev[3]
             gaps.append({
@@ -259,7 +321,8 @@ def find_gap_candidates(
     type_priority = {"track_end": 0, "mid_gap": 1}
     gaps.sort(key=lambda g: (type_priority.get(g["gap_type"], 2), -g["trajectory_length"]))
 
-    logger.info("Found %d gap candidates from %d trajectories", len(gaps), len(trajectories))
+    logger.info("Found %d gap candidates from %d tracks (max gap: %.1fs)",
+                len(gaps), len(trajectories), max_gap_seconds)
     return gaps
 
 

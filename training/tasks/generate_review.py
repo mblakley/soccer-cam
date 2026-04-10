@@ -203,18 +203,24 @@ def _build_review_filmstrips(candidates, manifest, packs_dir, review_dir, cfg):
     try:
         from training.data_prep.trajectory_gaps import (
             build_trajectories_from_manifest,
+            stitch_game_ball_track,
             find_gap_candidates,
             get_gap_context_frames,
             build_gap_filmstrip,
         )
 
-        trajectories = build_trajectories_from_manifest(
+        raw = build_trajectories_from_manifest(
             manifest.conn, min_length=cfg.qa.min_trajectory_length,
+        )
+        trajectories = stitch_game_ball_track(
+            raw, max_gap_seconds=3.0, frame_interval=cfg.tiling.frame_interval,
         )
         if not trajectories:
             return
 
-        gaps = find_gap_candidates(trajectories, frame_interval=cfg.tiling.frame_interval)
+        gaps = find_gap_candidates(
+            trajectories[:3], frame_interval=cfg.tiling.frame_interval, max_gap_seconds=3.0,
+        )
         gap_stems = {c["tile_stem"] for c in candidates if c["reason"] == "trajectory_gap_sonnet_failed"}
 
         filmstrip_dir = review_dir / "filmstrips"
