@@ -155,153 +155,85 @@ def run_sonnet_qa(
         )
 
         if trajectories:
-            # Only check the dominant track (longest = most likely game ball)
-            # Verify each candidate track with Sonnet before checking gaps
-            game_ball_tracks = []
+            # Pick the longest track — most likely game ball
+            dominant = trajectories[0]
+            dom_disp = max(
+                ((p[2]-dominant[0][2])**2 + (p[3]-dominant[0][3])**2)**0.5
+                for p in dominant[1:]
+            )
 
-            # Pull packs for trajectory verification
-            traj_segments = {t[0][1] for t in trajectories[:5]}
+            # Get segment frame range to compare track extent vs video
+            segment = dominant[0][1]
+            seg_info = manifest.conn.execute(
+                "SELECT frame_min, frame_max, frame_count FROM segments WHERE segment = ?",
+                (segment,),
+            ).fetchone()
+            seg_start = seg_info[0] if seg_info else 0
+            seg_end = seg_info[1] if seg_info else 0
+            seg_frames = seg_info[2] if seg_info else 0
+
+            track_start = dominant[0][0]
+            track_end = dominant[-1][0]
+
+            logger.info(
+                "Phase 2: dominant track in %s — %d frames, %.0fpx displacement, "
+                "track fi=%d-%d, segment fi=%d-%d (%d frames)",
+                segment[:30], len(dominant), dom_disp,
+                track_start, track_end, seg_start, seg_end, seg_frames,
+            )
+
+            # Pull packs for filmstrip building
             traj_pack_files = set()
-            for seg in traj_segments:
-                rows_q = manifest.conn.execute(
-                    "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
-                    (seg,),
-                ).fetchall()
-                for r in rows_q:
-                    traj_pack_files.add(r[0])
+            rows_q = manifest.conn.execute(
+                "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
+                (segment,),
+            ).fetchall()
+            for r in rows_q:
+                traj_pack_files.add(r[0])
             _pull_selective_packs(task_io, traj_pack_files)
 
-            # Verify top tracks with Sonnet: "is this actually a game ball?"
-            for traj_idx, traj in enumerate(trajectories[:5]):
-                if len(game_ball_tracks) >= 1:
-                    break  # only need the dominant game ball track
+            # Build a filmstrip of the dominant track for human confirmation
+            verify_frames = _get_trajectory_sample_frames(dominant, n_samples=6)
+            if verify_frames:
+                verify_path = task_io.local_game / "game_ball_candidate.jpg"
+                build_gap_filmstrip(verify_frames, manifest, packs_dir, verify_path)
 
-                # Build a verification filmstrip from evenly-spaced frames
-                verify_frames = _get_trajectory_sample_frames(traj, n_samples=5)
-                if len(verify_frames) < 3:
-                    continue
+            # Store track info for generate_review to package for human
+            track_info = {
+                "segment": segment,
+                "track_start": track_start,
+                "track_end": track_end,
+                "track_frames": len(dominant),
+                "displacement_px": round(dom_disp),
+                "segment_start": seg_start,
+                "segment_end": seg_end,
+                "segment_frames": seg_frames,
+                "top_5_tracks": [
+                    {
+                        "length": len(t),
+                        "segment": t[0][1],
+                        "start_fi": t[0][0],
+                        "end_fi": t[-1][0],
+                    }
+                    for t in trajectories[:5]
+                ],
+            }
+            manifest.set_metadata("game_ball_track", json.dumps(track_info))
 
-                verify_path = task_io.local_game / f"traj_verify_{traj_idx}.jpg"
-                ok = build_gap_filmstrip(verify_frames, manifest, packs_dir, verify_path)
-                if not ok:
-                    continue
+            # Store the track points for later gap filling
+            track_points = [
+                {"fi": fi, "seg": seg, "px": round(px, 1), "py": round(py, 1)}
+                for fi, seg, px, py in dominant
+            ]
+            manifest.set_metadata("game_ball_track_points", json.dumps(track_points))
 
-                logger.info(
-                    "Phase 2: verifying trajectory %d (%d frames, disp=%.0fpx)...",
-                    traj_idx, len(traj),
-                    max(((p[2]-traj[0][2])**2 + (p[3]-traj[0][3])**2)**0.5 for p in traj[1:]),
-                )
-
-                is_game_ball = _verify_trajectory_with_sonnet(verify_path, len(traj))
-                logger.info("Phase 2: trajectory %d -> %s", traj_idx,
-                            "GAME_BALL" if is_game_ball else "NOT_GAME_BALL")
-
-                if is_game_ball:
-                    game_ball_tracks.append(traj)
-
-            gaps_to_check = []
-            if not game_ball_tracks:
-                logger.info("Phase 2: no confirmed game ball tracks, skipping gap detection")
-            else:
-                all_gaps = find_gap_candidates(
-                    game_ball_tracks,
-                    frame_interval=cfg.tiling.frame_interval,
-                    max_gap_seconds=3.0,
-                )
-                all_gaps = filter_static_gaps(all_gaps, manifest.conn)
-
-                gap_budget = cfg.qa.gap_budget
-                gaps_to_check = all_gaps[:gap_budget]
-
-            if gaps_to_check:
-                logger.info("Phase 2: checking %d gaps in %d confirmed game ball track(s)",
-                            len(gaps_to_check), len(game_ball_tracks))
-
-                for gap_idx, gap in enumerate(gaps_to_check):
-                    traj = game_ball_tracks[gap["trajectory_idx"]]
-                    context = get_gap_context_frames(gap, traj, n_before=3, n_after=2)
-
-                    if len(context) < 2:
-                        continue
-
-                    filmstrip_path = task_io.local_game / f"gap_filmstrip_{gap_idx}.jpg"
-                    ok = build_gap_filmstrip(context, manifest, packs_dir, filmstrip_path)
-                    if not ok:
-                        gap_verdicts["error"] += 1
-                        continue
-
-                    logger.info(
-                        "Gap %d/%d (%s): fi=%d traj_len=%d, calling Claude...",
-                        gap_idx + 1, len(gaps_to_check), gap["gap_type"],
-                        gap["frame_idx"], gap["trajectory_length"],
-                    )
-
-                    try:
-                        t0 = time.time()
-                        result = _call_claude_gap(filmstrip_path, context)
-                        elapsed = time.time() - t0
-
-                        # Find the gap frame's tile_stem
-                        gap_frame = next((f for f in context if f["role"] == "gap"), None)
-                        if gap_frame and result:
-                            tile_stem = gap_frame["tile_stem"]
-                            if result == "FOUND":
-                                manifest.set_qa_verdict(tile_stem, "gap_ball_found")
-                                gap_verdicts["found"] += 1
-                            else:
-                                manifest.set_qa_verdict(tile_stem, "gap_no_ball")
-                                gap_verdicts["not_found"] += 1
-
-                                # Tentatively mark as out_of_play for track ends
-                                if gap["gap_type"] == "track_end":
-                                    manifest.insert_ball_event(
-                                        segment=gap["segment"],
-                                        frame_idx=gap["frame_idx"],
-                                        event_type="out_of_play",
-                                        pano_x=gap["pano_x"],
-                                        pano_y=gap["pano_y"],
-                                        trajectory_id=gap["trajectory_idx"],
-                                        source="sonnet_qa",
-                                    )
-
-                            logger.info(
-                                "Gap %d: %s in %.1fs",
-                                gap_idx + 1, result, elapsed,
-                            )
-                        else:
-                            gap_verdicts["error"] += 1
-
-                    except Exception as e:
-                        logger.exception("Gap %d Claude call failed: %s", gap_idx + 1, e)
-                        gap_verdicts["error"] += 1
-
-                    time.sleep(2)
-
-                # Store gap metadata for generate_review
-                gap_positions = {}
-                for gap in gaps_to_check:
-                    gap_frame = None
-                    traj = game_ball_tracks[gap["trajectory_idx"]]
-                    context = get_gap_context_frames(gap, traj, n_before=0, n_after=0)
-                    if context:
-                        gap_frame = context[0]
-                        gap_positions[gap_frame["tile_stem"]] = {
-                            "pano_x": gap["pano_x"],
-                            "pano_y": gap["pano_y"],
-                            "tile_local_x": gap_frame["tile_local_x"],
-                            "tile_local_y": gap_frame["tile_local_y"],
-                            "gap_type": gap["gap_type"],
-                            "trajectory_length": gap["trajectory_length"],
-                        }
-                manifest.set_metadata("gap_positions", json.dumps(gap_positions))
-
-                logger.info(
-                    "Phase 2 complete: %d gaps checked (found=%d, not_found=%d, error=%d)",
-                    len(gaps_to_check), gap_verdicts["found"],
-                    gap_verdicts["not_found"], gap_verdicts["error"],
-                )
+            logger.info(
+                "Phase 2 complete: dominant track stored (%d frames). "
+                "Awaiting human confirmation before gap filling.",
+                len(dominant),
+            )
         else:
-            logger.info("Phase 2: no trajectories found, skipping gap detection")
+            logger.info("Phase 2: no moving trajectories found (rows 0-1, >200px disp)")
 
     except Exception as e:
         logger.exception("Phase 2 failed: %s", e)

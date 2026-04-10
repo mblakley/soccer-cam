@@ -424,14 +424,27 @@ html, body {
     <div class="progress-track"><div class="progress-inner" id="gap-progress-bar"></div></div>
   </div>
   <div class="annotate-body">
-    <div class="frame-reason" id="gap-info">Trajectory gap</div>
-    <div style="padding:4px 12px; overflow-x:auto; flex:1; display:flex; align-items:center;">
+    <div class="frame-reason" id="gap-info">Loading...</div>
+    <div style="padding:8px 12px; overflow-x:auto; flex:1; display:flex; align-items:center;">
       <img id="gap-filmstrip" style="max-height:100%; border-radius:8px;" />
     </div>
-    <div style="padding:4px 12px; overflow:hidden; display:flex; align-items:center; justify-content:center; max-height:40%;">
-      <canvas id="gap-tile-canvas" style="max-width:100%; max-height:100%; border-radius:8px; touch-action:none;"></canvas>
+    <!-- Track confirmation buttons -->
+    <div class="action-bar" id="gap-confirm-bar">
+      <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--green);color:#000;flex:2;">
+        <span class="icon">&#x26BD;</span>Yes, Game Ball
+      </button>
+      <button class="action-btn" onclick="gapAction('reject')" style="background:var(--red);color:#fff;flex:1;">
+        <span class="icon">&#x2717;</span>Not Ball
+      </button>
+      <button class="action-btn btn-skip" onclick="gapAction('cant_tell')" style="flex:1;">
+        <span class="icon">&rarr;</span>Skip
+      </button>
     </div>
-    <div class="action-bar">
+    <!-- Gap filling buttons (shown after track is confirmed) -->
+    <div class="action-bar" id="gap-fill-bar" style="display:none;">
+      <div style="padding:4px 12px; overflow:hidden; display:flex; align-items:center; justify-content:center; max-height:40%;">
+        <canvas id="gap-tile-canvas" style="max-width:100%; max-height:100%; border-radius:8px; touch-action:none;"></canvas>
+      </div>
       <button class="action-btn btn-confirm" onclick="gapAction('locate')" style="background:var(--green);color:#000;">
         <span class="icon">&#x1F3AF;</span>Ball Here
       </button>
@@ -2388,18 +2401,19 @@ async function loadGapReviews() {
       container.innerHTML = '<div class="empty-state"><div class="icon">&#x26BD;</div><div>No trajectory gaps to review</div><div style="margin-top:12px;font-size:13px">Gaps appear after Sonnet QA runs on games</div></div>';
       return;
     }
-    container.innerHTML = packets.map(p => `
+    container.innerHTML = packets.map(p => {
+      const isConfirm = p.review_type === 'confirm_game_ball';
+      const label = isConfirm ? 'Confirm game ball track' : `${p.remaining} gaps remaining`;
+      const icon = isConfirm ? '&#x26BD;' : '&#x1F50D;';
+      return `
       <div class="packet-card" onclick="navigateTo('gap-annotate', '${p.packet_id}')" style="padding:16px;margin:8px;background:var(--surface);border-radius:12px;cursor:pointer;border:1px solid #333;">
-        <div style="font-weight:600;margin-bottom:4px;">${p.game_id}</div>
-        <div style="font-size:13px;color:#888;">
-          ${p.remaining} gaps remaining / ${p.total_gaps} total
-          ${p.reviewed > 0 ? ' (' + p.reviewed + ' reviewed)' : ''}
-        </div>
+        <div style="font-weight:600;margin-bottom:4px;">${icon} ${p.game_id}</div>
+        <div style="font-size:13px;color:#888;">${label}</div>
         <div style="margin-top:8px;height:4px;background:#333;border-radius:2px;overflow:hidden;">
           <div style="height:100%;background:var(--green);width:${Math.round(p.reviewed/Math.max(p.total_gaps,1)*100)}%;border-radius:2px;"></div>
         </div>
       </div>
-    `).join('');
+    `;}).join('');
   } catch (err) {
     container.innerHTML = '<div class="empty-state">Error loading gap reviews</div>';
   }
@@ -2432,84 +2446,38 @@ function updateGapDisplay() {
   const item = gapItems[gapCurrentIndex];
   if (!item) return;
 
+  const reviewType = gapManifest.review_type || 'gap_review';
+
   // Progress
   document.getElementById('gap-progress-text').textContent = `${gapCurrentIndex + 1}/${gapItems.length}`;
   const pct = Math.round((gapCurrentIndex + 1) / gapItems.length * 100);
   document.getElementById('gap-progress-bar').style.width = pct + '%';
 
-  // Info
-  const ctx = item.gap_context || {};
-  const gapType = ctx.gap_type || 'unknown';
-  const trajLen = ctx.trajectory_length || '?';
-  document.getElementById('gap-info').textContent =
-    `${gapType === 'track_end' ? 'Ball disappeared' : 'Mid-trajectory gap'} (trajectory: ${trajLen} frames)`;
+  if (reviewType === 'confirm_game_ball') {
+    // Track confirmation mode
+    const ti = gapManifest.track_info || {};
+    const coverage = ti.segment_frames ? Math.round(ti.track_frames / ti.segment_frames * 100) : '?';
+    document.getElementById('gap-info').textContent =
+      `Is this the game ball? (${ti.track_frames || '?'} frames, ${coverage}% of video)`;
 
-  // Load filmstrip
-  const filmstrip = document.getElementById('gap-filmstrip');
-  filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/filmstrip/${encodeURIComponent(item.tile_stem)}`;
-  filmstrip.onerror = () => { filmstrip.style.display = 'none'; };
-  filmstrip.onload = () => { filmstrip.style.display = 'block'; };
-
-  // Load tile image on canvas (for tap-to-locate)
-  const canvas = document.getElementById('gap-tile-canvas');
-  const ctx2d = canvas.getContext('2d');
-  const img = new Image();
-  img.onload = () => {
-    canvas.width = img.width;
-    canvas.height = img.height;
-    ctx2d.drawImage(img, 0, 0);
-    // Draw expected position marker (yellow circle)
-    if (ctx.tile_local_x !== undefined) {
-      const ex = ctx.tile_local_x * img.width;
-      const ey = ctx.tile_local_y * img.height;
-      ctx2d.strokeStyle = '#ffcc00';
-      ctx2d.lineWidth = 3;
-      ctx2d.beginPath();
-      ctx2d.arc(ex, ey, 25, 0, Math.PI * 2);
-      ctx2d.stroke();
-      ctx2d.fillStyle = '#ffcc00';
-      ctx2d.font = '20px sans-serif';
-      ctx2d.fillText('?', ex - 6, ey + 7);
-    }
-    gapTapPos = null;
-  };
-  img.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
-
-  // Enable tap-to-locate on canvas
-  canvas.onclick = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
-    gapTapPos = { x, y };
-    // Redraw with tap marker
-    const tmpImg = new Image();
-    tmpImg.onload = () => {
-      ctx2d.drawImage(tmpImg, 0, 0);
-      // Expected position (yellow)
-      if (ctx.tile_local_x !== undefined) {
-        const ex = ctx.tile_local_x * canvas.width;
-        const ey = ctx.tile_local_y * canvas.height;
-        ctx2d.strokeStyle = '#ffcc00';
-        ctx2d.lineWidth = 2;
-        ctx2d.beginPath();
-        ctx2d.arc(ex, ey, 25, 0, Math.PI * 2);
-        ctx2d.stroke();
-      }
-      // Tap position (green)
-      ctx2d.strokeStyle = '#22ff22';
-      ctx2d.lineWidth = 3;
-      ctx2d.beginPath();
-      ctx2d.arc(x, y, 20, 0, Math.PI * 2);
-      ctx2d.stroke();
-      ctx2d.beginPath();
-      ctx2d.arc(x, y, 3, 0, Math.PI * 2);
-      ctx2d.fill();
+    // Show the game ball track filmstrip
+    const filmstrip = document.getElementById('gap-filmstrip');
+    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/game_ball_track`;
+    filmstrip.onerror = () => {
+      // Try individual tile if filmstrip not available
+      filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
     };
-    tmpImg.src = img.src;
-    showToast(`Ball marked at (${x}, ${y}) - tap "Ball Here" to confirm`);
-  };
+
+    // Show confirm buttons, hide gap-fill buttons
+    document.getElementById('gap-confirm-bar').style.display = 'flex';
+    document.getElementById('gap-fill-bar').style.display = 'none';
+
+  } else {
+    // Gap filling mode (future)
+    document.getElementById('gap-info').textContent = 'Gap fill (coming soon)';
+    document.getElementById('gap-confirm-bar').style.display = 'none';
+    document.getElementById('gap-fill-bar').style.display = 'block';
+  }
 }
 
 async function gapAction(action) {

@@ -1,14 +1,12 @@
-"""Generate review task — package trajectory gap tiles for human review + NTFY.
+"""Generate review task — present game ball track for human confirmation.
 
-After Sonnet QA, trajectory endpoints where both the detector AND Sonnet
-failed to find the ball are the highest-value frames for human review.
-The human can either locate the ball (new training label) or confirm
-it went out of play (autocam data).
+After Sonnet QA identifies the dominant ball trajectory, this task
+packages a filmstrip of the track for human confirmation. The human
+confirms "yes, that's the game ball" and then the system can fill
+in gaps where the detector lost the ball.
 
-Pull-local-process-push pattern:
-  - Pull: manifest.db + packs for the game
-  - Process: extract gap tiles, build filmstrip composites, create review packet
-  - Push: review packet to server's review_packets/ dir
+Step 1: "Is this the game ball?" (this task)
+Step 2: Gap filling with Sonnet + human (future tasks, after confirmation)
 """
 
 import json
@@ -31,7 +29,7 @@ def run_generate_review(
     server_share: str = "",
     local_models_dir: Path | None = None,
 ) -> dict:
-    """Package trajectory gap tiles into a review packet for human review."""
+    """Package the dominant ball track for human confirmation."""
     game_id = item["game_id"]
 
     from training.pipeline.config import load_config
@@ -48,89 +46,102 @@ def run_generate_review(
     manifest = GameManifest(task_io.local_game)
     manifest.open(create=False)
 
-    # Find tiles needing human review — trajectory gaps where Sonnet failed
-    candidates = _get_review_candidates(manifest)
+    # Read track info saved by sonnet_qa Phase 2
+    track_info_raw = manifest.conn.execute(
+        "SELECT value FROM metadata WHERE key = 'game_ball_track'"
+    ).fetchone()
 
-    if not candidates:
+    if not track_info_raw:
         manifest.close()
-        logger.info("No review candidates for %s", game_id)
+        logger.info("No game ball track found for %s — nothing to review", game_id)
         return {"review_count": 0}
 
-    logger.info("Review: %d candidates for %s", len(candidates), game_id)
+    track_info = json.loads(track_info_raw[0])
+    track_points_raw = manifest.conn.execute(
+        "SELECT value FROM metadata WHERE key = 'game_ball_track_points'"
+    ).fetchone()
+    track_points = json.loads(track_points_raw[0]) if track_points_raw else []
 
-    # Pull needed packs for extracting tiles and building filmstrips
-    from training.tasks.sonnet_qa import _find_needed_packs, _pull_selective_packs
+    # Pull needed packs for filmstrip
+    from training.tasks.sonnet_qa import _pull_selective_packs
 
-    needed_packs = _find_needed_packs(candidates, manifest)
-    _pull_selective_packs(task_io, needed_packs)
+    segment = track_info["segment"]
+    pack_files = set()
+    rows = manifest.conn.execute(
+        "SELECT DISTINCT pack_file FROM tiles WHERE segment = ? AND pack_file IS NOT NULL",
+        (segment,),
+    ).fetchall()
+    for r in rows:
+        pack_files.add(r[0])
+    _pull_selective_packs(task_io, pack_files)
 
     # Build review packet
     review_dir = Path(cfg.paths.games_dir).parent / "review_packets" / f"{game_id}_{int(time.time())}"
     review_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build filmstrip of the dominant track (evenly spaced samples)
+    from training.tasks.sonnet_qa import _get_trajectory_sample_frames
+    from training.data_prep.trajectory_gaps import build_gap_filmstrip
+
+    traj_tuples = [(p["fi"], p["seg"], p["px"], p["py"]) for p in track_points]
+    sample_frames = _get_trajectory_sample_frames(traj_tuples, n_samples=8)
+
+    filmstrip_path = review_dir / "game_ball_track.jpg"
+    if sample_frames:
+        build_gap_filmstrip(sample_frames, manifest, task_io.local_packs, filmstrip_path)
+
+    # Also extract individual tile images for the track samples
     from training.tasks.sonnet_qa import _read_tile_from_packs
 
-    extracted = 0
-    manifest_items = []
-
-    # Load gap positions metadata (saved by sonnet_qa Phase 2)
-    gap_positions_raw = manifest.conn.execute(
-        "SELECT value FROM metadata WHERE key = 'gap_positions'"
-    ).fetchone()
-    gap_positions = json.loads(gap_positions_raw[0]) if gap_positions_raw else {}
-
-    for cand in candidates:
-        tile_stem = cand["tile_stem"]
-
-        # Save the tile image
+    tile_images = []
+    for frame in sample_frames:
+        tile_stem = frame["tile_stem"]
         jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, task_io.local_packs)
-        if jpeg_bytes is None:
-            continue
-
-        tile_path = review_dir / f"{tile_stem}.jpg"
-        tile_path.write_bytes(jpeg_bytes)
-
-        # Include gap context if available
-        gap_ctx = gap_positions.get(tile_stem, {})
-
-        manifest_items.append({
-            "tile_stem": tile_stem,
-            "qa_verdict": cand.get("qa_verdict"),
-            "priority": cand.get("priority", 0),
-            "reason": cand.get("reason", ""),
-            "gap_context": gap_ctx if gap_ctx else None,
-        })
-        extracted += 1
-
-    # Also build filmstrips for gap candidates (trajectory context)
-    _build_review_filmstrips(candidates, manifest, task_io.local_packs, review_dir, cfg)
+        if jpeg_bytes:
+            tile_path = review_dir / f"{tile_stem}.jpg"
+            tile_path.write_bytes(jpeg_bytes)
+            tile_images.append(tile_stem)
 
     # Write review manifest
     review_manifest = {
         "game_id": game_id,
         "created_at": time.time(),
-        "tile_count": extracted,
-        "items": manifest_items,
+        "review_type": "confirm_game_ball",
+        "track_info": track_info,
+        "filmstrip": "game_ball_track.jpg",
+        "tile_count": len(tile_images),
+        "items": [
+            {
+                "tile_stem": frame["tile_stem"],
+                "frame_idx": frame["frame_idx"],
+                "reason": "confirm_game_ball",
+                "priority": 300,
+                "role": "track_sample",
+            }
+            for frame in sample_frames
+        ],
     }
     (review_dir / "manifest.json").write_text(json.dumps(review_manifest, indent=2))
 
     manifest.close()
 
-    # Send NTFY notification
-    if extracted > 0 and cfg.ntfy.enabled:
-        gap_count = sum(1 for c in candidates if c.get("reason", "").startswith("trajectory_gap"))
+    # Send NTFY
+    if cfg.ntfy.enabled:
+        track_frames = track_info.get("track_frames", 0)
+        seg_frames = track_info.get("segment_frames", 0)
+        coverage = round(track_frames / max(seg_frames, 1) * 100)
         try:
             subprocess.run(
                 [
                     "curl", "-s",
-                    "-H", "Title: Gap Review Ready",
-                    "-H", "Priority: high",
+                    "-H", "Title: Confirm Game Ball Track",
+                    "-H", "Priority: default",
                     "-H", f"Tags: soccer,{game_id}",
                     "-d",
-                    f"{extracted} trajectory gaps need review\n"
+                    f"Is this the game ball?\n"
                     f"Game: {game_id}\n"
-                    f"{gap_count} gaps where ball disappeared\n"
-                    f"Review at: https://trainer.goat-rattlesnake.ts.net/static/annotate.html#gap-review",
+                    f"Track: {track_frames} frames ({coverage}% of segment)\n"
+                    f"Review: https://trainer.goat-rattlesnake.ts.net/static/annotate.html#gap-review",
                     f"https://ntfy.sh/{cfg.ntfy.topic}",
                 ],
                 capture_output=True,
@@ -139,106 +150,17 @@ def run_generate_review(
         except Exception as e:
             logger.warning("NTFY failed: %s", e)
 
-    logger.info("Generated review packet for %s: %d tiles (%d gaps)", game_id, extracted, gap_count)
+    logger.info(
+        "Generated track confirmation packet for %s: %d sample tiles, "
+        "track=%d frames (%d-%d), segment=%d frames",
+        game_id, len(tile_images), track_info["track_frames"],
+        track_info["track_start"], track_info["track_end"],
+        track_info["segment_frames"],
+    )
 
     return {
-        "review_count": extracted,
+        "review_count": len(tile_images),
         "review_dir": str(review_dir),
+        "review_type": "confirm_game_ball",
+        "track_coverage_pct": coverage,
     }
-
-
-def _get_review_candidates(manifest, max_tiles: int = 100) -> list[dict]:
-    """Get tiles for human review — trajectory gaps where Sonnet also failed.
-
-    Priority:
-    1. gap_no_ball: trajectory endpoints where Sonnet couldn't find ball (200)
-    2. Sonnet disagreement: false_positive on high-confidence detection (100)
-    """
-    conn = manifest.conn
-    candidates = []
-
-    # HIGHEST PRIORITY: trajectory gaps where Sonnet couldn't find the ball
-    # These are the most valuable — if human finds ball, it's a new training label
-    gap_tiles = conn.execute(
-        """SELECT tile_stem, confidence, qa_verdict
-           FROM labels
-           WHERE qa_verdict = 'gap_no_ball'
-           LIMIT ?""",
-        (max_tiles,),
-    ).fetchall()
-    for r in gap_tiles:
-        candidates.append({
-            "tile_stem": r[0],
-            "confidence": r[1],
-            "qa_verdict": r[2],
-            "priority": 200,
-            "reason": "trajectory_gap_sonnet_failed",
-        })
-
-    # MEDIUM PRIORITY: Sonnet disagreed with high-confidence model detection
-    remaining = max_tiles - len(candidates)
-    if remaining > 0:
-        disagreements = conn.execute(
-            """SELECT tile_stem, confidence, qa_verdict
-               FROM labels
-               WHERE qa_verdict = 'false_positive' AND confidence > 0.6
-               LIMIT ?""",
-            (remaining,),
-        ).fetchall()
-        for r in disagreements:
-            candidates.append({
-                "tile_stem": r[0],
-                "confidence": r[1],
-                "qa_verdict": r[2],
-                "priority": 100,
-                "reason": "sonnet_disagreement",
-            })
-
-    candidates.sort(key=lambda x: x["priority"], reverse=True)
-    return candidates[:max_tiles]
-
-
-def _build_review_filmstrips(candidates, manifest, packs_dir, review_dir, cfg):
-    """Build filmstrip composites for gap candidates (same format as Sonnet saw)."""
-    try:
-        from training.data_prep.trajectory_gaps import (
-            build_trajectories_from_manifest,
-            stitch_game_ball_track,
-            find_gap_candidates,
-            get_gap_context_frames,
-            build_gap_filmstrip,
-        )
-
-        raw = build_trajectories_from_manifest(
-            manifest.conn, min_length=cfg.qa.min_trajectory_length,
-        )
-        trajectories = stitch_game_ball_track(
-            raw, max_gap_seconds=3.0, frame_interval=cfg.tiling.frame_interval,
-        )
-        if not trajectories:
-            return
-
-        gaps = find_gap_candidates(
-            trajectories[:3], frame_interval=cfg.tiling.frame_interval, max_gap_seconds=3.0,
-        )
-        gap_stems = {c["tile_stem"] for c in candidates if c["reason"] == "trajectory_gap_sonnet_failed"}
-
-        filmstrip_dir = review_dir / "filmstrips"
-        filmstrip_dir.mkdir(exist_ok=True)
-
-        built = 0
-        for gap in gaps:
-            traj = trajectories[gap["trajectory_idx"]]
-            context = get_gap_context_frames(gap, traj, n_before=3, n_after=2)
-            gap_frame = next((f for f in context if f["role"] == "gap"), None)
-            if not gap_frame or gap_frame["tile_stem"] not in gap_stems:
-                continue
-
-            out = filmstrip_dir / f"{gap_frame['tile_stem']}_filmstrip.jpg"
-            if build_gap_filmstrip(context, manifest, packs_dir, out):
-                built += 1
-
-        logger.info("Built %d filmstrips for review", built)
-
-    except Exception as e:
-        logger.warning("Failed to build review filmstrips: %s", e)

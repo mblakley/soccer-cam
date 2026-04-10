@@ -855,9 +855,10 @@ async def get_gap_reviews():
             continue
         with open(manifest_path) as f:
             m = json.load(f)
-        # Only include packets that have gap review items
+        # Include packets with gap items OR confirm_game_ball type
         gap_items = [i for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap")]
-        if not gap_items:
+        review_type = m.get("review_type", "gap_review")
+        if not gap_items and review_type != "confirm_game_ball":
             continue
 
         results_path = packet_dir / "annotation_results.json"
@@ -866,12 +867,15 @@ async def get_gap_reviews():
             with open(results_path) as f:
                 reviewed = len(json.load(f))
 
+        review_type = m.get("review_type", "gap_review")
+        total = len(gap_items) if gap_items else m.get("tile_count", 0)
         packets.append({
             "packet_id": packet_dir.name,
             "game_id": m.get("game_id", ""),
-            "total_gaps": len(gap_items),
+            "review_type": review_type,
+            "total_gaps": total,
             "reviewed": reviewed,
-            "remaining": len(gap_items) - reviewed,
+            "remaining": total - reviewed,
             "created_at": m.get("created_at", 0),
         })
 
