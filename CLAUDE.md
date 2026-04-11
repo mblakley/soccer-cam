@@ -134,11 +134,14 @@ REGISTERED → stage → STAGING → tile → TILED → label → LABELED →
 sonnet_qa → QA_DONE → generate_review → TRAINABLE → train
 ```
 
-Each task follows pull-local-process-push:
-1. **Pull:** Copy manifest + packs from D: to G: SSD (or local SSD on remote)
-2. **Process:** Do work on local SSD (fast I/O)
+**CRITICAL: Every task MUST follow pull-local-process-push.** Never read packs or manifests directly from SMB shares — random I/O over SMB is 700x slower than local SSD. Stage everything locally first.
+
+1. **Pull:** Copy manifest + packs from D: (SMB) to local SSD work dir
+2. **Process:** Read/write ONLY from local SSD paths — never from `\\server\training\...`
 3. **Push:** Copy results back to D: (manifest) and F: (packs)
 4. **Cleanup:** Delete local work dir
+
+Use `TaskIO` (training/tasks/io.py) which implements this pattern. If a task needs pack data, call `io.pull_packs()` or stage individual packs with `shutil.copy2()` to local SSD before reading tiles.
 
 ### Pipeline Commands
 
