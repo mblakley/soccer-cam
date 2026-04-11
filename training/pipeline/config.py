@@ -34,7 +34,7 @@ class Paths:
     staging: str = "D:/training_data/staging"
     training_sets: str = "D:/training_data/training_sets"
     game_registry: str = "D:/training_data/game_registry.json"
-    log_file: str = "D:/training_data/pipeline.log"
+    log_dir: str = "G:/pipeline_db/logs"
     server_work_dir: str = "G:/pipeline_work"
     archive: ArchivePaths = field(default_factory=ArchivePaths)
 

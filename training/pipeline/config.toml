@@ -9,7 +9,7 @@ games_dir = "D:/training_data/games"          # per-game dirs: manifest.db + til
 staging = "D:/training_data/staging"
 training_sets = "D:/training_data/training_sets"
 game_registry = "D:/training_data/game_registry.json"
-log_file = "D:/training_data/pipeline.log"
+log_dir = "G:/pipeline_db/logs"
 # Server local SSD for processing (pull-local-process-push)
 server_work_dir = "G:/pipeline_work"
 

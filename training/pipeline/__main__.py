@@ -43,24 +43,38 @@ def cmd_status(args):
                 for item in items:
                     if item["id"] == w["current_task_id"]:
                         task_str = f"  {item['task_type']} {item.get('game_id', '')}"
-            print(f"  {w['hostname']:20s} {w.get('status', '?'):10s}"
-                  f" GPU: {w.get('gpu_util_pct', 0):.0f}% {w.get('gpu_temp_c', 0):.0f}C"
-                  f" Disk: {w.get('disk_free_gb', 0):.0f}GB"
-                  f" ({age_str}){task_str}")
+            print(
+                f"  {w['hostname']:20s} {w.get('status', '?'):10s}"
+                f" GPU: {w.get('gpu_util_pct', 0):.0f}% {w.get('gpu_temp_c', 0):.0f}C"
+                f" Disk: {w.get('disk_free_gb', 0):.0f}GB"
+                f" ({age_str}){task_str}"
+            )
     else:
         print("  (no workers reporting)")
 
     # Queue
     stats = q.get_queue_stats()
-    print(f"\nQueue: {stats.get('queued', 0)} queued, {stats.get('running', 0)} running, "
-          f"{stats.get('claimed', 0)} claimed, {stats.get('done', 0)} done, "
-          f"{stats.get('failed', 0)} failed")
+    print(
+        f"\nQueue: {stats.get('queued', 0)} queued, {stats.get('running', 0)} running, "
+        f"{stats.get('claimed', 0)} claimed, {stats.get('done', 0)} done, "
+        f"{stats.get('failed', 0)} failed"
+    )
 
     # Games
     state_counts = reg.get_state_counts()
     print(f"\nGames ({sum(state_counts.values())} total):")
-    for state in ["TRAINABLE", "QA_DONE", "LABELED", "QA_PENDING", "LABELING",
-                   "TILED", "STAGING", "REGISTERED", "EXCLUDED", "HOLD"]:
+    for state in [
+        "TRAINABLE",
+        "QA_DONE",
+        "LABELED",
+        "QA_PENDING",
+        "LABELING",
+        "TILED",
+        "STAGING",
+        "REGISTERED",
+        "EXCLUDED",
+        "HOLD",
+    ]:
         count = state_counts.get(state, 0)
         if count > 0:
             print(f"  {state:15s} {count}")
@@ -138,8 +152,10 @@ def cmd_queue(args):
     for item in items:
         ts = datetime.fromtimestamp(item.get("created_at") or 0).strftime("%m/%d %H:%M")
         claimed = item.get("claimed_by") or ""
-        print(f"  #{item['id']:4d} {item['status']:10s} {item['task_type']:15s} "
-              f"{item.get('game_id', ''):40s} P{item['priority']} {claimed:15s} {ts}")
+        print(
+            f"  #{item['id']:4d} {item['status']:10s} {item['task_type']:15s} "
+            f"{item.get('game_id', ''):40s} P{item['priority']} {claimed:15s} {ts}"
+        )
 
     stats = q.get_queue_stats()
     print(f"\nTotal: {sum(stats.values())} items ({stats})")
@@ -164,10 +180,14 @@ def cmd_machines(args):
         age = time.time() - (w.get("last_seen") or 0)
         print(f"  {w['hostname']}:")
         print(f"    Status: {w.get('status', '?')} (last seen {age / 60:.0f}m ago)")
-        print(f"    GPU: {w.get('gpu_name', '?')} — {w.get('gpu_util_pct', 0):.0f}% util, "
-              f"{w.get('gpu_temp_c', 0):.0f}C, "
-              f"{w.get('gpu_memory_used_mb', 0):.0f}/{w.get('gpu_memory_total_mb', 0):.0f} MB")
-        print(f"    RAM: {w.get('ram_used_gb', 0):.1f}/{w.get('ram_total_gb', 0):.1f} GB")
+        print(
+            f"    GPU: {w.get('gpu_name', '?')} — {w.get('gpu_util_pct', 0):.0f}% util, "
+            f"{w.get('gpu_temp_c', 0):.0f}C, "
+            f"{w.get('gpu_memory_used_mb', 0):.0f}/{w.get('gpu_memory_total_mb', 0):.0f} MB"
+        )
+        print(
+            f"    RAM: {w.get('ram_used_gb', 0):.1f}/{w.get('ram_total_gb', 0):.1f} GB"
+        )
         print(f"    Disk: {w.get('disk_free_gb', 0):.1f} GB free")
         print(f"    User idle: {bool(w.get('is_user_idle'))}")
 
@@ -224,6 +244,7 @@ def cmd_unskip(args):
 
     # Try to infer the right state to go back to
     from training.pipeline.state_machine import infer_initial_state
+
     new_state = infer_initial_state(
         has_video=bool(game.get("video_path")),
         has_packs=game.get("tile_count", 0) > 0,
@@ -248,7 +269,9 @@ def cmd_enqueue(args):
         priority=args.priority,
         target_machine=args.machine,
     )
-    print(f"Enqueued {args.type} (id={item_id}, game={args.game}, priority={args.priority})")
+    print(
+        f"Enqueued {args.type} (id={item_id}, game={args.game}, priority={args.priority})"
+    )
     q.close()
 
 
@@ -288,6 +311,7 @@ def cmd_events(args):
     params = []
     if args.hours:
         import time
+
         params.append(f"since={time.time() - args.hours * 3600}")
     if args.category:
         params.append(f"category={args.category}")
@@ -305,7 +329,9 @@ def cmd_events(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="training.pipeline", description="Pipeline orchestrator")
+    parser = argparse.ArgumentParser(
+        prog="training.pipeline", description="Pipeline orchestrator"
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
 
@@ -350,18 +376,44 @@ def main():
     p_delete.add_argument("item_id", type=int, help="Queue item ID")
 
     p_events = sub.add_parser("events", help="Show pipeline event log")
-    p_events.add_argument("--hours", type=float, default=6, help="Show events from last N hours (default: 6)")
+    p_events.add_argument(
+        "--hours",
+        type=float,
+        default=6,
+        help="Show events from last N hours (default: 6)",
+    )
     p_events.add_argument("--category", help="Filter by category (e.g. state_change)")
     p_events.add_argument("--limit", type=int, default=100, help="Max events to show")
 
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s", datefmt="%H:%M:%S"
     )
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+
+    # File logging for long-running commands (serve, run)
+    if args.command in ("serve", "run"):
+        from pathlib import Path
+        from logging.handlers import RotatingFileHandler
+        from training.pipeline.config import load_config
+
+        cfg = load_config()
+        log_dir = Path(cfg.paths.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_name = "api.log" if args.command == "serve" else "orchestrator.log"
+        # 250MB per file × 3 backups = ~1GB budget shared across 4 services
+        fh = RotatingFileHandler(
+            log_dir / log_name, maxBytes=250_000_000, backupCount=3
+        )
+        fh.setFormatter(fmt)
+        handlers.append(fh)
+
+    for h in handlers:
+        h.setFormatter(fmt)
+    logging.basicConfig(level=level, handlers=handlers)
 
     commands = {
         "serve": cmd_serve,

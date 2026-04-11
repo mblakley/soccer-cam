@@ -17,3 +17,6 @@ idle_games = []
 
 [heartbeat]
 interval = 30
+
+[logging]
+log_dir = "G:/pipeline_db/logs"

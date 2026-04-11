@@ -74,7 +74,9 @@ def cmd_status(args):
         w = workers[0]
         print(f"Worker: {w['hostname']}")
         print(f"Status: {w['status']}")
-        print(f"GPU: {w['gpu_name']} ({w['gpu_util_pct']:.0f}%, {w['gpu_temp_c']:.0f}C)")
+        print(
+            f"GPU: {w['gpu_name']} ({w['gpu_util_pct']:.0f}%, {w['gpu_temp_c']:.0f}C)"
+        )
         print(f"RAM: {w['ram_used_gb']:.1f}/{w['ram_total_gb']:.1f} GB")
         print(f"Disk free: {w['disk_free_gb']:.1f} GB")
         print(f"User idle: {bool(w['is_user_idle'])}")
@@ -82,7 +84,9 @@ def cmd_status(args):
             items = q.get_items(status="running")
             for item in items:
                 if item["id"] == w["current_task_id"]:
-                    print(f"Current task: {item['task_type']} {item.get('game_id', '')}")
+                    print(
+                        f"Current task: {item['task_type']} {item.get('game_id', '')}"
+                    )
     else:
         print(f"No status found for {hostname}")
     q.close()
@@ -107,7 +111,9 @@ def cmd_capabilities(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="training.worker", description="Pipeline worker")
+    parser = argparse.ArgumentParser(
+        prog="training.worker", description="Pipeline worker"
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
 
@@ -121,11 +127,43 @@ def main():
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
-    # Use explicit StreamHandler with flush to ensure logs appear in redirected output
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s", datefmt="%H:%M:%S"))
-    handler.flush = lambda: handler.stream.flush()
-    logging.basicConfig(level=level, handlers=[handler])
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s", datefmt="%H:%M:%S"
+    )
+
+    # Stream handler with flush for redirected output
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    sh.flush = lambda: sh.stream.flush()
+    handlers: list[logging.Handler] = [sh]
+
+    # File logging for the run command (log_dir from worker config TOML)
+    if args.command == "run":
+        import tomllib
+        from logging.handlers import RotatingFileHandler
+
+        config_path = getattr(args, "config", "") or ""
+        log_dir_str = None
+        if config_path:
+            with open(config_path, "rb") as _f:
+                _raw = tomllib.load(_f)
+            log_dir_str = _raw.get("logging", {}).get("log_dir")
+
+        if log_dir_str:
+            _log_dir = Path(log_dir_str)
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            if "qa" in config_path:
+                log_name = "qa_worker.log"
+            else:
+                log_name = "worker.log"
+            # 250MB per file × 3 backups = ~1GB budget shared across 4 services
+            fh = RotatingFileHandler(
+                _log_dir / log_name, maxBytes=250_000_000, backupCount=3
+            )
+            fh.setFormatter(fmt)
+            handlers.append(fh)
+
+    logging.basicConfig(level=level, handlers=handlers)
 
     if args.command == "run":
         cmd_run(args)
