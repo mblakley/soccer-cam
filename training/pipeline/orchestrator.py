@@ -66,6 +66,7 @@ class Orchestrator:
         """One pass of the orchestrator loop."""
         self._collect_results()
         self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
+        self._audit_game_states()
         self._enqueue_work()
 
     # ------------------------------------------------------------------
@@ -165,6 +166,47 @@ class Orchestrator:
                 )
 
     # ------------------------------------------------------------------
+    # Audit — validate game states match actual data
+    # ------------------------------------------------------------------
+
+    def _audit_game_states(self):
+        """Check that each game's state matches its actual data.
+
+        Demotes games whose state claims more progress than their data
+        supports. Runs every tick but only makes changes when needed.
+        """
+        if self.dry_run:
+            return
+
+        games = self.api.get_games_needing_work()
+        for game in games:
+            game_id = game["game_id"]
+            state = game["pipeline_state"]
+            tiles = game.get("tile_count", 0)
+            labels = game.get("label_count", 0)
+
+            if is_failed(state):
+                state = get_failed_stage(state)
+
+            # LABELED or beyond but has 0 tiles — needs tiling
+            if state in ("LABELED", "QA_PENDING", "QA_DONE") and tiles == 0:
+                self.api.set_game_state(game_id, "TILED")
+                logger.info("Audit: demoted %s %s->TILED (0 tiles)", game_id, state)
+                continue
+
+            # LABELED but has 0 labels — needs labeling
+            if state in ("LABELED", "QA_PENDING", "QA_DONE") and labels == 0 and tiles > 0:
+                self.api.set_game_state(game_id, "TILED")
+                logger.info("Audit: demoted %s %s->TILED (0 labels)", game_id, state)
+                continue
+
+            # TILED but has 0 tiles — needs staging
+            if state == "TILED" and tiles == 0:
+                self.api.set_game_state(game_id, "STAGING")
+                logger.info("Audit: demoted %s TILED->STAGING (0 tiles)", game_id)
+                continue
+
+    # ------------------------------------------------------------------
     # Enqueue work
     # ------------------------------------------------------------------
 
@@ -209,21 +251,8 @@ class Orchestrator:
                 if stage_count >= self.cfg.orchestrator.max_staging_concurrent:
                     continue
 
-            if task_type == "sonnet_qa":
-                if not self._can_qa():
-                    continue
-                # Don't QA games without tiles — they need tiling first
-                if game.get("tile_count", 0) == 0:
-                    if not self.dry_run and state == "LABELED":
-                        # Demote to TILED so tiling gets enqueued
-                        self.api.set_game_state(game_id, "TILED")
-                        logger.info("Demoted %s LABELED->TILED (0 tiles)", game_id)
-                    continue
-
-            if task_type == "label":
-                # Don't label games without tiles
-                if game.get("tile_count", 0) == 0:
-                    continue
+            if task_type == "sonnet_qa" and not self._can_qa():
+                continue
 
             payload = self._build_payload(game, task_type)
             priority = self._get_priority(task_type, game)
