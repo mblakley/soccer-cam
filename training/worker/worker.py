@@ -74,6 +74,7 @@ class Worker:
 
         self._current_task_id: int | None = None
         self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_stop: threading.Event | None = None
 
     @classmethod
     def from_config(cls, config_path: Path) -> "Worker":
@@ -148,15 +149,21 @@ class Worker:
 
         # 3. Can I work? (temp, disk)
         if state.gpu_temp_c > self.max_gpu_temp:
-            logger.warning("GPU too hot (%.0fC > %dC), cooling down...",
-                           state.gpu_temp_c, self.max_gpu_temp)
+            logger.warning(
+                "GPU too hot (%.0fC > %dC), cooling down...",
+                state.gpu_temp_c,
+                self.max_gpu_temp,
+            )
             self._report_status(state, status="idle")
             _shutdown.wait(timeout=60)
             return
 
         if state.disk_free_gb < self.min_disk_free_gb:
-            logger.warning("Disk low (%.1fGB < %dGB), skipping work...",
-                           state.disk_free_gb, self.min_disk_free_gb)
+            logger.warning(
+                "Disk low (%.1fGB < %dGB), skipping work...",
+                state.disk_free_gb,
+                self.min_disk_free_gb,
+            )
             self._report_status(state, status="idle")
             _shutdown.wait(timeout=60)
             return
@@ -239,6 +246,7 @@ class Worker:
             game_work = self.local_work_dir / game_id
             if game_work.exists():
                 import shutil
+
                 try:
                     shutil.rmtree(game_work)
                     logger.debug("Cleaned up %s", game_work)
@@ -250,27 +258,44 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _start_heartbeat(self, item_id: int):
-        """Start background heartbeat thread."""
+        """Start background heartbeat thread.
+
+        Uses a per-heartbeat stop event (not the global _shutdown) so that
+        stopping the heartbeat between tasks doesn't signal the main loop
+        to exit.  Also updates worker_status.last_seen on every beat so the
+        orchestrator doesn't think the worker is stale during long tasks.
+        """
         self._stop_heartbeat()
 
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+
         def _beat():
-            while not _shutdown.is_set():
+            while not stop.is_set() and not _shutdown.is_set():
                 try:
                     self.api.heartbeat(item_id)
                 except Exception as e:
                     logger.warning("Heartbeat failed: %s", e)
-                _shutdown.wait(timeout=self.heartbeat_interval)
+                # Also refresh worker_status.last_seen so orchestrator
+                # doesn't flag us as stale during long-running tasks.
+                try:
+                    state = self.monitor.check()
+                    self._report_status(state, status="working", task_id=item_id)
+                except Exception:
+                    pass
+                stop.wait(timeout=self.heartbeat_interval)
 
         self._heartbeat_thread = threading.Thread(target=_beat, daemon=True)
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self):
         """Stop background heartbeat thread."""
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            _shutdown.set()
             self._heartbeat_thread.join(timeout=5)
-            _shutdown.clear()
         self._heartbeat_thread = None
+        self._heartbeat_stop = None
 
     # ------------------------------------------------------------------
     # Status reporting
