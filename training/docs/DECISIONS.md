@@ -170,3 +170,13 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 Label sources are tracked separately so we can always compare model performance against ground truth. We never overwrite external model labels — QA verdicts and human labels are additive.
 **Files:** `training/data_prep/game_manifest.py` (labels table: source, qa_verdict columns)
+
+## 2026-04-11: Ball track length is the ground truth metric
+
+**Context:** Multiple metrics could indicate model quality — precision, recall, mAP, false positive rate. But the purpose of the model is to track the game ball continuously.
+**Decision:** The primary metric is **verified game ball track length** — the longest continuous trajectory confirmed by the human reviewer, measured as a percentage of total game time. This directly measures what we care about: can the model see the ball throughout the game?
+- Sonnet QA helps filter false positives but isn't perfect
+- Only human verification of the trajectory confirms ground truth
+- Retraining is valuable when track gaps exist that new labels could fill
+- The flywheel naturally converges: longer tracks → fewer gaps → fewer human reviews → less retraining needed → done
+**Trade-off:** Harder to measure automatically than mAP. Requires trajectory building + human review to evaluate. But it's the metric that actually matters for the autocam use case.
