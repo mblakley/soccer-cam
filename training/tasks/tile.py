@@ -72,7 +72,7 @@ def run_tile(
         import shutil
         _, _, free = shutil.disk_usage(str(io.local_work_dir))
         free_gb = free / (1024**3)
-        if free_gb < 10:
+        if free_gb < 5:
             logger.error("Disk critically low (%.1fGB free), stopping tiling early", free_gb)
             break
 
