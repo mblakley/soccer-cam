@@ -3,7 +3,7 @@
 
 [worker]
 hostname = "DESKTOP-5L867J8-QA"
-capabilities = ["sonnet_qa", "generate_review", "ingest_reviews"]
+capabilities = ["sonnet_qa"]
 api_url = "http://127.0.0.1:8643"
 server_share = ""
 local_work_dir = "G:/pipeline_work_qa"

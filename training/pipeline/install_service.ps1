@@ -67,7 +67,20 @@ Register-ScheduledTask `
 
 Write-Host "Registered PipelineWorker"
 
-# --- 4. Annotation Server (human review UI, port 8642) ---
+# --- 4. Server QA Worker (Sonnet QA + review, runs alongside tile worker) ---
+Unregister-ScheduledTask -TaskName "PipelineQAWorker" -Confirm:$false -ErrorAction SilentlyContinue
+
+Register-ScheduledTask `
+    -TaskName "PipelineQAWorker" `
+    -Action (New-ScheduledTaskAction -Execute $UvPath -Argument "run python -u -m training.worker run --config training\worker\server_qa_config.toml" -WorkingDirectory $ProjectDir) `
+    -Trigger $Trigger `
+    -Settings $CommonSettings `
+    -Principal $Principal `
+    -Description "Server QA worker (sonnet_qa, generate_review, ingest_reviews)"
+
+Write-Host "Registered PipelineQAWorker"
+
+# --- 5. Annotation Server (human review UI, port 8642) ---
 Unregister-ScheduledTask -TaskName "AnnotationServer" -Confirm:$false -ErrorAction SilentlyContinue
 
 Register-ScheduledTask `
@@ -85,6 +98,7 @@ Start-ScheduledTask -TaskName "PipelineAPI"
 Start-Sleep -Seconds 5
 Start-ScheduledTask -TaskName "PipelineOrchestrator"
 Start-ScheduledTask -TaskName "PipelineWorker"
+Start-ScheduledTask -TaskName "PipelineQAWorker"
 Start-ScheduledTask -TaskName "AnnotationServer"
 
 Write-Host "`nAll started. Check: curl http://127.0.0.1:8643/api/status"
