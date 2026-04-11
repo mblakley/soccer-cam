@@ -10,4 +10,6 @@ dir \\192.168.86.152\training >> C:\soccer-cam-label\startup.log 2>&1
 
 echo Starting worker process... >> C:\soccer-cam-label\startup.log
 cd /d C:\soccer-cam-label\project
+REM Add CUDA 12 DLLs to PATH (from system Python's PyTorch installation)
+set PATH=C:\Program Files\Python312\Lib\site-packages\torch\lib;%PATH%
 %USERPROFILE%\.local\bin\uv.exe run python -u -m training.worker run --config worker_config.toml >> C:\soccer-cam-label\worker.log 2>&1
