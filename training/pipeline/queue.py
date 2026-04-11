@@ -159,7 +159,11 @@ class WorkQueue:
         return item_id
 
     def has_active_item(self, task_type: str, game_id: str | None = None) -> bool:
-        """Check if a queued/claimed/running item exists for this task+game."""
+        """Check if a queued/claimed/running item exists for this task type.
+
+        If game_id is provided, checks for that specific game.
+        If game_id is None, checks for ANY active item of this task type.
+        """
         conn = self._get_conn()
         if game_id:
             row = conn.execute(
@@ -172,7 +176,7 @@ class WorkQueue:
         else:
             row = conn.execute(
                 """SELECT 1 FROM work_items
-                   WHERE task_type = ? AND game_id IS NULL
+                   WHERE task_type = ?
                      AND status IN ('queued', 'claimed', 'running')
                    LIMIT 1""",
                 (task_type,),
@@ -316,8 +320,13 @@ class WorkQueue:
                    WHERE id = ?""",
                 (error, item_id),
             )
-            logger.warning("Item %d failed (attempt %d/%d), re-queued: %s",
-                           item_id, row["attempts"], row["max_attempts"], error)
+            logger.warning(
+                "Item %d failed (attempt %d/%d), re-queued: %s",
+                item_id,
+                row["attempts"],
+                row["max_attempts"],
+                error,
+            )
         else:
             conn.execute(
                 """UPDATE work_items
@@ -357,11 +366,17 @@ class WorkQueue:
                            heartbeat_at = NULL,
                            error = ?
                        WHERE id = ?""",
-                    (f"stale heartbeat - worker {row['claimed_by']} presumed dead", row["id"]),
+                    (
+                        f"stale heartbeat - worker {row['claimed_by']} presumed dead",
+                        row["id"],
+                    ),
                 )
                 logger.warning(
                     "Reclaimed stale item %d (%s %s) from %s",
-                    row["id"], row["task_type"], row.get("game_id", ""), row["claimed_by"],
+                    row["id"],
+                    row["task_type"],
+                    row.get("game_id", ""),
+                    row["claimed_by"],
                 )
             else:
                 conn.execute(
@@ -369,11 +384,16 @@ class WorkQueue:
                        SET status = 'failed', completed_at = ?,
                            error = ?
                        WHERE id = ?""",
-                    (time.time(), f"exhausted {row['max_attempts']} attempts", row["id"]),
+                    (
+                        time.time(),
+                        f"exhausted {row['max_attempts']} attempts",
+                        row["id"],
+                    ),
                 )
                 logger.error(
                     "Item %d permanently failed after %d attempts",
-                    row["id"], row["max_attempts"],
+                    row["id"],
+                    row["max_attempts"],
                 )
             reclaimed.append(row)
 
@@ -427,11 +447,20 @@ class WorkQueue:
                    disk_free_gb=excluded.disk_free_gb,
                    is_user_idle=excluded.is_user_idle""",
             (
-                hostname, time.time(), status, current_task_id,
-                gpu_name, gpu_util_pct, gpu_temp_c,
-                gpu_memory_used_mb, gpu_memory_total_mb,
-                cpu_util_pct, ram_used_gb, ram_total_gb,
-                disk_free_gb, 1 if is_user_idle else 0,
+                hostname,
+                time.time(),
+                status,
+                current_task_id,
+                gpu_name,
+                gpu_util_pct,
+                gpu_temp_c,
+                gpu_memory_used_mb,
+                gpu_memory_total_mb,
+                cpu_util_pct,
+                ram_used_gb,
+                ram_total_gb,
+                disk_free_gb,
+                1 if is_user_idle else 0,
             ),
         )
         conn.commit()
@@ -478,8 +507,11 @@ class WorkQueue:
         return [dict(r) for r in rows]
 
     def get_events(
-        self, since: float | None = None, until: float | None = None,
-        category: str | None = None, limit: int = 200,
+        self,
+        since: float | None = None,
+        until: float | None = None,
+        category: str | None = None,
+        limit: int = 200,
     ) -> list[dict]:
         """Query pipeline events by time range and/or category."""
         conn = self._get_conn()
