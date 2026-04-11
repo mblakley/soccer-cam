@@ -240,10 +240,16 @@ class Orchestrator:
         return payload
 
     def _get_priority(self, task_type: str, game: dict) -> int:
+        # Lower number = higher priority. Designed so QA and review
+        # interleave with tiling rather than waiting for all tiles.
         base = {
-            "ingest_reviews": 5, "train": 10, "label": 20,
-            "measure_coverage": 25, "fill_gaps": 30, "tile": 35,
-            "stage": 40, "sonnet_qa": 50, "generate_review": 55,
+            "ingest_reviews": 5,
+            "generate_review": 10,
+            "train": 15,
+            "sonnet_qa": 25,        # between label and tile — runs as games become LABELED
+            "label": 30,
+            "tile": 35,
+            "stage": 40,
         }.get(task_type, 50)
         if game.get("label_count", 0) > 0:
             base -= 5
