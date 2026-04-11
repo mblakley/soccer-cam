@@ -22,6 +22,14 @@ Soccer-cam (video-grouper) is an automated pipeline for downloading, processing,
 
 6. **Track what's actually running.** Maintain awareness of every background process. Know their PIDs, what they're doing, and when they last produced output. A process that hasn't logged in 10 minutes may be dead.
 
+7. **Audit means validate prerequisites, not just state.** When auditing the pipeline, don't just check game states — verify that each game has the resources its state claims. A game in LABELED state with 0 tiles is broken. Specifically check:
+   - **LABELED**: has tiles > 0? has labels > 0? pack_file not NULL? packs exist on disk (D: or F:)?
+   - **TILED**: has tiles > 0? pack_file not NULL? packs exist?
+   - **QA_DONE**: has qa_verdicts? has game_ball_track metadata?
+   - **TRAINABLE**: has labels with matching tiles? packs accessible?
+   - **Any state**: pipeline_attempts climbing? (indicates retry loop — fix root cause, don't just reset)
+   - If a game's state doesn't match its data, demote it to the correct stage.
+
 ## Game Naming Convention
 
 All games use this format everywhere — tiles, labels, shards, manifests, configs:
