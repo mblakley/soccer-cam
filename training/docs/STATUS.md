@@ -1,151 +1,113 @@
 # Current Status
 
-*Last updated: 2026-04-09 18:10*
+*Last updated: 2026-04-11 09:00*
 
-## What's Running Right Now
+## What's Running
 
-Four server processes + one remote worker, all communicating via HTTP API:
+Five processes on the server, two remote workers:
 
-| Process | Machine | Status | What it does |
-|---------|---------|--------|-------------|
-| PipelineAPI | Server (port 8643) | Running | FastAPI, sole SQLite accessor |
-| PipelineOrchestrator | Server | Running | Populates work queues via API every 60s |
-| PipelineWorker | Server | Running | Pulls stage/tile/QA tasks |
-| PipelineWorker | FORTNITE-OP | Running | Pulls label/tile tasks, pauses for games |
-| AnnotationServer | Server (port 8642) | Running | Human review UI via Tailscale |
-| PipelineWorker | jared-laptop | Running | Tile/label/train tasks |
+| Process | Machine | Port | What it does |
+|---------|---------|------|-------------|
+| PipelineAPI | Server | 8643 | FastAPI, sole SQLite accessor for registry + work queue |
+| PipelineOrchestrator | Server | — | Populates work queues via API every 60s |
+| PipelineWorker | Server | — | Pulls stage/tile/QA/review tasks |
+| AnnotationServer | Server | 8642 | Human review UI (Tailscale: trainer.goat-rattlesnake.ts.net) |
+| PipelineWorker | jared-laptop | — | Tile/label/train tasks (RTX 4070, CUDA) |
+| PipelineWorker | FORTNITE-OP | — | Label/tile tasks (RTX 3060 Ti), yields for games |
 
 **Restart all server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
 
-## Key Paths
-
-| What | Where | Why there |
-|------|-------|-----------|
-| Registry DB | `G:/pipeline_db/registry.db` | SSD for fast access |
-| Work Queue DB | `G:/pipeline_db/work_queue.db` | SSD for fast access |
-| Per-game manifests | `D:/training_data/games/{game_id}/manifest.db` | HDD, one per game |
-| Pack files (tiles) | `D:/training_data/tile_packs/{game_id}/` | HDD, legacy location |
-| Worker SSD cache | `G:/pipeline_work/` | SSD for processing |
-| Config | `training/pipeline/config.toml` | All paths/machines/thresholds |
-| FORTNITE-OP worker code | `C:\soccer-cam-label\project\` on FORTNITE-OP | Deployed via PS session |
-| FORTNITE-OP config | `C:\soccer-cam-label\project\worker_config.toml` | Uses single-quoted UNC paths |
-
-## Game Pipeline State
-
-| State | Count | What happens next |
-|-------|-------|-------------------|
-| LABELED | 25 | **Blocked on Sonnet QA** - tasks queued, server worker has capability |
-| STAGING | 1 | Video verified, waiting for tile task |
-| REGISTERED | 1 | Needs staging (video path lookup on F:) |
-| EXCLUDED | 7 | 6 futsal + 1 indoor dome, not trainable |
-| FAILED:STAGING | 4 | Need retry - were disk-full failures, D: now has 148GB free |
-| FAILED:TILED | 1 | Needs retry |
-
-## What Needs to Happen Next (in priority order)
-
-### 1. Sonnet QA flywheel (WORKING)
-
-**Verified working.** 26 sonnet_qa tasks queued at P45, running after tile/label tasks complete.
-
-Sonnet QA now has two phases:
-- **Phase 1**: Verify ONNX detections (BALL/NOT_BALL) — 120 tiles per game, ~4 min
-- **Phase 2**: Trajectory gap detection — builds trajectories from verified labels, finds gaps, asks Sonnet with filmstrip context (before + gap + after frames), ~3.5 min
-
-Results: `true_positive`, `false_positive`, `gap_ball_found`, `gap_no_ball`
-
-### 2. Pipeline flow: QA_DONE -> generate_review -> TRAINABLE (BUILT)
-
-State machine now: `LABELED -> sonnet_qa -> QA_DONE -> generate_review -> TRAINABLE`
-
-- `generate_review` packages trajectory gaps where Sonnet failed, sends NTFY via Tailscale
-- Human review is ASYNC — doesn't block training
-- `ingest_reviews` applies human verdicts for next training run
-- Human actions: "Ball Here" (tap position), "Out of Play", "Hidden", "Skip"
-
-### 3. Annotation server + Gap Review UI (BUILT)
-
-- Server at port 8642, Tailscale: https://trainer.goat-rattlesnake.ts.net/
-- New "Gaps" tab in annotation app with filmstrip view + tap-to-locate
-- API endpoints: `/api/gap-reviews`, `/api/gap-reviews/{id}/filmstrip/{stem}`, etc.
-- Added to install_service.ps1 as 4th scheduled task
-
-### 4. Deploy annotation server + restart services
-
-Run: `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
-
-### 5. Deploy laptop worker
-
-Same pattern as FORTNITE-OP. Capabilities: train, label, tile.
-
-### 6. Auto-trigger training
-
-Once 2+ games reach TRAINABLE, orchestrator auto-enqueues `train` task.
-
-### 7. Retry 5 failed games
+## Storage Architecture
 
 ```
-uv run python -m training.pipeline retry heat__2024.05.28_vs_Chili_home
-uv run python -m training.pipeline retry heat__2024.06.04_vs_Spencerport_home
-uv run python -m training.pipeline retry heat__2024.06.25_vs_Pittsford_home
-uv run python -m training.pipeline retry heat__2024.06.27_vs_Pittsford_away
-uv run python -m training.pipeline retry flash__2025.05.31_vs_IYSA_away
+F: (USB, 7.4TB free)     — PERMANENT storage
+  /training_data/tile_packs/{game_id}/*.pack   — archived pack files
+  /Flash_2013s/...         — original video files
+  /Heat_2012s/...          — original video files
+
+D: (HDD, ~1.8TB free)    — SERVING storage (SMB shared to remote workers)
+  /training_data/games/{game_id}/manifest.db   — per-game manifests (~50-200MB each)
+  /training_data/games/{game_id}/tile_packs/   — temporary pack staging (restored from F: on demand)
+  /training_data/review_packets/               — human review packets
+  /training_data/deploy/                       — remote worker deployment files
+
+G: (SSD, 141GB)           — PROCESSING storage (local to server)
+  /pipeline_db/registry.db                     — game registry
+  /pipeline_db/work_queue.db                   — work queue
+  /pipeline_work/{game_id}/                    — temporary work dirs (cleaned after each task)
 ```
 
-## Architecture (for context)
+### Pack File Lifecycle
 
 ```
-Remote Workers                    Server (192.168.86.152)
-+-----------+                    +---------------------------+
-| Worker    |--- HTTP claim ---->| PipelineAPI (:8643)       |
-| (any PC)  |--- HTTP heartbeat->|   WorkQueue (SSD SQLite)  |
-|           |--- HTTP complete ->|   GameRegistry (SSD SQLite)|
-|           |                    +---------------------------+
-|           |--- SMB copy ------>| \\server\training\games\* |
-| (local    |    (pack files,    | (bulk files only,         |
-|  SSD)     |     video, weights)|  never databases)         |
-+-----------+                    +---------------------------+
+TILE:    video on F: → extract to G: SSD → push packs to D: → archive to F: → clean D:
+LABEL:   manifest says D: path → server_packs() restores F:→D: if missing → pull to G: SSD → ONNX
+QA:      same as label (restore + pull)
+TRAIN:   _resolve_pack_path() checks D: then F: → stages to local SSD → extract tiles → train
 ```
 
-**Key rule:** Only the API process touches SQLite. Everything else uses HTTP. SMB is for bulk file transfer only.
+**Rule:** Manifests store pack_file paths as D: paths. Packs live permanently on F:. When a task needs packs, they're auto-restored from F: to D:, then cleaned after use. Remote workers access D: via SMB share `\\192.168.86.152\training`.
 
-## TOML Config Gotcha
-
-UNC paths with backslashes MUST use single quotes in TOML:
-- WRONG: `server_share = "\\192.168.86.152\training"` (TOML interprets `\t` as tab)
-- RIGHT: `server_share = '\\192.168.86.152\training'` (literal string)
-
-## Files Created This Session
+## Pipeline States
 
 ```
-training/pipeline/
-  api.py              # FastAPI server (sole DB accessor)
-  client.py           # stdlib HTTP client (no deps for remote machines)
-  config.toml         # Single config for all paths/machines
-  config.py           # Config loader
-  queue.py            # SQLite work queue
-  registry.py         # Game registry DB
-  state_machine.py    # Pipeline state transitions
-  migrate.py          # One-time monolithic -> per-game migration (done)
-  install_service.ps1 # Register 3 Windows scheduled tasks
-  __main__.py         # CLI: serve, run, status, games, queue, retry, skip, enqueue
+REGISTERED → STAGING → TILED → LABELING → LABELED →
+QA_PENDING → QA_DONE → generate_review → TRAINABLE
+```
 
-training/worker/
-  worker.py           # Pull-based worker loop (HTTP API client)
-  resources.py        # GPU/CPU/disk/idle monitoring
-  __main__.py         # Worker CLI
-  server_worker_config.toml
-  worker_config.toml  # Template for remote machines
+- `FAILED:{stage}` — failed at a stage, reset with `reset-attempts` + state change
+- `EXCLUDED` — not trainable (futsal, indoor)
 
-training/tasks/
-  io.py               # Shared TaskIO for pull-local-process-push
-  stage.py            # Verify video exists on F:
-  tile.py             # Extract frames -> tile -> pack files
-  label.py            # ONNX inference on tiles
-  train.py            # Build training set + YOLO training
-  sonnet_qa.py        # Claude CLI vision QA
-  generate_review.py  # Package uncertain tiles for human review
-  ingest_reviews.py   # Collect human verdicts
+## Game Pipeline Status
 
-training/data_prep/
-  game_manifest.py    # Per-game SQLite manifest
+| State | Count | Notes |
+|-------|-------|-------|
+| LABELED | ~17 | Have labels, need tiling to complete |
+| TILED | ~3 | Need ONNX labeling |
+| STAGING | ~3 | Video path verified, need tiling |
+| QA_DONE | 1 | Kenmore — ready for review |
+| EXCLUDED | 7 | Futsal/indoor games |
+
+~21 games need tiling to complete (server worker processing, ~1hr/game).
+
+## What Needs to Happen
+
+### Active (running now)
+1. **D:→F: pack archive** — moving existing packs to F:, freeing D: (~975GB)
+2. **Tiling** — server worker processing 21 games from F: video files
+3. **Labeling** — laptop running ONNX on tiled games (CUDA via torch/lib PATH)
+
+### After tiling/labeling completes
+4. **Sonnet QA** — auto-enqueued for LABELED games (~18min/game)
+5. **Game ball track confirmation** — human reviews filmstrip in annotation app
+6. **Training** — auto-triggers when 2+ games reach TRAINABLE
+
+### Known issues
+- Heartbeat thread has a race condition — worker status shows stale but workers are running
+- FORTNITE-OP needs redeployment with Python 3.13 + CUDA PATH when it comes online
+- Phase 2 trajectory gap detection needs end-to-end test with properly tiled+labeled game
+
+## Key Commands
+
+```bash
+# Pipeline status
+uv run python -m training.pipeline status
+
+# Game list
+uv run python -m training.pipeline games
+
+# Event log (last 6 hours)
+uv run python -m training.pipeline events
+
+# Queue management
+uv run python -m training.pipeline enqueue tile --game GAME_ID --priority 30
+uv run python -m training.pipeline priority ITEM_ID PRIORITY
+uv run python -m training.pipeline delete ITEM_ID
+
+# Reset failed games
+# Via API: POST /api/game/{game_id}/reset-attempts + POST /api/game/{game_id}/state
+
+# Audit all games
+uv run python G:/pipeline_work/audit_all_games.py
+uv run python G:/pipeline_work/audit_all_games.py --fix
 ```

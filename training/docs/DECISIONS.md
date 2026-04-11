@@ -115,3 +115,45 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 **Context:** `flash__2024.06.01_vs_IYSA_home` and `heat__2024.05.31_vs_Fairport_home` recorded with camera mounted upside down (sky at bottom, spectators at top).
 **Decision:** Exclude both from v2 training dataset. For v3, include them with corrected video or code-flipped tiles.
 **Reason:** Including upside-down frames would confuse the model about field orientation.
+
+---
+
+## 2026-04-09: HTTP API-only architecture for pipeline
+
+**Context:** Multiple machines (server, laptop, FORTNITE-OP) need to coordinate work. Direct SQLite access from remote machines causes corruption.
+**Decision:** Only the PipelineAPI process touches SQLite (registry.db, work_queue.db). Workers communicate exclusively via HTTP API. SMB shares are for bulk file transfer only (packs, manifests, videos).
+**Trade-off:** Extra HTTP round-trips, but eliminates all SQLite concurrency issues.
+**Files:** `training/pipeline/api.py`, `training/pipeline/client.py`, `training/worker/worker.py`
+
+## 2026-04-09: Sonnet QA with Claude CLI for ball detection verification
+
+**Context:** ONNX model produces many false positives (~85% NOT_BALL). Need automated QA before training.
+**Decision:** Use `claude -p` CLI with Sonnet model to verify detections. Build 3x2 grid composites of tiles, ask Sonnet BALL/NOT_BALL for each. ~10s per grid, 120 tiles per game, included in Claude Max subscription.
+**Trade-off:** Slower than a dedicated classifier, but zero additional cost and high accuracy.
+**Files:** `training/tasks/sonnet_qa.py`
+
+## 2026-04-10: Per-segment tiling — skip concatenated videos
+
+**Context:** Video directories contain both individual segment files (`18.30.10-18.46.58[F][0@0][215198]_ch1.mp4`) and concatenated full-game videos (`flash-iysa-home-raw.mp4`, `combined.mp4`). Concatenated videos produce 100GB+ packs that fill the SSD.
+**Decision:** Only tile files with `[F]` or `[0@0]` markers in the filename. Skip all others. Individual segments cover the same footage in manageable ~15-20GB chunks.
+**Files:** `training/tasks/tile.py` (skip filter at line ~60)
+
+## 2026-04-10: Legacy label remapping — raw frame indices to per-segment
+
+**Context:** Legacy labels reference concatenated "raw.mp4" frame numbering (e.g., frame_idx=98444). New tiles use per-segment numbering (e.g., frame_idx=22694 within segment 4). Frame indices map cleanly via cumulative offset table.
+**Decision:** `remap_legacy_labels()` builds offset table from individual segment .mp4 files, remaps label tile_stems and tile frame indices in the manifest. Both tiles and labels end up using per-segment frame numbering.
+**Files:** `training/data_prep/game_manifest.py` (`remap_legacy_labels()`)
+
+## 2026-04-11: F: as permanent pack archive, D: as serving tier
+
+**Context:** D: (HDD, 1.9TB) can't hold all pack files (~80GB/game × 30+ games = 2.4TB). F: (USB, 15TB) has ample space.
+**Decision:** Pack lifecycle: create on G: SSD → push to D: (for SMB serving) → archive to F: (permanent) → clean D:. When a task needs packs, `server_packs()` auto-restores from F: to D:. Remote workers access D: via SMB; they never see F:.
+**Manifest convention:** `pack_file` column always stores D: paths. The system transparently stages from F: when D: copies don't exist.
+**Trade-off:** Extra copy F:→D: when accessing old games. But D: stays small and we never run out of space.
+**Files:** `training/tasks/io.py` (`server_packs`, `cleanup_server_packs`), `training/tasks/tile.py` (archive step), `training/data_prep/manifest_dataset.py` (`_resolve_pack_path`)
+
+## 2026-04-11: Python 3.13 standardized across all machines
+
+**Context:** Server had 3.13, laptop had 3.12. CUDA DLLs were available in system Python's PyTorch installation but not in the uv venv's PATH.
+**Decision:** All machines use Python 3.13. Worker startup bat files add `C:\Python313\Lib\site-packages\torch\lib` to PATH for CUDA 12 DLLs (cublas, cudnn, cufft, etc.). No separate CUDA toolkit installation needed — PyTorch bundles everything.
+**Files:** `training/pipeline/run_laptop_worker.bat`, worker pyproject.toml (`requires-python = ">=3.13"`)

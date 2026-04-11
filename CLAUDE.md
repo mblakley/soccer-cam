@@ -61,15 +61,107 @@ The game registry (`F:/training_data/game_registry.json`) is the source of truth
 
 ```
 training/
-  annotation/         # Tracking lab, annotation tools
-  data_prep/          # Dataset preparation, tiling, frame extraction
-  distributed/        # Dask cluster: coordinator, worker, plugins, label_job
-  experiments/        # Threshold sweeps, analysis scripts
-  inference/          # Detection models (external ball detector, field filter)
-  configs/            # YAML configs for training runs
-  static/             # Web UI assets
-  annotation_server.py  # FastAPI server
+  pipeline/             # Pipeline orchestration (API, queue, state machine, config)
+  worker/               # Pull-based workers (server, laptop, FORTNITE-OP)
+  tasks/                # Task implementations (stage, tile, label, sonnet_qa, train, etc.)
+  data_prep/            # Dataset preparation (manifest, tiling, trajectory analysis)
+  annotation/           # Tracking lab, annotation tools
+  inference/            # Detection models (external ball detector, field filter)
+  experiments/          # Threshold sweeps, analysis scripts
+  static/               # Web UI assets (annotate.html, ball-verify.html)
+  annotation_server.py  # FastAPI annotation server (port 8642)
+  docs/                 # STATUS.md, DECISIONS.md, EXPERIMENTS.md, GAMES.md, ROADMAP.md
 ```
+
+## Training Pipeline
+
+### Architecture
+
+The ball detection training pipeline runs across 3 machines coordinated by an HTTP API:
+
+```
+Server (DESKTOP-5L867J8)          Laptop (jared-laptop)         FORTNITE-OP
+┌─────────────────────┐          ┌──────────────────┐          ┌──────────────┐
+│ PipelineAPI (:8643) │◄─HTTP──► │ PipelineWorker   │          │ PipelineWorker│
+│ Orchestrator        │          │ (tile,label,train)│          │ (tile,label)  │
+│ PipelineWorker      │          │ RTX 4070 (CUDA)  │          │ RTX 3060 Ti   │
+│ AnnotationServer    │          └──────────────────┘          └──────────────┘
+│ (:8642/Tailscale)   │                ▲                              ▲
+└─────────────────────┘                │ SMB                          │ SMB
+         ▲                             │                              │
+    D: ──┤──► \\server\training ───────┴──────────────────────────────┘
+    F: ──┤    (manifests + staged packs)
+    G: ──┘
+```
+
+### Storage Rules
+
+**These rules are critical. Violating them causes disk-full failures and data loss.**
+
+| Drive | Role | What lives here | Who accesses |
+|-------|------|-----------------|--------------|
+| **F:** (USB, 15TB) | Permanent archive | Pack files, original videos | Server only (local) |
+| **D:** (HDD, 1.9TB) | Serving tier | Manifests, staged packs (SMB shared) | All workers via SMB |
+| **G:** (SSD, 271GB) | Processing | Temporary work dirs, pipeline DBs | Server only (local) |
+
+**Pack file lifecycle:**
+1. **Create:** Tile task extracts frames → packs on G: SSD
+2. **Serve:** Push packs to D: (manifest `pack_file` column = D: path)
+3. **Archive:** Copy packs to F: (permanent)
+4. **Clean:** Delete packs from D: (verified against F: first)
+5. **Restore:** When a task needs packs, `server_packs()` auto-restores F: → D:
+
+**Rules:**
+- Manifests always store `pack_file` as D: paths (served via SMB)
+- Never read directly from F: in task code — always stage to D: or G: first
+- Never use C: for temp files — use G:/pipeline_work/test/
+- Never open live SQLite DBs directly — copy to G: temp first, or use the API
+- Only the PipelineAPI process touches registry.db and work_queue.db
+- Remote workers cannot access F: or G: — only D: via SMB
+
+### Pipeline Flow
+
+```
+REGISTERED → stage → STAGING → tile → TILED → label → LABELED →
+sonnet_qa → QA_DONE → generate_review → TRAINABLE → train
+```
+
+Each task follows pull-local-process-push:
+1. **Pull:** Copy manifest + packs from D: to G: SSD (or local SSD on remote)
+2. **Process:** Do work on local SSD (fast I/O)
+3. **Push:** Copy results back to D: (manifest) and F: (packs)
+4. **Cleanup:** Delete local work dir
+
+### Pipeline Commands
+
+```bash
+# Status and monitoring
+uv run python -m training.pipeline status
+uv run python -m training.pipeline games
+uv run python -m training.pipeline events --hours 6
+uv run python -m training.pipeline queue
+
+# Task management
+uv run python -m training.pipeline enqueue tile --game GAME_ID --priority 30
+uv run python -m training.pipeline enqueue label --game GAME_ID --priority 20
+uv run python -m training.pipeline priority ITEM_ID NEW_PRIORITY
+uv run python -m training.pipeline delete ITEM_ID
+
+# Service management
+powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1
+```
+
+### Machines
+
+| Machine | Hostname | IP | GPU | Capabilities | Python |
+|---------|----------|----|-----|-------------|--------|
+| Server | DESKTOP-5L867J8 | 192.168.86.152 | None | stage, tile, sonnet_qa, generate_review | 3.13 |
+| Laptop | jared-laptop | 192.168.86.24 | RTX 4070 (8GB) | tile, label, train | 3.13 |
+| FORTNITE-OP | FORTNITE-OP | 192.168.86.250 | RTX 3060 Ti | tile, label | 3.13 |
+
+- PS remoting: user `training`, pass `amy4ever`
+- SMB share: `\\192.168.86.152\training` = `D:\training_data`, user `jared`
+- Annotation server: https://trainer.goat-rattlesnake.ts.net/ (Tailscale, port 8642)
 
 ## Build & Development Commands
 
