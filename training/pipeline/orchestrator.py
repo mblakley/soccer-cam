@@ -209,8 +209,21 @@ class Orchestrator:
                 if stage_count >= self.cfg.orchestrator.max_staging_concurrent:
                     continue
 
-            if task_type == "sonnet_qa" and not self._can_qa():
-                continue
+            if task_type == "sonnet_qa":
+                if not self._can_qa():
+                    continue
+                # Don't QA games without tiles — they need tiling first
+                if game.get("tile_count", 0) == 0:
+                    if not self.dry_run and state == "LABELED":
+                        # Demote to TILED so tiling gets enqueued
+                        self.api.set_game_state(game_id, "TILED")
+                        logger.info("Demoted %s LABELED->TILED (0 tiles)", game_id)
+                    continue
+
+            if task_type == "label":
+                # Don't label games without tiles
+                if game.get("tile_count", 0) == 0:
+                    continue
 
             payload = self._build_payload(game, task_type)
             priority = self._get_priority(task_type, game)
