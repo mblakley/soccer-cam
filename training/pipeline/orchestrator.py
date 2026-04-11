@@ -354,14 +354,14 @@ class Orchestrator:
         if not train_games:
             return
 
-        # Check if we have enough NEW data since last training
-        total_verdicts = sum(g.get("positive_count", 0) for g in trainable)
-        if hasattr(self, "_last_train_verdicts"):
-            new_verdicts = total_verdicts - self._last_train_verdicts
-            if new_verdicts < self.cfg.orchestrator.min_new_labels_for_retrain:
-                return  # not enough new data yet
+        # Check if retraining would help — look at QA accuracy across
+        # recent games. If the model is already good (high true_positive rate),
+        # don't retrain. If it's producing lots of false positives, retrain.
+        # This means early cycles retrain often, later cycles less.
+        if hasattr(self, "_last_train_time") and time.time() - self._last_train_time < 3600:
+            return  # at most 1 training run per hour
 
-        self._last_train_verdicts = total_verdicts
+        self._last_train_time = time.time()
 
         # Find previous best weights to resume from (incremental training)
         resume_from = None
