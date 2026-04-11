@@ -161,8 +161,12 @@ def status():
 
 
 @app.get("/api/events")
-def get_events(since: float | None = None, until: float | None = None,
-               category: str | None = None, limit: int = 200):
+def get_events(
+    since: float | None = None,
+    until: float | None = None,
+    category: str | None = None,
+    limit: int = 200,
+):
     """Query pipeline events by time range and/or category.
 
     Usage:
@@ -170,7 +174,9 @@ def get_events(since: float | None = None, until: float | None = None,
         /api/events?category=state_change&limit=50
         /api/events?since=1775800000  (everything since timestamp)
     """
-    return _get_queue().get_events(since=since, until=until, category=category, limit=limit)
+    return _get_queue().get_events(
+        since=since, until=until, category=category, limit=limit
+    )
 
 
 @app.get("/api/games")
@@ -187,7 +193,9 @@ def game_detail(game_id: str):
     # Add file share paths for SMB copy
     if _cfg:
         games_dir = _cfg.paths.games_dir
-        game["packs_share"] = f"{_cfg.server.share_training}\\games\\{game_id}\\tile_packs"
+        game["packs_share"] = (
+            f"{_cfg.server.share_training}\\games\\{game_id}\\tile_packs"
+        )
         game["packs_local"] = f"{games_dir}\\{game_id}\\tile_packs"
         if game.get("video_path"):
             # Convert F: path to video share path
@@ -195,7 +203,9 @@ def game_detail(game_id: str):
             if vpath.startswith("F:"):
                 game["video_share"] = vpath.replace("F:", _cfg.server.share_video, 1)
             elif vpath.startswith("F:/"):
-                game["video_share"] = vpath.replace("F:/", _cfg.server.share_video + "/", 1)
+                game["video_share"] = vpath.replace(
+                    "F:/", _cfg.server.share_video + "/", 1
+                )
             else:
                 game["video_share"] = vpath
     return game
@@ -238,10 +248,13 @@ def enqueue(req: EnqueueRequest):
 
 @app.post("/api/archive/{item_id}")
 def archive_item(item_id: int):
-    """Move a done item to archived status so it's not re-processed."""
+    """Move a done or failed item to archived status so it's not re-processed."""
     q = _get_queue()
     conn = q._get_conn()
-    conn.execute("UPDATE work_items SET status = 'archived' WHERE id = ? AND status = 'done'", (item_id,))
+    conn.execute(
+        "UPDATE work_items SET status = 'archived' WHERE id = ? AND status IN ('done', 'failed')",
+        (item_id,),
+    )
     conn.commit()
     return {"ok": True}
 
@@ -272,7 +285,9 @@ def update_priority(item_id: int, req: dict):
 def delete_queue_item(item_id: int):
     q = _get_queue()
     conn = q._get_conn()
-    row = conn.execute("SELECT status FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status FROM work_items WHERE id = ?", (item_id,)
+    ).fetchone()
     if not row:
         raise HTTPException(404, "Item not found")
     if row["status"] == "running":
