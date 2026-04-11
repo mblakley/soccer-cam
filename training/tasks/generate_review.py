@@ -46,74 +46,78 @@ def run_generate_review(
     manifest = GameManifest(task_io.local_game)
     manifest.open(create=False)
 
-    # Read track info saved by sonnet_qa Phase 2
-    track_info_raw = manifest.conn.execute(
-        "SELECT value FROM metadata WHERE key = 'game_ball_track'"
-    ).fetchone()
+    try:
+        # Read track info saved by sonnet_qa Phase 2
+        track_info_raw = manifest.conn.execute(
+            "SELECT value FROM metadata WHERE key = 'game_ball_track'"
+        ).fetchone()
 
-    if not track_info_raw:
+        if not track_info_raw:
+            logger.info("No game ball track found for %s — nothing to review", game_id)
+            return {"review_count": 0}
+
+        track_info = json.loads(track_info_raw[0])
+        track_points_raw = manifest.conn.execute(
+            "SELECT value FROM metadata WHERE key = 'game_ball_track_points'"
+        ).fetchone()
+        track_points = json.loads(track_points_raw[0]) if track_points_raw else []
+
+        # Resolve pack location (read directly, no copy — only need a few tiles)
+        packs_dir = task_io.server_packs()
+
+        # Build review packet
+        review_dir = (
+            Path(cfg.paths.games_dir).parent
+            / "review_packets"
+            / f"{game_id}_{int(time.time())}"
+        )
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build filmstrip of the dominant track (evenly spaced samples)
+        from training.tasks.sonnet_qa import _get_trajectory_sample_frames
+        from training.data_prep.trajectory_gaps import build_gap_filmstrip
+
+        traj_tuples = [(p["fi"], p["seg"], p["px"], p["py"]) for p in track_points]
+        sample_frames = _get_trajectory_sample_frames(traj_tuples, n_samples=8)
+
+        filmstrip_path = review_dir / "game_ball_track.jpg"
+        if sample_frames:
+            build_gap_filmstrip(sample_frames, manifest, packs_dir, filmstrip_path)
+
+        # Also extract individual tile images for the track samples
+        from training.tasks.sonnet_qa import _read_tile_from_packs
+
+        tile_images = []
+        for frame in sample_frames:
+            tile_stem = frame["tile_stem"]
+            jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
+            if jpeg_bytes:
+                tile_path = review_dir / f"{tile_stem}.jpg"
+                tile_path.write_bytes(jpeg_bytes)
+                tile_images.append(tile_stem)
+
+        # Write review manifest
+        review_manifest = {
+            "game_id": game_id,
+            "created_at": time.time(),
+            "review_type": "confirm_game_ball",
+            "track_info": track_info,
+            "filmstrip": "game_ball_track.jpg",
+            "tile_count": len(tile_images),
+            "items": [
+                {
+                    "tile_stem": frame["tile_stem"],
+                    "frame_idx": frame["frame_idx"],
+                    "reason": "confirm_game_ball",
+                    "priority": 300,
+                    "role": "track_sample",
+                }
+                for frame in sample_frames
+            ],
+        }
+        (review_dir / "manifest.json").write_text(json.dumps(review_manifest, indent=2))
+    finally:
         manifest.close()
-        logger.info("No game ball track found for %s — nothing to review", game_id)
-        return {"review_count": 0}
-
-    track_info = json.loads(track_info_raw[0])
-    track_points_raw = manifest.conn.execute(
-        "SELECT value FROM metadata WHERE key = 'game_ball_track_points'"
-    ).fetchone()
-    track_points = json.loads(track_points_raw[0]) if track_points_raw else []
-
-    # Resolve pack location (read directly, no copy — only need a few tiles)
-    packs_dir = task_io.server_packs()
-
-    # Build review packet
-    review_dir = Path(cfg.paths.games_dir).parent / "review_packets" / f"{game_id}_{int(time.time())}"
-    review_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build filmstrip of the dominant track (evenly spaced samples)
-    from training.tasks.sonnet_qa import _get_trajectory_sample_frames
-    from training.data_prep.trajectory_gaps import build_gap_filmstrip
-
-    traj_tuples = [(p["fi"], p["seg"], p["px"], p["py"]) for p in track_points]
-    sample_frames = _get_trajectory_sample_frames(traj_tuples, n_samples=8)
-
-    filmstrip_path = review_dir / "game_ball_track.jpg"
-    if sample_frames:
-        build_gap_filmstrip(sample_frames, manifest, packs_dir, filmstrip_path)
-
-    # Also extract individual tile images for the track samples
-    from training.tasks.sonnet_qa import _read_tile_from_packs
-
-    tile_images = []
-    for frame in sample_frames:
-        tile_stem = frame["tile_stem"]
-        jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
-        if jpeg_bytes:
-            tile_path = review_dir / f"{tile_stem}.jpg"
-            tile_path.write_bytes(jpeg_bytes)
-            tile_images.append(tile_stem)
-
-    # Write review manifest
-    review_manifest = {
-        "game_id": game_id,
-        "created_at": time.time(),
-        "review_type": "confirm_game_ball",
-        "track_info": track_info,
-        "filmstrip": "game_ball_track.jpg",
-        "tile_count": len(tile_images),
-        "items": [
-            {
-                "tile_stem": frame["tile_stem"],
-                "frame_idx": frame["frame_idx"],
-                "reason": "confirm_game_ball",
-                "priority": 300,
-                "role": "track_sample",
-            }
-            for frame in sample_frames
-        ],
-    }
-    (review_dir / "manifest.json").write_text(json.dumps(review_manifest, indent=2))
-
-    manifest.close()
 
     # Send NTFY
     if cfg.ntfy.enabled:
@@ -123,10 +127,14 @@ def run_generate_review(
         try:
             subprocess.run(
                 [
-                    "curl", "-s",
-                    "-H", "Title: Confirm Game Ball Track",
-                    "-H", "Priority: default",
-                    "-H", f"Tags: soccer,{game_id}",
+                    "curl",
+                    "-s",
+                    "-H",
+                    "Title: Confirm Game Ball Track",
+                    "-H",
+                    "Priority: default",
+                    "-H",
+                    f"Tags: soccer,{game_id}",
                     "-d",
                     f"Is this the game ball?\n"
                     f"Game: {game_id}\n"
@@ -143,8 +151,11 @@ def run_generate_review(
     logger.info(
         "Generated track confirmation packet for %s: %d sample tiles, "
         "track=%d frames (%d-%d), segment=%d frames",
-        game_id, len(tile_images), track_info["track_frames"],
-        track_info["track_start"], track_info["track_end"],
+        game_id,
+        len(tile_images),
+        track_info["track_frames"],
+        track_info["track_start"],
+        track_info["track_end"],
         track_info["segment_frames"],
     )
 

@@ -58,12 +58,19 @@ def run_sonnet_qa(
     manifest = GameManifest(task_io.local_game)
     manifest.open(create=False)
 
+    try:
+        return _run_qa(manifest, task_io, cfg, game_id)
+    finally:
+        manifest.close()
+
+
+def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
+    """Inner QA logic — separated so manifest.close() is guaranteed by caller."""
     candidates = _get_qa_candidates(
         manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size
     )
 
     if not candidates:
-        manifest.close()
         logger.info("No QA candidates for %s", game_id)
         return {"tiles_reviewed": 0, "verdicts": {}}
 
@@ -271,9 +278,8 @@ def run_sonnet_qa(
         logger.exception("Coverage computation failed: %s", e)
 
     manifest.set_metadata("qa_at", str(time.time()))
-    manifest.close()
 
-    # Step 6: Push updated manifest back
+    # Push updated manifest back (manifest.close() handled by caller's finally)
     task_io.push_manifest()
 
     logger.info(

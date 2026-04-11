@@ -270,101 +270,110 @@ def _build_split(
         manifest = GameManifest(local_game)
         manifest.open(create=False)
 
-        # Get all positive tiles (have labels)
-        labeled_stems = manifest.get_labeled_stems()
-        game_images = images_dir / game_id
-        game_labels = labels_dir / game_id
-        game_images.mkdir(parents=True, exist_ok=True)
-        game_labels.mkdir(parents=True, exist_ok=True)
+        try:
+            # Get all positive tiles (have labels)
+            labeled_stems = manifest.get_labeled_stems()
+            game_images = images_dir / game_id
+            game_labels = labels_dir / game_id
+            game_images.mkdir(parents=True, exist_ok=True)
+            game_labels.mkdir(parents=True, exist_ok=True)
 
-        # Export labels
-        manifest.export_labels_yolo(game_labels)
+            # Export labels
+            manifest.export_labels_yolo(game_labels)
 
-        # Get priority stems for gap-focused oversampling
-        priority_stems = _get_priority_stems(manifest)
-        if priority_stems:
-            logger.info(
-                "  %s: %d priority stems for oversampling", game_id, len(priority_stems)
-            )
+            # Get priority stems for gap-focused oversampling
+            priority_stems = _get_priority_stems(manifest)
+            if priority_stems:
+                logger.info(
+                    "  %s: %d priority stems for oversampling",
+                    game_id,
+                    len(priority_stems),
+                )
 
-        # Extract tile images from packs for labeled tiles
-        segments = manifest.get_segments()
-        extracted = 0
+            # Extract tile images from packs for labeled tiles
+            segments = manifest.get_segments()
+            extracted = 0
 
-        for segment in segments:
-            tiles = manifest.get_tiles_for_segment(segment)
-            for tile_info in tiles:
-                stem = f"{segment}_frame_{tile_info['frame_idx']:06d}_r{tile_info['row']}_c{tile_info['col']}"
+            for segment in segments:
+                tiles = manifest.get_tiles_for_segment(segment)
+                for tile_info in tiles:
+                    stem = f"{segment}_frame_{tile_info['frame_idx']:06d}_r{tile_info['row']}_c{tile_info['col']}"
 
-                # Only extract tiles that have labels (positive) or are sampled negatives
-                has_label = stem in labeled_stems
-                if not has_label:
-                    # Simple negative sampling: skip most negatives
-                    import random
+                    # Only extract tiles that have labels (positive) or are sampled negatives
+                    has_label = stem in labeled_stems
+                    if not has_label:
+                        # Simple negative sampling: skip most negatives
+                        import random
 
-                    if random.random() > neg_ratio / max(
-                        1, len(tiles) / max(1, len(labeled_stems))
-                    ):
+                        if random.random() > neg_ratio / max(
+                            1, len(tiles) / max(1, len(labeled_stems))
+                        ):
+                            continue
+
+                    # Read from pack
+                    pack_file = tile_info.get("pack_file")
+                    if not pack_file:
                         continue
 
-                # Read from pack
-                pack_file = tile_info.get("pack_file")
-                if not pack_file:
-                    continue
+                    # Try local pack, then server pack, then F: archive
+                    pack_name = Path(pack_file).name
+                    pack_path = local_game / "tile_packs" / pack_name
+                    if not pack_path.exists():
+                        pack_path = (
+                            server_games_dir / game_id / "tile_packs" / pack_name
+                        )
+                    if not pack_path.exists():
+                        # Stage from F: archive to local SSD for fast reads
+                        from training.data_prep.manifest_dataset import (
+                            _resolve_pack_path,
+                        )
 
-                # Try local pack, then server pack, then F: archive
-                pack_name = Path(pack_file).name
-                pack_path = local_game / "tile_packs" / pack_name
-                if not pack_path.exists():
-                    pack_path = server_games_dir / game_id / "tile_packs" / pack_name
-                if not pack_path.exists():
-                    # Stage from F: archive to local SSD for fast reads
-                    from training.data_prep.manifest_dataset import _resolve_pack_path
+                        try:
+                            resolved = _resolve_pack_path(pack_file)
+                            # Copy to local SSD for the rest of this game's tiles
+                            local_pack_dir = local_game / "tile_packs"
+                            local_pack_dir.mkdir(parents=True, exist_ok=True)
+                            local_dest = local_pack_dir / pack_name
+                            if not local_dest.exists():
+                                logger.info(
+                                    "    Staging pack %s to local SSD (%.1f GB)",
+                                    pack_name,
+                                    Path(resolved).stat().st_size / 1e9,
+                                )
+                                shutil.copy2(resolved, str(local_dest))
+                            pack_path = local_dest
+                        except FileNotFoundError:
+                            continue
 
                     try:
-                        resolved = _resolve_pack_path(pack_file)
-                        # Copy to local SSD for the rest of this game's tiles
-                        local_pack_dir = local_game / "tile_packs"
-                        local_pack_dir.mkdir(parents=True, exist_ok=True)
-                        local_dest = local_pack_dir / pack_name
-                        if not local_dest.exists():
-                            logger.info(
-                                "    Staging pack %s to local SSD (%.1f GB)",
-                                pack_name,
-                                Path(resolved).stat().st_size / 1e9,
-                            )
-                            shutil.copy2(resolved, str(local_dest))
-                        pack_path = local_dest
-                    except FileNotFoundError:
-                        continue
+                        with open(pack_path, "rb") as f:
+                            f.seek(tile_info["pack_offset"])
+                            jpeg_bytes = f.read(tile_info["pack_size"])
 
-                try:
-                    with open(pack_path, "rb") as f:
-                        f.seek(tile_info["pack_offset"])
-                        jpeg_bytes = f.read(tile_info["pack_size"])
-
-                    (game_images / f"{stem}.jpg").write_bytes(jpeg_bytes)
-                    extracted += 1
-
-                    # Write empty label file for negatives
-                    if not has_label:
-                        (game_labels / f"{stem}.txt").write_text("")
-
-                    # Oversample priority tiles (gap-adjacent / human-verified)
-                    repeat = priority_stems.get(stem, 1)
-                    label_file = game_labels / f"{stem}.txt"
-                    for dup in range(1, repeat):
-                        dup_stem = f"{stem}_dup{dup}"
-                        (game_images / f"{dup_stem}.jpg").write_bytes(jpeg_bytes)
-                        if label_file.exists():
-                            shutil.copy2(
-                                str(label_file), str(game_labels / f"{dup_stem}.txt")
-                            )
+                        (game_images / f"{stem}.jpg").write_bytes(jpeg_bytes)
                         extracted += 1
-                except Exception as e:
-                    logger.debug("Failed to extract tile %s: %s", stem, e)
 
-        manifest.close()
+                        # Write empty label file for negatives
+                        if not has_label:
+                            (game_labels / f"{stem}.txt").write_text("")
+
+                        # Oversample priority tiles (gap-adjacent / human-verified)
+                        repeat = priority_stems.get(stem, 1)
+                        label_file = game_labels / f"{stem}.txt"
+                        for dup in range(1, repeat):
+                            dup_stem = f"{stem}_dup{dup}"
+                            (game_images / f"{dup_stem}.jpg").write_bytes(jpeg_bytes)
+                            if label_file.exists():
+                                shutil.copy2(
+                                    str(label_file),
+                                    str(game_labels / f"{dup_stem}.txt"),
+                                )
+                            extracted += 1
+                    except Exception as e:
+                        logger.debug("Failed to extract tile %s: %s", stem, e)
+        finally:
+            manifest.close()
+
         total += extracted
         logger.info(
             "  %s: %d tiles extracted (%d positive)",

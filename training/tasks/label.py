@@ -41,83 +41,106 @@ def run_label(
     manifest = GameManifest(io.local_game)
     manifest.open(create=False)
 
-    # Find ONNX model
-    model_path = _find_model(io.cfg.labeling.onnx_model, local_models_dir)
-    if not model_path:
-        manifest.close()
-        raise FileNotFoundError(f"ONNX model not found: {io.cfg.labeling.onnx_model}")
-
-    conf_threshold = io.cfg.labeling.confidence
-    logger.info("Running ONNX inference with %s (conf=%.2f)", model_path.name, conf_threshold)
-
-    import cv2
-    import numpy as np
-    import onnxruntime as ort
-
-    providers = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
-    session = ort.InferenceSession(str(model_path), providers=providers)
-    input_name = session.get_inputs()[0].name
-    input_shape = session.get_inputs()[0].shape
-
-    segments = manifest.get_segments()
-    total_labels = 0
-    total_tiles = 0
-
-    for segment in segments:
-        tiles = manifest.get_tiles_for_segment(segment)
-        logger.info("  Segment %s: %d tiles", segment, len(tiles))
-
-        batch_labels = []
-        for tile_info in tiles:
-            pack_file = tile_info.get("pack_file")
-            if not pack_file:
-                continue
-
-            # Read from local pack
-            local_pack = io.local_packs / Path(pack_file).name
-            if not local_pack.exists():
-                continue
-
-            with open(local_pack, "rb") as f:
-                f.seek(tile_info["pack_offset"])
-                jpeg_bytes = f.read(tile_info["pack_size"])
-
-            img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-            if img is None:
-                continue
-
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img_resized = cv2.resize(img_rgb, (input_shape[3], input_shape[2]))
-            img_norm = img_resized.astype(np.float32) / 255.0
-            img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...]
-
-            outputs = session.run(None, {input_name: img_input})
-            detections = _parse_onnx_output(outputs, conf_threshold)
-
-            tile_stem = (
-                f"{segment}_frame_{tile_info['frame_idx']:06d}"
-                f"_r{tile_info['row']}_c{tile_info['col']}"
+    try:
+        # Find ONNX model
+        model_path = _find_model(io.cfg.labeling.onnx_model, local_models_dir)
+        if not model_path:
+            raise FileNotFoundError(
+                f"ONNX model not found: {io.cfg.labeling.onnx_model}"
             )
-            for det in detections:
-                batch_labels.append((
-                    tile_stem, 0, det["cx"], det["cy"], det["w"], det["h"],
-                    "onnx", det["conf"],
-                ))
-            total_tiles += 1
 
-        if batch_labels:
-            total_labels += manifest.bulk_insert_labels(batch_labels)
+        conf_threshold = io.cfg.labeling.confidence
+        logger.info(
+            "Running ONNX inference with %s (conf=%.2f)",
+            model_path.name,
+            conf_threshold,
+        )
 
-    manifest.set_metadata("labeled_at", str(time.time()))
-    manifest.set_metadata("onnx_model", model_path.name)
-    manifest.close()
+        import cv2
+        import numpy as np
+        import onnxruntime as ort
+
+        providers = [
+            "CUDAExecutionProvider",
+            "DmlExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        session = ort.InferenceSession(str(model_path), providers=providers)
+        input_name = session.get_inputs()[0].name
+        input_shape = session.get_inputs()[0].shape
+
+        segments = manifest.get_segments()
+        total_labels = 0
+        total_tiles = 0
+
+        for segment in segments:
+            tiles = manifest.get_tiles_for_segment(segment)
+            logger.info("  Segment %s: %d tiles", segment, len(tiles))
+
+            batch_labels = []
+            for tile_info in tiles:
+                pack_file = tile_info.get("pack_file")
+                if not pack_file:
+                    continue
+
+                # Read from local pack
+                local_pack = io.local_packs / Path(pack_file).name
+                if not local_pack.exists():
+                    continue
+
+                with open(local_pack, "rb") as f:
+                    f.seek(tile_info["pack_offset"])
+                    jpeg_bytes = f.read(tile_info["pack_size"])
+
+                img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img_resized = cv2.resize(img_rgb, (input_shape[3], input_shape[2]))
+                img_norm = img_resized.astype(np.float32) / 255.0
+                img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...]
+
+                outputs = session.run(None, {input_name: img_input})
+                detections = _parse_onnx_output(outputs, conf_threshold)
+
+                tile_stem = (
+                    f"{segment}_frame_{tile_info['frame_idx']:06d}"
+                    f"_r{tile_info['row']}_c{tile_info['col']}"
+                )
+                for det in detections:
+                    batch_labels.append(
+                        (
+                            tile_stem,
+                            0,
+                            det["cx"],
+                            det["cy"],
+                            det["w"],
+                            det["h"],
+                            "onnx",
+                            det["conf"],
+                        )
+                    )
+                total_tiles += 1
+
+            if batch_labels:
+                total_labels += manifest.bulk_insert_labels(batch_labels)
+
+        manifest.set_metadata("labeled_at", str(time.time()))
+        manifest.set_metadata("onnx_model", model_path.name)
+    finally:
+        manifest.close()
 
     # Push updated manifest
     io.push_manifest()
 
     logger.info("Labeled %s: %d tiles, %d labels", game_id, total_tiles, total_labels)
-    return {"tiles_processed": total_tiles, "labels_written": total_labels, "segments": len(segments)}
+    return {
+        "tiles_processed": total_tiles,
+        "labels_written": total_labels,
+        "segments": len(segments),
+    }
 
 
 def _find_model(model_name: str, local_models_dir: Path | None) -> Path | None:

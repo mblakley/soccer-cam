@@ -36,19 +36,28 @@ def run_tile(
     # Pull video to local SSD
     io.pull_video()
 
-    # Tiling config
     cfg = io.cfg
+
+    from training.data_prep.game_manifest import GameManifest
+
+    manifest = GameManifest(io.local_game)
+    manifest.open()
+
+    try:
+        return _tile_segments(manifest, io, cfg, game_id, payload)
+    finally:
+        manifest.close()
+
+
+def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
+    """Inner tiling logic — separated so manifest.close() is guaranteed."""
+    from training.data_prep.game_manifest import GameManifest
+
     needs_flip = payload.get("needs_flip", False)
     frame_interval = cfg.tiling.frame_interval
     tile_cols = cfg.tiling.tile_cols
     tile_rows = cfg.tiling.tile_rows
     tile_size = cfg.tiling.tile_size
-
-    # Create local manifest
-    from training.data_prep.game_manifest import GameManifest
-
-    manifest = GameManifest(io.local_game)
-    manifest.open()
 
     total_tiles = 0
     total_pack_bytes = 0
@@ -137,6 +146,7 @@ def run_tile(
 
         # Push manifest + this pack to D:
         manifest.rebuild_segment_stats()
+        # Close before push (releases WAL lock for copy)
         manifest.close()
         io.push_manifest()
 
@@ -180,9 +190,8 @@ def run_tile(
 
     manifest.rebuild_segment_stats()
     manifest.set_metadata("tiled_at", str(time.time()))
-    manifest.close()
 
-    # Final manifest push
+    manifest.close()
     io.push_manifest()
 
     logger.info(
