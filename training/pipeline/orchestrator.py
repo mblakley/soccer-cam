@@ -404,11 +404,12 @@ class Orchestrator:
         return base
 
     def _get_target_machine(self, task_type: str) -> str | None:
-        # Server-only tasks (need local F:/D: access or claude CLI)
+        # Server-only tasks (need local F:/D: access)
+        # Note: sonnet_qa is NOT targeted — the QA worker has a different
+        # hostname (DESKTOP-5L867J8-QA) and must be able to claim QA tasks.
         if task_type in (
             "stage",
             "tile",
-            "sonnet_qa",
             "generate_review",
             "ingest_reviews",
         ):
