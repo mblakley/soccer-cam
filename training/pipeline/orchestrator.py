@@ -19,6 +19,7 @@ from training.pipeline.client import PipelineClient
 from training.pipeline.config import load_config
 from training.pipeline.state_machine import (
     advance_state,
+    get_failed_stage,
     is_failed,
     next_task_for_game,
 )
