@@ -153,15 +153,7 @@ powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1
 
 ### Machines
 
-| Machine | Hostname | IP | GPU | Capabilities | Python |
-|---------|----------|----|-----|-------------|--------|
-| Server | DESKTOP-5L867J8 | 192.168.86.152 | None | stage, tile, sonnet_qa, generate_review | 3.13 |
-| Laptop | jared-laptop | 192.168.86.24 | RTX 4070 (8GB) | tile, label, train | 3.13 |
-| FORTNITE-OP | FORTNITE-OP | 192.168.86.250 | RTX 3060 Ti | tile, label | 3.13 |
-
-- PS remoting: user `training`, pass `amy4ever`
-- SMB share: `\\192.168.86.152\training` = `D:\training_data`, user `jared`
-- Annotation server: https://trainer.goat-rattlesnake.ts.net/ (Tailscale, port 8642)
+See Claude memory for hostnames, IPs, credentials, and GPU details. Three machines: server (no GPU, runs API/orchestrator/tiling), laptop (RTX 4070, training), FORTNITE-OP (RTX 3060 Ti, labeling, yields for games).
 
 ## Build & Development Commands
 
