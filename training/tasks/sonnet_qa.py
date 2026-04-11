@@ -422,14 +422,18 @@ def _read_tile_from_packs(manifest, tile_stem: str, local_packs: Path) -> bytes 
     if not tile or not tile.get("pack_file"):
         return None
 
-    # Try local pack first
+    # Try local pack first, then original path, then F: archive
     pack_name = Path(tile["pack_file"]).name
     local_pack = local_packs / pack_name
     if not local_pack.exists():
-        # Try original path
         local_pack = Path(tile["pack_file"])
     if not local_pack.exists():
-        return None
+        # Try F: archive
+        from training.data_prep.manifest_dataset import _resolve_pack_path
+        try:
+            local_pack = Path(_resolve_pack_path(tile["pack_file"]))
+        except FileNotFoundError:
+            return None
 
     try:
         with open(local_pack, "rb") as f:

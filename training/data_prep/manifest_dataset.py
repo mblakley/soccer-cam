@@ -35,9 +35,52 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+import logging
+import shutil
+
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils import LOGGER, colorstr
+
+_logger = logging.getLogger(__name__)
+
+# F: archive path for tile packs (permanent storage)
+_ARCHIVE_TILE_PACKS = Path("F:/training_data/tile_packs")
+
+
+def _resolve_pack_path(pack_file: str) -> str:
+    """Resolve a pack file path — if not on D:, stage from F: archive.
+
+    Manifest stores pack_file as D: paths. If the file was cleaned off D:
+    (archived to F:), this restores it to D: so it can be read locally
+    or served to remote workers via SMB.
+    """
+    p = Path(pack_file)
+    if p.exists():
+        return pack_file
+
+    # Try F: archive — derive game_id from the D: path structure
+    # D:\training_data\games\{game_id}\tile_packs\segment.pack
+    # → F:\training_data\tile_packs\{game_id}\segment.pack
+    parts = p.parts
+    try:
+        games_idx = parts.index("games")
+        game_id = parts[games_idx + 1]
+        pack_name = parts[-1]
+    except (ValueError, IndexError):
+        raise FileNotFoundError(f"Pack file not found and can't parse game_id: {pack_file}")
+
+    archive_path = _ARCHIVE_TILE_PACKS / game_id / pack_name
+    if not archive_path.exists():
+        raise FileNotFoundError(
+            f"Pack file not found on D: or F: archive: {pack_file} / {archive_path}"
+        )
+
+    # Stage from F: → D:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _logger.info("Staging pack %s from F: archive (%.1f GB)", pack_name, archive_path.stat().st_size / 1e9)
+    shutil.copy2(str(archive_path), str(p))
+    return pack_file
 from ultralytics.utils.torch_utils import unwrap_model
 
 TILE_RE = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
@@ -225,7 +268,8 @@ class ManifestDataset(YOLODataset):
 
         # Use cached file handle
         if pack_file not in self._pack_handles:
-            self._pack_handles[pack_file] = open(pack_file, "rb")
+            resolved = _resolve_pack_path(pack_file)
+            self._pack_handles[pack_file] = open(resolved, "rb")
         fh = self._pack_handles[pack_file]
 
         fh.seek(offset)
