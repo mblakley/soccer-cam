@@ -60,10 +60,12 @@ def run_tile(
     for video_path in local_videos:
         segment = video_path.stem
 
-        # Skip concatenated full-game videos — they duplicate individual segments
-        # and are too large (100GB+) for the SSD work dir
-        if any(kw in segment.lower() for kw in skip_keywords):
-            logger.info("  Skipping concatenated video: %s", segment)
+        # Only tile individual segment files (they have [F] or [0@0] in the name).
+        # Skip concatenated full-game videos (raw, combined, etc.) — they duplicate
+        # the individual segments and produce 100GB+ packs that fill the SSD.
+        is_segment = "[F]" in segment or "[0@0]" in segment
+        if not is_segment:
+            logger.info("  Skipping non-segment video: %s", segment)
             continue
 
         # Check disk space before each segment (~20GB per segment)
