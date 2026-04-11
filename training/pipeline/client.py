@@ -59,6 +59,11 @@ class PipelineClient:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None  # expected for missing games, don't log
+            logger.warning("API GET %s failed: %s", path, e)
+            return None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             logger.warning("API GET %s failed: %s", path, e)
             return None
