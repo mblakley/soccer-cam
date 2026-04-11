@@ -280,6 +280,30 @@ def cmd_delete(args):
         print(f"Failed: {e}")
 
 
+def cmd_events(args):
+    import json
+    import urllib.request
+    from datetime import datetime
+
+    params = []
+    if args.hours:
+        import time
+        params.append(f"since={time.time() - args.hours * 3600}")
+    if args.category:
+        params.append(f"category={args.category}")
+    params.append(f"limit={args.limit}")
+
+    url = f"http://127.0.0.1:8643/api/events?{'&'.join(params)}"
+    resp = urllib.request.urlopen(url)
+    events = json.loads(resp.read())
+
+    for e in reversed(events):
+        ts = datetime.fromtimestamp(e["timestamp"]).strftime("%m/%d %H:%M")
+        cat = e.get("category", "")[:12]
+        msg = e.get("message", "")
+        print(f"  {ts}  {cat:12s}  {msg}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="training.pipeline", description="Pipeline orchestrator")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -325,6 +349,11 @@ def main():
     p_delete = sub.add_parser("delete", help="Delete a queue item")
     p_delete.add_argument("item_id", type=int, help="Queue item ID")
 
+    p_events = sub.add_parser("events", help="Show pipeline event log")
+    p_events.add_argument("--hours", type=float, default=6, help="Show events from last N hours (default: 6)")
+    p_events.add_argument("--category", help="Filter by category (e.g. state_change)")
+    p_events.add_argument("--limit", type=int, default=100, help="Max events to show")
+
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -347,6 +376,7 @@ def main():
         "enqueue": cmd_enqueue,
         "priority": cmd_priority,
         "delete": cmd_delete,
+        "events": cmd_events,
     }
 
     if args.command in commands:

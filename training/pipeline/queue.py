@@ -469,12 +469,34 @@ class WorkQueue:
         )
         conn.commit()
 
-    def get_recent_events(self, limit: int = 20) -> list[dict]:
+    def get_recent_events(self, limit: int = 50) -> list[dict]:
         """Get the most recent pipeline events."""
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT * FROM event_log ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_events(
+        self, since: float | None = None, until: float | None = None,
+        category: str | None = None, limit: int = 200,
+    ) -> list[dict]:
+        """Query pipeline events by time range and/or category."""
+        conn = self._get_conn()
+        query = "SELECT * FROM event_log WHERE 1=1"
+        params: list = []
+        if since:
+            query += " AND timestamp >= ?"
+            params.append(since)
+        if until:
+            query += " AND timestamp <= ?"
+            params.append(until)
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------

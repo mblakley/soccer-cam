@@ -151,13 +151,26 @@ def status():
     workers = q.get_worker_status()
     queue_stats = q.get_queue_stats()
     state_counts = _get_registry().get_state_counts()
-    events = q.get_recent_events(limit=20)
+    events = q.get_recent_events(limit=50)
     return {
         "workers": workers,
         "queue": queue_stats,
         "games": state_counts,
         "events": events,
     }
+
+
+@app.get("/api/events")
+def get_events(since: float | None = None, until: float | None = None,
+               category: str | None = None, limit: int = 200):
+    """Query pipeline events by time range and/or category.
+
+    Usage:
+        /api/events?since=1775800000&until=1775900000
+        /api/events?category=state_change&limit=50
+        /api/events?since=1775800000  (everything since timestamp)
+    """
+    return _get_queue().get_events(since=since, until=until, category=category, limit=limit)
 
 
 @app.get("/api/games")
