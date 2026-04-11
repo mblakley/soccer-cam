@@ -40,6 +40,11 @@ class Paths:
 
 
 @dataclass(frozen=True)
+class ResourceConfig:
+    min_disk_free_gb: int = 5
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     hostname: str = "DESKTOP-5L867J8"
     ip: str = "192.168.86.152"
@@ -54,6 +59,8 @@ class OrchestratorConfig:
     max_staging_concurrent: int = 1
     min_new_games_for_retrain: int = 2
     min_new_labels_for_retrain: int = 5000
+    coverage_target: float = 0.90
+    coverage_min_delta: float = 0.02
 
 
 @dataclass(frozen=True)
@@ -129,6 +136,7 @@ class WorkerConfig:
 @dataclass(frozen=True)
 class PipelineConfig:
     paths: Paths = field(default_factory=Paths)
+    resources: ResourceConfig = field(default_factory=ResourceConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     machines: dict[str, MachineConfig] = field(default_factory=dict)
@@ -205,7 +213,9 @@ def load_config(
     paths_data = raw.get("paths", {})
     archive_data = paths_data.pop("archive", {})
     archive = _build_dataclass(ArchivePaths, archive_data)
-    paths = Paths(**{k: v for k, v in paths_data.items() if k != "archive"}, archive=archive)
+    paths = Paths(
+        **{k: v for k, v in paths_data.items() if k != "archive"}, archive=archive
+    )
 
     # Build machines dict
     machines_raw = raw.get("machines", {})
@@ -218,6 +228,7 @@ def load_config(
 
     return PipelineConfig(
         paths=paths,
+        resources=_build_dataclass(ResourceConfig, raw.get("resources", {})),
         server=_build_dataclass(ServerConfig, raw.get("server", {})),
         orchestrator=_build_dataclass(OrchestratorConfig, raw.get("orchestrator", {})),
         machines=machines,

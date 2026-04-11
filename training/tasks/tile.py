@@ -68,12 +68,13 @@ def run_tile(
             logger.info("  Skipping non-segment video: %s", segment)
             continue
 
-        # Check disk space before each segment (~20GB per segment)
+        # Check disk space before each segment
         import shutil
         _, _, free = shutil.disk_usage(str(io.local_work_dir))
         free_gb = free / (1024**3)
-        if free_gb < 5:
-            logger.error("Disk critically low (%.1fGB free), stopping tiling early", free_gb)
+        if free_gb < cfg.resources.min_disk_free_gb:
+            logger.error("Disk critically low (%.1fGB < %dGB), stopping tiling early",
+                         free_gb, cfg.resources.min_disk_free_gb)
             break
 
         # Check if this segment already has tiles (resume from last tiled frame)
