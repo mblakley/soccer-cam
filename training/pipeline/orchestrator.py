@@ -335,26 +335,64 @@ class Orchestrator:
         return None
 
     def _maybe_enqueue_training(self):
+        """Enqueue training when enough new verified data has accumulated.
+
+        The flywheel: each training run uses the latest QA verdicts + human
+        labels. When enough new data accumulates since the last run, we
+        retrain from the previous best weights (incremental improvement).
+        """
         if self.api.has_active_item("train"):
             return
+
         trainable = self.api.get_trainable_games()
         if len(trainable) < self.cfg.orchestrator.min_new_games_for_retrain:
             return
+
         train_games = [g["game_id"] for g in trainable]
         val_games = train_games[:1]
         train_games = train_games[1:]
         if not train_games:
             return
 
+        # Check if we have enough NEW data since last training
+        total_verdicts = sum(g.get("positive_count", 0) for g in trainable)
+        if hasattr(self, "_last_train_verdicts"):
+            new_verdicts = total_verdicts - self._last_train_verdicts
+            if new_verdicts < self.cfg.orchestrator.min_new_labels_for_retrain:
+                return  # not enough new data yet
+
+        self._last_train_verdicts = total_verdicts
+
+        # Find previous best weights to resume from (incremental training)
+        resume_from = None
+        training_sets = Path(self.cfg.paths.training_sets)
+        if training_sets.exists():
+            versions = sorted(training_sets.iterdir(), reverse=True)
+            for v in versions:
+                best = v / "weights" / "best.pt"
+                if best.exists():
+                    resume_from = str(best)
+                    break
+
         version = f"v3.{int(time.time()) % 10000}"
         if self.dry_run:
-            logger.info("[DRY RUN] Would enqueue training %s", version)
+            logger.info("[DRY RUN] Would enqueue training %s (resume=%s)", version, resume_from)
         else:
             self.api.enqueue(
                 "train",
                 priority=10,
                 target_machine=self._get_target_machine("train"),
-                payload={"train_games": train_games, "val_games": val_games, "version": version},
+                payload={
+                    "train_games": train_games,
+                    "val_games": val_games,
+                    "version": version,
+                    "resume_from": resume_from,
+                },
+            )
+            logger.info(
+                "Enqueued training %s: %d games, %d total verdicts, resume=%s",
+                version, len(train_games), total_verdicts,
+                Path(resume_from).parent.parent.name if resume_from else "scratch",
             )
 
     def _can_qa(self) -> bool:
