@@ -55,7 +55,9 @@ def run_tile(
     io.local_packs.mkdir(parents=True, exist_ok=True)
 
     # Process each video segment (skip concatenated full-game videos that are too large)
-    local_videos = sorted(io.local_video.glob("*.mp4")) + sorted(io.local_video.glob("*.dav"))
+    local_videos = sorted(io.local_video.glob("*.mp4")) + sorted(
+        io.local_video.glob("*.dav")
+    )
     skip_keywords = ("combined", "raw", "once-processed", "processed")
     for video_path in local_videos:
         segment = video_path.stem
@@ -70,22 +72,33 @@ def run_tile(
 
         # Check disk space before each segment
         import shutil
+
         _, _, free = shutil.disk_usage(str(io.local_work_dir))
         free_gb = free / (1024**3)
         if free_gb < cfg.resources.min_disk_free_gb:
-            logger.error("Disk critically low (%.1fGB < %dGB), stopping tiling early",
-                         free_gb, cfg.resources.min_disk_free_gb)
+            logger.error(
+                "Disk critically low (%.1fGB < %dGB), stopping tiling early",
+                free_gb,
+                cfg.resources.min_disk_free_gb,
+            )
             break
 
         # Check if this segment already has tiles (resume from last tiled frame)
         max_frame_row = manifest.conn.execute(
             "SELECT MAX(frame_idx) FROM tiles WHERE segment = ?", (segment,)
         ).fetchone()
-        max_frame = max_frame_row[0] if max_frame_row and max_frame_row[0] is not None else None
+        max_frame = (
+            max_frame_row[0] if max_frame_row and max_frame_row[0] is not None else None
+        )
         start_frame = (max_frame + frame_interval) if max_frame is not None else 0
 
         if start_frame > 0:
-            logger.info("  Resuming %s from frame %d (was tiled to %d)", segment, start_frame, max_frame)
+            logger.info(
+                "  Resuming %s from frame %d (was tiled to %d)",
+                segment,
+                start_frame,
+                max_frame,
+            )
         else:
             logger.info("  Tiling segment: %s", segment)
 
@@ -106,55 +119,78 @@ def run_tile(
 
         total_tiles += stats["tiles"]
         total_pack_bytes += stats["pack_bytes"]
-        logger.info("    %d tiles, %.1f MB pack, %.1fs",
-                     stats["tiles"], stats["pack_bytes"] / 1e6, time.time() - t0)
+        logger.info(
+            "    %d tiles, %.1f MB pack, %.1fs",
+            stats["tiles"],
+            stats["pack_bytes"] / 1e6,
+            time.time() - t0,
+        )
+
+        # Push this segment's pack immediately (don't accumulate on SSD).
+        # Rewrite pack_file path, push to D:, archive to F:, clean local.
+        server_packs_dir = io.server_game_dir / "tile_packs"
+        manifest.conn.execute(
+            "UPDATE tiles SET pack_file = REPLACE(pack_file, ?, ?) WHERE segment = ?",
+            (str(io.local_packs), str(server_packs_dir), segment),
+        )
+        manifest.conn.commit()
+
+        # Push manifest + this pack to D:
+        manifest.rebuild_segment_stats()
+        manifest.close()
+        io.push_manifest()
+
+        server_packs_dir.mkdir(parents=True, exist_ok=True)
+        if pack_path.exists():
+            import shutil as _shutil
+
+            dest = server_packs_dir / pack_path.name
+            logger.info(
+                "    Pushing %s (%.1f GB) to D:",
+                pack_path.name,
+                pack_path.stat().st_size / 1e9,
+            )
+            _shutil.copy2(str(pack_path), str(dest))
+
+            # Archive to F:
+            archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            f_dest = archive_dir / pack_path.name
+            if not f_dest.exists() or f_dest.stat().st_size != pack_path.stat().st_size:
+                logger.info("    Archiving %s to F:", pack_path.name)
+                _shutil.copy2(str(pack_path), str(f_dest))
+
+            # Verify archive then clean local + D:
+            if f_dest.exists() and f_dest.stat().st_size == pack_path.stat().st_size:
+                pack_path.unlink()
+                dest.unlink()
+                logger.info("    Cleaned local + D: pack (archived to F:)")
+            else:
+                logger.warning("    Archive verify failed — keeping pack on D:")
+                pack_path.unlink()  # still clean local to save SSD space
+
+        # Reopen manifest for next segment
+        manifest = GameManifest(io.local_game)
+        manifest.open(create=False)
+
+        # Also clean the staged video for this segment to free SSD
+        if video_path.exists():
+            video_path.unlink()
+            logger.info("    Cleaned staged video %s", video_path.name)
 
     manifest.rebuild_segment_stats()
     manifest.set_metadata("tiled_at", str(time.time()))
-
-    # Rewrite pack_file paths from local SSD → D: per-game dir
-    # (D: is served via SMB to remote workers)
-    server_packs_dir = io.server_game_dir / "tile_packs"
-    manifest.conn.execute(
-        "UPDATE tiles SET pack_file = REPLACE(pack_file, ?, ?)",
-        (str(io.local_packs), str(server_packs_dir)),
-    )
-    manifest.conn.commit()
     manifest.close()
 
-    # Push packs to D: (served via SMB) and archive to F: (permanent)
-    io.push_packs()
+    # Final manifest push
     io.push_manifest()
 
-    # Archive packs to F: then clean D: to save space
-    from training.pipeline.config import load_config
-    cfg = load_config()
-    archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
-    archive_dir.mkdir(parents=True, exist_ok=True)
-
-    import shutil
-    for pack_file in server_packs_dir.glob("*.pack"):
-        dest = archive_dir / pack_file.name
-        if not dest.exists() or dest.stat().st_size != pack_file.stat().st_size:
-            logger.info("  Archiving %s (%.1f GB) to F:", pack_file.name, pack_file.stat().st_size / 1e9)
-            shutil.copy2(str(pack_file), str(dest))
-
-    # Verify archive, then clean D: packs
-    all_archived = True
-    for pack_file in server_packs_dir.glob("*.pack"):
-        archived = archive_dir / pack_file.name
-        if not archived.exists() or archived.stat().st_size != pack_file.stat().st_size:
-            all_archived = False
-            break
-
-    if all_archived:
-        for pack_file in server_packs_dir.glob("*.pack"):
-            pack_file.unlink()
-        logger.info("  Cleaned D: packs (archived to F:)")
-    else:
-        logger.warning("  Archive verification failed — keeping packs on D:")
-
-    logger.info("Tiled %s: %d tiles, %.1f MB total", game_id, total_tiles, total_pack_bytes / 1e6)
+    logger.info(
+        "Tiled %s: %d tiles, %.1f MB total",
+        game_id,
+        total_tiles,
+        total_pack_bytes / 1e6,
+    )
 
     return {
         "tiles": total_tiles,
@@ -226,7 +262,9 @@ def _tile_segment_to_pack(
                     x = min(col * step_x, width - tile_size)
                     tile = frame[y : y + tile_size, x : x + tile_size]
 
-                    success, jpeg = cv2.imencode(".jpg", tile, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    success, jpeg = cv2.imencode(
+                        ".jpg", tile, [cv2.IMWRITE_JPEG_QUALITY, 90]
+                    )
                     if not success:
                         continue
 
@@ -236,7 +274,15 @@ def _tile_segment_to_pack(
 
                     tile_rows_db.append((segment, frame_idx, row, col))
                     pack_updates.append(
-                        (str(pack_path), pack_offset, jpeg_size, segment, frame_idx, row, col)
+                        (
+                            str(pack_path),
+                            pack_offset,
+                            jpeg_size,
+                            segment,
+                            frame_idx,
+                            row,
+                            col,
+                        )
                     )
                     pack_offset += jpeg_size
                     tile_count += 1
