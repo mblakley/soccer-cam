@@ -54,10 +54,17 @@ def run_tile(
     total_pack_bytes = 0
     io.local_packs.mkdir(parents=True, exist_ok=True)
 
-    # Process each video segment
+    # Process each video segment (skip concatenated full-game videos that are too large)
     local_videos = sorted(io.local_video.glob("*.mp4")) + sorted(io.local_video.glob("*.dav"))
+    skip_keywords = ("combined", "raw", "once-processed", "processed")
     for video_path in local_videos:
         segment = video_path.stem
+
+        # Skip concatenated full-game videos — they duplicate individual segments
+        # and are too large (100GB+) for the SSD work dir
+        if any(kw in segment.lower() for kw in skip_keywords):
+            logger.info("  Skipping concatenated video: %s", segment)
+            continue
 
         # Check disk space before each segment (~20GB per segment)
         import shutil
