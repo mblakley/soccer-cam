@@ -37,13 +37,20 @@ class Orchestrator:
         self._last_qa_time = 0.0
         self._qa_count_this_hour = 0
         self._alerted_workers: set[str] = set()
-        self._alerted_stuck: set[str] = set()  # games that hit hard limit (notified once)
-        self._last_reset: dict[str, float] = {}  # game_id -> timestamp of last auto-reset
+        self._alerted_stuck: set[str] = (
+            set()
+        )  # games that hit hard limit (notified once)
+        self._last_reset: dict[
+            str, float
+        ] = {}  # game_id -> timestamp of last auto-reset
 
     def run(self, once: bool = False):
         """Main orchestrator loop. Requires API server to be running separately."""
-        logger.info("Orchestrator starting (interval=%ds, dry_run=%s)",
-                     self.cfg.orchestrator.check_interval, self.dry_run)
+        logger.info(
+            "Orchestrator starting (interval=%ds, dry_run=%s)",
+            self.cfg.orchestrator.check_interval,
+            self.dry_run,
+        )
 
         # Wait for API to be available
         if not self.dry_run:
@@ -97,10 +104,17 @@ class Orchestrator:
                                 except (json.JSONDecodeError, TypeError):
                                     result = {}
                             if result:
-                                self._update_stats_from_result(game_id, task_type, result)
+                                self._update_stats_from_result(
+                                    game_id, task_type, result
+                                )
 
-                        logger.info("Game %s: %s -> %s (via %s)",
-                                     game_id, current_state, new_state, task_type)
+                        logger.info(
+                            "Game %s: %s -> %s (via %s)",
+                            game_id,
+                            current_state,
+                            new_state,
+                            task_type,
+                        )
                         self.api.log_event(
                             "info",
                             f"{game_id} {current_state} -> {new_state}",
@@ -123,12 +137,16 @@ class Orchestrator:
                     if not is_failed(current_state):
                         new_state = f"FAILED:{current_state}"
                         if not self.dry_run:
-                            self.api.set_game_state(game_id, new_state, error=item.get("error"))
+                            self.api.set_game_state(
+                                game_id, new_state, error=item.get("error")
+                            )
                             self.api.increment_attempts(game_id)
 
                         # Notify once when a game hits 20 attempts (hard limit)
                         game_info = self.api.get_game(game_id)
-                        attempts = game_info.get("pipeline_attempts", 0) if game_info else 0
+                        attempts = (
+                            game_info.get("pipeline_attempts", 0) if game_info else 0
+                        )
                         if attempts >= 20 and game_id not in self._alerted_stuck:
                             self._alerted_stuck.add(game_id)
                             self._ntfy(
@@ -154,6 +172,10 @@ class Orchestrator:
                 game_id,
                 label_count=result.get("labels_written"),
             )
+        elif task_type == "sonnet_qa":
+            coverage = result.get("track_coverage")
+            if coverage is not None:
+                self.api.update_game_stats(game_id, coverage=coverage)
         elif task_type == "train":
             metrics = result.get("metrics", {})
             if metrics:
@@ -188,13 +210,17 @@ class Orchestrator:
                 if age > 86400:  # 24 hours
                     try:
                         import urllib.request
+
                         req = urllib.request.Request(
                             f"http://127.0.0.1:8643/api/workers/{w['hostname']}",
                             method="DELETE",
                         )
                         urllib.request.urlopen(req)
-                        logger.info("Audit: cleaned stale worker %s (%d hrs old)",
-                                    w["hostname"], age // 3600)
+                        logger.info(
+                            "Audit: cleaned stale worker %s (%d hrs old)",
+                            w["hostname"],
+                            age // 3600,
+                        )
                     except Exception:
                         pass
 
@@ -222,7 +248,11 @@ class Orchestrator:
                 continue
 
             # LABELED but has 0 labels — needs labeling
-            if state in ("LABELED", "QA_PENDING", "QA_DONE") and labels == 0 and tiles > 0:
+            if (
+                state in ("LABELED", "QA_PENDING", "QA_DONE")
+                and labels == 0
+                and tiles > 0
+            ):
                 self.api.set_game_state(game_id, "TILED")
                 logger.info("Audit: demoted %s %s->TILED (0 labels)", game_id, state)
                 continue
@@ -274,7 +304,11 @@ class Orchestrator:
             if task_type == "stage":
                 active_stages = self.api.get_queue_items(status="running")
                 claimed_stages = self.api.get_queue_items(status="claimed")
-                stage_count = sum(1 for i in active_stages + claimed_stages if i.get("task_type") == "stage")
+                stage_count = sum(
+                    1
+                    for i in active_stages + claimed_stages
+                    if i.get("task_type") == "stage"
+                )
                 if stage_count >= self.cfg.orchestrator.max_staging_concurrent:
                     continue
 
@@ -286,8 +320,13 @@ class Orchestrator:
             target = self._get_target_machine(task_type)
 
             if self.dry_run:
-                logger.info("[DRY RUN] Would enqueue %s for %s (priority=%d, target=%s)",
-                             task_type, game_id, priority, target or "any")
+                logger.info(
+                    "[DRY RUN] Would enqueue %s for %s (priority=%d, target=%s)",
+                    task_type,
+                    game_id,
+                    priority,
+                    target or "any",
+                )
             else:
                 self.api.enqueue(
                     task_type,
@@ -315,7 +354,7 @@ class Orchestrator:
             "ingest_reviews": 5,
             "generate_review": 10,
             "train": 15,
-            "sonnet_qa": 25,        # between label and tile — runs as games become LABELED
+            "sonnet_qa": 25,  # between label and tile — runs as games become LABELED
             "label": 30,
             "tile": 35,
             "stage": 40,
@@ -335,11 +374,12 @@ class Orchestrator:
         return None
 
     def _maybe_enqueue_training(self):
-        """Enqueue training when enough new verified data has accumulated.
+        """Enqueue training driven by ball track coverage.
 
-        The flywheel: each training run uses the latest QA verdicts + human
-        labels. When enough new data accumulates since the last run, we
-        retrain from the previous best weights (incremental improvement).
+        The flywheel: retrain when track coverage is below target and
+        still improving. Stop when converged or plateaued (need human
+        reviews instead). Falls back to game-count trigger when no
+        coverage data exists yet (bootstrap).
         """
         if self.api.has_active_item("train"):
             return
@@ -348,20 +388,58 @@ class Orchestrator:
         if len(trainable) < self.cfg.orchestrator.min_new_games_for_retrain:
             return
 
-        train_games = [g["game_id"] for g in trainable]
-        val_games = train_games[:1]
-        train_games = train_games[1:]
+        # Coverage-aware trigger: check if retraining would help
+        games_with_coverage = [g for g in trainable if g.get("coverage", 0) > 0]
+
+        if games_with_coverage:
+            avg_coverage = sum(g["coverage"] for g in games_with_coverage) / len(
+                games_with_coverage
+            )
+
+            if avg_coverage >= self.cfg.orchestrator.coverage_target:
+                logger.info(
+                    "Track coverage converged at %.1f%% (target %.0f%%) — skipping training",
+                    avg_coverage * 100,
+                    self.cfg.orchestrator.coverage_target * 100,
+                )
+                return
+
+            prev_coverage = getattr(self, "_last_train_coverage", 0.0)
+            delta = avg_coverage - prev_coverage
+            if prev_coverage > 0 and delta < self.cfg.orchestrator.coverage_min_delta:
+                logger.info(
+                    "Track coverage plateaued at %.1f%% (delta=%.1f%%) — need human reviews, skipping training",
+                    avg_coverage * 100,
+                    delta * 100,
+                )
+                return
+        # else: no coverage data yet, fall through to bootstrap trigger
+
+        # Rate limit: at most 1 training run per hour
+        if (
+            hasattr(self, "_last_train_time")
+            and time.time() - self._last_train_time < 3600
+        ):
+            return
+
+        self._enqueue_train(trainable)
+
+    def _enqueue_train(self, trainable: list[dict]):
+        """Build and enqueue a training task from trainable games."""
+        self._last_train_time = time.time()
+
+        game_ids = [g["game_id"] for g in trainable]
+        val_games = game_ids[:1]
+        train_games = game_ids[1:]
         if not train_games:
             return
 
-        # Check if retraining would help — look at QA accuracy across
-        # recent games. If the model is already good (high true_positive rate),
-        # don't retrain. If it's producing lots of false positives, retrain.
-        # This means early cycles retrain often, later cycles less.
-        if hasattr(self, "_last_train_time") and time.time() - self._last_train_time < 3600:
-            return  # at most 1 training run per hour
-
-        self._last_train_time = time.time()
+        # Track coverage for plateau detection on next cycle
+        games_with_coverage = [g for g in trainable if g.get("coverage", 0) > 0]
+        if games_with_coverage:
+            self._last_train_coverage = sum(
+                g["coverage"] for g in games_with_coverage
+            ) / len(games_with_coverage)
 
         # Find previous best weights to resume from (incremental training)
         resume_from = None
@@ -376,7 +454,9 @@ class Orchestrator:
 
         version = f"v3.{int(time.time()) % 10000}"
         if self.dry_run:
-            logger.info("[DRY RUN] Would enqueue training %s (resume=%s)", version, resume_from)
+            logger.info(
+                "[DRY RUN] Would enqueue training %s (resume=%s)", version, resume_from
+            )
         else:
             self.api.enqueue(
                 "train",
@@ -390,8 +470,9 @@ class Orchestrator:
                 },
             )
             logger.info(
-                "Enqueued training %s: %d games, %d total verdicts, resume=%s",
-                version, len(train_games), total_verdicts,
+                "Enqueued training %s: %d games, resume=%s",
+                version,
+                len(train_games),
                 Path(resume_from).parent.parent.name if resume_from else "scratch",
             )
 
@@ -453,9 +534,19 @@ class Orchestrator:
             return
         try:
             subprocess.run(
-                ["curl", "-s", "-H", f"Title: {title}", "-H", f"Priority: {priority}",
-                 "-d", message, f"https://ntfy.sh/{self.cfg.ntfy.topic}"],
-                capture_output=True, timeout=10,
+                [
+                    "curl",
+                    "-s",
+                    "-H",
+                    f"Title: {title}",
+                    "-H",
+                    f"Priority: {priority}",
+                    "-d",
+                    message,
+                    f"https://ntfy.sh/{self.cfg.ntfy.topic}",
+                ],
+                capture_output=True,
+                timeout=10,
             )
         except Exception as e:
             logger.warning("NTFY failed: %s", e)

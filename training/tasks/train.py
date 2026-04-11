@@ -31,6 +31,7 @@ def run_train(
     payload = item.get("payload") or {}
 
     from training.pipeline.config import load_config
+
     cfg = load_config()
 
     # Determine which games to use
@@ -50,13 +51,22 @@ def run_train(
     local_labels_val = local_dataset / "labels" / "val"
     local_weights = local_work_dir / "training" / "weights"
 
-    for d in [local_images_train, local_images_val,
-              local_labels_train, local_labels_val, local_weights]:
+    for d in [
+        local_images_train,
+        local_images_val,
+        local_labels_train,
+        local_labels_val,
+        local_weights,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Pull and build training set
-    logger.info("Building training set %s (%d train, %d val games)...",
-                version, len(train_games), len(val_games))
+    logger.info(
+        "Building training set %s (%d train, %d val games)...",
+        version,
+        len(train_games),
+        len(val_games),
+    )
 
     server_games_dir = Path(cfg.paths.games_dir)
     if server_share and not server_games_dir.exists():
@@ -82,7 +92,9 @@ def run_train(
     build_time = time.time() - t0
     logger.info(
         "Training set built: %d train, %d val tiles (%.0fs)",
-        train_tile_count, val_tile_count, build_time,
+        train_tile_count,
+        val_tile_count,
+        build_time,
     )
 
     # Write dataset.yaml
@@ -173,6 +185,56 @@ def run_train(
     }
 
 
+def _get_priority_stems(manifest) -> dict[str, int]:
+    """Get tile stems that should be oversampled for gap-focused training.
+
+    Human-verified gap labels are the highest-value training data (3x).
+    Sonnet-verified tiles near track gaps are also valuable (2x).
+
+    Returns {tile_stem: multiplier}.
+    """
+    import json as _json
+
+    conn = manifest.conn
+    priority: dict[str, int] = {}
+
+    # Human-verified gap labels: 3x oversample
+    rows = conn.execute(
+        "SELECT DISTINCT tile_stem FROM labels WHERE source = 'human_gap_review'"
+    ).fetchall()
+    for (stem,) in rows:
+        priority[stem] = 3
+
+    # Tiles near track gaps: 2x oversample
+    try:
+        raw = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'track_coverage'"
+        ).fetchone()
+        if raw:
+            coverage_data = _json.loads(raw[0])
+            gap_frames: set[tuple[str, int]] = set()
+            for gap in coverage_data.get("gaps", []):
+                seg = gap.get("segment", "")
+                for fi in range(gap["frame_start"], gap["frame_end"] + 1, 4):
+                    gap_frames.add((seg, fi))
+
+            for seg, fi in gap_frames:
+                for delta in (-4, 0, 4):
+                    pattern = f"{seg}_frame_{fi + delta:06d}_%"
+                    near = conn.execute(
+                        "SELECT DISTINCT tile_stem FROM labels "
+                        "WHERE tile_stem LIKE ? AND qa_verdict = 'true_positive'",
+                        (pattern,),
+                    ).fetchall()
+                    for (stem,) in near:
+                        if stem not in priority:
+                            priority[stem] = 2
+    except Exception:
+        pass
+
+    return priority
+
+
 def _build_split(
     *,
     game_ids: list[str],
@@ -218,6 +280,13 @@ def _build_split(
         # Export labels
         manifest.export_labels_yolo(game_labels)
 
+        # Get priority stems for gap-focused oversampling
+        priority_stems = _get_priority_stems(manifest)
+        if priority_stems:
+            logger.info(
+                "  %s: %d priority stems for oversampling", game_id, len(priority_stems)
+            )
+
         # Extract tile images from packs for labeled tiles
         segments = manifest.get_segments()
         extracted = 0
@@ -232,7 +301,10 @@ def _build_split(
                 if not has_label:
                     # Simple negative sampling: skip most negatives
                     import random
-                    if random.random() > neg_ratio / max(1, len(tiles) / max(1, len(labeled_stems))):
+
+                    if random.random() > neg_ratio / max(
+                        1, len(tiles) / max(1, len(labeled_stems))
+                    ):
                         continue
 
                 # Read from pack
@@ -248,6 +320,7 @@ def _build_split(
                 if not pack_path.exists():
                     # Stage from F: archive to local SSD for fast reads
                     from training.data_prep.manifest_dataset import _resolve_pack_path
+
                     try:
                         resolved = _resolve_pack_path(pack_file)
                         # Copy to local SSD for the rest of this game's tiles
@@ -255,8 +328,11 @@ def _build_split(
                         local_pack_dir.mkdir(parents=True, exist_ok=True)
                         local_dest = local_pack_dir / pack_name
                         if not local_dest.exists():
-                            logger.info("    Staging pack %s to local SSD (%.1f GB)",
-                                        pack_name, Path(resolved).stat().st_size / 1e9)
+                            logger.info(
+                                "    Staging pack %s to local SSD (%.1f GB)",
+                                pack_name,
+                                Path(resolved).stat().st_size / 1e9,
+                            )
                             shutil.copy2(resolved, str(local_dest))
                         pack_path = local_dest
                     except FileNotFoundError:
@@ -273,11 +349,28 @@ def _build_split(
                     # Write empty label file for negatives
                     if not has_label:
                         (game_labels / f"{stem}.txt").write_text("")
+
+                    # Oversample priority tiles (gap-adjacent / human-verified)
+                    repeat = priority_stems.get(stem, 1)
+                    label_file = game_labels / f"{stem}.txt"
+                    for dup in range(1, repeat):
+                        dup_stem = f"{stem}_dup{dup}"
+                        (game_images / f"{dup_stem}.jpg").write_bytes(jpeg_bytes)
+                        if label_file.exists():
+                            shutil.copy2(
+                                str(label_file), str(game_labels / f"{dup_stem}.txt")
+                            )
+                        extracted += 1
                 except Exception as e:
                     logger.debug("Failed to extract tile %s: %s", stem, e)
 
         manifest.close()
         total += extracted
-        logger.info("  %s: %d tiles extracted (%d positive)", game_id, extracted, len(labeled_stems))
+        logger.info(
+            "  %s: %d tiles extracted (%d positive)",
+            game_id,
+            extracted,
+            len(labeled_stems),
+        )
 
     return total

@@ -58,7 +58,9 @@ def run_sonnet_qa(
     manifest = GameManifest(task_io.local_game)
     manifest.open(create=False)
 
-    candidates = _get_qa_candidates(manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size)
+    candidates = _get_qa_candidates(
+        manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size
+    )
 
     if not candidates:
         manifest.close()
@@ -94,7 +96,10 @@ def run_sonnet_qa(
             n_tiles = len(grid_info["tile_stems"])
             logger.info(
                 "Grid %d/%d: calling Claude on %d tiles (%s)...",
-                grid_num, max_batches, n_tiles, grid_info["image_path"].name,
+                grid_num,
+                max_batches,
+                n_tiles,
+                grid_info["image_path"].name,
             )
             try:
                 t0 = time.time()
@@ -116,8 +121,13 @@ def run_sonnet_qa(
 
                 logger.info(
                     "Grid %d: %d/%d BALL in %.1fs (total: %d reviewed, %d ball, %d not_ball)",
-                    grid_num, balls, n_tiles, elapsed,
-                    total_reviewed, verdicts["ball"], verdicts["not_ball"],
+                    grid_num,
+                    balls,
+                    n_tiles,
+                    elapsed,
+                    total_reviewed,
+                    verdicts["ball"],
+                    verdicts["not_ball"],
                 )
 
             except Exception as e:
@@ -158,7 +168,7 @@ def run_sonnet_qa(
             # Pick the longest track — most likely game ball
             dominant = trajectories[0]
             dom_disp = max(
-                ((p[2]-dominant[0][2])**2 + (p[3]-dominant[0][3])**2)**0.5
+                ((p[2] - dominant[0][2]) ** 2 + (p[3] - dominant[0][3]) ** 2) ** 0.5
                 for p in dominant[1:]
             )
 
@@ -178,8 +188,14 @@ def run_sonnet_qa(
             logger.info(
                 "Phase 2: dominant track in %s — %d frames, %.0fpx displacement, "
                 "track fi=%d-%d, segment fi=%d-%d (%d frames)",
-                segment[:30], len(dominant), dom_disp,
-                track_start, track_end, seg_start, seg_end, seg_frames,
+                segment[:30],
+                len(dominant),
+                dom_disp,
+                track_start,
+                track_end,
+                seg_start,
+                seg_end,
+                seg_frames,
             )
 
             # Pull packs for filmstrip building
@@ -238,6 +254,22 @@ def run_sonnet_qa(
     except Exception as e:
         logger.exception("Phase 2 failed: %s", e)
 
+    # Step 5b: Compute track coverage (reuses trajectories already built)
+    coverage_result = {"coverage": 0.0, "gap_count": 0}
+    try:
+        from training.flywheel.coverage import measure_game_coverage_from_manifest
+
+        coverage_result = measure_game_coverage_from_manifest(manifest.conn)
+        manifest.set_metadata("track_coverage", json.dumps(coverage_result))
+        logger.info(
+            "Track coverage for %s: %.1f%% (%d gaps)",
+            game_id,
+            coverage_result["coverage"] * 100,
+            coverage_result["gap_count"],
+        )
+    except Exception as e:
+        logger.exception("Coverage computation failed: %s", e)
+
     manifest.set_metadata("qa_at", str(time.time()))
     manifest.close()
 
@@ -246,15 +278,21 @@ def run_sonnet_qa(
 
     logger.info(
         "QA complete for %s: Phase1=%d tiles (ball=%d, not_ball=%d), Phase2=%d gaps (found=%d, not_found=%d)",
-        game_id, total_reviewed, verdicts["ball"], verdicts["not_ball"],
+        game_id,
+        total_reviewed,
+        verdicts["ball"],
+        verdicts["not_ball"],
         gap_verdicts["found"] + gap_verdicts["not_found"],
-        gap_verdicts["found"], gap_verdicts["not_found"],
+        gap_verdicts["found"],
+        gap_verdicts["not_found"],
     )
 
     return {
         "tiles_reviewed": total_reviewed,
         "verdicts": verdicts,
         "gap_verdicts": gap_verdicts,
+        "track_coverage": coverage_result.get("coverage", 0.0),
+        "gap_count": coverage_result.get("gap_count", 0),
     }
 
 
@@ -295,7 +333,11 @@ def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
         dest = task_io.local_packs / pack_name
         src_size = src.stat().st_size if src.exists() else 0
         if dest.exists() and dest.stat().st_size == src_size:
-            logger.info("Pack %s already on SSD (%.1f GB), skipping copy", pack_name, src_size / (1024**3))
+            logger.info(
+                "Pack %s already on SSD (%.1f GB), skipping copy",
+                pack_name,
+                src_size / (1024**3),
+            )
         elif src.exists():
             size_gb = src_size / (1024**3)
             if dest.exists():
@@ -430,6 +472,7 @@ def _read_tile_from_packs(manifest, tile_stem: str, local_packs: Path) -> bytes 
     if not local_pack.exists():
         # Try F: archive
         from training.data_prep.manifest_dataset import _resolve_pack_path
+
         try:
             local_pack = Path(_resolve_pack_path(tile["pack_file"]))
         except FileNotFoundError:
@@ -464,10 +507,15 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
     try:
         result = subprocess.run(
             [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--model", "sonnet",
-                "--allowedTools", "Read",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
+                "--model",
+                "sonnet",
+                "--allowedTools",
+                "Read",
             ],
             capture_output=True,
             text=True,
@@ -475,8 +523,12 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
         )
 
         if result.returncode != 0:
-            logger.warning("claude CLI failed (rc=%d): stderr=%s stdout=%s",
-                           result.returncode, result.stderr[:300], result.stdout[:300])
+            logger.warning(
+                "claude CLI failed (rc=%d): stderr=%s stdout=%s",
+                result.returncode,
+                result.stderr[:300],
+                result.stdout[:300],
+            )
             return {}
 
         # Parse response — extract JSON from output
@@ -488,7 +540,11 @@ def _call_claude(image_path: Path, tile_stems: list[str]) -> dict[str, str]:
         # Try to find JSON in the output
         response_data = _extract_json(output)
         if not response_data:
-            logger.warning("Could not parse claude response (len=%d): %s", len(output), output[:500])
+            logger.warning(
+                "Could not parse claude response (len=%d): %s",
+                len(output),
+                output[:500],
+            )
             return {}
 
         # Map numbered results back to tile_stems
@@ -572,10 +628,15 @@ def _call_claude_gap(filmstrip_path: Path, context_frames: list[dict]) -> str | 
     try:
         result = subprocess.run(
             [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--model", "sonnet",
-                "--allowedTools", "Read",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
+                "--model",
+                "sonnet",
+                "--allowedTools",
+                "Read",
             ],
             capture_output=True,
             text=True,
@@ -583,8 +644,11 @@ def _call_claude_gap(filmstrip_path: Path, context_frames: list[dict]) -> str | 
         )
 
         if result.returncode != 0:
-            logger.warning("claude CLI gap call failed (rc=%d): %s",
-                           result.returncode, result.stderr[:200])
+            logger.warning(
+                "claude CLI gap call failed (rc=%d): %s",
+                result.returncode,
+                result.stderr[:200],
+            )
             return None
 
         output = result.stdout.strip()
@@ -641,16 +705,18 @@ def _get_trajectory_sample_frames(
         if tile_info is None:
             continue
         row, col, cx_norm, cy_norm = tile_info
-        frames.append({
-            "frame_idx": fi,
-            "segment": seg,
-            "pano_x": px,
-            "pano_y": py,
-            "role": "before",  # all marked as detected (red circles)
-            "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
-            "tile_local_x": cx_norm,
-            "tile_local_y": cy_norm,
-        })
+        frames.append(
+            {
+                "frame_idx": fi,
+                "segment": seg,
+                "pano_x": px,
+                "pano_y": py,
+                "role": "before",  # all marked as detected (red circles)
+                "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
+                "tile_local_x": cx_norm,
+                "tile_local_y": cy_norm,
+            }
+        )
 
     return frames
 
@@ -674,10 +740,15 @@ def _verify_trajectory_with_sonnet(filmstrip_path: Path, traj_length: int) -> bo
     try:
         result = subprocess.run(
             [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--model", "sonnet",
-                "--allowedTools", "Read",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
+                "--model",
+                "sonnet",
+                "--allowedTools",
+                "Read",
             ],
             capture_output=True,
             text=True,
