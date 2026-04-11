@@ -310,40 +310,36 @@ def _build_split(
                         ):
                             continue
 
-                    # Read from pack
+                    # Read from pack — always stage to local SSD first
                     pack_file = tile_info.get("pack_file")
                     if not pack_file:
                         continue
 
-                    # Try local pack, then server pack, then F: archive
                     pack_name = Path(pack_file).name
-                    pack_path = local_game / "tile_packs" / pack_name
-                    if not pack_path.exists():
-                        pack_path = (
-                            server_games_dir / game_id / "tile_packs" / pack_name
-                        )
-                    if not pack_path.exists():
-                        # Stage from F: archive to local SSD for fast reads
-                        from training.data_prep.manifest_dataset import (
-                            _resolve_pack_path,
-                        )
+                    local_pack_dir = local_game / "tile_packs"
+                    local_pack_dir.mkdir(parents=True, exist_ok=True)
+                    pack_path = local_pack_dir / pack_name
 
-                        try:
-                            resolved = _resolve_pack_path(pack_file)
-                            # Copy to local SSD for the rest of this game's tiles
-                            local_pack_dir = local_game / "tile_packs"
-                            local_pack_dir.mkdir(parents=True, exist_ok=True)
-                            local_dest = local_pack_dir / pack_name
-                            if not local_dest.exists():
-                                logger.info(
-                                    "    Staging pack %s to local SSD (%.1f GB)",
-                                    pack_name,
-                                    Path(resolved).stat().st_size / 1e9,
-                                )
-                                shutil.copy2(resolved, str(local_dest))
-                            pack_path = local_dest
-                        except FileNotFoundError:
-                            continue
+                    # Stage pack to local SSD if not already there
+                    if not pack_path.exists():
+                        # Try server D: (or SMB share), then F: archive
+                        src = server_games_dir / game_id / "tile_packs" / pack_name
+                        if not src.exists():
+                            from training.data_prep.manifest_dataset import (
+                                _resolve_pack_path,
+                            )
+
+                            try:
+                                src = Path(_resolve_pack_path(pack_file))
+                            except FileNotFoundError:
+                                continue
+
+                        logger.info(
+                            "    Staging pack %s to local SSD (%.1f GB)",
+                            pack_name,
+                            src.stat().st_size / 1e9,
+                        )
+                        shutil.copy2(str(src), str(pack_path))
 
                     try:
                         with open(pack_path, "rb") as f:
