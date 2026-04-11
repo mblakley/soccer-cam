@@ -173,10 +173,30 @@ class Orchestrator:
         """Check that each game's state matches its actual data.
 
         Demotes games whose state claims more progress than their data
-        supports. Runs every tick but only makes changes when needed.
+        supports. Also cleans up FAILED:TRAINABLE (terminal state shouldn't fail)
+        and prunes stale worker entries. Runs every tick.
         """
         if self.dry_run:
             return
+
+        # Clean stale worker entries (> 24 hours old)
+        status = self.api.get_status()
+        if status:
+            now = time.time()
+            for w in status.get("workers", []):
+                age = now - (w.get("last_seen") or 0)
+                if age > 86400:  # 24 hours
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:8643/api/workers/{w['hostname']}",
+                            method="DELETE",
+                        )
+                        urllib.request.urlopen(req)
+                        logger.info("Audit: cleaned stale worker %s (%d hrs old)",
+                                    w["hostname"], age // 3600)
+                    except Exception:
+                        pass
 
         games = self.api.get_games_needing_work()
         for game in games:
@@ -184,6 +204,13 @@ class Orchestrator:
             state = game["pipeline_state"]
             tiles = game.get("tile_count", 0)
             labels = game.get("label_count", 0)
+
+            # FAILED:TRAINABLE — just reset to TRAINABLE + clear attempts
+            if state == "FAILED:TRAINABLE":
+                self.api.set_game_state(game_id, "TRAINABLE")
+                self.api.reset_attempts(game_id)
+                logger.info("Audit: fixed %s FAILED:TRAINABLE->TRAINABLE", game_id)
+                continue
 
             if is_failed(state):
                 state = get_failed_stage(state)
