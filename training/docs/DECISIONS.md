@@ -157,3 +157,16 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 **Context:** Server had 3.13, laptop had 3.12. CUDA DLLs were available in system Python's PyTorch installation but not in the uv venv's PATH.
 **Decision:** All machines use Python 3.13. Worker startup bat files add `C:\Python313\Lib\site-packages\torch\lib` to PATH for CUDA 12 DLLs (cublas, cudnn, cufft, etc.). No separate CUDA toolkit installation needed — PyTorch bundles everything.
 **Files:** `training/pipeline/run_laptop_worker.bat`, worker pyproject.toml (`requires-python = ">=3.13"`)
+
+## 2026-04-11: Flywheel improves training data, not labeling model
+
+**Context:** The pipeline uses an external ONNX model for initial ball detection labels. Our trained model may or may not be better.
+**Decision:** The flywheel cycle improves the training DATASET, not the labeling model:
+1. External ONNX labels (`source='onnx'`) — baseline, always preserved
+2. Sonnet QA verdicts (`qa_verdict`) — automated verification, accumulates
+3. Human reviews (`source='human_gap_review'`) — highest-value labels from trajectory gaps
+4. Training uses all verified data to build our model
+5. Our model is only deployed for labeling if it demonstrably outperforms the external model on the human-verified test set
+
+Label sources are tracked separately so we can always compare model performance against ground truth. We never overwrite external model labels — QA verdicts and human labels are additive.
+**Files:** `training/data_prep/game_manifest.py` (labels table: source, qa_verdict columns)
