@@ -36,6 +36,8 @@ class Orchestrator:
         self._last_qa_time = 0.0
         self._qa_count_this_hour = 0
         self._alerted_workers: set[str] = set()
+        self._alerted_stuck: set[str] = set()  # games that hit hard limit (notified once)
+        self._last_reset: dict[str, float] = {}  # game_id -> timestamp of last auto-reset
 
     def run(self, once: bool = False):
         """Main orchestrator loop. Requires API server to be running separately."""
@@ -108,7 +110,7 @@ class Orchestrator:
             if not self.dry_run:
                 self.api.archive(item["id"])
 
-        # Check failed items
+        # Check failed items — set game state and archive
         failed = self.api.get_queue_items(status="failed")
         for item in failed:
             game_id = item.get("game_id")
@@ -122,17 +124,21 @@ class Orchestrator:
                             self.api.set_game_state(game_id, new_state, error=item.get("error"))
                             self.api.increment_attempts(game_id)
 
-                        # Only notify on final failure (max attempts reached)
-                        game_info = self.api.get_game(game_id) if game_id else None
+                        # Notify once when a game hits 20 attempts (hard limit)
+                        game_info = self.api.get_game(game_id)
                         attempts = game_info.get("pipeline_attempts", 0) if game_info else 0
-                        max_attempts = item.get("max_attempts", 3)
-                        if attempts >= max_attempts:
+                        if attempts >= 20 and game_id not in self._alerted_stuck:
+                            self._alerted_stuck.add(game_id)
                             self._ntfy(
-                                f"Task failed (final): {item['task_type']} for {game_id}\n"
+                                f"Game stuck after {attempts} attempts: {game_id}\n"
                                 f"Error: {item.get('error', 'unknown')[:200]}",
-                                title="Task Failed",
+                                title="Game Stuck",
                                 priority="default",
                             )
+
+            # Always archive failed items so they don't pile up
+            if not self.dry_run:
+                self.api.archive(item["id"])
 
     def _update_stats_from_result(self, game_id: str, task_type: str, result: dict):
         if task_type == "tile":
@@ -168,7 +174,24 @@ class Orchestrator:
             game_id = game["game_id"]
             state = game["pipeline_state"]
 
-            if game.get("pipeline_attempts", 0) >= 3:
+            attempts = game.get("pipeline_attempts", 0)
+
+            # Auto-recover FAILED games with cooldown.
+            # Most failures are transient (disk full, USB hiccup).
+            # Wait 5 min between retries, hard limit at 20 attempts.
+            if is_failed(state):
+                if attempts >= 20:
+                    continue  # truly stuck, needs manual investigation
+
+                last_reset = self._last_reset.get(game_id, 0)
+                if time.time() - last_reset < 300:
+                    continue  # 5 min cooldown between retries
+
+                failed_stage = get_failed_stage(state)
+                if failed_stage and not self.dry_run:
+                    self.api.set_game_state(game_id, failed_stage)
+                    self._last_reset[game_id] = time.time()
+                    logger.info("Auto-reset %s (attempt %d)", game_id, attempts)
                 continue
 
             task_type = next_task_for_game(state)
