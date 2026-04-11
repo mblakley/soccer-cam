@@ -337,21 +337,25 @@ class Orchestrator:
                 )
 
         self._maybe_enqueue_training()
-        self._maybe_enqueue_continuous_qa(games)
+        self._maybe_enqueue_continuous_qa()
 
-    def _maybe_enqueue_continuous_qa(self, games: list[dict]):
+    def _maybe_enqueue_continuous_qa(self):
         """Keep QA running on any game with un-QA'd labeled tiles.
 
         QA should never stop — if there are tiles with labels but no
         qa_verdict, enqueue another QA pass. This covers games in
         QA_DONE and TRAINABLE that still have unreviewed tiles.
-        """
-        if not self._can_qa():
-            return
 
-        # Games past LABELED that might have more tiles to QA
+        Uses its own game list (not just needing-work) since TRAINABLE
+        games still need QA on unreviewed tiles.
+        """
+        if self.api.has_active_item("sonnet_qa"):
+            return  # already running one
+
+        # Get ALL games, not just needing-work (which excludes TRAINABLE)
+        all_games = self.api.get_all_games()
         qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}
-        for game in games:
+        for game in all_games:
             state = game["pipeline_state"]
             if state not in qa_eligible_states:
                 continue

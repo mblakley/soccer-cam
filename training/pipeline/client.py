@@ -46,7 +46,9 @@ class PipelineClient:
         except urllib.error.HTTPError as e:
             if e.code == 204:
                 return None
-            logger.warning("API %s returned %d: %s", path, e.code, e.read().decode()[:200])
+            logger.warning(
+                "API %s returned %d: %s", path, e.code, e.read().decode()[:200]
+            )
             return None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             logger.warning("API %s failed: %s", path, e)
@@ -72,10 +74,13 @@ class PipelineClient:
 
     def claim(self, capabilities: list[str], hostname: str) -> dict | None:
         """Claim the next available work item. Returns item dict or None."""
-        return self._post("/api/claim", {
-            "capabilities": capabilities,
-            "hostname": hostname,
-        })
+        return self._post(
+            "/api/claim",
+            {
+                "capabilities": capabilities,
+                "hostname": hostname,
+            },
+        )
 
     def start(self, item_id: int):
         """Mark item as actively running."""
@@ -117,21 +122,24 @@ class PipelineClient:
         is_user_idle: bool = True,
     ):
         """Report worker resource status."""
-        self._post("/api/worker-status", {
-            "hostname": hostname,
-            "status": status,
-            "current_task_id": current_task_id,
-            "gpu_name": gpu_name,
-            "gpu_util_pct": gpu_util_pct,
-            "gpu_temp_c": gpu_temp_c,
-            "gpu_memory_used_mb": gpu_memory_used_mb,
-            "gpu_memory_total_mb": gpu_memory_total_mb,
-            "cpu_util_pct": cpu_util_pct,
-            "ram_used_gb": ram_used_gb,
-            "ram_total_gb": ram_total_gb,
-            "disk_free_gb": disk_free_gb,
-            "is_user_idle": is_user_idle,
-        })
+        self._post(
+            "/api/worker-status",
+            {
+                "hostname": hostname,
+                "status": status,
+                "current_task_id": current_task_id,
+                "gpu_name": gpu_name,
+                "gpu_util_pct": gpu_util_pct,
+                "gpu_temp_c": gpu_temp_c,
+                "gpu_memory_used_mb": gpu_memory_used_mb,
+                "gpu_memory_total_mb": gpu_memory_total_mb,
+                "cpu_util_pct": cpu_util_pct,
+                "ram_used_gb": ram_used_gb,
+                "ram_total_gb": ram_total_gb,
+                "disk_free_gb": disk_free_gb,
+                "is_user_idle": is_user_idle,
+            },
+        )
 
     def get_status(self) -> dict | None:
         """Get full pipeline status."""
@@ -162,14 +170,17 @@ class PipelineClient:
         max_attempts: int = 3,
     ) -> int | None:
         """Enqueue a work item. Returns item ID."""
-        result = self._post("/api/enqueue", {
-            "task_type": task_type,
-            "game_id": game_id,
-            "priority": priority,
-            "target_machine": target_machine,
-            "payload": payload,
-            "max_attempts": max_attempts,
-        })
+        result = self._post(
+            "/api/enqueue",
+            {
+                "task_type": task_type,
+                "game_id": game_id,
+                "priority": priority,
+                "target_machine": target_machine,
+                "payload": payload,
+                "max_attempts": max_attempts,
+            },
+        )
         return result.get("id") if result else None
 
     def has_active_item(self, task_type: str, game_id: str | None = None) -> bool:
@@ -198,6 +209,9 @@ class PipelineClient:
 
     def get_games_needing_work(self) -> list:
         return self._get("/api/games/needing-work") or []
+
+    def get_all_games(self) -> list:
+        return self._get("/api/games") or []
 
     def get_trainable_games(self) -> list:
         return self._get("/api/games/trainable") or []
