@@ -122,12 +122,17 @@ class Orchestrator:
                             self.api.set_game_state(game_id, new_state, error=item.get("error"))
                             self.api.increment_attempts(game_id)
 
-                        self._ntfy(
-                            f"Task failed: {item['task_type']} for {game_id}\n"
-                            f"Error: {item.get('error', 'unknown')[:200]}",
-                            title="Task Failed",
-                            priority="high",
-                        )
+                        # Only notify on final failure (max attempts reached)
+                        game_info = self.api.get_game(game_id) if game_id else None
+                        attempts = game_info.get("pipeline_attempts", 0) if game_info else 0
+                        max_attempts = item.get("max_attempts", 3)
+                        if attempts >= max_attempts:
+                            self._ntfy(
+                                f"Task failed (final): {item['task_type']} for {game_id}\n"
+                                f"Error: {item.get('error', 'unknown')[:200]}",
+                                title="Task Failed",
+                                priority="default",
+                            )
 
     def _update_stats_from_result(self, game_id: str, task_type: str, result: dict):
         if task_type == "tile":
