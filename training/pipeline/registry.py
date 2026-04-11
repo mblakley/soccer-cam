@@ -121,10 +121,19 @@ class GameRegistry:
                    trainable=excluded.trainable,
                    pipeline_updated=excluded.pipeline_updated""",
             (
-                game_id, team, date, opponent, location, video_path,
-                1 if needs_flip else 0, game_type, camera_type,
+                game_id,
+                team,
+                date,
+                opponent,
+                location,
+                video_path,
+                1 if needs_flip else 0,
+                game_type,
+                camera_type,
                 1 if trainable else 0,
-                pipeline_state, now, now,
+                pipeline_state,
+                now,
+                now,
             ),
         )
         conn.commit()
@@ -171,7 +180,9 @@ class GameRegistry:
                 (new_state, now, error, game_id),
             )
         conn.commit()
-        logger.info("Game %s → %s%s", game_id, new_state, f" ({error})" if error else "")
+        logger.info(
+            "Game %s → %s%s", game_id, new_state, f" ({error})" if error else ""
+        )
 
     def increment_attempts(self, game_id: str):
         """Increment the failure attempt counter."""
@@ -198,7 +209,9 @@ class GameRegistry:
     def get_game(self, game_id: str) -> dict | None:
         """Get full game record."""
         conn = self._get_conn()
-        row = conn.execute("SELECT * FROM games WHERE game_id = ?", (game_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM games WHERE game_id = ?", (game_id,)
+        ).fetchone()
         return dict(row) if row else None
 
     def get_games_in_state(self, state: str) -> list[dict]:
@@ -260,6 +273,7 @@ class GameRegistry:
         positive_count: int | None = None,
         segment_count: int | None = None,
         coverage: float | None = None,
+        video_path: str | None = None,
     ):
         """Update cached stats for a game."""
         conn = self._get_conn()
@@ -280,6 +294,9 @@ class GameRegistry:
         if coverage is not None:
             updates.append("coverage = ?")
             params.append(coverage)
+        if video_path is not None:
+            updates.append("video_path = ?")
+            params.append(video_path)
 
         if updates:
             params.append(game_id)
