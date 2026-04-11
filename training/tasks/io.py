@@ -77,22 +77,28 @@ class TaskIO:
         return self.server_game_dir / "manifest.db"
 
     def server_packs(self) -> Path:
-        """Find pack files — check D: per-game dir, restore from F: archive if needed."""
+        """Find pack files — check D: per-game dir, restore from F: archive if needed.
+
+        On the server: checks D: first, then restores from F: archive.
+        On remote workers: checks D: via SMB share. F: is not accessible
+        remotely — the server must have restored packs to D: first.
+        """
         packs = self.server_game_dir / "tile_packs"
         if packs.exists() and any(packs.glob("*.pack")):
             return packs
 
-        # Check F: archive and restore to D: if found
-        archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
-        if archive_dir.exists() and any(archive_dir.glob("*.pack")):
-            packs.mkdir(parents=True, exist_ok=True)
-            for pack_file in archive_dir.glob("*.pack"):
-                dest = packs / pack_file.name
-                if not dest.exists():
-                    logger.info("Restoring %s from F: archive (%.1f GB)",
-                                pack_file.name, pack_file.stat().st_size / 1e9)
-                    shutil.copy2(str(pack_file), str(dest))
-            return packs
+        # Only try F: archive if we're on the server (no server_share = local)
+        if not self.server_share:
+            archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
+            if archive_dir.exists() and any(archive_dir.glob("*.pack")):
+                packs.mkdir(parents=True, exist_ok=True)
+                for pack_file in archive_dir.glob("*.pack"):
+                    dest = packs / pack_file.name
+                    if not dest.exists():
+                        logger.info("Restoring %s from F: archive (%.1f GB)",
+                                    pack_file.name, pack_file.stat().st_size / 1e9)
+                        shutil.copy2(str(pack_file), str(dest))
+                return packs
 
         return packs  # default even if empty
 

@@ -44,8 +44,15 @@ from ultralytics.utils import LOGGER, colorstr
 
 _logger = logging.getLogger(__name__)
 
-# F: archive path for tile packs (permanent storage)
-_ARCHIVE_TILE_PACKS = Path("F:/training_data/tile_packs")
+
+def _get_archive_tile_packs() -> Path:
+    """Get the F: archive path from config, with fallback."""
+    try:
+        from training.pipeline.config import load_config
+        cfg = load_config()
+        return Path(cfg.paths.archive.tile_packs)
+    except Exception:
+        return Path("F:/training_data/tile_packs")
 
 
 def _resolve_pack_path(pack_file: str) -> str:
@@ -54,6 +61,9 @@ def _resolve_pack_path(pack_file: str) -> str:
     Manifest stores pack_file as D: paths. If the file was cleaned off D:
     (archived to F:), this restores it to D: so it can be read locally
     or served to remote workers via SMB.
+
+    Only works on the server (F: is local). Remote workers must have packs
+    staged to D: before calling this.
     """
     p = Path(pack_file)
     if p.exists():
@@ -70,7 +80,8 @@ def _resolve_pack_path(pack_file: str) -> str:
     except (ValueError, IndexError):
         raise FileNotFoundError(f"Pack file not found and can't parse game_id: {pack_file}")
 
-    archive_path = _ARCHIVE_TILE_PACKS / game_id / pack_name
+    archive_packs = _get_archive_tile_packs()
+    archive_path = archive_packs / game_id / pack_name
     if not archive_path.exists():
         raise FileNotFoundError(
             f"Pack file not found on D: or F: archive: {pack_file} / {archive_path}"
