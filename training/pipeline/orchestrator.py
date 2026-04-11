@@ -364,8 +364,14 @@ class Orchestrator:
         return base
 
     def _get_target_machine(self, task_type: str) -> str | None:
-        # Server-only tasks (need local F: access or claude CLI)
-        if task_type in ("stage", "sonnet_qa", "generate_review", "ingest_reviews"):
+        # Server-only tasks (need local F:/D: access or claude CLI)
+        if task_type in (
+            "stage",
+            "tile",
+            "sonnet_qa",
+            "generate_review",
+            "ingest_reviews",
+        ):
             return self.cfg.server.hostname
         if task_type == "train":
             for name, m in self.cfg.machines.items():
