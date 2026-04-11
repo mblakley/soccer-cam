@@ -77,14 +77,23 @@ class TaskIO:
         return self.server_game_dir / "manifest.db"
 
     def server_packs(self) -> Path:
-        """Find pack files — check per-game dir first, then legacy tile_packs/."""
+        """Find pack files — check D: per-game dir, restore from F: archive if needed."""
         packs = self.server_game_dir / "tile_packs"
         if packs.exists() and any(packs.glob("*.pack")):
             return packs
-        # Legacy: D:/training_data/tile_packs/{game_id}/
-        legacy = self._server_games_dir.parent / "tile_packs" / self.game_id
-        if legacy.exists():
-            return legacy
+
+        # Check F: archive and restore to D: if found
+        archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
+        if archive_dir.exists() and any(archive_dir.glob("*.pack")):
+            packs.mkdir(parents=True, exist_ok=True)
+            for pack_file in archive_dir.glob("*.pack"):
+                dest = packs / pack_file.name
+                if not dest.exists():
+                    logger.info("Restoring %s from F: archive (%.1f GB)",
+                                pack_file.name, pack_file.stat().st_size / 1e9)
+                    shutil.copy2(str(pack_file), str(dest))
+            return packs
+
         return packs  # default even if empty
 
     def video_path(self) -> Path | None:
@@ -219,6 +228,27 @@ class TaskIO:
                 logger.debug("Cleaned up %s", self.local_game)
             except Exception as e:
                 logger.warning("Cleanup failed for %s: %s", self.local_game, e)
+
+    def cleanup_server_packs(self):
+        """Remove packs from D: after use (they're archived on F:).
+
+        Only deletes if the F: archive copy exists and matches size.
+        """
+        server_packs = self.server_game_dir / "tile_packs"
+        if not server_packs.exists():
+            return
+
+        archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
+        if not archive_dir.exists():
+            return  # no archive — keep D: packs
+
+        for pack_file in server_packs.glob("*.pack"):
+            archived = archive_dir / pack_file.name
+            if archived.exists() and archived.stat().st_size == pack_file.stat().st_size:
+                pack_file.unlink()
+                logger.debug("Cleaned D: pack %s (archived on F:)", pack_file.name)
+            else:
+                logger.debug("Keeping D: pack %s (no matching archive)", pack_file.name)
 
     # ------------------------------------------------------------------
     # Helpers

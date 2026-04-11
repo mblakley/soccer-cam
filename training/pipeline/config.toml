@@ -14,9 +14,10 @@ log_file = "D:/training_data/pipeline.log"
 server_work_dir = "G:/pipeline_work"
 
 [paths.archive]
-# F: is USB archive — read-only source for original videos, write for backups
+# F: is USB archive — source for videos, permanent home for tile packs
 root = "F:/"
 video_sources = "F:/training_data"
+tile_packs = "F:/training_data/tile_packs"   # per-game pack archive: {game_id}/*.pack
 checkpoints = "F:/training_checkpoints"
 backups = "F:/training_backups"
 

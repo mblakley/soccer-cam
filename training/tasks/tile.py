@@ -111,7 +111,8 @@ def run_tile(
     manifest.rebuild_segment_stats()
     manifest.set_metadata("tiled_at", str(time.time()))
 
-    # Rewrite pack_file paths from local SSD → server destination
+    # Rewrite pack_file paths from local SSD → D: per-game dir
+    # (D: is served via SMB to remote workers)
     server_packs_dir = io.server_game_dir / "tile_packs"
     manifest.conn.execute(
         "UPDATE tiles SET pack_file = REPLACE(pack_file, ?, ?)",
@@ -120,9 +121,37 @@ def run_tile(
     manifest.conn.commit()
     manifest.close()
 
-    # Push results to server
+    # Push packs to D: (served via SMB) and archive to F: (permanent)
     io.push_packs()
     io.push_manifest()
+
+    # Archive packs to F: then clean D: to save space
+    from training.pipeline.config import load_config
+    cfg = load_config()
+    archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+    for pack_file in server_packs_dir.glob("*.pack"):
+        dest = archive_dir / pack_file.name
+        if not dest.exists() or dest.stat().st_size != pack_file.stat().st_size:
+            logger.info("  Archiving %s (%.1f GB) to F:", pack_file.name, pack_file.stat().st_size / 1e9)
+            shutil.copy2(str(pack_file), str(dest))
+
+    # Verify archive, then clean D: packs
+    all_archived = True
+    for pack_file in server_packs_dir.glob("*.pack"):
+        archived = archive_dir / pack_file.name
+        if not archived.exists() or archived.stat().st_size != pack_file.stat().st_size:
+            all_archived = False
+            break
+
+    if all_archived:
+        for pack_file in server_packs_dir.glob("*.pack"):
+            pack_file.unlink()
+        logger.info("  Cleaned D: packs (archived to F:)")
+    else:
+        logger.warning("  Archive verification failed — keeping packs on D:")
 
     logger.info("Tiled %s: %d tiles, %.1f MB total", game_id, total_tiles, total_pack_bytes / 1e6)
 

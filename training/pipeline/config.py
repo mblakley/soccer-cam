@@ -21,6 +21,7 @@ _CONFIG_DIR = Path(__file__).parent
 class ArchivePaths:
     root: str = "F:/"
     video_sources: str = "F:/training_data"
+    tile_packs: str = "F:/training_data/tile_packs"
     checkpoints: str = "F:/training_checkpoints"
     backups: str = "F:/training_backups"
 
