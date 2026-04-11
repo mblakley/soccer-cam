@@ -14,6 +14,11 @@ max_gpu_temp = 85
 min_disk_free_gb = 20
 gpu_device = 0
 idle_games = []
+# CUDA DLLs from system torch — added to PATH on worker startup
+cuda_path = "C:/Python313/Lib/site-packages/torch/lib"
 
 [heartbeat]
 interval = 30
+
+[logging]
+log_dir = "C:/soccer-cam-label/logs"

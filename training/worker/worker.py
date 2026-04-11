@@ -85,6 +85,13 @@ class Worker:
         w = raw.get("worker", {})
         r = raw.get("resources", w.get("resources", {}))
 
+        # Add CUDA DLL path if configured (needed for remote machines
+        # where torch is installed in system Python, not the venv)
+        cuda_path = r.get("cuda_path", "")
+        if cuda_path and cuda_path not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = cuda_path + os.pathsep + os.environ.get("PATH", "")
+            logger.info("Added CUDA path to PATH: %s", cuda_path)
+
         return cls(
             hostname=w.get("hostname", platform.node()),
             capabilities=w.get("capabilities", []),

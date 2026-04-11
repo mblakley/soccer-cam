@@ -337,6 +337,42 @@ class Orchestrator:
                 )
 
         self._maybe_enqueue_training()
+        self._maybe_enqueue_continuous_qa(games)
+
+    def _maybe_enqueue_continuous_qa(self, games: list[dict]):
+        """Keep QA running on any game with un-QA'd labeled tiles.
+
+        QA should never stop — if there are tiles with labels but no
+        qa_verdict, enqueue another QA pass. This covers games in
+        QA_DONE and TRAINABLE that still have unreviewed tiles.
+        """
+        if not self._can_qa():
+            return
+
+        # Games past LABELED that might have more tiles to QA
+        qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}
+        for game in games:
+            state = game["pipeline_state"]
+            if state not in qa_eligible_states:
+                continue
+            if game.get("label_count", 0) == 0:
+                continue
+            if self.api.has_active_item("sonnet_qa", game["game_id"]):
+                continue
+
+            # Enqueue QA — the task itself checks for un-QA'd tiles
+            # and returns early if there's nothing to do
+            if not self.dry_run:
+                self.api.enqueue(
+                    "sonnet_qa",
+                    game_id=game["game_id"],
+                    priority=self._get_priority("sonnet_qa", game),
+                    target_machine=self._get_target_machine("sonnet_qa"),
+                )
+                logger.info(
+                    "Continuous QA: enqueued for %s (%s)", game["game_id"], state
+                )
+            break  # One at a time to stay within rate limit
 
     def _build_payload(self, game: dict, task_type: str) -> dict:
         payload = {}
