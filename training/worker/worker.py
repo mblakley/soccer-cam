@@ -207,6 +207,7 @@ class Worker:
 
         logger.info("Starting %s for %s (id=%d)", task_type, game_id, item_id)
 
+        self._cleanup_stale_work_dirs()
         self.api.start(item_id)
         self._current_task_id = item_id
         self._report_status(state, status="working", task_id=item_id)
@@ -240,18 +241,61 @@ class Worker:
         )
 
     def _cleanup_work_dir(self, item: dict):
-        """Clean up local working files after task completion."""
+        """Clean up local working files after task completion.
+
+        Force-closes any open SQLite connections first — tasks open
+        manifest.db but may not close it on exception, leaving WAL/SHM
+        files locked. Since we're in the same process, gc.collect()
+        releases the unreferenced connection objects.
+        """
         game_id = item.get("game_id")
         if game_id:
             game_work = self.local_work_dir / game_id
             if game_work.exists():
+                import gc
                 import shutil
+
+                # Force Python to finalize any unreferenced SQLite connections
+                # that the failed task left open. This releases file locks on
+                # manifest.db-wal and manifest.db-shm.
+                gc.collect()
 
                 try:
                     shutil.rmtree(game_work)
                     logger.debug("Cleaned up %s", game_work)
                 except Exception as e:
                     logger.warning("Failed to clean up %s: %s", game_work, e)
+
+    def _cleanup_stale_work_dirs(self):
+        """Clean up leftover work dirs from previous failed tasks.
+
+        Runs before each new task. Any game dir in the work dir is stale
+        — the previous task either failed cleanup or had locked files.
+        gc.collect() first to release any lingering SQLite connections.
+        """
+        import gc
+        import shutil
+
+        if not self.local_work_dir.exists():
+            return
+
+        gc.collect()
+
+        # "training" subdir is used by the train task for datasets — skip it
+        skip = {"training"}
+        cleaned = 0
+        for entry in self.local_work_dir.iterdir():
+            if not entry.is_dir() or entry.name in skip:
+                continue
+            try:
+                shutil.rmtree(entry)
+                cleaned += 1
+                logger.info("Cleaned stale work dir: %s", entry.name)
+            except Exception as e:
+                logger.debug("Could not clean %s: %s", entry.name, e)
+
+        if cleaned:
+            logger.info("Cleaned %d stale work dir(s)", cleaned)
 
     # ------------------------------------------------------------------
     # Heartbeat
