@@ -1,0 +1,19 @@
+# Server QA worker — dedicated to Sonnet QA + review tasks
+# Runs alongside the main server worker (separate work dir)
+
+[worker]
+hostname = "DESKTOP-5L867J8-QA"
+capabilities = ["sonnet_qa", "generate_review", "ingest_reviews"]
+api_url = "http://127.0.0.1:8643"
+server_share = ""
+local_work_dir = "G:/pipeline_work_qa"
+local_models_dir = "D:/training_data/models"
+
+[resources]
+max_gpu_temp = 85
+min_disk_free_gb = 10
+gpu_device = 0
+idle_games = []
+
+[heartbeat]
+interval = 30
