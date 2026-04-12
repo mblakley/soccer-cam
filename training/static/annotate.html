@@ -425,19 +425,25 @@ html, body {
   </div>
   <div class="annotate-body">
     <div class="frame-reason" id="gap-info">Loading...</div>
-    <div style="padding:8px 12px; overflow-x:auto; flex:1; display:flex; align-items:center;">
-      <img id="gap-filmstrip" style="max-height:100%; border-radius:8px;" />
+    <div style="padding:8px 12px; overflow-x:auto; flex:1; display:flex; align-items:center; position:relative;">
+      <div id="gap-filmstrip-container" style="position:relative; display:inline-block;">
+        <img id="gap-filmstrip" style="max-height:100%; border-radius:8px; display:block;" />
+        <canvas id="gap-overlay" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:auto; cursor:crosshair;" onclick="onFilmstripClick(event)"></canvas>
+      </div>
     </div>
     <!-- Track confirmation buttons -->
     <div class="action-bar" id="gap-confirm-bar">
       <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--green);color:#000;flex:2;">
-        <span class="icon">&#x2714;</span>Yes — Ball Circled Correctly
+        <span class="icon">&#x2714;</span>Correct
       </button>
       <button class="action-btn" onclick="gapAction('reject')" style="background:var(--red);color:#fff;flex:1;">
-        <span class="icon">&#x2717;</span>Wrong — Not the Ball
+        <span class="icon">&#x2717;</span>Wrong
       </button>
-      <button class="action-btn btn-skip" onclick="gapAction('cant_tell')" style="flex:1;">
-        <span class="icon">&rarr;</span>Can't Tell
+      <button class="action-btn" onclick="gapAction('locate')" style="background:var(--blue);color:#fff;flex:1;" id="gap-locate-btn" disabled>
+        <span class="icon">&#x1F3AF;</span>Ball Here
+      </button>
+      <button class="action-btn btn-skip" onclick="gapAction('cant_tell')">
+        <span class="icon">&rarr;</span>Skip
       </button>
     </div>
     <!-- Gap filling buttons (shown after track is confirmed) -->
@@ -2456,26 +2462,123 @@ function updateGapDisplay() {
   document.getElementById('gap-progress-bar').style.width = pct + '%';
 
   if (reviewType === 'confirm_game_ball') {
-    // Per-frame track confirmation: show one tile at a time
     const ti = gapManifest.track_info || {};
     const coverage = ti.segment_frames ? Math.round(ti.track_frames / ti.segment_frames * 100) : '?';
     document.getElementById('gap-info').innerHTML =
-      `<div>Frame ${gapCurrentIndex + 1} of ${gapItems.length} — Is the <b>game ball</b> circled in red?</div>` +
-      `<div style="font-size:12px;color:#888;margin-top:4px;">${gapManifest.game_id} · ${ti.track_frames || '?'} track frames · ${coverage}% coverage</div>`;
+      `<div>Frame <b>${gapCurrentIndex + 1}</b> of ${gapItems.length} — Is the <b>game ball</b> circled in red?</div>` +
+      `<div style="font-size:12px;color:#888;margin-top:4px;">${gapManifest.game_id} · ${ti.track_frames || '?'} track frames · ${coverage}% coverage</div>` +
+      `<div style="font-size:12px;color:#aaa;margin-top:2px;">Click on any frame to mark the ball position, then press "Ball Here"</div>`;
 
-    // Show individual tile (not filmstrip)
+    // Show the full filmstrip
     const filmstrip = document.getElementById('gap-filmstrip');
-    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
+    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/game_ball_track`;
+    filmstrip.onload = () => drawFilmstripOverlay();
 
     // Show confirm buttons, hide gap-fill buttons
     document.getElementById('gap-confirm-bar').style.display = 'flex';
     document.getElementById('gap-fill-bar').style.display = 'none';
+    // Reset locate button
+    document.getElementById('gap-locate-btn').disabled = true;
+    gapTapPos = null;
 
   } else {
     // Gap filling mode (future)
     document.getElementById('gap-info').textContent = 'Gap fill (coming soon)';
     document.getElementById('gap-confirm-bar').style.display = 'none';
     document.getElementById('gap-fill-bar').style.display = 'block';
+  }
+}
+
+function drawFilmstripOverlay() {
+  const img = document.getElementById('gap-filmstrip');
+  const canvas = document.getElementById('gap-overlay');
+  if (!img.naturalWidth || !gapItems.length) return;
+
+  // Size canvas to match displayed image
+  const rect = img.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const frameW = canvas.width / gapItems.length;
+
+  // Draw frame numbers and highlight current
+  for (let i = 0; i < gapItems.length; i++) {
+    const x = i * frameW;
+    const reviewed = gapItems[i].reviewed;
+    const action = gapItems[i]._action; // local annotation state
+
+    // Highlight current frame
+    if (i === gapCurrentIndex) {
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x + 2, 2, frameW - 4, canvas.height - 4);
+    }
+
+    // Show verdict badge if already reviewed
+    if (action === 'confirm') {
+      ctx.fillStyle = 'rgba(0,200,0,0.3)';
+      ctx.fillRect(x, 0, frameW, canvas.height);
+    } else if (action === 'reject') {
+      ctx.fillStyle = 'rgba(200,0,0,0.3)';
+      ctx.fillRect(x, 0, frameW, canvas.height);
+    }
+
+    // Frame number
+    ctx.fillStyle = i === gapCurrentIndex ? '#00ff00' : '#ffffff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 4;
+    ctx.fillText(`${i + 1}`, x + frameW / 2, 20);
+    ctx.shadowBlur = 0;
+  }
+
+  // Draw tap position marker if set
+  if (gapTapPos && gapTapPos.frameIdx === gapCurrentIndex) {
+    const x = gapCurrentIndex * frameW + (gapTapPos.x / 640) * frameW;
+    const y = (gapTapPos.y / 640) * canvas.height;
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#00ffff';
+    ctx.fill();
+  }
+}
+
+function onFilmstripClick(event) {
+  const canvas = document.getElementById('gap-overlay');
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+
+  const frameW = canvas.width / gapItems.length;
+  const clickedFrame = Math.floor(x / frameW);
+
+  if (clickedFrame >= 0 && clickedFrame < gapItems.length) {
+    // If clicking a different frame, switch to it
+    if (clickedFrame !== gapCurrentIndex) {
+      gapCurrentIndex = clickedFrame;
+      gapTapPos = null;
+      document.getElementById('gap-locate-btn').disabled = true;
+      updateGapDisplay();
+      return;
+    }
+
+    // Clicking within the current frame — mark ball position
+    const localX = ((x - clickedFrame * frameW) / frameW) * 640;
+    const localY = (y / canvas.height) * 640;
+    gapTapPos = { x: Math.round(localX), y: Math.round(localY), frameIdx: gapCurrentIndex };
+    document.getElementById('gap-locate-btn').disabled = false;
+    drawFilmstripOverlay();
   }
 }
 
@@ -2503,16 +2606,34 @@ async function gapAction(action) {
     });
     const result = await resp.json();
 
-    const colors = { locate: 'var(--green)', out_of_play: 'var(--red)', obscured: 'var(--blue)', cant_tell: '#666' };
-    showToast(action === 'locate' ? 'Ball located!' : action.replace('_', ' '), colors[action]);
+    const colors = { confirm: 'var(--green)', reject: 'var(--red)', locate: 'var(--blue)', cant_tell: '#666' };
+    const labels = { confirm: 'Confirmed!', reject: 'Rejected', locate: 'Ball marked!', cant_tell: 'Skipped' };
+    showToast(labels[action] || action, colors[action]);
 
-    // Advance to next
+    // Mark local state for overlay
+    item._action = action;
     gapTapPos = null;
-    gapCurrentIndex++;
-    if (gapCurrentIndex >= gapItems.length) {
-      showToast('All gaps reviewed!');
-      setTimeout(() => navigateTo('gap-review'), 1000);
+    document.getElementById('gap-locate-btn').disabled = true;
+
+    // Advance to next unreviewed frame
+    let next = -1;
+    for (let i = gapCurrentIndex + 1; i < gapItems.length; i++) {
+      if (!gapItems[i]._action) { next = i; break; }
+    }
+    if (next === -1) {
+      // Check if any before current are unreviewed
+      for (let i = 0; i < gapCurrentIndex; i++) {
+        if (!gapItems[i]._action) { next = i; break; }
+      }
+    }
+
+    if (next === -1) {
+      // All reviewed
+      drawFilmstripOverlay();
+      showToast('All frames reviewed! 🎉');
+      setTimeout(() => navigateTo('gap-review'), 1500);
     } else {
+      gapCurrentIndex = next;
       updateGapDisplay();
     }
   } catch (err) {
