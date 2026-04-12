@@ -54,6 +54,7 @@ class TaskIO:
 
         # Load config for paths
         from training.pipeline.config import load_config
+
         self.cfg = load_config()
 
         # Server game directory (D: on server, share for remote)
@@ -77,30 +78,30 @@ class TaskIO:
         return self.server_game_dir / "manifest.db"
 
     def server_packs(self) -> Path:
-        """Find pack files — check D: per-game dir, restore from F: archive if needed.
+        """Find pack files — restore any missing packs from F: archive to D:.
 
-        On the server: checks D: first, then restores from F: archive.
-        On remote workers: checks D: via SMB share. F: is not accessible
-        remotely — the server must have restored packs to D: first.
+        Always checks F: archive for packs not yet on D:, even if some
+        packs already exist. This handles the case where incremental
+        tiling archived and cleaned individual segment packs.
         """
         packs = self.server_game_dir / "tile_packs"
-        if packs.exists() and any(packs.glob("*.pack")):
-            return packs
+        packs.mkdir(parents=True, exist_ok=True)
 
-        # Only try F: archive if we're on the server (no server_share = local)
+        # Restore missing packs from F: archive (server only)
         if not self.server_share:
             archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
-            if archive_dir.exists() and any(archive_dir.glob("*.pack")):
-                packs.mkdir(parents=True, exist_ok=True)
+            if archive_dir.exists():
                 for pack_file in archive_dir.glob("*.pack"):
                     dest = packs / pack_file.name
                     if not dest.exists():
-                        logger.info("Restoring %s from F: archive (%.1f GB)",
-                                    pack_file.name, pack_file.stat().st_size / 1e9)
+                        logger.info(
+                            "Restoring %s from F: archive (%.1f GB)",
+                            pack_file.name,
+                            pack_file.stat().st_size / 1e9,
+                        )
                         shutil.copy2(str(pack_file), str(dest))
-                return packs
 
-        return packs  # default even if empty
+        return packs
 
     def video_path(self) -> Path | None:
         """Find original video files — uses API to look up video path."""
@@ -163,8 +164,11 @@ class TaskIO:
             if stale.exists():
                 stale.unlink()
         shutil.copy2(str(src), str(self.local_manifest_path))
-        logger.debug("Pulled manifest.db for %s (%.1f MB)",
-                     self.game_id, os.path.getsize(str(self.local_manifest_path)) / 1e6)
+        logger.debug(
+            "Pulled manifest.db for %s (%.1f MB)",
+            self.game_id,
+            os.path.getsize(str(self.local_manifest_path)) / 1e6,
+        )
         return self.local_manifest_path
 
     def pull_packs(self) -> Path:
@@ -250,7 +254,10 @@ class TaskIO:
 
         for pack_file in server_packs.glob("*.pack"):
             archived = archive_dir / pack_file.name
-            if archived.exists() and archived.stat().st_size == pack_file.stat().st_size:
+            if (
+                archived.exists()
+                and archived.stat().st_size == pack_file.stat().st_size
+            ):
                 pack_file.unlink()
                 logger.debug("Cleaned D: pack %s (archived on F:)", pack_file.name)
             else:
