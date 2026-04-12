@@ -207,6 +207,11 @@ class PipelineClient:
     def update_game_stats(self, game_id: str, **stats):
         self._post(f"/api/game/{game_id}/stats", stats)
 
+    def release_worker_tasks(self, hostname: str) -> int:
+        """Release all tasks held by this worker (orphan cleanup on startup)."""
+        result = self._post(f"/api/release-worker/{hostname}")
+        return result.get("released", 0) if result else 0
+
     def get_games_needing_work(self) -> list:
         return self._get("/api/games/needing-work") or []
 

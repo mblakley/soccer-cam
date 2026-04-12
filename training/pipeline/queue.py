@@ -401,6 +401,57 @@ class WorkQueue:
             conn.commit()
         return reclaimed
 
+    def release_worker_tasks(self, hostname: str) -> int:
+        """Fail all running/claimed tasks held by a worker.
+
+        Called on worker startup to release tasks orphaned by a previous
+        instance that was killed. Returns count of released items.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT id, task_type, game_id, attempts, max_attempts
+               FROM work_items
+               WHERE claimed_by = ? AND status IN ('claimed', 'running')""",
+            (hostname,),
+        ).fetchall()
+
+        for row in rows:
+            row = dict(row)
+            error = f"released on worker {hostname} startup (previous instance died)"
+            if row["attempts"] < row["max_attempts"]:
+                conn.execute(
+                    """UPDATE work_items
+                       SET status = 'queued', claimed_by = NULL, claimed_at = NULL,
+                           heartbeat_at = NULL, error = ?
+                       WHERE id = ?""",
+                    (error, row["id"]),
+                )
+                logger.info(
+                    "Released orphan %d (%s %s) from %s — re-queued",
+                    row["id"],
+                    row["task_type"],
+                    row.get("game_id", ""),
+                    hostname,
+                )
+            else:
+                conn.execute(
+                    """UPDATE work_items
+                       SET status = 'failed', completed_at = ?, error = ?
+                       WHERE id = ?""",
+                    (time.time(), error, row["id"]),
+                )
+                logger.info(
+                    "Released orphan %d (%s %s) from %s — exhausted attempts",
+                    row["id"],
+                    row["task_type"],
+                    row.get("game_id", ""),
+                    hostname,
+                )
+
+        if rows:
+            conn.commit()
+        return len(rows)
+
     # ------------------------------------------------------------------
     # Worker status
     # ------------------------------------------------------------------

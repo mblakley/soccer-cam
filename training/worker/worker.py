@@ -127,6 +127,11 @@ class Worker:
             logger.info("Waiting for API server...")
             _shutdown.wait(timeout=10)
 
+        # Release any tasks orphaned by a previous instance of this worker.
+        # When we restart (kill + start), running tasks stay in "running"
+        # status with stale heartbeats. Fail them now so they get re-queued.
+        self._release_orphaned_tasks()
+
         while not _shutdown.is_set():
             try:
                 self._tick()
@@ -246,6 +251,23 @@ class Worker:
             server_share=self.server_share,
             local_models_dir=self.local_models_dir,
         )
+
+    def _release_orphaned_tasks(self):
+        """Release any tasks this worker held from a previous instance.
+
+        When a worker is killed (taskkill, service restart), its running
+        tasks stay in 'running' status with stale heartbeats. On startup,
+        we tell the API to re-queue them so they get picked up immediately
+        instead of waiting for the 2-hour stale timeout.
+        """
+        try:
+            released = self.api.release_worker_tasks(self.hostname)
+            if released:
+                logger.info(
+                    "Released %d orphaned task(s) from previous instance", released
+                )
+        except Exception as e:
+            logger.warning("Failed to release orphaned tasks: %s", e)
 
     def _cleanup_work_dir(self, item: dict):
         """Clean up local working files after task completion.

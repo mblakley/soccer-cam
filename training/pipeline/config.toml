@@ -32,7 +32,7 @@ min_disk_free_gb = 5          # minimum free disk before tasks stop/skip
 
 [orchestrator]
 check_interval = 60           # seconds between passes
-stale_heartbeat = 7200        # 2 hours → assume worker died
+stale_heartbeat = 300         # 5 minutes → assume worker died (heartbeats every 30s)
 max_staging_concurrent = 1    # one game staging at a time (HDD)
 min_new_games_for_retrain = 2 # games reaching TRAINABLE before re-training
 min_new_labels_for_retrain = 5000

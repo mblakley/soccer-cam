@@ -308,6 +308,13 @@ def reclaim_stale(timeout: int = 7200):
     return {"reclaimed": len(reclaimed), "items": reclaimed}
 
 
+@app.post("/api/release-worker/{hostname}")
+def release_worker_tasks(hostname: str):
+    """Release all tasks held by a worker (called on worker startup)."""
+    count = _get_queue().release_worker_tasks(hostname)
+    return {"ok": True, "released": count}
+
+
 @app.post("/api/game/{game_id}/state")
 def set_game_state(game_id: str, req: SetStateRequest):
     _get_registry().set_state(game_id, req.state, error=req.error)
