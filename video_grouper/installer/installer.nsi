@@ -30,7 +30,7 @@ VIAddVersionKey "CompanyName" "${COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${DESCRIPTION}"
 VIAddVersionKey "FileVersion" "${FULL_VERSION}"
 VIAddVersionKey "ProductVersion" "${FULL_VERSION}"
-VIAddVersionKey "LegalCopyright" "Copyright (C) 2024 ${COMPANYNAME}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${COMPANYNAME}"
 
 ; Interface Settings
 !define MUI_ABORTWARNING

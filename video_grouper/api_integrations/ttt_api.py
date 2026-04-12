@@ -774,6 +774,44 @@ class TTTApiClient:
     # Machine management
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Schedule providers
+    # ------------------------------------------------------------------
+
+    def list_schedule_providers(self, team_id: str) -> list[dict[str, Any]]:
+        """List schedule providers for a team.
+
+        GET {api_base_url}/api/device-link/schedule-providers?team_id=...
+        """
+        url = f"{self.api_base_url}/api/device-link/schedule-providers"
+        params = {"team_id": team_id}
+        logger.debug("Fetching schedule providers for team %s", team_id)
+        return self._request("GET", url, params=params)
+
+    def create_schedule_provider(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a schedule provider.
+
+        POST {api_base_url}/api/device-link/schedule-providers
+        """
+        url = f"{self.api_base_url}/api/device-link/schedule-providers"
+        logger.debug("Creating schedule provider: %s", data.get("provider_type"))
+        return self._request("POST", url, json=data)
+
+    def update_schedule_provider(
+        self, provider_id: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update a schedule provider.
+
+        PUT {api_base_url}/api/device-link/schedule-providers/{provider_id}
+        """
+        url = f"{self.api_base_url}/api/device-link/schedule-providers/{provider_id}"
+        logger.debug("Updating schedule provider %s", provider_id)
+        return self._request("PUT", url, json=data)
+
+    # ------------------------------------------------------------------
+    # Machine management
+    # ------------------------------------------------------------------
+
     def list_machines(self) -> list[dict[str, Any]]:
         """List all registered machines for this camera manager."""
         url = f"{self.api_base_url}/api/device-link/machines"

@@ -143,9 +143,12 @@ class OnboardingWizard(QDialog):
     PAGE_NTFY = 7
     # Manual-only page
     PAGE_MANUAL_TTT = 8
-    PAGE_SUMMARY = 9
+    # Integration pages
+    PAGE_PLAYMETRICS = 9
+    PAGE_TEAMSNAP = 10
+    PAGE_SUMMARY = 11
     # TTT machine setup (inserted after camera in TTT path)
-    PAGE_MACHINE_SETUP = 10
+    PAGE_MACHINE_SETUP = 12
 
     def __init__(self, config_path: Path, parent=None):
         super().__init__(parent)
@@ -194,6 +197,20 @@ class OnboardingWizard(QDialog):
         self._other_machines: list[dict] = []
         self._machine_setup_done = False
         self._ttt_sign_in_error = ""
+        self._ttt_schedule_providers: dict[str, list[dict]] = {}
+
+        # PlayMetrics / TeamSnap state
+        self._playmetrics_config: dict = {
+            "username": "",
+            "password": "",
+            "teams": [],
+        }
+        self._teamsnap_config: dict = {
+            "client_id": "",
+            "client_secret": "",
+            "access_token": "",
+            "teams": [],
+        }
 
         # Connect thread-safe signals for background task callbacks
         self._ttt_sign_in_succeeded.connect(self._on_ttt_sign_in_success)
@@ -229,8 +246,10 @@ class OnboardingWizard(QDialog):
         self._stack.addWidget(self._build_youtube_page())  # 6
         self._stack.addWidget(self._build_ntfy_page())  # 7
         self._stack.addWidget(self._build_manual_ttt_page())  # 8
-        self._stack.addWidget(self._build_summary_page())  # 9
-        self._stack.addWidget(self._build_machine_setup_page())  # 10
+        self._stack.addWidget(self._build_playmetrics_page())  # 9
+        self._stack.addWidget(self._build_teamsnap_page())  # 10
+        self._stack.addWidget(self._build_summary_page())  # 11
+        self._stack.addWidget(self._build_machine_setup_page())  # 12
 
         # Navigation bar
         nav_bar = QWidget()
@@ -429,6 +448,12 @@ class OnboardingWizard(QDialog):
         self._restore_details = QLabel("Loading...")
         self._restore_details.setWordWrap(True)
         layout.addWidget(self._restore_details)
+
+        self._restore_missing = QLabel("")
+        self._restore_missing.setWordWrap(True)
+        self._restore_missing.setStyleSheet("color: gray; font-style: italic;")
+        self._restore_missing.setVisible(False)
+        layout.addWidget(self._restore_missing)
 
         layout.addSpacing(20)
 
@@ -810,6 +835,287 @@ class OnboardingWizard(QDialog):
         layout.addStretch()
         return page
 
+    def _build_playmetrics_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 30, 40, 20)
+
+        title = QLabel("PlayMetrics")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        desc = QLabel(
+            "Connect your PlayMetrics account to automatically sync game "
+            "schedules and populate match info. Enter the same email and "
+            "password you use to sign in at playmetrics.com.\n\n"
+            "Skip this step if you don't use PlayMetrics."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(10)
+
+        form = QFormLayout()
+        self._pm_username_input = QLineEdit()
+        self._pm_username_input.setPlaceholderText("your@email.com")
+        form.addRow("Email:", self._pm_username_input)
+
+        self._pm_password_input = QLineEdit()
+        self._pm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Password:", self._pm_password_input)
+        layout.addLayout(form)
+
+        layout.addSpacing(10)
+
+        # Sign In & Get Teams button + status
+        pm_signin_layout = QHBoxLayout()
+        self._pm_signin_btn = QPushButton("Sign In && Get Teams")
+        self._pm_signin_btn.setMinimumHeight(36)
+        self._pm_signin_btn.clicked.connect(self._pm_sign_in_and_get_teams)
+        pm_signin_layout.addWidget(self._pm_signin_btn)
+
+        self._pm_signin_status = QLabel("")
+        pm_signin_layout.addWidget(self._pm_signin_status, 1)
+        layout.addLayout(pm_signin_layout)
+
+        layout.addSpacing(10)
+
+        # Teams table
+        teams_label = QLabel(
+            "Teams — Add each team you want to sync. Find your Team ID in "
+            "the PlayMetrics URL when viewing a team "
+            "(e.g. playmetrics.com/teams/213119)."
+        )
+        teams_label.setWordWrap(True)
+        teams_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(teams_label)
+
+        self._pm_teams_table = QTableWidget(0, 4)
+        self._pm_teams_table.setHorizontalHeaderLabels(
+            ["Team Name", "Team ID", "Enabled", ""]
+        )
+        self._pm_teams_table.horizontalHeader().setStretchLastSection(False)
+        self._pm_teams_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._pm_teams_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._pm_teams_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._pm_teams_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._pm_teams_table.verticalHeader().setVisible(False)
+        layout.addWidget(self._pm_teams_table)
+
+        add_btn = QPushButton("Add Team")
+        add_btn.clicked.connect(self._pm_add_team_row)
+        layout.addWidget(add_btn)
+
+        layout.addStretch()
+        return page
+
+    def _pm_add_team_row(
+        self, team_name: str = "", team_id: str = "", enabled: bool = True
+    ):
+        """Add a row to the PlayMetrics teams table."""
+        row = self._pm_teams_table.rowCount()
+        self._pm_teams_table.insertRow(row)
+        self._pm_teams_table.setItem(row, 0, QTableWidgetItem(team_name))
+        self._pm_teams_table.setItem(row, 1, QTableWidgetItem(team_id))
+
+        enabled_cb = QCheckBox()
+        enabled_cb.setChecked(enabled)
+        self._pm_teams_table.setCellWidget(row, 2, enabled_cb)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(lambda _, r=row: self._pm_remove_team_row(r))
+        self._pm_teams_table.setCellWidget(row, 3, remove_btn)
+
+    def _pm_remove_team_row(self, row: int):
+        """Remove a row from the PlayMetrics teams table."""
+        if 0 <= row < self._pm_teams_table.rowCount():
+            self._pm_teams_table.removeRow(row)
+            # Reconnect remove buttons with updated row indices
+            for r in range(self._pm_teams_table.rowCount()):
+                btn = self._pm_teams_table.cellWidget(r, 3)
+                if btn:
+                    btn.clicked.disconnect()
+                    btn.clicked.connect(lambda _, r=r: self._pm_remove_team_row(r))
+
+    def _pm_sign_in_and_get_teams(self):
+        """Sign in to PlayMetrics and discover available teams."""
+        username = self._pm_username_input.text().strip()
+        password = self._pm_password_input.text()
+        if not username or not password:
+            QMessageBox.warning(
+                self, "Missing Fields", "Please enter email and password."
+            )
+            return
+
+        self._pm_signin_btn.setEnabled(False)
+        self._pm_signin_status.setText("Signing in...")
+
+        def do_pm_login():
+            try:
+                from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
+
+                # Build a minimal config-like object for PlayMetricsAPI
+                class _PMConfig:
+                    pass
+
+                cfg = _PMConfig()
+                cfg.enabled = True
+                cfg.username = username
+                cfg.password = password
+                cfg.team_id = "0"
+                cfg.team_name = "discovery"
+
+                api = PlayMetricsAPI(cfg)
+                api.login()
+                teams = api.get_available_teams()
+                api.close()
+
+                def on_success(discovered=teams):
+                    self._pm_signin_btn.setEnabled(True)
+                    # Clear existing teams table
+                    self._pm_teams_table.setRowCount(0)
+                    for t in discovered:
+                        self._pm_add_team_row(
+                            team_name=t.get("name", ""),
+                            team_id=str(t.get("id", "")),
+                            enabled=True,
+                        )
+                    self._pm_signin_status.setText(f"Found {len(discovered)} team(s)")
+
+                self._run_on_main.emit(on_success)
+
+            except Exception as exc:
+                logger.error("PlayMetrics sign-in failed: %s", exc)
+
+                def on_error(err=str(exc)):
+                    self._pm_signin_btn.setEnabled(True)
+                    self._pm_signin_status.setText(f"Failed: {err}")
+
+                self._run_on_main.emit(on_error)
+
+        thread = threading.Thread(target=do_pm_login, daemon=True)
+        thread.start()
+
+    def _build_teamsnap_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 30, 40, 20)
+
+        title = QLabel("TeamSnap")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        desc = QLabel(
+            "Connect your TeamSnap account to automatically sync game "
+            "schedules. To get your API credentials:\n"
+            "1. Go to auth.teamsnap.com and sign in\n"
+            "2. Create a Personal Access application\n"
+            "3. Copy the Client ID and Client Secret below\n\n"
+            "The access token is obtained automatically. "
+            "Skip this step if you don't use TeamSnap."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addSpacing(10)
+
+        form = QFormLayout()
+        self._ts_client_id_input = QLineEdit()
+        self._ts_client_id_input.setPlaceholderText("e.g. tg_NSujH-SzkADEw...")
+        form.addRow("Client ID:", self._ts_client_id_input)
+
+        self._ts_client_secret_input = QLineEdit()
+        self._ts_client_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ts_client_secret_input.setPlaceholderText("e.g. WlIUOoST_ul9ZOF...")
+        form.addRow("Client Secret:", self._ts_client_secret_input)
+
+        self._ts_access_token_input = QLineEdit()
+        self._ts_access_token_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ts_access_token_input.setPlaceholderText(
+            "(optional — obtained automatically)"
+        )
+        form.addRow("Access Token:", self._ts_access_token_input)
+        layout.addLayout(form)
+
+        layout.addSpacing(10)
+
+        # Teams table
+        teams_label = QLabel(
+            "Teams — Add each team you want to sync. Find your Team ID in "
+            "the TeamSnap URL when viewing a team "
+            "(e.g. teamsnap.com/team/8200820)."
+        )
+        teams_label.setWordWrap(True)
+        teams_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(teams_label)
+
+        self._ts_teams_table = QTableWidget(0, 4)
+        self._ts_teams_table.setHorizontalHeaderLabels(
+            ["Team Name", "Team ID", "Enabled", ""]
+        )
+        self._ts_teams_table.horizontalHeader().setStretchLastSection(False)
+        self._ts_teams_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._ts_teams_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._ts_teams_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._ts_teams_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._ts_teams_table.verticalHeader().setVisible(False)
+        layout.addWidget(self._ts_teams_table)
+
+        add_btn = QPushButton("Add Team")
+        add_btn.clicked.connect(self._ts_add_team_row)
+        layout.addWidget(add_btn)
+
+        layout.addStretch()
+        return page
+
+    def _ts_add_team_row(
+        self, team_name: str = "", team_id: str = "", enabled: bool = True
+    ):
+        """Add a row to the TeamSnap teams table."""
+        row = self._ts_teams_table.rowCount()
+        self._ts_teams_table.insertRow(row)
+        self._ts_teams_table.setItem(row, 0, QTableWidgetItem(team_name))
+        self._ts_teams_table.setItem(row, 1, QTableWidgetItem(team_id))
+
+        enabled_cb = QCheckBox()
+        enabled_cb.setChecked(enabled)
+        self._ts_teams_table.setCellWidget(row, 2, enabled_cb)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(lambda _, r=row: self._ts_remove_team_row(r))
+        self._ts_teams_table.setCellWidget(row, 3, remove_btn)
+
+    def _ts_remove_team_row(self, row: int):
+        """Remove a row from the TeamSnap teams table."""
+        if 0 <= row < self._ts_teams_table.rowCount():
+            self._ts_teams_table.removeRow(row)
+            # Reconnect remove buttons with updated row indices
+            for r in range(self._ts_teams_table.rowCount()):
+                btn = self._ts_teams_table.cellWidget(r, 3)
+                if btn:
+                    btn.clicked.disconnect()
+                    btn.clicked.connect(lambda _, r=r: self._ts_remove_team_row(r))
+
     def _build_summary_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -871,6 +1177,8 @@ class OnboardingWizard(QDialog):
                     self.PAGE_CAMERA,
                     self.PAGE_MACHINE_SETUP,
                     self.PAGE_YOUTUBE,
+                    self.PAGE_PLAYMETRICS,
+                    self.PAGE_TEAMSNAP,
                     self.PAGE_SUMMARY,
                 ]
             )
@@ -884,6 +1192,8 @@ class OnboardingWizard(QDialog):
                 self.PAGE_YOUTUBE,
                 self.PAGE_NTFY,
                 self.PAGE_MANUAL_TTT,
+                self.PAGE_PLAYMETRICS,
+                self.PAGE_TEAMSNAP,
                 self.PAGE_SUMMARY,
             ]
         else:
@@ -954,6 +1264,14 @@ class OnboardingWizard(QDialog):
         # Machine setup: register and check for other machines
         if page_index == self.PAGE_MACHINE_SETUP and self._mode == "ttt":
             self._register_machine()
+
+        # Pre-populate PlayMetrics page from state
+        if page_index == self.PAGE_PLAYMETRICS:
+            self._prepopulate_playmetrics_page()
+
+        # Pre-populate TeamSnap page from state
+        if page_index == self.PAGE_TEAMSNAP:
+            self._prepopulate_teamsnap_page()
 
         self._nav_history.append(self._stack.currentIndex())
         self._stack.setCurrentIndex(page_index)
@@ -1072,6 +1390,47 @@ class OnboardingWizard(QDialog):
                 self._ntfy_topic
             )
 
+        elif page_index == self.PAGE_PLAYMETRICS:
+            self._playmetrics_config["username"] = (
+                self._pm_username_input.text().strip()
+            )
+            self._playmetrics_config["password"] = self._pm_password_input.text()
+            teams = []
+            for row in range(self._pm_teams_table.rowCount()):
+                name_item = self._pm_teams_table.item(row, 0)
+                id_item = self._pm_teams_table.item(row, 1)
+                cb = self._pm_teams_table.cellWidget(row, 2)
+                teams.append(
+                    {
+                        "team_name": name_item.text() if name_item else "",
+                        "team_id": id_item.text() if id_item else "",
+                        "enabled": cb.isChecked() if cb else True,
+                    }
+                )
+            self._playmetrics_config["teams"] = teams
+
+        elif page_index == self.PAGE_TEAMSNAP:
+            self._teamsnap_config["client_id"] = self._ts_client_id_input.text().strip()
+            self._teamsnap_config["client_secret"] = (
+                self._ts_client_secret_input.text().strip()
+            )
+            self._teamsnap_config["access_token"] = (
+                self._ts_access_token_input.text().strip()
+            )
+            teams = []
+            for row in range(self._ts_teams_table.rowCount()):
+                name_item = self._ts_teams_table.item(row, 0)
+                id_item = self._ts_teams_table.item(row, 1)
+                cb = self._ts_teams_table.cellWidget(row, 2)
+                teams.append(
+                    {
+                        "team_name": name_item.text() if name_item else "",
+                        "team_id": id_item.text() if id_item else "",
+                        "enabled": cb.isChecked() if cb else True,
+                    }
+                )
+            self._teamsnap_config["teams"] = teams
+
         elif page_index == self.PAGE_SUMMARY:
             # No editable NTFY fields on the summary page; topic is
             # configured on the NTFY page (manual) or auto-set (TTT)
@@ -1112,10 +1471,27 @@ class OnboardingWizard(QDialog):
                 teams = client.get_team_assignments()
                 device_config = client.get_device_config()
 
+                # Fetch schedule providers for each team (best-effort)
+                schedule_providers: dict[str, list[dict]] = {}
+                for team in teams:
+                    tid = team.get("team_id")
+                    if not tid:
+                        continue
+                    try:
+                        providers = client.list_schedule_providers(str(tid))
+                        schedule_providers[str(tid)] = providers
+                    except Exception as sp_exc:
+                        logger.warning(
+                            "Failed to fetch schedule providers for team %s: %s",
+                            tid,
+                            sp_exc,
+                        )
+
                 # Store results for the UI callback (safe — only read on main thread)
                 self._pending_ttt_client = client
                 self._pending_ttt_teams = teams
                 self._pending_ttt_device_config = device_config
+                self._pending_ttt_schedule_providers = schedule_providers
 
                 # Signal the main thread (thread-safe)
                 self._ttt_sign_in_succeeded.emit()
@@ -1135,11 +1511,18 @@ class OnboardingWizard(QDialog):
         self._ttt_enabled = True
         self._ttt_teams = self._pending_ttt_teams
         self._ttt_device_config = self._pending_ttt_device_config
+        self._ttt_schedule_providers = getattr(
+            self, "_pending_ttt_schedule_providers", {}
+        )
         self._ttt_signin_btn.setEnabled(True)
         team_names = [t.get("team_name", "?") for t in self._ttt_teams]
         self._ttt_signin_status.setText(
             f"Signed in -- {len(self._ttt_teams)} team(s): {', '.join(team_names)}"
         )
+
+        # Pre-fill PlayMetrics username from TTT email
+        if self._ttt_email and not self._playmetrics_config.get("username"):
+            self._playmetrics_config["username"] = self._ttt_email
 
         # Auto-populate NTFY from TTT device config
         dc = self._ttt_device_config
@@ -1147,6 +1530,12 @@ class OnboardingWizard(QDialog):
             self._ntfy_topic = dc["ntfy_topic"]
             self._ntfy_server_url = dc.get("ntfy_server_url", "https://ntfy.sh")
             self._ntfy_enabled = True
+
+        # Auto-populate PlayMetrics / TeamSnap from TTT device config
+        self._populate_integrations_from_device_config()
+
+        # Pre-populate from schedule providers (takes precedence over device config)
+        self._populate_integrations_from_schedule_providers()
 
         # Auto-advance to next step
         self._go_next()
@@ -1280,6 +1669,22 @@ class OnboardingWizard(QDialog):
                     teams = client.get_team_assignments()
                     device_config = client.get_device_config()
 
+                    # Fetch schedule providers for each team (best-effort)
+                    schedule_providers: dict[str, list[dict]] = {}
+                    for team in teams:
+                        tid = team.get("team_id")
+                        if not tid:
+                            continue
+                        try:
+                            providers = client.list_schedule_providers(str(tid))
+                            schedule_providers[str(tid)] = providers
+                        except Exception as sp_exc:
+                            logger.warning(
+                                "Failed to fetch schedule providers for team %s: %s",
+                                tid,
+                                sp_exc,
+                            )
+
                     # Extract email from the JWT for display
                     from video_grouper.api_integrations.ttt_api import (
                         _decode_jwt_payload,
@@ -1294,6 +1699,7 @@ class OnboardingWizard(QDialog):
                     wizard_ref._pending_ttt_client = client
                     wizard_ref._pending_ttt_teams = teams
                     wizard_ref._pending_ttt_device_config = device_config
+                    wizard_ref._pending_ttt_schedule_providers = schedule_providers
                     wizard_ref._pending_ttt_email = email
                     wizard_ref._pending_ttt_password = ""
 
@@ -1320,6 +1726,9 @@ class OnboardingWizard(QDialog):
         self._ttt_enabled = True
         self._ttt_teams = self._pending_ttt_teams
         self._ttt_device_config = self._pending_ttt_device_config
+        self._ttt_schedule_providers = getattr(
+            self, "_pending_ttt_schedule_providers", {}
+        )
         for _b in self._oauth_btns.values():
             _b.setEnabled(True)
         self._ttt_signin_btn.setEnabled(True)
@@ -1328,12 +1737,22 @@ class OnboardingWizard(QDialog):
             f"Signed in -- {len(self._ttt_teams)} team(s): {', '.join(team_names)}"
         )
 
+        # Pre-fill PlayMetrics username from TTT email
+        if self._ttt_email and not self._playmetrics_config.get("username"):
+            self._playmetrics_config["username"] = self._ttt_email
+
         # Auto-populate NTFY from TTT device config
         dc = self._ttt_device_config
         if dc and dc.get("ntfy_topic"):
             self._ntfy_topic = dc["ntfy_topic"]
             self._ntfy_server_url = dc.get("ntfy_server_url", "https://ntfy.sh")
             self._ntfy_enabled = True
+
+        # Auto-populate PlayMetrics / TeamSnap from TTT device config
+        self._populate_integrations_from_device_config()
+
+        # Pre-populate from schedule providers (takes precedence over device config)
+        self._populate_integrations_from_schedule_providers()
 
         # Auto-advance to next step
         self._go_next()
@@ -1344,6 +1763,140 @@ class OnboardingWizard(QDialog):
             _b.setEnabled(True)
         self._ttt_signin_btn.setEnabled(True)
         self._ttt_signin_status.setText(f"Sign-in failed: {err}")
+
+    def _prepopulate_playmetrics_page(self):
+        """Fill PlayMetrics page widgets from wizard state."""
+        pm = self._playmetrics_config
+        # Fall back to TTT email if no PlayMetrics username is configured
+        if not pm.get("username") and self._ttt_email:
+            pm["username"] = self._ttt_email
+        if pm.get("username") and not self._pm_username_input.text().strip():
+            self._pm_username_input.setText(pm["username"])
+        if pm.get("password") and not self._pm_password_input.text():
+            self._pm_password_input.setText(pm["password"])
+        # Only populate teams table if it's currently empty
+        if self._pm_teams_table.rowCount() == 0 and pm.get("teams"):
+            for t in pm["teams"]:
+                self._pm_add_team_row(
+                    team_name=t.get("team_name", ""),
+                    team_id=t.get("team_id", ""),
+                    enabled=t.get("enabled", True),
+                )
+
+    def _prepopulate_teamsnap_page(self):
+        """Fill TeamSnap page widgets from wizard state."""
+        ts = self._teamsnap_config
+        if ts.get("client_id") and not self._ts_client_id_input.text().strip():
+            self._ts_client_id_input.setText(ts["client_id"])
+        if ts.get("client_secret") and not self._ts_client_secret_input.text():
+            self._ts_client_secret_input.setText(ts["client_secret"])
+        if ts.get("access_token") and not self._ts_access_token_input.text():
+            self._ts_access_token_input.setText(ts["access_token"])
+        # Only populate teams table if it's currently empty
+        if self._ts_teams_table.rowCount() == 0 and ts.get("teams"):
+            for t in ts["teams"]:
+                self._ts_add_team_row(
+                    team_name=t.get("team_name", ""),
+                    team_id=t.get("team_id", ""),
+                    enabled=t.get("enabled", True),
+                )
+
+    def _populate_integrations_from_device_config(self):
+        """Pre-populate PlayMetrics / TeamSnap state from TTT device config."""
+        dc = self._ttt_device_config
+        if not dc:
+            return
+
+        # PlayMetrics
+        pm_data = dc.get("playmetrics")
+        if isinstance(pm_data, dict):
+            if pm_data.get("username"):
+                self._playmetrics_config["username"] = pm_data["username"]
+            if pm_data.get("password"):
+                self._playmetrics_config["password"] = pm_data["password"]
+            pm_teams = pm_data.get("teams")
+            if isinstance(pm_teams, list) and pm_teams:
+                self._playmetrics_config["teams"] = [
+                    {
+                        "team_name": t.get("team_name", ""),
+                        "team_id": t.get("team_id", ""),
+                        "enabled": t.get("enabled", True),
+                    }
+                    for t in pm_teams
+                ]
+
+        # TeamSnap
+        ts_data = dc.get("teamsnap")
+        if isinstance(ts_data, dict):
+            if ts_data.get("client_id"):
+                self._teamsnap_config["client_id"] = ts_data["client_id"]
+            if ts_data.get("client_secret"):
+                self._teamsnap_config["client_secret"] = ts_data["client_secret"]
+            if ts_data.get("access_token"):
+                self._teamsnap_config["access_token"] = ts_data["access_token"]
+            ts_teams = ts_data.get("teams")
+            if isinstance(ts_teams, list) and ts_teams:
+                self._teamsnap_config["teams"] = [
+                    {
+                        "team_name": t.get("team_name", ""),
+                        "team_id": t.get("team_id", ""),
+                        "enabled": t.get("enabled", True),
+                    }
+                    for t in ts_teams
+                ]
+
+    def _populate_integrations_from_schedule_providers(self):
+        """Pre-populate PlayMetrics / TeamSnap state from TTT schedule providers."""
+        if not self._ttt_schedule_providers:
+            return
+
+        for _team_id, providers in self._ttt_schedule_providers.items():
+            for prov in providers:
+                ptype = prov.get("provider_type")
+                creds = prov.get("credentials") or {}
+                ext_team_id = prov.get("external_team_id", "")
+                ext_team_name = prov.get("external_team_name", "")
+
+                if ptype == "playmetrics":
+                    if creds.get("username"):
+                        self._playmetrics_config["username"] = creds["username"]
+                    if creds.get("password"):
+                        self._playmetrics_config["password"] = creds["password"]
+                    if ext_team_id:
+                        # Merge into teams list if not already present
+                        existing_ids = {
+                            t.get("team_id")
+                            for t in self._playmetrics_config.get("teams", [])
+                        }
+                        if ext_team_id not in existing_ids:
+                            self._playmetrics_config.setdefault("teams", []).append(
+                                {
+                                    "team_name": ext_team_name,
+                                    "team_id": ext_team_id,
+                                    "enabled": True,
+                                }
+                            )
+
+                elif ptype == "teamsnap":
+                    if creds.get("client_id"):
+                        self._teamsnap_config["client_id"] = creds["client_id"]
+                    if creds.get("client_secret"):
+                        self._teamsnap_config["client_secret"] = creds["client_secret"]
+                    if creds.get("access_token"):
+                        self._teamsnap_config["access_token"] = creds["access_token"]
+                    if ext_team_id:
+                        existing_ids = {
+                            t.get("team_id")
+                            for t in self._teamsnap_config.get("teams", [])
+                        }
+                        if ext_team_id not in existing_ids:
+                            self._teamsnap_config.setdefault("teams", []).append(
+                                {
+                                    "team_name": ext_team_name,
+                                    "team_id": ext_team_id,
+                                    "enabled": True,
+                                }
+                            )
 
     def _sign_in_manual_ttt(self):
         """Sign in from the manual TTT page."""
@@ -1417,7 +1970,41 @@ class OnboardingWizard(QDialog):
             lines.append("  YouTube: Previously configured")
         if cfg.get("gcp_project_id"):
             lines.append(f"  GCP Project: {cfg['gcp_project_id']}")
+        pm_data = cfg.get("playmetrics")
+        if isinstance(pm_data, dict) and pm_data.get("username"):
+            pm_teams = pm_data.get("teams", [])
+            lines.append(
+                f"  PlayMetrics: {pm_data['username']} ({len(pm_teams)} team(s))"
+            )
+        ts_data = cfg.get("teamsnap")
+        if isinstance(ts_data, dict) and (
+            ts_data.get("client_id") or ts_data.get("access_token")
+        ):
+            ts_teams = ts_data.get("teams", [])
+            lines.append(f"  TeamSnap: Configured ({len(ts_teams)} team(s))")
         self._restore_details.setText("\n".join(lines))
+
+        # Show what's missing in a separate gray/italic label
+        missing = []
+        pm_data = cfg.get("playmetrics")
+        if not isinstance(pm_data, dict) or not pm_data.get("username"):
+            missing.append("PlayMetrics: Not configured (you'll be prompted)")
+        ts_data_check = cfg.get("teamsnap")
+        if not isinstance(ts_data_check, dict) or not ts_data_check.get("client_id"):
+            missing.append("TeamSnap: Not configured (you'll be prompted)")
+        if not cfg.get("camera_ip"):
+            missing.append("Camera: Not configured (you'll be prompted)")
+        if not cfg.get("youtube_configured"):
+            missing.append("YouTube: Not configured (you'll be prompted)")
+
+        if missing:
+            missing_lines = ["Still needs setup:\n"]
+            for item in missing:
+                missing_lines.append(f"  {item}")
+            self._restore_missing.setText("\n".join(missing_lines))
+            self._restore_missing.setVisible(True)
+        else:
+            self._restore_missing.setVisible(False)
 
     def _restore_ttt_config(self):
         """Restore settings from TTT device config and jump to summary."""
@@ -1438,6 +2025,9 @@ class OnboardingWizard(QDialog):
                 self._youtube_enabled = True
             if cfg.get("gcp_project_id"):
                 self._gcp_project_id = cfg["gcp_project_id"]
+
+            # Restore PlayMetrics / TeamSnap
+            self._populate_integrations_from_device_config()
 
         self._populate_summary()
         self._navigate_to(self.PAGE_SUMMARY)
@@ -1895,6 +2485,26 @@ class OnboardingWizard(QDialog):
         else:
             skipped.append("NTFY: Open Settings to configure push notifications")
 
+        # PlayMetrics
+        pm = self._playmetrics_config
+        if pm.get("username"):
+            pm_teams = [t for t in pm.get("teams", []) if t.get("enabled")]
+            configured.append(
+                f"PlayMetrics: {pm['username']} ({len(pm_teams)} team(s))"
+            )
+        else:
+            skipped.append(
+                "PlayMetrics: Open Settings to configure PlayMetrics integration"
+            )
+
+        # TeamSnap
+        ts = self._teamsnap_config
+        if ts.get("client_id") or ts.get("access_token"):
+            ts_teams = [t for t in ts.get("teams", []) if t.get("enabled")]
+            configured.append(f"TeamSnap: Configured ({len(ts_teams)} team(s))")
+        else:
+            skipped.append("TeamSnap: Open Settings to configure TeamSnap integration")
+
         # TTT
         if self._ttt_enabled:
             configured.append(f"Team Tech Tools: Connected as {self._ttt_email}")
@@ -1930,6 +2540,116 @@ class OnboardingWizard(QDialog):
             self._summary_ntfy_note.setVisible(True)
         else:
             self._summary_ntfy_note.setVisible(False)
+
+    def _save_schedule_providers_to_ttt(self):
+        """Create or update schedule providers in TTT for configured integrations."""
+        if not self._ttt_client or not self._ttt_teams:
+            return
+
+        # Use the first TTT team for all providers in this first pass
+        ttt_team_id = str(self._ttt_teams[0].get("team_id", ""))
+        if not ttt_team_id:
+            return
+
+        # Build a lookup of existing providers by (provider_type, external_team_id)
+        existing_providers: dict[tuple[str, str], dict] = {}
+        for providers in self._ttt_schedule_providers.values():
+            for prov in providers:
+                key = (
+                    prov.get("provider_type", ""),
+                    prov.get("external_team_id", ""),
+                )
+                existing_providers[key] = prov
+
+        # PlayMetrics providers
+        pm = self._playmetrics_config
+        if pm.get("username"):
+            for team in pm.get("teams", []):
+                if not team.get("enabled", True):
+                    continue
+                ext_id = team.get("team_id", "")
+                ext_name = team.get("team_name", "")
+                lookup_key = ("playmetrics", ext_id)
+                try:
+                    if lookup_key in existing_providers:
+                        prov_id = existing_providers[lookup_key].get("id", "")
+                        if prov_id:
+                            self._ttt_client.update_schedule_provider(
+                                str(prov_id),
+                                {
+                                    "credentials": {
+                                        "username": pm["username"],
+                                        "password": pm.get("password", ""),
+                                    },
+                                    "external_team_id": ext_id,
+                                    "external_team_name": ext_name,
+                                },
+                            )
+                    else:
+                        self._ttt_client.create_schedule_provider(
+                            {
+                                "team_id": ttt_team_id,
+                                "provider_type": "playmetrics",
+                                "credentials": {
+                                    "username": pm["username"],
+                                    "password": pm.get("password", ""),
+                                },
+                                "external_team_id": ext_id,
+                                "external_team_name": ext_name,
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to save PlayMetrics provider for team %s: %s",
+                        ext_name,
+                        exc,
+                    )
+
+        # TeamSnap providers
+        ts = self._teamsnap_config
+        if ts.get("client_id") or ts.get("access_token"):
+            for team in ts.get("teams", []):
+                if not team.get("enabled", True):
+                    continue
+                ext_id = team.get("team_id", "")
+                ext_name = team.get("team_name", "")
+                lookup_key = ("teamsnap", ext_id)
+                try:
+                    if lookup_key in existing_providers:
+                        prov_id = existing_providers[lookup_key].get("id", "")
+                        if prov_id:
+                            self._ttt_client.update_schedule_provider(
+                                str(prov_id),
+                                {
+                                    "credentials": {
+                                        "client_id": ts.get("client_id", ""),
+                                        "client_secret": ts.get("client_secret", ""),
+                                        "access_token": ts.get("access_token", ""),
+                                    },
+                                    "external_team_id": ext_id,
+                                    "external_team_name": ext_name,
+                                },
+                            )
+                    else:
+                        self._ttt_client.create_schedule_provider(
+                            {
+                                "team_id": ttt_team_id,
+                                "provider_type": "teamsnap",
+                                "credentials": {
+                                    "client_id": ts.get("client_id", ""),
+                                    "client_secret": ts.get("client_secret", ""),
+                                    "access_token": ts.get("access_token", ""),
+                                },
+                                "external_team_id": ext_id,
+                                "external_team_name": ext_name,
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to save TeamSnap provider for team %s: %s",
+                        ext_name,
+                        exc,
+                    )
 
     def _finish(self):
         """Save configuration and close the wizard."""
@@ -1988,6 +2708,43 @@ class OnboardingWizard(QDialog):
             config.ntfy.server_url = self._ntfy_server_url
         if self._ntfy_enabled:
             config.ntfy.response_service = True
+
+        # PlayMetrics
+        pm = self._playmetrics_config
+        pm_has_creds = bool(pm.get("username"))
+        config.playmetrics.enabled = pm_has_creds
+        if pm_has_creds:
+            config.playmetrics.username = pm["username"]
+            config.playmetrics.password = pm.get("password", "")
+            from video_grouper.utils.config import PlayMetricsTeamConfig
+
+            config.playmetrics.teams = [
+                PlayMetricsTeamConfig(
+                    team_name=t.get("team_name", ""),
+                    team_id=t.get("team_id") or None,
+                    enabled=t.get("enabled", True),
+                )
+                for t in pm.get("teams", [])
+            ]
+
+        # TeamSnap
+        ts = self._teamsnap_config
+        ts_has_creds = bool(ts.get("client_id") or ts.get("access_token"))
+        config.teamsnap.enabled = ts_has_creds
+        if ts_has_creds:
+            config.teamsnap.client_id = ts.get("client_id") or None
+            config.teamsnap.client_secret = ts.get("client_secret") or None
+            config.teamsnap.access_token = ts.get("access_token") or None
+            from video_grouper.utils.config import TeamSnapTeamConfig
+
+            config.teamsnap.teams = [
+                TeamSnapTeamConfig(
+                    team_name=t.get("team_name", ""),
+                    team_id=t.get("team_id") or None,
+                    enabled=t.get("enabled", True),
+                )
+                for t in ts.get("teams", [])
+            ]
 
         # TTT
         if self._ttt_enabled:
@@ -2048,9 +2805,32 @@ class OnboardingWizard(QDialog):
                 # Password sent over HTTPS; TTT backend encrypts at rest
                 if self._camera_password:
                     device_data["camera_password"] = self._camera_password
+
+                # PlayMetrics credentials for future restores
+                pm = self._playmetrics_config
+                if pm.get("username"):
+                    device_data["playmetrics"] = {
+                        "username": pm["username"],
+                        "password": pm.get("password", ""),
+                        "teams": pm.get("teams", []),
+                    }
+
+                # TeamSnap credentials for future restores
+                ts = self._teamsnap_config
+                if ts.get("client_id") or ts.get("access_token"):
+                    device_data["teamsnap"] = {
+                        "client_id": ts.get("client_id", ""),
+                        "client_secret": ts.get("client_secret", ""),
+                        "access_token": ts.get("access_token", ""),
+                        "teams": ts.get("teams", []),
+                    }
+
                 self._ttt_client.save_device_config(device_data)
                 logger.info("Device config saved to TTT")
             except Exception as exc:
                 logger.warning("Failed to save device config to TTT: %s", exc)
+
+            # Sync schedule providers to TTT
+            self._save_schedule_providers_to_ttt()
 
         self.accept()

@@ -405,7 +405,7 @@ class PlayMetricsAPI:
                             {
                                 "id": team_id,
                                 "name": team_name,
-                                "calendar_url": None,  # Will be populated later
+                                "calendar_url": None,
                             }
                         )
 
@@ -413,28 +413,133 @@ class PlayMetricsAPI:
                 except Exception as e:
                     logger.debug(f"Could not extract team from page title: {e}")
 
-            # Get calendar URL for each team
-            for team in teams:
-                # If we have multiple teams, we need to switch to the team first
-                if len(teams) > 1 and team["id"]:
-                    try:
-                        # Try to switch to the team
-                        team_url = f"{self.DASHBOARD_URL}?teamId={team['id']}"
-                        self.driver.get(team_url)
-                        time.sleep(3)
-                    except Exception as e:
-                        logger.error(f"Error switching to team {team['name']}: {e}")
-
-                # Now get the calendar URL
-                calendar_url = self.get_calendar_url()
-                if calendar_url:
-                    team["calendar_url"] = calendar_url
+            # Method 4: Use the REST API to discover teams via roles + calendars
+            if not teams:
+                try:
+                    teams = self._get_teams_via_api()
+                    if teams:
+                        logger.info(f"Found {len(teams)} teams via REST API")
+                except Exception as e:
+                    logger.debug(f"REST API team discovery failed: {e}")
 
             return teams
 
         except Exception as e:
             logger.error(f"Error getting available teams: {e}")
             return []
+
+    def _get_teams_via_api(self) -> List[TeamInfo]:
+        """Discover teams using the PlayMetrics REST API.
+
+        Logs in via Firebase, fetches roles (clubs), then for each role
+        fetches calendar data which contains team objects.  Returns a flat
+        list of ``{id, name, calendar_url}`` dicts with ``name`` formatted
+        as ``"Club — Team"`` for disambiguation.
+        """
+        roles = self._get_user_roles()
+        if not roles:
+            return []
+
+        teams: List[TeamInfo] = []
+        seen_ids: set = set()
+
+        for role in roles:
+            role_name = role.get("name", "")
+
+            # Switch to this role
+            self.driver.execute_script(
+                """
+                var vuex = JSON.parse(localStorage.getItem('vuex') || '{}');
+                if (!vuex.auth) vuex.auth = {};
+                vuex.auth.currentRole = arguments[0];
+                vuex.auth.previousRoleID = arguments[0].id;
+                localStorage.setItem('vuex', JSON.stringify(vuex));
+                """,
+                role,
+            )
+            self.driver.get(f"{self.BASE_URL}/calendar")
+            time.sleep(6)
+
+            # Fetch calendar data to get team objects
+            raw = self._fetch_calendar_raw()
+            if not raw or not isinstance(raw, list):
+                continue
+
+            for cal in raw:
+                if not isinstance(cal, dict):
+                    continue
+                team = cal.get("team") or {}
+                team_id = str(team.get("id", ""))
+                team_name = team.get("name", "")
+                if not team_name or team_id in seen_ids:
+                    continue
+                seen_ids.add(team_id)
+                display = f"{role_name} — {team_name}" if role_name else team_name
+                teams.append({"id": team_id, "name": display, "calendar_url": None})
+
+        return teams
+
+    def _fetch_calendar_raw(self) -> Optional[list]:
+        """Fetch raw calendar JSON from the page context (no parsing)."""
+        try:
+            js_code = """
+var callback = arguments[arguments.length - 1];
+var dbReq = indexedDB.open('firebaseLocalStorageDb');
+dbReq.onerror = function() { callback(null); };
+dbReq.onsuccess = function(event) {
+    var db = event.target.result;
+    var tx = db.transaction('firebaseLocalStorage', 'readonly');
+    var getAll = tx.objectStore('firebaseLocalStorage').getAll();
+    getAll.onsuccess = function() {
+        var firebaseToken = null;
+        for (var i = 0; i < getAll.result.length; i++) {
+            var val = getAll.result[i].value;
+            if (val && val.stsTokenManager && val.stsTokenManager.accessToken) {
+                firebaseToken = val.stsTokenManager.accessToken;
+                break;
+            }
+        }
+        if (!firebaseToken) { callback(null); return; }
+        var vuex = JSON.parse(localStorage.getItem('vuex') || '{}');
+        var currentRoleId = (vuex.auth && vuex.auth.currentRole)
+            ? vuex.auth.currentRole.id : '';
+        fetch('https://api.playmetrics.com/firebase/user/login', {
+            method: 'POST',
+            headers: {'Firebase-Token': firebaseToken, 'Content-Type': 'application/json'},
+            body: JSON.stringify({current_role_id: currentRoleId, client_type: 'desktop'})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(loginData) {
+            var accessKey = loginData.access_key || '';
+            var now = new Date();
+            var startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            var endDate = new Date(now.getFullYear(), now.getMonth() + 6, 0);
+            var filter = JSON.stringify({
+                start_date: startDate.toISOString().split('T')[0],
+                end_date: endDate.toISOString().split('T')[0],
+                limit: 100, offset: 0, only_my_events: true
+            });
+            var apiUrl = 'https://api.playmetrics.com/user/calendars'
+                + '?populate=team'
+                + '&calendar_filter=' + encodeURIComponent(filter);
+            fetch(apiUrl, {
+                headers: {'Firebase-Token': firebaseToken, 'pm-access-key': accessKey}
+            })
+            .then(function(r) { return r.text(); })
+            .then(function(text) { callback(text.substring(0, 500000)); })
+            .catch(function() { callback(null); });
+        })
+        .catch(function() { callback(null); });
+    };
+};
+"""
+            raw = self.driver.execute_async_script(js_code)
+            if not raw:
+                return None
+            return json.loads(raw) if isinstance(raw, str) else raw
+        except Exception as e:
+            logger.debug(f"_fetch_calendar_raw failed: {e}")
+            return None
 
     def get_calendar_url(self) -> Optional[str]:
         """
