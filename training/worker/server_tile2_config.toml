@@ -7,7 +7,7 @@ hostname = "DESKTOP-5L867J8-TILE2"
 capabilities = ["tile"]
 api_url = "http://127.0.0.1:8643"
 server_share = ""
-local_work_dir = "G:/pipeline_work2"
+local_work_dir = "D:/pipeline_work2"
 local_models_dir = "D:/training_data/models"
 
 [resources]
