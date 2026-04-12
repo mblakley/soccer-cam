@@ -63,9 +63,8 @@ Section "Install" SecInstall
     File "..\dist\VideoGrouperTray.exe"
     File "..\icon.ico"
 
-    ; Install and start the Windows service
+    ; Install the Windows service (do not start -- onboarding wizard must run first)
     ExecWait '"$INSTDIR\VideoGrouperService.exe" install'
-    ExecWait '"$INSTDIR\VideoGrouperService.exe" start'
 
     ; Create startup shortcut for tray agent (no config path arg - wizard handles it)
     CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"

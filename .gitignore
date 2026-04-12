@@ -6,8 +6,9 @@ video_grouper/config.ini
 *.key
 *.pem
 
-# Build-time injected secrets (generated from GitHub secrets)
+# Build-time injected config (generated from environment variables)
 video_grouper/utils/_youtube_secrets.py
+video_grouper/utils/_ttt_config.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

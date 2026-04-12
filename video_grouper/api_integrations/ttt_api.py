@@ -168,6 +168,27 @@ class TTTApiClient:
         self._store_auth_response(resp.json())
         logger.debug("TTT token refreshed successfully")
 
+    def set_session_from_token(self, access_token: str) -> None:
+        """Establish a session from an existing access token (e.g. OAuth).
+
+        Decodes the JWT to extract expiry, stores the token, and persists
+        it to disk.  There is no refresh token in this flow -- the caller
+        must re-authenticate when the token expires.
+        """
+        self._access_token = access_token
+        self._refresh_token_value = None
+        try:
+            payload = _decode_jwt_payload(access_token)
+            self._expires_at = float(payload["exp"])
+        except (ValueError, KeyError) as exc:
+            logger.warning(
+                "Could not decode JWT exp from OAuth token, using 1-hour fallback: %s",
+                exc,
+            )
+            self._expires_at = time.time() + 3600
+        self._save_tokens()
+        logger.info("TTT session established from OAuth token")
+
     def is_authenticated(self) -> bool:
         """Return True if we have tokens that are not yet expired."""
         if not self._access_token or not self._expires_at:

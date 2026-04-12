@@ -144,11 +144,11 @@ class VideoGrouperApp:
                     self.config.playmetrics
                 )
             except RuntimeError as e:
-                logger.critical(f"PlayMetricsService failed to initialize: {e}")
-                # Optionally, you can use sys.exit(1) to exit the app immediately
-                import sys
-
-                sys.exit(1)
+                logger.error(f"PlayMetricsService failed to initialize: {e}")
+                logger.warning("Continuing without PlayMetrics integration")
+                playmetrics_service = create_playmetrics_service(
+                    type("_Cfg", (), {"enabled": False, "teams": []})()
+                )
 
             # Create NTFY processor first (without service)
             self.ntfy_processor = NtfyProcessor(

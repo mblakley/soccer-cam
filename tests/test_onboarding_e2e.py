@@ -118,6 +118,7 @@ class TestManualPathWalkthrough:
     def test_finish_creates_config(self, wizard, qtbot, config_path):
         """Finishing the wizard should create a valid config.ini."""
         wizard.config_path = config_path
+        wizard._storage_path = str(config_path.parent)
 
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
@@ -136,6 +137,8 @@ class TestManualPathWalkthrough:
     def test_finish_with_camera_saves_camera_config(self, wizard, qtbot, config_path):
         """Configuring a camera should save it to config.ini."""
         wizard.config_path = config_path
+        wizard._storage_path = str(config_path.parent)
+        wizard._storage_path_input.setText(str(config_path.parent))
 
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
@@ -164,6 +167,7 @@ class TestManualPathWalkthrough:
     def test_finish_with_ntfy_saves_topic(self, wizard, qtbot, config_path):
         """Configuring NTFY should save topic to config.ini."""
         wizard.config_path = config_path
+        wizard._storage_path = str(config_path.parent)
 
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
@@ -237,6 +241,7 @@ class TestTTTPathWalkthrough:
     def test_ttt_restore_flow(self, wizard, qtbot, config_path):
         """TTT restore should apply stored config and jump to summary."""
         wizard.config_path = config_path
+        wizard._storage_path = str(config_path.parent)
 
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("ttt")
@@ -348,6 +353,7 @@ class TestFirstRunDetection:
         """After wizard completes, config should not trigger onboarding again."""
         config_path = tmp_path / "config.ini"
         wizard.config_path = config_path
+        wizard._storage_path = str(tmp_path)
 
         # Quick manual path, skip all
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
@@ -362,6 +368,7 @@ class TestFirstRunDetection:
         """TTT config should be saved when user signs in via manual path."""
         config_path = tmp_path / "config.ini"
         wizard.config_path = config_path
+        wizard._storage_path = str(tmp_path)
 
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("manual")
