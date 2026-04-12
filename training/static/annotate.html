@@ -1480,6 +1480,14 @@ if ('serviceWorker' in navigator) {
   }).catch(() => {});
 }
 
+// ========== Gap Review variables (must be before handleHash) ==========
+let gapPacketId = null;
+let gapManifest = null;
+let gapItems = [];
+let gapReviewedSet = new Set();
+let gapCurrentIndex = 0;
+let gapTapPos = null;  // {x, y} in tile pixel coords (0-640)
+
 window.addEventListener('hashchange', handleHash);
 handleHash();
 
@@ -2384,12 +2392,6 @@ async function labSendMessage() {
   }
 }
 // ========== Gap Review ==========
-let gapPacketId = null;
-let gapManifest = null;
-let gapItems = [];
-let gapReviewedSet = new Set();
-let gapCurrentIndex = 0;
-let gapTapPos = null;  // {x, y} in tile pixel coords (0-640)
 
 async function loadGapReviews() {
   const container = document.getElementById('gap-list');
@@ -2425,7 +2427,7 @@ async function startGapReview(packetId) {
   try {
     const resp = await fetch(API + `/api/gap-reviews/${packetId}`);
     gapManifest = await resp.json();
-    gapItems = gapManifest.gap_items || [];
+    gapItems = gapManifest.items || gapManifest.gap_items || [];
     gapReviewedSet = new Set();
     // Mark already-reviewed items
     const detailResp = await fetch(API + `/api/gap-reviews/${packetId}`);
