@@ -279,7 +279,9 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
 
     manifest.set_metadata("qa_at", str(time.time()))
 
-    # Push updated manifest back (manifest.close() handled by caller's finally)
+    # Close before push to flush WAL — track metadata must be in the
+    # main DB file before copying to D:
+    manifest.close()
     task_io.push_manifest()
 
     logger.info(
