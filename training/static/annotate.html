@@ -431,13 +431,13 @@ html, body {
     <!-- Track confirmation buttons -->
     <div class="action-bar" id="gap-confirm-bar">
       <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--green);color:#000;flex:2;">
-        <span class="icon">&#x26BD;</span>Yes, Game Ball
+        <span class="icon">&#x2714;</span>Yes — Ball Circled Correctly
       </button>
       <button class="action-btn" onclick="gapAction('reject')" style="background:var(--red);color:#fff;flex:1;">
-        <span class="icon">&#x2717;</span>Not Ball
+        <span class="icon">&#x2717;</span>Wrong — Not the Ball
       </button>
       <button class="action-btn btn-skip" onclick="gapAction('cant_tell')" style="flex:1;">
-        <span class="icon">&rarr;</span>Skip
+        <span class="icon">&rarr;</span>Can't Tell
       </button>
     </div>
     <!-- Gap filling buttons (shown after track is confirmed) -->
@@ -2456,19 +2456,16 @@ function updateGapDisplay() {
   document.getElementById('gap-progress-bar').style.width = pct + '%';
 
   if (reviewType === 'confirm_game_ball') {
-    // Track confirmation mode
+    // Per-frame track confirmation: show one tile at a time
     const ti = gapManifest.track_info || {};
     const coverage = ti.segment_frames ? Math.round(ti.track_frames / ti.segment_frames * 100) : '?';
-    document.getElementById('gap-info').textContent =
-      `Is this the game ball? (${ti.track_frames || '?'} frames, ${coverage}% of video)`;
+    document.getElementById('gap-info').innerHTML =
+      `<div>Frame ${gapCurrentIndex + 1} of ${gapItems.length} — Is the <b>game ball</b> circled in red?</div>` +
+      `<div style="font-size:12px;color:#888;margin-top:4px;">${gapManifest.game_id} · ${ti.track_frames || '?'} track frames · ${coverage}% coverage</div>`;
 
-    // Show the game ball track filmstrip
+    // Show individual tile (not filmstrip)
     const filmstrip = document.getElementById('gap-filmstrip');
-    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/game_ball_track`;
-    filmstrip.onerror = () => {
-      // Try individual tile if filmstrip not available
-      filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
-    };
+    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/${encodeURIComponent(item.tile_stem)}`;
 
     // Show confirm buttons, hide gap-fill buttons
     document.getElementById('gap-confirm-bar').style.display = 'flex';
