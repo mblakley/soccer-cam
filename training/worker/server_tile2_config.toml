@@ -1,0 +1,23 @@
+# Server tile worker 2 — parallel tiling
+# Separate hostname so tasks don't conflict with the main worker.
+# Separate work dir so both workers can tile simultaneously.
+
+[worker]
+hostname = "DESKTOP-5L867J8-TILE2"
+capabilities = ["tile"]
+api_url = "http://127.0.0.1:8643"
+server_share = ""
+local_work_dir = "G:/pipeline_work2"
+local_models_dir = "D:/training_data/models"
+
+[resources]
+max_gpu_temp = 85
+min_disk_free_gb = 10
+gpu_device = 0
+idle_games = []
+
+[heartbeat]
+interval = 30
+
+[logging]
+log_dir = "G:/pipeline_db/logs"
