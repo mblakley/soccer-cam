@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -337,8 +337,7 @@ async def get_exclusions():
             det_x = int(det.get("x", -1))
             det_y = int(det.get("y", -1))
             thumb_url = (
-                f"/api/packets/{packet_id}/thumb/{frame_idx}"
-                f"?bx={det_x}&by={det_y}"
+                f"/api/packets/{packet_id}/thumb/{frame_idx}?bx={det_x}&by={det_y}"
             )
 
             frame_info = {
@@ -370,40 +369,46 @@ async def get_exclusions():
     for game_id, wf in sorted(warmup_frames.items()):
         wf.sort(key=lambda x: x["time_secs"])
         max_time = max(f["time_secs"] for f in wf)
-        warmup_ranges.append({
-            "game_id": game_id,
-            "cutoff_secs": max_time,
-            "cutoff_mins": round(max_time / 60, 1),
-            "frame_count": len(wf),
-            "samples": wf[:6],  # show up to 6 sample images
-        })
+        warmup_ranges.append(
+            {
+                "game_id": game_id,
+                "cutoff_secs": max_time,
+                "cutoff_mins": round(max_time / 60, 1),
+                "frame_count": len(wf),
+                "samples": wf[:6],  # show up to 6 sample images
+            }
+        )
 
     # Build game-over summary
     gameover_ranges = []
     for game_id, gf in sorted(gameover_frames.items()):
         gf.sort(key=lambda x: x["time_secs"])
         min_time = min(f["time_secs"] for f in gf)
-        gameover_ranges.append({
-            "game_id": game_id,
-            "cutoff_secs": min_time,
-            "cutoff_mins": round(min_time / 60, 1),
-            "frame_count": len(gf),
-            "samples": gf[:6],
-        })
+        gameover_ranges.append(
+            {
+                "game_id": game_id,
+                "cutoff_secs": min_time,
+                "cutoff_mins": round(min_time / 60, 1),
+                "frame_count": len(gf),
+                "samples": gf[:6],
+            }
+        )
 
     # Build static ball summary — cluster by position proximity
     static_balls = []
     for key, sf in sorted(static_ball_clusters.items()):
         sf.sort(key=lambda x: x["time_secs"])
-        static_balls.append({
-            "position_key": key,
-            "frame_count": len(sf),
-            "time_range": {
-                "min_secs": sf[0]["time_secs"],
-                "max_secs": sf[-1]["time_secs"],
-            },
-            "samples": sf[:6],
-        })
+        static_balls.append(
+            {
+                "position_key": key,
+                "frame_count": len(sf),
+                "time_range": {
+                    "min_secs": sf[0]["time_secs"],
+                    "max_secs": sf[-1]["time_secs"],
+                },
+                "samples": sf[:6],
+            }
+        )
 
     # Count total exclusions that would apply
     total_excluded = (
@@ -486,9 +491,7 @@ async def get_thumb(game_id: str, frame_idx: int, bx: int = -1, by: int = -1):
 
         # Circle at ball
         r = 4
-        draw.ellipse(
-            [tx - r, ty - r, tx + r, ty + r], outline="#ff3333", width=2
-        )
+        draw.ellipse([tx - r, ty - r, tx + r, ty + r], outline="#ff3333", width=2)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
@@ -621,7 +624,9 @@ async def get_tracking_lab_tiles_for_frame(frame_idx: int):
     for row in range(3):  # r0, r1, r2 (include r0 for tracking lab)
         for col in range(7):  # c0-c6
             base = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
-            if (tiles_root / (base + ".jpg")).exists() or (tiles_root / (base + ".excluded")).exists():
+            if (tiles_root / (base + ".jpg")).exists() or (
+                tiles_root / (base + ".excluded")
+            ).exists():
                 tiles.append({"row": row, "col": col})
     return tiles
 
@@ -671,12 +676,14 @@ async def post_lab_message(message: dict):
         with open(msg_path) as f:
             existing = json.load(f)
 
-    existing.append({
-        "text": message.get("text", ""),
-        "frame_idx": message.get("frame_idx"),
-        "tile": message.get("tile"),
-        "timestamp": time.time(),
-    })
+    existing.append(
+        {
+            "text": message.get("text", ""),
+            "frame_idx": message.get("frame_idx"),
+            "tile": message.get("tile"),
+            "timestamp": time.time(),
+        }
+    )
     with open(msg_path, "w") as f:
         json.dump(existing, f, indent=2)
 
@@ -776,12 +783,14 @@ async def submit_ball_verify_result(result: dict):
     """
     results = _load_ball_verify_results()
     results = [r for r in results if r["frame_idx"] != result["frame_idx"]]
-    results.append({
-        "frame_idx": result["frame_idx"],
-        "verdict": result["verdict"],
-        "notes": result.get("notes", ""),
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-    })
+    results.append(
+        {
+            "frame_idx": result["frame_idx"],
+            "verdict": result["verdict"],
+            "notes": result.get("notes", ""),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     results.sort(key=lambda r: r["frame_idx"])
     _save_ball_verify_results(results)
 
@@ -856,7 +865,11 @@ async def get_gap_reviews():
         with open(manifest_path) as f:
             m = json.load(f)
         # Include packets with gap items OR confirm_game_ball type
-        gap_items = [i for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap")]
+        gap_items = [
+            i
+            for i in m.get("items", [])
+            if i.get("reason", "").startswith("trajectory_gap")
+        ]
         review_type = m.get("review_type", "gap_review")
         if not gap_items and review_type != "confirm_game_ball":
             continue
@@ -868,16 +881,21 @@ async def get_gap_reviews():
                 reviewed = len(json.load(f))
 
         review_type = m.get("review_type", "gap_review")
-        total = len(gap_items) if gap_items else m.get("tile_count", 0)
-        packets.append({
-            "packet_id": packet_dir.name,
-            "game_id": m.get("game_id", ""),
-            "review_type": review_type,
-            "total_gaps": total,
-            "reviewed": reviewed,
-            "remaining": total - reviewed,
-            "created_at": m.get("created_at", 0),
-        })
+        all_items = m.get("items", [])
+        total = len(all_items)
+        packets.append(
+            {
+                "packet_id": packet_dir.name,
+                "game_id": m.get("game_id", ""),
+                "review_type": review_type,
+                "total_gaps": total,
+                "item_count": total,
+                "tile_count": m.get("tile_count", 0),
+                "reviewed": reviewed,
+                "remaining": total - reviewed,
+                "created_at": m.get("created_at", 0),
+            }
+        )
 
     packets.sort(key=lambda p: p["remaining"], reverse=True)
     return packets
@@ -902,13 +920,19 @@ async def get_gap_review_detail(packet_id: str):
             results = json.load(f)
     reviewed_stems = {r.get("tile_stem") for r in results}
 
-    # Find next unreviewed gap item
-    gap_items = [i for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap")]
-    unreviewed = [i for i in gap_items if i["tile_stem"] not in reviewed_stems]
+    # All reviewable items (gap reviews + track confirmations)
+    all_items = m.get("items", [])
+    for item in all_items:
+        stem = item.get("tile_stem", "")
+        item["has_image"] = (packet_dir / f"{stem}.jpg").exists()
+        item["reviewed"] = stem in reviewed_stems
+
+    unreviewed = [i for i in all_items if not i.get("reviewed")]
 
     return {
         **m,
-        "gap_items": gap_items,
+        "packet_id": packet_id,
+        "items": all_items,
         "reviewed_count": len(reviewed_stems),
         "remaining_count": len(unreviewed),
         "next_item": unreviewed[0] if unreviewed else None,
@@ -917,17 +941,55 @@ async def get_gap_review_detail(packet_id: str):
 
 @app.get("/api/gap-reviews/{packet_id}/tile/{tile_stem:path}")
 async def get_gap_tile(packet_id: str, tile_stem: str):
-    """Serve a tile image from a gap review packet."""
+    """Serve a tile image from a gap review packet.
+
+    First checks for a pre-extracted JPG. If not found, reads the tile
+    on demand from the game's manifest + pack files.
+    """
     tile_path = REVIEW_PACKETS_DIR / packet_id / f"{tile_stem}.jpg"
-    if not tile_path.exists():
-        raise HTTPException(404, "Tile image not found")
-    return FileResponse(tile_path, media_type="image/jpeg")
+    if tile_path.exists():
+        return FileResponse(tile_path, media_type="image/jpeg")
+
+    # Read on demand from pack
+    manifest_path = REVIEW_PACKETS_DIR / packet_id / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "Packet not found")
+
+    with open(manifest_path) as f:
+        pkt = json.load(f)
+    game_id = pkt.get("game_id", "")
+
+    game_dir = Path("D:/training_data/games") / game_id
+    if not (game_dir / "manifest.db").exists():
+        raise HTTPException(404, "Game manifest not found")
+
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.io import TaskIO
+    from training.tasks.sonnet_qa import _read_tile_from_packs
+
+    manifest = GameManifest(game_dir)
+    manifest.open(create=False)
+    try:
+        io = TaskIO(game_id, Path("G:/pipeline_work"), "")
+        packs_dir = io.server_packs()
+        jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
+    finally:
+        manifest.close()
+
+    if not jpeg_bytes:
+        raise HTTPException(404, "Tile not found in packs")
+
+    # Cache for next time
+    tile_path.write_bytes(jpeg_bytes)
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 
 @app.get("/api/gap-reviews/{packet_id}/filmstrip/{tile_stem:path}")
 async def get_gap_filmstrip(packet_id: str, tile_stem: str):
     """Serve the filmstrip composite for a gap tile."""
-    filmstrip_path = REVIEW_PACKETS_DIR / packet_id / "filmstrips" / f"{tile_stem}_filmstrip.jpg"
+    filmstrip_path = (
+        REVIEW_PACKETS_DIR / packet_id / "filmstrips" / f"{tile_stem}_filmstrip.jpg"
+    )
     if not filmstrip_path.exists():
         raise HTTPException(404, "Filmstrip not found")
     return FileResponse(filmstrip_path, media_type="image/jpeg")
@@ -954,12 +1016,14 @@ async def submit_gap_result(packet_id: str, result: dict):
     # Replace existing result for same tile_stem
     tile_stem = result.get("tile_stem", "")
     results = [r for r in results if r.get("tile_stem") != tile_stem]
-    results.append({
-        "tile_stem": tile_stem,
-        "action": result.get("action", ""),
-        "ball_position": result.get("ball_position"),
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-    })
+    results.append(
+        {
+            "tile_stem": tile_stem,
+            "action": result.get("action", ""),
+            "ball_position": result.get("ball_position"),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
@@ -970,7 +1034,11 @@ async def submit_gap_result(packet_id: str, result: dict):
     if manifest_path.exists():
         with open(manifest_path) as f:
             m = json.load(f)
-        total_gaps = sum(1 for i in m.get("items", []) if i.get("reason", "").startswith("trajectory_gap"))
+        total_gaps = sum(
+            1
+            for i in m.get("items", [])
+            if i.get("reason", "").startswith("trajectory_gap")
+        )
 
     return {
         "accepted": True,
