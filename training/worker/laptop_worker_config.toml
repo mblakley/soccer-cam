@@ -3,7 +3,7 @@
 
 [worker]
 hostname = "jared-laptop"
-capabilities = ["tile", "label", "train"]
+capabilities = ["tile", "label"]  # train temporarily removed — prioritizing labeling
 api_url = "http://192.168.86.152:8643"
 server_share = '\\192.168.86.152\training'
 local_work_dir = "C:/soccer-cam-label/work"

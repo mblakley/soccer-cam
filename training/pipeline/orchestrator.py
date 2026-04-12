@@ -352,6 +352,10 @@ class Orchestrator:
         if self.api.has_active_item("sonnet_qa"):
             return  # already running one
 
+        # Don't starve generate_review — if one is queued, let it run first
+        if self.api.has_active_item("generate_review"):
+            return
+
         # Get ALL games, not just needing-work (which excludes TRAINABLE)
         all_games = self.api.get_all_games()
         qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}
