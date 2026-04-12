@@ -688,8 +688,13 @@ def _call_claude_gap(filmstrip_path: Path, context_frames: list[dict]) -> str | 
 def _get_trajectory_sample_frames(
     traj: list[tuple[int, str, float, float]],
     n_samples: int = 5,
+    frame_interval: int = 4,
 ) -> list[dict]:
     """Get evenly-spaced frames from a trajectory for verification.
+
+    Snaps each sample to the nearest tiled frame (frame_idx must be
+    divisible by frame_interval) since trajectory points come from
+    labels which may not align with tile frame indices.
 
     Returns frame dicts compatible with build_gap_filmstrip (role='before').
     """
@@ -705,8 +710,15 @@ def _get_trajectory_sample_frames(
         indices[-1] = len(traj) - 1
 
     frames = []
+    seen_fi = set()
     for idx in indices:
         fi, seg, px, py = traj[idx]
+        # Snap to nearest tiled frame
+        fi = round(fi / frame_interval) * frame_interval
+        if fi in seen_fi:
+            continue
+        seen_fi.add(fi)
+
         tile_info = _pano_to_tile(px, py)
         if tile_info is None:
             continue
