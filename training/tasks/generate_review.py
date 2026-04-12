@@ -78,7 +78,11 @@ def run_generate_review(
         from training.data_prep.trajectory_gaps import build_gap_filmstrip
 
         traj_tuples = [(p["fi"], p["seg"], p["px"], p["py"]) for p in track_points]
-        sample_frames = _get_trajectory_sample_frames(traj_tuples, n_samples=8)
+        sample_frames = _get_trajectory_sample_frames(
+            traj_tuples,
+            n_samples=8,
+            manifest=manifest,
+        )
 
         filmstrip_path = review_dir / "game_ball_track.jpg"
         if sample_frames:

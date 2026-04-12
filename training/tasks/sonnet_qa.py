@@ -689,12 +689,12 @@ def _get_trajectory_sample_frames(
     traj: list[tuple[int, str, float, float]],
     n_samples: int = 5,
     frame_interval: int = 4,
+    manifest=None,
 ) -> list[dict]:
     """Get evenly-spaced frames from a trajectory for verification.
 
-    Snaps each sample to the nearest tiled frame (frame_idx must be
-    divisible by frame_interval) since trajectory points come from
-    labels which may not align with tile frame indices.
+    If manifest is provided, only returns frames that actually have tiles
+    in the manifest (some games are partially tiled).
 
     Returns frame dicts compatible with build_gap_filmstrip (role='before').
     """
@@ -702,6 +702,26 @@ def _get_trajectory_sample_frames(
 
     if len(traj) < 3:
         return []
+
+    # Filter to frames that have tiles if manifest is available
+    if manifest:
+        tiled_frames = set()
+        for fi, seg, _, _ in traj:
+            fi_snapped = round(fi / frame_interval) * frame_interval
+            count = manifest.conn.execute(
+                "SELECT COUNT(*) FROM tiles WHERE segment = ? AND frame_idx = ?",
+                (seg, fi_snapped),
+            ).fetchone()[0]
+            if count > 0:
+                tiled_frames.add((fi_snapped, seg))
+        # Rebuild traj with only tiled frames
+        traj_filtered = []
+        for fi, seg, px, py in traj:
+            fi_snapped = round(fi / frame_interval) * frame_interval
+            if (fi_snapped, seg) in tiled_frames:
+                traj_filtered.append((fi_snapped, seg, px, py))
+        if len(traj_filtered) >= 3:
+            traj = traj_filtered
 
     # Pick evenly-spaced indices
     step = max(1, (len(traj) - 1) // (n_samples - 1))
@@ -713,7 +733,6 @@ def _get_trajectory_sample_frames(
     seen_fi = set()
     for idx in indices:
         fi, seg, px, py = traj[idx]
-        # Snap to nearest tiled frame
         fi = round(fi / frame_interval) * frame_interval
         if fi in seen_fi:
             continue
@@ -729,7 +748,7 @@ def _get_trajectory_sample_frames(
                 "segment": seg,
                 "pano_x": px,
                 "pano_y": py,
-                "role": "before",  # all marked as detected (red circles)
+                "role": "before",
                 "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
                 "tile_local_x": cx_norm,
                 "tile_local_y": cy_norm,
