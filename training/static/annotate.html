@@ -2519,13 +2519,19 @@ function drawFilmstripOverlay() {
       ctx.strokeRect(x + 2, 2, frameW - 4, canvas.height - 4);
     }
 
-    // Show verdict badge if already reviewed
-    if (action === 'confirm') {
-      ctx.fillStyle = 'rgba(0,200,0,0.3)';
-      ctx.fillRect(x, 0, frameW, canvas.height);
-    } else if (action === 'reject') {
-      ctx.fillStyle = 'rgba(200,0,0,0.3)';
-      ctx.fillRect(x, 0, frameW, canvas.height);
+    // Show verdict badge — small indicator, not a full overlay
+    if (action === 'confirm' || action === 'reject') {
+      const color = action === 'confirm' ? '#00cc00' : '#cc0000';
+      const symbol = action === 'confirm' ? '✓' : '✗';
+      // Bottom-right badge
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x + frameW - 14, canvas.height - 14, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(symbol, x + frameW - 14, canvas.height - 10);
     }
 
     // Frame number
