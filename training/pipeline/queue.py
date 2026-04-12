@@ -128,8 +128,40 @@ class WorkQueue:
         payload: dict | None = None,
         max_attempts: int = 3,
     ) -> int:
-        """Add a work item to the queue. Returns the item ID."""
+        """Add a work item to the queue. Returns the item ID.
+
+        Skips if an identical item (same task_type + game_id) is already
+        queued/claimed/running — prevents duplicate work items.
+        """
         conn = self._get_conn()
+
+        # Dedup: don't enqueue if already active
+        if game_id:
+            existing = conn.execute(
+                """SELECT id FROM work_items
+                   WHERE task_type = ? AND game_id = ?
+                     AND status IN ('queued', 'claimed', 'running')
+                   LIMIT 1""",
+                (task_type, game_id),
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                """SELECT id FROM work_items
+                   WHERE task_type = ?
+                     AND status IN ('queued', 'claimed', 'running')
+                   LIMIT 1""",
+                (task_type,),
+            ).fetchone()
+
+        if existing:
+            logger.debug(
+                "Skipped duplicate enqueue: %s for %s (existing id=%d)",
+                task_type,
+                game_id or "pipeline",
+                existing[0],
+            )
+            return existing[0]
+
         cursor = conn.execute(
             """INSERT INTO work_items
                (task_type, game_id, priority, status, target_machine,
