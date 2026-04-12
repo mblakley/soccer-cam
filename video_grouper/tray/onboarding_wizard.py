@@ -9,9 +9,13 @@ import logging
 import os
 import platform
 import secrets
+import socket
 import threading
+import webbrowser
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -32,7 +36,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QIcon
 
 from video_grouper.utils.config import (
@@ -48,9 +52,12 @@ from video_grouper.utils.youtube_upload import (
 
 logger = logging.getLogger(__name__)
 
-# TTT infrastructure defaults (not secrets -- Supabase anon keys are public)
-TTT_SUPABASE_URL = "https://lfnqnfbkresbbprgribe.supabase.co"
-TTT_ANON_KEY = (
+# TTT infrastructure defaults (not secrets -- Supabase anon keys are public).
+# Values are injected at build time via _ttt_config.py (generated from
+# environment variables by the build script).  Fall back to production
+# defaults when running from source or when the generated file is absent.
+_TTT_DEFAULT_SUPABASE_URL = "https://lfnqnfbkresbbprgribe.supabase.co"
+_TTT_DEFAULT_ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
     "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxm"
     "bnFuZmJrcmVzYmJwcmdyaWJlIiwicm9sZSI6"
@@ -58,11 +65,70 @@ TTT_ANON_KEY = (
     "cCI6MjA0ODczODk2Nn0.bVPADfD5v6E5a7Y3"
     "2BGeJJYuiVqsMnyexVj0KNpblh4"
 )
-TTT_API_BASE_URL = "https://team-tech-tools.vercel.app"
+_TTT_DEFAULT_API_BASE_URL = "https://team-tech-tools.vercel.app"
+
+try:
+    from video_grouper.utils._ttt_config import (
+        TTT_SUPABASE_URL,
+        TTT_ANON_KEY,
+        TTT_API_BASE_URL,
+    )
+except ImportError:
+    TTT_SUPABASE_URL = _TTT_DEFAULT_SUPABASE_URL
+    TTT_ANON_KEY = _TTT_DEFAULT_ANON_KEY
+    TTT_API_BASE_URL = _TTT_DEFAULT_API_BASE_URL
+
+
+# HTML served at /callback to extract the token from the URL hash fragment.
+# Supabase returns tokens as a hash fragment (e.g. #access_token=...),
+# which the browser never sends to the server.  This page uses JS to
+# parse the fragment and forward the token to /receive-token.
+_OAUTH_CALLBACK_HTML = """\
+<!DOCTYPE html>
+<html>
+<head><title>Soccer-Cam Sign In</title></head>
+<body>
+<h2>Completing sign-in...</h2>
+<p id="status">Processing authentication response...</p>
+<script>
+(function() {
+    var hash = window.location.hash.substring(1);
+    if (!hash) {
+        document.getElementById('status').textContent =
+            'Error: No authentication data received.';
+        return;
+    }
+    var params = new URLSearchParams(hash);
+    var accessToken = params.get('access_token');
+    var error = params.get('error');
+    var errorDesc = params.get('error_description');
+    var url = 'http://localhost:{{PORT}}/receive-token?';
+    if (accessToken) {
+        url += 'access_token=' + encodeURIComponent(accessToken);
+    } else {
+        url += 'error=' + encodeURIComponent(error || 'unknown');
+        if (errorDesc) {
+            url += '&error_description=' + encodeURIComponent(errorDesc);
+        }
+    }
+    window.location.replace(url);
+})();
+</script>
+</body>
+</html>
+"""
 
 
 class OnboardingWizard(QDialog):
     """First-run setup wizard for Soccer-Cam."""
+
+    # Thread-safe signals for background task results
+    _ttt_sign_in_succeeded = pyqtSignal()
+    _ttt_sign_in_failed = pyqtSignal(str)
+    _ttt_oauth_succeeded = pyqtSignal()
+    _ttt_oauth_failed = pyqtSignal(str)
+    _yt_auth_finished = pyqtSignal(bool, str)
+    _run_on_main = pyqtSignal(object)  # emit a callable to run on main thread
 
     # Page indices for TTT path
     PAGE_WELCOME = 0
@@ -127,6 +193,18 @@ class OnboardingWizard(QDialog):
         self._machine_name = ""
         self._other_machines: list[dict] = []
         self._machine_setup_done = False
+        self._ttt_sign_in_error = ""
+
+        # Connect thread-safe signals for background task callbacks
+        self._ttt_sign_in_succeeded.connect(self._on_ttt_sign_in_success)
+        self._ttt_sign_in_failed.connect(self._on_ttt_sign_in_error)
+        self._ttt_oauth_succeeded.connect(self._on_ttt_oauth_success)
+        self._ttt_oauth_failed.connect(self._on_ttt_oauth_error)
+        self._yt_auth_finished.connect(self._on_yt_auth_finished)
+        self._run_on_main.connect(lambda fn: fn())
+
+        # OAuth callback server (kept as instance var so we can shut it down)
+        self._oauth_server: Optional[HTTPServer] = None
 
         # Navigation history (for Back button across paths)
         self._nav_history: list[int] = []
@@ -272,6 +350,36 @@ class OnboardingWizard(QDialog):
 
         layout.addSpacing(10)
 
+        # --- OAuth provider buttons ---
+        self._oauth_providers = {
+            "google": ("Sign in with Google", "#4285F4", "#3367D6"),
+            "discord": ("Sign in with Discord", "#5865F2", "#4752C4"),
+            "apple": ("Sign in with Apple", "#000000", "#333333"),
+        }
+        self._oauth_btns: dict[str, QPushButton] = {}
+        for provider, (label, bg, hover_bg) in self._oauth_providers.items():
+            btn = QPushButton(label)
+            btn.setMinimumHeight(40)
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {bg}; color: white; "
+                f"font-weight: bold; border-radius: 4px; padding: 8px 16px; }}"
+                f"QPushButton:hover {{ background-color: {hover_bg}; }}"
+                f"QPushButton:disabled {{ background-color: #a0a0a0; }}"
+            )
+            btn.clicked.connect(lambda checked, p=provider: self._sign_in_ttt_oauth(p))
+            layout.addWidget(btn)
+            self._oauth_btns[provider] = btn
+
+        layout.addSpacing(10)
+
+        # Separator
+        separator_label = QLabel("-- or sign in with email --")
+        separator_label.setStyleSheet("color: #888; padding: 4px 0;")
+        layout.addWidget(separator_label)
+
+        layout.addSpacing(10)
+
+        # --- Email/password form ---
         form = QFormLayout()
         self._ttt_email_input = QLineEdit()
         self._ttt_email_input.setPlaceholderText("your@email.com")
@@ -404,7 +512,7 @@ class OnboardingWizard(QDialog):
         form.addRow("Camera Type:", self._camera_type_combo)
 
         self._camera_ip_input = QLineEdit()
-        self._camera_ip_input.setPlaceholderText("192.168.1.100")
+        self._camera_ip_input.setPlaceholderText(self._get_gateway_placeholder())
         form.addRow("IP Address:", self._camera_ip_input)
 
         self._camera_user_input = QLineEdit("admin")
@@ -728,36 +836,11 @@ class OnboardingWizard(QDialog):
 
         layout.addSpacing(10)
 
-        # Advanced NTFY settings (collapsed by default for TTT users)
-        self._advanced_ntfy_group = QGroupBox("Advanced: Notification Settings")
-        self._advanced_ntfy_group.setCheckable(False)
-        self._advanced_ntfy_group.setVisible(False)
-        adv_layout = QVBoxLayout(self._advanced_ntfy_group)
-
-        self._advanced_ntfy_toggle = QPushButton("Change notification topic...")
-        self._advanced_ntfy_toggle.setFlat(True)
-        self._advanced_ntfy_toggle.setStyleSheet(
-            "text-align: left; color: #0066cc; text-decoration: underline;"
-        )
-        self._advanced_ntfy_toggle.clicked.connect(self._toggle_advanced_ntfy)
-        layout.addWidget(self._advanced_ntfy_toggle)
-
-        adv_form = QFormLayout()
-        self._summary_ntfy_topic_input = QLineEdit()
-        self._summary_ntfy_topic_input.setPlaceholderText("soccer-cam-xxxxxxxx")
-        adv_form.addRow("NTFY Topic:", self._summary_ntfy_topic_input)
-        self._summary_ntfy_server_input = QLineEdit("https://ntfy.sh")
-        adv_form.addRow("Server URL:", self._summary_ntfy_server_input)
-        adv_layout.addLayout(adv_form)
-
-        adv_note = QLabel(
-            "To receive notifications on your phone, install the ntfy app "
-            "and subscribe to this topic."
-        )
-        adv_note.setWordWrap(True)
-        adv_layout.addWidget(adv_note)
-
-        layout.addWidget(self._advanced_ntfy_group)
+        # NTFY status note (read-only; topic can be changed in tray settings)
+        self._summary_ntfy_note = QLabel("")
+        self._summary_ntfy_note.setWordWrap(True)
+        self._summary_ntfy_note.setVisible(False)
+        layout.addWidget(self._summary_ntfy_note)
 
         layout.addSpacing(10)
 
@@ -880,7 +963,24 @@ class OnboardingWizard(QDialog):
         if self._nav_history:
             prev = self._nav_history.pop()
             self._stack.setCurrentIndex(prev)
+            self._reset_page_state(prev)
             self._update_nav()
+
+    def _reset_page_state(self, page_index: int):
+        """Re-enable interactive controls when navigating back to a page."""
+        if page_index == self.PAGE_TTT_SIGNIN:
+            self._ttt_signin_btn.setEnabled(True)
+            for _b in self._oauth_btns.values():
+                _b.setEnabled(True)
+        elif page_index == self.PAGE_MANUAL_TTT:
+            if hasattr(self, "_manual_ttt_signin_btn"):
+                self._manual_ttt_signin_btn.setEnabled(True)
+        elif page_index == self.PAGE_CAMERA:
+            if hasattr(self, "_camera_test_btn"):
+                self._camera_test_btn.setEnabled(True)
+        elif page_index == self.PAGE_YOUTUBE:
+            if hasattr(self, "_yt_auth_btn"):
+                self._yt_auth_btn.setEnabled(True)
 
     def _go_next(self):
         current = self._stack.currentIndex()
@@ -917,17 +1017,17 @@ class OnboardingWizard(QDialog):
             # Handled by restore/fresh buttons
             return
 
+        # Summary -> finish
+        if current == self.PAGE_SUMMARY:
+            self._finish()
+            return
+
         # For all other pages, advance through sequence
         seq = self._get_page_sequence()
         if current in seq:
             idx = seq.index(current)
             if idx + 1 < len(seq):
                 self._navigate_to(seq[idx + 1])
-            return
-
-        # Summary -> finish
-        if current == self.PAGE_SUMMARY:
-            self._finish()
             return
 
     def _skip_step(self):
@@ -973,14 +1073,10 @@ class OnboardingWizard(QDialog):
             )
 
         elif page_index == self.PAGE_SUMMARY:
-            # Read back advanced NTFY edits if the user changed them
-            if self._mode == "ttt" and self._advanced_ntfy_group.isVisible():
-                topic = self._summary_ntfy_topic_input.text().strip()
-                server = self._summary_ntfy_server_input.text().strip()
-                if topic:
-                    self._ntfy_topic = topic
-                if server:
-                    self._ntfy_server_url = server
+            # No editable NTFY fields on the summary page; topic is
+            # configured on the NTFY page (manual) or auto-set (TTT)
+            # and can be changed later in the tray agent settings.
+            pass
 
     # ------------------------------------------------------------------
     # TTT sign-in
@@ -998,6 +1094,10 @@ class OnboardingWizard(QDialog):
         self._ttt_signin_btn.setEnabled(False)
         self._ttt_signin_status.setText("Signing in...")
 
+        # Stash credentials so the background thread can read them
+        self._pending_ttt_email = email
+        self._pending_ttt_password = password
+
         def do_login():
             try:
                 from video_grouper.api_integrations.ttt_api import TTTApiClient
@@ -1012,40 +1112,238 @@ class OnboardingWizard(QDialog):
                 teams = client.get_team_assignments()
                 device_config = client.get_device_config()
 
-                def on_success():
-                    self._ttt_client = client
-                    self._ttt_email = email
-                    self._ttt_password = password
-                    self._ttt_enabled = True
-                    self._ttt_teams = teams
-                    self._ttt_device_config = device_config
-                    self._ttt_signin_btn.setEnabled(True)
-                    team_names = [t.get("team_name", "?") for t in teams]
-                    self._ttt_signin_status.setText(
-                        f"Signed in -- {len(teams)} team(s): {', '.join(team_names)}"
-                    )
+                # Store results for the UI callback (safe — only read on main thread)
+                self._pending_ttt_client = client
+                self._pending_ttt_teams = teams
+                self._pending_ttt_device_config = device_config
 
-                    # Auto-populate NTFY from TTT device config
-                    if device_config and device_config.get("ntfy_topic"):
-                        self._ntfy_topic = device_config["ntfy_topic"]
-                        self._ntfy_server_url = device_config.get(
-                            "ntfy_server_url", "https://ntfy.sh"
-                        )
-                        self._ntfy_enabled = True
-
-                QTimer.singleShot(0, on_success)
+                # Signal the main thread (thread-safe)
+                self._ttt_sign_in_succeeded.emit()
 
             except Exception as exc:
                 logger.error("TTT sign-in failed: %s", exc)
-
-                def on_error(err=str(exc)):
-                    self._ttt_signin_btn.setEnabled(True)
-                    self._ttt_signin_status.setText(f"Sign-in failed: {err}")
-
-                QTimer.singleShot(0, on_error)
+                self._ttt_sign_in_failed.emit(str(exc))
 
         thread = threading.Thread(target=do_login, daemon=True)
         thread.start()
+
+    def _on_ttt_sign_in_success(self):
+        """Slot called on main thread after successful TTT sign-in."""
+        self._ttt_client = self._pending_ttt_client
+        self._ttt_email = self._pending_ttt_email
+        self._ttt_password = self._pending_ttt_password
+        self._ttt_enabled = True
+        self._ttt_teams = self._pending_ttt_teams
+        self._ttt_device_config = self._pending_ttt_device_config
+        self._ttt_signin_btn.setEnabled(True)
+        team_names = [t.get("team_name", "?") for t in self._ttt_teams]
+        self._ttt_signin_status.setText(
+            f"Signed in -- {len(self._ttt_teams)} team(s): {', '.join(team_names)}"
+        )
+
+        # Auto-populate NTFY from TTT device config
+        dc = self._ttt_device_config
+        if dc and dc.get("ntfy_topic"):
+            self._ntfy_topic = dc["ntfy_topic"]
+            self._ntfy_server_url = dc.get("ntfy_server_url", "https://ntfy.sh")
+            self._ntfy_enabled = True
+
+        # Auto-advance to next step
+        self._go_next()
+
+    def _on_ttt_sign_in_error(self, err: str):
+        """Slot called on main thread after failed TTT sign-in."""
+        self._ttt_signin_btn.setEnabled(True)
+        self._ttt_signin_status.setText(f"Sign-in failed: {err}")
+
+    # ------------------------------------------------------------------
+    # TTT Google OAuth sign-in
+    # ------------------------------------------------------------------
+
+    def _sign_in_ttt_oauth(self, provider: str = "google"):
+        """Start OAuth flow for the given provider: open browser, listen for callback."""
+        for btn in self._oauth_btns.values():
+            btn.setEnabled(False)
+        self._ttt_signin_btn.setEnabled(False)
+        provider_label = provider.replace("_", " ").title()
+        self._ttt_signin_status.setText(
+            f"Opening browser for {provider_label} sign-in..."
+        )
+
+        def _run_oauth():
+            try:
+                # Find an available port
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+                sock.close()
+
+                # Build the OAuth callback server
+                token_holder: dict = {}
+                error_holder: dict = {}
+                wizard_ref = self
+
+                class OAuthCallbackHandler(BaseHTTPRequestHandler):
+                    """HTTP handler for the OAuth redirect."""
+
+                    def log_message(self, fmt, *args):
+                        # Suppress default stderr logging
+                        logger.debug(fmt, *args)
+
+                    def do_GET(self):
+                        parsed = urlparse(self.path)
+
+                        if parsed.path == "/callback":
+                            # Supabase puts tokens in the URL fragment
+                            # (hash), which browsers don't send to
+                            # servers.  Serve a page with JS that
+                            # extracts the hash and forwards the token.
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/html")
+                            self.end_headers()
+                            html = _OAUTH_CALLBACK_HTML.replace("{{PORT}}", str(port))
+                            self.wfile.write(html.encode("utf-8"))
+                            return
+
+                        if parsed.path == "/receive-token":
+                            qs = parse_qs(parsed.query)
+                            access_token = qs.get("access_token", [None])[0]
+                            if access_token:
+                                token_holder["access_token"] = access_token
+                                self.send_response(200)
+                                self.send_header("Content-Type", "text/html")
+                                self.end_headers()
+                                self.wfile.write(
+                                    b"<html><body><h2>Sign-in successful!</h2>"
+                                    b"<p>You can close this tab and return to "
+                                    b"Soccer-Cam.</p></body></html>"
+                                )
+                            else:
+                                error_msg = qs.get(
+                                    "error_description",
+                                    qs.get("error", ["Unknown error"]),
+                                )[0]
+                                error_holder["error"] = error_msg
+                                self.send_response(400)
+                                self.send_header("Content-Type", "text/html")
+                                self.end_headers()
+                                self.wfile.write(
+                                    f"<html><body><h2>Sign-in failed</h2>"
+                                    f"<p>{error_msg}</p></body></html>".encode()
+                                )
+                            # Shut down the server after handling
+                            threading.Thread(
+                                target=self.server.shutdown, daemon=True
+                            ).start()
+                            return
+
+                        # Unknown path
+                        self.send_response(404)
+                        self.end_headers()
+
+                server = HTTPServer(("127.0.0.1", port), OAuthCallbackHandler)
+                wizard_ref._oauth_server = server
+
+                # Build the Supabase OAuth URL
+                redirect_url = f"http://localhost:{port}/callback"
+                auth_url = (
+                    f"{TTT_SUPABASE_URL}/auth/v1/authorize"
+                    f"?provider={provider}"
+                    f"&redirect_to={redirect_url}"
+                )
+
+                # Open the browser
+                webbrowser.open(auth_url)
+
+                # Serve until we get a token or an error (or timeout)
+                server.timeout = 300  # 5-minute timeout
+                server.handle_timeout = lambda: server.shutdown()
+
+                # serve_forever blocks until shutdown() is called
+                server.serve_forever()
+                server.server_close()
+                wizard_ref._oauth_server = None
+
+                if "access_token" in token_holder:
+                    # We have the token -- create a TTT client session
+                    from video_grouper.api_integrations.ttt_api import (
+                        TTTApiClient,
+                    )
+
+                    client = TTTApiClient(
+                        supabase_url=TTT_SUPABASE_URL,
+                        anon_key=TTT_ANON_KEY,
+                        api_base_url=TTT_API_BASE_URL,
+                        storage_path=wizard_ref._storage_path,
+                    )
+                    client.set_session_from_token(token_holder["access_token"])
+                    teams = client.get_team_assignments()
+                    device_config = client.get_device_config()
+
+                    # Extract email from the JWT for display
+                    from video_grouper.api_integrations.ttt_api import (
+                        _decode_jwt_payload,
+                    )
+
+                    try:
+                        payload = _decode_jwt_payload(token_holder["access_token"])
+                        email = payload.get("email", "Google user")
+                    except Exception:
+                        email = "Google user"
+
+                    wizard_ref._pending_ttt_client = client
+                    wizard_ref._pending_ttt_teams = teams
+                    wizard_ref._pending_ttt_device_config = device_config
+                    wizard_ref._pending_ttt_email = email
+                    wizard_ref._pending_ttt_password = ""
+
+                    wizard_ref._ttt_oauth_succeeded.emit()
+                elif "error" in error_holder:
+                    wizard_ref._ttt_oauth_failed.emit(error_holder["error"])
+                else:
+                    wizard_ref._ttt_oauth_failed.emit(
+                        f"Timed out waiting for {provider_label} sign-in"
+                    )
+
+            except Exception as exc:
+                logger.error("%s OAuth failed: %s", provider_label, exc, exc_info=True)
+                wizard_ref._ttt_oauth_failed.emit(str(exc))
+
+        thread = threading.Thread(target=_run_oauth, daemon=True)
+        thread.start()
+
+    def _on_ttt_oauth_success(self):
+        """Slot called on main thread after successful Google OAuth."""
+        self._ttt_client = self._pending_ttt_client
+        self._ttt_email = self._pending_ttt_email
+        self._ttt_password = self._pending_ttt_password
+        self._ttt_enabled = True
+        self._ttt_teams = self._pending_ttt_teams
+        self._ttt_device_config = self._pending_ttt_device_config
+        for _b in self._oauth_btns.values():
+            _b.setEnabled(True)
+        self._ttt_signin_btn.setEnabled(True)
+        team_names = [t.get("team_name", "?") for t in self._ttt_teams]
+        self._ttt_signin_status.setText(
+            f"Signed in -- {len(self._ttt_teams)} team(s): {', '.join(team_names)}"
+        )
+
+        # Auto-populate NTFY from TTT device config
+        dc = self._ttt_device_config
+        if dc and dc.get("ntfy_topic"):
+            self._ntfy_topic = dc["ntfy_topic"]
+            self._ntfy_server_url = dc.get("ntfy_server_url", "https://ntfy.sh")
+            self._ntfy_enabled = True
+
+        # Auto-advance to next step
+        self._go_next()
+
+    def _on_ttt_oauth_error(self, err: str):
+        """Slot called on main thread after failed Google OAuth."""
+        for _b in self._oauth_btns.values():
+            _b.setEnabled(True)
+        self._ttt_signin_btn.setEnabled(True)
+        self._ttt_signin_status.setText(f"Sign-in failed: {err}")
 
     def _sign_in_manual_ttt(self):
         """Sign in from the manual TTT page."""
@@ -1085,7 +1383,7 @@ class OnboardingWizard(QDialog):
                         f"Connected -- {len(teams)} team(s): {', '.join(team_names)}"
                     )
 
-                QTimer.singleShot(0, on_success)
+                self._run_on_main.emit(on_success)
 
             except Exception as exc:
                 logger.error("TTT sign-in failed: %s", exc)
@@ -1094,7 +1392,7 @@ class OnboardingWizard(QDialog):
                     self._manual_ttt_signin_btn.setEnabled(True)
                     self._manual_ttt_status.setText(f"Sign-in failed: {err}")
 
-                QTimer.singleShot(0, on_error)
+                self._run_on_main.emit(on_error)
 
         thread = threading.Thread(target=do_login, daemon=True)
         thread.start()
@@ -1153,9 +1451,37 @@ class OnboardingWizard(QDialog):
     # Storage
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _get_gateway_placeholder() -> str:
+        """Return the default gateway IP as a placeholder hint for camera IP."""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-Command",
+                    "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | "
+                    "Sort-Object -Property RouteMetric | "
+                    "Select-Object -First 1).NextHop",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            gw = result.stdout.strip()
+            if gw:
+                return gw
+        except Exception:
+            pass
+        return "192.168.1.100"
+
     def _browse_storage(self):
         path = QFileDialog.getExistingDirectory(
-            self, "Select Storage Directory", self._storage_path
+            self,
+            "Select Storage Directory",
+            self._storage_path,
+            QFileDialog.Option.DontUseNativeDialog,
         )
         if path:
             self._storage_path_input.setText(path)
@@ -1261,7 +1587,7 @@ class OnboardingWizard(QDialog):
                     else:
                         self._camera_test_status.setText("Connection failed")
 
-                QTimer.singleShot(0, on_result)
+                self._run_on_main.emit(on_result)
 
             except Exception as exc:
                 logger.error("Camera test failed: %s", exc)
@@ -1270,7 +1596,7 @@ class OnboardingWizard(QDialog):
                     self._camera_test_btn.setEnabled(True)
                     self._camera_test_status.setText(f"Error: {err}")
 
-                QTimer.singleShot(0, on_error)
+                self._run_on_main.emit(on_error)
 
         thread = threading.Thread(target=do_test, daemon=True)
         thread.start()
@@ -1338,7 +1664,7 @@ class OnboardingWizard(QDialog):
                     else:
                         self._cam_pass_status.setText("Failed to change password")
 
-                QTimer.singleShot(0, on_result)
+                self._run_on_main.emit(on_result)
             except Exception as exc:
                 logger.error("Password change failed: %s", exc)
 
@@ -1346,7 +1672,7 @@ class OnboardingWizard(QDialog):
                     self._cam_set_pass_btn.setEnabled(True)
                     self._cam_pass_status.setText(f"Error: {err}")
 
-                QTimer.singleShot(0, on_error)
+                self._run_on_main.emit(on_error)
 
         thread = threading.Thread(target=do_change, daemon=True)
         thread.start()
@@ -1398,7 +1724,7 @@ class OnboardingWizard(QDialog):
                             "Some settings failed (see table above)"
                         )
 
-                QTimer.singleShot(0, on_result)
+                self._run_on_main.emit(on_result)
             except Exception as exc:
                 logger.error("Apply settings failed: %s", exc)
 
@@ -1406,7 +1732,7 @@ class OnboardingWizard(QDialog):
                     self._cam_apply_btn.setEnabled(True)
                     self._cam_config_status.setText(f"Error: {err}")
 
-                QTimer.singleShot(0, on_error)
+                self._run_on_main.emit(on_error)
 
         thread = threading.Thread(target=do_apply, daemon=True)
         thread.start()
@@ -1431,29 +1757,23 @@ class OnboardingWizard(QDialog):
         def do_auth():
             try:
                 success, message = authenticate_youtube_embedded(token_file)
-
-                def on_done(ok=success, msg=message):
-                    self._yt_auth_btn.setEnabled(True)
-                    if ok:
-                        self._youtube_enabled = True
-                        self._youtube_authenticated = True
-                        self._yt_auth_status.setText("Authorized")
-                    else:
-                        self._yt_auth_status.setText(f"Failed: {msg}")
-
-                QTimer.singleShot(0, on_done)
-
+                self._yt_auth_finished.emit(success, message)
             except Exception as exc:
                 logger.error("YouTube auth failed: %s", exc)
-
-                def on_error(err=str(exc)):
-                    self._yt_auth_btn.setEnabled(True)
-                    self._yt_auth_status.setText(f"Error: {err}")
-
-                QTimer.singleShot(0, on_error)
+                self._yt_auth_finished.emit(False, str(exc))
 
         thread = threading.Thread(target=do_auth, daemon=True)
         thread.start()
+
+    def _on_yt_auth_finished(self, success: bool, message: str):
+        """Slot called on main thread after YouTube auth completes."""
+        self._yt_auth_btn.setEnabled(True)
+        if success:
+            self._youtube_enabled = True
+            self._youtube_authenticated = True
+            self._yt_auth_status.setText("Authorized")
+        else:
+            self._yt_auth_status.setText(f"Failed: {message}")
 
     # ------------------------------------------------------------------
     # NTFY
@@ -1512,7 +1832,7 @@ class OnboardingWizard(QDialog):
                             "This is the only computer on this account."
                         )
 
-                QTimer.singleShot(0, on_success)
+                self._run_on_main.emit(on_success)
 
             except Exception as exc:
                 logger.error("Machine registration failed: %s", exc)
@@ -1525,7 +1845,7 @@ class OnboardingWizard(QDialog):
                     )
                     self._machine_setup_done = True
 
-                QTimer.singleShot(0, on_error)
+                self._run_on_main.emit(on_error)
 
         thread = threading.Thread(target=do_register, daemon=True)
         thread.start()
@@ -1533,14 +1853,6 @@ class OnboardingWizard(QDialog):
     def _generate_ntfy_topic(self):
         topic = f"soccer-cam-{secrets.token_hex(4)}"
         self._ntfy_topic_input.setText(topic)
-
-    def _toggle_advanced_ntfy(self):
-        """Toggle visibility of the advanced NTFY settings on summary page."""
-        visible = not self._advanced_ntfy_group.isVisible()
-        self._advanced_ntfy_group.setVisible(visible)
-        self._advanced_ntfy_toggle.setText(
-            "Hide notification settings" if visible else "Change notification topic..."
-        )
 
     # ------------------------------------------------------------------
     # Summary & Finish
@@ -1609,20 +1921,35 @@ class OnboardingWizard(QDialog):
         else:
             self._next_steps_group.setVisible(False)
 
-        # Advanced NTFY settings on summary page (for TTT users who skipped NTFY page)
-        if self._mode == "ttt" and self._ntfy_enabled:
-            self._summary_ntfy_topic_input.setText(self._ntfy_topic)
-            self._summary_ntfy_server_input.setText(self._ntfy_server_url)
-            self._advanced_ntfy_toggle.setVisible(True)
-            self._advanced_ntfy_group.setVisible(False)  # collapsed by default
+        # NTFY read-only note on summary page
+        if self._ntfy_enabled:
+            self._summary_ntfy_note.setText(
+                "NTFY notifications are enabled. "
+                "You can change the topic in the tray agent settings."
+            )
+            self._summary_ntfy_note.setVisible(True)
         else:
-            self._advanced_ntfy_toggle.setVisible(False)
-            self._advanced_ntfy_group.setVisible(False)
+            self._summary_ntfy_note.setVisible(False)
 
     def _finish(self):
         """Save configuration and close the wizard."""
+        try:
+            self._finish_inner()
+        except Exception as exc:
+            logger.error("Finish failed: %s", exc, exc_info=True)
+            QMessageBox.critical(
+                self, "Setup Error", f"Failed to complete setup: {exc}"
+            )
+
+    def _finish_inner(self):
         # Collect data from current page
         self._collect_page_data(self._stack.currentIndex())
+
+        # Use the wizard's storage path for config, not the exe directory
+        config_dir = Path(self._storage_path)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self.config_path = config_dir / "config.ini"
+        logger.info("Saving config to %s", self.config_path)
 
         # Create or update config
         if self.config_path.exists():
@@ -1687,6 +2014,25 @@ class OnboardingWizard(QDialog):
                 self, "Save Error", f"Failed to save configuration: {exc}"
             )
             return
+
+        # Write StoragePath to registry so the Windows service can find config
+        try:
+            import winreg
+
+            key = winreg.CreateKeyEx(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\VideoGrouper",
+                0,
+                winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY,
+            )
+            winreg.SetValueEx(
+                key, "StoragePath", 0, winreg.REG_SZ, str(self._storage_path)
+            )
+            winreg.CloseKey(key)
+            logger.info("Wrote StoragePath to registry: %s", self._storage_path)
+        except Exception as exc:
+            # Non-admin context or non-Windows — not fatal
+            logger.warning("Could not write StoragePath to registry: %s", exc)
 
         # Save to TTT if connected
         if self._ttt_enabled and self._ttt_client:
