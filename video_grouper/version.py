@@ -20,7 +20,7 @@ VERSION_INFO = {
     "company_name": "VideoGrouper",
     "file_description": "VideoGrouper Service and Tray Agent",
     "internal_name": "VideoGrouper",
-    "legal_copyright": "Copyright (c) 2024",
+    "legal_copyright": "Copyright (c) 2026",
     "original_filename": "VideoGrouperService.exe",
     "product_name": "VideoGrouper",
 }
