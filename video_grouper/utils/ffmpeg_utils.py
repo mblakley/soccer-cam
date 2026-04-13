@@ -112,7 +112,7 @@ def _remux_dav_to_mp4_sync(file_path: str, output_path: str) -> str:
     """Synchronous implementation: remux DAV -> MP4 (video copy, AAC re-encode)."""
     with av.open(file_path) as input_container:
         with av.open(
-            output_path, "w", options={"movflags": "faststart"}
+            output_path, "w", format="mp4", options={"movflags": "faststart"}
         ) as output_container:
             # Set up streams
             in_video_stream = None
@@ -346,7 +346,7 @@ def _trim_video_sync(
 
     with av.open(input_path) as input_container:
         with av.open(
-            output_path, "w", options={"movflags": "faststart"}
+            output_path, "w", format="mp4", options={"movflags": "faststart"}
         ) as output_container:
             # Create output streams as copies of input streams
             stream_map = {}
