@@ -350,7 +350,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         # Per-camera enable/disable
         if self.config and len(self.config.cameras) > 0:
-            cameras_menu = QMenu("Cameras", self)
+            cameras_menu = QMenu("Cameras")
             for cam_config in self.config.cameras:
                 cam_action = QAction(
                     f"{cam_config.name} ({cam_config.device_ip})", self
