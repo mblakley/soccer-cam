@@ -274,6 +274,7 @@ class GameRegistry:
         segment_count: int | None = None,
         coverage: float | None = None,
         video_path: str | None = None,
+        **kwargs,
     ):
         """Update cached stats for a game."""
         conn = self._get_conn()
@@ -297,6 +298,9 @@ class GameRegistry:
         if video_path is not None:
             updates.append("video_path = ?")
             params.append(video_path)
+        if "needs_flip" in kwargs:
+            updates.append("needs_flip = ?")
+            params.append(1 if kwargs["needs_flip"] else 0)
 
         if updates:
             params.append(game_id)

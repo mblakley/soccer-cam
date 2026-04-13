@@ -33,6 +33,8 @@ def run_label(
 ) -> dict:
     """Run ONNX ball detection on full video frames for a game."""
     game_id = item["game_id"]
+    payload = item.get("payload") or {}
+    needs_flip = payload.get("needs_flip", False)
 
     from training.tasks.io import TaskIO
 
@@ -116,7 +118,7 @@ def run_label(
             # Pre-scan: sample 5 evenly-spaced frames to check if this
             # segment contains game footage. Skips indoor/transport/backyard
             # recordings that the Dahua camera stores on the same SD card.
-            if not _prescan_segment(seg_video, session, conf_threshold, cv2):
+            if not _prescan_segment(seg_video, session, conf_threshold, cv2, flip=needs_flip):
                 logger.info(
                     "  Skipping %s (no detections in pre-scan)", seg_name[:50]
                 )
@@ -156,6 +158,8 @@ def run_label(
                 if fi % FRAME_INTERVAL == 0:
                     ret, frame = cap.retrieve()
                     if ret:
+                        if needs_flip:
+                            frame = cv2.flip(frame, -1)
                         dets = detect_balls(frame, session, conf_threshold)
                         seg_dets += len(dets)
                         for det in dets:
@@ -235,7 +239,7 @@ def run_label(
     }
 
 
-def _prescan_segment(video_path: Path, session, conf_threshold: float, cv2) -> bool:
+def _prescan_segment(video_path: Path, session, conf_threshold: float, cv2, flip: bool = False) -> bool:
     """Sample 5 frames from a segment to check for game footage.
 
     Returns True if any sampled frame produces a detection — meaning
@@ -261,6 +265,8 @@ def _prescan_segment(video_path: Path, session, conf_threshold: float, cv2) -> b
         ret, frame = cap.read()
         if not ret:
             continue
+        if flip:
+            frame = cv2.flip(frame, -1)
         dets = detect_balls(frame, session, conf_threshold)
         if dets:
             found = True
