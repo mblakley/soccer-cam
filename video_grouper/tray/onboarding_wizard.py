@@ -621,6 +621,24 @@ class OnboardingWizard(QDialog):
         self._cam_phase_c.setVisible(False)
         layout.addWidget(self._cam_phase_c)
 
+        # ── AutoCam toggle ──────────────────────────────────────────
+        layout.addSpacing(15)
+        autocam_path = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Programs", "Autocam", "GUI.exe"
+        )
+        autocam_installed = os.path.exists(autocam_path)
+        self._autocam_checkbox = QCheckBox(
+            "Enable AutoCam processing (AI camera tracking)"
+        )
+        self._autocam_checkbox.setChecked(autocam_installed)
+        self._autocam_checkbox.setEnabled(autocam_installed)
+        if not autocam_installed:
+            self._autocam_checkbox.setToolTip(
+                "AutoCam is not installed. Install it from autocam.app to enable."
+            )
+        layout.addWidget(self._autocam_checkbox)
+        self._autocam_path = autocam_path if autocam_installed else ""
+
         layout.addStretch()
         return page
 
@@ -2731,6 +2749,11 @@ class OnboardingWizard(QDialog):
             config.ntfy.server_url = self._ntfy_server_url
         if self._ntfy_enabled:
             config.ntfy.response_service = True
+
+        # AutoCam
+        config.autocam.enabled = self._autocam_checkbox.isChecked()
+        if self._autocam_path:
+            config.autocam.executable = self._autocam_path
 
         # PlayMetrics
         pm = self._playmetrics_config
