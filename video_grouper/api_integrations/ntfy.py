@@ -661,9 +661,10 @@ class NtfyAPI:
                     )
                     # For images, we need to use PUT method with the file as the body
                     # and add the JSON payload as headers
+                    # HTTP headers cannot contain newlines — replace with spaces
                     headers = {}
-                    headers["Message"] = payload.get("message", "")
-                    headers["Title"] = payload.get("title", "")
+                    headers["Message"] = payload.get("message", "").replace("\n", " ")
+                    headers["Title"] = payload.get("title", "").replace("\n", " ")
                     headers["Tags"] = ",".join(payload.get("tags", []))
                     headers["Priority"] = str(payload.get("priority", 4))
                     headers["Actions"] = json.dumps(payload.get("actions", []))
