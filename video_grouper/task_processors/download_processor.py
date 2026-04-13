@@ -38,6 +38,17 @@ class DownloadProcessor(QueueProcessor):
         """Return the queue type for this processor."""
         return QueueType.DOWNLOAD
 
+    def _get_priority(self, item) -> int:
+        """Prioritize files for partially-downloaded groups."""
+        group_dir = os.path.dirname(getattr(item, "file_path", ""))
+        if group_dir and os.path.isdir(group_dir):
+            if any(
+                f.endswith(".mp4") and not f.endswith(".tmp.mp4")
+                for f in os.listdir(group_dir)
+            ):
+                return 1  # Partially downloaded group — complete it first
+        return 2
+
     async def process_item(self, item: RecordingFile) -> None:
         """
         Download a single file from the camera.

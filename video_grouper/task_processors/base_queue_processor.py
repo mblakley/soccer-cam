@@ -39,6 +39,8 @@ class QueueProcessor(ABC):
         self._max_retries = 3  # Maximum number of retry attempts
         self._retry_counts = {}  # Track retry counts for each item
         self._in_progress_item: Optional[BaseTask] = None  # Currently processing item
+        self._sequence = 0
+        self._items_by_key: dict[str, tuple[int, int, BaseTask]] = {}
 
         logger.info(f"Initialized {self.__class__.__name__}")
 
@@ -66,18 +68,27 @@ class QueueProcessor(ABC):
         if not hasattr(item, "storage_path"):
             setattr(item, "storage_path", self.storage_path)
 
-    async def add_work(self, item: BaseTask) -> None:
+    def _get_priority(self, item: BaseTask) -> int:
+        """Return priority for this item. Lower = higher priority. Default: 2 (normal)."""
+        return 2
+
+    async def add_work(self, item: BaseTask, priority: int | None = None) -> None:
         """Add work to the processor's queue."""
         # Create queue if it doesn't exist
         if self._queue is None:
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.PriorityQueue()
 
         item_key = self.get_item_key(item)
 
         if item_key not in self._queued_items:
             self._inject_storage_path(item)
 
-            await self._queue.put(item)
+            if priority is None:
+                priority = self._get_priority(item)
+            seq = self._sequence
+            self._sequence += 1
+            await self._queue.put((priority, seq, item))
+            self._items_by_key[item_key] = (priority, seq, item)
             self._queued_items.add(item_key)
             queue_size = self._queue.qsize()
             logger.info(
@@ -96,7 +107,7 @@ class QueueProcessor(ABC):
 
         # Create queue if it doesn't exist
         if self._queue is None:
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.PriorityQueue()
 
         # Load state first
         await self.load_state()
@@ -129,8 +140,9 @@ class QueueProcessor(ABC):
             except Exception:
                 pass  # Ignore errors during cleanup
 
-        # Clear the queued items set
+        # Clear the queued items set and items_by_key
         self._queued_items.clear()
+        self._items_by_key.clear()
 
         # Set queue to None to ensure clean state
         self._queue = None
@@ -143,7 +155,9 @@ class QueueProcessor(ABC):
             try:
                 # Get the next item from the queue
                 try:
-                    item = await asyncio.wait_for(self._queue.get(), timeout=5.0)
+                    priority, seq, item = await asyncio.wait_for(
+                        self._queue.get(), timeout=5.0
+                    )
                 except asyncio.TimeoutError:
                     # Timeout - check if we should continue or exit
                     if self._shutdown_event.is_set():
@@ -161,7 +175,10 @@ class QueueProcessor(ABC):
                     f"{self.__class__.__name__}: Processing item: {item} [trace_id: {trace_id}]"
                 )
 
-                # Track in-progress item so it's persisted if we crash
+                # Track in-progress item so it's persisted if we crash.
+                # Remove from _items_by_key since it's no longer "queued".
+                item_key = self.get_item_key(item)
+                self._items_by_key.pop(item_key, None)
                 self._in_progress_item = item
                 await self.save_state()
 
@@ -173,8 +190,8 @@ class QueueProcessor(ABC):
                     )
                     # Task succeeded - remove from queue
                     self._queue.task_done()
-                    item_key = self.get_item_key(item)
                     self._queued_items.discard(item_key)
+                    self._items_by_key.pop(item_key, None)
                     self._retry_counts.pop(
                         item_key, None
                     )  # Clear retry count on success
@@ -186,8 +203,6 @@ class QueueProcessor(ABC):
                     )
                 except Exception as e:
                     from video_grouper.utils.youtube_upload import YouTubeQuotaError
-
-                    item_key = self.get_item_key(item)
 
                     if isinstance(e, YouTubeQuotaError):
                         # Quota errors should not be retried immediately.
@@ -215,7 +230,10 @@ class QueueProcessor(ABC):
 
                         # Sleep until quota resets, then requeue
                         await asyncio.sleep(wait_seconds)
-                        await self._queue.put(item)
+                        new_seq = self._sequence
+                        self._sequence += 1
+                        await self._queue.put((priority, new_seq, item))
+                        self._items_by_key[item_key] = (priority, new_seq, item)
                         self._retry_counts.pop(item_key, None)
                         await self.save_state()
                         logger.info(
@@ -231,10 +249,13 @@ class QueueProcessor(ABC):
                     retry_count = self._retry_counts.get(item_key, 0)
 
                     if retry_count < self._max_retries:
-                        # Task failed but can be retried - requeue at the end
+                        # Task failed but can be retried - requeue with low priority
                         self._queue.task_done()
                         self._in_progress_item = None
-                        await self._queue.put(item)
+                        new_seq = self._sequence
+                        self._sequence += 1
+                        await self._queue.put((3, new_seq, item))
+                        self._items_by_key[item_key] = (3, new_seq, item)
                         self._retry_counts[item_key] = retry_count + 1
                         queue_size = self._queue.qsize()
                         logger.info(
@@ -246,6 +267,7 @@ class QueueProcessor(ABC):
                         self._queue.task_done()
                         self._in_progress_item = None
                         self._queued_items.discard(item_key)
+                        self._items_by_key.pop(item_key, None)
                         self._retry_counts.pop(item_key, None)
                         queue_size = self._queue.qsize()
                         logger.error(
@@ -275,13 +297,14 @@ class QueueProcessor(ABC):
         state_file = os.path.join(self.storage_path, self.get_state_file_name())
 
         try:
-            # Snapshot the queue's internal deque without draining it.
-            # This avoids the race condition where draining and replacing
-            # the queue could lose items or strand the processing loop.
-            items = list(self._queue._queue) if self._queue else []
+            # Build sorted snapshot from _items_by_key (the canonical state).
+            items = sorted(self._items_by_key.values(), key=lambda x: (x[0], x[1]))
 
-            # Serialize items
-            serialized_items = [self._serialize_item(item) for item in items]
+            # Serialize items with priority metadata
+            serialized_items = [
+                {"priority": pri, "seq": seq, **self._serialize_item(task)}
+                for pri, seq, task in items
+            ]
 
             # Build state with in-progress item tracking
             state = {
@@ -339,12 +362,15 @@ class QueueProcessor(ABC):
                     task = self._deserialize_task(in_progress_data)
                     if task:
                         self._inject_storage_path(task)
-                        await self._queue.put(task)
+                        seq = self._sequence
+                        self._sequence += 1
+                        await self._queue.put((0, seq, task))
                         item_key = self.get_item_key(task)
+                        self._items_by_key[item_key] = (0, seq, task)
                         self._queued_items.add(item_key)
                         restored_count += 1
                         logger.info(
-                            f"{self.__class__.__name__}: Restored in-progress task to front of queue: {task}"
+                            f"{self.__class__.__name__}: Restored in-progress task to front of queue (priority 0): {task}"
                         )
                 except Exception as e:
                     logger.error(
@@ -359,13 +385,19 @@ class QueueProcessor(ABC):
                         skipped_count += 1
                         continue
 
+                    # Extract priority and seq before deserializing
+                    priority = item_data.pop("priority", 2)
+                    seq = item_data.pop("seq", self._sequence)
+                    self._sequence = max(self._sequence, seq + 1)
+
                     # Deserialize the task
                     task = self._deserialize_task(item_data)
                     if task:
                         self._inject_storage_path(task)
                         # Add to queue and track
-                        await self._queue.put(task)
+                        await self._queue.put((priority, seq, task))
                         item_key = self.get_item_key(task)
+                        self._items_by_key[item_key] = (priority, seq, task)
                         self._queued_items.add(item_key)
                         restored_count += 1
                         logger.debug(
@@ -405,19 +437,28 @@ class QueueProcessor(ABC):
         }
 
     def update_in_place(self, item_key: str, new_task: BaseTask) -> None:
-        """Update a queued item in place, preserving its position in the queue.
+        """Update a queued item in place, preserving its priority and sequence.
 
-        Directly mutates the internal deque. This is safe because asyncio is
-        single-threaded and this method is only called from coroutines that
-        are not currently yielded inside Queue.get/put.
+        Replaces the task in _items_by_key and rebuilds the PriorityQueue.
+        This is safe because asyncio is single-threaded and this method is
+        only called from coroutines that are not currently yielded inside
+        Queue.get/put.
         """
-        if self._queue is None:
+        if item_key not in self._items_by_key:
             return
-        deque = self._queue._queue
-        for idx, item in enumerate(deque):
-            if self.get_item_key(item) == item_key:
-                deque[idx] = new_task
-                break
+        pri, seq, _old_task = self._items_by_key[item_key]
+        self._items_by_key[item_key] = (pri, seq, new_task)
+        self._rebuild_queue()
+
+    def _rebuild_queue(self):
+        """Reconstruct the PriorityQueue from _items_by_key."""
+        self._queue = asyncio.PriorityQueue()
+        for pri, seq, task in sorted(self._items_by_key.values()):
+            self._queue.put_nowait((pri, seq, task))
+
+    def get_queued_items(self) -> list[BaseTask]:
+        """Return a snapshot of all queued items (for inspection, not modification)."""
+        return [task for _, _, task in sorted(self._items_by_key.values())]
 
     def _deserialize_task(self, item_data: Dict[str, object]) -> BaseTask:
         """

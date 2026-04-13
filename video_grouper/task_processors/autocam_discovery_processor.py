@@ -57,12 +57,11 @@ class AutocamDiscoveryProcessor(PollingProcessor):
             )
             return
 
-        # Get all currently queued group names (read-only peek via internal deque)
+        # Get all currently queued group names
         queued_group_names = set()
-        if self.autocam_processor._queue is not None:
-            for item in list(self.autocam_processor._queue._queue):
-                if hasattr(item, "group_dir"):
-                    queued_group_names.add(str(item.group_dir))
+        for item in self.autocam_processor.get_queued_items():
+            if hasattr(item, "group_dir"):
+                queued_group_names.add(str(item.group_dir))
 
         logger.info(f"AUTOCAM_DISCOVERY: Currently queued groups: {queued_group_names}")
 
