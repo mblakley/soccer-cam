@@ -200,6 +200,63 @@ class TestPlayMetricsService:
         assert game["source"] == "PlayMetrics"
         assert game["team_name"] == "Test Team"
 
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.models.MatchInfo.update_team_info")
+    def test_populate_match_info_translates_is_home_to_home(
+        self, mock_update, mock_api_class, playmetrics_config
+    ):
+        """When the PlayMetrics game is marked ``is_home=True``, location
+        must be ``"Home"`` — NOT the PlayMetrics venue name. match_info.ini's
+        location field is a Home/Away designation; the venue name lives
+        elsewhere (or not at all)."""
+        mock_api = Mock()
+        mock_api.enabled = True
+        mock_api.login.return_value = True
+        mock_api.team_name = "Test Team"
+        mock_api.find_game_for_recording.return_value = {
+            "opponent": "Opponent Team",
+            "location": "Flash Fields B",  # venue name — must NOT land here
+            "is_home": True,
+        }
+        mock_api_class.return_value = mock_api
+
+        service = PlayMetricsService([playmetrics_config])
+        result = service.populate_match_info(
+            "/test/dir", datetime.now(), datetime.now() + timedelta(hours=2)
+        )
+
+        assert result is True
+        mock_update.assert_called_once()
+        team_info = mock_update.call_args[0][1]
+        assert team_info["location"] == "Home"
+        assert team_info["location"] != "Flash Fields B"
+
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.models.MatchInfo.update_team_info")
+    def test_populate_match_info_translates_is_home_to_away(
+        self, mock_update, mock_api_class, playmetrics_config
+    ):
+        """is_home=False → location "Away"."""
+        mock_api = Mock()
+        mock_api.enabled = True
+        mock_api.login.return_value = True
+        mock_api.team_name = "Test Team"
+        mock_api.find_game_for_recording.return_value = {
+            "opponent": "Opponent Team",
+            "location": "Glacier Ridge Sports Park",
+            "is_home": False,
+        }
+        mock_api_class.return_value = mock_api
+
+        service = PlayMetricsService([playmetrics_config])
+        result = service.populate_match_info(
+            "/test/dir", datetime.now(), datetime.now() + timedelta(hours=2)
+        )
+
+        assert result is True
+        team_info = mock_update.call_args[0][1]
+        assert team_info["location"] == "Away"
+
 
 class TestNtfyService:
     """Test NTFY service functionality."""

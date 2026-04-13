@@ -157,11 +157,20 @@ class PlayMetricsService:
         try:
             from video_grouper.models import MatchInfo
 
-            # Convert PlayMetrics game to match info format
+            # PlayMetrics ``location`` is the venue name (e.g. "Flash Fields
+            # B"), NOT the Home/Away designation that match_info.ini expects.
+            # Translate is_home → "Home"/"Away" and drop the venue name so
+            # downstream filename formatting (which renders ``({location})``)
+            # stays consistent with the rest of the pipeline.
+            if "is_home" in game:
+                location = "Home" if game["is_home"] else "Away"
+            else:
+                location = ""
+
             team_info = {
                 "my_team_name": game.get("team_name", ""),
                 "opponent_team_name": game.get("opponent", ""),
-                "location": game.get("location", ""),
+                "location": location,
             }
 
             # Add date/time if available
