@@ -223,12 +223,20 @@ class Orchestrator:
             return
 
         # Clean stale worker entries (> 24 hours old)
+        # Skip if the same hostname also has a fresh entry (WAL corruption
+        # can cause duplicate rows despite PRIMARY KEY constraint).
         status = self.api.get_status()
         if status:
             now = time.time()
-            for w in status.get("workers", []):
+            workers = status.get("workers", [])
+            fresh_hostnames = {
+                w["hostname"]
+                for w in workers
+                if (now - (w.get("last_seen") or 0)) < 86400
+            }
+            for w in workers:
                 age = now - (w.get("last_seen") or 0)
-                if age > 86400:  # 24 hours
+                if age > 86400 and w["hostname"] not in fresh_hostnames:
                     try:
                         import urllib.request
 

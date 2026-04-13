@@ -262,12 +262,74 @@ def archive_item(item_id: int):
 
 @app.delete("/api/workers/{hostname}")
 def delete_worker(hostname: str):
-    """Remove a stale worker status entry."""
+    """Remove stale worker status entries.
+
+    If duplicate rows exist (WAL corruption), deletes the oldest one
+    by last_seen timestamp, keeping the freshest.
+    """
     q = _get_queue()
     conn = q._get_conn()
-    conn.execute("DELETE FROM worker_status WHERE hostname = ?", (hostname,))
+    # Count entries for this hostname
+    count = conn.execute(
+        "SELECT COUNT(*) FROM worker_status WHERE hostname = ?", (hostname,)
+    ).fetchone()[0]
+    if count > 1:
+        # Keep only the freshest entry
+        conn.execute(
+            """DELETE FROM worker_status WHERE hostname = ? AND rowid NOT IN (
+                SELECT rowid FROM worker_status WHERE hostname = ?
+                ORDER BY last_seen DESC LIMIT 1
+            )""",
+            (hostname, hostname),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM worker_status WHERE hostname = ?", (hostname,)
+        )
     conn.commit()
-    return {"ok": True, "hostname": hostname}
+    return {"ok": True, "hostname": hostname, "deleted": count}
+
+
+@app.post("/api/maintenance/checkpoint")
+def checkpoint():
+    """Force WAL checkpoint on work_queue.db."""
+    q = _get_queue()
+    conn = q._get_conn()
+    result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    return {"ok": True, "busy": result[0], "log": result[1], "checkpointed": result[2]}
+
+
+@app.post("/api/maintenance/rebuild-workers")
+def rebuild_workers():
+    """Rebuild worker_status table to fix duplicate rows from WAL corruption."""
+    q = _get_queue()
+    conn = q._get_conn()
+    # Save fresh entries (most recent per hostname)
+    rows = conn.execute(
+        """SELECT hostname, MAX(last_seen) as last_seen, status,
+                  current_task_id, gpu_name, gpu_util_pct, gpu_temp_c,
+                  gpu_memory_used_mb, gpu_memory_total_mb, cpu_util_pct,
+                  ram_used_gb, ram_total_gb, disk_free_gb, is_user_idle
+           FROM worker_status GROUP BY hostname"""
+    ).fetchall()
+    # Drop and recreate (without foreign key — task_ids may be archived)
+    conn.execute("DROP TABLE IF EXISTS worker_status")
+    conn.execute("""CREATE TABLE worker_status (
+        hostname TEXT PRIMARY KEY,
+        last_seen REAL, status TEXT, current_task_id INTEGER,
+        gpu_name TEXT, gpu_util_pct REAL, gpu_temp_c REAL,
+        gpu_memory_used_mb REAL, gpu_memory_total_mb REAL,
+        cpu_util_pct REAL, ram_used_gb REAL, ram_total_gb REAL,
+        disk_free_gb REAL, is_user_idle INTEGER
+    )""")
+    # Re-insert deduplicated rows
+    for r in rows:
+        conn.execute(
+            """INSERT INTO worker_status VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tuple(r),
+        )
+    conn.commit()
+    return {"ok": True, "workers_kept": len(rows)}
 
 
 @app.patch("/api/queue/{item_id}/priority")
