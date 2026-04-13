@@ -39,6 +39,47 @@ class TestMatchInfo:
         )
         assert unpopulated.is_populated() is False
 
+    def test_is_populated_treats_unknown_as_unpopulated(self):
+        """`"Unknown"` is the NTFY fallback sentinel — it must not count as
+        populated, otherwise populate_match_info_from_apis() will skip the
+        PlayMetrics lookup and the real opponent never gets written."""
+        for field, kwargs in [
+            ("my_team_name", {"my_team_name": "Unknown"}),
+            ("opponent_team_name", {"opponent_team_name": "Unknown"}),
+            ("location", {"location": "Unknown"}),
+        ]:
+            defaults = dict(
+                my_team_name="Team A",
+                opponent_team_name="Team B",
+                location="Home",
+                start_time_offset="00:10:00",
+                total_duration="01:30:00",
+            )
+            defaults.update(kwargs)
+            mi = MatchInfo(**defaults)
+            assert mi.is_populated() is False, (
+                f"{field}='Unknown' should count as not populated"
+            )
+
+        # Case-insensitive: lowercase "unknown" and mixed case should also fail
+        mi = MatchInfo(
+            my_team_name="Team A",
+            opponent_team_name="unknown",
+            location="Home",
+            start_time_offset="00:10:00",
+            total_duration="01:30:00",
+        )
+        assert mi.is_populated() is False
+
+        mi = MatchInfo(
+            my_team_name="Team A",
+            opponent_team_name="UNKNOWN",
+            location="Home",
+            start_time_offset="00:10:00",
+            total_duration="01:30:00",
+        )
+        assert mi.is_populated() is False
+
     def test_get_team_info(self):
         """Test that get_team_info returns the correct dictionary."""
         match_info = MatchInfo(

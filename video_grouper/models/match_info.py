@@ -269,8 +269,14 @@ class MatchInfo:
     def is_populated(self) -> bool:
         """Check if all required fields are populated.
 
+        A field of ``"Unknown"`` (any case) counts as NOT populated — it is
+        the sentinel the NTFY fallback writes when the user hasn't confirmed
+        the opponent, and treating it as populated would cause
+        ``populate_match_info_from_apis`` to skip the PlayMetrics lookup and
+        leave "Unknown" baked in permanently.
+
         Returns:
-            True if all fields are filled, False otherwise
+            True if all fields are filled with real values, False otherwise
         """
         required_fields = [
             self.my_team_name,
@@ -278,7 +284,10 @@ class MatchInfo:
             self.location,
             self.start_time_offset,
         ]
-        return all(field.strip() for field in required_fields)
+        return all(
+            field.strip() and field.strip().lower() != "unknown"
+            for field in required_fields
+        )
 
     def get_total_duration_seconds(self) -> int:
         """Get the total duration in seconds.
