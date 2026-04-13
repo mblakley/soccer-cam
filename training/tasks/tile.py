@@ -33,8 +33,9 @@ def run_tile(
     io = TaskIO(game_id, local_work_dir, server_share)
     io.ensure_space(needed_gb=10)  # video + packs can be large
 
-    # Pull video to local SSD
-    io.pull_video()
+    # Don't pull all videos upfront — tournament games can be 100GB+.
+    # Instead, stage one segment at a time inside _tile_segments().
+    io.local_video.mkdir(parents=True, exist_ok=True)
 
     cfg = io.cfg
 
@@ -63,26 +64,37 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
     total_pack_bytes = 0
     io.local_packs.mkdir(parents=True, exist_ok=True)
 
-    # Process each video segment (skip concatenated full-game videos that are too large)
-    local_videos = sorted(io.local_video.glob("*.mp4")) + sorted(
-        io.local_video.glob("*.dav")
+    # Find segment videos from source (F: or SMB share) — don't copy all upfront.
+    # Tournament games can have 100GB+ of video files which would fill the SSD.
+    source_video_dir = io.video_path()
+    if not source_video_dir:
+        raise FileNotFoundError(f"No video path found for {game_id}")
+
+    source_videos = sorted(source_video_dir.glob("*.mp4")) + sorted(
+        source_video_dir.glob("*.dav")
     )
-    skip_keywords = ("combined", "raw", "once-processed", "processed")
-    for video_path in local_videos:
-        segment = video_path.stem
+    if not source_videos:
+        source_videos = sorted(source_video_dir.rglob("*.mp4"))
+
+    import shutil as _stage_shutil
+
+    for source_video in source_videos:
+        segment = source_video.stem
 
         # Only tile individual segment files (they have [F] or [0@0] in the name).
-        # Skip concatenated full-game videos (raw, combined, etc.) — they duplicate
-        # the individual segments and produce 100GB+ packs that fill the SSD.
         is_segment = "[F]" in segment or "[0@0]" in segment
         if not is_segment:
             logger.info("  Skipping non-segment video: %s", segment)
             continue
 
-        # Check disk space before each segment
-        import shutil
+        # Stage this one segment to local SSD
+        video_path = io.local_video / source_video.name
+        if not video_path.exists():
+            logger.info("  Staging %s to SSD...", source_video.name)
+            _stage_shutil.copy2(str(source_video), str(video_path))
 
-        _, _, free = shutil.disk_usage(str(io.local_work_dir))
+        # Check disk space before each segment
+        _, _, free = _stage_shutil.disk_usage(str(io.local_work_dir))
         free_gb = free / (1024**3)
         if free_gb < cfg.resources.min_disk_free_gb:
             logger.error(
