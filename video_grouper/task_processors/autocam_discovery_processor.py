@@ -156,5 +156,6 @@ class AutocamDiscoveryProcessor(PollingProcessor):
 
     def _get_autocam_input_output_paths(self, group_dir: Path) -> tuple[str, str]:
         """Find the raw video file and determine the autocam output path."""
-        # Autocam 3.x outputs .mkv format; the task will convert to .mp4 after
-        return get_autocam_input_output_paths(group_dir, output_ext="mkv")
+        # Autocam 3.x lets us choose the output container from the Save As
+        # dialog, so we write directly to .mp4 and skip the post-remux step.
+        return get_autocam_input_output_paths(group_dir, output_ext="mp4")
