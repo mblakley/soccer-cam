@@ -357,6 +357,52 @@ class TestMatchInfoService:
         assert start_time == mock_file1.start_time
         assert end_time == mock_file2.end_time
 
+    @patch("video_grouper.task_processors.services.match_info_service.DirectoryState")
+    def test_get_recording_timespan_falls_back_to_filenames(
+        self, mock_dir_state, mock_services, tmp_path
+    ):
+        """After a group transitions to combined, DirectoryState.files is
+        empty. The service should fall back to parsing Reolink clip filenames
+        on disk so post-combine match_info re-queries still work."""
+        teamsnap, playmetrics, ntfy = mock_services
+        service = MatchInfoService(teamsnap, playmetrics, ntfy)
+
+        # DirectoryState returns empty files (post-combine state)
+        mock_state = Mock()
+        mock_state.files = {}
+        mock_dir_state.return_value = mock_state
+
+        # Drop actual Reolink-named files on disk
+        (tmp_path / "RecM09_DST20260412_154649_155148_0_ABC_DEF.mp4").touch()
+        (tmp_path / "RecM09_DST20260412_155149_155649_0_ABC_DEF.mp4").touch()
+        (tmp_path / "RecM09_DST20260412_165649_170148_0_ABC_DEF.mp4").touch()
+        # Unrelated files should be ignored
+        (tmp_path / "combined.mp4").touch()
+        (tmp_path / "match_info.ini").touch()
+
+        span = service._get_recording_timespan(str(tmp_path))
+        assert span is not None
+        start, end = span
+        assert start == datetime(2026, 4, 12, 15, 46, 49)
+        assert end == datetime(2026, 4, 12, 17, 1, 48)
+
+    @patch("video_grouper.task_processors.services.match_info_service.DirectoryState")
+    def test_get_recording_timespan_returns_none_when_no_files_and_no_clips(
+        self, mock_dir_state, mock_services, tmp_path
+    ):
+        """Empty state AND no recognizable clip filenames → None."""
+        teamsnap, playmetrics, ntfy = mock_services
+        service = MatchInfoService(teamsnap, playmetrics, ntfy)
+
+        mock_state = Mock()
+        mock_state.files = {}
+        mock_dir_state.return_value = mock_state
+
+        (tmp_path / "combined.mp4").touch()
+        (tmp_path / "match_info.ini").touch()
+
+        assert service._get_recording_timespan(str(tmp_path)) is None
+
 
 class TestCleanupService:
     """Test cleanup service functionality."""
