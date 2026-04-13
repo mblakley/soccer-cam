@@ -85,6 +85,13 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
             logger.error(f"Failed to load config: {e}")
             return
 
+        # Set CWD to storage path so relative paths resolve correctly.
+        # Windows services default to C:\WINDOWS\system32 which breaks
+        # state.json lock files, video paths, and everything else.
+        storage_dir = config_path.parent
+        os.chdir(storage_dir)
+        logger.info(f"Set working directory to {storage_dir}")
+
         app = VideoGrouperApp(config)
 
         self.loop = asyncio.new_event_loop()
