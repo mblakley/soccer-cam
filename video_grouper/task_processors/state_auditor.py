@@ -174,7 +174,14 @@ class StateAuditor(PollingProcessor):
 
                     # Skip NTFY flow for short clips that aren't real games
                     min_duration = self.config.recording.min_duration
-                    duration = await get_video_duration(combined_path)
+                    try:
+                        duration = await get_video_duration(combined_path)
+                    except Exception as exc:
+                        logger.warning(
+                            f"STATE_AUDITOR: Could not get duration for {group_dir}: {exc}. "
+                            f"Assuming long video, continuing."
+                        )
+                        duration = None
                     if duration is not None and duration < min_duration:
                         logger.info(
                             f"STATE_AUDITOR: Combined video too short "
