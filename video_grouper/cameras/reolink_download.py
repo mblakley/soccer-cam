@@ -845,7 +845,7 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
     We reassemble the Annex-B stream into a temp file for PyAV to parse,
     using the embedded microsecond timestamps for accurate PTS.
     """
-    import av
+    from video_grouper.utils.ffmpeg_utils import av_open_read, av_open_write
 
     # Read all frames with their timestamps
     frames = []
@@ -877,9 +877,9 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
         else:
             fmt = "hevc" if codec == "H265" else "h264"
 
-        with av.open(annexb_path, format=fmt) as input_ct:
-            with av.open(
-                mp4_path, "w", format="mp4", options={"movflags": "faststart"}
+        with av_open_read(annexb_path, format=fmt) as input_ct:
+            with av_open_write(
+                mp4_path, options={"movflags": "faststart"}
             ) as output_ct:
                 in_stream = input_ct.streams.video[0]
                 out_stream = output_ct.add_stream_from_template(in_stream)

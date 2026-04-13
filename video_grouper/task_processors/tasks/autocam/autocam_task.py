@@ -10,6 +10,8 @@ from typing import Dict
 
 import av
 
+from video_grouper.utils.ffmpeg_utils import av_open_read, av_open_write
+
 from ..base_task import BaseTask
 from ...queue_type import QueueType
 from video_grouper.utils.config import AutocamConfig
@@ -93,7 +95,7 @@ class AutocamTask(BaseTask):
             return False
 
         try:
-            with av.open(path) as container:
+            with av_open_read(path) as container:
                 duration = None
                 if container.duration is not None:
                     duration = container.duration / av.time_base
@@ -187,8 +189,8 @@ class AutocamTask(BaseTask):
         try:
             logger.info(f"AUTOCAM: Remuxing {mkv_path} -> {mp4_path}")
 
-            with av.open(mkv_path) as input_container:
-                with av.open(mp4_path, "w") as output_container:
+            with av_open_read(mkv_path) as input_container:
+                with av_open_write(mp4_path) as output_container:
                     stream_map = {}
                     for in_stream in input_container.streams:
                         if in_stream.type in ("video", "audio"):

@@ -12,6 +12,57 @@ logger = logging.getLogger(__name__)
 # Long videos (2+ hours of 180-degree footage) can take a while to process.
 FFMPEG_TIMEOUT = 1800
 
+# Per-I/O timeout passed to libav via PyAV's interrupt_callback. This is the
+# only hang-protection that actually works for av.open — asyncio.wait_for on a
+# thread can't kill the underlying C call since Python threads are unkillable.
+AV_IO_TIMEOUT = 30.0
+
+_EXT_TO_AV_FORMAT = {
+    ".mp4": "mp4",
+    ".m4v": "mp4",
+    ".mov": "mp4",
+    ".mkv": "matroska",
+}
+
+
+def _av_format_for(path: str) -> Optional[str]:
+    return _EXT_TO_AV_FORMAT.get(os.path.splitext(path)[1].lower())
+
+
+def av_open_read(
+    path: str,
+    *,
+    format: Optional[str] = None,
+    timeout: float = AV_IO_TIMEOUT,
+    **kwargs,
+):
+    """Open a container for reading with a format hint and libav I/O timeout.
+
+    Every read site in this codebase goes through here. The ``format`` hint
+    skips libav's probe step, which has been observed to hang in the frozen
+    Windows service on large inputs. The ``timeout`` routes through libav's
+    interrupt_callback so a hung C-level read is actually interruptible —
+    unlike ``asyncio.wait_for`` wrapping a thread, which can't kill the thread.
+    """
+    fmt = format if format is not None else _av_format_for(path)
+    return av.open(path, format=fmt, timeout=timeout, **kwargs)
+
+
+def av_open_write(
+    path: str,
+    *,
+    format: str = "mp4",
+    timeout: float = AV_IO_TIMEOUT,
+    **kwargs,
+):
+    """Open a container for writing with an explicit format.
+
+    Every write site in this codebase goes through here. PyInstaller-frozen
+    bundles can't infer output format from the extension, so we always pass
+    one explicitly (defaults to mp4, which covers every current call site).
+    """
+    return av.open(path, "w", format=format, timeout=timeout, **kwargs)
+
 
 def _scaled_timeout(file_paths: list[str], base_timeout: int = FFMPEG_TIMEOUT) -> int:
     """Scale the FFmpeg timeout based on total input file size.
@@ -62,25 +113,20 @@ async def verify_ffmpeg_install() -> bool:
 
 def _get_video_duration_sync(file_path: str) -> Optional[float]:
     """Synchronous implementation: get video duration via av.open metadata."""
-    try:
-        with av.open(file_path) as container:
-            if container.duration is not None:
-                return container.duration / av.time_base
-            # Fallback: check the first video stream's duration
-            for stream in container.streams.video:
-                if stream.duration is not None and stream.time_base is not None:
-                    return float(stream.duration * stream.time_base)
-    except Exception:
-        raise
+    with av_open_read(file_path) as container:
+        if container.duration is not None:
+            return container.duration / av.time_base
+        # Fallback: check the first video stream's duration
+        for stream in container.streams.video:
+            if stream.duration is not None and stream.time_base is not None:
+                return float(stream.duration * stream.time_base)
     return None
 
 
 async def get_video_duration(file_path: str) -> Optional[float]:
     """Get the duration of a video file using PyAV."""
     try:
-        return await _run_in_thread_with_timeout(
-            _get_video_duration_sync, file_path, timeout=60
-        )
+        return await asyncio.to_thread(_get_video_duration_sync, file_path)
     except Exception as e:
         logger.error(f"Error getting video duration: {e}")
         return None
@@ -110,9 +156,9 @@ async def verify_mp4_duration(
 
 def _remux_dav_to_mp4_sync(file_path: str, output_path: str) -> str:
     """Synchronous implementation: remux DAV -> MP4 (video copy, AAC re-encode)."""
-    with av.open(file_path) as input_container:
-        with av.open(
-            output_path, "w", format="mp4", options={"movflags": "faststart"}
+    with av_open_read(file_path) as input_container:
+        with av_open_write(
+            output_path, options={"movflags": "faststart"}
         ) as output_container:
             # Set up streams
             in_video_stream = None
@@ -254,7 +300,7 @@ def _create_screenshot_sync(
     except (ValueError, IndexError):
         seconds = 1.0
 
-    with av.open(video_path) as container:
+    with av_open_read(video_path) as container:
         stream = container.streams.video[0]
         duration = float(stream.duration * stream.time_base) if stream.duration else 0
 
@@ -344,9 +390,9 @@ def _trim_video_sync(
         except (ValueError, IndexError):
             pass
 
-    with av.open(input_path) as input_container:
-        with av.open(
-            output_path, "w", format="mp4", options={"movflags": "faststart"}
+    with av_open_read(input_path) as input_container:
+        with av_open_write(
+            output_path, options={"movflags": "faststart"}
         ) as output_container:
             # Create output streams as copies of input streams
             stream_map = {}
@@ -453,8 +499,8 @@ def _combine_videos_sync(
     if not file_paths:
         raise ValueError("No files to combine")
 
-    with av.open(
-        output_path, "w", format="mp4", options={"movflags": "faststart"}
+    with av_open_write(
+        output_path, options={"movflags": "faststart"}
     ) as output_container:
         # Write camera metadata if available
         if camera_name:
@@ -470,7 +516,7 @@ def _combine_videos_sync(
         out_audio_stream = None
 
         # Probe the first file to set up output streams
-        with av.open(file_paths[0]) as probe:
+        with av_open_read(file_paths[0]) as probe:
             for stream in probe.streams:
                 if stream.type == "video" and out_video_stream is None:
                     out_video_stream = output_container.add_stream_from_template(stream)
@@ -495,7 +541,7 @@ def _combine_copy(
     video_pts_offset = 0
 
     for file_path in file_paths:
-        with av.open(file_path) as input_container:
+        with av_open_read(file_path) as input_container:
             in_video = None
             in_audio = None
             for stream in input_container.streams:
@@ -609,8 +655,8 @@ def _extract_clip_copy_sync(
     input_path: str, start_sec: float, end_sec: float, output_path: str
 ) -> bool:
     """Synchronous implementation: extract clip with stream copy."""
-    with av.open(input_path) as input_container:
-        with av.open(output_path, "w", format="mp4") as output_container:
+    with av_open_read(input_path) as input_container:
+        with av_open_write(output_path) as output_container:
             stream_map = {}
             for in_stream in input_container.streams:
                 if in_stream.type in ("video", "audio"):
@@ -654,8 +700,8 @@ def _extract_clip_reencode_sync(
     input_path: str, start_sec: float, end_sec: float, output_path: str
 ) -> bool:
     """Synchronous implementation: extract clip with full re-encode (fallback)."""
-    with av.open(input_path) as input_container:
-        with av.open(output_path, "w", format="mp4") as output_container:
+    with av_open_read(input_path) as input_container:
+        with av_open_write(output_path) as output_container:
             in_video = input_container.streams.video[0]
             in_audio = None
             for stream in input_container.streams:
@@ -766,12 +812,12 @@ async def extract_clip(
 
 def _compile_clips_sync(clip_paths: list[str], output_path: str) -> bool:
     """Synchronous implementation: concatenate clips with full re-encode."""
-    with av.open(output_path, "w", format="mp4") as output_container:
+    with av_open_write(output_path) as output_container:
         out_video = None
         out_audio = None
 
         # Probe first clip for stream parameters
-        with av.open(clip_paths[0]) as probe:
+        with av_open_read(clip_paths[0]) as probe:
             in_video = probe.streams.video[0]
             in_audio = None
             for stream in probe.streams:
@@ -794,7 +840,7 @@ def _compile_clips_sync(clip_paths: list[str], output_path: str) -> bool:
                 out_audio.bit_rate = 128000
 
         for clip_path in clip_paths:
-            with av.open(clip_path) as input_container:
+            with av_open_read(clip_path) as input_container:
                 streams_to_decode = list(input_container.streams.video)
                 if out_audio:
                     streams_to_decode.extend(list(input_container.streams.audio))

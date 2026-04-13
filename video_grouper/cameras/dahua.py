@@ -1130,9 +1130,9 @@ class DahuaCamera(Camera):
 
                 # Use PyAV to extract the first frame
                 try:
-                    import av
+                    from video_grouper.utils.ffmpeg_utils import av_open_read
 
-                    with av.open(temp_file) as container:
+                    with av_open_read(temp_file) as container:
                         stream = container.streams.video[0]
                         # Seek to ~1 second in
                         target_pts = int(1.0 / stream.time_base)
