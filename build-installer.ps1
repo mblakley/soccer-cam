@@ -1,7 +1,6 @@
 # Build script for VideoGrouper installer
 
-# Configuration
-$VERSION = "0.1.0"
+# Configuration — version is sourced from video_grouper/version.py (single master)
 $BUILD_NUMBER = "0"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ICON_PATH = Join-Path $SCRIPT_DIR "video_grouper\icon.ico"
@@ -25,6 +24,14 @@ if (-not (Test-Path $BUILD_DIR)) {
 # Install dev dependencies (including PyInstaller) using uv
 Write-Host "Installing dependencies including PyInstaller..."
 uv sync --extra dev
+
+# Read the master version from video_grouper/version.py
+$VERSION = (uv run python -c "from video_grouper.version import VERSION; print(VERSION)").Trim()
+if (-not $VERSION) {
+    Write-Error "Failed to read version from video_grouper/version.py"
+    exit 1
+}
+Write-Host "Building version: $VERSION"
 
 # Generate YouTube OAuth secrets file from environment variables (set by GitHub Actions)
 $SECRETS_FILE = Join-Path $SCRIPT_DIR "video_grouper\utils\_youtube_secrets.py"

@@ -2301,7 +2301,6 @@ wheels = [
 
 [[package]]
 name = "video-grouper"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -2412,7 +2411,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'ml'", specifier = ">=0.34.0" },
     { name = "webdriver-manager", specifier = ">=4.0.1" },
 ]
-provides-extras = ["metrics", "tray", "service", "dev", "ml"]
+provides-extras = ["dev", "metrics", "ml", "service", "tray"]
 
 [package.metadata.requires-dev]
 dev = [
