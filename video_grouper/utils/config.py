@@ -282,7 +282,7 @@ class Config(BaseModel):
 
 def load_config(config_path: Path) -> Config:
     parser = configparser.ConfigParser()
-    parser.read(config_path)
+    parser.read(config_path, encoding="utf-8")
 
     config_dict = {s: dict(parser.items(s)) for s in parser.sections()}
 
@@ -359,14 +359,21 @@ def save_config(config: Config, config_path: Path):
         if field_name == "cameras":
             continue
 
-        if field_name == "playmetrics_teams":
-            for item in value:
-                section_name = f"PLAYMETRICS.{item.team_name}"
-                item_dict = item.model_dump()
-                item_dict.pop("team_name")
+        if field_name == "playmetrics" and hasattr(value, "teams"):
+            # Write each PlayMetrics team as its own [PLAYMETRICS.TEAM.N] section
+            # so load_config's section.startswith("PLAYMETRICS.TEAM.") check
+            # picks them up.
+            for index, item in enumerate(value.teams):
+                section_name = f"PLAYMETRICS.TEAM.{index}"
                 parser[section_name] = {
-                    k: str(v) for k, v in item_dict.items() if v is not None
+                    k: str(v) for k, v in item.model_dump().items() if v is not None
                 }
+            # Main [PLAYMETRICS] section: credentials + enabled, but not teams
+            playmetrics_dict = value.model_dump()
+            playmetrics_dict.pop("teams", None)
+            parser[alias] = {
+                k: str(v) for k, v in playmetrics_dict.items() if v is not None
+            }
             continue
 
         if field_name == "teamsnap" and hasattr(value, "teams"):
@@ -406,7 +413,7 @@ def save_config(config: Config, config_path: Path):
             if section_items:
                 parser[alias] = section_items
 
-    with config_path.open("w") as f:
+    with config_path.open("w", encoding="utf-8") as f:
         parser.write(f)
 
 
