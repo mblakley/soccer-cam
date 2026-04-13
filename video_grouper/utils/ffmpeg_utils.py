@@ -454,7 +454,7 @@ def _combine_videos_sync(
         raise ValueError("No files to combine")
 
     with av.open(
-        output_path, "w", options={"movflags": "faststart"}
+        output_path, "w", format="mp4", options={"movflags": "faststart"}
     ) as output_container:
         # Write camera metadata if available
         if camera_name:
