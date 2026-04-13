@@ -72,8 +72,12 @@ Section "Install" SecInstall
     ; Also create a desktop shortcut
     CreateShortCut "$DESKTOP\VideoGrouper.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
 
-    ; Launch tray agent (will show onboarding wizard on first run)
-    Exec '"$INSTDIR\VideoGrouperTray.exe"'
+    ; Launch tray agent (will show onboarding wizard on first run).
+    ; Skip in silent mode -- /S installs need to stay headless, otherwise
+    ; the wizard blocks automation (e.g. CI and scripted upgrades).
+    ${IfNot} ${Silent}
+        Exec '"$INSTDIR\VideoGrouperTray.exe"'
+    ${EndIf}
 
     ; Create uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
