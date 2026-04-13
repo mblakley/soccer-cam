@@ -23,6 +23,7 @@ import time
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 from pydantic import BaseModel
 
 from training.pipeline.config import load_config
@@ -94,7 +95,7 @@ class WorkerStatusRequest(BaseModel):
 def claim(req: ClaimRequest):
     item = _get_queue().claim(req.capabilities, req.hostname)
     if item is None:
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
     return item
 
 
