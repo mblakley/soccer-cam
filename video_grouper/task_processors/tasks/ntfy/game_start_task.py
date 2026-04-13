@@ -14,6 +14,12 @@ from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
+# When the user confirms "Yes, game started at T", the actual start is
+# somewhere between the previous "No" (T-5min) and T.  We back up by this
+# buffer so the trim doesn't cut into the real start.  Could be made
+# configurable later; 4 minutes works well with the 5-minute question interval.
+GAME_START_BACKUP_SECONDS = 240  # 4 minutes
+
 
 class GameStartTask(BaseNtfyTask):
     """
@@ -145,13 +151,9 @@ class GameStartTask(BaseNtfyTask):
         if "yes" in response_lower or "game started" in response_lower:
             logger.info(f"Game started at {self.time_offset} for {self.group_dir}")
 
-            # Calculate the actual start time by subtracting 4 minutes from the current time offset
-            # This is because if you say "Yes" at 05:00, the game likely started after 00:00 (when we said "No" at 00:00)
-            actual_start_seconds = (
-                self.time_seconds - 240
-            )  # Subtract 4 minutes (240 seconds)
-            if actual_start_seconds < 0:
-                actual_start_seconds = 0  # Don't go below 0
+            # Back up from the confirmed time so the trim doesn't cut into
+            # the real start (see GAME_START_BACKUP_SECONDS).
+            actual_start_seconds = max(0, self.time_seconds - GAME_START_BACKUP_SECONDS)
 
             actual_start_offset = (
                 f"{actual_start_seconds // 60:02d}:{actual_start_seconds % 60:02d}"

@@ -326,6 +326,26 @@ class NtfyProcessor(QueueProcessor):
         """
         logger.info(f"NTFY_QUEUE: Requesting match info for {group_dir}")
 
+        # Skip NTFY flow for short clips that aren't real games
+        if not force and os.path.exists(combined_video_path):
+            from video_grouper.utils.ffmpeg_utils import get_video_duration
+
+            min_duration = getattr(
+                getattr(self.config, "recording", None), "min_duration", None
+            )
+            duration = await get_video_duration(combined_video_path)
+            if (
+                duration is not None
+                and min_duration is not None
+                and duration < min_duration
+            ):
+                logger.info(
+                    f"NTFY_QUEUE: Combined video too short "
+                    f"({duration:.0f}s < {min_duration}s) for {group_dir}, "
+                    f"skipping NTFY flow"
+                )
+                return False
+
         # Check if already processed or waiting
         if not force:
             if self.ntfy_service.has_been_processed(group_dir):

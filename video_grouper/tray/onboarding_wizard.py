@@ -47,7 +47,6 @@ from video_grouper.utils.config import (
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.youtube_upload import (
     authenticate_youtube_embedded,
-    get_youtube_paths,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,6 +181,7 @@ class OnboardingWizard(QDialog):
         self._camera_factory_defaults = False
         self._youtube_enabled = False
         self._youtube_authenticated = False
+        self._youtube_playlist_map: dict[str, str] = {}
         self._gcp_project_id: Optional[str] = None
         self._ntfy_enabled = False
         self._ntfy_topic = ""
@@ -1845,6 +1845,11 @@ class OnboardingWizard(QDialog):
                     for t in ts_teams
                 ]
 
+        # YouTube playlist map
+        yt_playlist_map = dc.get("youtube_playlist_map")
+        if isinstance(yt_playlist_map, dict) and yt_playlist_map:
+            self._youtube_playlist_map = dict(yt_playlist_map)
+
     def _populate_integrations_from_schedule_providers(self):
         """Pre-populate PlayMetrics / TeamSnap state from TTT schedule providers."""
         if not self._ttt_schedule_providers:
@@ -2339,7 +2344,12 @@ class OnboardingWizard(QDialog):
             )
             return
 
-        _, token_file = get_youtube_paths(storage_path)
+        # Build the token path directly from the wizard's storage path so the
+        # token lands where the service expects it (storage_path/youtube/token.json)
+        # instead of relative to get_shared_data_path().
+        yt_dir = Path(storage_path) / "youtube"
+        yt_dir.mkdir(parents=True, exist_ok=True)
+        token_file = str(yt_dir / "token.json")
 
         self._yt_auth_btn.setEnabled(False)
         self._yt_auth_status.setText("Opening browser for sign-in...")
@@ -2700,6 +2710,19 @@ class OnboardingWizard(QDialog):
         # YouTube
         config.youtube.enabled = self._youtube_enabled
 
+        # Build playlist map: start from any TTT-restored map, then ensure
+        # every TTT team has an entry (team_name -> team_name as default).
+        playlist_map = dict(self._youtube_playlist_map)
+        if self._ttt_teams:
+            for team in self._ttt_teams:
+                team_name = team.get("team_name", "")
+                if team_name and team_name not in playlist_map:
+                    playlist_map[team_name] = team_name
+        if playlist_map:
+            from video_grouper.utils.config import YouTubePlaylistMapConfig
+
+            config.youtube.playlist_map = YouTubePlaylistMapConfig(playlist_map)
+
         # NTFY
         config.ntfy.enabled = self._ntfy_enabled
         if self._ntfy_topic:
@@ -2815,6 +2838,10 @@ class OnboardingWizard(QDialog):
                         "teams": pm.get("teams", []),
                     }
 
+                # YouTube playlist map for future restores
+                if playlist_map:
+                    device_data["youtube_playlist_map"] = playlist_map
+
                 # TeamSnap credentials for future restores
                 ts = self._teamsnap_config
                 if ts.get("client_id") or ts.get("access_token"):
@@ -2832,5 +2859,18 @@ class OnboardingWizard(QDialog):
 
             # Sync schedule providers to TTT
             self._save_schedule_providers_to_ttt()
+
+        # Start the Windows service now that config is saved
+        try:
+            import subprocess
+
+            subprocess.run(
+                ["sc", "start", "VideoGrouperService"],
+                capture_output=True,
+                timeout=10,
+            )
+            logger.info("Started VideoGrouperService")
+        except Exception as exc:
+            logger.warning("Could not start service: %s", exc)
 
         self.accept()

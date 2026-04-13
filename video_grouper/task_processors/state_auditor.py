@@ -12,6 +12,7 @@ from ..utils.paths import (
     get_combined_video_path,
     get_match_info_path,
 )
+from ..utils.ffmpeg_utils import get_video_duration
 from .services import (
     NtfyService,
     MatchInfoService,
@@ -170,6 +171,18 @@ class StateAuditor(PollingProcessor):
                 combined_path = get_combined_video_path(group_dir, self.storage_path)
                 if os.path.exists(combined_path):
                     logger.info(f"STATE_AUDITOR: Found combined directory: {group_dir}")
+
+                    # Skip NTFY flow for short clips that aren't real games
+                    min_duration = self.config.recording.min_duration
+                    duration = await get_video_duration(combined_path)
+                    if duration is not None and duration < min_duration:
+                        logger.info(
+                            f"STATE_AUDITOR: Combined video too short "
+                            f"({duration:.0f}s < {min_duration}s) for {group_dir}, "
+                            f"marking as not_a_game"
+                        )
+                        await dir_state.update_group_status("not_a_game")
+                        return
 
                     # Check if we're waiting for user input via NTFY queue processor
                     is_waiting = False
