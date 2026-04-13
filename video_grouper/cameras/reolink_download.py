@@ -878,7 +878,9 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
             fmt = "hevc" if codec == "H265" else "h264"
 
         with av.open(annexb_path, format=fmt) as input_ct:
-            with av.open(mp4_path, "w", options={"movflags": "faststart"}) as output_ct:
+            with av.open(
+                mp4_path, "w", format="mp4", options={"movflags": "faststart"}
+            ) as output_ct:
                 in_stream = input_ct.streams.video[0]
                 out_stream = output_ct.add_stream_from_template(in_stream)
                 tb = out_stream.time_base or in_stream.time_base
