@@ -92,6 +92,10 @@ class TestManualPathWalkthrough:
 
         # Skip camera
         qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
+        assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_VIDEO_PROCESSING
+
+        # Skip video processing
+        qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_YOUTUBE
 
         # Skip youtube
@@ -119,8 +123,8 @@ class TestManualPathWalkthrough:
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
 
-        # Skip all steps to summary (Storage, Camera, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
-        for _ in range(7):
+        # Skip all steps to summary (Storage, Camera, VideoProcessing, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
+        for _ in range(8):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_SUMMARY
@@ -138,8 +142,8 @@ class TestManualPathWalkthrough:
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
 
-        # Skip all steps to summary (Storage, Camera, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
-        for _ in range(7):
+        # Skip all steps to summary (Storage, Camera, VideoProcessing, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
+        for _ in range(8):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         # Click Finish
@@ -187,8 +191,8 @@ class TestManualPathWalkthrough:
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
 
-        # Skip storage, camera, youtube
-        for _ in range(3):
+        # Skip storage, camera, video processing, youtube
+        for _ in range(4):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         # On NTFY page, set topic
@@ -341,7 +345,8 @@ class TestYouTubeAuth:
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("manual")
 
-        # Skip to youtube
+        # Skip to youtube (storage, camera, video processing)
+        qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_YOUTUBE
@@ -373,7 +378,7 @@ class TestFirstRunDetection:
         # Quick manual path, skip all
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("manual")
-        for _ in range(5):
+        for _ in range(6):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         wizard._finish()
 
@@ -388,8 +393,8 @@ class TestFirstRunDetection:
         qtbot.mouseClick(wizard._next_btn, Qt.MouseButton.LeftButton)
         wizard._choose_path("manual")
 
-        # Skip to TTT page
-        for _ in range(4):
+        # Skip to TTT page (storage, camera, video processing, youtube, ntfy)
+        for _ in range(5):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         # Simulate TTT sign-in on manual page
@@ -421,6 +426,7 @@ class TestSummaryPage:
         wizard._camera_configured = True
         wizard._camera_ip = "192.168.1.50"
         wizard._camera_type = "reolink"
+        wizard._video_processor_type = "autocam"
         wizard._youtube_authenticated = True
         wizard._youtube_enabled = True
         wizard._ntfy_enabled = True

@@ -18,6 +18,7 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -30,6 +31,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -138,16 +140,17 @@ class OnboardingWizard(QDialog):
     # Shared pages (both paths use these, but at different stack indices)
     PAGE_STORAGE = 4
     PAGE_CAMERA = 5
-    PAGE_YOUTUBE = 6
-    PAGE_NTFY = 7
+    PAGE_VIDEO_PROCESSING = 6
+    PAGE_YOUTUBE = 7
+    PAGE_NTFY = 8
     # Manual-only page
-    PAGE_MANUAL_TTT = 8
+    PAGE_MANUAL_TTT = 9
     # Integration pages
-    PAGE_PLAYMETRICS = 9
-    PAGE_TEAMSNAP = 10
-    PAGE_SUMMARY = 11
+    PAGE_PLAYMETRICS = 10
+    PAGE_TEAMSNAP = 11
+    PAGE_SUMMARY = 12
     # TTT machine setup (inserted after camera in TTT path)
-    PAGE_MACHINE_SETUP = 12
+    PAGE_MACHINE_SETUP = 13
 
     def __init__(self, config_path: Path, parent=None):
         super().__init__(parent)
@@ -199,6 +202,10 @@ class OnboardingWizard(QDialog):
         self._ttt_sign_in_error = ""
         self._ttt_schedule_providers: dict[str, list[dict]] = {}
 
+        # Video processing state (set properly in _build_video_processing_page)
+        self._video_processor_type = "none"
+        self._autocam_path = ""
+
         # PlayMetrics / TeamSnap state
         self._playmetrics_config: dict = {
             "username": "",
@@ -243,13 +250,14 @@ class OnboardingWizard(QDialog):
         self._stack.addWidget(self._build_ttt_restore_page())  # 3
         self._stack.addWidget(self._build_storage_page())  # 4
         self._stack.addWidget(self._build_camera_page())  # 5
-        self._stack.addWidget(self._build_youtube_page())  # 6
-        self._stack.addWidget(self._build_ntfy_page())  # 7
-        self._stack.addWidget(self._build_manual_ttt_page())  # 8
-        self._stack.addWidget(self._build_playmetrics_page())  # 9
-        self._stack.addWidget(self._build_teamsnap_page())  # 10
-        self._stack.addWidget(self._build_summary_page())  # 11
-        self._stack.addWidget(self._build_machine_setup_page())  # 12
+        self._stack.addWidget(self._build_video_processing_page())  # 6
+        self._stack.addWidget(self._build_youtube_page())  # 7
+        self._stack.addWidget(self._build_ntfy_page())  # 8
+        self._stack.addWidget(self._build_manual_ttt_page())  # 9
+        self._stack.addWidget(self._build_playmetrics_page())  # 10
+        self._stack.addWidget(self._build_teamsnap_page())  # 11
+        self._stack.addWidget(self._build_summary_page())  # 12
+        self._stack.addWidget(self._build_machine_setup_page())  # 13
 
         # Navigation bar
         nav_bar = QWidget()
@@ -621,26 +629,83 @@ class OnboardingWizard(QDialog):
         self._cam_phase_c.setVisible(False)
         layout.addWidget(self._cam_phase_c)
 
-        # ── AutoCam toggle ──────────────────────────────────────────
+        layout.addStretch()
+        return page
+
+    def _build_video_processing_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 30, 40, 20)
+
+        title = QLabel("Video Processing")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        layout.addSpacing(10)
+
+        desc = QLabel(
+            "Select which video processing to apply after recording. "
+            "These run automatically on each game before uploading to YouTube."
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
         layout.addSpacing(15)
+
+        # Auto-detect AutoCam installation
         autocam_path = os.path.join(
             os.environ.get("LOCALAPPDATA", ""), "Programs", "Autocam", "GUI.exe"
         )
         autocam_installed = os.path.exists(autocam_path)
-        self._autocam_checkbox = QCheckBox(
-            "Enable AutoCam processing (AI camera tracking)"
-        )
-        self._autocam_checkbox.setChecked(autocam_installed)
-        self._autocam_checkbox.setEnabled(autocam_installed)
-        if not autocam_installed:
-            self._autocam_checkbox.setToolTip(
-                "AutoCam is not installed. Install it from autocam.app to enable."
-            )
-        layout.addWidget(self._autocam_checkbox)
         self._autocam_path = autocam_path if autocam_installed else ""
+
+        # Radio buttons
+        self._vp_btn_group = QButtonGroup(page)
+
+        self._vp_autocam_radio = QRadioButton(
+            "AutoCam \u2014 AI camera tracking (follows the ball and players)"
+        )
+        self._vp_autocam_radio.setEnabled(autocam_installed)
+        self._vp_btn_group.addButton(self._vp_autocam_radio)
+        layout.addWidget(self._vp_autocam_radio)
+
+        if not autocam_installed:
+            autocam_note = QLabel(
+                "    AutoCam is not installed. "
+                'Install from <a href="https://autocam.app">autocam.app</a>'
+            )
+            autocam_note.setOpenExternalLinks(True)
+            autocam_note.setStyleSheet("color: gray; font-style: italic;")
+            layout.addWidget(autocam_note)
+
+        layout.addSpacing(5)
+
+        self._vp_none_radio = QRadioButton(
+            "None \u2014 Upload raw full-field video without processing"
+        )
+        self._vp_btn_group.addButton(self._vp_none_radio)
+        layout.addWidget(self._vp_none_radio)
+
+        # Set default selection
+        if autocam_installed:
+            self._vp_autocam_radio.setChecked(True)
+            self._video_processor_type = "autocam"
+        else:
+            self._vp_none_radio.setChecked(True)
+            self._video_processor_type = "none"
+
+        # Connect signals to update state
+        self._vp_autocam_radio.toggled.connect(self._on_vp_radio_changed)
 
         layout.addStretch()
         return page
+
+    def _on_vp_radio_changed(self, checked: bool):
+        """Update video processor type when radio selection changes."""
+        if self._vp_autocam_radio.isChecked():
+            self._video_processor_type = "autocam"
+        else:
+            self._video_processor_type = "none"
 
     def _build_youtube_page(self) -> QWidget:
         page = QWidget()
@@ -1193,6 +1258,7 @@ class OnboardingWizard(QDialog):
                 [
                     self.PAGE_STORAGE,
                     self.PAGE_CAMERA,
+                    self.PAGE_VIDEO_PROCESSING,
                     self.PAGE_MACHINE_SETUP,
                     self.PAGE_YOUTUBE,
                     self.PAGE_PLAYMETRICS,
@@ -1207,6 +1273,7 @@ class OnboardingWizard(QDialog):
                 self.PAGE_PATH_CHOICE,
                 self.PAGE_STORAGE,
                 self.PAGE_CAMERA,
+                self.PAGE_VIDEO_PROCESSING,
                 self.PAGE_YOUTUBE,
                 self.PAGE_NTFY,
                 self.PAGE_MANUAL_TTT,
@@ -1400,6 +1467,12 @@ class OnboardingWizard(QDialog):
             self._camera_password = self._camera_pass_input.text().strip()
             self._camera_type = self._camera_type_combo.currentText()
             self._camera_configured = bool(self._camera_ip)
+
+        elif page_index == self.PAGE_VIDEO_PROCESSING:
+            if self._vp_autocam_radio.isChecked():
+                self._video_processor_type = "autocam"
+            else:
+                self._video_processor_type = "none"
 
         elif page_index == self.PAGE_NTFY:
             self._ntfy_topic = self._ntfy_topic_input.text().strip()
@@ -2499,6 +2572,12 @@ class OnboardingWizard(QDialog):
                 "Camera: Open Settings > Camera Settings to configure your camera"
             )
 
+        # Video Processing
+        if self._video_processor_type == "autocam":
+            configured.append("Video Processing: AutoCam")
+        else:
+            configured.append("Video Processing: None (raw upload)")
+
         # YouTube
         if self._youtube_authenticated:
             configured.append("YouTube: Authenticated")
@@ -2751,7 +2830,7 @@ class OnboardingWizard(QDialog):
             config.ntfy.response_service = True
 
         # AutoCam
-        config.autocam.enabled = self._autocam_checkbox.isChecked()
+        config.autocam.enabled = self._video_processor_type == "autocam"
         if self._autocam_path:
             config.autocam.executable = self._autocam_path
 
