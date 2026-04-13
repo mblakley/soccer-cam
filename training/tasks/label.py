@@ -113,6 +113,15 @@ def run_label(
             seg_name = seg_video.stem
             t0 = time.time()
 
+            # Pre-scan: sample 5 evenly-spaced frames to check if this
+            # segment contains game footage. Skips indoor/transport/backyard
+            # recordings that the Dahua camera stores on the same SD card.
+            if not _prescan_segment(seg_video, session, conf_threshold, cv2):
+                logger.info(
+                    "  Skipping %s (no detections in pre-scan)", seg_name[:50]
+                )
+                continue
+
             # Stage video to local SSD for fast I/O
             local_video = io.local_game / "video" / seg_video.name
             local_video.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +233,41 @@ def run_label(
         "segments": len(segment_videos),
         "provider": active_provider,
     }
+
+
+def _prescan_segment(video_path: Path, session, conf_threshold: float, cv2) -> bool:
+    """Sample 5 frames from a segment to check for game footage.
+
+    Returns True if any sampled frame produces a detection — meaning
+    the segment likely contains soccer. Returns False for indoor,
+    transport, or backyard footage where the model finds nothing.
+    """
+    from training.distributed.label_job import detect_balls
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return False
+
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total < 10:
+        cap.release()
+        return False
+
+    # Sample 5 evenly-spaced frames
+    sample_positions = [int(total * i / 6) for i in range(1, 6)]
+    found = False
+    for pos in sample_positions:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        dets = detect_balls(frame, session, conf_threshold)
+        if dets:
+            found = True
+            break
+
+    cap.release()
+    return found
 
 
 def _find_model(model_name: str, local_models_dir: Path | None) -> Path | None:
