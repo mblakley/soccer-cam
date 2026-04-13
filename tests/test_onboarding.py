@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from video_grouper.utils.config import (
     Config,
+    PlayMetricsTeamConfig,
     create_default_config,
     config_needs_onboarding,
     load_config,
@@ -109,6 +110,63 @@ class TestSetupConfig:
         config_path = tmp_path / "config.ini"
         config = create_default_config(config_path, str(tmp_path))
         assert config.setup.onboarding_completed is False
+
+
+# ---------------------------------------------------------------------------
+# PlayMetrics teams round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestPlayMetricsTeamsRoundTrip:
+    def test_teams_roundtrip_as_sections(self, tmp_path):
+        config_path = tmp_path / "config.ini"
+        config = create_default_config(config_path, str(tmp_path))
+        config.playmetrics.enabled = True
+        config.playmetrics.username = "user@example.com"
+        config.playmetrics.password = "secret"
+        config.playmetrics.teams = [
+            PlayMetricsTeamConfig(
+                team_id="335774",
+                team_name="WNY Flash - 13B ECNL-RL",
+                enabled=True,
+            ),
+            PlayMetricsTeamConfig(
+                team_id="111222",
+                team_name="WNY Flash - 15G",
+                enabled=False,
+            ),
+        ]
+        save_config(config, config_path)
+
+        raw = config_path.read_text(encoding="utf-8")
+        assert "[PLAYMETRICS.TEAM.0]" in raw
+        assert "[PLAYMETRICS.TEAM.1]" in raw
+        assert "PlayMetricsTeamConfig(" not in raw
+
+        reloaded = load_config(config_path)
+        assert reloaded.playmetrics.enabled is True
+        assert reloaded.playmetrics.username == "user@example.com"
+        assert len(reloaded.playmetrics.teams) == 2
+        by_id = {t.team_id: t for t in reloaded.playmetrics.teams}
+        assert by_id["335774"].team_name == "WNY Flash - 13B ECNL-RL"
+        assert by_id["335774"].enabled is True
+        assert by_id["111222"].enabled is False
+
+    def test_non_ascii_team_name_roundtrips(self, tmp_path):
+        config_path = tmp_path / "config.ini"
+        config = create_default_config(config_path, str(tmp_path))
+        config.playmetrics.enabled = True
+        config.playmetrics.username = "user@example.com"
+        config.playmetrics.password = "secret"
+        config.playmetrics.teams = [
+            PlayMetricsTeamConfig(
+                team_id="1", team_name="Flash \u2014 13B", enabled=True
+            ),
+        ]
+        save_config(config, config_path)
+
+        reloaded = load_config(config_path)
+        assert reloaded.playmetrics.teams[0].team_name == "Flash \u2014 13B"
 
 
 # ---------------------------------------------------------------------------
