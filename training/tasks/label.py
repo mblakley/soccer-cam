@@ -98,7 +98,7 @@ def run_label(
                     continue
 
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img_resized = cv2.resize(img_rgb, (input_shape[3], input_shape[2]))
+                img_resized = cv2.resize(img_rgb, (int(input_shape[3]), int(input_shape[2])))
                 img_norm = img_resized.astype(np.float32) / 255.0
                 img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...]
 
@@ -136,6 +136,13 @@ def run_label(
     io.push_manifest()
 
     logger.info("Labeled %s: %d tiles, %d labels", game_id, total_tiles, total_labels)
+
+    if total_tiles == 0 and len(segments) > 0:
+        raise RuntimeError(
+            f"Label task processed 0 tiles across {len(segments)} segments — "
+            "likely pack files not pulled to local SSD"
+        )
+
     return {
         "tiles_processed": total_tiles,
         "labels_written": total_labels,

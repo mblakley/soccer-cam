@@ -71,15 +71,27 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     )
 
     if not candidates:
-        logger.info("No QA candidates for %s", game_id)
-        return {"tiles_reviewed": 0, "verdicts": {}}
+        # Check if Phase 2 (trajectory) still needs to run
+        existing_track = manifest.conn.execute(
+            "SELECT value FROM metadata WHERE key = 'game_ball_track'"
+        ).fetchone()
+        if existing_track:
+            logger.info("No QA candidates for %s", game_id)
+            return {"tiles_reviewed": 0, "verdicts": {}}
+        logger.info(
+            "No QA candidates for %s — but game_ball_track missing, running Phase 2",
+            game_id,
+        )
+        candidates = []  # fall through to Phase 2
 
-    logger.info("QA: %d candidate tiles for %s", len(candidates), game_id)
-
-    # Step 3: Pull only the pack files that QA candidates reference to SSD
-    needed_packs = _find_needed_packs(candidates, manifest)
-    _pull_selective_packs(task_io, needed_packs)
     packs_dir = task_io.local_packs
+
+    if candidates:
+        logger.info("QA: %d candidate tiles for %s", len(candidates), game_id)
+
+        # Step 3: Pull only the pack files that QA candidates reference to SSD
+        needed_packs = _find_needed_packs(candidates, manifest)
+        _pull_selective_packs(task_io, needed_packs)
 
     # Step 4: Process in batches
     batch_size = cfg.qa.sonnet_batch_size

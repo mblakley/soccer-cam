@@ -43,6 +43,9 @@ class Orchestrator:
         self._last_reset: dict[
             str, float
         ] = {}  # game_id -> timestamp of last auto-reset
+        self._qa_exhausted: set[str] = (
+            set()
+        )  # games where sonnet_qa found no candidates (skip re-enqueue)
 
     def run(self, once: bool = False):
         """Main orchestrator loop. Requires API server to be running separately."""
@@ -93,6 +96,8 @@ class Orchestrator:
                     current_state = game.get("pipeline_state", "")
                     new_state = advance_state(current_state, task_type, success=True)
                     if new_state != current_state:
+                        # New labels may exist — allow QA re-check
+                        self._qa_exhausted.discard(game_id)
                         if not self.dry_run:
                             self.api.set_game_state(game_id, new_state)
                             self.api.reset_attempts(game_id)
@@ -121,6 +126,22 @@ class Orchestrator:
                             category="state_change",
                             game_id=game_id,
                         )
+
+            # Track QA-exhausted games to avoid re-enqueue spam
+            if task_type == "sonnet_qa" and game_id:
+                result = item.get("result")
+                if isinstance(result, str):
+                    try:
+                        result_data = json.loads(result)
+                    except (json.JSONDecodeError, TypeError):
+                        result_data = {}
+                else:
+                    result_data = result or {}
+                if result_data.get("tiles_reviewed", -1) == 0:
+                    self._qa_exhausted.add(game_id)
+                    logger.debug(
+                        "QA exhausted for %s — no candidates remain", game_id
+                    )
 
             # Archive processed items so they don't get re-processed
             if not self.dry_run:
@@ -365,6 +386,8 @@ class Orchestrator:
                 continue
             if game.get("label_count", 0) == 0:
                 continue
+            if game["game_id"] in self._qa_exhausted:
+                continue  # no candidates last time — don't spam
             if self.api.has_active_item("sonnet_qa", game["game_id"]):
                 continue
 

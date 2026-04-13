@@ -162,22 +162,33 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
             )
             _shutil.copy2(str(pack_path), str(dest))
 
-            # Archive to F:
-            archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            f_dest = archive_dir / pack_path.name
-            if not f_dest.exists() or f_dest.stat().st_size != pack_path.stat().st_size:
-                logger.info("    Archiving %s to F:", pack_path.name)
-                _shutil.copy2(str(pack_path), str(f_dest))
+            # Archive to F: (server-only — F: is not accessible from remote workers)
+            import socket as _socket
 
-            # Verify archive then clean local + D:
-            if f_dest.exists() and f_dest.stat().st_size == pack_path.stat().st_size:
-                pack_path.unlink()
-                dest.unlink()
-                logger.info("    Cleaned local + D: pack (archived to F:)")
+            archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
+            if _socket.gethostname().upper() == "DESKTOP-5L867J8" and archive_dir.drive.upper() != "":
+                try:
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    f_dest = archive_dir / pack_path.name
+                    if not f_dest.exists() or f_dest.stat().st_size != pack_path.stat().st_size:
+                        logger.info("    Archiving %s to F:", pack_path.name)
+                        _shutil.copy2(str(pack_path), str(f_dest))
+
+                    # Verify archive then clean local + D:
+                    if f_dest.exists() and f_dest.stat().st_size == pack_path.stat().st_size:
+                        pack_path.unlink()
+                        dest.unlink()
+                        logger.info("    Cleaned local + D: pack (archived to F:)")
+                    else:
+                        logger.warning("    Archive verify failed — keeping pack on D:")
+                        pack_path.unlink()  # still clean local to save SSD space
+                except OSError as e:
+                    logger.warning("    F: archive failed (%s) — keeping pack on D:", e)
+                    pack_path.unlink()
             else:
-                logger.warning("    Archive verify failed — keeping pack on D:")
-                pack_path.unlink()  # still clean local to save SSD space
+                # Remote worker: clean local, keep on D: for server to archive later
+                pack_path.unlink()
+                logger.info("    Cleaned local pack (remote worker, D: copy kept)")
 
         # Reopen manifest for next segment
         manifest = GameManifest(io.local_game)
