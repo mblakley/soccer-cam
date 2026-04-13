@@ -1,10 +1,14 @@
-"""Label task — run ONNX ball detection on tiles and write labels.
+"""Label task — run ONNX ball detection on full panoramic frames.
 
-Uses TaskIO for consistent pull-local-process-push:
-  - Pull: pack files + manifest.db to local SSD
-  - Process: ONNX inference on tiles, write labels to local manifest
-  - Push: updated manifest.db back to server
-  - Cleanup: remove local working files
+The external ball detector model takes full 4096x1800 panoramic frames,
+NOT 640x640 tiles. This task:
+  1. Pulls manifest + video segments to local SSD
+  2. Reads video frames at FRAME_INTERVAL (every 4th frame)
+  3. Runs full-frame ONNX inference (CUDA > DML > CPU)
+  4. Maps panoramic detections to per-tile YOLO labels
+  5. Pushes updated manifest back to server
+
+Uses detect_balls() and pano_to_tile_labels() from label_job.py.
 """
 
 import logging
@@ -15,6 +19,9 @@ from training.tasks import register_task
 
 logger = logging.getLogger(__name__)
 
+# Frame interval matches label_job.py — every 4th frame (~6fps from 24.6fps)
+FRAME_INTERVAL = 4
+
 
 @register_task("label")
 def run_label(
@@ -24,17 +31,16 @@ def run_label(
     server_share: str = "",
     local_models_dir: Path | None = None,
 ) -> dict:
-    """Run ONNX ball detection on all tiles for a game."""
+    """Run ONNX ball detection on full video frames for a game."""
     game_id = item["game_id"]
 
     from training.tasks.io import TaskIO
 
     io = TaskIO(game_id, local_work_dir, server_share)
-    io.ensure_space(needed_gb=5)
+    io.ensure_space(needed_gb=10)
 
-    # Pull manifest + packs
+    # Pull manifest (for segment list) — no packs needed for labeling
     io.pull_manifest()
-    io.pull_packs()
 
     from training.data_prep.game_manifest import GameManifest
 
@@ -50,15 +56,14 @@ def run_label(
             )
 
         conf_threshold = io.cfg.labeling.confidence
-        logger.info(
-            "Running ONNX inference with %s (conf=%.2f)",
-            model_path.name,
-            conf_threshold,
-        )
 
         import cv2
-        import numpy as np
         import onnxruntime as ort
+
+        from training.distributed.label_job import (
+            detect_balls,
+            pano_to_tile_labels,
+        )
 
         providers = [
             "CUDAExecutionProvider",
@@ -66,87 +71,158 @@ def run_label(
             "CPUExecutionProvider",
         ]
         session = ort.InferenceSession(str(model_path), providers=providers)
-        input_name = session.get_inputs()[0].name
-        input_shape = session.get_inputs()[0].shape
+        active_provider = session.get_providers()[0]
+        logger.info(
+            "Running ONNX inference with %s (conf=%.2f) on %s",
+            model_path.name,
+            conf_threshold,
+            active_provider,
+        )
 
-        segments = manifest.get_segments()
+        # Get video directory
+        video_dir = io.video_path()
+        if not video_dir:
+            raise FileNotFoundError(f"No video path found for {game_id}")
+
+        # Find segment video files (only [F] or [0@0] markers = individual segments)
+        video_files = sorted(video_dir.glob("*.mp4"))
+        segment_videos = [
+            v for v in video_files if "[F]" in v.name or "[0@0]" in v.name
+        ]
+        if not segment_videos:
+            # Try rglob for tournament structure
+            segment_videos = sorted(
+                v
+                for v in video_dir.rglob("*.mp4")
+                if "[F]" in v.name or "[0@0]" in v.name
+            )
+        if not segment_videos:
+            raise FileNotFoundError(
+                f"No segment videos found in {video_dir}"
+            )
+
+        logger.info(
+            "Found %d segment videos for %s", len(segment_videos), game_id
+        )
+
         total_labels = 0
-        total_tiles = 0
+        total_frames = 0
+        total_detections = 0
 
-        for segment in segments:
-            tiles = manifest.get_tiles_for_segment(segment)
-            logger.info("  Segment %s: %d tiles", segment, len(tiles))
+        for seg_video in segment_videos:
+            seg_name = seg_video.stem
+            t0 = time.time()
 
-            batch_labels = []
-            for tile_info in tiles:
-                pack_file = tile_info.get("pack_file")
-                if not pack_file:
-                    continue
+            # Stage video to local SSD for fast I/O
+            local_video = io.local_game / "video" / seg_video.name
+            local_video.parent.mkdir(parents=True, exist_ok=True)
+            if not local_video.exists():
+                import shutil
 
-                # Read from local pack
-                local_pack = io.local_packs / Path(pack_file).name
-                if not local_pack.exists():
-                    continue
+                logger.info("  Staging %s to SSD...", seg_video.name)
+                shutil.copy2(str(seg_video), str(local_video))
 
-                with open(local_pack, "rb") as f:
-                    f.seek(tile_info["pack_offset"])
-                    jpeg_bytes = f.read(tile_info["pack_size"])
+            cap = cv2.VideoCapture(str(local_video))
+            if not cap.isOpened():
+                logger.error("  Cannot open: %s", seg_video.name)
+                continue
 
-                img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-                img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
-                if img is None:
-                    continue
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            logger.info(
+                "  Segment %s: %d frames (interval=%d)",
+                seg_name[:50],
+                frame_count,
+                FRAME_INTERVAL,
+            )
 
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img_resized = cv2.resize(img_rgb, (int(input_shape[3]), int(input_shape[2])))
-                img_norm = img_resized.astype(np.float32) / 255.0
-                img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...]
+            seg_labels = []
+            seg_dets = 0
+            seg_frames = 0
+            fi = 0
 
-                outputs = session.run(None, {input_name: img_input})
-                detections = _parse_onnx_output(outputs, conf_threshold)
+            while True:
+                ret = cap.grab()
+                if not ret:
+                    break
+                if fi % FRAME_INTERVAL == 0:
+                    ret, frame = cap.retrieve()
+                    if ret:
+                        dets = detect_balls(frame, session, conf_threshold)
+                        seg_dets += len(dets)
+                        for det in dets:
+                            for tl in pano_to_tile_labels(
+                                det["cx"], det["cy"], det["w"], det["h"]
+                            ):
+                                tile_stem = (
+                                    f"{seg_name}_frame_{fi:06d}"
+                                    f"_r{tl['row']}_c{tl['col']}"
+                                )
+                                seg_labels.append(
+                                    (
+                                        tile_stem,
+                                        0,
+                                        tl["cx_norm"],
+                                        tl["cy_norm"],
+                                        tl["w_norm"],
+                                        tl["h_norm"],
+                                        "onnx",
+                                        det["conf"],
+                                    )
+                                )
+                        seg_frames += 1
+                fi += 1
 
-                tile_stem = (
-                    f"{segment}_frame_{tile_info['frame_idx']:06d}"
-                    f"_r{tile_info['row']}_c{tile_info['col']}"
-                )
-                for det in detections:
-                    batch_labels.append(
-                        (
-                            tile_stem,
-                            0,
-                            det["cx"],
-                            det["cy"],
-                            det["w"],
-                            det["h"],
-                            "onnx",
-                            det["conf"],
-                        )
-                    )
-                total_tiles += 1
+            cap.release()
 
-            if batch_labels:
-                total_labels += manifest.bulk_insert_labels(batch_labels)
+            # Write labels to manifest
+            if seg_labels:
+                written = manifest.bulk_insert_labels(seg_labels)
+                total_labels += written
+            total_frames += seg_frames
+            total_detections += seg_dets
+
+            elapsed = time.time() - t0
+            logger.info(
+                "    %d detections -> %d labels in %.0fs (%.1f fps)",
+                seg_dets,
+                len(seg_labels),
+                elapsed,
+                seg_frames / elapsed if elapsed > 0 else 0,
+            )
+
+            # Clean staged video to free SSD space
+            if local_video.exists():
+                local_video.unlink()
 
         manifest.set_metadata("labeled_at", str(time.time()))
         manifest.set_metadata("onnx_model", model_path.name)
+        manifest.set_metadata("label_provider", active_provider)
     finally:
         manifest.close()
 
     # Push updated manifest
     io.push_manifest()
 
-    logger.info("Labeled %s: %d tiles, %d labels", game_id, total_tiles, total_labels)
+    logger.info(
+        "Labeled %s: %d frames, %d detections, %d labels",
+        game_id,
+        total_frames,
+        total_detections,
+        total_labels,
+    )
 
-    if total_tiles == 0 and len(segments) > 0:
+    if total_frames == 0 and len(segment_videos) > 0:
         raise RuntimeError(
-            f"Label task processed 0 tiles across {len(segments)} segments — "
-            "likely pack files not pulled to local SSD"
+            f"Label task processed 0 frames across {len(segment_videos)} "
+            "segments — video files may be unreadable"
         )
 
     return {
-        "tiles_processed": total_tiles,
+        "frames_processed": total_frames,
+        "detections": total_detections,
         "labels_written": total_labels,
-        "segments": len(segments),
+        "segments": len(segment_videos),
+        "provider": active_provider,
     }
 
 
@@ -164,34 +240,3 @@ def _find_model(model_name: str, local_models_dir: Path | None) -> Path | None:
         if p.exists():
             return p
     return None
-
-
-def _parse_onnx_output(outputs: list, conf_threshold: float = 0.45) -> list[dict]:
-    """Parse ONNX model output into normalized detections."""
-    import numpy as np
-
-    output = outputs[0]
-    if len(output.shape) == 3:
-        if output.shape[2] <= output.shape[1]:
-            dets = output[0]
-        else:
-            dets = output[0].T
-    elif len(output.shape) == 2:
-        dets = output
-    else:
-        return []
-
-    results = []
-    for det in dets:
-        if len(det) < 5:
-            continue
-        x1, y1, x2, y2, conf = det[:5]
-        if conf < conf_threshold:
-            continue
-        cx = ((x1 + x2) / 2) / 640.0
-        cy = ((y1 + y2) / 2) / 640.0
-        w = abs(x2 - x1) / 640.0
-        h = abs(y2 - y1) / 640.0
-        if 0 < cx < 1 and 0 < cy < 1 and w > 0 and h > 0:
-            results.append({"cx": cx, "cy": cy, "w": w, "h": h, "conf": float(conf)})
-    return results
