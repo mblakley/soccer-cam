@@ -151,7 +151,8 @@ class TestNtfyProcessorEndTrimConfig:
         # Check that no GameEndTask was queued
         queued_items = []
         while not processor._queue.empty():
-            queued_items.append(processor._queue.get_nowait())
+            _, _, task = processor._queue.get_nowait()
+            queued_items.append(task)
 
         task_types = [t.__class__.__name__ for t in queued_items]
         assert "GameEndTask" not in task_types, (

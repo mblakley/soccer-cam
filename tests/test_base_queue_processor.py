@@ -85,7 +85,7 @@ class TestQueueProcessorInProgressPersistence:
     ):
         """While an item is being processed, it should appear in the saved state."""
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
 
         # Use an event to pause processing mid-flight
         processing_started = asyncio.Event()
@@ -140,21 +140,23 @@ class TestQueueProcessorInProgressPersistence:
             json.dump(state, f)
 
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
         await processor.load_state()
 
-        # The in-progress item should be first, then the queued item
+        # The in-progress item should be first (priority 0), then the queued item (priority 2)
         assert processor._queue.qsize() == 2
-        first = processor._queue.get_nowait()
+        pri1, _, first = processor._queue.get_nowait()
         assert first.name == "crashed-item"
-        second = processor._queue.get_nowait()
+        assert pri1 == 0  # In-progress recovery gets highest priority
+        pri2, _, second = processor._queue.get_nowait()
         assert second.name == "queued-item"
+        assert pri2 == 2  # Normal priority
 
     @pytest.mark.asyncio
     async def test_in_progress_item_cleared_after_success(self, tmp_path, mock_config):
         """After successful processing, in_progress should be None and not in state file."""
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
 
         task = StubTask("success-item")
         await processor.add_work(task)
@@ -184,7 +186,7 @@ class TestQueueProcessorInProgressPersistence:
     ):
         """After exceeding max retries, the item should be removed completely."""
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
         processor._max_retries = 0  # Fail immediately, no retries
 
         # Make process_item always fail
@@ -215,7 +217,7 @@ class TestQueueProcessorInProgressPersistence:
     async def test_save_state_new_format_with_queue_key(self, tmp_path, mock_config):
         """State file should use new dict format with 'queue' key."""
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
 
         task = StubTask("item-1")
         await processor.add_work(task)
@@ -242,9 +244,9 @@ class TestQueueProcessorInProgressPersistence:
             json.dump(legacy_state, f)
 
         processor = StubQueueProcessor(str(tmp_path), mock_config)
-        processor._queue = asyncio.Queue()
+        processor._queue = asyncio.PriorityQueue()
         await processor.load_state()
 
         assert processor._queue.qsize() == 1
-        item = processor._queue.get_nowait()
+        _, _, item = processor._queue.get_nowait()
         assert item.name == "legacy-item"

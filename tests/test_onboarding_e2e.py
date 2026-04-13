@@ -97,6 +97,14 @@ class TestManualPathWalkthrough:
 
         # Skip TTT
         qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
+        assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_PLAYMETRICS
+
+        # Skip PlayMetrics
+        qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
+        assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_TEAMSNAP
+
+        # Skip TeamSnap
+        qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_SUMMARY
 
     def test_skip_all_produces_next_steps(self, wizard, qtbot):
@@ -104,8 +112,8 @@ class TestManualPathWalkthrough:
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
 
-        # Skip all steps to summary
-        for _ in range(5):
+        # Skip all steps to summary (Storage, Camera, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
+        for _ in range(7):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         assert wizard._stack.currentIndex() == OnboardingWizard.PAGE_SUMMARY
@@ -123,8 +131,8 @@ class TestManualPathWalkthrough:
         self._go_to_path_choice(wizard, qtbot)
         wizard._choose_path("manual")
 
-        # Skip all steps to summary
-        for _ in range(5):
+        # Skip all steps to summary (Storage, Camera, YouTube, NTFY, ManualTTT, PlayMetrics, TeamSnap)
+        for _ in range(7):
             qtbot.mouseClick(wizard._skip_btn, Qt.MouseButton.LeftButton)
 
         # Click Finish
@@ -412,6 +420,17 @@ class TestSummaryPage:
         wizard._ntfy_topic = "soccer-cam-test"
         wizard._ttt_enabled = True
         wizard._ttt_email = "user@test.com"
+        wizard._playmetrics_config = {
+            "username": "user@test.com",
+            "password": "pass",
+            "teams": [{"name": "Test", "id": "1", "enabled": True}],
+        }
+        wizard._teamsnap_config = {
+            "client_id": "abc",
+            "client_secret": "def",
+            "access_token": "tok",
+            "teams": [{"name": "Test", "id": "1", "enabled": True}],
+        }
 
         wizard._populate_summary()
 

@@ -38,6 +38,12 @@ class VideoProcessor(QueueProcessor):
         """Return the queue type for this processor."""
         return QueueType.VIDEO
 
+    def _get_priority(self, item) -> int:
+        """Trim tasks (final step) prioritize over combine tasks (intermediate)."""
+        if hasattr(item, "task_type") and item.task_type == "trim":
+            return 1
+        return 2
+
     async def process_item(self, item: BaseFfmpegTask) -> None:
         """
         Process a video task (combine or trim).
