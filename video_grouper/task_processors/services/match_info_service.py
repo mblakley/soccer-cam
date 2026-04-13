@@ -4,6 +4,7 @@ Match information service that coordinates between different data sources.
 
 import logging
 import os
+import re
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 
@@ -14,6 +15,13 @@ from video_grouper.models import DirectoryState
 from video_grouper.models import MatchInfo
 
 logger = logging.getLogger(__name__)
+
+# Reolink clip filenames look like:
+#   RecM09_DST20260412_154649_155148_0_9D288300000000_1BFBD5ED.mp4
+# Groups: (YYYYMMDD)(HHMMSS start)(HHMMSS end)
+_REOLINK_CLIP_RE = re.compile(
+    r"Rec\w+_DST(?P<date>\d{8})_(?P<start>\d{6})_(?P<end>\d{6})_"
+)
 
 
 class MatchInfoService:
@@ -44,7 +52,13 @@ class MatchInfoService:
         self, group_dir: str
     ) -> Optional[Tuple[datetime, datetime]]:
         """
-        Get the recording timespan from directory state.
+        Get the recording timespan for a group directory.
+
+        Prefers ``DirectoryState.files`` (populated from camera metadata at
+        download time), but falls back to scanning filenames on disk when
+        state has been emptied (e.g. after the group transitions to
+        ``combined`` and the per-file entries get dropped). The fallback is
+        what lets a post-combine match_info re-query still succeed.
 
         Args:
             group_dir: Directory path
@@ -60,31 +74,79 @@ class MatchInfoService:
             files = list(dir_state.files.values())
             logger.info(f"Found {len(files)} files in directory state")
 
-            if not files:
-                logger.warning("No files found in directory state")
-                return None
+            if files:
+                # Sort files by start time to get first and last
+                files.sort(key=lambda f: f.start_time)
+                first_file = files[0]
+                last_file = files[-1]
 
-            # Sort files by start time to get first and last
-            files.sort(key=lambda f: f.start_time)
-            first_file = files[0]
-            last_file = files[-1]
+                logger.info(
+                    f"First file: {first_file.file_path} at {first_file.start_time}"
+                )
+                logger.info(
+                    f"Last file: {last_file.file_path} at {last_file.end_time or last_file.start_time}"
+                )
 
-            logger.info(
-                f"First file: {first_file.file_path} at {first_file.start_time}"
-            )
-            logger.info(
-                f"Last file: {last_file.file_path} at {last_file.end_time or last_file.start_time}"
-            )
+                recording_start = first_file.start_time
+                recording_end = last_file.end_time or last_file.start_time
+                logger.info(f"Recording timespan: {recording_start} to {recording_end}")
+                return recording_start, recording_end
 
-            recording_start = first_file.start_time
-            recording_end = last_file.end_time or last_file.start_time
-
-            logger.info(f"Recording timespan: {recording_start} to {recording_end}")
-            return recording_start, recording_end
+            # Fallback: parse timestamps from filenames on disk. State is
+            # empty post-combine, but the original clips are still present.
+            logger.info("No files in directory state, falling back to filename parsing")
+            return self._parse_timespan_from_filenames(group_dir)
 
         except Exception as e:
             logger.error(f"Error getting recording timespan for {group_dir}: {e}")
             return None
+
+    def _parse_timespan_from_filenames(
+        self, group_dir: str
+    ) -> Optional[Tuple[datetime, datetime]]:
+        """Scan ``group_dir`` for Reolink clip filenames and extract timespan.
+
+        Reolink cameras produce files like
+        ``RecM09_DST20260412_154649_155148_0_...mp4`` where the groups are
+        ``YYYYMMDD``, ``HHMMSS`` start, ``HHMMSS`` end. We only need the
+        earliest start and the latest end to bound the whole recording.
+        """
+        try:
+            entries = os.listdir(group_dir)
+        except OSError as e:
+            logger.warning(f"Could not list {group_dir}: {e}")
+            return None
+
+        starts: list[datetime] = []
+        ends: list[datetime] = []
+        for name in entries:
+            m = _REOLINK_CLIP_RE.match(name)
+            if not m:
+                continue
+            try:
+                start = datetime.strptime(
+                    f"{m.group('date')}{m.group('start')}", "%Y%m%d%H%M%S"
+                )
+                end = datetime.strptime(
+                    f"{m.group('date')}{m.group('end')}", "%Y%m%d%H%M%S"
+                )
+            except ValueError:
+                continue
+            starts.append(start)
+            ends.append(end)
+
+        if not starts:
+            logger.warning(
+                f"No Reolink clip filenames found in {group_dir} for timespan fallback"
+            )
+            return None
+
+        recording_start = min(starts)
+        recording_end = max(ends)
+        logger.info(
+            f"Recording timespan (from filenames): {recording_start} to {recording_end}"
+        )
+        return recording_start, recording_end
 
     def _collect_games_from_apis(
         self, recording_start: datetime, recording_end: datetime
