@@ -292,11 +292,16 @@ def delete_worker(hostname: str):
 
 @app.post("/api/maintenance/checkpoint")
 def checkpoint():
-    """Force WAL checkpoint on work_queue.db."""
-    q = _get_queue()
-    conn = q._get_conn()
-    result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-    return {"ok": True, "busy": result[0], "log": result[1], "checkpointed": result[2]}
+    """Force WAL checkpoint on both databases."""
+    results = {}
+    for name, db in [("queue", _get_queue()), ("registry", _get_registry())]:
+        try:
+            conn = db._get_conn()
+            r = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+            results[name] = {"busy": r[0], "log": r[1], "checkpointed": r[2]}
+        except Exception as e:
+            results[name] = {"error": str(e)}
+    return {"ok": True, **results}
 
 
 @app.post("/api/maintenance/rebuild-workers")

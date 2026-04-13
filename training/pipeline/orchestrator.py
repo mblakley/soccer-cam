@@ -78,6 +78,8 @@ class Orchestrator:
         self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
         self._audit_game_states()
         self._enqueue_work()
+        # Periodic WAL checkpoint to prevent unbounded WAL growth
+        self.api.maybe_checkpoint()
 
     # ------------------------------------------------------------------
     # Collect results

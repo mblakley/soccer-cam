@@ -232,3 +232,10 @@ class PipelineClient:
 
     def log_event(self, level: str, message: str, **kwargs):
         self._post("/api/log-event", {"level": level, "message": message, **kwargs})
+
+    def maybe_checkpoint(self):
+        """Request a WAL checkpoint if the server supports it."""
+        try:
+            self._post("/api/maintenance/checkpoint", {})
+        except Exception:
+            pass  # older API versions may not have this endpoint

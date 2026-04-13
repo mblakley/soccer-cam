@@ -93,6 +93,7 @@ class WorkQueue:
         if not str(self.db_path).startswith("\\\\"):
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
+        self._last_checkpoint: float = 0.0
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -105,11 +106,100 @@ class WorkQueue:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA busy_timeout=30000")
+            # Checkpoint WAL every 100 pages (~400KB) instead of default 1000
+            self._conn.execute("PRAGMA wal_autocheckpoint=100")
             self._conn.executescript(SCHEMA_SQL)
+            self._verify_integrity()
         return self._conn
+
+    def _verify_integrity(self):
+        """Check DB integrity on first connection. Rebuild if corrupt."""
+        try:
+            result = self._conn.execute("PRAGMA integrity_check").fetchone()
+            if result[0] != "ok":
+                logger.error(
+                    "Database integrity check FAILED: %s — attempting recovery",
+                    result[0],
+                )
+                self._rebuild_from_dump()
+        except sqlite3.DatabaseError as e:
+            logger.error("Database corrupt: %s — attempting recovery", e)
+            self._rebuild_from_dump()
+
+    def _rebuild_from_dump(self):
+        """Rebuild the database from SQL dump to fix corruption."""
+        import shutil
+
+        self._conn.close()
+        self._conn = None
+
+        backup = self.db_path.with_suffix(".db.corrupt")
+        new_path = self.db_path.with_suffix(".db.rebuilt")
+
+        # Remove stale WAL/SHM
+        for ext in ["-wal", "-shm"]:
+            p = Path(str(self.db_path) + ext)
+            if p.exists():
+                p.unlink()
+
+        old_conn = sqlite3.connect(str(self.db_path))
+        new_conn = sqlite3.connect(str(new_path))
+        recovered = 0
+        try:
+            for line in old_conn.iterdump():
+                try:
+                    new_conn.execute(line)
+                    recovered += 1
+                except sqlite3.Error:
+                    pass  # skip duplicate/constraint violations
+            new_conn.commit()
+        except Exception as e:
+            logger.error("Recovery dump failed: %s — starting fresh", e)
+            new_conn.close()
+            new_path.unlink(missing_ok=True)
+            new_conn = sqlite3.connect(str(new_path))
+            new_conn.executescript(SCHEMA_SQL)
+            new_conn.commit()
+        finally:
+            old_conn.close()
+            new_conn.close()
+
+        shutil.move(str(self.db_path), str(backup))
+        shutil.move(str(new_path), str(self.db_path))
+        logger.info(
+            "Rebuilt %s (%d statements recovered, backup at %s)",
+            self.db_path.name,
+            recovered,
+            backup.name,
+        )
+
+        # Re-open the clean DB
+        self._conn = sqlite3.connect(
+            str(self.db_path), timeout=30, check_same_thread=False
+        )
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
+        self._conn.execute("PRAGMA wal_autocheckpoint=100")
+
+    def checkpoint(self):
+        """Force a WAL checkpoint to merge WAL into main DB file."""
+        conn = self._get_conn()
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        self._last_checkpoint = time.time()
+
+    def maybe_checkpoint(self):
+        """Checkpoint if more than 5 minutes since last one."""
+        if time.time() - self._last_checkpoint > 300:
+            self.checkpoint()
 
     def close(self):
         if self._conn:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
             self._conn.close()
             self._conn = None
 
