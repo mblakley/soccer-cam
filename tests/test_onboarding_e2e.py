@@ -18,8 +18,19 @@ from video_grouper.utils.config import (
 
 @pytest.fixture(autouse=True)
 def _mock_registry():
-    """Prevent tests from writing to the real Windows registry."""
-    with patch("video_grouper.tray.onboarding_wizard.winreg", create=True):
+    """Prevent tests from writing to the real Windows registry.
+
+    The wizard does ``import winreg`` locally inside its save handler, so
+    patching ``video_grouper.tray.onboarding_wizard.winreg`` has no effect —
+    the local import resolves straight from ``sys.modules``. Patch the
+    actual winreg functions that the wizard calls so any write becomes a
+    no-op regardless of how winreg is imported.
+    """
+    with (
+        patch("winreg.CreateKeyEx"),
+        patch("winreg.SetValueEx"),
+        patch("winreg.CloseKey"),
+    ):
         yield
 
 
