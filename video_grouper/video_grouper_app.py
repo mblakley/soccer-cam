@@ -74,6 +74,27 @@ class VideoGrouperApp:
             upload_processor=self.upload_processor,
         )
 
+        # AutoCam processors (optional)
+        self.autocam_processor = None
+        self.autocam_discovery_processor = None
+        if self.config.autocam.enabled and self.config.autocam.executable:
+            from video_grouper.task_processors.autocam_processor import AutocamProcessor
+            from video_grouper.task_processors.autocam_discovery_processor import (
+                AutocamDiscoveryProcessor,
+            )
+
+            self.autocam_processor = AutocamProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                upload_processor=self.upload_processor,
+            )
+            self.autocam_discovery_processor = AutocamDiscoveryProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                autocam_processor=self.autocam_processor,
+                poll_interval=30,
+            )
+
         # Initialize per-camera processors
         self.cameras: dict = {}
         self.download_processors: dict = {}
@@ -406,6 +427,10 @@ class VideoGrouperApp:
             self.processors.append(self.clip_discovery_processor)
         if self.ttt_job_processor:
             self.processors.append(self.ttt_job_processor)
+        if self.autocam_processor:
+            self.processors.append(self.autocam_processor)
+        if self.autocam_discovery_processor:
+            self.processors.append(self.autocam_discovery_processor)
         # Polling processors last -- StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
