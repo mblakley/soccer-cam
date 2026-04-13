@@ -16,6 +16,13 @@ from video_grouper.utils.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_registry():
+    """Prevent tests from writing to the real Windows registry."""
+    with patch("video_grouper.tray.onboarding_wizard.winreg", create=True):
+        yield
+
+
 @pytest.fixture
 def wizard(qtbot, tmp_path):
     """Create an OnboardingWizard instance for testing."""
