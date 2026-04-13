@@ -435,6 +435,9 @@ def _build_grids(
                 continue
 
             img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            if img_arr.size == 0:
+                logger.warning("Empty tile data for %s, skipping", tile_stem)
+                continue
             img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
             if img is None:
                 continue
