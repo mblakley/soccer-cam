@@ -10,7 +10,7 @@ from typing import Dict
 
 import av
 
-from video_grouper.utils.ffmpeg_utils import av_open_read, av_open_write
+from video_grouper.utils.ffmpeg_utils import av_open_read
 
 from ..base_task import BaseTask
 from ...queue_type import QueueType
@@ -129,9 +129,9 @@ class AutocamTask(BaseTask):
         """
         Execute the autocam task.
 
-        Autocam 3.x outputs .mkv files. After processing, the .mkv is remuxed
-        to .mp4 (stream copy, no re-encoding) so the rest of the pipeline
-        (upload, etc.) works with .mp4 files.
+        Autocam 3.x writes directly to the output container we specify (we
+        request .mp4 via the Save As dialog), so the post-remux step is no
+        longer needed.
 
         Returns:
             True if task succeeded, False otherwise
@@ -161,65 +161,11 @@ class AutocamTask(BaseTask):
                 logger.error(f"AUTOCAM: Failed to process group {self.group_dir.name}")
                 return False
 
-            # Remux .mkv to .mp4 if autocam output is .mkv
-            if self.output_path.endswith(".mkv"):
-                mp4_path = self.output_path[:-4] + ".mp4"
-                success = self._remux_mkv_to_mp4(self.output_path, mp4_path)
-                if not success:
-                    return False
-
             logger.info(f"AUTOCAM: Successfully processed group {self.group_dir.name}")
             return True
 
         except Exception as e:
             logger.error(f"AUTOCAM: Error processing group {self.group_dir.name}: {e}")
-            return False
-
-    def _remux_mkv_to_mp4(self, mkv_path: str, mp4_path: str) -> bool:
-        """
-        Remux an MKV file to MP4 by copying streams without re-encoding.
-
-        Args:
-            mkv_path: Path to the input .mkv file
-            mp4_path: Path for the output .mp4 file
-
-        Returns:
-            True if remux succeeded, False otherwise
-        """
-        try:
-            logger.info(f"AUTOCAM: Remuxing {mkv_path} -> {mp4_path}")
-
-            with av_open_read(mkv_path) as input_container:
-                with av_open_write(mp4_path) as output_container:
-                    stream_map = {}
-                    for in_stream in input_container.streams:
-                        if in_stream.type in ("video", "audio"):
-                            out_stream = output_container.add_stream_from_template(
-                                in_stream
-                            )
-                            stream_map[in_stream] = out_stream
-
-                    for packet in input_container.demux(list(stream_map.keys())):
-                        if packet.dts is None:
-                            continue
-                        try:
-                            packet.stream = stream_map[packet.stream]
-                            output_container.mux(packet)
-                        except (av.InvalidDataError, av.error.FFmpegError, KeyError):
-                            continue
-
-            # Remove the original .mkv file
-            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
-                os.remove(mkv_path)
-                logger.info(f"AUTOCAM: Remux complete, removed {mkv_path}")
-            else:
-                logger.error(f"AUTOCAM: Remux output missing or empty: {mp4_path}")
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.error(f"AUTOCAM: Error remuxing {mkv_path}: {e}")
             return False
 
     def __str__(self):
