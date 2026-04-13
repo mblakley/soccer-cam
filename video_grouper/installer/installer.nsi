@@ -63,8 +63,8 @@ Section "Install" SecInstall
     File "..\dist\VideoGrouperTray.exe"
     File "..\icon.ico"
 
-    ; Install the Windows service (do not start -- onboarding wizard must run first)
-    ExecWait '"$INSTDIR\VideoGrouperService.exe" install'
+    ; Install the Windows service silently (do not start -- onboarding wizard must run first)
+    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" install'
 
     ; Create startup shortcut for tray agent (no config path arg - wizard handles it)
     CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
@@ -89,12 +89,12 @@ SectionEnd
 
 Section "Uninstall"
     SetRegView 64
-    ; Stop and remove the service
-    ExecWait '"$INSTDIR\VideoGrouperService.exe" stop'
-    ExecWait '"$INSTDIR\VideoGrouperService.exe" remove'
+    ; Stop and remove the service silently
+    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" stop'
+    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" remove'
 
     ; Kill tray if running
-    ExecWait 'taskkill /F /IM VideoGrouperTray.exe'
+    nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
 
     ; Remove files
     Delete "$INSTDIR\VideoGrouperService.exe"
