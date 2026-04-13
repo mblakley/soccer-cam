@@ -610,7 +610,7 @@ def _extract_clip_copy_sync(
 ) -> bool:
     """Synchronous implementation: extract clip with stream copy."""
     with av.open(input_path) as input_container:
-        with av.open(output_path, "w") as output_container:
+        with av.open(output_path, "w", format="mp4") as output_container:
             stream_map = {}
             for in_stream in input_container.streams:
                 if in_stream.type in ("video", "audio"):
@@ -655,7 +655,7 @@ def _extract_clip_reencode_sync(
 ) -> bool:
     """Synchronous implementation: extract clip with full re-encode (fallback)."""
     with av.open(input_path) as input_container:
-        with av.open(output_path, "w") as output_container:
+        with av.open(output_path, "w", format="mp4") as output_container:
             in_video = input_container.streams.video[0]
             in_audio = None
             for stream in input_container.streams:
@@ -766,7 +766,7 @@ async def extract_clip(
 
 def _compile_clips_sync(clip_paths: list[str], output_path: str) -> bool:
     """Synchronous implementation: concatenate clips with full re-encode."""
-    with av.open(output_path, "w") as output_container:
+    with av.open(output_path, "w", format="mp4") as output_container:
         out_video = None
         out_audio = None
 
