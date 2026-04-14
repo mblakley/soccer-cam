@@ -210,6 +210,12 @@ class OnboardingWizard(QDialog):
         self._playmetrics_config: dict = {
             "username": "",
             "password": "",
+            "refresh_token": "",
+            # role_id_by_team_id maps team_id -> the PlayMetrics role under
+            # which that team was discovered. Populated from TTT's connect
+            # probe so the final create_schedule_provider call can send the
+            # correct role-scoped credentials shape.
+            "role_id_by_team_id": {},
             "teams": [],
         }
         self._teamsnap_config: dict = {
@@ -1045,35 +1051,71 @@ class OnboardingWizard(QDialog):
 
         def do_pm_login():
             try:
-                from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
+                # Prefer TTT's connect probe when we're signed in to TTT —
+                # it returns the canonical refresh_token + per-team role_id
+                # mapping that the final create_schedule_provider call needs.
+                # Fall back to the local PlayMetricsAPI for offline/legacy
+                # setups that don't have a TTT account configured.
+                refresh_token = ""
+                role_id_by_team_id: dict[str, str] = {}
+                discovered: list[dict] = []
 
-                # Build a minimal config-like object for PlayMetricsAPI
-                class _PMConfig:
-                    pass
+                if self._ttt_client is not None:
+                    result = self._ttt_client.connect_playmetrics(username, password)
+                    refresh_token = str(result.get("refresh_token", ""))
+                    for team in result.get("teams", []):
+                        team_id = str(team.get("id", ""))
+                        role_id = str(team.get("role_id", ""))
+                        if not team_id:
+                            continue
+                        discovered.append({"id": team_id, "name": team.get("name", "")})
+                        if role_id:
+                            role_id_by_team_id[team_id] = role_id
+                else:
+                    from video_grouper.api_integrations.playmetrics import (
+                        PlayMetricsAPI,
+                    )
 
-                cfg = _PMConfig()
-                cfg.enabled = True
-                cfg.username = username
-                cfg.password = password
-                cfg.team_id = "0"
-                cfg.team_name = "discovery"
+                    class _PMConfig:
+                        pass
 
-                api = PlayMetricsAPI(cfg)
-                api.login()
-                teams = api.get_available_teams()
-                api.close()
+                    cfg = _PMConfig()
+                    cfg.enabled = True
+                    cfg.username = username
+                    cfg.password = password
+                    cfg.team_id = "0"
+                    cfg.team_name = "discovery"
 
-                def on_success(discovered=teams):
+                    api = PlayMetricsAPI(cfg)
+                    api.login()
+                    raw_teams = api.get_available_teams()
+                    api.close()
+                    for t in raw_teams:
+                        team_id = str(t.get("id", ""))
+                        if team_id:
+                            discovered.append(
+                                {"id": team_id, "name": t.get("name", "")}
+                            )
+
+                def on_success(
+                    teams=discovered,
+                    rt=refresh_token,
+                    role_map=role_id_by_team_id,
+                ):
                     self._pm_signin_btn.setEnabled(True)
+                    # Cache TTT-side credentials so _save_to_ttt sends the
+                    # right shape (refresh_token + per-team current_role_id).
+                    self._playmetrics_config["refresh_token"] = rt
+                    self._playmetrics_config["role_id_by_team_id"] = role_map
                     # Clear existing teams table
                     self._pm_teams_table.setRowCount(0)
-                    for t in discovered:
+                    for t in teams:
                         self._pm_add_team_row(
                             team_name=t.get("name", ""),
                             team_id=str(t.get("id", "")),
                             enabled=True,
                         )
-                    self._pm_signin_status.setText(f"Found {len(discovered)} team(s)")
+                    self._pm_signin_status.setText(f"Found {len(teams)} team(s)")
 
                 self._run_on_main.emit(on_success)
 
@@ -2668,14 +2710,29 @@ class OnboardingWizard(QDialog):
                 )
                 existing_providers[key] = prov
 
-        # PlayMetrics providers
+        # PlayMetrics providers — push the canonical TTT credential shape
+        # (refresh_token + per-team current_role_id). The wizard's sign-in
+        # step already populated `refresh_token` and `role_id_by_team_id`
+        # via TTT's connect probe, so we don't send the raw password here.
         pm = self._playmetrics_config
-        if pm.get("username"):
+        if pm.get("refresh_token"):
+            role_map = pm.get("role_id_by_team_id", {}) or {}
             for team in pm.get("teams", []):
                 if not team.get("enabled", True):
                     continue
                 ext_id = team.get("team_id", "")
                 ext_name = team.get("team_name", "")
+                role_id = role_map.get(ext_id, "")
+                if not role_id:
+                    logger.warning(
+                        "Skipping PlayMetrics team %s — no role_id from connect probe",
+                        ext_name,
+                    )
+                    continue
+                credentials = {
+                    "refresh_token": pm["refresh_token"],
+                    "current_role_id": role_id,
+                }
                 lookup_key = ("playmetrics", ext_id)
                 try:
                     if lookup_key in existing_providers:
@@ -2684,10 +2741,7 @@ class OnboardingWizard(QDialog):
                             self._ttt_client.update_schedule_provider(
                                 str(prov_id),
                                 {
-                                    "credentials": {
-                                        "username": pm["username"],
-                                        "password": pm.get("password", ""),
-                                    },
+                                    "credentials": credentials,
                                     "external_team_id": ext_id,
                                     "external_team_name": ext_name,
                                 },
@@ -2697,10 +2751,7 @@ class OnboardingWizard(QDialog):
                             {
                                 "team_id": ttt_team_id,
                                 "provider_type": "playmetrics",
-                                "credentials": {
-                                    "username": pm["username"],
-                                    "password": pm.get("password", ""),
-                                },
+                                "credentials": credentials,
                                 "external_team_id": ext_id,
                                 "external_team_name": ext_name,
                             }
