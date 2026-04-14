@@ -147,11 +147,20 @@ def advance_state(current: str, task_type: str, success: bool) -> str:
         if can_transition(current, new_state):
             return new_state
 
-    # If no explicit transition, stay in current state
-    logger.warning(
-        "No state transition defined for %s completing %s (success=%s)",
-        current, task_type, success,
-    )
+    # If no explicit transition, stay in current state.
+    # Continuous QA on TRAINABLE/QA_DONE games is expected — don't warn.
+    if task_type == "sonnet_qa" and current in ("TRAINABLE", "QA_DONE"):
+        logger.debug(
+            "Continuous QA on %s game — no state change (expected)",
+            current,
+        )
+    else:
+        logger.warning(
+            "No state transition defined for %s completing %s (success=%s)",
+            current,
+            task_type,
+            success,
+        )
     return current
 
 
