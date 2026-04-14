@@ -258,16 +258,31 @@ def cmd_unskip(args):
 
 def cmd_enqueue(args):
     from training.pipeline.config import load_config
+    from training.pipeline.registry import GameRegistry
     from training.pipeline.queue import WorkQueue
 
     cfg = load_config()
     q = WorkQueue(cfg.paths.work_queue_db)
+
+    # Build payload like the orchestrator does — ensures needs_flip
+    # and camera_type are passed for tile/label tasks
+    payload = None
+    if args.type in ("tile", "label") and args.game:
+        reg = GameRegistry(cfg.paths.registry_db)
+        game = reg.get_game(args.game)
+        reg.close()
+        if game:
+            payload = {
+                "needs_flip": bool(game.get("needs_flip")),
+                "camera_type": game.get("camera_type", "dahua"),
+            }
 
     item_id = q.enqueue(
         args.type,
         game_id=args.game,
         priority=args.priority,
         target_machine=args.machine,
+        payload=payload,
     )
     print(
         f"Enqueued {args.type} (id={item_id}, game={args.game}, priority={args.priority})"
