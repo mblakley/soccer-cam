@@ -17,6 +17,7 @@ Usage:
     gm.close()
 """
 
+import json
 import logging
 import os
 import re
@@ -93,6 +94,21 @@ CREATE TABLE IF NOT EXISTS ball_events (
     created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_ball_events_seg ON ball_events(segment, frame_idx);
+
+CREATE TABLE IF NOT EXISTS game_phases (
+    id INTEGER PRIMARY KEY,
+    phase TEXT NOT NULL,
+    segment_start TEXT NOT NULL,
+    frame_start INTEGER NOT NULL,
+    segment_end TEXT NOT NULL,
+    frame_end INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    confidence REAL,
+    confirmed_by TEXT,
+    confirmed_at REAL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_phases_phase ON game_phases(phase);
 """
 
 
@@ -220,6 +236,17 @@ class GameManifest:
         ).fetchone()
         return dict(row_result) if row_result else None
 
+    def get_tile_by_stem(self, tile_stem: str) -> dict | None:
+        """Get a tile record by parsing a tile_stem string."""
+        import re
+
+        m = re.match(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$", tile_stem)
+        if not m:
+            return None
+        return self.get_tile(
+            m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        )
+
     def get_tiles_for_segment(self, segment: str) -> list[dict]:
         """Get all tiles in a segment, sorted by frame/row/col."""
         rows = self.conn.execute(
@@ -232,7 +259,9 @@ class GameManifest:
         row = self.conn.execute("SELECT COUNT(*) as cnt FROM tiles").fetchone()
         return row["cnt"]
 
-    def read_tile_from_pack(self, segment: str, frame_idx: int, row: int, col: int) -> bytes | None:
+    def read_tile_from_pack(
+        self, segment: str, frame_idx: int, row: int, col: int
+    ) -> bytes | None:
         """Read tile JPEG bytes from its pack file."""
         tile = self.get_tile(segment, frame_idx, row, col)
         if not tile or not tile["pack_file"]:
@@ -276,9 +305,7 @@ class GameManifest:
 
     def get_segment_summary(self) -> list[dict]:
         """Return per-segment stats."""
-        rows = self.conn.execute(
-            "SELECT * FROM segments ORDER BY segment"
-        ).fetchall()
+        rows = self.conn.execute("SELECT * FROM segments ORDER BY segment").fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -329,9 +356,7 @@ class GameManifest:
 
     def get_labeled_stems(self) -> set[str]:
         """Return set of tile_stems that have at least one label."""
-        rows = self.conn.execute(
-            "SELECT DISTINCT tile_stem FROM labels"
-        ).fetchall()
+        rows = self.conn.execute("SELECT DISTINCT tile_stem FROM labels").fetchall()
         return {r["tile_stem"] for r in rows}
 
     def get_label_count(self) -> int:
@@ -382,7 +407,16 @@ class GameManifest:
             """INSERT INTO ball_events
                (segment, frame_idx, event_type, pano_x, pano_y, trajectory_id, source, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (segment, frame_idx, event_type, pano_x, pano_y, trajectory_id, source, time.time()),
+            (
+                segment,
+                frame_idx,
+                event_type,
+                pano_x,
+                pano_y,
+                trajectory_id,
+                source,
+                time.time(),
+            ),
         )
         self.conn.commit()
 
@@ -401,12 +435,114 @@ class GameManifest:
         query += " ORDER BY segment, frame_idx"
 
         rows = self.conn.execute(query, params).fetchall()
-        cols = [d[0] for d in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()]
+        cols = [
+            d[0] for d in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()
+        ]
         # Handle case where table doesn't exist yet (older manifests)
         if not cols:
             return []
-        col_names = [c[1] for c in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()]
+        col_names = [
+            c[1] for c in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()
+        ]
         return [dict(zip(col_names, row)) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Game phases (pre_game, first_half, halftime, second_half, post_game)
+    # ------------------------------------------------------------------
+
+    def replace_phases(self, phases: list[dict], source: str):
+        """Atomically replace all phases from a given source.
+
+        Each phase dict must have: phase, segment_start, frame_start,
+        segment_end, frame_end. Optional: confidence.
+        """
+        self.conn.execute("DELETE FROM game_phases WHERE source = ?", (source,))
+        now = time.time()
+        for p in phases:
+            self.conn.execute(
+                """INSERT INTO game_phases
+                   (phase, segment_start, frame_start, segment_end, frame_end,
+                    source, confidence, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    p["phase"],
+                    p["segment_start"],
+                    p["frame_start"],
+                    p["segment_end"],
+                    p["frame_end"],
+                    source,
+                    p.get("confidence"),
+                    now,
+                ),
+            )
+        self.conn.commit()
+
+        # Update summary metadata
+        summary = {
+            "source": source,
+            "phase_count": len(phases),
+            "phases": [p["phase"] for p in phases],
+            "updated_at": now,
+        }
+        self.set_metadata("game_phases_summary", json.dumps(summary))
+
+    def get_phases(self) -> list[dict]:
+        """Return all phases ordered chronologically.
+
+        If human-confirmed phases exist, return those. Otherwise return
+        the best auto-detected source (whistle > sonnet > heuristic).
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM game_phases ORDER BY segment_start, frame_start"
+        ).fetchall()
+        if not rows:
+            return []
+
+        phases = [dict(r) for r in rows]
+
+        # Prefer human > whistle > sonnet > heuristic
+        source_priority = {"human": 0, "whistle": 1, "sonnet": 2, "heuristic": 3}
+        sources = {p["source"] for p in phases}
+        best_source = min(sources, key=lambda s: source_priority.get(s, 99))
+        return [p for p in phases if p["source"] == best_source]
+
+    def get_phase_for_frame(self, segment: str, frame_idx: int) -> str | None:
+        """Return the phase name for a given frame, or None if unclassified.
+
+        Uses segment ordering: compares (segment, frame_idx) tuples against
+        phase boundaries.
+        """
+        phases = self.get_phases()
+        if not phases:
+            return None
+
+        for p in phases:
+            # Check if frame falls within this phase's range
+            after_start = (segment > p["segment_start"]) or (
+                segment == p["segment_start"] and frame_idx >= p["frame_start"]
+            )
+            before_end = (segment < p["segment_end"]) or (
+                segment == p["segment_end"] and frame_idx <= p["frame_end"]
+            )
+            if after_start and before_end:
+                return p["phase"]
+
+        return None
+
+    def is_active_play(self, segment: str, frame_idx: int) -> bool:
+        """Return True if the frame is during first_half or second_half.
+
+        Returns True if no phases are defined (backward compat).
+        """
+        phase = self.get_phase_for_frame(segment, frame_idx)
+        if phase is None:
+            return True  # no phase data = treat everything as play
+        return phase in ("first_half", "second_half")
+
+    def get_play_frame_ranges(self) -> list[dict]:
+        """Return phase entries for active play only (first_half, second_half)."""
+        phases = self.get_phases()
+        return [p for p in phases if p["phase"] in ("first_half", "second_half")]
 
     # ------------------------------------------------------------------
     # Stats
@@ -417,7 +553,9 @@ class GameManifest:
         tiles = self.get_tile_count()
         labels = self.get_label_count()
         positives = self.get_positive_tile_count()
-        segments = self.conn.execute("SELECT COUNT(*) as cnt FROM segments").fetchone()["cnt"]
+        segments = self.conn.execute("SELECT COUNT(*) as cnt FROM segments").fetchone()[
+            "cnt"
+        ]
 
         return {
             "game_id": self.game_id,
@@ -447,10 +585,14 @@ class GameManifest:
         for row in rows:
             if row["tile_stem"] != current_stem:
                 if current_stem and lines:
-                    (output_dir / f"{current_stem}.txt").write_text("\n".join(lines) + "\n")
+                    (output_dir / f"{current_stem}.txt").write_text(
+                        "\n".join(lines) + "\n"
+                    )
                 current_stem = row["tile_stem"]
                 lines = []
-            lines.append(f"{row['class_id']} {row['cx']} {row['cy']} {row['w']} {row['h']}")
+            lines.append(
+                f"{row['class_id']} {row['cx']} {row['cy']} {row['w']} {row['h']}"
+            )
 
         if current_stem and lines:
             (output_dir / f"{current_stem}.txt").write_text("\n".join(lines) + "\n")
@@ -481,10 +623,9 @@ def remap_legacy_labels(conn, video_dir, frame_interval: int = 4):
     tile_re = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
 
     # Find individual segment files (not raw, not highlight clips)
-    segment_files = sorted([
-        f for f in video_dir.glob("*.mp4")
-        if "[F]" in f.name or "[0@0]" in f.name
-    ])
+    segment_files = sorted(
+        [f for f in video_dir.glob("*.mp4") if "[F]" in f.name or "[0@0]" in f.name]
+    )
 
     if not segment_files:
         return {"error": "No segment files found", "remapped": 0}

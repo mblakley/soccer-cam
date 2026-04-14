@@ -66,6 +66,9 @@ def run_sonnet_qa(
 
 def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     """Inner QA logic — separated so manifest.close() is guaranteed by caller."""
+    # Phase 0: Detect game phases (pre-game, halftime, post-game) if not yet done
+    _ensure_game_phases(manifest, task_io)
+
     candidates = _get_qa_candidates(
         manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size
     )
@@ -160,6 +163,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     # Phase 2: Trajectory gap detection — find where ball disappeared
     # ================================================================
     gap_verdicts = {"found": 0, "not_found": 0, "error": 0}
+    trajectories = []  # hoisted for Phase 3
 
     try:
         from training.data_prep.trajectory_gaps import (
@@ -167,13 +171,16 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
             stitch_game_ball_track,
             find_gap_candidates,
             filter_static_gaps,
+            gap_to_tile_stem,
             get_gap_context_frames,
             build_gap_filmstrip,
         )
 
+        has_phases = bool(manifest.get_phases())
         raw_trajectories = build_trajectories_from_manifest(
             manifest.conn,
             min_length=cfg.qa.min_trajectory_length,
+            play_phases_only=has_phases,
         )
 
         # Stitch fragments into continuous game ball tracks
@@ -263,8 +270,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
             manifest.set_metadata("game_ball_track_points", json.dumps(track_points))
 
             logger.info(
-                "Phase 2 complete: dominant track stored (%d frames). "
-                "Awaiting human confirmation before gap filling.",
+                "Phase 2 complete: dominant track stored (%d frames).",
                 len(dominant),
             )
         else:
@@ -272,6 +278,152 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
 
     except Exception as e:
         logger.exception("Phase 2 failed: %s", e)
+
+    # ================================================================
+    # Phase 3: Track-end discovery — check tiles where detector missed
+    # ================================================================
+    track_end_verdicts = {"found": 0, "not_found": 0, "error": 0}
+
+    try:
+        if trajectories:
+            gap_candidates = find_gap_candidates(
+                trajectories,
+                frame_interval=cfg.tiling.frame_interval,
+            )
+            # Focus on track ends and short mid-gaps
+            gap_candidates = [
+                g for g in gap_candidates
+                if g["gap_type"] in ("track_end", "mid_gap")
+            ]
+
+            # Convert gap positions to tile_stems and filter already-labeled
+            labeled_stems = manifest.get_labeled_stems()
+            # Also skip tiles already checked in previous QA runs
+            qa_checked = set()
+            for row in manifest.conn.execute(
+                "SELECT tile_stem FROM labels WHERE source = 'sonnet_qa_discovery'"
+            ).fetchall():
+                qa_checked.add(row[0])
+
+            discovery_stems = []
+            for gap in gap_candidates:
+                stem = gap_to_tile_stem(
+                    gap["segment"], gap["frame_idx"], gap["pano_x"], gap["pano_y"]
+                )
+                if stem and stem not in labeled_stems and stem not in qa_checked:
+                    # Verify tile exists in manifest (frame was actually tiled)
+                    tile = manifest.get_tile_by_stem(stem)
+                    if tile:
+                        discovery_stems.append({
+                            "tile_stem": stem,
+                            "gap": gap,
+                        })
+
+            # Limit to a reasonable batch per cycle
+            max_discovery = min(
+                cfg.qa.sonnet_batch_limit * TILES_PER_GRID,
+                len(discovery_stems),
+            )
+            discovery_stems = discovery_stems[:max_discovery]
+
+            if discovery_stems:
+                logger.info(
+                    "Phase 3: %d track-end/gap tiles to check for %s",
+                    len(discovery_stems),
+                    game_id,
+                )
+
+                # Ensure packs are pulled for these segments
+                disc_packs = _find_needed_packs(discovery_stems, manifest)
+                _pull_selective_packs(task_io, disc_packs)
+
+                # Build grids and call Claude
+                disc_grids = _build_grids(
+                    discovery_stems, manifest, packs_dir, task_io.local_game
+                )
+                for grid_info in disc_grids:
+                    n_tiles = len(grid_info["tile_stems"])
+                    logger.info(
+                        "Phase 3 grid: calling Claude on %d tiles (%s)...",
+                        n_tiles,
+                        grid_info["image_path"].name,
+                    )
+                    try:
+                        results = _call_claude(
+                            grid_info["image_path"], grid_info["tile_stems"]
+                        )
+                        for stem, verdict in results.items():
+                            if verdict in ("BALL", "TRUE_POSITIVE"):
+                                # Find the gap info to get ball position
+                                gap_info = next(
+                                    (d["gap"] for d in discovery_stems
+                                     if d["tile_stem"] == stem),
+                                    None,
+                                )
+                                if gap_info:
+                                    from training.data_prep.trajectory_gaps import (
+                                        _pano_to_tile,
+                                    )
+                                    tile_pos = _pano_to_tile(
+                                        gap_info["pano_x"], gap_info["pano_y"]
+                                    )
+                                    if tile_pos:
+                                        _, _, cx, cy = tile_pos
+                                        # Create label — extends the track
+                                        manifest.upsert_label(
+                                            tile_stem=stem,
+                                            class_id=0,
+                                            cx=cx,
+                                            cy=cy,
+                                            w=0.03,  # ~20px in 640
+                                            h=0.03,
+                                            source="sonnet_qa_discovery",
+                                            confidence=0.7,
+                                        )
+                                        manifest.set_qa_verdict(
+                                            stem, "true_positive"
+                                        )
+                                        track_end_verdicts["found"] += 1
+                                        logger.info(
+                                            "Phase 3: ball found at %s (%.1f, %.1f)",
+                                            stem,
+                                            gap_info["pano_x"],
+                                            gap_info["pano_y"],
+                                        )
+                                else:
+                                    track_end_verdicts["found"] += 1
+                            else:
+                                # Record that we checked this tile (no ball)
+                                # Use a dummy label so we don't re-check
+                                manifest.upsert_label(
+                                    tile_stem=stem,
+                                    class_id=0,
+                                    cx=0.5,
+                                    cy=0.5,
+                                    w=0.01,
+                                    h=0.01,
+                                    source="sonnet_qa_discovery",
+                                    confidence=0.0,
+                                )
+                                manifest.set_qa_verdict(stem, "false_positive")
+                                track_end_verdicts["not_found"] += 1
+                        manifest.conn.commit()
+                    except Exception as e:
+                        logger.exception("Phase 3 grid failed: %s", e)
+                        track_end_verdicts["error"] += n_tiles
+                    time.sleep(2)
+
+                logger.info(
+                    "Phase 3 complete: %d found, %d not found, %d errors",
+                    track_end_verdicts["found"],
+                    track_end_verdicts["not_found"],
+                    track_end_verdicts["error"],
+                )
+            else:
+                logger.info("Phase 3: no unchecked track-end tiles for %s", game_id)
+
+    except Exception as e:
+        logger.exception("Phase 3 failed: %s", e)
 
     # Step 5b: Compute track coverage (reuses trajectories already built)
     coverage_result = {"coverage": 0.0, "gap_count": 0}
@@ -296,21 +448,28 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     manifest.close()
     task_io.push_manifest()
 
+    total_discovery = (
+        track_end_verdicts["found"]
+        + track_end_verdicts["not_found"]
+        + track_end_verdicts["error"]
+    )
     logger.info(
-        "QA complete for %s: Phase1=%d tiles (ball=%d, not_ball=%d), Phase2=%d gaps (found=%d, not_found=%d)",
+        "QA complete for %s: Phase1=%d tiles (ball=%d, not_ball=%d), "
+        "Phase3=%d discovery (found=%d, not_found=%d)",
         game_id,
         total_reviewed,
         verdicts["ball"],
         verdicts["not_ball"],
-        gap_verdicts["found"] + gap_verdicts["not_found"],
-        gap_verdicts["found"],
-        gap_verdicts["not_found"],
+        total_discovery,
+        track_end_verdicts["found"],
+        track_end_verdicts["not_found"],
     )
 
     return {
-        "tiles_reviewed": total_reviewed,
+        "tiles_reviewed": total_reviewed + total_discovery,
         "verdicts": verdicts,
         "gap_verdicts": gap_verdicts,
+        "track_end_verdicts": track_end_verdicts,
         "track_coverage": coverage_result.get("coverage", 0.0),
         "gap_count": coverage_result.get("gap_count", 0),
     }
@@ -372,27 +531,117 @@ def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
     logger.info("Pulled %d/%d needed pack files to SSD", copied, len(pack_files))
 
 
+def _ensure_game_phases(manifest, task_io: TaskIO):
+    """Run game phase detection if phases haven't been detected yet."""
+    existing = manifest.get_metadata("game_phases_summary")
+    if existing:
+        return  # already done
+
+    try:
+        from training.tasks.phase_detect import detect_game_phases
+
+        result = detect_game_phases(manifest, task_io)
+        if result:
+            logger.info(
+                "Phase 0: detected %d phases for %s",
+                result.get("phase_count", 0),
+                manifest.game_id,
+            )
+    except Exception as e:
+        logger.warning("Phase 0 failed for %s: %s", manifest.game_id, e)
+
+
 def _get_qa_candidates(manifest, max_tiles: int = 2000) -> list[dict]:
-    """Get tiles that need QA — prioritize uncertain detections."""
+    """Get tiles that need QA — uncertain detections plus random high-conf sample.
+
+    Always reserves ~20% of the batch for random high-confidence detections
+    to verify that ONNX tracks are actually finding real balls.
+    """
+    import random
+
     conn = manifest.conn
 
-    # Tiles with labels but no QA verdict
-    rows = conn.execute(
+    # Reserve slots for random high-confidence verification
+    verify_slots = max(TILES_PER_GRID, max_tiles // 5)  # ~20%, at least one grid
+    uncertain_slots = max_tiles - verify_slots
+
+    # Uncertain/low-confidence tiles (main QA work)
+    uncertain_rows = conn.execute(
         """SELECT DISTINCT l.tile_stem, l.confidence
            FROM labels l
-           WHERE l.qa_verdict IS NULL
+           WHERE l.qa_verdict IS NULL AND l.confidence < 0.6
+             AND l.source != 'sonnet_qa_discovery'
            ORDER BY
                CASE
-                   WHEN l.confidence BETWEEN 0.3 AND 0.6 THEN 0  -- uncertain first
-                   WHEN l.confidence < 0.3 THEN 1                 -- low conf
-                   ELSE 2                                          -- high conf
+                   WHEN l.confidence BETWEEN 0.3 AND 0.6 THEN 0
+                   WHEN l.confidence < 0.3 THEN 1
+                   ELSE 2
                END,
                l.confidence ASC
            LIMIT ?""",
-        (max_tiles,),
+        (uncertain_slots,),
     ).fetchall()
 
-    return [{"tile_stem": r[0], "confidence": r[1]} for r in rows]
+    # Random sample of high-confidence un-QA'd detections (track validation)
+    high_conf_rows = conn.execute(
+        """SELECT DISTINCT l.tile_stem, l.confidence
+           FROM labels l
+           WHERE l.qa_verdict IS NULL AND l.confidence >= 0.6
+             AND l.source != 'sonnet_qa_discovery'
+           ORDER BY RANDOM()
+           LIMIT ?""",
+        (verify_slots,),
+    ).fetchall()
+
+    candidates = [{"tile_stem": r[0], "confidence": r[1]} for r in uncertain_rows]
+    verify = [{"tile_stem": r[0], "confidence": r[1]} for r in high_conf_rows]
+
+    if verify:
+        logger.info(
+            "QA candidates: %d uncertain + %d high-conf verification",
+            len(candidates),
+            len(verify),
+        )
+
+    # Phase-aware filtering: de-prioritize non-play tiles (cap at 10%)
+    import re
+
+    phases = manifest.get_phases()
+    if phases:
+        play_candidates = []
+        nonplay_candidates = []
+        for c in candidates:
+            m = re.match(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$", c["tile_stem"])
+            if m and not manifest.is_active_play(m.group(1), int(m.group(2))):
+                nonplay_candidates.append(c)
+            else:
+                play_candidates.append(c)
+
+        # Cap non-play tiles at 10% of the total
+        nonplay_cap = max(TILES_PER_GRID, max_tiles // 10)
+        nonplay_candidates = nonplay_candidates[:nonplay_cap]
+        candidates = play_candidates + nonplay_candidates
+
+        if nonplay_candidates:
+            logger.info(
+                "Phase filter: %d play + %d non-play candidates (capped from %d)",
+                len(play_candidates),
+                len(nonplay_candidates),
+                len(nonplay_candidates),
+            )
+
+    # Interleave: put verify tiles every ~5 candidates so they're spread across grids
+    combined = []
+    v_idx = 0
+    for i, c in enumerate(candidates):
+        combined.append(c)
+        if (i + 1) % 5 == 0 and v_idx < len(verify):
+            combined.append(verify[v_idx])
+            v_idx += 1
+    # Append remaining verify tiles
+    combined.extend(verify[v_idx:])
+
+    return combined
 
 
 def _build_grids(

@@ -150,12 +150,35 @@ def measure_game_coverage_from_manifest(conn: sqlite3.Connection) -> dict:
         stitch_game_ball_track,
     )
 
-    trajectories = build_trajectories_from_manifest(conn)
+    # Check if game phases exist — if so, focus coverage on play phases only
+    has_phases = False
+    try:
+        phase_check = conn.execute(
+            "SELECT COUNT(*) FROM game_phases WHERE phase IN ('first_half', 'second_half')"
+        ).fetchone()
+        has_phases = (phase_check[0] or 0) > 0
+    except Exception:
+        pass  # table may not exist in older manifests
+
+    trajectories = build_trajectories_from_manifest(conn, play_phases_only=has_phases)
     stitched = stitch_game_ball_track(trajectories)
 
-    # Total frames across all segments
-    row = conn.execute("SELECT SUM(frame_count) FROM segments").fetchone()
-    total_frames = (row[0] or 0) if row else 0
+    # Total frames: use play-phase frames if available, otherwise all segments
+    if has_phases:
+        play_frame_count = conn.execute(
+            """SELECT SUM(s.frame_count) FROM segments s
+               INNER JOIN game_phases gp
+               ON s.segment >= gp.segment_start AND s.segment <= gp.segment_end
+               WHERE gp.phase IN ('first_half', 'second_half')"""
+        ).fetchone()
+        total_frames = (play_frame_count[0] or 0) if play_frame_count else 0
+        if not total_frames:
+            # Fallback if join didn't work (segment ranges cross boundaries)
+            row = conn.execute("SELECT SUM(frame_count) FROM segments").fetchone()
+            total_frames = (row[0] or 0) if row else 0
+    else:
+        row = conn.execute("SELECT SUM(frame_count) FROM segments").fetchone()
+        total_frames = (row[0] or 0) if row else 0
 
     if not total_frames:
         return {
@@ -227,6 +250,7 @@ def measure_game_coverage_from_manifest(conn: sqlite3.Connection) -> dict:
 
     return {
         "coverage": round(coverage, 4),
+        "play_phases_only": has_phases,
         "total_frames": total_frames,
         "tracked_frames": tracked_frames,
         "out_of_play_frames": out_of_play_frames,

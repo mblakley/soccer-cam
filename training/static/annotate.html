@@ -394,6 +394,29 @@ html, body {
   </div>
 </div>
 
+<!-- Game Phases Page -->
+<div id="phases-page" class="page">
+  <div class="header">
+    <button class="header-btn" onclick="navigateTo('packets')">&larr;</button>
+    <h1>Game Phases</h1>
+  </div>
+  <div class="content" id="phases-content"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('phases')">
+      <span>&#x23F1;</span>Phases
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
 <!-- Gap Review List Page -->
 <div id="gap-review-page" class="page">
   <div class="header">
@@ -436,14 +459,14 @@ html, body {
       <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--green);color:#000;flex:2;">
         <span class="icon">&#x2714;</span>Correct
       </button>
-      <button class="action-btn" onclick="gapAction('reject')" style="background:var(--red);color:#fff;flex:1;">
-        <span class="icon">&#x2717;</span>Wrong
+      <button class="action-btn" onclick="gapAction('not_visible')" style="background:#666;color:#fff;flex:1;">
+        <span class="icon">&#x1F6AB;</span>Not Visible
+      </button>
+      <button class="action-btn" onclick="gapAction('out_of_play')" style="background:#e67e22;color:#fff;flex:1;">
+        <span class="icon">&#x26BD;</span>Out of Play
       </button>
       <button class="action-btn" onclick="gapAction('locate')" style="background:var(--blue);color:#fff;flex:1;" id="gap-locate-btn" disabled>
         <span class="icon">&#x1F3AF;</span>Ball Here
-      </button>
-      <button class="action-btn btn-skip" onclick="gapAction('cant_tell')">
-        <span class="icon">&rarr;</span>Skip
       </button>
     </div>
     <!-- Gap filling buttons (shown after track is confirmed) -->
@@ -503,6 +526,10 @@ function navigateTo(page, param) {
     document.getElementById('tracking-lab-page').classList.add('active');
     location.hash = '#tracking-lab';
     loadTrackingLab();
+  } else if (page === 'phases') {
+    document.getElementById('phases-page').classList.add('active');
+    location.hash = '#phases';
+    loadGamePhases();
   } else if (page === 'gap-review') {
     document.getElementById('gap-review-page').classList.add('active');
     location.hash = '#gap-review';
@@ -533,6 +560,8 @@ function handleHash() {
     navigateTo('exclusions');
   } else if (hash === '#tracking-lab') {
     navigateTo('tracking-lab');
+  } else if (hash === '#phases') {
+    navigateTo('phases');
   } else if (hash === '#gap-review') {
     navigateTo('gap-review');
   } else if (hash.startsWith('#gap-annotate/')) {
@@ -2435,12 +2464,9 @@ async function startGapReview(packetId) {
     gapManifest = await resp.json();
     gapItems = gapManifest.items || gapManifest.gap_items || [];
     gapReviewedSet = new Set();
-    // Mark already-reviewed items
-    const detailResp = await fetch(API + `/api/gap-reviews/${packetId}`);
-    const detail = await detailResp.json();
     gapCurrentIndex = 0;
     // Skip to first unreviewed
-    const reviewed = detail.reviewed_count || 0;
+    const reviewed = gapManifest.reviewed_count || 0;
     gapCurrentIndex = reviewed;
     if (gapCurrentIndex >= gapItems.length) gapCurrentIndex = gapItems.length - 1;
     updateGapDisplay();
@@ -2471,8 +2497,15 @@ function updateGapDisplay() {
 
     // Show the full filmstrip
     const filmstrip = document.getElementById('gap-filmstrip');
-    filmstrip.src = API + `/api/gap-reviews/${gapPacketId}/tile/game_ball_track`;
-    filmstrip.onload = () => drawFilmstripOverlay();
+    const newSrc = API + `/api/gap-reviews/${gapPacketId}/tile/game_ball_track`;
+    if (filmstrip.src !== newSrc) {
+      filmstrip.src = newSrc;
+      filmstrip.onload = () => { drawFilmstripOverlay(); scrollToCurrentFrame(); };
+    } else {
+      // Same image already loaded — just redraw overlay and scroll
+      drawFilmstripOverlay();
+      scrollToCurrentFrame();
+    }
 
     // Show confirm buttons, hide gap-fill buttons
     document.getElementById('gap-confirm-bar').style.display = 'flex';
@@ -2487,6 +2520,15 @@ function updateGapDisplay() {
     document.getElementById('gap-confirm-bar').style.display = 'none';
     document.getElementById('gap-fill-bar').style.display = 'block';
   }
+}
+
+function scrollToCurrentFrame() {
+  const container = document.querySelector('#gap-filmstrip-container').parentElement;
+  const img = document.getElementById('gap-filmstrip');
+  if (!img.naturalWidth || !gapItems.length) return;
+  const frameW = img.clientWidth / gapItems.length;
+  const targetX = gapCurrentIndex * frameW + frameW / 2 - container.clientWidth / 2;
+  container.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' });
 }
 
 function drawFilmstripOverlay() {
@@ -2520,9 +2562,11 @@ function drawFilmstripOverlay() {
     }
 
     // Show verdict badge — small indicator, not a full overlay
-    if (action === 'confirm' || action === 'reject') {
-      const color = action === 'confirm' ? '#00cc00' : '#cc0000';
-      const symbol = action === 'confirm' ? '✓' : '✗';
+    if (action === 'confirm' || action === 'not_visible' || action === 'out_of_play' || action === 'locate') {
+      const badgeColors = { confirm: '#00cc00', not_visible: '#666', out_of_play: '#e67e22', locate: '#3388ff' };
+      const badgeSymbols = { confirm: '\u2713', not_visible: '\u2014', out_of_play: '\u26BD', locate: '\uD83C\uDFAF' };
+      const color = badgeColors[action] || '#666';
+      const symbol = badgeSymbols[action] || '?';
       // Bottom-right badge
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -2612,8 +2656,8 @@ async function gapAction(action) {
     });
     const result = await resp.json();
 
-    const colors = { confirm: 'var(--green)', reject: 'var(--red)', locate: 'var(--blue)', cant_tell: '#666' };
-    const labels = { confirm: 'Confirmed!', reject: 'Rejected', locate: 'Ball marked!', cant_tell: 'Skipped' };
+    const colors = { confirm: 'var(--green)', not_visible: '#666', out_of_play: '#e67e22', locate: 'var(--blue)' };
+    const labels = { confirm: 'Confirmed!', not_visible: 'Not visible', out_of_play: 'Out of play', locate: 'Ball marked!' };
     showToast(labels[action] || action, colors[action]);
 
     // Mark local state for overlay
@@ -2652,6 +2696,113 @@ function leaveGapReview() {
   gapManifest = null;
   gapItems = [];
   navigateTo('gap-review');
+}
+
+// ========== Game Phases ==========
+
+const PHASE_COLORS = {
+  pre_game: '#6b7280',
+  first_half: '#22c55e',
+  halftime: '#f59e0b',
+  second_half: '#3b82f6',
+  post_game: '#6b7280',
+};
+
+const PHASE_LABELS = {
+  pre_game: 'Pre-Game',
+  first_half: '1st Half',
+  halftime: 'Halftime',
+  second_half: '2nd Half',
+  post_game: 'Post-Game',
+};
+
+async function loadGamePhases() {
+  const container = document.getElementById('phases-content');
+  container.innerHTML = '<div class="loading">Loading game phases...</div>';
+
+  try {
+    const resp = await fetch(API + '/api/game-phases');
+    const games = await resp.json();
+
+    if (!games.length) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">&#x23F1;</div><div>No games with phase data yet</div><div style="margin-top:12px;font-size:13px">Phases are auto-detected during QA (whistle + Sonnet vision)</div></div>';
+      return;
+    }
+
+    let html = '';
+    const withPhases = games.filter(g => g.has_phases);
+    const without = games.filter(g => !g.has_phases);
+
+    html += `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPhases.length} games with phases, ${without.length} pending</div>`;
+
+    for (const game of withPhases) {
+      html += renderGamePhaseCard(game);
+    }
+
+    if (without.length > 0) {
+      html += '<div style="padding:12px 16px;margin-top:16px"><h3 style="color:var(--text-dim);font-size:14px">Pending Phase Detection</h3></div>';
+      for (const game of without) {
+        html += `<div class="packet-card" style="opacity:0.5"><div class="title">${game.game_id}</div><div class="meta">${game.segments.length} segments</div></div>`;
+      }
+    }
+
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function renderGamePhaseCard(game) {
+  const phases = game.phases;
+  if (!phases.length) return '';
+
+  // Build timeline bar
+  const allSegs = game.segments.sort((a, b) => a.segment.localeCompare(b.segment));
+  const firstSeg = allSegs[0];
+  const lastSeg = allSegs[allSegs.length - 1];
+
+  // Compute total frame span for timeline width
+  let totalFrames = 0;
+  for (const s of allSegs) totalFrames += s.frame_count || 0;
+  if (!totalFrames) totalFrames = 1;
+
+  // Build a segment offset map
+  const segOffsets = {};
+  let cumOffset = 0;
+  for (const s of allSegs) {
+    segOffsets[s.segment] = cumOffset;
+    cumOffset += (s.frame_count || 0);
+  }
+
+  const source = game.summary ? game.summary.source : 'unknown';
+  const confirmed = phases.some(p => p.confirmed_by === 'human');
+
+  let timelineHtml = '<div style="display:flex;height:24px;border-radius:6px;overflow:hidden;margin:8px 0">';
+  for (const p of phases) {
+    const startOff = (segOffsets[p.segment_start] || 0) + p.frame_start;
+    const endOff = (segOffsets[p.segment_end] || 0) + p.frame_end;
+    const width = Math.max(((endOff - startOff) / totalFrames) * 100, 2);
+    const color = PHASE_COLORS[p.phase] || '#444';
+    const label = PHASE_LABELS[p.phase] || p.phase;
+    timelineHtml += `<div style="width:${width}%;background:${color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5);overflow:hidden;white-space:nowrap" title="${label}">${width > 8 ? label : ''}</div>`;
+  }
+  timelineHtml += '</div>';
+
+  // Phase details
+  let detailHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">';
+  for (const p of phases) {
+    const color = PHASE_COLORS[p.phase] || '#444';
+    const label = PHASE_LABELS[p.phase] || p.phase;
+    detailHtml += `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${color}33;color:${color};font-weight:600">${label}</span>`;
+  }
+  detailHtml += '</div>';
+
+  return `<div class="packet-card">
+    <div class="title">${game.game_id}</div>
+    <div class="meta">Source: ${source} ${confirmed ? '(confirmed)' : '(auto)'} &mdash; ${allSegs.length} segments</div>
+    ${timelineHtml}
+    ${detailHtml}
+  </div>`;
 }
 
 </script>

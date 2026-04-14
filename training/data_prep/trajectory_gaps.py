@@ -25,7 +25,9 @@ MAX_LINK_DISTANCE = 400  # panoramic pixels
 _TILE_RE = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
 
 
-def _tile_to_pano(cx_norm: float, cy_norm: float, row: int, col: int) -> tuple[float, float]:
+def _tile_to_pano(
+    cx_norm: float, cy_norm: float, row: int, col: int
+) -> tuple[float, float]:
     """Convert normalized tile coordinates to panoramic pixel coordinates."""
     pano_x = col * STEP_X + cx_norm * TILE_SIZE
     pano_y = row * STEP_Y + cy_norm * TILE_SIZE
@@ -48,10 +50,27 @@ def _pano_to_tile(pano_x: float, pano_y: float) -> tuple[int, int, float, float]
     return None
 
 
+def _in_play_range(
+    segment: str,
+    frame_idx: int,
+    play_ranges: list[tuple[str, int, str, int]],
+) -> bool:
+    """Check if a frame is within any active play phase range."""
+    for seg_start, fi_start, seg_end, fi_end in play_ranges:
+        after_start = (segment > seg_start) or (
+            segment == seg_start and frame_idx >= fi_start
+        )
+        before_end = (segment < seg_end) or (segment == seg_end and frame_idx <= fi_end)
+        if after_start and before_end:
+            return True
+    return False
+
+
 def build_trajectories_from_manifest(
     conn: sqlite3.Connection,
     min_length: int = 5,
     max_link_distance: float = MAX_LINK_DISTANCE,
+    play_phases_only: bool = False,
 ) -> list[list[tuple[int, str, float, float]]]:
     """Build ball trajectories from labels in the manifest.
 
@@ -61,9 +80,27 @@ def build_trajectories_from_manifest(
     - Displacement > 200px (game ball moves fast, not stationary)
     - Rejects false_positive labels if QA'd
 
+    Args:
+        play_phases_only: If True, only include frames from active play phases
+            (first_half, second_half). Requires game_phases table to be populated.
+
     Returns list of trajectories. Each trajectory is a sorted list of
     (frame_idx, segment, pano_x, pano_y) tuples.
     """
+    # Load play phase ranges if filtering is requested
+    play_ranges = None
+    if play_phases_only:
+        try:
+            phase_rows = conn.execute(
+                "SELECT phase, segment_start, frame_start, segment_end, frame_end "
+                "FROM game_phases WHERE phase IN ('first_half', 'second_half') "
+                "ORDER BY segment_start, frame_start"
+            ).fetchall()
+            if phase_rows:
+                play_ranges = [(r[1], r[2], r[3], r[4]) for r in phase_rows]
+        except Exception:
+            pass  # table may not exist in older manifests
+
     # Use all labels, excluding known false positives
     rows = conn.execute(
         """SELECT tile_stem, cx, cy FROM labels
@@ -86,6 +123,10 @@ def build_trajectories_from_manifest(
 
         # Skip row 2 (near field / sideline) — game ball is almost never here
         if row >= 2:
+            continue
+
+        # Skip frames outside active play phases
+        if play_ranges and not _in_play_range(segment, frame_idx, play_ranges):
             continue
 
         pano_x, pano_y = _tile_to_pano(cx, cy, row, col)
@@ -167,8 +208,7 @@ def build_trajectories_from_manifest(
             # Compute displacement: max distance from first point to any other
             x0, y0 = traj[0][2], traj[0][3]
             max_disp = max(
-                ((p[2] - x0) ** 2 + (p[3] - y0) ** 2) ** 0.5
-                for p in traj[1:]
+                ((p[2] - x0) ** 2 + (p[3] - y0) ** 2) ** 0.5 for p in traj[1:]
             )
 
             # Game ball threshold: must move significantly (200px panoramic)
@@ -182,8 +222,11 @@ def build_trajectories_from_manifest(
     logger.info(
         "Built %d moving trajectories (>=%d frames, rejected %d static) "
         "from %d detections across %d segments",
-        len(all_trajectories), min_length, static_count,
-        len(frame_dets), len(seg_frames),
+        len(all_trajectories),
+        min_length,
+        static_count,
+        len(frame_dets),
+        len(seg_frames),
     )
     return all_trajectories
 
@@ -225,7 +268,9 @@ def stitch_game_ball_track(
                 last = chain[-1]
                 first_new = frag[0]
                 time_gap = first_new[0] - last[0]
-                dist = ((first_new[2] - last[2]) ** 2 + (first_new[3] - last[3]) ** 2) ** 0.5
+                dist = (
+                    (first_new[2] - last[2]) ** 2 + (first_new[3] - last[3]) ** 2
+                ) ** 0.5
 
                 if 0 < time_gap <= max_gap_frames and dist < max_stitch_distance:
                     chain.extend(frag)
@@ -242,7 +287,8 @@ def stitch_game_ball_track(
 
     logger.info(
         "Stitched %d fragments into %d tracks (longest: %d frames)",
-        len(trajectories), len(stitched),
+        len(trajectories),
+        len(stitched),
         len(stitched[0]) if stitched else 0,
     )
     return stitched
@@ -287,18 +333,20 @@ def find_gap_candidates(
                 interp_x = x_prev + frac * (x_curr - x_prev)
                 interp_y = y_prev + frac * (y_curr - y_prev)
 
-                gaps.append({
-                    "segment": segment,
-                    "frame_idx": interp_fi,
-                    "pano_x": round(interp_x, 1),
-                    "pano_y": round(interp_y, 1),
-                    "gap_type": "mid_gap",
-                    "trajectory_idx": traj_idx,
-                    "trajectory_length": len(traj),
-                    "gap_size": gap_frames,
-                    "context_before": (fi_prev, x_prev, y_prev),
-                    "context_after": (fi_curr, x_curr, y_curr),
-                })
+                gaps.append(
+                    {
+                        "segment": segment,
+                        "frame_idx": interp_fi,
+                        "pano_x": round(interp_x, 1),
+                        "pano_y": round(interp_y, 1),
+                        "gap_type": "mid_gap",
+                        "trajectory_idx": traj_idx,
+                        "trajectory_length": len(traj),
+                        "gap_size": gap_frames,
+                        "context_before": (fi_prev, x_prev, y_prev),
+                        "context_after": (fi_curr, x_curr, y_curr),
+                    }
+                )
 
         # Track endpoints — where ball left play
         if len(traj) >= 10:
@@ -306,29 +354,39 @@ def find_gap_candidates(
             prev = traj[-2]
             dx = last[2] - prev[2]
             dy = last[3] - prev[3]
-            gaps.append({
-                "segment": segment,
-                "frame_idx": last[0] + frame_interval,
-                "pano_x": round(last[2] + dx, 1),
-                "pano_y": round(last[3] + dy, 1),
-                "gap_type": "track_end",
-                "trajectory_idx": traj_idx,
-                "trajectory_length": len(traj),
-                "gap_size": frame_interval,
-                "context_before": (last[0], last[2], last[3]),
-                "context_after": None,
-            })
+            gaps.append(
+                {
+                    "segment": segment,
+                    "frame_idx": last[0] + frame_interval,
+                    "pano_x": round(last[2] + dx, 1),
+                    "pano_y": round(last[3] + dy, 1),
+                    "gap_type": "track_end",
+                    "trajectory_idx": traj_idx,
+                    "trajectory_length": len(traj),
+                    "gap_size": frame_interval,
+                    "context_before": (last[0], last[2], last[3]),
+                    "context_after": None,
+                }
+            )
 
     # Sort: longer trajectories first, track_end > mid_gap
     type_priority = {"track_end": 0, "mid_gap": 1}
-    gaps.sort(key=lambda g: (type_priority.get(g["gap_type"], 2), -g["trajectory_length"]))
+    gaps.sort(
+        key=lambda g: (type_priority.get(g["gap_type"], 2), -g["trajectory_length"])
+    )
 
-    logger.info("Found %d gap candidates from %d tracks (max gap: %.1fs)",
-                len(gaps), len(trajectories), max_gap_seconds)
+    logger.info(
+        "Found %d gap candidates from %d tracks (max gap: %.1fs)",
+        len(gaps),
+        len(trajectories),
+        max_gap_seconds,
+    )
     return gaps
 
 
-def gap_to_tile_stem(segment: str, frame_idx: int, pano_x: float, pano_y: float) -> str | None:
+def gap_to_tile_stem(
+    segment: str, frame_idx: int, pano_x: float, pano_y: float
+) -> str | None:
     """Convert a gap's panoramic position to a tile_stem.
 
     Returns tile_stem like '{segment}_frame_{frame_idx:06d}_r{row}_c{col}'
@@ -375,6 +433,7 @@ def filter_static_gaps(
             mask_path = Path(field_mask_path)
             if mask_path.exists():
                 import numpy as np
+
                 polygon = json.loads(mask_path.read_text())
                 field_polygon = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
         except Exception as e:
@@ -399,6 +458,7 @@ def filter_static_gaps(
         if field_polygon is not None:
             try:
                 import cv2
+
                 dist = cv2.pointPolygonTest(field_polygon, (px, py), measureDist=True)
                 if dist < -50:  # well outside field
                     continue
@@ -411,8 +471,12 @@ def filter_static_gaps(
 
         filtered.append(gap)
 
-    logger.info("Filtered gaps: %d -> %d (removed %d static/off-field)",
-                len(gaps), len(filtered), len(gaps) - len(filtered))
+    logger.info(
+        "Filtered gaps: %d -> %d (removed %d static/off-field)",
+        len(gaps),
+        len(filtered),
+        len(gaps) - len(filtered),
+    )
     return filtered
 
 
@@ -441,31 +505,35 @@ def get_gap_context_frames(
         if tile_info is None:
             continue
         row, col, cx_norm, cy_norm = tile_info
-        frames.append({
-            "frame_idx": fi,
-            "segment": seg,
-            "pano_x": px,
-            "pano_y": py,
-            "role": "before",
-            "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
-            "tile_local_x": cx_norm,
-            "tile_local_y": cy_norm,
-        })
+        frames.append(
+            {
+                "frame_idx": fi,
+                "segment": seg,
+                "pano_x": px,
+                "pano_y": py,
+                "role": "before",
+                "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
+                "tile_local_x": cx_norm,
+                "tile_local_y": cy_norm,
+            }
+        )
 
     # Gap frame
     tile_info = _pano_to_tile(gap_px, gap_py)
     if tile_info:
         row, col, cx_norm, cy_norm = tile_info
-        frames.append({
-            "frame_idx": gap_fi,
-            "segment": segment,
-            "pano_x": gap_px,
-            "pano_y": gap_py,
-            "role": "gap",
-            "tile_stem": f"{segment}_frame_{gap_fi:06d}_r{row}_c{col}",
-            "tile_local_x": cx_norm,
-            "tile_local_y": cy_norm,
-        })
+        frames.append(
+            {
+                "frame_idx": gap_fi,
+                "segment": segment,
+                "pano_x": gap_px,
+                "pano_y": gap_py,
+                "role": "gap",
+                "tile_stem": f"{segment}_frame_{gap_fi:06d}_r{row}_c{col}",
+                "tile_local_x": cx_norm,
+                "tile_local_y": cy_norm,
+            }
+        )
 
     # After frames: first n_after trajectory points after the gap
     after_points = [(fi, seg, px, py) for fi, seg, px, py in trajectory if fi > gap_fi]
@@ -474,16 +542,18 @@ def get_gap_context_frames(
         if tile_info is None:
             continue
         row, col, cx_norm, cy_norm = tile_info
-        frames.append({
-            "frame_idx": fi,
-            "segment": seg,
-            "pano_x": px,
-            "pano_y": py,
-            "role": "after",
-            "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
-            "tile_local_x": cx_norm,
-            "tile_local_y": cy_norm,
-        })
+        frames.append(
+            {
+                "frame_idx": fi,
+                "segment": seg,
+                "pano_x": px,
+                "pano_y": py,
+                "role": "after",
+                "tile_stem": f"{seg}_frame_{fi:06d}_r{row}_c{col}",
+                "tile_local_x": cx_norm,
+                "tile_local_y": cy_norm,
+            }
+        )
 
     return frames
 
@@ -544,17 +614,32 @@ def build_gap_filmstrip(
         elif frame["role"] == "gap":
             # Yellow circle + "?" — expected position
             cv2.circle(composite, (bx, by), radius, (0, 255, 255), 3)
-            cv2.putText(composite, "?", (bx - 8, by + 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.putText(
+                composite,
+                "?",
+                (bx - 8, by + 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 255),
+                2,
+            )
         elif frame["role"] == "after":
             # Green circle — ball reappeared
             cv2.circle(composite, (bx, by), radius, (0, 255, 0), 2)
 
         # Frame number label
-        cv2.putText(composite, f"F{frame['frame_idx']}",
-                    (x_offset + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.putText(
+            composite,
+            f"F{frame['frame_idx']}",
+            (x_offset + 5, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            1,
+        )
 
     from pathlib import Path
+
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), composite, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return True

@@ -46,6 +46,7 @@ class Orchestrator:
         self._qa_exhausted: set[str] = (
             set()
         )  # games where sonnet_qa found no candidates (skip re-enqueue)
+        self._last_qa_game: str | None = None  # round-robin continuous QA
 
     def run(self, once: bool = False):
         """Main orchestrator loop. Requires API server to be running separately."""
@@ -381,14 +382,26 @@ class Orchestrator:
         # Get ALL games, not just needing-work (which excludes TRAINABLE)
         all_games = self.api.get_all_games()
         qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}
-        for game in all_games:
-            state = game["pipeline_state"]
-            if state not in qa_eligible_states:
-                continue
-            if game.get("label_count", 0) == 0:
-                continue
-            if game["game_id"] in self._qa_exhausted:
-                continue  # no candidates last time — don't spam
+        eligible = [
+            g
+            for g in all_games
+            if g["pipeline_state"] in qa_eligible_states
+            and g.get("label_count", 0) > 0
+            and g["game_id"] not in self._qa_exhausted
+        ]
+        if not eligible:
+            return
+
+        # Round-robin: start after the last game we QA'd
+        if self._last_qa_game:
+            ids = [g["game_id"] for g in eligible]
+            try:
+                last_idx = ids.index(self._last_qa_game)
+                eligible = eligible[last_idx + 1 :] + eligible[: last_idx + 1]
+            except ValueError:
+                pass  # last game no longer eligible, start from top
+
+        for game in eligible:
             if self.api.has_active_item("sonnet_qa", game["game_id"]):
                 continue
 
@@ -401,8 +414,11 @@ class Orchestrator:
                     priority=self._get_priority("sonnet_qa", game),
                     target_machine=self._get_target_machine("sonnet_qa"),
                 )
+                self._last_qa_game = game["game_id"]
                 logger.info(
-                    "Continuous QA: enqueued for %s (%s)", game["game_id"], state
+                    "Continuous QA: enqueued for %s (%s)",
+                    game["game_id"],
+                    game["pipeline_state"],
                 )
             break  # One at a time to stay within rate limit
 

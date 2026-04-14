@@ -101,6 +101,29 @@ def run_generate_review(
                 tile_images.append(tile_stem)
 
         # Write review manifest
+        # Tag each frame with its game phase (for display in review UI)
+        items = []
+        for frame in sample_frames:
+            phase = manifest.get_phase_for_frame(frame["segment"], frame["frame_idx"])
+            items.append(
+                {
+                    "tile_stem": frame["tile_stem"],
+                    "frame_idx": frame["frame_idx"],
+                    "reason": "confirm_game_ball",
+                    "priority": 300,
+                    "role": "track_sample",
+                    "phase": phase,
+                }
+            )
+
+        # Get phase summary for the review manifest
+        phases = manifest.get_phases()
+        phase_summary = (
+            [{"phase": p["phase"], "source": p["source"]} for p in phases]
+            if phases
+            else None
+        )
+
         review_manifest = {
             "game_id": game_id,
             "created_at": time.time(),
@@ -108,16 +131,8 @@ def run_generate_review(
             "track_info": track_info,
             "filmstrip": "game_ball_track.jpg",
             "tile_count": len(tile_images),
-            "items": [
-                {
-                    "tile_stem": frame["tile_stem"],
-                    "frame_idx": frame["frame_idx"],
-                    "reason": "confirm_game_ball",
-                    "priority": 300,
-                    "role": "track_sample",
-                }
-                for frame in sample_frames
-            ],
+            "game_phases": phase_summary,
+            "items": items,
         }
         (review_dir / "manifest.json").write_text(json.dumps(review_manifest, indent=2))
     finally:

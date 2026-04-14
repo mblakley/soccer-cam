@@ -850,7 +850,7 @@ async def root_redirect():
 
 
 @app.get("/api/gap-reviews")
-async def get_gap_reviews():
+def get_gap_reviews():
     """List all pending gap review packets."""
     packets = []
     if not REVIEW_PACKETS_DIR.exists():
@@ -902,7 +902,7 @@ async def get_gap_reviews():
 
 
 @app.get("/api/gap-reviews/{packet_id}")
-async def get_gap_review_detail(packet_id: str):
+def get_gap_review_detail(packet_id: str):
     """Get full gap review packet with items and review status."""
     packet_dir = REVIEW_PACKETS_DIR / packet_id
     manifest_path = packet_dir / "manifest.json"
@@ -940,15 +940,16 @@ async def get_gap_review_detail(packet_id: str):
 
 
 @app.get("/api/gap-reviews/{packet_id}/tile/{tile_stem:path}")
-async def get_gap_tile(packet_id: str, tile_stem: str):
+def get_gap_tile(packet_id: str, tile_stem: str):
     """Serve a tile image from a gap review packet.
 
     First checks for a pre-extracted JPG. If not found, reads the tile
     on demand from the game's manifest + pack files.
     """
+    _img_cache = {"Cache-Control": "public, max-age=604800, immutable"}
     tile_path = REVIEW_PACKETS_DIR / packet_id / f"{tile_stem}.jpg"
     if tile_path.exists():
-        return FileResponse(tile_path, media_type="image/jpeg")
+        return FileResponse(tile_path, media_type="image/jpeg", headers=_img_cache)
 
     # Read on demand from pack
     manifest_path = REVIEW_PACKETS_DIR / packet_id / "manifest.json"
@@ -981,22 +982,30 @@ async def get_gap_tile(packet_id: str, tile_stem: str):
 
     # Cache for next time
     tile_path.write_bytes(jpeg_bytes)
-    return Response(content=jpeg_bytes, media_type="image/jpeg")
+    return Response(
+        content=jpeg_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
 
 
 @app.get("/api/gap-reviews/{packet_id}/filmstrip/{tile_stem:path}")
-async def get_gap_filmstrip(packet_id: str, tile_stem: str):
+def get_gap_filmstrip(packet_id: str, tile_stem: str):
     """Serve the filmstrip composite for a gap tile."""
     filmstrip_path = (
         REVIEW_PACKETS_DIR / packet_id / "filmstrips" / f"{tile_stem}_filmstrip.jpg"
     )
     if not filmstrip_path.exists():
         raise HTTPException(404, "Filmstrip not found")
-    return FileResponse(filmstrip_path, media_type="image/jpeg")
+    return FileResponse(
+        filmstrip_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
 
 
 @app.post("/api/gap-reviews/{packet_id}/result")
-async def submit_gap_result(packet_id: str, result: dict):
+def submit_gap_result(packet_id: str, result: dict):
     """Submit a gap review result.
 
     Expected: {
@@ -1045,6 +1054,191 @@ async def submit_gap_result(packet_id: str, result: dict):
         "reviewed": len(results),
         "remaining": total_gaps - len(results),
     }
+
+
+# ------------------------------------------------------------------
+# Game Phases API
+# ------------------------------------------------------------------
+
+GAMES_DIR = Path("D:/training_data/games")
+
+
+@app.get("/api/game-phases")
+async def list_game_phases():
+    """List all games with their detected phases."""
+    from training.data_prep.game_manifest import GameManifest
+
+    results = []
+    if not GAMES_DIR.exists():
+        return results
+
+    for game_dir in sorted(GAMES_DIR.iterdir()):
+        if not game_dir.is_dir():
+            continue
+        manifest_path = game_dir / "manifest.db"
+        if not manifest_path.exists():
+            continue
+
+        try:
+            gm = GameManifest(game_dir)
+            gm.open(create=False)
+            phases = gm.get_phases()
+            summary = gm.get_metadata("game_phases_summary")
+            segments = gm.get_segment_summary()
+            gm.close()
+
+            results.append(
+                {
+                    "game_id": game_dir.name,
+                    "has_phases": len(phases) > 0,
+                    "phases": [
+                        {
+                            "phase": p["phase"],
+                            "segment_start": p["segment_start"],
+                            "frame_start": p["frame_start"],
+                            "segment_end": p["segment_end"],
+                            "frame_end": p["frame_end"],
+                            "source": p["source"],
+                            "confidence": p.get("confidence"),
+                            "confirmed_by": p.get("confirmed_by"),
+                        }
+                        for p in phases
+                    ],
+                    "segments": [
+                        {
+                            "segment": s["segment"],
+                            "frame_min": s["frame_min"],
+                            "frame_max": s["frame_max"],
+                            "frame_count": s["frame_count"],
+                        }
+                        for s in segments
+                    ],
+                    "summary": json.loads(summary) if summary else None,
+                }
+            )
+        except Exception as e:
+            logger.debug("Skipping %s for phases: %s", game_dir.name, e)
+
+    return results
+
+
+@app.get("/api/game-phases/{game_id}")
+async def get_game_phases(game_id: str):
+    """Get phase details for a specific game."""
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.phase_detect import parse_segment_time
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    phases = gm.get_phases()
+    segments = gm.get_segment_summary()
+    gm.close()
+
+    # Enrich segments with parsed time info
+    enriched_segments = []
+    for s in segments:
+        start_sec = parse_segment_time(s["segment"])
+        enriched_segments.append(
+            {
+                "segment": s["segment"],
+                "frame_min": s["frame_min"],
+                "frame_max": s["frame_max"],
+                "frame_count": s["frame_count"],
+                "start_time_sec": start_sec,
+                "start_time_str": _fmt_secs(start_sec) if start_sec else None,
+            }
+        )
+
+    return {
+        "game_id": game_id,
+        "phases": [
+            {
+                "id": p.get("id"),
+                "phase": p["phase"],
+                "segment_start": p["segment_start"],
+                "frame_start": p["frame_start"],
+                "segment_end": p["segment_end"],
+                "frame_end": p["frame_end"],
+                "source": p["source"],
+                "confidence": p.get("confidence"),
+                "confirmed_by": p.get("confirmed_by"),
+            }
+            for p in phases
+        ],
+        "segments": enriched_segments,
+    }
+
+
+@app.post("/api/game-phases/{game_id}")
+async def save_game_phases(game_id: str, request: Request):
+    """Save human-adjusted phase boundaries.
+
+    Expects JSON body: {"phases": [{"phase": str, "segment_start": str,
+    "frame_start": int, "segment_end": str, "frame_end": int}, ...]}
+    """
+    from training.data_prep.game_manifest import GameManifest
+
+    body = await request.json()
+    phases = body.get("phases", [])
+
+    if not phases:
+        raise HTTPException(400, "No phases provided")
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    gm.replace_phases(phases, source="human")
+    gm.close()
+
+    logger.info(
+        "Saved %d human-confirmed phases for %s: %s",
+        len(phases),
+        game_id,
+        ", ".join(p["phase"] for p in phases),
+    )
+
+    return {"accepted": True, "phase_count": len(phases)}
+
+
+@app.get("/api/game-phases/{game_id}/thumb/{segment}/{frame_idx}")
+async def get_phase_thumbnail(game_id: str, segment: str, frame_idx: int):
+    """Serve a center tile thumbnail for a phase boundary."""
+    from training.data_prep.game_manifest import GameManifest
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    # Try center tile (row=1, col=3), then fallbacks
+    jpeg_bytes = None
+    for row, col in [(1, 3), (0, 3), (1, 2), (1, 4)]:
+        jpeg_bytes = gm.read_tile_from_pack(segment, int(frame_idx), row, col)
+        if jpeg_bytes:
+            break
+
+    gm.close()
+
+    if not jpeg_bytes:
+        raise HTTPException(404, "Tile not found")
+
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+
+def _fmt_secs(secs: float) -> str:
+    h = int(secs // 3600)
+    m = int((secs % 3600) // 60)
+    s = int(secs % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 # Static file mount must come AFTER all API routes (catch-all).

@@ -227,7 +227,7 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
     return {
         "tiles": total_tiles,
         "pack_bytes": total_pack_bytes,
-        "segments": len(local_videos),
+        "segments": len(source_videos),
     }
 
 
