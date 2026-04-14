@@ -46,21 +46,28 @@ TRANSITIONS = {
     "TRAINABLE": {"HOLD"},  # can go back for re-training later
     "EXCLUDED": {"REGISTERED"},  # can un-exclude
     "HOLD": {  # can resume to any stage
-        "REGISTERED", "STAGING", "TILED", "LABELING",
-        "LABELED", "QA_PENDING", "QA_DONE", "REVIEW_PENDING", "TRAINABLE",
+        "REGISTERED",
+        "STAGING",
+        "TILED",
+        "LABELING",
+        "LABELED",
+        "QA_PENDING",
+        "QA_DONE",
+        "REVIEW_PENDING",
+        "TRAINABLE",
     },
 }
 
 # Which task type advances a game FROM each state
 STATE_TO_TASK = {
     "REGISTERED": "stage",
-    "STAGING": "tile",      # staging is done, now tile
+    "STAGING": "tile",  # staging is done, now tile
     "TILED": "label",
-    "LABELING": None,       # labeling in progress, wait for completion
+    "LABELING": None,  # labeling in progress, wait for completion
     "LABELED": "sonnet_qa",
-    "QA_PENDING": None,     # QA in progress
+    "QA_PENDING": None,  # QA in progress
     "QA_DONE": "generate_review",  # auto-enqueue, but doesn't block training
-    "REVIEW_PENDING": None,        # human review is async, doesn't block
+    "REVIEW_PENDING": None,  # human review is async, doesn't block
 }
 
 # What state a game enters when a task type starts
@@ -74,12 +81,12 @@ TASK_START_STATE = {
 
 # What state a game enters when a task type completes
 TASK_COMPLETE_STATE = {
-    "stage": "STAGING",     # staged but not yet tiled
+    "stage": "STAGING",  # staged but not yet tiled
     "tile": "TILED",
     "label": "LABELED",
     "sonnet_qa": "QA_DONE",
     "generate_review": "TRAINABLE",  # game is trainable immediately, human review is async
-    "ingest_reviews": "TRAINABLE",   # human verdicts improve labels for next training run
+    "ingest_reviews": "TRAINABLE",  # human verdicts improve labels for next training run
 }
 
 
@@ -149,9 +156,12 @@ def advance_state(current: str, task_type: str, success: bool) -> str:
 
     # If no explicit transition, stay in current state.
     # Continuous QA on TRAINABLE/QA_DONE games is expected — don't warn.
-    if task_type == "sonnet_qa" and current in ("TRAINABLE", "QA_DONE"):
+    # Tasks that run on already-advanced games without changing state
+    no_warn_tasks = {"sonnet_qa", "field_boundary"}
+    if task_type in no_warn_tasks and current in ("TRAINABLE", "QA_DONE"):
         logger.debug(
-            "Continuous QA on %s game — no state change (expected)",
+            "%s on %s game — no state change (expected)",
+            task_type,
             current,
         )
     else:
