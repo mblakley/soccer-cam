@@ -130,7 +130,9 @@ class Orchestrator:
                             game_id=game_id,
                         )
 
-            # Track QA-exhausted games to avoid re-enqueue spam
+            # Track QA-exhausted games to avoid re-enqueue spam.
+            # Use unreviewed_remaining (actual count of un-QA'd labels in manifest)
+            # rather than tiles_reviewed (which only counts what this run processed).
             if task_type == "sonnet_qa" and game_id:
                 result = item.get("result")
                 if isinstance(result, str):
@@ -140,10 +142,18 @@ class Orchestrator:
                         result_data = {}
                 else:
                     result_data = result or {}
-                if result_data.get("tiles_reviewed", -1) == 0:
+                remaining = result_data.get("unreviewed_remaining")
+                if remaining is not None and remaining == 0:
                     self._qa_exhausted.add(game_id)
                     logger.debug(
-                        "QA exhausted for %s — no candidates remain", game_id
+                        "QA exhausted for %s — 0 unreviewed labels remain",
+                        game_id,
+                    )
+                elif remaining is not None:
+                    logger.debug(
+                        "QA for %s: %d unreviewed labels remain",
+                        game_id,
+                        remaining,
                     )
 
             # Archive processed items so they don't get re-processed

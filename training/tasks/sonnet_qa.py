@@ -292,8 +292,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
             )
             # Focus on track ends and short mid-gaps
             gap_candidates = [
-                g for g in gap_candidates
-                if g["gap_type"] in ("track_end", "mid_gap")
+                g for g in gap_candidates if g["gap_type"] in ("track_end", "mid_gap")
             ]
 
             # Convert gap positions to tile_stems and filter already-labeled
@@ -314,10 +313,12 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
                     # Verify tile exists in manifest (frame was actually tiled)
                     tile = manifest.get_tile_by_stem(stem)
                     if tile:
-                        discovery_stems.append({
-                            "tile_stem": stem,
-                            "gap": gap,
-                        })
+                        discovery_stems.append(
+                            {
+                                "tile_stem": stem,
+                                "gap": gap,
+                            }
+                        )
 
             # Limit to a reasonable batch per cycle
             max_discovery = min(
@@ -356,14 +357,18 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
                             if verdict in ("BALL", "TRUE_POSITIVE"):
                                 # Find the gap info to get ball position
                                 gap_info = next(
-                                    (d["gap"] for d in discovery_stems
-                                     if d["tile_stem"] == stem),
+                                    (
+                                        d["gap"]
+                                        for d in discovery_stems
+                                        if d["tile_stem"] == stem
+                                    ),
                                     None,
                                 )
                                 if gap_info:
                                     from training.data_prep.trajectory_gaps import (
                                         _pano_to_tile,
                                     )
+
                                     tile_pos = _pano_to_tile(
                                         gap_info["pano_x"], gap_info["pano_y"]
                                     )
@@ -380,9 +385,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
                                             source="sonnet_qa_discovery",
                                             confidence=0.7,
                                         )
-                                        manifest.set_qa_verdict(
-                                            stem, "true_positive"
-                                        )
+                                        manifest.set_qa_verdict(stem, "true_positive")
                                         track_end_verdicts["found"] += 1
                                         logger.info(
                                             "Phase 3: ball found at %s (%.1f, %.1f)",
@@ -443,6 +446,11 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
 
     manifest.set_metadata("qa_at", str(time.time()))
 
+    # Count how many labels still have no QA verdict (for orchestrator exhaustion check)
+    unreviewed_remaining = manifest.conn.execute(
+        "SELECT COUNT(DISTINCT tile_stem) FROM labels WHERE qa_verdict IS NULL"
+    ).fetchone()[0]
+
     # Close before push to flush WAL — track metadata must be in the
     # main DB file before copying to D:
     manifest.close()
@@ -455,7 +463,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     )
     logger.info(
         "QA complete for %s: Phase1=%d tiles (ball=%d, not_ball=%d), "
-        "Phase3=%d discovery (found=%d, not_found=%d)",
+        "Phase3=%d discovery (found=%d, not_found=%d), %d unreviewed remaining",
         game_id,
         total_reviewed,
         verdicts["ball"],
@@ -463,10 +471,12 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
         total_discovery,
         track_end_verdicts["found"],
         track_end_verdicts["not_found"],
+        unreviewed_remaining,
     )
 
     return {
         "tiles_reviewed": total_reviewed + total_discovery,
+        "unreviewed_remaining": unreviewed_remaining,
         "verdicts": verdicts,
         "gap_verdicts": gap_verdicts,
         "track_end_verdicts": track_end_verdicts,
