@@ -140,11 +140,28 @@ class Orchestrator:
                         result_data = {}
                 else:
                     result_data = result or {}
+
+                should_exhaust = False
                 if result_data.get("tiles_reviewed", -1) == 0:
+                    should_exhaust = True
+                    logger.debug("QA exhausted for %s — no candidates remain", game_id)
+                else:
+                    # Check if game is already past the QA stage — if so,
+                    # don't keep re-enqueuing. The state won't advance
+                    # (TRAINABLE has no sonnet_qa transition), so mark
+                    # exhausted until new labels arrive and reset it.
+                    g = self.api.get_game(game_id)
+                    g_state = g.get("pipeline_state", "") if g else ""
+                    if g_state in ("TRAINABLE", "QA_DONE"):
+                        should_exhaust = True
+                        logger.debug(
+                            "QA exhausted for %s — game already %s",
+                            game_id,
+                            g_state,
+                        )
+
+                if should_exhaust:
                     self._qa_exhausted.add(game_id)
-                    logger.debug(
-                        "QA exhausted for %s — no candidates remain", game_id
-                    )
 
             # Archive processed items so they don't get re-processed
             if not self.dry_run:
