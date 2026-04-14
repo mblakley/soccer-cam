@@ -310,6 +310,59 @@ class TestTTTApiClient(unittest.TestCase):
         body = self.client._http.request.call_args[1]["json"]
         self.assertEqual(body["file_path"], "/clips/mc1.mp4")
 
+    # ------------------------------------------------------------------
+    # Schedule providers — PlayMetrics onboarding additions
+    # ------------------------------------------------------------------
+
+    def test_create_schedule_provider_default(self):
+        data = {"id": "p1", "provider_type": "teamsnap"}
+        self.client._http.request = Mock(return_value=_mock_response(201, data))
+        result = self.client.create_schedule_provider(
+            {"provider_type": "teamsnap", "credentials": {"client_id": "cid"}}
+        )
+        self.assertEqual(result["id"], "p1")
+        # No dry_run param when default
+        self.assertIsNone(self.client._http.request.call_args[1].get("params"))
+
+    def test_create_schedule_provider_dry_run(self):
+        dry_run_response = {"ok": True, "teams": [{"id": "t1", "name": "Eagles"}]}
+        self.client._http.request = Mock(
+            return_value=_mock_response(201, dry_run_response)
+        )
+        result = self.client.create_schedule_provider(
+            {"provider_type": "teamsnap", "credentials": {"client_id": "cid"}},
+            dry_run=True,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["teams"][0]["id"], "t1")
+        # dry_run=true should be passed as a query param
+        self.assertEqual(
+            self.client._http.request.call_args[1]["params"], {"dry_run": "true"}
+        )
+
+    def test_connect_playmetrics(self):
+        data = {
+            "refresh_token": "rt-1",
+            "roles": [{"id": "role-1", "name": "Coach"}],
+            "teams": [{"id": "tm-1", "name": "Eagles", "role_id": "role-1"}],
+        }
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.connect_playmetrics("user@example.com", "pw")
+        self.assertEqual(result["refresh_token"], "rt-1")
+        self.assertEqual(result["roles"][0]["id"], "role-1")
+        # Body should carry email + password; URL should be the connect endpoint
+        call_args = self.client._http.request.call_args
+        self.assertEqual(
+            call_args[0],
+            (
+                "POST",
+                "https://api.test.com/api/device-link/schedule-providers/playmetrics/connect",
+            ),
+        )
+        self.assertEqual(
+            call_args[1]["json"], {"email": "user@example.com", "password": "pw"}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

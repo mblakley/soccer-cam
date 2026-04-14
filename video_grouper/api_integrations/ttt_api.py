@@ -788,14 +788,45 @@ class TTTApiClient:
         logger.debug("Fetching schedule providers for team %s", team_id)
         return self._request("GET", url, params=params)
 
-    def create_schedule_provider(self, data: dict[str, Any]) -> dict[str, Any]:
+    def create_schedule_provider(
+        self, data: dict[str, Any], dry_run: bool = False
+    ) -> dict[str, Any]:
         """Create a schedule provider.
 
         POST {api_base_url}/api/device-link/schedule-providers
+
+        When ``dry_run=True``, the backend validates the credentials and
+        returns the discoverable teams without persisting. The response
+        shape is ``{"ok": bool, "teams": [...], "error": str|None}``.
+        Use this during onboarding to drive a team picker before the
+        final create call.
         """
         url = f"{self.api_base_url}/api/device-link/schedule-providers"
-        logger.debug("Creating schedule provider: %s", data.get("provider_type"))
-        return self._request("POST", url, json=data)
+        params = {"dry_run": "true"} if dry_run else None
+        logger.debug(
+            "Creating schedule provider (dry_run=%s): %s",
+            dry_run,
+            data.get("provider_type"),
+        )
+        return self._request("POST", url, params=params, json=data)
+
+    def connect_playmetrics(self, email: str, password: str) -> dict[str, Any]:
+        """Probe PlayMetrics credentials via TTT and return picker data.
+
+        POST {api_base_url}/api/device-link/schedule-providers/playmetrics/connect
+
+        TTT runs a one-time Firebase ``signInWithPassword`` and discovers
+        the user's roles + teams, returning everything the tray wizard
+        needs to render a role + team picker. The user's password is
+        never persisted on either side. The caller then re-posts the
+        chosen ``refresh_token`` + ``current_role_id`` + team ID to
+        ``create_schedule_provider`` to finalize onboarding.
+
+        Response shape: ``{"refresh_token": str, "roles": [...], "teams": [...]}``.
+        """
+        url = f"{self.api_base_url}/api/device-link/schedule-providers/playmetrics/connect"
+        logger.debug("Connecting PlayMetrics for %s", email)
+        return self._request("POST", url, json={"email": email, "password": password})
 
     def update_schedule_provider(
         self, provider_id: str, data: dict[str, Any]
