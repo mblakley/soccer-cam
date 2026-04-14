@@ -14,9 +14,7 @@ Usage (as task): enqueued by orchestrator for LABELED games
 
 import json
 import logging
-import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -41,7 +39,6 @@ def run_sonnet_qa(
 ) -> dict:
     """Run Sonnet vision QA on uncertain detections for a game."""
     game_id = item["game_id"]
-    payload = item.get("payload") or {}
 
     from training.pipeline.config import load_config
 
@@ -173,9 +170,7 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
             build_trajectories_from_manifest,
             stitch_game_ball_track,
             find_gap_candidates,
-            filter_static_gaps,
             gap_to_tile_stem,
-            get_gap_context_frames,
             build_gap_filmstrip,
         )
 
@@ -595,7 +590,6 @@ def _get_qa_candidates(manifest, max_tiles: int = 2000) -> list[dict]:
     Always reserves ~20% of the batch for random high-confidence detections
     to verify that ONNX tracks are actually finding real balls.
     """
-    import random
 
     conn = manifest.conn
 

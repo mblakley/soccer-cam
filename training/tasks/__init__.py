@@ -10,7 +10,6 @@ Task handlers are registered here and dispatched by the worker.
 """
 
 import logging
-from pathlib import Path
 from typing import Callable
 
 logger = logging.getLogger(__name__)
@@ -24,9 +23,11 @@ _HANDLERS: dict[str, TaskHandler] = {}
 
 def register_task(task_type: str):
     """Decorator to register a task handler."""
+
     def decorator(func: TaskHandler) -> TaskHandler:
         _HANDLERS[task_type] = func
         return func
+
     return decorator
 
 
