@@ -1,29 +1,57 @@
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock, mock_open
-from selenium.webdriver.common.by import By
+"""Unit tests for the pure-HTTP PlayMetrics client.
+
+The client previously used Selenium; the legacy browser-based tests have
+been replaced with HTTP-mocked equivalents that exercise the same public
+contract (login → fetch calendars → parse → match recordings).
+"""
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
-from video_grouper.utils.config import PlayMetricsConfig
+from video_grouper.utils.config import AppConfig, PlayMetricsConfig
 
 
-class TestPlayMetricsCalendar:
-    """Test PlayMetrics API calendar functionality."""
+@pytest.fixture(autouse=True)
+def _firebase_api_key(monkeypatch):
+    """Every test runs with a non-empty Firebase API key so login() proceeds."""
+    monkeypatch.setenv("PLAYMETRICS_FIREBASE_WEB_API_KEY", "test-key")
 
+
+def _make_api(**overrides):
+    """Build a PlayMetricsAPI with sensible defaults for tests."""
+    cfg = PlayMetricsConfig(
+        enabled=overrides.pop("enabled", True),
+        username=overrides.pop("username", "test@example.com"),
+        password=overrides.pop("password", "testpassword"),
+        team_id=overrides.pop("team_id", "123456"),
+        team_name=overrides.pop("team_name", "Test Team"),
+    )
+    app_config = AppConfig(timezone="America/New_York")
+    return PlayMetricsAPI(cfg, app_config)
+
+
+def _mock_response(status_code=200, json_body=None):
+    """Build a minimal requests.Response stand-in."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = json_body or {}
+    response.raise_for_status = MagicMock()
+    if status_code >= 400:
+        response.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Construction
+# ---------------------------------------------------------------------------
+
+
+class TestPlayMetricsConstruction:
     def test_initialization(self):
-        """Test initialization with config."""
-        test_config = PlayMetricsConfig(
-            enabled=True,
-            username="test@example.com",
-            password="testpassword",
-            team_id="123456",
-            team_name="Test Team",
-        )
-        from video_grouper.utils.config import AppConfig
-
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(test_config, app_config)
-
-        # Check that values were loaded correctly
+        api = _make_api()
         assert api.enabled
         assert api.username == "test@example.com"
         assert api.password == "testpassword"
@@ -31,190 +59,232 @@ class TestPlayMetricsCalendar:
         assert api.team_name == "Test Team"
 
     def test_disabled_when_not_configured(self):
-        """Test that API is disabled when not configured."""
-        from video_grouper.utils.config import AppConfig
-
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(
-            PlayMetricsConfig(
-                enabled=False, username="user", password="password", team_name="Team A"
-            ),
-            app_config,
-        )
-
-        # Check that API is disabled
+        api = _make_api(enabled=False)
         assert not api.enabled
 
-    @patch("video_grouper.api_integrations.playmetrics.time.sleep")
-    @patch("video_grouper.api_integrations.playmetrics.ChromeDriverManager")
-    @patch("video_grouper.api_integrations.playmetrics.webdriver")
-    def test_login(self, mock_webdriver, mock_chrome_driver_manager, mock_sleep):
-        """Test login to PlayMetrics."""
-        # Mock ChromeDriverManager
-        mock_chrome_driver_manager.return_value.install.return_value = (
-            "/fake/chromedriver"
-        )
+    def test_login_returns_false_when_disabled(self):
+        api = _make_api(enabled=False)
+        assert api.login() is False
+        assert api.logged_in is False
 
-        # Mock the webdriver
-        mock_driver = MagicMock()
-        mock_webdriver.Chrome.return_value = mock_driver
-        mock_options = MagicMock()
-        mock_webdriver.ChromeOptions.return_value = mock_options
+    def test_login_returns_false_when_firebase_key_missing(self, monkeypatch):
+        monkeypatch.delenv("PLAYMETRICS_FIREBASE_WEB_API_KEY", raising=False)
+        api = _make_api()
+        assert api.login() is False
 
-        # Set up find_element behavior for CSS_SELECTOR
-        def mock_find_element(by, value):
-            mock_element = MagicMock()
-            if by == By.CSS_SELECTOR:
-                if value in ["input[type='email']", "#username", "#email"]:
-                    return mock_element
-                elif value in ["input[type='password']", "#password"]:
-                    return mock_element
-            elif by == By.XPATH and value == "//button[@type='submit']":
-                return mock_element
-            raise Exception(f"Element not found: {by}, {value}")
+    def test_close_is_noop(self):
+        # Pure-HTTP client has no resources to release; calling close()
+        # twice in a row must not raise.
+        api = _make_api()
+        api.close()
+        api.close()
 
-        mock_driver.find_element.side_effect = mock_find_element
 
-        # Mock successful login redirect
-        mock_driver.current_url = "https://playmetrics.com/dashboard"
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
 
-        test_config = PlayMetricsConfig(
-            enabled=True,
-            username="test@example.com",
-            password="testpassword",
-            team_id="123456",
-            team_name="Test Team",
-        )
-        from video_grouper.utils.config import AppConfig
 
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(test_config, app_config)
+class TestPlayMetricsLogin:
+    def test_login_signs_in_and_caches_tokens(self):
+        api = _make_api()
 
-        # Call login
-        result = api.login()
+        with patch(
+            "video_grouper.api_integrations.playmetrics.requests"
+        ) as mock_requests:
+            mock_requests.post.side_effect = [
+                # signInWithPassword
+                _mock_response(
+                    json_body={
+                        "idToken": "id-1",
+                        "refreshToken": "refresh-1",
+                        "expiresIn": "3600",
+                    }
+                ),
+                # firebase/user/login (empty body — fetch roles)
+                _mock_response(
+                    json_body={"roles": [{"id": "role-1", "name": "Coach"}]}
+                ),
+            ]
 
-        # Check that login was successful
-        assert result
+            assert api.login() is True
+
         assert api.logged_in
+        assert api.refresh_token == "refresh-1"
+        assert api.current_role_id == "role-1"
+        # signInWithPassword + role discovery
+        assert mock_requests.post.call_count == 2
 
-        # Verify that the driver was called correctly
-        mock_driver.get.assert_called_with("https://playmetrics.com/login")
+    def test_login_uses_refresh_token_when_present(self):
+        api = _make_api()
+        api.refresh_token = "preexisting-refresh"
 
-        # Verify time.sleep was called (but mocked)
-        assert mock_sleep.call_count >= 2  # At least 2 sleep calls in login
+        with patch(
+            "video_grouper.api_integrations.playmetrics.requests"
+        ) as mock_requests:
+            mock_requests.post.side_effect = [
+                # securetoken refresh
+                _mock_response(
+                    json_body={
+                        "id_token": "id-2",
+                        "refresh_token": "preexisting-refresh",
+                        "expires_in": "3600",
+                    }
+                ),
+                # firebase/user/login (empty body — roles)
+                _mock_response(
+                    json_body={"roles": [{"id": "role-1", "name": "Coach"}]}
+                ),
+            ]
 
-    @patch("video_grouper.api_integrations.playmetrics.requests")
-    def test_download_calendar(self, mock_requests):
-        """Test downloading the calendar."""
-        # Mock the calendar URL
-        calendar_url = "https://api.playmetrics.com/calendar/test.ics"
+            assert api.login() is True
 
-        # Mock the response
-        mock_response = MagicMock()
-        mock_response.content = b"BEGIN:VCALENDAR\nEND:VCALENDAR"
-        mock_requests.get.return_value = mock_response
+        # Confirm the securetoken endpoint was hit (not signInWithPassword)
+        first_call_url = mock_requests.post.call_args_list[0][0][0]
+        assert "securetoken" in first_call_url
 
-        # Create a PlayMetrics API instance with mocked calendar URL
-        from video_grouper.utils.config import AppConfig
+    def test_login_failure_returns_false(self):
+        api = _make_api()
+        with patch(
+            "video_grouper.api_integrations.playmetrics.requests"
+        ) as mock_requests:
+            mock_requests.post.side_effect = Exception("network down")
+            assert api.login() is False
+            assert api.logged_in is False
 
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
-        api.logged_in = True  # Set logged_in to True
-        api.calendar_url = calendar_url
 
-        # Call download_calendar with mocked file operations
-        with patch("tempfile.mkstemp", return_value=(1, "/tmp/test.ics")):
-            with patch("os.close"):
-                with patch("builtins.open", mock_open()):
-                    result = api.download_calendar()
+# ---------------------------------------------------------------------------
+# Calendar parsing
+# ---------------------------------------------------------------------------
 
-        # Check that the result is the path to the downloaded file
-        assert result == "/tmp/test.ics"
 
-        # Verify that requests.get was called with the correct URL
-        mock_requests.get.assert_called_with(calendar_url)
+class TestPlayMetricsParser:
+    def test_parse_api_calendars_extracts_games_and_practices(self):
+        api = _make_api(team_id="123456")
+        calendars = [
+            {
+                "team": {
+                    "id": "123456",
+                    "name": "Test Team",
+                    "games": [
+                        {
+                            "id": "g-1",
+                            "start_datetime": "2026-04-01T14:00:00Z",
+                            "end_datetime": "2026-04-01T16:00:00Z",
+                            "opponent_team_name": "Rival FC",
+                            "is_home": True,
+                            "field": {"display_name": "Field A"},
+                            "league": {"name": "Spring League"},
+                        },
+                    ],
+                    "practices": [
+                        {
+                            "id": "p-1",
+                            "start_datetime": "2026-04-02T18:00:00Z",
+                            "end_datetime": "2026-04-02T19:30:00Z",
+                            "field": {"display_name": "Practice Field"},
+                        },
+                    ],
+                }
+            }
+        ]
+        events = api._parse_api_calendars(calendars)
 
-    def test_parse_calendar(self):
-        """Test parsing a calendar file."""
-        # Create a sample calendar content
-        calendar_content = """BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//PlayMetrics//Calendar//EN
-BEGIN:VEVENT
-SUMMARY:Test Team - Game
-DESCRIPTION:Test Team at Opponent (League)
-LOCATION:Test Field
-DTSTART:20250615T140000Z
-DTEND:20250615T160000Z
-END:VEVENT
-BEGIN:VEVENT
-SUMMARY:Test Team - Practice
-DESCRIPTION:Practice description
-LOCATION:Practice Field
-DTSTART:20250616T180000Z
-DTEND:20250616T200000Z
-END:VEVENT
-END:VCALENDAR"""
+        assert len(events) == 2
+        game = next(e for e in events if e["is_game"])
+        practice = next(e for e in events if not e["is_game"])
 
-        # Create a properly initialized API instance
-        test_config = PlayMetricsConfig(enabled=True, team_name="Test Team")
-        from video_grouper.utils.config import AppConfig
+        assert game["id"] == "g-1"
+        assert game["title"] == "Test Team vs Rival FC"
+        assert game["opponent"] == "Rival FC"
+        assert game["is_home"] is True
+        assert game["location"] == "Field A"
+        assert game["description"] == "Spring League"
 
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(test_config, app_config)
+        assert practice["id"] == "p-1"
+        assert practice["location"] == "Practice Field"
+        assert practice["opponent"] is None
 
-        # Use a temporary file instead of mock_open
-        import tempfile
-        import os
+    def test_parse_filters_by_configured_team_id(self):
+        api = _make_api(team_id="123456")
+        calendars = [
+            {
+                "team": {
+                    "id": "999999",  # different team — should be skipped
+                    "name": "Other Team",
+                    "games": [
+                        {
+                            "id": "ignored",
+                            "start_datetime": "2026-04-01T14:00:00Z",
+                            "opponent_team_name": "X",
+                        }
+                    ],
+                }
+            },
+            {
+                "team": {
+                    "id": "123456",
+                    "name": "Test Team",
+                    "games": [
+                        {
+                            "id": "g-keep",
+                            "start_datetime": "2026-04-01T14:00:00Z",
+                            "opponent_team_name": "Rival FC",
+                        }
+                    ],
+                }
+            },
+        ]
+        events = api._parse_api_calendars(calendars)
+        assert [e["id"] for e in events] == ["g-keep"]
 
-        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as temp_file:
-            temp_file.write(calendar_content.encode("utf-8"))
-            temp_file_path = temp_file.name
+    def test_parse_includes_all_teams_when_team_id_zero(self):
+        api = _make_api(team_id="0")  # discovery mode
+        calendars = [
+            {
+                "team": {
+                    "id": "111",
+                    "name": "Team One",
+                    "games": [
+                        {
+                            "id": "g-1",
+                            "start_datetime": "2026-04-01T14:00:00Z",
+                            "opponent_team_name": "X",
+                        }
+                    ],
+                }
+            },
+            {
+                "team": {
+                    "id": "222",
+                    "name": "Team Two",
+                    "games": [
+                        {
+                            "id": "g-2",
+                            "start_datetime": "2026-04-02T14:00:00Z",
+                            "opponent_team_name": "Y",
+                        }
+                    ],
+                }
+            },
+        ]
+        events = api._parse_api_calendars(calendars)
+        assert {e["id"] for e in events} == {"g-1", "g-2"}
 
-        try:
-            # Call parse_calendar with the temporary file
-            events = api.parse_calendar(temp_file_path)
 
-            # Check that events were parsed correctly
-            assert len(events) == 2
+# ---------------------------------------------------------------------------
+# Match selection
+# ---------------------------------------------------------------------------
 
-            # Check the game event
-            game_event = events[0]
-            assert game_event["title"] == "Test Team - Game"
-            assert game_event["description"] == "Test Team at Opponent (League)"
-            assert game_event["location"] == "Test Field"
-            assert game_event["is_game"]
-            assert game_event["opponent"] == "Opponent"
-            assert game_event["my_team_name"] == "Test Team"
 
-            # Check the practice event
-            practice_event = events[1]
-            assert not practice_event["is_game"]
-            assert practice_event["title"] == "Test Team - Practice"
-            assert (
-                practice_event["time"] == "16:00"
-            )  # End time in EDT (20:00 UTC - 4 hours)
-
-        finally:
-            # Clean up the temporary file
-            os.unlink(temp_file_path)
-
-    def test_find_game_for_recording(self):
-        """Test finding a game for a recording timespan."""
-        # Create a PlayMetrics API instance
-        from video_grouper.utils.config import AppConfig
-
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
-
-        # Create some sample events
-        game_time = datetime(2025, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+class TestPlayMetricsFindGame:
+    def test_find_game_for_recording_match(self):
+        api = _make_api()
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
         events = [
             {
                 "id": "1",
-                "title": "Test Game vs Opponent",
-                "description": "Game description",
-                "location": "Test Field",
+                "title": "Test vs Opponent",
                 "start_time": game_time,
                 "end_time": game_time + timedelta(hours=2),
                 "is_game": True,
@@ -222,160 +292,128 @@ END:VCALENDAR"""
             },
             {
                 "id": "2",
-                "title": "Test Practice",
-                "description": "Practice description",
-                "location": "Practice Field",
+                "title": "Practice",
                 "start_time": game_time + timedelta(days=1),
                 "end_time": game_time + timedelta(days=1, hours=2),
                 "is_game": False,
-                "opponent": None,
             },
         ]
+        api.get_games = MagicMock(return_value=[e for e in events if e["is_game"]])
 
-        # Mock the get_games method
-        api.get_games = MagicMock(return_value=events)
-
-        # Test finding a game that matches the recording timespan
         recording_start = game_time - timedelta(minutes=30)
         recording_end = game_time + timedelta(hours=1)
+        result = api.find_game_for_recording(recording_start, recording_end)
+        assert result is not None
+        assert result["id"] == "1"
 
-        game = api.find_game_for_recording(recording_start, recording_end)
+    def test_find_game_for_recording_no_match(self):
+        api = _make_api()
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+        api.get_games = MagicMock(
+            return_value=[
+                {
+                    "id": "1",
+                    "title": "Test",
+                    "start_time": game_time,
+                    "end_time": game_time + timedelta(hours=2),
+                    "is_game": True,
+                }
+            ]
+        )
 
-        # Check that the correct game was found
-        assert game is not None
-        assert game["id"] == "1"
-        assert game["title"] == "Test Game vs Opponent"
-
-        # Test finding a game that doesn't match the recording timespan
         recording_start = game_time + timedelta(days=2)
         recording_end = recording_start + timedelta(hours=1)
+        assert api.find_game_for_recording(recording_start, recording_end) is None
 
-        game = api.find_game_for_recording(recording_start, recording_end)
+    def test_populate_match_info_writes_fields(self):
+        api = _make_api()
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+        api.find_game_for_recording = MagicMock(
+            return_value={
+                "id": "1",
+                "title": "Test vs Opponent",
+                "description": "Spring League",
+                "location": "Field A",
+                "start_time": game_time,
+                "end_time": game_time + timedelta(hours=2),
+                "is_game": True,
+                "opponent": "Opponent",
+            }
+        )
 
-        # Check that no game was found
-        assert game is None
-
-    def test_populate_match_info(self):
-        """Test populating match info from a game."""
-        # Create a PlayMetrics API instance
-        from video_grouper.utils.config import AppConfig
-
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(PlayMetricsConfig(enabled=True), app_config)
-
-        # Create a sample game
-        game_time = datetime(2025, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
-        game = {
-            "id": "1",
-            "title": "Test Game vs Opponent",
-            "description": "Game description",
-            "location": "Test Field",
-            "start_time": game_time,
-            "end_time": game_time + timedelta(hours=2),
-            "is_game": True,
-            "opponent": "Opponent",
-        }
-
-        # Mock the find_game_for_recording method
-        api.find_game_for_recording = MagicMock(return_value=game)
-
-        # Create a match info dictionary
-        match_info = {}
-
-        # Call populate_match_info
-        recording_start = game_time - timedelta(minutes=30)
-        recording_end = game_time + timedelta(hours=1)
-
-        result = api.populate_match_info(match_info, recording_start, recording_end)
-
-        # Check that the result is True
-        assert result
-
-        # Check that match_info was populated correctly
-        assert match_info["title"] == "Test Game vs Opponent"
+        match_info: dict = {}
+        assert (
+            api.populate_match_info(
+                match_info,
+                game_time - timedelta(minutes=30),
+                game_time + timedelta(hours=1),
+            )
+            is True
+        )
+        assert match_info["title"] == "Test vs Opponent"
         assert match_info["opponent"] == "Opponent"
-        assert match_info["location"] == "Test Field"
-        assert match_info["date"] == "2025-06-15"
+        assert match_info["location"] == "Field A"
+        assert match_info["date"] == "2026-06-15"
         assert match_info["time"] == "14:00"
-        assert match_info["description"] == "Game description"
+        assert match_info["description"] == "Spring League"
 
-    def test_playmetrics_api_init(self, mock_config):
-        """Test PlayMetricsAPI initialization from config."""
-        from video_grouper.utils.config import AppConfig
 
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(config=mock_config.playmetrics, app_config=app_config)
+# ---------------------------------------------------------------------------
+# End-to-end auth + fetch flow (mocked)
+# ---------------------------------------------------------------------------
 
-        # Check that values were loaded correctly
-        assert api.enabled
-        assert api.username == "test@example.com"
-        assert api.password == "testpassword"
 
-    def test_playmetrics_api_disabled(self, mock_config):
-        """Test PlayMetricsAPI when disabled in config."""
-        mock_config.playmetrics.enabled = False
-        from video_grouper.utils.config import AppConfig
+class TestPlayMetricsEndToEnd:
+    def test_get_games_full_http_path(self):
+        api = _make_api(team_id="123456")
 
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(config=mock_config.playmetrics, app_config=app_config)
-
-        # Check that API is disabled
-        assert not api.enabled
-
-    @patch("video_grouper.api_integrations.playmetrics.time.sleep")
-    @patch("video_grouper.api_integrations.playmetrics.ChromeDriverManager")
-    @patch("video_grouper.api_integrations.playmetrics.webdriver")
-    def test_login_failed(self, mock_webdriver, mock_chrome_driver_manager, mock_sleep):
-        """Test login to PlayMetrics when login fails."""
-        # Mock ChromeDriverManager
-        mock_chrome_driver_manager.return_value.install.return_value = (
-            "/fake/chromedriver"
+        sign_in = _mock_response(
+            json_body={
+                "idToken": "id-1",
+                "refreshToken": "refresh-1",
+                "expiresIn": "3600",
+            }
+        )
+        roles_response = _mock_response(
+            json_body={"roles": [{"id": "role-1", "name": "Coach"}]}
+        )
+        access_key_response = _mock_response(json_body={"access_key": "ak-1"})
+        calendars_response = _mock_response(
+            json_body=[
+                {
+                    "team": {
+                        "id": "123456",
+                        "name": "Test Team",
+                        "games": [
+                            {
+                                "id": "g-1",
+                                "start_datetime": "2026-04-01T14:00:00Z",
+                                "end_datetime": "2026-04-01T16:00:00Z",
+                                "opponent_team_name": "Rival FC",
+                                "is_home": True,
+                                "field": {"display_name": "Field A"},
+                            }
+                        ],
+                    }
+                }
+            ]
         )
 
-        # Mock the webdriver
-        mock_driver = MagicMock()
-        mock_webdriver.Chrome.return_value = mock_driver
-        mock_options = MagicMock()
-        mock_webdriver.ChromeOptions.return_value = mock_options
+        with patch(
+            "video_grouper.api_integrations.playmetrics.requests"
+        ) as mock_requests:
+            mock_requests.post.side_effect = [
+                sign_in,
+                roles_response,
+                access_key_response,
+            ]
+            mock_requests.get.return_value = calendars_response
 
-        # Set up find_element behavior for CSS_SELECTOR
-        def mock_find_element(by, value):
-            mock_element = MagicMock()
-            if by == By.CSS_SELECTOR:
-                if value in ["input[type='email']", "#username", "#email"]:
-                    return mock_element
-                elif value in ["input[type='password']", "#password"]:
-                    return mock_element
-            elif by == By.XPATH and value == "//button[@type='submit']":
-                return mock_element
-            raise Exception(f"Element not found: {by}, {value}")
+            games = api.get_games()
 
-        mock_driver.find_element.side_effect = mock_find_element
-
-        # Mock failed login redirect
-        mock_driver.current_url = "https://playmetrics.com/login"
-
-        test_config = PlayMetricsConfig(
-            enabled=True,
-            username="test@example.com",
-            password="testpassword",
-            team_id="123456",
-            team_name="Test Team",
-        )
-        from video_grouper.utils.config import AppConfig
-
-        app_config = AppConfig(timezone="America/New_York")
-        api = PlayMetricsAPI(test_config, app_config)
-
-        # Call login
-        result = api.login()
-
-        # Check that login failed
-        assert not result
-        assert not api.logged_in
-
-        # Verify that the driver was called correctly
-        mock_driver.get.assert_called_with("https://playmetrics.com/login")
-
-        # Verify time.sleep was called (but mocked)
-        assert mock_sleep.call_count >= 2  # At least 2 sleep calls in login
+        assert len(games) == 1
+        assert games[0]["title"] == "Test Team vs Rival FC"
+        # 3 POSTs: signin → roles → access_key
+        assert mock_requests.post.call_count == 3
+        # 1 GET: /user/calendars
+        assert mock_requests.get.call_count == 1
