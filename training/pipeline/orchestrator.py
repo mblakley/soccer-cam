@@ -130,10 +130,12 @@ class Orchestrator:
                             game_id=game_id,
                         )
 
-            # Track QA-exhausted games to avoid re-enqueue spam.
+            # Track QA-exhausted games and advance round-robin.
             # Use unreviewed_remaining (actual count of un-QA'd labels in manifest)
             # rather than tiles_reviewed (which only counts what this run processed).
             if task_type == "sonnet_qa" and game_id:
+                # Advance round-robin so the next enqueue picks a different game
+                self._last_qa_game = game_id
                 result = item.get("result")
                 if isinstance(result, str):
                     try:
