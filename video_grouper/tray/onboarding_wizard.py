@@ -1143,18 +1143,57 @@ class OnboardingWizard(QDialog):
         layout.addSpacing(10)
 
         desc = QLabel(
-            "Connect your TeamSnap account to automatically sync game "
-            "schedules. To get your API credentials:\n"
-            "1. Go to auth.teamsnap.com and sign in\n"
-            "2. Create a Personal Access application\n"
-            "3. Copy the Client ID and Client Secret below\n\n"
-            "The access token is obtained automatically. "
-            "Skip this step if you don't use TeamSnap."
+            "Connect your TeamSnap account to sync game schedules. The "
+            "easiest way is to sign in below — we'll create the integration "
+            "automatically. If you'd rather paste your own credentials, "
+            "scroll down to the manual section."
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
         layout.addSpacing(10)
+
+        # Auto-onboard form (Selenium dev portal automation)
+        auto_label = QLabel("Sign in with TeamSnap")
+        auto_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(auto_label)
+
+        auto_form = QFormLayout()
+        self._ts_auto_email_input = QLineEdit()
+        self._ts_auto_email_input.setPlaceholderText("your@email.com")
+        auto_form.addRow("Email:", self._ts_auto_email_input)
+
+        self._ts_auto_password_input = QLineEdit()
+        self._ts_auto_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        auto_form.addRow("Password:", self._ts_auto_password_input)
+        layout.addLayout(auto_form)
+
+        ts_auto_layout = QHBoxLayout()
+        self._ts_auto_btn = QPushButton("Sign In && Create Application")
+        self._ts_auto_btn.setMinimumHeight(36)
+        self._ts_auto_btn.clicked.connect(self._ts_auto_onboard)
+        ts_auto_layout.addWidget(self._ts_auto_btn)
+
+        self._ts_auto_status = QLabel("")
+        ts_auto_layout.addWidget(self._ts_auto_status, 1)
+        layout.addLayout(ts_auto_layout)
+
+        layout.addSpacing(16)
+
+        # Manual paste form (fallback)
+        manual_label = QLabel("Or paste credentials manually")
+        manual_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(manual_label)
+
+        manual_help = QLabel(
+            "If sign-in fails or you'd rather provision the application "
+            "yourself, create a new application at "
+            "auth.teamsnap.com/oauth/applications/new and paste the "
+            "Client ID and Client Secret below."
+        )
+        manual_help.setWordWrap(True)
+        manual_help.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(manual_help)
 
         form = QFormLayout()
         self._ts_client_id_input = QLineEdit()
@@ -1240,6 +1279,71 @@ class OnboardingWizard(QDialog):
                 if btn:
                     btn.clicked.disconnect()
                     btn.clicked.connect(lambda _, r=r: self._ts_remove_team_row(r))
+
+    def _ts_auto_onboard(self):
+        """Run the TeamSnap dev portal Selenium automation in a background thread.
+
+        On success, drops the discovered ``client_id``/``client_secret``
+        into the manual paste fields below — same downstream flow as if
+        the user had pasted them themselves. The manual section stays
+        usable as a fallback for any path the automation can't handle
+        (broken Chrome, 2FA, CAPTCHA, dev portal layout drift).
+        """
+        email = self._ts_auto_email_input.text().strip()
+        password = self._ts_auto_password_input.text()
+        if not email or not password:
+            QMessageBox.warning(
+                self, "Missing Fields", "Please enter your TeamSnap email and password."
+            )
+            return
+
+        self._ts_auto_btn.setEnabled(False)
+        self._ts_auto_status.setText("Signing in to TeamSnap...")
+
+        def do_ts_login():
+            try:
+                from video_grouper.api_integrations.teamsnap_dev_portal_automation import (
+                    TeamSnapAutomationError,
+                    obtain_teamsnap_credentials,
+                )
+
+                try:
+                    creds = obtain_teamsnap_credentials(
+                        email=email,
+                        password=password,
+                        headless=False,  # headed first run so user sees the flow
+                    )
+                except TeamSnapAutomationError as exc:
+                    raise exc
+                except Exception as exc:
+                    # Wrap unexpected errors so the UI gets a clean message
+                    raise RuntimeError(str(exc)) from exc
+
+                def on_success(c=creds):
+                    self._ts_auto_btn.setEnabled(True)
+                    self._ts_client_id_input.setText(c.client_id)
+                    self._ts_client_secret_input.setText(c.client_secret)
+                    self._ts_auto_status.setText(
+                        "Reused existing application."
+                        if c.reused_existing
+                        else "Created new application."
+                    )
+
+                self._run_on_main.emit(on_success)
+
+            except Exception as exc:
+                logger.error("TeamSnap auto-onboard failed: %s", exc)
+
+                def on_error(err=str(exc)):
+                    self._ts_auto_btn.setEnabled(True)
+                    self._ts_auto_status.setText(
+                        f"Failed: {err[:120]}. Use the manual fields below."
+                    )
+
+                self._run_on_main.emit(on_error)
+
+        thread = threading.Thread(target=do_ts_login, daemon=True)
+        thread.start()
 
     def _build_summary_page(self) -> QWidget:
         page = QWidget()
