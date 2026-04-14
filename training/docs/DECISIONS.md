@@ -66,11 +66,34 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 **Decision:** Changed `gdir.iterdir()` to `gdir.rglob("*.mp4")` in `build_registry()`.
 **Impact:** Found 3 new games: Hershey Tournament (17 segs), and correctly detected Heat Tournament + Clarence Tournament.
 
-## 2026-03-30: Upside-down game handling strategy
+## 2026-04-13: Upside-down game handling — `needs_flip` flag
 
-**Context:** 13 of 32 games recorded with camera mounted upside down. 11 have corrected full-res `*-raw.mp4` files. 2 have no corrected version.
-**Decision:** Three strategies: (1) Use corrected .mp4 if available, (2) flip in code via `cv2.flip(frame, -1)` for games without corrected video, (3) exclude from training if too problematic.
-**Alternatives:** Always flip in code — rejected because corrected videos may have other fixes (exposure, color correction).
+**Context:** 9 games (May–June 2024) were recorded with the Dahua camera mounted upside down. Some have corrected `-raw.mp4` files but we don't use them — we always process the individual `[F]` segment files and flip in code.
+
+**Decision:** The game registry has a `needs_flip INTEGER DEFAULT 0` column. When `needs_flip=1`:
+
+1. **Tiling** (`tile.py:288`): `cv2.flip(frame, -1)` before cutting tiles → tiles are right-side up
+2. **Labeling** (`label.py:161`): `cv2.flip(frame, -1)` before ONNX inference → detections are in right-side-up coordinates matching the tiles
+3. **Prescan** (`label.py:268`): also flips before sampling frames for game detection
+
+The flip is carried via the task **payload** (`{"needs_flip": true}`), built by:
+- Orchestrator `_build_payload()` for both `tile` and `label` tasks (reads from game registry)
+- CLI `cmd_enqueue()` also reads from registry when manually enqueueing
+
+**Critical:** If a task is enqueued WITHOUT a payload (e.g., old queue items, direct DB insertion), `needs_flip` defaults to `False` and flipped games will be processed upside down. Always enqueue through the orchestrator or CLI.
+
+**Flipped games (as of 2026-04-13):**
+- `flash__2024.05.01_vs_RNYFC_away`
+- `flash__2024.05.10_vs_NY_Rush_away`
+- `flash__2024.06.01_vs_IYSA_home`
+- `flash__2024.06.02_vs_Flash_2014s_scrimmage`
+- `heat__2024.05.13_vs_Byron_Bergen_home`
+- `heat__2024.05.19_vs_Byron_Bergen_home`
+- `heat__2024.05.28_vs_Chili_home`
+- `heat__2024.05.31_vs_Fairport_home`
+- `heat__2024.06.04_vs_Spencerport_home`
+
+**Files:** `training/pipeline/registry.py` (schema), `training/pipeline/orchestrator.py` (`_build_payload`), `training/tasks/tile.py` (flip at line 288), `training/tasks/label.py` (flip at lines 161, 268), `training/pipeline/__main__.py` (`cmd_enqueue` payload)
 
 ## 2026-03-30: Game naming convention
 
