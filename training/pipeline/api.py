@@ -283,9 +283,7 @@ def delete_worker(hostname: str):
             (hostname, hostname),
         )
     else:
-        conn.execute(
-            "DELETE FROM worker_status WHERE hostname = ?", (hostname,)
-        )
+        conn.execute("DELETE FROM worker_status WHERE hostname = ?", (hostname,))
     conn.commit()
     return {"ok": True, "hostname": hostname, "deleted": count}
 
@@ -368,6 +366,16 @@ def delete_queue_item(item_id: int):
 @app.get("/api/has-active/{task_type}")
 def has_active(task_type: str, game_id: str | None = None):
     return {"active": _get_queue().has_active_item(task_type, game_id)}
+
+
+@app.get("/api/queue-depth")
+def queue_depth(task_types: str | None = None):
+    """Count active (queued + claimed + running) items.
+
+    Optional task_types parameter: comma-separated list to filter by.
+    """
+    types = task_types.split(",") if task_types else None
+    return {"depth": _get_queue().count_active(types)}
 
 
 @app.post("/api/reclaim-stale")

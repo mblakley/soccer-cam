@@ -32,7 +32,12 @@ class PipelineClient:
         self._client = httpx.Client(base_url=self.base_url, timeout=TIMEOUT)
 
     def _request(
-        self, method: str, path: str, *, json: dict | None = None, silent_404: bool = False
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict | None = None,
+        silent_404: bool = False,
     ) -> dict | list | None:
         """Make an API request. Returns parsed JSON or None on error."""
         try:
@@ -44,7 +49,13 @@ class PipelineClient:
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
-            logger.warning("API %s %s returned %d: %s", method, path, e.response.status_code, e.response.text[:200])
+            logger.warning(
+                "API %s %s returned %d: %s",
+                method,
+                path,
+                e.response.status_code,
+                e.response.text[:200],
+            )
             return None
         except Exception as e:
             logger.warning("API %s %s failed: %s", method, path, e)
@@ -173,6 +184,12 @@ class PipelineClient:
         params = f"?game_id={game_id}" if game_id else ""
         result = self._get(f"/api/has-active/{task_type}{params}")
         return result.get("active", False) if result else False
+
+    def get_queue_depth(self, task_types: list[str] | None = None) -> int:
+        """Count active (queued + claimed + running) items."""
+        params = f"?task_types={','.join(task_types)}" if task_types else ""
+        result = self._get(f"/api/queue-depth{params}")
+        return result.get("depth", 0) if result else 0
 
     def reclaim_stale(self, timeout: int = 7200) -> list:
         """Reclaim stale work items."""

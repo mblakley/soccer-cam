@@ -391,6 +391,19 @@ class Orchestrator:
         if self.api.has_active_item("generate_review"):
             return
 
+        # Don't pile onto a worker that already has a deep queue.
+        # The QA worker also handles field_boundary, generate_review, etc.
+        # If there's a significant backlog, let it drain first.
+        qa_worker_types = [
+            "sonnet_qa",
+            "generate_review",
+            "ingest_reviews",
+            "field_boundary",
+        ]
+        depth = self.api.get_queue_depth(qa_worker_types)
+        if depth >= 3:
+            return  # enough work queued already
+
         # Get ALL games, not just needing-work (which excludes TRAINABLE)
         all_games = self.api.get_all_games()
         qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}

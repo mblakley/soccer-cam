@@ -305,6 +305,24 @@ class WorkQueue:
             ).fetchone()
         return row is not None
 
+    def count_active(self, task_types: list[str] | None = None) -> int:
+        """Count queued + claimed + running items, optionally filtered by task types."""
+        conn = self._get_conn()
+        if task_types:
+            placeholders = ",".join("?" for _ in task_types)
+            row = conn.execute(
+                f"""SELECT COUNT(*) FROM work_items
+                   WHERE status IN ('queued', 'claimed', 'running')
+                     AND task_type IN ({placeholders})""",
+                task_types,
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM work_items
+                   WHERE status IN ('queued', 'claimed', 'running')"""
+            ).fetchone()
+        return row[0] if row else 0
+
     # ------------------------------------------------------------------
     # Claim (worker pulls)
     # ------------------------------------------------------------------
