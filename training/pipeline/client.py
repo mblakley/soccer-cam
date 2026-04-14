@@ -1,7 +1,7 @@
-"""Pipeline HTTP client — stdlib-only client for remote workers.
+"""Pipeline HTTP client for workers and orchestrator.
 
-No external dependencies (no requests, no httpx). Uses urllib.request
-so it works on machines with only Python + opencv + onnxruntime.
+Uses httpx for reliable HTTP on Windows (stdlib urllib has known issues
+with localhost connections in non-interactive contexts like Scheduled Tasks).
 
 Usage:
     from training.pipeline.client import PipelineClient
@@ -14,61 +14,53 @@ Usage:
         api.complete(item["id"], {"labels": 500})
 """
 
-import json
 import logging
-import urllib.error
-import urllib.request
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_API_URL = "http://127.0.0.1:8643"
+TIMEOUT = 10  # seconds — API calls should be instant
+
 
 class PipelineClient:
-    """HTTP client for the Pipeline API. Stdlib only."""
+    """HTTP client for the Pipeline API."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str = DEFAULT_API_URL):
         self.base_url = base_url.rstrip("/")
+        self._client = httpx.Client(base_url=self.base_url, timeout=TIMEOUT)
+
+    def _request(
+        self, method: str, path: str, *, json: dict | None = None, silent_404: bool = False
+    ) -> dict | list | None:
+        """Make an API request. Returns parsed JSON or None on error."""
+        try:
+            r = self._client.request(method, path, json=json)
+            if r.status_code == 204:
+                return None
+            if r.status_code == 404 and silent_404:
+                return None
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            logger.warning("API %s %s returned %d: %s", method, path, e.response.status_code, e.response.text[:200])
+            return None
+        except Exception as e:
+            logger.warning("API %s %s failed: %s", method, path, e)
+            return None
 
     def _post(self, path: str, data: dict | None = None) -> dict | None:
-        """POST JSON to the API. Returns parsed response or None."""
-        url = f"{self.base_url}{path}"
-        body = json.dumps(data).encode() if data else b"{}"
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if resp.status == 204:
-                    return None
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code == 204:
-                return None
-            logger.warning(
-                "API %s returned %d: %s", path, e.code, e.read().decode()[:200]
-            )
-            return None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            logger.warning("API %s failed: %s", path, e)
-            return None
+        return self._request("POST", path, json=data or {})
 
     def _get(self, path: str) -> dict | list | None:
-        """GET from the API. Returns parsed response or None."""
-        url = f"{self.base_url}{path}"
-        req = urllib.request.Request(url, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None  # expected for missing games, don't log
-            logger.warning("API GET %s failed: %s", path, e)
-            return None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            logger.warning("API GET %s failed: %s", path, e)
-            return None
+        return self._request("GET", path, silent_404=True)
+
+    def _delete(self, path: str) -> dict | None:
+        return self._request("DELETE", path)
+
+    def _patch(self, path: str, data: dict | None = None) -> dict | None:
+        return self._request("PATCH", path, json=data or {})
 
     # --- Queue operations ---
 
@@ -76,10 +68,7 @@ class PipelineClient:
         """Claim the next available work item. Returns item dict or None."""
         return self._post(
             "/api/claim",
-            {
-                "capabilities": capabilities,
-                "hostname": hostname,
-            },
+            {"capabilities": capabilities, "hostname": hostname},
         )
 
     def start(self, item_id: int):
@@ -151,11 +140,7 @@ class PipelineClient:
 
     def is_available(self) -> bool:
         """Check if the API server is reachable."""
-        try:
-            result = self._get("/api/status")
-            return result is not None
-        except Exception:
-            return False
+        return self._get("/api/status") is not None
 
     # --- Orchestrator operations ---
 
@@ -212,6 +197,23 @@ class PipelineClient:
         result = self._post(f"/api/release-worker/{hostname}")
         return result.get("released", 0) if result else 0
 
+    def delete_worker(self, hostname: str):
+        """Remove a worker status entry."""
+        self._delete(f"/api/workers/{hostname}")
+
+    def set_priority(self, item_id: int, priority: int):
+        """Update a queue item's priority."""
+        self._patch(f"/api/queue/{item_id}/priority", {"priority": priority})
+
+    def delete_item(self, item_id: int):
+        """Delete a queue item."""
+        self._delete(f"/api/queue/{item_id}")
+
+    def get_events(self, **params) -> list:
+        """Get pipeline events with optional filters."""
+        qs = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
+        return self._get(f"/api/events?{qs}") or []
+
     def get_games_needing_work(self) -> list:
         return self._get("/api/games/needing-work") or []
 
@@ -235,7 +237,4 @@ class PipelineClient:
 
     def maybe_checkpoint(self):
         """Request a WAL checkpoint if the server supports it."""
-        try:
-            self._post("/api/maintenance/checkpoint", {})
-        except Exception:
-            pass  # older API versions may not have this endpoint
+        self._post("/api/maintenance/checkpoint", {})

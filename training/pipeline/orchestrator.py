@@ -239,21 +239,12 @@ class Orchestrator:
             for w in workers:
                 age = now - (w.get("last_seen") or 0)
                 if age > 86400 and w["hostname"] not in fresh_hostnames:
-                    try:
-                        import urllib.request
-
-                        req = urllib.request.Request(
-                            f"http://127.0.0.1:8643/api/workers/{w['hostname']}",
-                            method="DELETE",
-                        )
-                        urllib.request.urlopen(req)
-                        logger.info(
-                            "Audit: cleaned stale worker %s (%d hrs old)",
-                            w["hostname"],
-                            age // 3600,
-                        )
-                    except Exception:
-                        pass
+                    self.api.delete_worker(w["hostname"])
+                    logger.info(
+                        "Audit: cleaned stale worker %s (%d hrs old)",
+                        w["hostname"],
+                        age // 3600,
+                    )
 
         games = self.api.get_games_needing_work()
         for game in games:

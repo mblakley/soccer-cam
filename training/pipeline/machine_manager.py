@@ -191,14 +191,14 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
 
     def send_ntfy(self, message: str, title: str = "Training Pipeline") -> bool:
         """Send a push notification via NTFY."""
-        import urllib.request
+        import httpx
         try:
-            req = urllib.request.Request(
+            httpx.post(
                 "https://ntfy.sh/video_grouper_mblakley43431",
-                data=message.encode(),
+                content=message.encode(),
                 headers={"Title": title},
+                timeout=10,
             )
-            urllib.request.urlopen(req, timeout=10)
             return True
         except Exception as e:
             logger.warning("NTFY failed: %s", e)

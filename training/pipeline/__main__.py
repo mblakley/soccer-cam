@@ -276,50 +276,37 @@ def cmd_enqueue(args):
 
 
 def cmd_priority(args):
-    import json
-    import urllib.request
+    from training.pipeline.client import PipelineClient
 
-    req = urllib.request.Request(
-        f"http://127.0.0.1:8643/api/queue/{args.item_id}/priority",
-        data=json.dumps({"priority": args.priority}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="PATCH",
-    )
-    resp = urllib.request.urlopen(req)
+    api = PipelineClient()
+    api.set_priority(args.item_id, args.priority)
     print(f"#{args.item_id} priority -> {args.priority}")
 
 
 def cmd_delete(args):
-    import urllib.request
+    from training.pipeline.client import PipelineClient
 
-    req = urllib.request.Request(
-        f"http://127.0.0.1:8643/api/queue/{args.item_id}",
-        method="DELETE",
-    )
-    try:
-        urllib.request.urlopen(req)
-        print(f"Deleted #{args.item_id}")
-    except Exception as e:
-        print(f"Failed: {e}")
+    api = PipelineClient()
+    api.delete_item(args.item_id)
+    print(f"Deleted #{args.item_id}")
 
 
 def cmd_events(args):
-    import json
-    import urllib.request
     from datetime import datetime
 
-    params = []
+    from training.pipeline.client import PipelineClient
+
+    params = {}
     if args.hours:
         import time
 
-        params.append(f"since={time.time() - args.hours * 3600}")
+        params["since"] = time.time() - args.hours * 3600
     if args.category:
-        params.append(f"category={args.category}")
-    params.append(f"limit={args.limit}")
+        params["category"] = args.category
+    params["limit"] = args.limit
 
-    url = f"http://127.0.0.1:8643/api/events?{'&'.join(params)}"
-    resp = urllib.request.urlopen(url)
-    events = json.loads(resp.read())
+    api = PipelineClient()
+    events = api.get_events(**params)
 
     for e in reversed(events):
         ts = datetime.fromtimestamp(e["timestamp"]).strftime("%m/%d %H:%M")
@@ -414,6 +401,9 @@ def main():
     for h in handlers:
         h.setFormatter(fmt)
     logging.basicConfig(level=level, handlers=handlers)
+    # Suppress httpx request logging (noisy at INFO level)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     commands = {
         "serve": cmd_serve,
