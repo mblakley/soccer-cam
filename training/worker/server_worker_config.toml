@@ -3,7 +3,7 @@
 
 [worker]
 hostname = "DESKTOP-5L867J8"
-capabilities = ["stage", "tile", "generate_review", "ingest_reviews"]
+capabilities = ["stage", "tile", "generate_review", "ingest_reviews", "field_boundary"]
 api_url = "http://127.0.0.1:8643"
 server_share = ""
 local_work_dir = "G:/pipeline_work"

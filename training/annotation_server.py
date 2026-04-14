@@ -1241,6 +1241,162 @@ def _fmt_secs(secs: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+# ------------------------------------------------------------------
+# Field Boundary API
+# ------------------------------------------------------------------
+
+
+@app.get("/api/field-boundary")
+async def list_field_boundaries():
+    """List all games with their field boundary status."""
+    from training.data_prep.game_manifest import GameManifest
+
+    results = []
+    if not GAMES_DIR.exists():
+        return results
+
+    for game_dir in sorted(GAMES_DIR.iterdir()):
+        if not game_dir.is_dir():
+            continue
+        manifest_path = game_dir / "manifest.db"
+        if not manifest_path.exists():
+            continue
+
+        try:
+            gm = GameManifest(game_dir)
+            gm.open(create=False)
+            fb_raw = gm.get_metadata("field_boundary")
+            gm.close()
+
+            fb = json.loads(fb_raw) if fb_raw else None
+            results.append(
+                {
+                    "game_id": game_dir.name,
+                    "has_polygon": fb is not None and fb.get("polygon") is not None,
+                    "source": fb.get("source") if fb else None,
+                    "confidence": fb.get("confidence") if fb else None,
+                    "needs_human_review": fb.get("needs_human_review", True)
+                    if fb
+                    else True,
+                }
+            )
+        except Exception as e:
+            logger.debug("Skipping %s for field boundary: %s", game_dir.name, e)
+
+    return results
+
+
+@app.get("/api/field-boundary/{game_id}")
+async def get_field_boundary(game_id: str):
+    """Get field boundary polygon for a specific game."""
+    from training.data_prep.game_manifest import GameManifest
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    fb_raw = gm.get_metadata("field_boundary")
+    gm.close()
+
+    if not fb_raw:
+        return {"game_id": game_id, "polygon": None, "source": None}
+
+    fb = json.loads(fb_raw)
+    fb["game_id"] = game_id
+    return fb
+
+
+@app.post("/api/field-boundary/{game_id}")
+async def save_field_boundary(game_id: str, request: Request):
+    """Save human-drawn field boundary polygon.
+
+    Expects JSON body: {"polygon": [[x1,y1], [x2,y2], ...]}
+    """
+    from training.data_prep.game_manifest import GameManifest
+
+    body = await request.json()
+    polygon = body.get("polygon")
+
+    if not polygon or len(polygon) < 4:
+        raise HTTPException(400, "Polygon must have at least 4 points")
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    fb_result = {
+        "polygon": polygon,
+        "source": "human",
+        "confidence": 1.0,
+        "needs_human_review": False,
+        "created_at": time.time(),
+    }
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    gm.set_metadata("field_boundary", json.dumps(fb_result))
+    gm.close()
+
+    logger.info("Saved human field boundary for %s: %d points", game_id, len(polygon))
+    return {"accepted": True, "point_count": len(polygon)}
+
+
+@app.get("/api/field-boundary/{game_id}/panoramic")
+async def get_field_boundary_panoramic(game_id: str):
+    """Serve a panoramic JPEG with the field boundary polygon overlaid."""
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.field_boundary import (
+        _pick_detection_frame,
+        reconstruct_panoramic,
+    )
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    segment, frame_idx = _pick_detection_frame(gm)
+    if segment is None:
+        gm.close()
+        raise HTTPException(404, "No segments available")
+
+    packs_dir = game_dir / "tile_packs"
+    pano = reconstruct_panoramic(gm, segment, frame_idx, packs_dir)
+
+    # Draw polygon overlay if one exists
+    fb_raw = gm.get_metadata("field_boundary")
+    gm.close()
+
+    if pano is None:
+        raise HTTPException(404, "Could not reconstruct panoramic")
+
+    if fb_raw:
+        fb = json.loads(fb_raw)
+        if fb.get("polygon"):
+            import numpy as np
+
+            pts = np.array(fb["polygon"], dtype=np.int32)
+            overlay = pano.copy()
+            import cv2
+
+            cv2.fillPoly(overlay, [pts], (0, 180, 0))
+            pano = cv2.addWeighted(pano, 0.7, overlay, 0.3, 0)
+            cv2.polylines(pano, [pts], True, (0, 255, 0), 3)
+
+    # Downscale to half for web serving
+    import cv2
+
+    h, w = pano.shape[:2]
+    small = cv2.resize(pano, (w // 2, h // 2))
+    _, jpeg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+
+
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
     "/static",

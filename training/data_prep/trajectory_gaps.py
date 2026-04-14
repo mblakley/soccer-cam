@@ -76,9 +76,12 @@ def build_trajectories_from_manifest(
 
     Uses all class_id=0 labels (not just verified ones) to build complete
     trajectories. Filters aggressively for game-ball-like motion:
-    - Rows 0-1 only (far/mid field — game ball is on the field, not sideline)
+    - Field polygon filter (detections must be on-field within 50px margin)
     - Displacement > 200px (game ball moves fast, not stationary)
     - Rejects false_positive labels if QA'd
+
+    Requires a valid field_boundary polygon in manifest metadata.
+    Returns empty list if no polygon is available.
 
     Args:
         play_phases_only: If True, only include frames from active play phases
@@ -87,6 +90,30 @@ def build_trajectories_from_manifest(
     Returns list of trajectories. Each trajectory is a sorted list of
     (frame_idx, segment, pano_x, pano_y) tuples.
     """
+    import json
+
+    import cv2
+    import numpy as np
+
+    # Load field boundary polygon — required for trajectory building
+    field_polygon = None
+    try:
+        fb_json = conn.execute(
+            "SELECT value FROM metadata WHERE key = 'field_boundary'"
+        ).fetchone()
+        if fb_json:
+            fb = json.loads(fb_json[0])
+            if fb.get("polygon"):
+                field_polygon = np.asarray(fb["polygon"], dtype=np.float32).reshape(
+                    -1, 1, 2
+                )
+    except Exception:
+        pass  # table may not exist in older manifests
+
+    if field_polygon is None:
+        logger.warning("No field boundary polygon — skipping trajectory building")
+        return []
+
     # Load play phase ranges if filtering is requested
     play_ranges = None
     if play_phases_only:
@@ -108,9 +135,15 @@ def build_trajectories_from_manifest(
              AND (qa_verdict IS NULL OR qa_verdict IN ('true_positive', 'gap_ball_found'))"""
     ).fetchall()
 
+    # Soft field boundary filtering thresholds.
+    # The ball legitimately leaves the field (throw-ins, goal kicks, high kicks),
+    # so we use a soft filter: keep all on-field, exclude far-off-field,
+    # and keep some near-off-field detections.
+    NEAR_OFF_FIELD_MARGIN = 150  # px outside polygon = "near off-field"
+
     # Parse tile_stems and convert to panoramic coordinates
-    # ONLY rows 0-1 (far/mid field) — row 2 is near-field/sideline, almost never game ball
     frame_dets: dict[tuple[str, int], list[tuple[float, float]]] = defaultdict(list)
+    off_field_count = 0
 
     for tile_stem, cx, cy in rows:
         m = _TILE_RE.match(tile_stem)
@@ -121,16 +154,29 @@ def build_trajectories_from_manifest(
         row = int(m.group(3))
         col = int(m.group(4))
 
-        # Skip row 2 (near field / sideline) — game ball is almost never here
-        if row >= 2:
-            continue
-
         # Skip frames outside active play phases
         if play_ranges and not _in_play_range(segment, frame_idx, play_ranges):
             continue
 
         pano_x, pano_y = _tile_to_pano(cx, cy, row, col)
+
+        # Soft field boundary filter:
+        # - On-field (dist >= 0): always keep
+        # - Near off-field (-150px to 0): keep (ball can be near sideline)
+        # - Far off-field (< -150px): exclude (spectator/equipment noise)
+        dist = cv2.pointPolygonTest(field_polygon, (pano_x, pano_y), measureDist=True)
+        if dist < -NEAR_OFF_FIELD_MARGIN:
+            off_field_count += 1
+            continue
+
         frame_dets[(segment, frame_idx)].append((pano_x, pano_y))
+
+    if off_field_count > 0:
+        logger.info(
+            "Field filter: excluded %d far-off-field detections (>%dpx outside)",
+            off_field_count,
+            NEAR_OFF_FIELD_MARGIN,
+        )
 
     if not frame_dets:
         return []

@@ -69,6 +69,9 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     # Phase 0: Detect game phases (pre-game, halftime, post-game) if not yet done
     _ensure_game_phases(manifest, task_io)
 
+    # Phase 0.5: Detect field boundary polygon if not yet done
+    _ensure_field_boundary(manifest, task_io)
+
     candidates = _get_qa_candidates(
         manifest, max_tiles=cfg.qa.sonnet_batch_limit * cfg.qa.sonnet_batch_size
     )
@@ -559,6 +562,31 @@ def _ensure_game_phases(manifest, task_io: TaskIO):
             )
     except Exception as e:
         logger.warning("Phase 0 failed for %s: %s", manifest.game_id, e)
+
+
+def _ensure_field_boundary(manifest, task_io: TaskIO):
+    """Run field boundary detection if not yet done."""
+    existing = manifest.get_metadata("field_boundary")
+    if existing:
+        return  # already done
+
+    try:
+        from training.tasks.field_boundary import detect_field_boundary
+
+        result = detect_field_boundary(manifest, task_io)
+        if result:
+            source = result.get("source", "unknown")
+            confidence = result.get("confidence", 0)
+            logger.info(
+                "Field boundary: source=%s confidence=%.2f for %s",
+                source,
+                confidence,
+                manifest.game_id,
+            )
+    except Exception as e:
+        logger.warning(
+            "Field boundary detection failed for %s: %s", manifest.game_id, e
+        )
 
 
 def _get_qa_candidates(manifest, max_tiles: int = 2000) -> list[dict]:

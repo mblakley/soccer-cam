@@ -417,6 +417,29 @@ html, body {
   </div>
 </div>
 
+<!-- Field Boundary Page -->
+<div id="field-page" class="page">
+  <div class="header">
+    <button class="header-btn" onclick="navigateTo('packets')">&larr;</button>
+    <h1>Field Boundaries</h1>
+  </div>
+  <div class="content" id="field-content"></div>
+  <div class="nav-tabs">
+    <button class="nav-tab" onclick="navigateTo('packets')">
+      <span>&#x1F4CB;</span>Packets
+    </button>
+    <button class="nav-tab" onclick="navigateTo('gap-review')">
+      <span>&#x26BD;</span>Gaps
+    </button>
+    <button class="nav-tab active" onclick="navigateTo('field')">
+      <span>&#x1F3DF;</span>Field
+    </button>
+    <button class="nav-tab" onclick="navigateTo('stats')">
+      <span>&#x1F4CA;</span>Stats
+    </button>
+  </div>
+</div>
+
 <!-- Gap Review List Page -->
 <div id="gap-review-page" class="page">
   <div class="header">
@@ -530,6 +553,10 @@ function navigateTo(page, param) {
     document.getElementById('phases-page').classList.add('active');
     location.hash = '#phases';
     loadGamePhases();
+  } else if (page === 'field') {
+    document.getElementById('field-page').classList.add('active');
+    location.hash = '#field';
+    loadFieldBoundaries();
   } else if (page === 'gap-review') {
     document.getElementById('gap-review-page').classList.add('active');
     location.hash = '#gap-review';
@@ -562,6 +589,8 @@ function handleHash() {
     navigateTo('tracking-lab');
   } else if (hash === '#phases') {
     navigateTo('phases');
+  } else if (hash === '#field') {
+    navigateTo('field');
   } else if (hash === '#gap-review') {
     navigateTo('gap-review');
   } else if (hash.startsWith('#gap-annotate/')) {
@@ -2803,6 +2832,108 @@ function renderGamePhaseCard(game) {
     ${timelineHtml}
     ${detailHtml}
   </div>`;
+}
+
+// ========== Field Boundaries ==========
+
+async function loadFieldBoundaries() {
+  const container = document.getElementById('field-content');
+  container.innerHTML = '<div class="loading">Loading field boundaries...</div>';
+
+  try {
+    const resp = await fetch(API + '/api/field-boundary');
+    const games = await resp.json();
+
+    if (!games.length) {
+      container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F3DF;</div><div>No games yet</div></div>';
+      return;
+    }
+
+    const withPoly = games.filter(g => g.has_polygon);
+    const needsReview = games.filter(g => g.needs_human_review);
+    const noPoly = games.filter(g => !g.has_polygon);
+
+    let html = `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPoly.length} with polygon, ${needsReview.length} need review, ${noPoly.length} missing</div>`;
+
+    // Games needing review first
+    if (needsReview.length > 0) {
+      html += '<div style="padding:8px 16px"><h3 style="color:#f59e0b;font-size:14px">Needs Review</h3></div>';
+      for (const g of needsReview) {
+        html += renderFieldCard(g);
+      }
+    }
+
+    // Games with good polygons
+    const good = games.filter(g => g.has_polygon && !g.needs_human_review);
+    if (good.length > 0) {
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--green);font-size:14px">Detected</h3></div>';
+      for (const g of good) {
+        html += renderFieldCard(g);
+      }
+    }
+
+    // Missing
+    if (noPoly.length > 0) {
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--red);font-size:14px">No Polygon</h3></div>';
+      for (const g of noPoly) {
+        html += renderFieldCard(g);
+      }
+    }
+
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function renderFieldCard(game) {
+  const sourceColors = { onnx: '#22c55e', sonnet: '#3b82f6', human: '#a855f7', none: '#ef4444' };
+  const source = game.source || 'none';
+  const color = sourceColors[source] || '#6b7280';
+  const conf = game.confidence ? `${(game.confidence * 100).toFixed(0)}%` : '-';
+  const status = game.has_polygon ? 'Has polygon' : 'No polygon';
+
+  return `<div class="packet-card" onclick="viewFieldBoundary('${game.game_id}')">
+    <div class="title">${game.game_id}</div>
+    <div class="meta">
+      <span style="color:${color};font-weight:600">${source}</span> &mdash;
+      confidence: ${conf} &mdash; ${status}
+      ${game.needs_human_review ? ' <span style="color:#f59e0b">&#x26A0; needs review</span>' : ''}
+    </div>
+  </div>`;
+}
+
+async function viewFieldBoundary(gameId) {
+  const container = document.getElementById('field-content');
+  container.innerHTML = '<div class="loading">Loading panoramic...</div>';
+
+  try {
+    const imgUrl = API + `/api/field-boundary/${gameId}/panoramic`;
+    const detailResp = await fetch(API + `/api/field-boundary/${gameId}`);
+    const detail = await detailResp.json();
+
+    const source = detail.source || 'none';
+    const conf = detail.confidence ? `${(detail.confidence * 100).toFixed(0)}%` : '-';
+    const nPoints = detail.polygon ? detail.polygon.length : 0;
+
+    let html = `<div style="padding:12px 16px">
+      <button class="header-btn" onclick="loadFieldBoundaries()" style="margin-bottom:8px">&larr; Back</button>
+      <h2 style="font-size:16px;margin-bottom:8px">${gameId}</h2>
+      <div style="color:var(--text-dim);font-size:13px;margin-bottom:12px">
+        Source: <strong>${source}</strong> &mdash; Confidence: ${conf} &mdash; ${nPoints} points
+      </div>
+      <div style="overflow-x:auto;margin-bottom:12px">
+        <img src="${imgUrl}" style="max-width:100%;border-radius:8px;border:1px solid #333" loading="lazy">
+      </div>
+      <div style="font-size:12px;color:var(--text-dim)">
+        Green overlay shows the detected field boundary. Use the annotation tools to adjust if needed.
+      </div>
+    </div>`;
+
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
 }
 
 </script>

@@ -4,6 +4,16 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-14: Per-game field boundary replaces row-based spatial filter
+
+**Context:** Trajectory building used `row >= 2` exclusion as a crude proxy for "off-field." This missed off-field detections in rows 0-1 and excluded legitimate on-field detections in row 2. Ball trajectory coverage was only 0-5% across all games, partly due to off-field noise polluting trajectory fragments.
+
+**Decision:** Per-game field boundary polygon stored in manifest metadata (`field_boundary` key). Three-tiered detection: ONNX keypoint model (primary, proven on 9 games) → Sonnet vision fallback → human annotation. Trajectory building requires a valid polygon — skips if none available. Uses **soft filtering**: on-field and near-off-field (within 150px) kept, far-off-field excluded. This preserves throw-in/goal-kick continuity per the field-mask-must-be-soft principle.
+
+**Impact:** Row-based `row >= 2` filter removed. Games need a field polygon before trajectory building runs. Human can draw/adjust polygons via annotation app Field tab.
+
+---
+
 ## 2026-04-07: SQLite manifest + pack files replace loose tile/label files
 
 **Context:** 7.7M loose JPEG tiles across 39 games on HDD. `os.listdir` on 300K-file directories takes 5+ minutes. Label files (500K .txt) are equally slow to scan. Everything is I/O-bound on HDD random reads.
