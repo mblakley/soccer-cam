@@ -164,6 +164,8 @@ def main():
             handlers.append(fh)
 
     logging.basicConfig(level=level, handlers=handlers)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     if args.command == "run":
         cmd_run(args)
