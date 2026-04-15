@@ -70,22 +70,23 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
     if not source_video_dir:
         raise FileNotFoundError(f"No video path found for {game_id}")
 
-    source_videos = sorted(source_video_dir.glob("*.mp4")) + sorted(
+    all_videos = sorted(source_video_dir.glob("*.mp4")) + sorted(
         source_video_dir.glob("*.dav")
     )
+    if not all_videos:
+        all_videos = sorted(source_video_dir.rglob("*.mp4"))
+
+    # Filter to actual segment files (Dahua [F]/[0@0] markers).
+    # Exclude processed/combined videos that also live in the source directory.
+    source_videos = [v for v in all_videos if "[F]" in v.stem or "[0@0]" in v.stem]
+    # Fall back to all files if no segment markers found (e.g. Reolink, GoPro)
     if not source_videos:
-        source_videos = sorted(source_video_dir.rglob("*.mp4"))
+        source_videos = all_videos
 
     import shutil as _stage_shutil
 
     for source_video in source_videos:
         segment = source_video.stem
-
-        # Only tile individual segment files (they have [F] or [0@0] in the name).
-        is_segment = "[F]" in segment or "[0@0]" in segment
-        if not is_segment:
-            logger.info("  Skipping non-segment video: %s", segment)
-            continue
 
         # Stage this one segment to local SSD
         video_path = io.local_video / source_video.name
@@ -178,16 +179,25 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
             import socket as _socket
 
             archive_dir = Path(cfg.paths.archive.tile_packs) / game_id
-            if _socket.gethostname().upper() == "DESKTOP-5L867J8" and archive_dir.drive.upper() != "":
+            if (
+                _socket.gethostname().upper() == "DESKTOP-5L867J8"
+                and archive_dir.drive.upper() != ""
+            ):
                 try:
                     archive_dir.mkdir(parents=True, exist_ok=True)
                     f_dest = archive_dir / pack_path.name
-                    if not f_dest.exists() or f_dest.stat().st_size != pack_path.stat().st_size:
+                    if (
+                        not f_dest.exists()
+                        or f_dest.stat().st_size != pack_path.stat().st_size
+                    ):
                         logger.info("    Archiving %s to F:", pack_path.name)
                         _shutil.copy2(str(pack_path), str(f_dest))
 
                     # Verify archive then clean local + D:
-                    if f_dest.exists() and f_dest.stat().st_size == pack_path.stat().st_size:
+                    if (
+                        f_dest.exists()
+                        and f_dest.stat().st_size == pack_path.stat().st_size
+                    ):
                         pack_path.unlink()
                         dest.unlink()
                         logger.info("    Cleaned local + D: pack (archived to F:)")
@@ -318,6 +328,10 @@ def _tile_segment_to_pack(
                     )
                     pack_offset += jpeg_size
                     tile_count += 1
+
+            # Yield GIL periodically so heartbeat thread can run
+            if frame_idx % 200 == 0:
+                time.sleep(0)
 
             frame_idx += 1
 

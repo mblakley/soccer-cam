@@ -48,21 +48,30 @@ def run_stage(
     if not video_files:
         raise FileNotFoundError(f"No video files found in {source}")
 
+    # Filter to actual segment files (Dahua [F]/[0@0] markers)
+    # Exclude processed/combined videos that also live in the source directory
+    segment_files = [vf for vf in video_files if "[F]" in vf.name or "[0@0]" in vf.name]
+    # Fall back to all files if no segment markers found (e.g. Reolink, GoPro)
+    if not segment_files:
+        segment_files = video_files
+
     # Verify each file is readable and get sizes
     total_size = 0
     segments = []
-    for vf in video_files:
+    for vf in segment_files:
         try:
             size = vf.stat().st_size
             if size == 0:
                 logger.warning("Empty video file: %s", vf)
                 continue
             total_size += size
-            segments.append({
-                "name": vf.name,
-                "path": str(vf),
-                "size": size,
-            })
+            segments.append(
+                {
+                    "name": vf.name,
+                    "path": str(vf),
+                    "size": size,
+                }
+            )
         except OSError as e:
             logger.warning("Cannot access %s: %s", vf, e)
 
@@ -71,7 +80,10 @@ def run_stage(
 
     logger.info(
         "Staged %s: %d segments, %.1f GB at %s",
-        game_id, len(segments), total_size / 1e9, source,
+        game_id,
+        len(segments),
+        total_size / 1e9,
+        source,
     )
 
     return {
