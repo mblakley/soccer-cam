@@ -223,6 +223,10 @@ def detect_video(
 
             frames_processed += 1
 
+            # Yield GIL periodically so heartbeat thread can run
+            if frames_processed % 50 == 0:
+                time.sleep(0)
+
             if frames_processed % 100 == 0:
                 elapsed = time.time() - start
                 rate = frames_processed / elapsed

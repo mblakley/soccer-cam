@@ -115,15 +115,6 @@ def run_label(
             seg_name = seg_video.stem
             t0 = time.time()
 
-            # Pre-scan: sample 5 evenly-spaced frames to check if this
-            # segment contains game footage. Skips indoor/transport/backyard
-            # recordings that the Dahua camera stores on the same SD card.
-            if not _prescan_segment(seg_video, session, conf_threshold, cv2, flip=needs_flip):
-                logger.info(
-                    "  Skipping %s (no detections in pre-scan)", seg_name[:50]
-                )
-                continue
-
             # Stage video to local SSD for fast I/O
             local_video = io.local_game / "video" / seg_video.name
             local_video.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +174,10 @@ def run_label(
                                     )
                                 )
                         seg_frames += 1
+
+                        # Yield GIL periodically so heartbeat thread can run
+                        if seg_frames % 50 == 0:
+                            time.sleep(0)
                 fi += 1
 
             cap.release()
