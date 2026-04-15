@@ -223,6 +223,8 @@ def reconstruct_panoramic(
                 continue
 
             img_arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            if img_arr.size == 0:
+                continue
             img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
             if img is None:
                 continue
@@ -279,7 +281,8 @@ def _read_tile(
     try:
         with open(local_pack, "rb") as f:
             f.seek(tile["pack_offset"])
-            return f.read(tile["pack_size"])
+            data = f.read(tile["pack_size"])
+            return data if data else None
     except Exception:
         return None
 
