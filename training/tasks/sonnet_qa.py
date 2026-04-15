@@ -512,7 +512,9 @@ def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
     import shutil
 
     task_io.local_packs.mkdir(parents=True, exist_ok=True)
-    server_packs = task_io.server_packs()
+    # Only restore the specific packs we need from F: archive, not all packs
+    pack_names = {Path(p).name for p in pack_files}
+    server_packs = task_io.ensure_server_packs(pack_names)
     copied = 0
     for pack_path_str in pack_files:
         pack_name = Path(pack_path_str).name

@@ -78,11 +78,10 @@ class TaskIO:
         return self.server_game_dir / "manifest.db"
 
     def server_packs(self) -> Path:
-        """Find pack files — restore any missing packs from F: archive to D:.
+        """Return the server packs directory, restoring ALL missing packs from F:.
 
-        Always checks F: archive for packs not yet on D:, even if some
-        packs already exist. This handles the case where incremental
-        tiling archived and cleaned individual segment packs.
+        WARNING: For games with many segments, this can copy hundreds of GB.
+        Prefer ensure_server_packs() to restore only specific packs on demand.
         """
         packs = self.server_game_dir / "tile_packs"
         packs.mkdir(parents=True, exist_ok=True)
@@ -100,6 +99,32 @@ class TaskIO:
                             pack_file.stat().st_size / 1e9,
                         )
                         shutil.copy2(str(pack_file), str(dest))
+
+        return packs
+
+    def ensure_server_packs(self, pack_names: set[str]) -> Path:
+        """Ensure specific pack files exist on D:, restoring from F: if needed.
+
+        Only restores the requested packs, not all packs for the game.
+        Much faster than server_packs() for games with many segments.
+        """
+        packs = self.server_game_dir / "tile_packs"
+        packs.mkdir(parents=True, exist_ok=True)
+
+        if not self.server_share:
+            archive_dir = Path(self.cfg.paths.archive.tile_packs) / self.game_id
+            if archive_dir.exists():
+                for name in pack_names:
+                    dest = packs / name
+                    if not dest.exists():
+                        src = archive_dir / name
+                        if src.exists():
+                            logger.info(
+                                "Restoring %s from F: archive (%.1f GB)",
+                                name,
+                                src.stat().st_size / 1e9,
+                            )
+                            shutil.copy2(str(src), str(dest))
 
         return packs
 
