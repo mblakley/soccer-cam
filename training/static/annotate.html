@@ -50,7 +50,9 @@ html, body {
 .header-btn.active { background: var(--blue); color: #fff; }
 
 /* Packet list */
-#packet-list-page .content { flex: 1; overflow-y: auto; padding: 12px; }
+#packet-list-page .content,
+#phases-page .content,
+#field-page .content { flex: 1; overflow-y: auto; padding: 12px; }
 
 .packet-card {
   background: var(--surface); border-radius: 12px; padding: 16px;
@@ -285,8 +287,11 @@ html, body {
     <button class="nav-tab" onclick="navigateTo('gap-review')">
       <span>&#x26BD;</span>Gaps
     </button>
-    <button class="nav-tab" onclick="navigateTo('tracking-lab')">
-      <span>&#x1F3AF;</span>Lab
+    <button class="nav-tab" onclick="navigateTo('phases')">
+      <span>&#x23F1;</span>Phases
+    </button>
+    <button class="nav-tab" onclick="navigateTo('field')">
+      <span>&#x1F3DF;</span>Field
     </button>
     <button class="nav-tab" onclick="navigateTo('stats')">
       <span>&#x1F4CA;</span>Stats
@@ -2842,18 +2847,15 @@ async function loadFieldBoundaries() {
 
   try {
     const resp = await fetch(API + '/api/field-boundary');
-    const games = await resp.json();
-
-    if (!games.length) {
-      container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F3DF;</div><div>No games yet</div></div>';
-      return;
-    }
+    const data = await resp.json();
+    const games = data.games || data;  // handle both old and new format
+    const notReady = data.not_tiled || [];
 
     const withPoly = games.filter(g => g.has_polygon);
-    const needsReview = games.filter(g => g.needs_human_review);
+    const needsReview = games.filter(g => g.needs_human_review && g.has_polygon);
     const noPoly = games.filter(g => !g.has_polygon);
 
-    let html = `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPoly.length} with polygon, ${needsReview.length} need review, ${noPoly.length} missing</div>`;
+    let html = `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPoly.length} done, ${noPoly.length} need polygon, ${notReady.length} not tiled yet</div>`;
 
     // Games needing review first
     if (needsReview.length > 0) {
@@ -2863,20 +2865,32 @@ async function loadFieldBoundaries() {
       }
     }
 
+    // No polygon yet (but have tiles)
+    const noPolyReady = noPoly.filter(g => !g.has_polygon);
+    if (noPolyReady.length > 0) {
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--red);font-size:14px">Needs Polygon</h3></div>';
+      for (const g of noPolyReady) {
+        html += renderFieldCard(g);
+      }
+    }
+
     // Games with good polygons
     const good = games.filter(g => g.has_polygon && !g.needs_human_review);
     if (good.length > 0) {
-      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--green);font-size:14px">Detected</h3></div>';
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--green);font-size:14px">Done</h3></div>';
       for (const g of good) {
         html += renderFieldCard(g);
       }
     }
 
-    // Missing
-    if (noPoly.length > 0) {
-      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--red);font-size:14px">No Polygon</h3></div>';
-      for (const g of noPoly) {
-        html += renderFieldCard(g);
+    // Not tiled yet
+    if (notReady.length > 0) {
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--gray);font-size:14px">Not Tiled Yet</h3></div>';
+      for (const id of notReady) {
+        html += `<div class="packet-card" style="opacity:0.4">
+          <div class="title">&#x23F3; ${id}</div>
+          <div class="meta">STAGING &mdash; waiting for tiling</div>
+        </div>`;
       }
     }
 
@@ -2903,36 +2917,285 @@ function renderFieldCard(game) {
   </div>`;
 }
 
+let fieldEditorState = null;
+
 async function viewFieldBoundary(gameId) {
   const container = document.getElementById('field-content');
   container.innerHTML = '<div class="loading">Loading panoramic...</div>';
 
   try {
-    const imgUrl = API + `/api/field-boundary/${gameId}/panoramic`;
+    // Load the raw panoramic (without polygon overlay) and current polygon
     const detailResp = await fetch(API + `/api/field-boundary/${gameId}`);
     const detail = await detailResp.json();
 
     const source = detail.source || 'none';
-    const conf = detail.confidence ? `${(detail.confidence * 100).toFixed(0)}%` : '-';
     const nPoints = detail.polygon ? detail.polygon.length : 0;
 
-    let html = `<div style="padding:12px 16px">
-      <button class="header-btn" onclick="loadFieldBoundaries()" style="margin-bottom:8px">&larr; Back</button>
-      <h2 style="font-size:16px;margin-bottom:8px">${gameId}</h2>
-      <div style="color:var(--text-dim);font-size:13px;margin-bottom:12px">
-        Source: <strong>${source}</strong> &mdash; Confidence: ${conf} &mdash; ${nPoints} points
+    // Use the panoramic endpoint WITHOUT overlay (canvas draws polygon itself)
+    const imgUrl = API + `/api/field-boundary/${gameId}/panoramic?overlay=false`;
+
+    let html = `<div style="padding:8px 12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <button class="header-btn" onclick="loadFieldBoundaries()">&larr;</button>
+        <span style="font-size:14px;font-weight:600;flex:1">${gameId}</span>
+        <span id="field-point-info" style="font-size:12px;color:var(--text-dim)">${source} (${nPoints}pts)</span>
       </div>
-      <div style="overflow-x:auto;margin-bottom:12px">
-        <img src="${imgUrl}" style="max-width:100%;border-radius:8px;border:1px solid #333" loading="lazy">
+      <div style="position:relative">
+        <canvas id="field-canvas" style="display:block;border-radius:6px;border:1px solid #333;width:100%;touch-action:none"></canvas>
       </div>
-      <div style="font-size:12px;color:var(--text-dim)">
-        Green overlay shows the detected field boundary. Use the annotation tools to adjust if needed.
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="header-btn" onclick="fieldFlipImage('${gameId}')" id="field-flip-btn" style="background:#333">Flip</button>
+        <button class="header-btn" onclick="fieldAddPoint()" id="field-add-btn" style="background:#333">+ Add</button>
+        <button class="header-btn" onclick="fieldDeletePoint()" id="field-del-btn" style="background:#333">- Del</button>
+        <button class="header-btn" onclick="fieldResetPoints()">Reset</button>
+        <button class="header-btn" onclick="fieldSave('${gameId}')" style="background:var(--green);color:#000;font-weight:600;margin-left:auto">Save</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:6px">
+        Drag points to adjust. Near sideline (bottom, green) left-to-right, then far sideline (top, blue) right-to-left.
       </div>
     </div>`;
 
     container.innerHTML = html;
+
+    // Load image and set up canvas
+    const canvas = document.getElementById('field-canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // The panoramic endpoint returns half-res, so canvas matches that
+      canvas.width = img.width;
+      canvas.height = img.height;
+      // Scale factor: the polygon is in full panoramic coords, image is half-res
+      const scaleX = img.width / 4096;
+      const scaleY = img.height / 1800;
+
+      // Initialize 10 points: resample existing polygon or use template
+      let points = [];
+      if (detail.polygon && detail.polygon.length >= 4) {
+        points = fieldResampleTo10(detail.polygon.map(p => [p[0] * scaleX, p[1] * scaleY]));
+      }
+
+      fieldEditorState = {
+        canvas, ctx, img, points, scaleX, scaleY,
+        dragging: -1, selected: -1, gameId
+      };
+      fieldDraw();
+      fieldSetupEvents();
+    };
+    img.src = imgUrl;
   } catch (err) {
     container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function fieldDraw() {
+  const s = fieldEditorState;
+  if (!s) return;
+  const {ctx, img, points, canvas} = s;
+
+  ctx.drawImage(img, 0, 0);
+
+  if (points.length < 2) {
+    // Just draw points
+    points.forEach((p, i) => fieldDrawPoint(ctx, p, i, i === s.selected));
+    return;
+  }
+
+  // Draw filled polygon
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0, 180, 0, 0.15)';
+  ctx.fill();
+
+  // Draw edges
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+  ctx.closePath();
+  ctx.strokeStyle = '#00ff00';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Draw points
+  points.forEach((p, i) => fieldDrawPoint(ctx, p, i, i === s.selected));
+
+  // Update info
+  const info = document.getElementById('field-point-info');
+  if (info) info.textContent = `${points.length} points` + (s.selected >= 0 ? ` (pt ${s.selected})` : '');
+}
+
+function fieldDrawPoint(ctx, p, idx, selected) {
+  const s = fieldEditorState;
+  const mid = Math.floor(s.points.length / 2);
+  const isNear = idx < mid;
+  const r = selected ? 10 : 7;
+
+  ctx.beginPath();
+  ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+  ctx.fillStyle = selected ? '#ff0' : (isNear ? '#22c55e' : '#3b82f6');
+  ctx.fill();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Label
+  ctx.font = 'bold 11px sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(idx), p[0], p[1] - r - 4);
+}
+
+function fieldSetupEvents() {
+  const s = fieldEditorState;
+  const canvas = s.canvas;
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [
+      (t.clientX - rect.left) * (canvas.width / rect.width),
+      (t.clientY - rect.top) * (canvas.height / rect.height)
+    ];
+  }
+
+  function findNearest(pos) {
+    let best = -1, bestDist = 20 * (canvas.width / canvas.getBoundingClientRect().width);
+    s.points.forEach((p, i) => {
+      const d = Math.hypot(p[0] - pos[0], p[1] - pos[1]);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    return best;
+  }
+
+  canvas.onmousedown = canvas.ontouchstart = (e) => {
+    e.preventDefault();
+    const pos = getPos(e);
+    const idx = findNearest(pos);
+    if (idx >= 0) {
+      s.dragging = idx;
+      s.selected = idx;
+    } else {
+      s.selected = -1;
+    }
+    fieldDraw();
+  };
+
+  canvas.onmousemove = canvas.ontouchmove = (e) => {
+    if (s.dragging < 0) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    s.points[s.dragging] = pos;
+    fieldDraw();
+  };
+
+  canvas.onmouseup = canvas.ontouchend = () => {
+    s.dragging = -1;
+  };
+}
+
+function fieldResampleTo10(pts) {
+  // Split into near sideline (bottom half, higher Y) and far sideline (top half, lower Y)
+  // Then resample each to 5 evenly-spaced points along the path
+  if (pts.length <= 10) return pts;
+
+  const midY = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const near = pts.filter(p => p[1] >= midY).sort((a, b) => a[0] - b[0]);
+  const far = pts.filter(p => p[1] < midY).sort((a, b) => b[0] - a[0]); // right to left
+
+  function resample(arr, n) {
+    if (arr.length <= n) return arr;
+    const result = [];
+    for (let i = 0; i < n; i++) {
+      const idx = Math.round(i * (arr.length - 1) / (n - 1));
+      result.push(arr[idx]);
+    }
+    return result;
+  }
+
+  return [...resample(near, 5), ...resample(far, 5)];
+}
+
+function fieldFlipImage(gameId) {
+  const s = fieldEditorState;
+  if (!s) return;
+  // Reload image with flip parameter toggled
+  s.flipped = !s.flipped;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    s.img = img;
+    // Also flip all point Y coordinates
+    for (const p of s.points) {
+      p[1] = s.canvas.height - p[1];
+    }
+    fieldDraw();
+  };
+  img.src = API + `/api/field-boundary/${gameId}/panoramic?overlay=false&flip=${s.flipped}`;
+}
+
+function fieldAddPoint() {
+  const s = fieldEditorState;
+  if (!s) return;
+  // Add a point at center of canvas
+  s.points.push([s.canvas.width / 2, s.canvas.height / 2]);
+  s.selected = s.points.length - 1;
+  fieldDraw();
+}
+
+function fieldDeletePoint() {
+  const s = fieldEditorState;
+  if (!s || s.selected < 0) return;
+  s.points.splice(s.selected, 1);
+  s.selected = -1;
+  fieldDraw();
+}
+
+function fieldResetPoints() {
+  const s = fieldEditorState;
+  if (!s) return;
+  // Reset to default 10-point template
+  const w = s.canvas.width, h = s.canvas.height;
+  s.points = [
+    // Near sideline (bottom) left to right - 5 points
+    [w*0.02, h*0.82], [w*0.15, h*0.88], [w*0.35, h*0.92],
+    [w*0.55, h*0.93], [w*0.80, h*0.90],
+    // Far sideline (top) right to left - 5 points
+    [w*0.85, h*0.22], [w*0.65, h*0.18], [w*0.45, h*0.17],
+    [w*0.25, h*0.18], [w*0.05, h*0.22],
+  ];
+  s.selected = -1;
+  fieldDraw();
+}
+
+async function fieldSave(gameId) {
+  const s = fieldEditorState;
+  if (!s || s.points.length < 4) {
+    alert('Need at least 4 points');
+    return;
+  }
+
+  // Scale back to full panoramic coordinates
+  const polygon = s.points.map(p => [
+    Math.round(p[0] / s.scaleX * 10) / 10,
+    Math.round(p[1] / s.scaleY * 10) / 10
+  ]);
+
+  try {
+    const resp = await fetch(API + `/api/field-boundary/${gameId}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({polygon})
+    });
+    const result = await resp.json();
+    if (result.accepted) {
+      document.getElementById('field-point-info').textContent = `Saved! (${polygon.length} pts, human)`;
+      document.getElementById('field-point-info').style.color = 'var(--green)';
+    }
+  } catch (err) {
+    alert('Save failed: ' + err.message);
   }
 }
 

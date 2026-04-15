@@ -1265,6 +1265,10 @@ async def list_field_boundaries():
         try:
             gm = GameManifest(game_dir)
             gm.open(create=False)
+            segs = gm.get_segments()
+            if not segs:
+                gm.close()
+                continue  # empty manifest (still tiling)
             fb_raw = gm.get_metadata("field_boundary")
             gm.close()
 
@@ -1283,7 +1287,24 @@ async def list_field_boundaries():
         except Exception as e:
             logger.debug("Skipping %s for field boundary: %s", game_dir.name, e)
 
-    return results
+    # Find games still tiling (have no manifest yet) via pipeline API
+    not_tiled = []
+    try:
+        import httpx
+
+        pipe_resp = httpx.get("http://127.0.0.1:8643/api/games", timeout=5)
+        pipe_games = pipe_resp.json()
+        known_ids = {r["game_id"] for r in results}
+        for g in pipe_games:
+            if g["game_id"] not in known_ids and g.get("pipeline_state") in (
+                "REGISTERED",
+                "STAGING",
+            ):
+                not_tiled.append(g["game_id"])
+    except Exception:
+        pass
+
+    return {"games": results, "not_tiled": not_tiled}
 
 
 @app.get("/api/field-boundary/{game_id}")
@@ -1301,7 +1322,26 @@ async def get_field_boundary(game_id: str):
     gm.close()
 
     if not fb_raw:
-        return {"game_id": game_id, "polygon": None, "source": None}
+        # Return a default 10-point template so the editor has something to drag
+        default_poly = [
+            [100, 1300],
+            [800, 1500],
+            [1600, 1600],
+            [2500, 1600],
+            [3400, 1500],
+            [3900, 400],
+            [3000, 350],
+            [2100, 320],
+            [1200, 350],
+            [200, 400],
+        ]
+        return {
+            "game_id": game_id,
+            "polygon": default_poly,
+            "source": "template",
+            "confidence": 0,
+            "needs_human_review": True,
+        }
 
     fb = json.loads(fb_raw)
     fb["game_id"] = game_id
@@ -1344,13 +1384,12 @@ async def save_field_boundary(game_id: str, request: Request):
 
 
 @app.get("/api/field-boundary/{game_id}/panoramic")
-async def get_field_boundary_panoramic(game_id: str):
-    """Serve a panoramic JPEG with the field boundary polygon overlaid."""
+async def get_field_boundary_panoramic(
+    game_id: str, overlay: bool = True, flip: bool = False
+):
+    """Serve a panoramic JPEG, optionally with the field boundary polygon overlaid."""
     from training.data_prep.game_manifest import GameManifest
-    from training.tasks.field_boundary import (
-        _pick_detection_frame,
-        reconstruct_panoramic,
-    )
+    from training.tasks.field_boundary import reconstruct_panoramic
 
     game_dir = GAMES_DIR / game_id
     if not game_dir.exists():
@@ -1359,13 +1398,33 @@ async def get_field_boundary_panoramic(game_id: str):
     gm = GameManifest(game_dir)
     gm.open(create=False)
 
-    segment, frame_idx = _pick_detection_frame(gm)
-    if segment is None:
-        gm.close()
-        raise HTTPException(404, "No segments available")
-
     packs_dir = game_dir / "tile_packs"
-    pano = reconstruct_panoramic(gm, segment, frame_idx, packs_dir)
+    pano = None
+
+    # Try to find a frame with tiles available in packs on disk.
+    # Start from the middle of the segment list (more likely to be
+    # actual game footage, not setup/transport at the start).
+    segments = gm.get_segments()
+    mid = len(segments) // 2
+    segments = segments[mid:] + segments[:mid]
+    for seg in segments:
+        # Find a frame in this segment that has pack files on D:
+        row = gm.conn.execute(
+            """SELECT frame_idx FROM tiles
+               WHERE segment = ? AND pack_file IS NOT NULL
+               GROUP BY frame_idx HAVING COUNT(*) >= 10
+               ORDER BY frame_idx LIMIT 1 OFFSET (
+                   SELECT COUNT(DISTINCT frame_idx)/2 FROM tiles
+                   WHERE segment = ? AND pack_file IS NOT NULL
+               )""",
+            (seg, seg),
+        ).fetchone()
+        if not row:
+            continue
+        fi = row[0]
+        pano = reconstruct_panoramic(gm, seg, fi, packs_dir)
+        if pano is not None:
+            break
 
     # Draw polygon overlay if one exists
     fb_raw = gm.get_metadata("field_boundary")
@@ -1374,17 +1433,22 @@ async def get_field_boundary_panoramic(game_id: str):
     if pano is None:
         raise HTTPException(404, "Could not reconstruct panoramic")
 
-    if fb_raw:
+    if flip:
+        import cv2 as _cv2
+
+        pano = _cv2.flip(pano, -1)
+
+    if overlay and fb_raw:
         fb = json.loads(fb_raw)
         if fb.get("polygon"):
             import numpy as np
 
             pts = np.array(fb["polygon"], dtype=np.int32)
-            overlay = pano.copy()
+            poly_layer = pano.copy()
             import cv2
 
-            cv2.fillPoly(overlay, [pts], (0, 180, 0))
-            pano = cv2.addWeighted(pano, 0.7, overlay, 0.3, 0)
+            cv2.fillPoly(poly_layer, [pts], (0, 180, 0))
+            pano = cv2.addWeighted(pano, 0.7, poly_layer, 0.3, 0)
             cv2.polylines(pano, [pts], True, (0, 255, 0), 3)
 
     # Downscale to half for web serving

@@ -103,11 +103,21 @@ def detect_field_boundary(
     Returns summary dict with detection results.
     """
     existing = manifest.get_metadata("field_boundary")
-    if existing and not force:
-        logger.info(
-            "Field boundary already detected for %s, skipping", manifest.game_id
-        )
-        return json.loads(existing)
+    if existing:
+        fb = json.loads(existing)
+        # Never overwrite human-confirmed polygons
+        if fb.get("source") == "human":
+            logger.info(
+                "Field boundary for %s is human-confirmed, skipping",
+                manifest.game_id,
+            )
+            return fb
+        if not force:
+            logger.info(
+                "Field boundary already detected for %s, skipping",
+                manifest.game_id,
+            )
+            return fb
 
     logger.info("Starting field boundary detection for %s", manifest.game_id)
 
@@ -248,13 +258,23 @@ def _read_tile(
     if not tile or not tile.get("pack_file"):
         return None
 
-    # Try local pack first, then original path
+    # Try packs_dir first, then original D: path, then F: archive
     pack_name = Path(tile["pack_file"]).name
     local_pack = packs_dir / pack_name
     if not local_pack.exists():
         local_pack = Path(tile["pack_file"])
     if not local_pack.exists():
-        return None
+        try:
+            from training.pipeline.config import load_config
+
+            cfg = load_config()
+            archive = Path(cfg.paths.archive.tile_packs) / manifest.game_id / pack_name
+            if archive.exists():
+                local_pack = archive
+            else:
+                return None
+        except Exception:
+            return None
 
     try:
         with open(local_pack, "rb") as f:
