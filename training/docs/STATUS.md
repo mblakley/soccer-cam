@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-04-11 09:00*
+*Last updated: 2026-04-15*
 
 ## What's Running
 
@@ -15,7 +15,8 @@ Five processes on the server, two remote workers:
 | PipelineWorker | jared-laptop | — | Tile/label/train tasks (RTX 4070, CUDA) |
 | PipelineWorker | FORTNITE-OP | — | Label/tile tasks (RTX 3060 Ti), yields for games |
 
-**Restart all server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
+**Restart server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
+**Deploy remote worker:** `powershell -ExecutionPolicy Bypass -File training\worker\deploy_worker.ps1 -Machine laptop|fortnite`
 
 ## Storage Architecture
 
@@ -83,9 +84,11 @@ QA_PENDING → QA_DONE → generate_review → TRAINABLE
 6. **Training** — auto-triggers when 2+ games reach TRAINABLE
 
 ### Known issues
-- Heartbeat thread has a race condition — worker status shows stale but workers are running
-- FORTNITE-OP needs redeployment with Python 3.13 + CUDA PATH when it comes online
+- FORTNITE-OP needs redeployment when it comes online: `deploy_worker.ps1 -Machine fortnite`
 - Phase 2 trajectory gap detection needs end-to-end test with properly tiled+labeled game
+- 4 games had corrupt/missing packs (0-byte on F:), reset to REGISTERED on 2026-04-15:
+  `flash__2024.05.01_vs_RNYFC_away`, `flash__2024.05.10_vs_NY_Rush_away`,
+  `flash__2024.06.01_vs_IYSA_home`, `flash__2024.06.02_vs_Flash_2014s_scrimmage`
 
 ## Key Commands
 

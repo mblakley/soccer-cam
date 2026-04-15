@@ -164,7 +164,42 @@ powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1
 
 ### Machines
 
-See Claude memory for hostnames, IPs, credentials, and GPU details. Three machines: server (no GPU, runs API/orchestrator/tiling), laptop (RTX 4070, training), FORTNITE-OP (RTX 3060 Ti, labeling, yields for games).
+| Machine | Hostname | IP | User/Pass | GPU | Capabilities |
+|---------|----------|----|-----------|-----|-------------|
+| Server | DESKTOP-5L867J8 | 192.168.86.152 | jared | GTX 1060 (no CUDA tasks) | stage, tile, sonnet_qa, generate_review |
+| Laptop | jared-laptop | 192.168.86.24 | training / amy4ever | RTX 4070 | tile, label, train |
+| FORTNITE-OP | FORTNITE-OP | — | training / amy4ever | RTX 3060 Ti | label, tile (yields for games) |
+
+### Deploying Remote Workers
+
+**There is ONE canonical way to deploy a remote worker.** Do not create ad-hoc bat files, scheduled tasks, or startup scripts. Use the deploy script:
+
+```powershell
+# From the server, in the project root:
+powershell -ExecutionPolicy Bypass -File training\worker\deploy_worker.ps1 -Machine laptop
+powershell -ExecutionPolicy Bypass -File training\worker\deploy_worker.ps1 -Machine fortnite
+```
+
+**What it does** (6 steps):
+1. Creates directories on remote (`C:\soccer-cam-label\{project,work,models,logs}`)
+2. Syncs all `training/` Python code via PS session
+3. Generates `worker_config.toml` + `start_pipeline_worker.bat` (the only bat file)
+4. Copies ONNX model if missing
+5. Cleans up ALL old scheduled tasks, registers one `PipelineWorker` task with user credentials
+6. Starts the worker and verifies it's running
+
+**Prerequisites on the remote machine:**
+- Python 3.13 installed at `C:\Python313\` with torch+CUDA, opencv, numpy, onnxruntime
+- `httpx` and `psutil` pip packages (deploy script auto-installs these)
+- PS remoting enabled (`Enable-PSRemoting -Force`)
+- The `training` user account exists
+
+**If a worker stops running**, re-run the deploy script. It's idempotent.
+
+**Never:**
+- Create bat files by hand on remote machines
+- Register scheduled tasks manually
+- Edit `worker_config.toml` on the remote — re-run the deploy script instead
 
 ## Build & Development Commands
 

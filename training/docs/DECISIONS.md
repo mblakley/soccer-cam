@@ -4,6 +4,16 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-15: Single canonical deploy script for remote workers
+
+**Context:** Laptop worker kept dying after reboots and couldn't restart. Root cause: 3 conflicting scheduled tasks (`GPUWorker`, `LaptopWorker`, `PipelineWorker`) each pointing to different hand-edited bat files with wrong credentials, wrong CUDA paths, and TOML backslash escaping bugs. Each time someone fixed a problem they created a new bat/task instead of fixing the canonical deploy script.
+
+**Decision:** `training/worker/deploy_worker.ps1` is the ONE AND ONLY way to deploy remote workers. It handles everything: code sync, config generation (with correct TOML UNC path escaping), startup bat generation, pip dependencies, scheduled task cleanup + registration, and post-deploy verification. Never create bat files, scheduled tasks, or edit configs by hand on remote machines. If a worker stops, re-run the deploy script.
+
+**Trade-off:** Requires PS remoting enabled on remote machines. No support for partial updates — always does a full redeploy. This is intentional: idempotent full deploys are more reliable than incremental patches.
+
+---
+
 ## 2026-04-14: Per-game field boundary replaces row-based spatial filter
 
 **Context:** Trajectory building used `row >= 2` exclusion as a crude proxy for "off-field." This missed off-field detections in rows 0-1 and excluded legitimate on-field detections in row 2. Ball trajectory coverage was only 0-5% across all games, partly due to off-field noise polluting trajectory fragments.
