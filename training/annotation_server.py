@@ -1065,8 +1065,24 @@ GAMES_DIR = Path("D:/training_data/games")
 
 @app.get("/api/game-phases")
 async def list_game_phases():
-    """List all games with their detected phases."""
+    """List all games with their detected phases.
+
+    Only includes games that are at least TILED in the pipeline
+    (excludes REGISTERED, STAGING, EXCLUDED).
+    """
     from training.data_prep.game_manifest import GameManifest
+
+    # Get pipeline states to filter out incomplete games
+    tiled_states = {"TILED", "LABELED", "QA_DONE", "TRAINABLE"}
+    pipeline_states = {}
+    try:
+        from training.pipeline.client import PipelineClient
+
+        client = PipelineClient()
+        for g in client.get_all_games():
+            pipeline_states[g["game_id"]] = g.get("pipeline_state", "")
+    except Exception:
+        pass  # If pipeline API unavailable, show all games
 
     results = []
     if not GAMES_DIR.exists():
@@ -1077,6 +1093,10 @@ async def list_game_phases():
             continue
         manifest_path = game_dir / "manifest.db"
         if not manifest_path.exists():
+            continue
+
+        # Skip games not fully tiled (if we have pipeline state info)
+        if pipeline_states and pipeline_states.get(game_dir.name, "") not in tiled_states:
             continue
 
         try:
@@ -1239,6 +1259,190 @@ def _fmt_secs(secs: float) -> str:
     m = int((secs % 3600) // 60)
     s = int(secs % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ------------------------------------------------------------------
+# Phase Editor: sample points + panoramic frame serving
+# ------------------------------------------------------------------
+
+
+@app.get("/api/game-phases/{game_id}/samples")
+async def get_phase_samples(game_id: str, interval: int = 30):
+    """Return evenly-spaced sample frames for the phase editor filmstrip.
+
+    Each sample is a (segment, frame_idx) pair at ~`interval` seconds apart,
+    spanning the full game timeline.
+    """
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.phase_detect import (
+        FPS,
+        _build_segment_timeline,
+    )
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    try:
+        segments = gm.get_segments()
+        timeline = _build_segment_timeline(segments, gm)
+        if not timeline:
+            return {
+                "game_id": game_id,
+                "interval_sec": interval,
+                "samples": [],
+                "total_duration_sec": 0,
+            }
+
+        # Compute total duration from first segment start to last segment end
+        first_start = timeline[0]["start_sec"]
+        last_end = timeline[-1]["end_sec"]
+        total_duration = last_end - first_start
+
+        # Build sample points at regular intervals
+        samples = []
+        t = 0.0
+        idx = 0
+        while t <= total_duration:
+            abs_time = first_start + t
+
+            # Find the segment containing this absolute time
+            best_seg = None
+            for seg_info in timeline:
+                if seg_info["start_sec"] <= abs_time <= seg_info["end_sec"]:
+                    best_seg = seg_info
+                    break
+            # If between segments (gap), use the nearest segment
+            if best_seg is None:
+                best_seg = min(
+                    timeline,
+                    key=lambda s: min(
+                        abs(s["start_sec"] - abs_time), abs(s["end_sec"] - abs_time)
+                    ),
+                )
+
+            # Convert abs time to frame_idx within segment
+            offset_in_seg = abs_time - best_seg["start_sec"]
+            frame_idx = best_seg["frame_min"] + int(offset_in_seg * FPS)
+            # Snap to nearest tiled frame (multiple of 4)
+            frame_idx = (frame_idx // 4) * 4
+            frame_idx = max(
+                best_seg["frame_min"], min(frame_idx, best_seg["frame_max"])
+            )
+
+            # Verify this frame has tiles
+            tile_check = gm.conn.execute(
+                "SELECT COUNT(*) FROM tiles WHERE segment=? AND frame_idx=?",
+                (best_seg["segment"], frame_idx),
+            ).fetchone()[0]
+            if tile_check == 0:
+                # Find nearest frame with tiles
+                nearest = gm.conn.execute(
+                    "SELECT frame_idx FROM tiles WHERE segment=? ORDER BY ABS(frame_idx - ?) LIMIT 1",
+                    (best_seg["segment"], frame_idx),
+                ).fetchone()
+                if nearest:
+                    frame_idx = nearest[0]
+
+            samples.append(
+                {
+                    "index": idx,
+                    "segment": best_seg["segment"],
+                    "frame_idx": frame_idx,
+                    "time_sec": round(t, 1),
+                    "time_str": _fmt_secs(t),
+                }
+            )
+            idx += 1
+            t += interval
+
+        # Ensure packs exist on D: for all sampled frames
+        _ensure_sample_packs(gm, game_dir, samples)
+
+    finally:
+        gm.close()
+
+    return {
+        "game_id": game_id,
+        "interval_sec": interval,
+        "samples": samples,
+        "total_duration_sec": round(total_duration, 1),
+    }
+
+
+def _ensure_sample_packs(gm, game_dir: Path, samples: list[dict]):
+    """Ensure pack files for sampled frames exist on D:, restoring from F: if needed."""
+    import shutil
+
+    try:
+        from training.pipeline.config import load_config
+
+        cfg = load_config()
+        archive_base = Path(cfg.paths.archive.tile_packs) / game_dir.name
+    except Exception:
+        return
+
+    if not archive_base.exists():
+        return
+
+    packs_dir = game_dir / "tile_packs"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect unique pack files needed
+    needed = set()
+    for sample in samples:
+        tiles = gm.conn.execute(
+            "SELECT DISTINCT pack_file FROM tiles WHERE segment=? AND frame_idx=?",
+            (sample["segment"], sample["frame_idx"]),
+        ).fetchall()
+        for row in tiles:
+            if row[0]:
+                needed.add(Path(row[0]).name)
+
+    # Restore missing packs
+    for pack_name in needed:
+        dest = packs_dir / pack_name
+        if not dest.exists():
+            src = archive_base / pack_name
+            if src.exists():
+                logger.info(
+                    "Phase editor: restoring %s from F: (%.1f GB)",
+                    pack_name,
+                    src.stat().st_size / 1e9,
+                )
+                shutil.copy2(str(src), str(dest))
+
+
+@app.get("/api/game-phases/{game_id}/frame/{segment}/{frame_idx}")
+async def get_phase_frame(game_id: str, segment: str, frame_idx: int):
+    """Serve a full panoramic frame stitched from tiles, downscaled for the browser."""
+    import cv2
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.field_boundary import reconstruct_panoramic
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    packs_dir = game_dir / "tile_packs"
+    pano = reconstruct_panoramic(gm, segment, int(frame_idx), packs_dir)
+    gm.close()
+
+    if pano is None:
+        raise HTTPException(404, "Could not reconstruct panoramic frame")
+
+    # Downscale to half-res (same as field boundary panoramic endpoint)
+    h, w = pano.shape[:2]
+    small = cv2.resize(pano, (w // 2, h // 2))
+    _, jpeg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
 # ------------------------------------------------------------------

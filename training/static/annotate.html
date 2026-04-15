@@ -2776,7 +2776,7 @@ async function loadGamePhases() {
     if (without.length > 0) {
       html += '<div style="padding:12px 16px;margin-top:16px"><h3 style="color:var(--text-dim);font-size:14px">Pending Phase Detection</h3></div>';
       for (const game of without) {
-        html += `<div class="packet-card" style="opacity:0.5"><div class="title">${game.game_id}</div><div class="meta">${game.segments.length} segments</div></div>`;
+        html += `<div class="packet-card" style="opacity:0.5;cursor:pointer" onclick="viewPhaseEditor('${game.game_id}')"><div class="title">${game.game_id}</div><div class="meta">${game.segments.length} segments</div></div>`;
       }
     }
 
@@ -2795,18 +2795,15 @@ function renderGamePhaseCard(game) {
   const firstSeg = allSegs[0];
   const lastSeg = allSegs[allSegs.length - 1];
 
-  // Compute total frame span for timeline width
-  let totalFrames = 0;
-  for (const s of allSegs) totalFrames += s.frame_count || 0;
-  if (!totalFrames) totalFrames = 1;
-
-  // Build a segment offset map
+  // Build a segment offset map using frame_max (raw video frame indices)
+  // Phase boundaries use raw frame indices, not tiled frame counts
   const segOffsets = {};
   let cumOffset = 0;
   for (const s of allSegs) {
     segOffsets[s.segment] = cumOffset;
-    cumOffset += (s.frame_count || 0);
+    cumOffset += (s.frame_max || 0) - (s.frame_min || 0);
   }
+  const totalFrames = cumOffset || 1;
 
   const source = game.summary ? game.summary.source : 'unknown';
   const confirmed = phases.some(p => p.confirmed_by === 'human');
@@ -2831,13 +2828,344 @@ function renderGamePhaseCard(game) {
   }
   detailHtml += '</div>';
 
-  return `<div class="packet-card">
+  return `<div class="packet-card" onclick="viewPhaseEditor('${game.game_id}')" style="cursor:pointer">
     <div class="title">${game.game_id}</div>
     <div class="meta">Source: ${source} ${confirmed ? '(confirmed)' : '(auto)'} &mdash; ${allSegs.length} segments</div>
     ${timelineHtml}
     ${detailHtml}
   </div>`;
 }
+
+// ========== Phase Editor ==========
+
+let phaseEditorState = null;
+
+const BOUNDARY_TYPES = [
+  { key: 'game_start', label: 'Game Start', color: '#22c55e' },
+  { key: 'halftime_start', label: 'Halftime', color: '#f59e0b' },
+  { key: 'second_half_start', label: '2nd Half', color: '#3b82f6' },
+  { key: 'game_end', label: 'Game End', color: '#6b7280' },
+];
+
+async function viewPhaseEditor(gameId) {
+  const container = document.getElementById('phases-content');
+  container.innerHTML = '<div class="loading">Loading frames...</div>';
+
+  try {
+    const [samplesResp, phasesResp] = await Promise.all([
+      fetch(API + `/api/game-phases/${gameId}/samples?interval=30`),
+      fetch(API + `/api/game-phases/${gameId}`),
+    ]);
+    if (!samplesResp.ok) throw new Error(`Samples API: ${samplesResp.status} (restart server?)`);
+    const samplesData = await samplesResp.json();
+    const phasesData = await phasesResp.json();
+    const samples = samplesData.samples || [];
+
+    if (!samples.length) {
+      container.innerHTML = '<div class="loading">No tiled frames found for this game</div>';
+      return;
+    }
+
+    // Build boundary buttons
+    let boundaryBtns = '';
+    for (const bt of BOUNDARY_TYPES) {
+      boundaryBtns += `<button class="header-btn phase-boundary-btn" data-boundary="${bt.key}" style="border:2px solid ${bt.color};color:${bt.color}" onclick="phaseMarkAt('${bt.key}')">${bt.label}</button>`;
+    }
+
+    let html = `<div style="padding:8px 12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <button class="header-btn" onclick="loadGamePhases()">&larr;</button>
+        <span style="font-size:14px;font-weight:600;flex:1">${gameId}</span>
+        <span id="phase-info" style="font-size:12px;color:var(--text-dim)">${samples.length} samples</span>
+      </div>
+      <div style="position:relative;background:#000;border-radius:6px;overflow:hidden">
+        <img id="phase-frame" style="display:block;width:100%;border-radius:6px" />
+      </div>
+      <div id="phase-color-bar" style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0 4px 0;background:#222"></div>
+      <input type="range" id="phase-slider" min="0" max="${samples.length - 1}" value="0" style="width:100%;margin:4px 0;accent-color:var(--blue)">
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+        <button class="header-btn" onclick="phaseStep(-1)">&larr;</button>
+        <span id="phase-time" style="font-size:13px;font-weight:600;flex:1;text-align:center">00:00:00</span>
+        <button class="header-btn" onclick="phaseStep(1)">&rarr;</button>
+      </div>
+      <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
+        ${boundaryBtns}
+        <button class="header-btn" onclick="phaseSave('${gameId}')" style="background:var(--green);color:#000;font-weight:600;margin-left:auto">Save</button>
+      </div>
+      <div id="phase-boundary-info" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+    </div>`;
+
+    container.innerHTML = html;
+
+    phaseEditorState = {
+      gameId,
+      samples,
+      currentIndex: 0,
+      activeBoundary: null,
+      boundaries: {},
+      preloaded: {},
+    };
+
+    // Pre-populate from existing phases
+    _phasePrePopulate(phasesData, samplesData);
+
+    // Set up slider events
+    const slider = document.getElementById('phase-slider');
+    slider.addEventListener('input', () => {
+      phaseGoTo(parseInt(slider.value));
+    });
+
+    // Keyboard navigation
+    document.addEventListener('keydown', _phaseKeyHandler);
+
+    // Load first frame
+    phaseGoTo(0);
+  } catch (err) {
+    container.innerHTML = `<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+}
+
+function _phaseKeyHandler(e) {
+  if (!phaseEditorState) return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); phaseStep(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); phaseStep(1); }
+  else if (e.key === 'Home') { e.preventDefault(); phaseGoTo(0); }
+  else if (e.key === 'End') { e.preventDefault(); phaseGoTo(phaseEditorState.samples.length - 1); }
+  else if (e.key === '1') phaseMarkAt('game_start');
+  else if (e.key === '2') phaseMarkAt('halftime_start');
+  else if (e.key === '3') phaseMarkAt('second_half_start');
+  else if (e.key === '4') phaseMarkAt('game_end');
+}
+
+function phaseGoTo(index) {
+  const s = phaseEditorState;
+  if (!s) return;
+  index = Math.max(0, Math.min(index, s.samples.length - 1));
+  s.currentIndex = index;
+
+  const sample = s.samples[index];
+  const frameUrl = API + `/api/game-phases/${s.gameId}/frame/${encodeURIComponent(sample.segment)}/${sample.frame_idx}`;
+  document.getElementById('phase-frame').src = frameUrl;
+  document.getElementById('phase-slider').value = index;
+  document.getElementById('phase-time').textContent = `${sample.time_str} (${index + 1}/${s.samples.length})`;
+
+  // Preload adjacent frames
+  for (let offset = -3; offset <= 3; offset++) {
+    const pi = index + offset;
+    if (pi >= 0 && pi < s.samples.length && !s.preloaded[pi]) {
+      const ps = s.samples[pi];
+      const img = new Image();
+      img.src = API + `/api/game-phases/${s.gameId}/frame/${encodeURIComponent(ps.segment)}/${ps.frame_idx}`;
+      s.preloaded[pi] = img;
+    }
+  }
+}
+
+function phaseStep(delta) {
+  if (!phaseEditorState) return;
+  phaseGoTo(phaseEditorState.currentIndex + delta);
+}
+
+function phaseMarkAt(key) {
+  const s = phaseEditorState;
+  if (!s) return;
+  s.activeBoundary = key;
+  s.boundaries[key] = s.currentIndex;
+  // Highlight the clicked button briefly
+  document.querySelectorAll('.phase-boundary-btn').forEach(btn => {
+    const isThis = btn.dataset.boundary === key;
+    const isSet = s.boundaries[btn.dataset.boundary] !== undefined;
+    btn.style.background = isThis ? btn.style.borderColor : (isSet ? btn.style.borderColor + '33' : 'transparent');
+    btn.style.color = isThis ? '#000' : btn.style.borderColor;
+  });
+  _phaseUpdateColorBar();
+  _phaseUpdateBoundaryInfo();
+}
+
+function _phaseUpdateColorBar() {
+  const s = phaseEditorState;
+  if (!s) return;
+  const bar = document.getElementById('phase-color-bar');
+  const n = s.samples.length;
+  const b = s.boundaries;
+
+  // Build ordered boundary indices, defaulting to start/end
+  const gs = b.game_start ?? 0;
+  const hs = b.halftime_start ?? null;
+  const sh = b.second_half_start ?? null;
+  const ge = b.game_end ?? n - 1;
+
+  // Build segments with colors
+  const segments = [];
+  segments.push({ start: 0, end: gs, color: PHASE_COLORS.pre_game });
+  if (hs !== null) {
+    segments.push({ start: gs, end: hs, color: PHASE_COLORS.first_half });
+    if (sh !== null) {
+      segments.push({ start: hs, end: sh, color: PHASE_COLORS.halftime });
+      segments.push({ start: sh, end: ge, color: PHASE_COLORS.second_half });
+    } else {
+      segments.push({ start: hs, end: ge, color: PHASE_COLORS.halftime });
+    }
+  } else if (sh !== null) {
+    segments.push({ start: gs, end: sh, color: PHASE_COLORS.first_half });
+    segments.push({ start: sh, end: ge, color: PHASE_COLORS.second_half });
+  } else {
+    segments.push({ start: gs, end: ge, color: PHASE_COLORS.first_half });
+  }
+  segments.push({ start: ge, end: n, color: PHASE_COLORS.post_game });
+
+  let html = '';
+  for (const seg of segments) {
+    const width = Math.max(((seg.end - seg.start) / n) * 100, 0.5);
+    html += `<div style="width:${width}%;background:${seg.color}" title="${seg.start}-${seg.end}"></div>`;
+  }
+  bar.innerHTML = html;
+}
+
+function _phaseUpdateBoundaryInfo() {
+  const s = phaseEditorState;
+  if (!s) return;
+  const info = document.getElementById('phase-boundary-info');
+  let parts = [];
+  for (const bt of BOUNDARY_TYPES) {
+    const idx = s.boundaries[bt.key];
+    if (idx !== undefined) {
+      const sample = s.samples[idx];
+      parts.push(`<span style="color:${bt.color}">${bt.label}: ${sample.time_str}</span>`);
+    }
+  }
+  info.innerHTML = parts.join(' &mdash; ') || 'Click a boundary button then "Mark" to set boundaries';
+}
+
+function _phasePrePopulate(phasesData, samplesData) {
+  const s = phaseEditorState;
+  if (!s || !phasesData.phases || !phasesData.phases.length) return;
+
+  const samples = s.samples;
+  const phases = phasesData.phases;
+
+  // Map phase boundaries to nearest sample indices
+  for (const phase of phases) {
+    // Find sample nearest to the phase start
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < samples.length; i++) {
+      if (samples[i].segment === phase.segment_start) {
+        const dist = Math.abs(samples[i].frame_idx - phase.frame_start);
+        if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+      }
+    }
+    // Map phase type to boundary type
+    if (phase.phase === 'first_half') s.boundaries.game_start = bestIdx;
+    else if (phase.phase === 'halftime') s.boundaries.halftime_start = bestIdx;
+    else if (phase.phase === 'second_half') s.boundaries.second_half_start = bestIdx;
+    else if (phase.phase === 'post_game') s.boundaries.game_end = bestIdx;
+  }
+
+  _phaseUpdateColorBar();
+  _phaseUpdateBoundaryInfo();
+}
+
+async function phaseSave(gameId) {
+  const s = phaseEditorState;
+  if (!s) return;
+  const b = s.boundaries;
+  const samples = s.samples;
+
+  // Need at least game_start and game_end
+  if (b.game_start === undefined || b.game_end === undefined) {
+    alert('Set at least Game Start and Game End boundaries');
+    return;
+  }
+
+  // Validate order
+  const order = ['game_start', 'halftime_start', 'second_half_start', 'game_end'];
+  const set = order.filter(k => b[k] !== undefined);
+  for (let i = 1; i < set.length; i++) {
+    if (b[set[i]] <= b[set[i - 1]]) {
+      alert(`Boundaries must be in chronological order: ${set[i - 1]} must come before ${set[i]}`);
+      return;
+    }
+  }
+
+  // Build phases array
+  const phases = [];
+  const gs = samples[b.game_start];
+  const ge = samples[b.game_end];
+  const hs = b.halftime_start !== undefined ? samples[b.halftime_start] : null;
+  const sh = b.second_half_start !== undefined ? samples[b.second_half_start] : null;
+
+  // Pre-game (from start of first sample to game_start)
+  const first = samples[0];
+  if (b.game_start > 0) {
+    phases.push({
+      phase: 'pre_game',
+      segment_start: first.segment, frame_start: first.frame_idx,
+      segment_end: gs.segment, frame_end: gs.frame_idx,
+    });
+  }
+
+  // First half
+  const firstHalfEnd = hs || ge;
+  phases.push({
+    phase: 'first_half',
+    segment_start: gs.segment, frame_start: gs.frame_idx,
+    segment_end: firstHalfEnd.segment, frame_end: firstHalfEnd.frame_idx,
+  });
+
+  // Halftime (only if both halftime_start and second_half_start are set)
+  if (hs && sh) {
+    phases.push({
+      phase: 'halftime',
+      segment_start: hs.segment, frame_start: hs.frame_idx,
+      segment_end: sh.segment, frame_end: sh.frame_idx,
+    });
+  }
+
+  // Second half (only if second_half_start is set)
+  if (sh) {
+    phases.push({
+      phase: 'second_half',
+      segment_start: sh.segment, frame_start: sh.frame_idx,
+      segment_end: ge.segment, frame_end: ge.frame_idx,
+    });
+  }
+
+  // Post-game
+  const last = samples[samples.length - 1];
+  if (b.game_end < samples.length - 1) {
+    phases.push({
+      phase: 'post_game',
+      segment_start: ge.segment, frame_start: ge.frame_idx,
+      segment_end: last.segment, frame_end: last.frame_idx,
+    });
+  }
+
+  try {
+    const resp = await fetch(API + `/api/game-phases/${gameId}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({phases}),
+    });
+    const result = await resp.json();
+    if (result.accepted) {
+      const info = document.getElementById('phase-info');
+      info.textContent = `Saved! (${phases.length} phases, human)`;
+      info.style.color = 'var(--green)';
+    }
+  } catch (err) {
+    alert('Save failed: ' + err.message);
+  }
+}
+
+// Clean up keyboard handler when leaving phase editor
+const _origLoadGamePhases = loadGamePhases;
+loadGamePhases = async function() {
+  document.removeEventListener('keydown', _phaseKeyHandler);
+  phaseEditorState = null;
+  return _origLoadGamePhases();
+};
 
 // ========== Field Boundaries ==========
 
