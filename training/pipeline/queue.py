@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS work_items (
     result TEXT,
     attempts INTEGER DEFAULT 0,
     max_attempts INTEGER DEFAULT 3,
-    error TEXT
+    error TEXT,
+    failed_workers TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_status ON work_items(status, priority);
@@ -109,8 +110,17 @@ class WorkQueue:
             # Checkpoint WAL every 100 pages (~400KB) instead of default 1000
             self._conn.execute("PRAGMA wal_autocheckpoint=100")
             self._conn.executescript(SCHEMA_SQL)
+            self._migrate(self._conn)
             self._verify_integrity()
         return self._conn
+
+    @staticmethod
+    def _migrate(conn):
+        """Add columns that may not exist in older DBs."""
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(work_items)").fetchall()}
+        if "failed_workers" not in cols:
+            conn.execute("ALTER TABLE work_items ADD COLUMN failed_workers TEXT DEFAULT ''")
+            conn.commit()
 
     def _verify_integrity(self):
         """Check DB integrity on first connection. Rebuild if corrupt."""
@@ -351,9 +361,10 @@ class WorkQueue:
                     WHERE status = 'queued'
                       AND (target_machine IS NULL OR target_machine = ?)
                       AND task_type IN ({placeholders})
+                      AND (failed_workers = '' OR failed_workers NOT LIKE ?)
                     ORDER BY priority ASC, created_at ASC
                     LIMIT 1""",
-                (hostname, *capabilities),
+                (hostname, *capabilities, f"%{hostname}%"),
             ).fetchone()
 
             if row is None:
@@ -443,22 +454,41 @@ class WorkQueue:
         logger.info("Item %d completed", item_id)
 
     def fail(self, item_id: int, error: str):
-        """Mark item as failed. Will be retried if under max_attempts."""
+        """Mark item as failed. Will be retried if under max_attempts.
+
+        If max_attempts exhausted, marks item as failed and creates a fresh
+        queue item for the same game+task so work is never silently dropped.
+        Tracks which workers failed so the task avoids them on retry.
+        """
         conn = self._get_conn()
         now = time.time()
         # Check if we should retry or permanently fail
-        row = conn.execute(
-            "SELECT attempts, max_attempts FROM work_items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if row and row["attempts"] < row["max_attempts"]:
-            # Re-queue for retry
+        row = dict(
+            conn.execute(
+                "SELECT task_type, game_id, priority, attempts, max_attempts, payload, "
+                "claimed_by, failed_workers "
+                "FROM work_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            or {}
+        )
+        if not row:
+            return
+
+        # Track which worker failed
+        failed_workers = row.get("failed_workers", "") or ""
+        worker = row.get("claimed_by", "")
+        if worker and worker not in failed_workers:
+            failed_workers = f"{failed_workers},{worker}" if failed_workers else worker
+
+        if row["attempts"] < row["max_attempts"]:
+            # Re-queue for retry, avoiding workers that already failed
             conn.execute(
                 """UPDATE work_items
                    SET status = 'queued', claimed_by = NULL, claimed_at = NULL,
-                       heartbeat_at = NULL, error = ?
+                       heartbeat_at = NULL, error = ?, failed_workers = ?
                    WHERE id = ?""",
-                (error, item_id),
+                (error, failed_workers, item_id),
             )
             logger.warning(
                 "Item %d failed (attempt %d/%d), re-queued: %s",
@@ -474,8 +504,76 @@ class WorkQueue:
                    WHERE id = ?""",
                 (now, error, item_id),
             )
+            # Create a fresh item so the work isn't silently dropped
+            if row.get("game_id"):
+                self._reenqueue_fresh(conn, row, error)
             logger.error("Item %d permanently failed: %s", item_id, error)
         conn.commit()
+
+    def _reenqueue_fresh(self, conn, old_item: dict, error: str):
+        """Create a fresh queue item after permanent failure, or move to dead queue.
+
+        Tracks total lifetime attempts across all re-enqueues. If the task has
+        been re-enqueued too many times (total attempts >= max_attempts * max_reenqueues),
+        it goes to 'dead' status instead — requiring manual intervention.
+        """
+        max_reenqueues = 3  # max times we'll create a fresh item (so 3 * 3 = 9 total attempts)
+        task_type = old_item["task_type"]
+        game_id = old_item["game_id"]
+
+        # Count how many times this game+task has already been enqueued (any status)
+        total_items = conn.execute(
+            "SELECT COUNT(*) FROM work_items WHERE task_type = ? AND game_id = ?",
+            (task_type, game_id),
+        ).fetchone()[0]
+
+        if total_items > max_reenqueues:
+            # Too many cycles — move to dead status
+            conn.execute(
+                """UPDATE work_items
+                   SET status = 'dead', error = ?
+                   WHERE id = ?""",
+                (
+                    f"dead after {total_items} enqueue cycles: {error}",
+                    old_item.get("id", 0),
+                ),
+            )
+            logger.error(
+                "Task %s for %s is DEAD after %d enqueue cycles — needs manual intervention",
+                task_type,
+                game_id,
+                total_items,
+            )
+            return
+
+        # Carry over failed_workers so the fresh item avoids the same workers
+        failed_workers = old_item.get("failed_workers", "") or ""
+        worker = old_item.get("claimed_by", "")
+        if worker and worker not in failed_workers:
+            failed_workers = f"{failed_workers},{worker}" if failed_workers else worker
+
+        conn.execute(
+            """INSERT INTO work_items
+               (task_type, game_id, priority, status, payload, created_at,
+                attempts, max_attempts, failed_workers)
+               VALUES (?, ?, ?, 'queued', ?, ?, 0, ?, ?)""",
+            (
+                task_type,
+                game_id,
+                old_item.get("priority", 50),
+                old_item.get("payload"),
+                time.time(),
+                old_item.get("max_attempts", 3),
+                failed_workers,
+            ),
+        )
+        logger.info(
+            "Re-enqueued fresh %s for %s (cycle %d/%d)",
+            task_type,
+            game_id,
+            total_items,
+            max_reenqueues,
+        )
 
     # ------------------------------------------------------------------
     # Stale detection (orchestrator runs)
@@ -530,6 +628,8 @@ class WorkQueue:
                         row["id"],
                     ),
                 )
+                if row.get("game_id"):
+                    self._reenqueue_fresh(conn, row, "stale heartbeat exhausted attempts")
                 logger.error(
                     "Item %d permanently failed after %d attempts",
                     row["id"],
@@ -580,8 +680,10 @@ class WorkQueue:
                        WHERE id = ?""",
                     (time.time(), error, row["id"]),
                 )
+                if row.get("game_id"):
+                    self._reenqueue_fresh(conn, row, error)
                 logger.info(
-                    "Released orphan %d (%s %s) from %s — exhausted attempts",
+                    "Released orphan %d (%s %s) from %s — exhausted attempts, re-enqueued fresh",
                     row["id"],
                     row["task_type"],
                     row.get("game_id", ""),
