@@ -78,6 +78,10 @@ class TilingConfig:
     tile_cols: int = 7
     tile_rows: int = 3
     tile_size: int = 640
+    # Pipeline parallelism (0 = auto-detect from cpu_count at task start)
+    encode_threads: int = 0  # 0 = auto (cpu_count // 2, capped at tiles_per_frame)
+    read_ahead: int = 0  # 0 = auto (batch_frames * 2)
+    batch_frames: int = 0  # 0 = auto (encode_threads // 4)
 
 
 @dataclass(frozen=True)

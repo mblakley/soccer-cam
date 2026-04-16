@@ -34,7 +34,7 @@ min_disk_free_gb = 5          # minimum free disk before tasks stop/skip
 check_interval = 60           # seconds between passes
 stale_heartbeat = 300         # 5 minutes → assume worker died (heartbeats every 30s)
 max_staging_concurrent = 1    # one game staging at a time (HDD)
-min_new_games_for_retrain = 2 # games reaching TRAINABLE before re-training
+min_new_games_for_retrain = 999 # disabled until all games are tiled and labeled
 min_new_labels_for_retrain = 5000
 coverage_target = 0.90        # track coverage goal (0-1), retrain until reached
 coverage_min_delta = 0.02     # min coverage improvement to justify retraining
@@ -57,6 +57,11 @@ diff_threshold = 2.0
 tile_cols = 7
 tile_rows = 3
 tile_size = 640
+# Pipeline parallelism (0 = auto-detect from CPU count at task start)
+# Override per machine via worker_config.toml if needed
+encode_threads = 0
+read_ahead = 0
+batch_frames = 0
 
 [labeling]
 onnx_model = "model.onnx"

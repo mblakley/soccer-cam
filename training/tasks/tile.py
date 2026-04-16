@@ -8,6 +8,7 @@ Uses TaskIO for consistent pull-local-process-push:
 """
 
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -137,6 +138,9 @@ def _tile_segments(manifest, io, cfg, game_id: str, payload: dict) -> dict:
             tile_size=tile_size,
             flip=needs_flip,
             start_frame=start_frame,
+            encode_threads=getattr(cfg.tiling, "encode_threads", tile_rows * tile_cols),
+            read_ahead=getattr(cfg.tiling, "read_ahead", 16),
+            batch_frames=getattr(cfg.tiling, "batch_frames", 8),
         )
 
         total_tiles += stats["tiles"]
@@ -253,18 +257,37 @@ def _tile_segment_to_pack(
     tile_size: int = 640,
     flip: bool = False,
     start_frame: int = 0,
+    encode_threads: int = 21,
+    read_ahead: int = 16,
+    batch_frames: int = 8,
 ) -> dict:
     """Extract frames from video, tile them, write to a pack file.
 
     All processing in memory — no loose tile files on disk.
     If start_frame > 0, seeks to that position first (for resume tiling).
+
+    Uses a 3-stage pipeline for throughput:
+      1. Reader thread: decodes video frames into a queue
+      2. Encoder pool: JPEG-encodes tiles across multiple cores
+      3. Writer (main thread): writes encoded tiles to pack in order
     """
     import cv2
-    import numpy as np
+    import queue
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
-    cap = cv2.VideoCapture(str(video_path))
+    cap = cv2.VideoCapture(str(video_path), cv2.CAP_FFMPEG)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
+
+    # Auto-compute pipeline params from CPU count (0 = auto-detect)
+    cpus = os.cpu_count() or 4
+    if not encode_threads:
+        encode_threads = min(cpus // 2, tile_rows * tile_cols)
+    if not batch_frames:
+        batch_frames = max(1, encode_threads // 4)
+    if not read_ahead:
+        read_ahead = batch_frames * 2
 
     if start_frame > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -275,6 +298,46 @@ def _tile_segment_to_pack(
     step_x = max(1, (width - tile_size) // (tile_cols - 1)) if tile_cols > 1 else 0
     step_y = max(1, (height - tile_size) // (tile_rows - 1)) if tile_rows > 1 else 0
 
+    jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+    _SENTINEL = None  # signals end of stream
+
+    def _slice_and_encode(frame, row, col):
+        """Slice a tile from frame and JPEG-encode it. Both release GIL."""
+        y = min(row * step_y, height - tile_size)
+        x = min(col * step_x, width - tile_size)
+        tile = frame[y : y + tile_size, x : x + tile_size]
+        success, jpeg = cv2.imencode(".jpg", tile, jpeg_params)
+        if not success:
+            return None
+        return jpeg.tobytes()
+
+    # Stage 1: Reader thread — decodes frames and feeds them to the encode queue
+    # Uses grab()/retrieve() to skip decoding of non-target frames (3/4 of all frames)
+    frame_queue = queue.Queue(maxsize=read_ahead)
+
+    def _reader():
+        fi = start_frame
+        while True:
+            if fi % frame_interval != 0:
+                # grab() advances without decoding — much faster than read()
+                if not cap.grab():
+                    frame_queue.put(_SENTINEL)
+                    return
+                fi += 1
+                continue
+            ret, frame = cap.read()
+            if not ret:
+                frame_queue.put(_SENTINEL)
+                return
+            if flip:
+                frame = cv2.flip(frame, -1)
+            frame_queue.put((fi, frame))
+            fi += 1
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
+    # Stage 2+3: Encode tiles in thread pool, write results in order
     tile_count = 0
     pack_offset = 0
     tile_rows_db = []
@@ -284,33 +347,45 @@ def _tile_segment_to_pack(
     if open_mode == "ab":
         pack_offset = pack_path.stat().st_size
 
-    with open(pack_path, open_mode) as pf:
-        frame_idx = start_frame
+    num_encoders = encode_threads
+    batch_size = batch_frames
+    frames_processed = 0
+
+    with open(pack_path, open_mode) as pf, ThreadPoolExecutor(
+        max_workers=num_encoders
+    ) as pool:
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            # Drain up to batch_size frames from the queue
+            batch = []
+            for _ in range(batch_size):
+                item = frame_queue.get()
+                if item is _SENTINEL:
+                    batch.append(_SENTINEL)
+                    break
+                batch.append(item)
 
-            if frame_idx % frame_interval != 0:
-                frame_idx += 1
-                continue
+            # Submit all tiles from all frames in the batch
+            # Slicing + encoding happens in the thread pool (both release GIL)
+            frame_jobs = []  # [(frame_idx, tiles_info, futures), ...]
+            for item in batch:
+                if item is _SENTINEL:
+                    break
+                frame_idx, frame = item
+                futures = []
+                tiles_info = []
+                for row in range(tile_rows):
+                    for col in range(tile_cols):
+                        tiles_info.append((row, col))
+                        futures.append(pool.submit(_slice_and_encode, frame, row, col))
+                frame_jobs.append((frame_idx, tiles_info, futures))
 
-            if flip:
-                frame = cv2.flip(frame, -1)
-
-            for row in range(tile_rows):
-                for col in range(tile_cols):
-                    y = min(row * step_y, height - tile_size)
-                    x = min(col * step_x, width - tile_size)
-                    tile = frame[y : y + tile_size, x : x + tile_size]
-
-                    success, jpeg = cv2.imencode(
-                        ".jpg", tile, [cv2.IMWRITE_JPEG_QUALITY, 90]
-                    )
-                    if not success:
+            # Write results in frame order (maintains sequential pack offsets)
+            for frame_idx, tiles_info, futures in frame_jobs:
+                for (row, col), future in zip(tiles_info, futures):
+                    jpeg_bytes = future.result()
+                    if jpeg_bytes is None:
                         continue
 
-                    jpeg_bytes = jpeg.tobytes()
                     jpeg_size = len(jpeg_bytes)
                     pf.write(jpeg_bytes)
 
@@ -329,12 +404,16 @@ def _tile_segment_to_pack(
                     pack_offset += jpeg_size
                     tile_count += 1
 
+            frames_processed += len(frame_jobs)
             # Yield GIL periodically so heartbeat thread can run
-            if frame_idx % 200 == 0:
+            if frames_processed % 200 == 0:
                 time.sleep(0)
 
-            frame_idx += 1
+            # Check if we hit the sentinel
+            if batch and batch[-1] is _SENTINEL:
+                break
 
+    reader_thread.join(timeout=5)
     cap.release()
 
     if tile_rows_db:

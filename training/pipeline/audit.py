@@ -631,8 +631,21 @@ def audit_system() -> list[AuditResult]:
     results = []
     client = PipelineClient()
 
-    # Stale running items (no heartbeat in 2 hours)
+    # Dead tasks — permanently failed, need manual intervention
     now = time.time()
+    dead = client.get_queue_items(status="dead")
+    for item in dead:
+        results.append(
+            AuditResult(
+                "CRITICAL",
+                item.get("game_id", "?"),
+                "dead_task",
+                f"Task {item['id']} ({item['task_type']}) is DEAD after repeated failures: {(item.get('error') or '')[:60]}",
+                fix_command=f"uv run python -m training.pipeline enqueue {item['task_type']} --game {item.get('game_id', '?')} --priority 10",
+            )
+        )
+
+    # Stale running items (no heartbeat in 2 hours)
     running = client.get_queue_items(status="running")
     for item in running:
         hb = item.get("heartbeat_at") or item.get("started_at") or 0
