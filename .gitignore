@@ -40,10 +40,11 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# Keep our two build spec files tracked (source of truth for PyInstaller config)
+!VideoGrouperService.spec
+!VideoGrouperTray.spec
 
 # Installer logs
 pip-log.txt
@@ -192,3 +193,18 @@ review_packets/*
 *.tflite
 *.mlpackage
 certs/
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
+
+# MCP server caches
+.playwright-mcp/
+
+# Simulator runtime state (matches /shared_data/* convention)
+/shared_data_simulator/*
+!/shared_data_simulator/.gitkeep
+
+# Stray test/demo media outputs at repo root
+/*.mp4
+/*.mp4.jsonl

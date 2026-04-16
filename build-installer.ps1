@@ -3,9 +3,6 @@
 # Configuration — version is sourced from video_grouper/version.py (single master)
 $BUILD_NUMBER = "0"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ICON_PATH = Join-Path $SCRIPT_DIR "video_grouper\icon.ico"
-$SERVICE_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\service\main.py"
-$TRAY_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\tray\tray_entry.py"
 $INSTALLER_SCRIPT = Join-Path $SCRIPT_DIR "video_grouper\installer\installer.nsi"
 $DIST_DIR = Join-Path $SCRIPT_DIR "video_grouper\dist"
 $BUILD_DIR = Join-Path $SCRIPT_DIR "video_grouper\build"
@@ -74,14 +71,13 @@ if (-not (Test-Path $NSIS_PATH)) {
     exit 1
 }
 
-# Build service executable
+# Build service executable from spec file (source of truth for PyInstaller config)
 Write-Host "Building service executable..."
-$iconArg = if (Test-Path $ICON_PATH) { "--icon=$ICON_PATH" } else { "" }
-uv run pyinstaller --noconfirm --onefile $iconArg --name=VideoGrouperService --distpath=$DIST_DIR --workpath=$BUILD_DIR $SERVICE_SCRIPT
+uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR VideoGrouperService.spec
 
-# Build tray agent executable
+# Build tray agent executable from spec file
 Write-Host "Building tray agent executable..."
-uv run pyinstaller --noconfirm --onefile --windowed $iconArg --name=VideoGrouperTray --distpath=$DIST_DIR --workpath=$BUILD_DIR $TRAY_SCRIPT
+uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR VideoGrouperTray.spec
 
 # Build installer
 Write-Host "Building installer..."
