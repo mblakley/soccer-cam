@@ -79,6 +79,7 @@ class Orchestrator:
         self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
         self._audit_game_states()
         self._enqueue_work()
+        self._cleanup_serving_tier()
         # Periodic WAL checkpoint to prevent unbounded WAL growth
         self.api.maybe_checkpoint()
 
@@ -473,14 +474,9 @@ class Orchestrator:
         return base
 
     def _get_target_machine(self, task_type: str) -> str | None:
-        # Server-only tasks (need local F:/D: access for video/pack staging)
-        # Note: sonnet_qa, generate_review, and ingest_reviews are NOT
-        # targeted — the QA worker has hostname DESKTOP-5L867J8-QA and
-        # must be able to claim these tasks.
-        if task_type in (
-            "stage",
-            "tile",
-        ):
+        # Stage needs local F: access for video files — server only.
+        # Tile can run on any machine (pulls video via SMB).
+        if task_type == "stage":
             return self.cfg.server.hostname
         if task_type == "train":
             for name, m in self.cfg.machines.items():
@@ -604,6 +600,57 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Worker health
     # ------------------------------------------------------------------
+
+    def _cleanup_serving_tier(self):
+        """Clean archived packs from D: when disk usage exceeds 80%.
+
+        Only deletes packs that are verified to exist on F: with matching size.
+        Deletes oldest packs first (by file modification time).
+        """
+        import shutil
+
+        games_dir = Path(self.cfg.paths.games_dir)
+        archive_base = Path(self.cfg.paths.archive.tile_packs)
+
+        total, used, free = shutil.disk_usage(str(games_dir))
+        usage_pct = used / total
+        if usage_pct < 0.80:
+            return
+
+        target_free = int(total * 0.3)  # free down to 70% usage
+        freed = 0
+
+        # Collect all reclaimable packs with their modification times
+        reclaimable = []
+        for game_dir in games_dir.iterdir():
+            if not game_dir.is_dir():
+                continue
+            packs_dir = game_dir / "tile_packs"
+            if not packs_dir.exists():
+                continue
+            archive_dir = archive_base / game_dir.name
+            for pack in packs_dir.glob("*.pack"):
+                f_copy = archive_dir / pack.name
+                if f_copy.exists() and f_copy.stat().st_size == pack.stat().st_size:
+                    reclaimable.append((pack.stat().st_mtime, pack))
+
+        # Sort oldest first
+        reclaimable.sort(key=lambda x: x[0])
+
+        for mtime, pack in reclaimable:
+            if freed >= target_free - (total - used):
+                break
+            size = pack.stat().st_size
+            pack.unlink()
+            freed += size
+            logger.info("D: cleanup: deleted %s (%.1f GB)", pack.name, size / 1e9)
+
+        if freed > 0:
+            logger.info(
+                "D: cleanup: freed %.1f GB (was %d%% full)",
+                freed / 1e9,
+                int(usage_pct * 100),
+            )
 
     def _check_workers(self):
         status = self.api.get_status()
