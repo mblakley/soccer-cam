@@ -622,7 +622,7 @@ class VideoGrouperApp:
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
             "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
-            "clip_request": self.clip_request_processor.get_queue_size()
+            "clip_request": len(self.clip_request_processor._processing)
             if self.clip_request_processor
             else -1,
             "ttt_jobs": len(self.ttt_job_processor._processing_jobs)

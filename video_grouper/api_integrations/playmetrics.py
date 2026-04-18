@@ -83,12 +83,20 @@ class GameInfo(TypedDict, total=False):
 
 
 def _get_firebase_api_key() -> Optional[str]:
-    """Read the Firebase Web API key from env at first use.
+    """Read the Firebase Web API key, checking build-time secrets first.
 
     Returns None (instead of raising) so the integration can degrade
     gracefully — callers see ``enabled=False`` and skip the PlayMetrics
     code path entirely.
     """
+    try:
+        from video_grouper.utils._playmetrics_secrets import (
+            PLAYMETRICS_FIREBASE_WEB_API_KEY,
+        )
+
+        return PLAYMETRICS_FIREBASE_WEB_API_KEY
+    except ImportError:
+        pass
     return os.environ.get("PLAYMETRICS_FIREBASE_WEB_API_KEY")
 
 

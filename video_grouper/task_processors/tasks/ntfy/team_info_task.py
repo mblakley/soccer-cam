@@ -75,13 +75,15 @@ class TeamInfoTask(BaseNtfyTask):
     # Field helpers
     # ------------------------------------------------------------------
 
+    _PLACEHOLDER_VALUES = {"my team", "opponent", "location", "unknown", ""}
+
     def _get_missing_fields(self) -> List[str]:
-        """Return field keys from FIELD_SEQUENCE that are still empty."""
+        """Return field keys from FIELD_SEQUENCE that are still empty or placeholder."""
         match_info = self._load_match_info()
         missing = []
         for field_key, _, _ in FIELD_SEQUENCE:
             val = getattr(match_info, field_key, "") if match_info else ""
-            if not val or not val.strip():
+            if not val or val.strip().lower() in self._PLACEHOLDER_VALUES:
                 missing.append(field_key)
         return missing
 

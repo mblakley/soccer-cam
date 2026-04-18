@@ -122,6 +122,7 @@ class NtfyTaskFactory:
                 ntfy_service=ntfy_service,
                 combined_video_path=combined_video_path,
                 existing_info=existing_info,
+                asking_field=metadata.get("asking_field"),
             )
 
         elif task_type == NtfyInputType.WAS_THERE_A_MATCH.value:

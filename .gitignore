@@ -9,6 +9,7 @@ video_grouper/config.ini
 # Build-time injected config (generated from environment variables)
 video_grouper/utils/_youtube_secrets.py
 video_grouper/utils/_ttt_config.py
+video_grouper/utils/_playmetrics_secrets.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
