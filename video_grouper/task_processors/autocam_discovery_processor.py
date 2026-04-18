@@ -57,14 +57,6 @@ class AutocamDiscoveryProcessor(PollingProcessor):
             )
             return
 
-        # Get all currently queued group names
-        queued_group_names = set()
-        for item in self.autocam_processor.get_queued_items():
-            if hasattr(item, "group_dir"):
-                queued_group_names.add(str(item.group_dir))
-
-        logger.info(f"AUTOCAM_DISCOVERY: Currently queued groups: {queued_group_names}")
-
         # Scan for new trimmed groups
         for group_dir in groups_dir.iterdir():
             if group_dir.is_dir():
@@ -79,10 +71,7 @@ class AutocamDiscoveryProcessor(PollingProcessor):
                             f"AUTOCAM_DISCOVERY: Directory {group_dir.name} has status: {status}"
                         )
 
-                        if (
-                            status == "trimmed"
-                            and str(group_dir) not in queued_group_names
-                        ):
+                        if status == "trimmed":
                             logger.info(
                                 f"AUTOCAM_DISCOVERY: Found trimmed directory: {group_dir.name}"
                             )
@@ -116,7 +105,7 @@ class AutocamDiscoveryProcessor(PollingProcessor):
                             await self._recover_upload(group_dir)
                         else:
                             logger.debug(
-                                f"AUTOCAM_DISCOVERY: Directory {group_dir.name} skipped - status: {status}, queued: {str(group_dir) in queued_group_names}"
+                                f"AUTOCAM_DISCOVERY: Directory {group_dir.name} skipped - status: {status}"
                             )
                     except Exception as e:
                         logger.error(
