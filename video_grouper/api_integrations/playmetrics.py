@@ -236,7 +236,12 @@ class PlayMetricsAPI:
             # Always discover roles + select default after login
             self._roles = self._fetch_roles()
             if not self.current_role_id and self._roles:
-                self.current_role_id = str(self._roles[0].get("id", ""))
+                self.current_role_id = self._pick_role_for_team(self._roles)
+                logger.info(
+                    "PlayMetrics: selected role %s for team %r",
+                    self.current_role_id,
+                    self.team_name,
+                )
 
             self.logged_in = True
             return True
@@ -317,6 +322,28 @@ class PlayMetricsAPI:
         response.raise_for_status()
         payload = response.json()
         return payload.get("roles") or []
+
+    def _pick_role_for_team(self, roles: List[dict]) -> str:
+        """Pick the role whose club_name is a prefix of the configured team_name.
+
+        PlayMetrics roles are scoped by club, not by team. The configured team
+        name typically starts with the club name (e.g. "Western New York Flash -
+        13B ECNL-RL" starts with club "Western New York Flash"), so a prefix
+        match is enough. Prefers Parent_* roles (read-only) over Manager_* when
+        multiple roles match the same club. Falls back to roles[0] if no match.
+        """
+        if self.team_name:
+            matches = [
+                r
+                for r in roles
+                if r.get("club_name") and self.team_name.startswith(r["club_name"])
+            ]
+            if matches:
+                parents = [
+                    r for r in matches if str(r.get("id", "")).startswith("Parent_")
+                ]
+                return str((parents or matches)[0].get("id", ""))
+        return str(roles[0].get("id", ""))
 
     def _ensure_access_key(self) -> str:
         """Exchange the current id_token for a role-scoped access_key."""
