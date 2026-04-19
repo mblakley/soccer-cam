@@ -888,3 +888,53 @@ class TTTApiClient:
                 "to_machine_id": to_machine_id,
             },
         )
+
+    # ── Pipeline Questions ───────────────────────────────────────────────
+
+    def create_pipeline_question(
+        self,
+        team_id: str,
+        question_type: str,
+        title: str,
+        message: str,
+        actions: list[dict[str, str]] | None = None,
+        recording_group_dir: str | None = None,
+        image_url: str | None = None,
+        camera_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create an interactive pipeline question (push notification to camera manager).
+
+        POST {api_base_url}/api/pipeline-questions
+        """
+        url = f"{self.api_base_url}/api/pipeline-questions"
+        body: dict[str, Any] = {
+            "team_id": team_id,
+            "question_type": question_type,
+            "title": title,
+            "message": message,
+            "actions": actions or [],
+        }
+        if recording_group_dir:
+            body["recording_group_dir"] = recording_group_dir
+        if image_url:
+            body["image_url"] = image_url
+        if camera_id:
+            body["camera_id"] = camera_id
+        logger.debug("Creating pipeline question: %s", question_type)
+        return self._request("POST", url, json=body)
+
+    def get_pipeline_question(self, question_id: str) -> dict[str, Any]:
+        """Get a pipeline question (poll for response from camera manager).
+
+        GET {api_base_url}/api/pipeline-questions/{question_id}
+        """
+        url = f"{self.api_base_url}/api/pipeline-questions/{question_id}"
+        return self._request("GET", url)
+
+    def cancel_pipeline_question(self, question_id: str) -> None:
+        """Cancel a pipeline question (respond with 'cancelled').
+
+        PATCH {api_base_url}/api/pipeline-questions/{question_id}/respond
+        """
+        url = f"{self.api_base_url}/api/pipeline-questions/{question_id}/respond"
+        self._request("PATCH", url, json={"response_value": "__cancelled__"})
