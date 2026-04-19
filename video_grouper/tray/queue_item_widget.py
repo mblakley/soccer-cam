@@ -97,6 +97,8 @@ class QueueItemWidget(QWidget):
         self.setLayout(layout)
 
     def set_thumbnail(self):
+        if not self.file_path:
+            return
         # Infer thumbnail path from video path (e.g., video.mp4 -> video.jpg)
         base, _ = os.path.splitext(self.file_path)
         thumbnail_path = f"{base}.jpg"
