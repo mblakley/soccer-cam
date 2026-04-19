@@ -1,9 +1,20 @@
 """
-Baichuan protocol file download for Reolink cameras.
+Reolink recording download — HTTP fast path with Baichuan fallback.
 
-The Reolink Duo 3 PoE's HTTP Download API is broken (firmware bug).
-This module implements native Baichuan protocol download (port 9000)
-to stream recordings to disk, then remux to MP4 via PyAV.
+Stock Reolink firmware ships a broken `cmd=Download` CGI handler and an
+nginx `/downloadfile/` location locked behind `internal;`, so the only
+working download path is the Baichuan binary protocol on port 9000
+(implemented later in this module) — that's slow (~14 Mbps) and requires
+a remux step.
+
+A patched firmware (build 4869+) comments out the `internal;` directive
+on the `/downloadfile/` location, exposing /mnt/sda directly via nginx
+static-serve. Throughput is ~80–90 Mbps, files are already valid MP4
+(no remux needed), no auth (so don't expose to untrusted networks).
+
+`download_and_mux()` probes the HTTP path first and falls back to
+Baichuan if the camera returns 404 (unpatched) or refuses the
+connection. Per-camera result is cached so we only probe once.
 """
 
 import asyncio
@@ -16,6 +27,7 @@ import time
 from hashlib import md5
 from typing import Optional
 
+import httpx
 from Crypto.Cipher import AES
 
 logger = logging.getLogger(__name__)
@@ -1015,6 +1027,7 @@ def _download_and_mux_sync(
     output_mp4: str,
     channel: int = 0,
     on_progress=None,
+    http_port: int = 80,
 ) -> bool:
     """Run download + mux in a dedicated event loop (called from a thread).
 
@@ -1034,10 +1047,133 @@ def _download_and_mux_sync(
                 output_mp4,
                 channel,
                 on_progress,
+                http_port=http_port,
             )
         )
     finally:
         loop.close()
+
+
+# Per-host cache: True = patched firmware (HTTP works), False = stock firmware
+# (use Baichuan), missing = unprobed. Probed lazily on first download attempt.
+_HTTP_PATH_SUPPORTED: dict[str, bool] = {}
+
+CAMERA_RECORD_PREFIX = "/mnt/sda/"  # stripped to form the /downloadfile/ URL path
+HTTP_PROBE_TIMEOUT = 5.0
+HTTP_DOWNLOAD_CONNECT_TIMEOUT = 10.0
+HTTP_CHUNK_BYTES = 1 << 20  # 1 MB
+
+
+async def _download_via_http_async(
+    host: str,
+    http_port: int,
+    file_path: str,
+    output_mp4: str,
+    on_progress=None,
+) -> Optional[bool]:
+    """Try the patched-firmware HTTP fast path.
+
+    Returns True on success, False if the camera responded but the download
+    failed mid-stream, None if HTTP is not supported (404 / connection
+    refused / dns error) — caller should fall back to Baichuan.
+    """
+    if not file_path.startswith(CAMERA_RECORD_PREFIX):
+        logger.debug(
+            f"file path {file_path!r} not under {CAMERA_RECORD_PREFIX}; "
+            "skipping HTTP fast path"
+        )
+        return None
+
+    rel = file_path[len(CAMERA_RECORD_PREFIX) :]
+    url = f"http://{host}:{http_port}/downloadfile/{rel}"
+
+    cached = _HTTP_PATH_SUPPORTED.get(host)
+    if cached is False:
+        return None  # known-unpatched, skip the probe
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=HTTP_DOWNLOAD_CONNECT_TIMEOUT,
+                read=60.0,
+                write=10.0,
+                pool=5.0,
+            )
+        ) as client:
+            if cached is None:
+                # First request to this camera — probe with HEAD.
+                try:
+                    head = await client.head(url, timeout=HTTP_PROBE_TIMEOUT)
+                except (
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.ReadTimeout,
+                ) as e:
+                    logger.info(f"HTTP probe to {host} failed ({e!r}); using Baichuan")
+                    _HTTP_PATH_SUPPORTED[host] = False
+                    return None
+                if head.status_code == 404:
+                    logger.info(
+                        f"{host}: /downloadfile/ returns 404 — firmware not patched, "
+                        "using Baichuan"
+                    )
+                    _HTTP_PATH_SUPPORTED[host] = False
+                    return None
+                if head.status_code != 200:
+                    logger.warning(
+                        f"{host}: /downloadfile/ HEAD returned {head.status_code}; "
+                        "treating as unpatched"
+                    )
+                    _HTTP_PATH_SUPPORTED[host] = False
+                    return None
+                _HTTP_PATH_SUPPORTED[host] = True
+                logger.info(f"{host}: patched firmware detected, using HTTP fast path")
+
+            # Stream GET → output file
+            t0 = time.monotonic()
+            written = 0
+            tmp = output_mp4 + ".http.tmp"
+            try:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        logger.error(f"HTTP download {url} returned {resp.status_code}")
+                        return False
+                    expected = int(resp.headers.get("content-length", 0))
+                    with open(tmp, "wb") as f:
+                        async for chunk in resp.aiter_bytes(HTTP_CHUNK_BYTES):
+                            f.write(chunk)
+                            written += len(chunk)
+                            if on_progress:
+                                try:
+                                    on_progress(written, time.monotonic() - t0)
+                                except Exception:
+                                    pass
+                    if expected and written != expected:
+                        logger.error(
+                            f"HTTP download size mismatch: got {written} expected {expected}"
+                        )
+                        return False
+                os.replace(tmp, output_mp4)
+                elapsed = time.monotonic() - t0
+                mbps = (written * 8) / elapsed / 1e6 if elapsed > 0 else 0
+                logger.info(
+                    f"HTTP download complete: {written / 1024 / 1024:.1f}MB "
+                    f"in {elapsed:.1f}s ({mbps:.1f} Mbps)"
+                )
+                return True
+            finally:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        logger.info(f"HTTP connection to {host} failed ({e!r}); using Baichuan")
+        _HTTP_PATH_SUPPORTED[host] = False
+        return None
+    except Exception as e:
+        logger.error(f"HTTP download to {url} failed: {e!r}", exc_info=True)
+        return False
 
 
 async def _download_and_mux_async(
@@ -1049,16 +1185,28 @@ async def _download_and_mux_async(
     output_mp4: str,
     channel: int = 0,
     on_progress=None,
+    http_port: int = 80,
 ) -> bool:
-    """Download a recording via Baichuan protocol and mux to MP4.
+    """Download a recording. HTTP fast path first; Baichuan fallback.
 
-    1. Connect and login via Baichuan (port 9000)
-    2. Stream download to temp raw video file (BcMedia -> Annex-B)
-    3. Remux to MP4 via ffmpeg (stream copy, no re-encoding)
-    4. Clean up temp file
+    1. Try patched-firmware HTTP fast path (~80–90 Mbps, no remux).
+    2. If unavailable (404 / connection refused), fall back to Baichuan
+       on port 9000: stream BcMedia -> Annex-B -> remux to MP4 via ffmpeg.
 
     Returns True on success.
     """
+    # Try HTTP first. None = not supported (fall through to Baichuan);
+    # True/False = HTTP path was attempted and resolved.
+    http_result = await _download_via_http_async(
+        host, http_port, file_path, output_mp4, on_progress
+    )
+    if http_result is True:
+        return True
+    if http_result is False:
+        logger.warning(
+            "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
+        )
+
     temp_raw = output_mp4 + ".raw.tmp"
     client = BaichuanStreamClient(host, port, username, password)
 
@@ -1122,8 +1270,9 @@ async def download_and_mux(
     output_mp4: str,
     channel: int = 0,
     on_progress=None,
+    http_port: int = 80,
 ) -> bool:
-    """Download a recording via Baichuan protocol and mux to MP4.
+    """Download a recording. HTTP fast path → Baichuan fallback → MP4 on disk.
 
     Runs in a dedicated thread with its own event loop to avoid contention
     with the main service loop.
@@ -1138,4 +1287,5 @@ async def download_and_mux(
         output_mp4,
         channel,
         on_progress,
+        http_port,
     )

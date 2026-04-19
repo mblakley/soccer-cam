@@ -52,6 +52,7 @@ class CameraConfig(BaseModel):
     password: str
     channel: int = 0
     baichuan_port: int = 9000
+    http_port: int = 80
     enabled: bool = True
     serial: str = ""
 
