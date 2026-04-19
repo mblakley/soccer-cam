@@ -507,13 +507,11 @@ class ReolinkCamera(Camera):
 
             if file_size > 0:
                 self.logger.info(
-                    f"Downloading {file_name} to '{dir_name}' via Baichuan "
+                    f"Downloading {file_name} to '{dir_name}' "
                     f"({file_size / 1024 / 1024:.1f}MB)"
                 )
             else:
-                self.logger.info(
-                    f"Downloading {file_name} to '{dir_name}' via Baichuan"
-                )
+                self.logger.info(f"Downloading {file_name} to '{dir_name}'")
 
             def _progress(bytes_written, elapsed):
                 if file_size > 0:
@@ -537,6 +535,7 @@ class ReolinkCamera(Camera):
                 output_mp4=local_path,
                 channel=self.channel,
                 on_progress=_progress,
+                http_port=self.config.http_port,
             )
 
             if success:
