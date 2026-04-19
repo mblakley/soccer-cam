@@ -131,6 +131,35 @@ def _to_annex_b(data: bytes) -> bytes:
     return _length_prefixed_to_annex_b(data)
 
 
+_ADTS_SAMPLE_RATES = {
+    0: 96000,
+    1: 88200,
+    2: 64000,
+    3: 48000,
+    4: 44100,
+    5: 32000,
+    6: 24000,
+    7: 22050,
+    8: 16000,
+    9: 12000,
+    10: 11025,
+    11: 8000,
+}
+
+
+def _parse_adts_header(data: bytes) -> tuple[int, int]:
+    """Extract sample rate and channel count from an ADTS header.
+
+    Returns (sample_rate, channels), falling back to (16000, 1) if the
+    data is too short or doesn't start with the ADTS sync word.
+    """
+    if len(data) < 4 or data[0] != 0xFF or (data[1] & 0xF0) != 0xF0:
+        return (16000, 1)
+    rate_idx = (data[2] >> 2) & 0xF
+    channels = ((data[2] & 0x01) << 2) | ((data[3] >> 6) & 0x03)
+    return (_ADTS_SAMPLE_RATES.get(rate_idx, 16000), channels or 1)
+
+
 # ── BcMedia Demuxer ──────────────────────────────────────────────────
 
 
@@ -149,6 +178,8 @@ class BcMediaDemuxer:
         self.height: int = 0
         self.fps: int = 0
         self.last_microseconds: int = 0
+        self.audio_sample_rate: int = 0
+        self.audio_channels: int = 0
 
     def feed(self, data: bytes) -> list:
         """Feed data and return list of parsed frames."""
@@ -245,6 +276,8 @@ class BcMediaDemuxer:
         if len(buf) < total:
             return None
         data = bytes(buf[8 : 8 + size_a])
+        if self.audio_sample_rate == 0 and len(data) >= 4:
+            self.audio_sample_rate, self.audio_channels = _parse_adts_header(data)
         return (("aac", None, data), total)
 
     def _parse_adpcm(self, buf):
@@ -727,15 +760,19 @@ class BaichuanStreamClient:
             "frames_written": 0,
             "bytes_written": 0,
             "video_codec": None,
+            "audio_frames_written": 0,
+            "audio_sample_rate": 0,
+            "audio_channels": 0,
             "duration_seconds": 0.0,
         }
         start_time = time.monotonic()
         last_progress = start_time
         # Idle timeout: cameras may pause between GOP boundaries
         idle_timeout = 15
+        audio_path = output_path + ".audio"
 
-        # Write framed video (each frame: 4-byte timestamp + 4-byte length + data)
-        with open(output_path, "wb") as f:
+        # Write framed video + audio sidecar
+        with open(output_path, "wb") as f, open(audio_path, "wb") as audio_f:
             while True:
                 try:
                     hdr, xml_body, payload = await asyncio.wait_for(
@@ -787,7 +824,7 @@ class BaichuanStreamClient:
                 # Decrypt binary payload
                 dec = self._decrypt_stream_chunk(payload, encrypt_len)
                 frames = demuxer.feed(dec)
-                self._write_frames(frames, f, stats, demuxer)
+                self._write_frames(frames, f, stats, demuxer, audio_f=audio_f)
 
                 # Progress callback
                 now = time.monotonic()
@@ -796,19 +833,20 @@ class BaichuanStreamClient:
                     last_progress = now
 
         stats["duration_seconds"] = time.monotonic() - start_time
+        stats["audio_sample_rate"] = demuxer.audio_sample_rate
+        stats["audio_channels"] = demuxer.audio_channels
         return stats
 
     @staticmethod
-    def _write_frames(frames: list, f, stats: dict, demuxer=None):
-        """Write parsed video frames to file as Annex-B NAL units.
+    def _write_frames(frames: list, f, stats: dict, demuxer=None, audio_f=None):
+        """Write parsed video/audio frames to their respective files.
 
-        Each frame is written as (4-byte LE microsecond timestamp + Annex-B data)
-        so the remuxer can assign real PTS without a sidecar file.
+        Video: (4-byte LE microsecond timestamp + 4-byte LE length + Annex-B data)
+        Audio: same framing — (4-byte LE timestamp + 4-byte LE length + raw AAC)
         """
         for frame_type, codec, data in frames:
             if frame_type in ("iframe", "pframe") and data:
                 annexb = _to_annex_b(data)
-                # Write timestamp prefix (4 bytes LE) + frame data
                 us = demuxer.last_microseconds if demuxer else 0
                 f.write(struct.pack("<I", us))
                 f.write(struct.pack("<I", len(annexb)))
@@ -817,6 +855,12 @@ class BaichuanStreamClient:
                 stats["bytes_written"] += len(annexb)
                 if codec:
                     stats["video_codec"] = codec
+            elif frame_type == "aac" and data and audio_f is not None:
+                us = demuxer.last_microseconds if demuxer else 0
+                audio_f.write(struct.pack("<I", us))
+                audio_f.write(struct.pack("<I", len(data)))
+                audio_f.write(data)
+                stats["audio_frames_written"] = stats.get("audio_frames_written", 0) + 1
 
 
 # ── High-level download + mux ────────────────────────────────────────
@@ -836,20 +880,10 @@ def _detect_hevc(raw_path: str) -> bool:
     return False
 
 
-def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
-    """Remux framed video data to MP4 container via PyAV.
-
-    The raw file contains frames in our custom format:
-      [4-byte LE microsecond timestamp][4-byte LE data length][Annex-B NAL data]
-
-    We reassemble the Annex-B stream into a temp file for PyAV to parse,
-    using the embedded microsecond timestamps for accurate PTS.
-    """
-    from video_grouper.utils.ffmpeg_utils import av_open_read, av_open_write
-
-    # Read all frames with their timestamps
-    frames = []
-    with open(raw_path, "rb") as f:
+def _read_framed_file(path: str) -> list[tuple[int, bytes]]:
+    """Read a framed file (video or audio sidecar) into (us, data) pairs."""
+    frames: list[tuple[int, bytes]] = []
+    with open(path, "rb") as f:
         while True:
             hdr = f.read(8)
             if len(hdr) < 8:
@@ -860,18 +894,49 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
             if len(data) < data_len:
                 break
             frames.append((us, data))
+    return frames
 
+
+def _remux_raw_to_mp4(
+    raw_path: str,
+    mp4_path: str,
+    codec: str = "H265",
+    audio_path: str | None = None,
+    audio_sample_rate: int = 16000,
+    audio_channels: int = 1,
+):
+    """Remux framed video (+ optional audio sidecar) to MP4 via PyAV.
+
+    The raw file contains frames in our custom format:
+      [4-byte LE microsecond timestamp][4-byte LE data length][Annex-B NAL data]
+    The audio sidecar uses the same framing with raw AAC (ADTS) data.
+    """
+    from video_grouper.utils.ffmpeg_utils import av_open_read, av_open_write
+
+    frames = _read_framed_file(raw_path)
     if not frames:
         return
 
-    # Write a clean Annex-B file for PyAV to parse
+    audio_frames: list[tuple[int, bytes]] = []
+    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+        audio_frames = _read_framed_file(audio_path)
+
+    # Write clean Annex-B file for PyAV to parse
     annexb_path = raw_path + ".annexb"
     with open(annexb_path, "wb") as f:
         for _, data in frames:
             f.write(data)
 
+    # Write raw ADTS file for PyAV if we have audio
+    adts_path = None
+    if audio_frames:
+        adts_path = raw_path + ".adts"
+        with open(adts_path, "wb") as f:
+            for _, data in audio_frames:
+                f.write(data)
+
+    audio_input_ct = None
     try:
-        # Detect codec from actual NAL data (camera may report wrong codec)
         if _detect_hevc(annexb_path):
             fmt = "hevc"
         else:
@@ -885,10 +950,24 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
                 out_stream = output_ct.add_stream_from_template(in_stream)
                 tb = out_stream.time_base or in_stream.time_base
 
-                # Normalize timestamps: start at 0, handle u32 wraparound
+                # Set up audio output stream (decode+re-encode pattern)
+                out_audio = None
+                in_audio = None
+                if adts_path:
+                    try:
+                        audio_input_ct = av_open_read(adts_path, format="aac")
+                        in_audio = audio_input_ct.streams.audio[0]
+                        out_audio = output_ct.add_stream(
+                            "aac", rate=in_audio.rate or audio_sample_rate
+                        )
+                        out_audio.bit_rate = 192000
+                    except Exception as e:
+                        logger.warning(f"Could not open audio stream: {e}")
+                        audio_input_ct = None
+
+                # Mux video
                 base_us = frames[0][0]
                 frame_idx = 0
-
                 for packet in input_ct.demux(in_stream):
                     if packet.size == 0:
                         continue
@@ -897,16 +976,34 @@ def _remux_raw_to_mp4(raw_path: str, mp4_path: str, codec: str = "H265"):
                         delta_us = (us - base_us) & 0xFFFFFFFF
                         pts = int(delta_us * 1e-6 / float(tb))
                     else:
-                        # Extrapolate if we run out of timestamps
                         pts = int(frame_idx / 20.0 / float(tb))
                     packet.dts = pts
                     packet.pts = pts
                     frame_idx += 1
                     packet.stream = out_stream
                     output_ct.mux(packet)
+
+                # Mux audio (stream copy — no re-encode)
+                if audio_input_ct and out_audio:
+                    first_dts = None
+                    for packet in audio_input_ct.demux(in_audio):
+                        if packet.size == 0:
+                            continue
+                        if packet.dts is None:
+                            continue
+                        if first_dts is None:
+                            first_dts = packet.dts
+                        packet.dts -= first_dts
+                        packet.pts -= first_dts
+                        packet.stream = out_audio
+                        output_ct.mux(packet)
     finally:
+        if audio_input_ct:
+            audio_input_ct.close()
         if os.path.exists(annexb_path):
             os.remove(annexb_path)
+        if adts_path and os.path.exists(adts_path):
+            os.remove(adts_path)
 
 
 def _download_and_mux_sync(
@@ -980,15 +1077,25 @@ async def _download_and_mux_async(
             logger.error("Baichuan download produced no video data")
             return False
 
+        audio_count = stats.get("audio_frames_written", 0)
         logger.info(
             f"Baichuan download complete: {stats['frames_written']} frames, "
+            f"{audio_count} audio frames, "
             f"{stats['bytes_written'] / 1024 / 1024:.1f}MB in "
             f"{stats['duration_seconds']:.1f}s"
         )
 
-        # Remux raw bitstream -> MP4
+        # Remux raw bitstream (+ audio sidecar) -> MP4
         codec = stats.get("video_codec") or "H265"
-        _remux_raw_to_mp4(temp_raw, output_mp4, codec)
+        audio_raw = temp_raw + ".audio"
+        _remux_raw_to_mp4(
+            temp_raw,
+            output_mp4,
+            codec,
+            audio_path=audio_raw if os.path.exists(audio_raw) else None,
+            audio_sample_rate=stats.get("audio_sample_rate") or 16000,
+            audio_channels=stats.get("audio_channels") or 1,
+        )
         logger.info(f"Remuxed to {os.path.basename(output_mp4)}")
 
         return True
@@ -998,11 +1105,12 @@ async def _download_and_mux_async(
         return False
     finally:
         await client.close()
-        if os.path.exists(temp_raw):
-            try:
-                os.remove(temp_raw)
-            except OSError:
-                pass
+        for tmp in (temp_raw, temp_raw + ".audio"):
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 async def download_and_mux(
