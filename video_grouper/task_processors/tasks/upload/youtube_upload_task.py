@@ -287,7 +287,7 @@ class YoutubeUploadTask(BaseUploadTask):
             if hasattr(config, "playlist_map") and config.playlist_map:
                 try:
                     team_lower = match_info.my_team_name.lower()
-                    for key, playlist_name in config.playlist_map.items():
+                    for key, playlist_name in config.playlist_map.root.items():
                         if key.lower() == team_lower or key.lower() in team_lower:
                             base_playlist_name = playlist_name
                             logger.info(
