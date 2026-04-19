@@ -572,3 +572,837 @@ class TestMatchInfoWidget:
         assert "my_team_name" not in received, (
             "'my_team_name' key must not appear in callback dict"
         )
+
+
+# ===========================================================================
+# 5. Real processor state format tests
+# ===========================================================================
+
+
+class TestRealProcessorStateFormat:
+    """Verify each queue tab handles the real save_state() dict format:
+    {"queue": [{"priority": N, "seq": N, ...task_fields...}], "in_progress": {...} | null}
+    """
+
+    # -- Download queue --
+
+    def test_download_queue_real_format(self, config_window):
+        """Download queue must parse the dict format from DownloadProcessor.save_state()."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "recording_file",
+                    "file_path": "/storage/2024.01.15-09.00.00/video1.dav",
+                    "start_time": "2024-01-15T09:00:00",
+                    "end_time": "2024-01-15T09:30:00",
+                    "status": "pending",
+                    "metadata": {},
+                    "skip": False,
+                },
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "recording_file",
+                    "file_path": "/storage/2024.01.15-09.00.00/video2.dav",
+                    "start_time": "2024-01-15T09:30:00",
+                    "end_time": "2024-01-15T10:00:00",
+                    "status": "pending",
+                    "metadata": {},
+                    "skip": False,
+                },
+            ],
+            "in_progress": None,
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_download_queue_display()
+        assert config_window.download_queue_list.count() == 2
+
+    def test_download_queue_real_format_with_in_progress(self, config_window):
+        """Download queue with one item in-progress shows both in-progress and queued."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "recording_file",
+                    "file_path": "/storage/2024.01.15-09.00.00/video2.dav",
+                    "start_time": "2024-01-15T09:30:00",
+                    "end_time": "2024-01-15T10:00:00",
+                    "status": "pending",
+                    "metadata": {},
+                    "skip": False,
+                },
+            ],
+            "in_progress": {
+                "task_type": "recording_file",
+                "file_path": "/storage/2024.01.15-09.00.00/video1.dav",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T09:30:00",
+                "status": "downloading",
+                "metadata": {},
+                "skip": False,
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_download_queue_display()
+        # 1 in-progress + 1 queued = 2
+        assert config_window.download_queue_list.count() == 2
+
+    def test_download_queue_real_format_empty(self, config_window):
+        """Download queue with empty queue list and no in-progress shows empty message."""
+        data = {"queue": [], "in_progress": None}
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_download_queue_display()
+        texts = _get_list_texts(config_window.download_queue_list)
+        assert texts == ["No downloads queued."]
+
+    # -- Processing queue --
+
+    def test_processing_queue_real_format(self, config_window):
+        """Processing queue must parse the dict format from VideoProcessor.save_state()."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "combine",
+                    "group_dir": "/storage/2024.01.15-09.00.00",
+                },
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "trim",
+                    "group_dir": "/storage/2024.01.16-10.30.00",
+                    "start_time": "00:05:00",
+                    "end_time": "01:35:00",
+                },
+            ],
+            "in_progress": None,
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_processing_queue_display()
+        assert config_window.processing_queue_list.count() == 2
+
+    def test_processing_queue_real_format_with_in_progress(self, config_window):
+        """Processing queue with in-progress combine task shows both."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "combine",
+                    "group_dir": "/storage/2024.01.16-10.30.00",
+                },
+            ],
+            "in_progress": {
+                "task_type": "combine",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_processing_queue_display()
+        # 1 in-progress + 1 queued = 2
+        assert config_window.processing_queue_list.count() == 2
+
+    def test_processing_queue_real_format_empty(self, config_window):
+        """Processing queue dict format with empty queue shows empty message."""
+        data = {"queue": [], "in_progress": None}
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_processing_queue_display()
+        texts = _get_list_texts(config_window.processing_queue_list)
+        assert texts == ["No processing tasks queued."]
+
+    # -- Autocam queue --
+
+    def test_autocam_queue_real_format(self, config_window):
+        """Autocam queue must parse the dict format from AutocamProcessor.save_state()."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "autocam_process",
+                    "group_dir": "/storage/2024.01.15-09.00.00",
+                    "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
+                    "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
+                    "autocam_config": {
+                        "executable": "C:/autocam/autocam.exe",
+                        "enabled": True,
+                    },
+                },
+            ],
+            "in_progress": None,
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_autocam_queue_display()
+        texts = _get_list_texts(config_window.autocam_queue_list)
+        assert len(texts) == 1
+        assert "2024.01.15-09.00.00" in texts[0]
+
+    def test_autocam_queue_real_format_with_in_progress(self, config_window):
+        """Autocam queue with in-progress item shows it."""
+        data = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "autocam_process",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+                "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
+                "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
+                "autocam_config": {
+                    "executable": "C:/autocam/autocam.exe",
+                    "enabled": True,
+                },
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_autocam_queue_display()
+        texts = _get_list_texts(config_window.autocam_queue_list)
+        assert len(texts) == 1
+        assert "2024.01.15-09.00.00" in texts[0]
+
+    # -- YouTube upload (regression) --
+
+    def test_youtube_upload_real_format_with_priority(self, config_window):
+        """YouTube upload handles queue items that have priority/seq fields from save_state()."""
+        data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "youtube_upload",
+                    "group_dir": "/storage/2024.01.16-10.30.00",
+                },
+            ],
+            "in_progress": {
+                "task_type": "youtube_upload",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_youtube_upload_display()
+        texts = _get_list_texts(config_window.youtube_upload_list)
+        assert len(texts) == 2
+        assert texts[0] == "[Uploading] 2024.01.15-09.00.00"
+        assert texts[1] == "[Pending] 2024.01.16-10.30.00"
+
+
+# ===========================================================================
+# 6. In-progress display tests
+# ===========================================================================
+
+
+class TestInProgressDisplay:
+    """Verify in-progress items are displayed with a visible status indicator."""
+
+    def test_download_in_progress_shows_downloading_prefix(self, config_window):
+        """Download queue shows [Downloading] prefix for in-progress item."""
+        data = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "recording_file",
+                "file_path": "/storage/2024.01.15-09.00.00/video1.dav",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T09:30:00",
+                "status": "downloading",
+                "metadata": {},
+                "skip": False,
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_download_queue_display()
+        assert config_window.download_queue_list.count() == 1
+
+    def test_processing_in_progress_shows_status(self, config_window):
+        """Processing queue shows in-progress combine task."""
+        data = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "combine",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_processing_queue_display()
+        assert config_window.processing_queue_list.count() == 1
+
+    def test_autocam_in_progress_shows_status(self, config_window):
+        """Autocam queue shows in-progress task with status indicator."""
+        data = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "autocam_process",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+                "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
+                "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
+                "autocam_config": {
+                    "executable": "C:/autocam/autocam.exe",
+                    "enabled": True,
+                },
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_autocam_queue_display()
+        texts = _get_list_texts(config_window.autocam_queue_list)
+        assert len(texts) == 1
+        assert "2024.01.15-09.00.00" in texts[0]
+
+    def test_youtube_in_progress_only(self, config_window):
+        """YouTube shows only in-progress item when queue is empty."""
+        data = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "youtube_upload",
+                "group_dir": "/storage/2024.01.15-09.00.00",
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data)
+        config_window.refresh_youtube_upload_display()
+        texts = _get_list_texts(config_window.youtube_upload_list)
+        assert len(texts) == 1
+        assert texts[0] == "[Uploading] 2024.01.15-09.00.00"
+
+
+# ===========================================================================
+# 7. Error state tests
+# ===========================================================================
+
+
+class TestErrorState:
+    """Verify each queue tab handles _read_json_file returning 'error'."""
+
+    def test_download_queue_error(self, config_window):
+        config_window._read_json_file = MagicMock(return_value="error")
+        config_window.refresh_download_queue_display()
+        texts = _get_list_texts(config_window.download_queue_list)
+        assert texts == ["Error reading download queue."]
+
+    def test_processing_queue_error(self, config_window):
+        config_window._read_json_file = MagicMock(return_value="error")
+        config_window.refresh_processing_queue_display()
+        texts = _get_list_texts(config_window.processing_queue_list)
+        assert texts == ["Error reading processing queue state."]
+
+    def test_autocam_queue_error(self, config_window):
+        config_window._read_json_file = MagicMock(return_value="error")
+        config_window.refresh_autocam_queue_display()
+        texts = _get_list_texts(config_window.autocam_queue_list)
+        assert texts == ["Error reading autocam queue."]
+
+    def test_youtube_upload_error(self, config_window):
+        config_window._read_json_file = MagicMock(return_value="error")
+        config_window.refresh_youtube_upload_display()
+        texts = _get_list_texts(config_window.youtube_upload_list)
+        assert texts == ["Error reading upload queue."]
+
+
+# ===========================================================================
+# 8. Refresh cycle tests
+# ===========================================================================
+
+
+class TestRefreshCycle:
+    """Verify display updates correctly across consecutive refresh calls."""
+
+    def test_download_queue_data_changes(self, config_window):
+        """Refreshing with new data replaces old display."""
+        data_v1 = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "recording_file",
+                    "file_path": "/storage/group-a/video1.dav",
+                    "start_time": "2024-01-15T09:00:00",
+                    "end_time": "2024-01-15T09:30:00",
+                    "status": "pending",
+                    "metadata": {},
+                    "skip": False,
+                },
+            ],
+            "in_progress": None,
+        }
+        config_window._read_json_file = MagicMock(return_value=data_v1)
+        config_window.refresh_download_queue_display()
+        assert config_window.download_queue_list.count() == 1
+
+        # Second refresh: queue drained
+        data_v2 = {"queue": [], "in_progress": None}
+        config_window._read_json_file = MagicMock(return_value=data_v2)
+        config_window.refresh_download_queue_display()
+        texts = _get_list_texts(config_window.download_queue_list)
+        assert texts == ["No downloads queued."]
+
+    def test_processing_queue_item_moves_to_in_progress(self, config_window):
+        """Item transitions from queued to in-progress between refreshes."""
+        data_v1 = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "combine",
+                    "group_dir": "/storage/group-a",
+                },
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "combine",
+                    "group_dir": "/storage/group-b",
+                },
+            ],
+            "in_progress": None,
+        }
+        config_window._read_json_file = MagicMock(return_value=data_v1)
+        config_window.refresh_processing_queue_display()
+        assert config_window.processing_queue_list.count() == 2
+
+        # Second refresh: 1 moved to in-progress
+        data_v2 = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 1,
+                    "task_type": "combine",
+                    "group_dir": "/storage/group-b",
+                },
+            ],
+            "in_progress": {"task_type": "combine", "group_dir": "/storage/group-a"},
+        }
+        config_window._read_json_file = MagicMock(return_value=data_v2)
+        config_window.refresh_processing_queue_display()
+        assert config_window.processing_queue_list.count() == 2
+
+    def test_youtube_upload_completes_between_refreshes(self, config_window):
+        """Upload finishes between refreshes, list goes from items to empty."""
+        data_v1 = {
+            "queue": [],
+            "in_progress": {
+                "task_type": "youtube_upload",
+                "group_dir": "/storage/group-a",
+            },
+        }
+        config_window._read_json_file = MagicMock(return_value=data_v1)
+        config_window.refresh_youtube_upload_display()
+        texts = _get_list_texts(config_window.youtube_upload_list)
+        assert len(texts) == 1
+        assert "[Uploading]" in texts[0]
+
+        # Second refresh: upload complete
+        data_v2 = {"queue": [], "in_progress": None}
+        config_window._read_json_file = MagicMock(return_value=data_v2)
+        config_window.refresh_youtube_upload_display()
+        texts = _get_list_texts(config_window.youtube_upload_list)
+        assert texts == ["No uploads queued."]
+
+
+# ===========================================================================
+# 9. Pipeline progression test
+# ===========================================================================
+
+
+class TestPipelineProgression:
+    """Simulate a video's journey through the pipeline stages via tray display."""
+
+    def test_full_pipeline_progression(self, config_window):
+        """Simulate: download queued -> processing -> upload -> done."""
+        group = "2024.01.15-09.00.00"
+
+        # --- Stage 1: File appears in download queue ---
+        dl_data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "recording_file",
+                    "file_path": f"/storage/{group}/video1.dav",
+                    "start_time": "2024-01-15T09:00:00",
+                    "end_time": "2024-01-15T09:30:00",
+                    "status": "pending",
+                    "metadata": {},
+                    "skip": False,
+                },
+            ],
+            "in_progress": None,
+        }
+        proc_empty = {"queue": [], "in_progress": None}
+        upload_empty = {"queue": [], "in_progress": None}
+
+        def mock_stage1(path, **kw):
+            p = str(path)
+            if "download" in p:
+                return dl_data
+            if "video" in p:
+                return proc_empty
+            if "upload" in p:
+                return upload_empty
+            return None
+
+        config_window._read_json_file = mock_stage1
+        config_window.refresh_download_queue_display()
+        config_window.refresh_processing_queue_display()
+        config_window.refresh_youtube_upload_display()
+
+        assert config_window.download_queue_list.count() == 1
+        assert _get_list_texts(config_window.processing_queue_list) == [
+            "No processing tasks queued."
+        ]
+        assert _get_list_texts(config_window.youtube_upload_list) == [
+            "No uploads queued."
+        ]
+
+        # --- Stage 2: Download done, combine queued ---
+        dl_empty = {"queue": [], "in_progress": None}
+        proc_data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "combine",
+                    "group_dir": f"/storage/{group}",
+                },
+            ],
+            "in_progress": None,
+        }
+
+        def mock_stage2(path, **kw):
+            p = str(path)
+            if "download" in p:
+                return dl_empty
+            if "video" in p:
+                return proc_data
+            if "upload" in p:
+                return upload_empty
+            return None
+
+        config_window._read_json_file = mock_stage2
+        config_window.refresh_download_queue_display()
+        config_window.refresh_processing_queue_display()
+        config_window.refresh_youtube_upload_display()
+
+        assert _get_list_texts(config_window.download_queue_list) == [
+            "No downloads queued."
+        ]
+        assert config_window.processing_queue_list.count() == 1
+        assert _get_list_texts(config_window.youtube_upload_list) == [
+            "No uploads queued."
+        ]
+
+        # --- Stage 3: Processing done, upload queued ---
+        upload_data = {
+            "queue": [
+                {
+                    "priority": 2,
+                    "seq": 0,
+                    "task_type": "youtube_upload",
+                    "group_dir": f"/storage/{group}",
+                },
+            ],
+            "in_progress": None,
+        }
+
+        def mock_stage3(path, **kw):
+            p = str(path)
+            if "download" in p:
+                return dl_empty
+            if "video" in p:
+                return proc_empty
+            if "upload" in p:
+                return upload_data
+            return None
+
+        config_window._read_json_file = mock_stage3
+        config_window.refresh_download_queue_display()
+        config_window.refresh_processing_queue_display()
+        config_window.refresh_youtube_upload_display()
+
+        assert _get_list_texts(config_window.download_queue_list) == [
+            "No downloads queued."
+        ]
+        assert _get_list_texts(config_window.processing_queue_list) == [
+            "No processing tasks queued."
+        ]
+        upload_texts = _get_list_texts(config_window.youtube_upload_list)
+        assert len(upload_texts) == 1
+        assert f"[Pending] {group}" in upload_texts[0]
+
+        # --- Stage 4: Upload done, all empty ---
+        def mock_stage4(path, **kw):
+            p = str(path)
+            if "download" in p:
+                return dl_empty
+            if "video" in p:
+                return proc_empty
+            if "upload" in p:
+                return upload_empty
+            return None
+
+        config_window._read_json_file = mock_stage4
+        config_window.refresh_download_queue_display()
+        config_window.refresh_processing_queue_display()
+        config_window.refresh_youtube_upload_display()
+
+        assert _get_list_texts(config_window.download_queue_list) == [
+            "No downloads queued."
+        ]
+        assert _get_list_texts(config_window.processing_queue_list) == [
+            "No processing tasks queued."
+        ]
+        assert _get_list_texts(config_window.youtube_upload_list) == [
+            "No uploads queued."
+        ]
+
+
+# ===========================================================================
+# 10. Cleanup tab variations
+# ===========================================================================
+
+
+class TestCleanupVariations:
+    """Test cleanup tab edge cases."""
+
+    def test_cleanup_deletion_not_supported(self, config_window):
+        """When deletion_supported=False, shows info message and button stays disabled."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "deletion_supported": False,
+            "files": [
+                {
+                    "path": "/camera/home/rec1.mp4",
+                    "startTime": "2024-01-15 09:00:00",
+                    "endTime": "2024-01-15 10:00:00",
+                    "size": 1048576,
+                },
+            ],
+        }
+        cleanup_path = Path(storage_path) / "home_cleanup_state.json"
+        cleanup_path.write_text(json.dumps(state))
+
+        with patch("video_grouper.tray.config_ui.os.path.exists", return_value=True):
+            config_window.refresh_cleanup_display()
+
+        texts = _get_list_texts(config_window.cleanup_list)
+        assert any("does not support remote file deletion" in t for t in texts)
+        assert not config_window.cleanup_delete_btn.isEnabled()
+
+    def test_cleanup_deletion_approved(self, config_window):
+        """When deletion is already approved, shows waiting message."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "deletion_supported": True,
+            "approved": True,
+            "files": [
+                {
+                    "path": "/camera/home/rec1.mp4",
+                    "startTime": "2024-01-15 09:00:00",
+                    "endTime": "2024-01-15 10:00:00",
+                    "size": 1048576,
+                },
+            ],
+        }
+        cleanup_path = Path(storage_path) / "home_cleanup_state.json"
+        cleanup_path.write_text(json.dumps(state))
+
+        with patch("video_grouper.tray.config_ui.os.path.exists", return_value=True):
+            config_window.refresh_cleanup_display()
+
+        texts = _get_list_texts(config_window.cleanup_list)
+        assert any("Deletion approved" in t for t in texts)
+
+    def test_cleanup_deletion_supported_enables_button(self, config_window):
+        """When deletion_supported=True and not approved, delete button is enabled."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "deletion_supported": True,
+            "files": [
+                {
+                    "path": "/camera/home/rec1.mp4",
+                    "startTime": "2024-01-15 09:00:00",
+                    "endTime": "2024-01-15 10:00:00",
+                    "size": 1048576,
+                },
+            ],
+        }
+        cleanup_path = Path(storage_path) / "home_cleanup_state.json"
+        cleanup_path.write_text(json.dumps(state))
+
+        with patch("video_grouper.tray.config_ui.os.path.exists", return_value=True):
+            config_window.refresh_cleanup_display()
+
+        assert config_window.cleanup_delete_btn.isEnabled()
+
+
+# ===========================================================================
+# 11. Connection history edge cases
+# ===========================================================================
+
+
+class TestConnectionHistoryEdgeCases:
+    """Test connection history with multiple cameras and edge cases."""
+
+    def test_multiple_cameras(self, config_window):
+        """Multiple cameras each with events display separately."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "cam1": {
+                "connection_events": [
+                    {
+                        "event_datetime": "2024-01-15T09:00:00+00:00",
+                        "event_type": "connected",
+                        "message": "",
+                    },
+                    {
+                        "event_datetime": "2024-01-15T10:00:00+00:00",
+                        "event_type": "disconnected",
+                        "message": "signal lost",
+                    },
+                ]
+            },
+            "cam2": {
+                "connection_events": [
+                    {
+                        "event_datetime": "2024-01-15T09:30:00+00:00",
+                        "event_type": "connected",
+                        "message": "",
+                    },
+                    {
+                        "event_datetime": "2024-01-15T11:00:00+00:00",
+                        "event_type": "disconnected",
+                        "message": "timeout",
+                    },
+                ]
+            },
+        }
+        camera_state_path = Path(storage_path) / "camera_state.json"
+        camera_state_path.write_text(json.dumps(state))
+
+        real_exists = Path.exists
+
+        def _exists(p):
+            return real_exists(p)
+
+        with patch.object(Path, "exists", _exists):
+            config_window.refresh_connection_events_display()
+
+        texts = _get_list_texts(config_window.connection_events_list)
+        assert len(texts) == 2
+        cam_names = [t.split("]")[0].lstrip("[") for t in texts]
+        assert "cam1" in cam_names
+        assert "cam2" in cam_names
+
+    def test_still_connected_camera(self, config_window):
+        """Camera with connected event but no disconnect shows 'Still connected'."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "cam1": {
+                "connection_events": [
+                    {
+                        "event_datetime": "2024-01-15T09:00:00+00:00",
+                        "event_type": "connected",
+                        "message": "",
+                    },
+                ]
+            },
+        }
+        camera_state_path = Path(storage_path) / "camera_state.json"
+        camera_state_path.write_text(json.dumps(state))
+
+        real_exists = Path.exists
+
+        def _exists(p):
+            return real_exists(p)
+
+        with patch.object(Path, "exists", _exists):
+            config_window.refresh_connection_events_display()
+
+        texts = _get_list_texts(config_window.connection_events_list)
+        assert len(texts) == 1
+        assert "(Still connected)" in texts[0]
+
+    def test_camera_with_non_dict_state(self, config_window):
+        """Non-dict camera state entry is gracefully skipped."""
+        storage_path = config_window.config.storage.path
+        state = {
+            "version": "1.0",
+            "cam1": {
+                "connection_events": [
+                    {
+                        "event_datetime": "2024-01-15T09:00:00+00:00",
+                        "event_type": "connected",
+                        "message": "",
+                    },
+                    {
+                        "event_datetime": "2024-01-15T10:00:00+00:00",
+                        "event_type": "disconnected",
+                        "message": "",
+                    },
+                ]
+            },
+        }
+        camera_state_path = Path(storage_path) / "camera_state.json"
+        camera_state_path.write_text(json.dumps(state))
+
+        real_exists = Path.exists
+
+        def _exists(p):
+            return real_exists(p)
+
+        with patch.object(Path, "exists", _exists):
+            config_window.refresh_connection_events_display()
+
+        texts = _get_list_texts(config_window.connection_events_list)
+        assert len(texts) == 1
+        assert "[cam1]" in texts[0]
+
+
+# ===========================================================================
+# 12. refresh_all_displays integration
+# ===========================================================================
+
+
+class TestRefreshAllDisplays:
+    """Verify refresh_all_displays calls all sub-refresh methods."""
+
+    def test_refresh_all_calls_all_sub_refreshes(self, config_window):
+        """refresh_all_displays must invoke every individual refresh method."""
+        with (
+            patch.object(config_window, "refresh_download_queue_display") as mock_dl,
+            patch.object(
+                config_window, "refresh_processing_queue_display"
+            ) as mock_proc,
+            patch.object(config_window, "refresh_autocam_queue_display") as mock_auto,
+            patch.object(config_window, "refresh_youtube_upload_display") as mock_yt,
+            patch.object(config_window, "refresh_skipped_files_display") as mock_skip,
+            patch.object(config_window, "refresh_match_info_display") as mock_match,
+            patch.object(
+                config_window, "refresh_connection_events_display"
+            ) as mock_conn,
+            patch.object(config_window, "refresh_cleanup_display") as mock_clean,
+        ):
+            config_window.refresh_all_displays()
+
+            mock_dl.assert_called_once()
+            mock_proc.assert_called_once()
+            mock_auto.assert_called_once()
+            mock_yt.assert_called_once()
+            mock_skip.assert_called_once()
+            mock_match.assert_called_once()
+            mock_conn.assert_called_once()
+            mock_clean.assert_called_once()
+
+    def test_refresh_queue_displays_calls_queue_refreshes(self, config_window):
+        """refresh_queue_displays must invoke the four queue refresh methods."""
+        with (
+            patch.object(config_window, "refresh_download_queue_display") as mock_dl,
+            patch.object(
+                config_window, "refresh_processing_queue_display"
+            ) as mock_proc,
+            patch.object(config_window, "refresh_autocam_queue_display") as mock_auto,
+            patch.object(config_window, "refresh_youtube_upload_display") as mock_yt,
+        ):
+            config_window.refresh_queue_displays()
+
+            mock_dl.assert_called_once()
+            mock_proc.assert_called_once()
+            mock_auto.assert_called_once()
+            mock_yt.assert_called_once()
