@@ -981,22 +981,25 @@ class OnboardingWizard(QDialog):
         teams_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(teams_label)
 
-        self._pm_teams_table = QTableWidget(0, 4)
+        self._pm_teams_table = QTableWidget(0, 5)
         self._pm_teams_table.setHorizontalHeaderLabels(
-            ["Team Name", "Team ID", "Enabled", ""]
+            ["Team Name", "Team ID", "YouTube Playlist", "Enabled", ""]
         )
         self._pm_teams_table.horizontalHeader().setStretchLastSection(False)
         self._pm_teams_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self._pm_teams_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
+            1, QHeaderView.ResizeMode.ResizeToContents
         )
         self._pm_teams_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
+            2, QHeaderView.ResizeMode.Stretch
         )
         self._pm_teams_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._pm_teams_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
         )
         self._pm_teams_table.verticalHeader().setVisible(False)
         layout.addWidget(self._pm_teams_table)
@@ -1009,7 +1012,11 @@ class OnboardingWizard(QDialog):
         return page
 
     def _pm_add_team_row(
-        self, team_name: str = "", team_id: str = "", enabled: bool = True
+        self,
+        team_name: str = "",
+        team_id: str = "",
+        enabled: bool = True,
+        playlist_name: str = "",
     ):
         """Add a row to the PlayMetrics teams table."""
         row = self._pm_teams_table.rowCount()
@@ -1017,13 +1024,17 @@ class OnboardingWizard(QDialog):
         self._pm_teams_table.setItem(row, 0, QTableWidgetItem(team_name))
         self._pm_teams_table.setItem(row, 1, QTableWidgetItem(team_id))
 
+        playlist_item = QTableWidgetItem(playlist_name)
+        playlist_item.setToolTip("YouTube playlist name for this team's videos")
+        self._pm_teams_table.setItem(row, 2, playlist_item)
+
         enabled_cb = QCheckBox()
         enabled_cb.setChecked(enabled)
-        self._pm_teams_table.setCellWidget(row, 2, enabled_cb)
+        self._pm_teams_table.setCellWidget(row, 3, enabled_cb)
 
         remove_btn = QPushButton("Remove")
         remove_btn.clicked.connect(lambda _, r=row: self._pm_remove_team_row(r))
-        self._pm_teams_table.setCellWidget(row, 3, remove_btn)
+        self._pm_teams_table.setCellWidget(row, 4, remove_btn)
 
     def _pm_remove_team_row(self, row: int):
         """Remove a row from the PlayMetrics teams table."""
@@ -1031,7 +1042,7 @@ class OnboardingWizard(QDialog):
             self._pm_teams_table.removeRow(row)
             # Reconnect remove buttons with updated row indices
             for r in range(self._pm_teams_table.rowCount()):
-                btn = self._pm_teams_table.cellWidget(r, 3)
+                btn = self._pm_teams_table.cellWidget(r, 4)
                 if btn:
                     btn.clicked.disconnect()
                     btn.clicked.connect(lambda _, r=r: self._pm_remove_team_row(r))
@@ -1110,10 +1121,12 @@ class OnboardingWizard(QDialog):
                     # Clear existing teams table
                     self._pm_teams_table.setRowCount(0)
                     for t in teams:
+                        name = t.get("name", "")
                         self._pm_add_team_row(
-                            team_name=t.get("name", ""),
+                            team_name=name,
                             team_id=str(t.get("id", "")),
                             enabled=True,
+                            playlist_name=self._youtube_playlist_map.get(name, ""),
                         )
                     self._pm_signin_status.setText(f"Found {len(teams)} team(s)")
 
@@ -1225,22 +1238,25 @@ class OnboardingWizard(QDialog):
         teams_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(teams_label)
 
-        self._ts_teams_table = QTableWidget(0, 4)
+        self._ts_teams_table = QTableWidget(0, 5)
         self._ts_teams_table.setHorizontalHeaderLabels(
-            ["Team Name", "Team ID", "Enabled", ""]
+            ["Team Name", "Team ID", "YouTube Playlist", "Enabled", ""]
         )
         self._ts_teams_table.horizontalHeader().setStretchLastSection(False)
         self._ts_teams_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self._ts_teams_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
+            1, QHeaderView.ResizeMode.ResizeToContents
         )
         self._ts_teams_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
+            2, QHeaderView.ResizeMode.Stretch
         )
         self._ts_teams_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._ts_teams_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
         )
         self._ts_teams_table.verticalHeader().setVisible(False)
         layout.addWidget(self._ts_teams_table)
@@ -1253,7 +1269,11 @@ class OnboardingWizard(QDialog):
         return page
 
     def _ts_add_team_row(
-        self, team_name: str = "", team_id: str = "", enabled: bool = True
+        self,
+        team_name: str = "",
+        team_id: str = "",
+        enabled: bool = True,
+        playlist_name: str = "",
     ):
         """Add a row to the TeamSnap teams table."""
         row = self._ts_teams_table.rowCount()
@@ -1261,13 +1281,17 @@ class OnboardingWizard(QDialog):
         self._ts_teams_table.setItem(row, 0, QTableWidgetItem(team_name))
         self._ts_teams_table.setItem(row, 1, QTableWidgetItem(team_id))
 
+        playlist_item = QTableWidgetItem(playlist_name)
+        playlist_item.setToolTip("YouTube playlist name for this team's videos")
+        self._ts_teams_table.setItem(row, 2, playlist_item)
+
         enabled_cb = QCheckBox()
         enabled_cb.setChecked(enabled)
-        self._ts_teams_table.setCellWidget(row, 2, enabled_cb)
+        self._ts_teams_table.setCellWidget(row, 3, enabled_cb)
 
         remove_btn = QPushButton("Remove")
         remove_btn.clicked.connect(lambda _, r=row: self._ts_remove_team_row(r))
-        self._ts_teams_table.setCellWidget(row, 3, remove_btn)
+        self._ts_teams_table.setCellWidget(row, 4, remove_btn)
 
     def _ts_remove_team_row(self, row: int):
         """Remove a row from the TeamSnap teams table."""
@@ -1275,7 +1299,7 @@ class OnboardingWizard(QDialog):
             self._ts_teams_table.removeRow(row)
             # Reconnect remove buttons with updated row indices
             for r in range(self._ts_teams_table.rowCount()):
-                btn = self._ts_teams_table.cellWidget(r, 3)
+                btn = self._ts_teams_table.cellWidget(r, 4)
                 if btn:
                     btn.clicked.disconnect()
                     btn.clicked.connect(lambda _, r=r: self._ts_remove_team_row(r))
@@ -1636,14 +1660,19 @@ class OnboardingWizard(QDialog):
             for row in range(self._pm_teams_table.rowCount()):
                 name_item = self._pm_teams_table.item(row, 0)
                 id_item = self._pm_teams_table.item(row, 1)
-                cb = self._pm_teams_table.cellWidget(row, 2)
+                playlist_item = self._pm_teams_table.item(row, 2)
+                cb = self._pm_teams_table.cellWidget(row, 3)
+                team_name = name_item.text() if name_item else ""
+                playlist = playlist_item.text().strip() if playlist_item else ""
                 teams.append(
                     {
-                        "team_name": name_item.text() if name_item else "",
+                        "team_name": team_name,
                         "team_id": id_item.text() if id_item else "",
                         "enabled": cb.isChecked() if cb else True,
                     }
                 )
+                if team_name and playlist:
+                    self._youtube_playlist_map[team_name] = playlist
             self._playmetrics_config["teams"] = teams
 
         elif page_index == self.PAGE_TEAMSNAP:
@@ -1658,14 +1687,19 @@ class OnboardingWizard(QDialog):
             for row in range(self._ts_teams_table.rowCount()):
                 name_item = self._ts_teams_table.item(row, 0)
                 id_item = self._ts_teams_table.item(row, 1)
-                cb = self._ts_teams_table.cellWidget(row, 2)
+                playlist_item = self._ts_teams_table.item(row, 2)
+                cb = self._ts_teams_table.cellWidget(row, 3)
+                team_name = name_item.text() if name_item else ""
+                playlist = playlist_item.text().strip() if playlist_item else ""
                 teams.append(
                     {
-                        "team_name": name_item.text() if name_item else "",
+                        "team_name": team_name,
                         "team_id": id_item.text() if id_item else "",
                         "enabled": cb.isChecked() if cb else True,
                     }
                 )
+                if team_name and playlist:
+                    self._youtube_playlist_map[team_name] = playlist
             self._teamsnap_config["teams"] = teams
 
         elif page_index == self.PAGE_SUMMARY:
@@ -2014,10 +2048,12 @@ class OnboardingWizard(QDialog):
         # Only populate teams table if it's currently empty
         if self._pm_teams_table.rowCount() == 0 and pm.get("teams"):
             for t in pm["teams"]:
+                name = t.get("team_name", "")
                 self._pm_add_team_row(
-                    team_name=t.get("team_name", ""),
+                    team_name=name,
                     team_id=t.get("team_id", ""),
                     enabled=t.get("enabled", True),
+                    playlist_name=self._youtube_playlist_map.get(name, ""),
                 )
 
     def _prepopulate_teamsnap_page(self):
@@ -2032,10 +2068,12 @@ class OnboardingWizard(QDialog):
         # Only populate teams table if it's currently empty
         if self._ts_teams_table.rowCount() == 0 and ts.get("teams"):
             for t in ts["teams"]:
+                name = t.get("team_name", "")
                 self._ts_add_team_row(
-                    team_name=t.get("team_name", ""),
+                    team_name=name,
                     team_id=t.get("team_id", ""),
                     enabled=t.get("enabled", True),
+                    playlist_name=self._youtube_playlist_map.get(name, ""),
                 )
 
     def _populate_integrations_from_device_config(self):

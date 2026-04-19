@@ -28,6 +28,9 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QScrollArea,
     QWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
     QInputDialog,
 )
 from PyQt6.QtCore import QTimer, QSize, Qt, pyqtSignal as Signal
@@ -274,6 +277,33 @@ class ConfigWindow(QWidget):
             "Processed Videos Playlist:", self.processed_playlist_name
         )
         playlist_layout.addRow("Raw Videos Playlist:", self.raw_playlist_name)
+
+        # Playlist map: team name → YouTube playlist
+        playlist_map_label = QLabel("Team → Playlist Mapping:")
+        playlist_map_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        playlist_layout.addRow(playlist_map_label)
+
+        self.playlist_map_table = QTableWidget(0, 3)
+        self.playlist_map_table.setHorizontalHeaderLabels(
+            ["Team Name", "YouTube Playlist", ""]
+        )
+        self.playlist_map_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.playlist_map_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.playlist_map_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.playlist_map_table.verticalHeader().setVisible(False)
+        self.playlist_map_table.setMaximumHeight(150)
+        playlist_layout.addRow(self.playlist_map_table)
+
+        add_map_btn = QPushButton("Add Mapping")
+        add_map_btn.clicked.connect(self._add_playlist_map_row)
+        playlist_layout.addRow(add_map_btn)
+
         playlist_group.setLayout(playlist_layout)
 
         youtube_layout.addRow("", self.youtube_enabled)
@@ -691,6 +721,12 @@ class ConfigWindow(QWidget):
         if self.config.youtube.raw_playlist:
             self.raw_playlist_name.setText(self.config.youtube.raw_playlist.name_format)
 
+        # Playlist map
+        self.playlist_map_table.setRowCount(0)
+        if self.config.youtube.playlist_map:
+            for team, playlist in self.config.youtube.playlist_map.items():
+                self._add_playlist_map_row(team, playlist)
+
         # TeamSnap configurations
         self.teamsnap_configs_list.clear()
         if self.config.teamsnap.enabled and not self.config.teamsnap.teams:
@@ -756,6 +792,26 @@ class ConfigWindow(QWidget):
         else:
             self.youtube_status_label.setText("Not authenticated")
             self.password.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _add_playlist_map_row(self, team_name: str = "", playlist_name: str = ""):
+        """Add a row to the playlist map table."""
+        row = self.playlist_map_table.rowCount()
+        self.playlist_map_table.insertRow(row)
+        self.playlist_map_table.setItem(row, 0, QTableWidgetItem(team_name))
+        self.playlist_map_table.setItem(row, 1, QTableWidgetItem(playlist_name))
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(lambda _, r=row: self._remove_playlist_map_row(r))
+        self.playlist_map_table.setCellWidget(row, 2, remove_btn)
+
+    def _remove_playlist_map_row(self, row: int):
+        """Remove a row from the playlist map table."""
+        if 0 <= row < self.playlist_map_table.rowCount():
+            self.playlist_map_table.removeRow(row)
+            for r in range(self.playlist_map_table.rowCount()):
+                btn = self.playlist_map_table.cellWidget(r, 2)
+                if btn:
+                    btn.clicked.disconnect()
+                    btn.clicked.connect(lambda _, r=r: self._remove_playlist_map_row(r))
 
     def toggle_password_visibility(self, checked):
         if checked:
@@ -993,6 +1049,23 @@ class ConfigWindow(QWidget):
                     self.config.youtube.raw_playlist.name_format = (
                         self.raw_playlist_name.text()
                     )
+
+                # Save playlist map from table
+                playlist_map = {}
+                for row in range(self.playlist_map_table.rowCount()):
+                    team_item = self.playlist_map_table.item(row, 0)
+                    playlist_item = self.playlist_map_table.item(row, 1)
+                    team = team_item.text().strip() if team_item else ""
+                    playlist = playlist_item.text().strip() if playlist_item else ""
+                    if team and playlist:
+                        playlist_map[team] = playlist
+                if playlist_map:
+                    from video_grouper.utils.config import YouTubePlaylistMapConfig
+
+                    self.config.youtube.playlist_map = YouTubePlaylistMapConfig(
+                        playlist_map
+                    )
+
                 self.config.app.timezone = self.timezone_combo.currentText()
 
                 # TTT Integration settings
