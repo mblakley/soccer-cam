@@ -121,6 +121,20 @@ class ConfigWindow(QWidget):
             logger.error(f"Error reading {path}: {e}")
             return "error"
 
+    def _normalize_queue_data(self, queue_data):
+        """Normalize queue data to (in_progress, items) regardless of format.
+
+        Handles:
+        - New dict format: {"queue": [...], "in_progress": {...}}
+        - Legacy list format: [...]
+
+        Returns:
+            Tuple of (in_progress_item_or_None, list_of_queued_items)
+        """
+        if isinstance(queue_data, dict):
+            return queue_data.get("in_progress"), queue_data.get("queue", [])
+        return None, queue_data if queue_data else []
+
     def init_ui(self):
         self.setWindowTitle("VideoGrouper Configuration")
         layout = QVBoxLayout()
@@ -1133,12 +1147,35 @@ class ConfigWindow(QWidget):
         if queue_data == "error":
             self.download_queue_list.addItem("Error reading download queue.")
             return
-        if not queue_data:
+
+        in_progress, items = self._normalize_queue_data(queue_data)
+
+        if not in_progress and not items:
             self.download_queue_list.addItem("No downloads queued.")
             return
 
         try:
-            for item_data in queue_data:
+            # Show in-progress item first
+            if in_progress:
+                file_path = in_progress.get("file_path", "Unknown File")
+                filename = os.path.basename(file_path)
+                group_name = os.path.basename(os.path.dirname(file_path))
+
+                widget = QueueItemWidget(
+                    item_text=f"[Downloading] {filename}",
+                    file_path=file_path,
+                    skip_callback=None,
+                    show_thumbnail=False,
+                    group_name=group_name,
+                    timezone_str=tz_str,
+                )
+                list_item = QListWidgetItem(self.download_queue_list)
+                list_item.setSizeHint(widget.sizeHint())
+                self.download_queue_list.addItem(list_item)
+                self.download_queue_list.setItemWidget(list_item, widget)
+
+            # Show queued items
+            for item_data in items:
                 file_path = item_data.get("file_path", "Unknown File")
                 filename = os.path.basename(file_path)
                 group_name = os.path.basename(os.path.dirname(file_path))
@@ -1173,14 +1210,30 @@ class ConfigWindow(QWidget):
         if queue_data == "error":
             self.autocam_queue_list.addItem("Error reading autocam queue.")
             return
-        if not queue_data:
+
+        in_progress, items = self._normalize_queue_data(queue_data)
+
+        if not in_progress and not items:
             self.autocam_queue_list.addItem("No autocam tasks queued.")
             return
 
         try:
-            for item in queue_data:
-                group_name = item.get("group_name", "Unknown")
-                status = item.get("status", "unknown")
+            # Show in-progress item first
+            if in_progress:
+                group_dir = in_progress.get("group_dir", "")
+                group_name = in_progress.get(
+                    "group_name", os.path.basename(group_dir) or "Unknown"
+                )
+                display_text = f"{group_name} - Status: processing"
+                self.autocam_queue_list.addItem(display_text)
+
+            # Show queued items
+            for item in items:
+                group_dir = item.get("group_dir", "")
+                group_name = item.get(
+                    "group_name", os.path.basename(group_dir) or "Unknown"
+                )
+                status = item.get("status", "pending")
                 display_text = f"{group_name} - Status: {status}"
                 self.autocam_queue_list.addItem(display_text)
         except Exception as e:
@@ -1234,8 +1287,8 @@ class ConfigWindow(QWidget):
             logger.error(f"Error refreshing YouTube upload display: {e}")
 
     def refresh_processing_queue_display(self):
-        """Reads and displays the FFmpeg processing queue state."""
-        queue_file = get_shared_data_path() / "ffmpeg_queue_state.json"
+        """Reads and displays the video processing queue state."""
+        queue_file = get_shared_data_path() / "video_queue_state.json"
         self.processing_queue_list.clear()
         tz_str = getattr(self.config.app, "timezone", "UTC")
 
@@ -1249,12 +1302,46 @@ class ConfigWindow(QWidget):
         if queue_data == "error":
             self.processing_queue_list.addItem("Error reading processing queue state.")
             return
-        if not queue_data:
+
+        in_progress, items = self._normalize_queue_data(queue_data)
+
+        if not in_progress and not items:
             self.processing_queue_list.addItem("No processing tasks queued.")
             return
 
         try:
-            for task_type, item_path in queue_data:
+            # Show in-progress item first
+            if in_progress:
+                task_type = in_progress.get("task_type", "unknown")
+                item_path = in_progress.get("group_dir", "Unknown")
+                item_name = os.path.basename(item_path)
+                display_text = (
+                    f"[Processing] Task: {task_type.capitalize()}, Item: {item_name}"
+                )
+
+                widget = QueueItemWidget(
+                    item_text=display_text,
+                    file_path=None,
+                    skip_callback=None,
+                    show_thumbnail=True,
+                    timezone_str=tz_str,
+                )
+                list_item = QListWidgetItem(self.processing_queue_list)
+                list_item.setSizeHint(widget.sizeHint())
+                self.processing_queue_list.addItem(list_item)
+                self.processing_queue_list.setItemWidget(list_item, widget)
+                widget.skip_button.setEnabled(False)
+                widget.skip_button.setToolTip("Cannot skip an in-progress task.")
+
+            # Show queued items
+            for item in items:
+                # Handle both dict format (from save_state) and legacy tuple format
+                if isinstance(item, (list, tuple)):
+                    task_type, item_path = item
+                else:
+                    task_type = item.get("task_type", "unknown")
+                    item_path = item.get("group_dir", "Unknown")
+
                 item_name = os.path.basename(item_path)
                 display_text = f"Task: {task_type.capitalize()}, Item: {item_name}"
 
