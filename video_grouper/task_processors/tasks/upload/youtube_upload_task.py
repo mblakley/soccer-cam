@@ -281,15 +281,19 @@ class YoutubeUploadTask(BaseUploadTask):
             logger.warning(f"Error reading playlist from directory state: {e}")
 
         # 2. Check config.playlist_map for team-based mapping
+        #    Supports exact match or case-insensitive substring match
+        #    (e.g. key "13b ecnl-rl rochester" matches team "Western New York Flash - 13B ECNL-RL Rochester")
         if not base_playlist_name:
             if hasattr(config, "playlist_map") and config.playlist_map:
                 try:
-                    mapped_name = config.playlist_map.get(match_info.my_team_name)
-                    if mapped_name:
-                        base_playlist_name = mapped_name
-                        logger.info(
-                            f"Using playlist from config map: {base_playlist_name}"
-                        )
+                    team_lower = match_info.my_team_name.lower()
+                    for key, playlist_name in config.playlist_map.items():
+                        if key.lower() == team_lower or key.lower() in team_lower:
+                            base_playlist_name = playlist_name
+                            logger.info(
+                                f"Using playlist from config map: {base_playlist_name} (matched key '{key}')"
+                            )
+                            break
                 except Exception as e:
                     logger.warning(f"Error looking up playlist in config map: {e}")
 
