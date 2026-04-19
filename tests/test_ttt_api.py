@@ -363,6 +363,48 @@ class TestTTTApiClient(unittest.TestCase):
             call_args[1]["json"], {"email": "user@example.com", "password": "pw"}
         )
 
+    # ------------------------------------------------------------------
+    # Pipeline Questions
+    # ------------------------------------------------------------------
+
+    def test_create_pipeline_question(self):
+        data = {"id": "pq-1", "question_type": "game_start", "title": "Game?"}
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.create_pipeline_question(
+            team_id="team-1",
+            question_type="game_start",
+            title="Game Starting?",
+            message="Does this look like a game?",
+            actions=[{"label": "Yes", "value": "yes"}, {"label": "No", "value": "no"}],
+            recording_group_dir="2026.04.19-14.30.00",
+        )
+        self.assertEqual(result["question_type"], "game_start")
+        call_args = self.client._http.request.call_args
+        self.assertEqual(call_args[0][0], "POST")
+        body = call_args[1]["json"]
+        self.assertEqual(body["question_type"], "game_start")
+        self.assertEqual(len(body["actions"]), 2)
+        self.assertEqual(body["recording_group_dir"], "2026.04.19-14.30.00")
+
+    def test_get_pipeline_question(self):
+        data = {"id": "pq-1", "response_value": "yes"}
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.get_pipeline_question("pq-1")
+        self.assertEqual(result["response_value"], "yes")
+        call_args = self.client._http.request.call_args
+        self.assertIn("/api/pipeline-questions/pq-1", call_args[0][1])
+
+    def test_cancel_pipeline_question(self):
+        self.client._http.request = Mock(
+            return_value=_mock_response(200, {"id": "pq-1"})
+        )
+        self.client.cancel_pipeline_question("pq-1")
+        call_args = self.client._http.request.call_args
+        self.assertEqual(call_args[0][0], "PATCH")
+        self.assertIn("/respond", call_args[0][1])
+        body = call_args[1]["json"]
+        self.assertEqual(body["response_value"], "__cancelled__")
+
 
 if __name__ == "__main__":
     unittest.main()
