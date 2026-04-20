@@ -121,6 +121,23 @@ open("app_unpacked/router","wb").write(bytes(data))
 print(f"   router bitrate cap: {SRC_BYTES.hex()} -> {DST_BYTES.hex()} (= {$KBPS} kbps)")
 PY
 
+echo "==> 5b) Patch router fps dropdown max"
+# router FUN_00465584 builds the fps-range array the GetEnc API returns.
+# Last entry is 'movz w0, #0x14' (= 20 fps max shown in the web UI dropdown).
+# Patch to the same fps target so the UI lets the user SELECT the higher value.
+python3 - <<PY
+PATCH_OFFSET = 0x6565c
+SRC_BYTES = bytes.fromhex("80028052")          # movz w0, #0x14 (=20)
+inst = 0x52800000 | ($FPS << 5)
+DST_BYTES = bytes([inst & 0xff, (inst>>8)&0xff, (inst>>16)&0xff, (inst>>24)&0xff])
+data = bytearray(open("app_unpacked/router","rb").read())
+actual = bytes(data[PATCH_OFFSET:PATCH_OFFSET+4])
+assert actual == SRC_BYTES, f"router[{hex(PATCH_OFFSET)}] mismatch: got {actual.hex()}, expected {SRC_BYTES.hex()}. Firmware may have changed; stop."
+data[PATCH_OFFSET:PATCH_OFFSET+4] = DST_BYTES
+open("app_unpacked/router","wb").write(bytes(data))
+print(f"   router fps dropdown: {SRC_BYTES.hex()} -> {DST_BYTES.hex()} (= {$FPS} fps max)")
+PY
+
 echo "==> 6) Repack app squashfs"
 mksquashfs app_unpacked app_new.bin \
     -comp xz -b 262144 -noappend -no-progress \
@@ -139,6 +156,7 @@ echo " Build complete: $OUT"
 echo "  - HTTP /downloadfile/ unlock: carried"
 echo "  - Main-stream max bitrate:    $KBPS kbps (was 12288 kbps stock)"
 echo "  - FPS hardcode (OS08C10):     $FPS fps (was 20 stock)"
+echo "  - FPS dropdown max:           $FPS fps (was 20 stock)"
 echo
 echo " After flashing, verify via camera API:"
 echo "   GetEnc action=0 -> mainStream.frameRate should be <= $FPS and the"
