@@ -2,6 +2,8 @@
 TeamSnap API integration for video_grouper.
 """
 
+import re
+
 import requests
 from datetime import datetime, timedelta
 import logging
@@ -372,17 +374,33 @@ class TeamSnapAPI:
         """
         Get games for the configured team.
 
+        Includes events flagged as games by TeamSnap *and* events whose name
+        contains "scrimmage" — scrimmages are tracked as non-game events in
+        TeamSnap's UI (is_game=False, event_type!="game") but coaches still
+        want them recorded and matched to recordings.
+
         Returns:
             List of game dictionaries, or empty list if request failed
         """
         events = self.get_team_events()
 
-        # Filter for games only
-        games = [
-            event
-            for event in events
-            if event.get("event_type") == "game" or event.get("is_game") is True
-        ]
+        def _is_game_like(event: dict) -> bool:
+            if event.get("event_type") == "game" or event.get("is_game") is True:
+                return True
+            name = (event.get("name") or "").lower()
+            return "scrimmage" in name
+
+        games = [event for event in events if _is_game_like(event)]
+
+        # Scrimmages often have opponent_name=None but embed the opponent in
+        # the name like "Scrimmage vs D'Ambrosia u15". Extract it so
+        # downstream code can treat scrimmages the same as regular games.
+        for event in games:
+            if not event.get("opponent_name"):
+                name = event.get("name") or ""
+                m = re.search(r"\bvs\.?\s+(.+)", name, flags=re.IGNORECASE)
+                if m:
+                    event["opponent_name"] = m.group(1).strip()
 
         logger.info(f"Found {len(games)} team games")
         return games
