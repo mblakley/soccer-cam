@@ -738,7 +738,7 @@ class ConfigWindow(QWidget):
         # Playlist map
         self.playlist_map_table.setRowCount(0)
         if self.config.youtube.playlist_map:
-            for team, playlist in self.config.youtube.playlist_map.items():
+            for team, playlist in self.config.youtube.playlist_map.root.items():
                 self._add_playlist_map_row(team, playlist)
 
         # TeamSnap configurations
