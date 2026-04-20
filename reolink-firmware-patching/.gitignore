@@ -1,0 +1,20 @@
+# Never commit firmware image files or extracted content
+*.pak
+sections/
+app_extracted/
+rootfs_extracted/
+ghidra_proj/
+
+# Local credentials — must never be committed
+camera.env
+
+# Local tooling working files / logs / artifacts
+*.log
+*.mp4
+*.png
+*.csv
+*.etl
+*.pcapng
+*.json
+!*.example.*
+__pycache__/
