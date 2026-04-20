@@ -138,7 +138,27 @@ open("app_unpacked/router","wb").write(bytes(data))
 print(f"   router fps dropdown: {SRC_BYTES.hex()} -> {DST_BYTES.hex()} (= {$FPS} fps max)")
 PY
 
-echo "==> 5c) Patch per-resolution max-fps table in FUN_004632b0"
+echo "==> 5c) Patch preloaded fps register in FUN_00465584"
+# FUN_00465584 preloads fps constants into registers w22..w28 at function
+# start, then uses stp pairs to scatter those values across many fps-array
+# templates (one per resolution). The w22 register starts as 20 and is
+# reused for the 'max fps = 20' slot in every sub-7680x2160 resolution's
+# fps array. Patching this one movz changes w22 to 25 and lifts every cap
+# that was using w22=20.
+python3 - <<PY
+PATCH_OFFSET = 0x655a4
+SRC_BYTES = bytes.fromhex("960280d2")          # movz x22, #0x14 (=20)  -- NOTE: 64-bit movz (sf=1)
+inst = 0xd2800000 | ($FPS << 5) | 22
+DST_BYTES = bytes([inst & 0xff, (inst>>8)&0xff, (inst>>16)&0xff, (inst>>24)&0xff])
+data = bytearray(open("app_unpacked/router","rb").read())
+actual = bytes(data[PATCH_OFFSET:PATCH_OFFSET+4])
+assert actual == SRC_BYTES, f"router[{hex(PATCH_OFFSET)}] mismatch: got {actual.hex()}, expected {SRC_BYTES.hex()}"
+data[PATCH_OFFSET:PATCH_OFFSET+4] = DST_BYTES
+open("app_unpacked/router","wb").write(bytes(data))
+print(f"   preloaded w22 cap: {SRC_BYTES.hex()} -> {DST_BYTES.hex()} (movz x22, #{$FPS})")
+PY
+
+echo "==> 5d) Patch per-resolution max-fps table in FUN_004632b0"
 # FUN_00465bc4 asks FUN_004632b0 to populate a per-resolution config table
 # (one 0x14c-byte entry per resolution). Each entry has max_fps at offset 0x3c.
 # FUN_004632b0 writes that value via 'mov w0, #N; stur w0, [x28, #-0xbc]'
