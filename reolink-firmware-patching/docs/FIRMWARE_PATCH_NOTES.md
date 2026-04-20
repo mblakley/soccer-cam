@@ -17,15 +17,51 @@ Two distinct goals were pursued and resolved in this session:
    The 21+ Mbps ceiling is enforced by the encoder hardware/firmware and
    refuses higher values with `rspCode -13 "set config failed"`.
 
-A third investigation was completed but produced a negative result:
+A third investigation was completed:
 
-3. **Frame-rate cap (20 → 25/30 fps)** — the firmware-side cap was lifted and
-   the dropdown now shows up to 30 fps, BUT the actual h.265 stream still
-   encodes at 20 fps regardless. The Duo 3's dual-sensor 16MP architecture
-   has a sensor-readout ceiling at 20 fps; this is hardware, not policy. The
-   25/30 fps code paths visible in the firmware are for resolution codes that
-   this hardware doesn't expose. **Don't bother flashing the fps patch — it
-   only changes the dropdown, not the actual fps.**
+3. **Frame-rate cap (20 → 30 fps)** — initial dropdown-only patch was a dead
+   end: the `router`-level byte patch changed the web UI to offer 25/30 fps
+   but the encoder still produced 19.92 fps. Deeper tracing through the full
+   videocap pipeline (kernel kflow_videocapture.ko ← userspace `device`
+   binary ← Nvt52xAdapter.cpp) located the actual 20 fps hardcode:
+
+   - **File**: `sections/app_extracted/device` (main userspace IPC binary)
+   - **Function**: `Na_video_encoder_build_basic` in Nvt52xAdapter.cpp
+     (Ghidra: `FUN_0048b630`)
+   - **Site**: VMA `0x0048bb1c`, file offset `0x8bb1c`
+   - **Instruction**: `movz w1, #0x14` (= load 20), encoded `81 02 80 52`
+   - **Followed by**: `str w1, [x19, #0x2884]` which stores `fps` into the
+     video-encoder config object
+   - **Condition**: only executes for sensors matched by mask `0x1080c241`,
+     which includes the OS08C10 (sensor type `0x26`)
+
+   Downstream flow: `obj[+0x2884]` → `FUN_0047e230` passes it as `param_7` to
+   `FUN_00488df0` → `cap_path[+0x34] = fps` → `FUN_00488af0` builds the frc
+   fraction as `(fps << 16) | 1` and calls `hd_videocap_set(cap_path,
+   HD_VIDEOCAP_PARAM_IN=0x80001016, &video_in_param)` → kernel
+   `_isf_vdocap_do_setportstruct` case `0x80001016` copies `param_4[4..7]` to
+   `ctx[+0xb8]` (= `HD_VIDEOCAP_IN.frc`). Any later fps request via
+   `vendor_videocap_set(path, 0x80001024, &fps)` is clamped to `ctx[+0xb8]`
+   in `_isf_vdocap_do_setportparam` case `-0x7fffefdc`, which prints
+   `WRN:...could not greater than HD_VIDEOCAP_IN.frc(%d)` if you try.
+
+   **The minimal patch is 2 bytes** (or 1 byte for 60 fps):
+   - File offset `0x8bb1c`..`0x8bb1d` in `device`
+   - Current: `81 02` (imm=0x14=20)
+   - For 30 fps: `c1 03` (imm=0x1e=30)
+   - For 60 fps: leave `81`, change byte at `0x8bb1d` to `07` (imm=0x3c=60)
+
+   **Not yet flashed.** Next steps: build a patched `device`, repack into
+   app.bin, flash. Caveats:
+   - Sensor driver `nvt_sen_os08c10.ko` adjusts VTS in `sen_chg_fps_os08c10`
+     with no hardcoded upper clamp, so 30 fps *should* be achievable
+     electrically given the OS08C10's base_FPS=2500 (25.00) config and
+     pclk=198 MHz.
+   - SIE bandwidth limit (`kdrv_sie_limit_98538` +0x04=150M, VIE=400M) may
+     still fire at higher pixel-rate demand; if so, the encoder will fail
+     with `SetEnc Error -13` or similar and we revert.
+   - The web UI dropdown also needs to offer 25/30 fps for the user to
+     actually request them — the earlier `router` 0x6565c patch handles that.
 
 The camera was never bricked. **Multiple flashes** total, all via the web
 UI's manual upgrade button. No UART required.
@@ -727,11 +763,11 @@ Found via `rootfs_extracted/lib/modules/5.10.168/hdal/sen_os08c10/nvt_sen_os08c1
 - **Mode table**: `os08c10_mode_1` — 10496-byte register-write sequence
   for the sensor's single supported mode in this firmware
 
-The 20 fps cap on 16MP composite is **not a sensor limit** — it's
-either a pipeline bandwidth limit (stitching two 4K sensors into
-7680×2160 is ~500 Mpix/s) or a deliberate firmware-level ceiling that
-we didn't locate in one shot. Sensor could theoretically support 4K@30
-per side if the stitcher allowed.
+The 20 fps cap on 16MP composite is **a deliberate firmware-level
+ceiling**, located (2026-04-20) as a hardcoded `movz w1, #0x14` in the
+userspace `device` binary's `Na_video_encoder_build_basic` (Ghidra
+`FUN_0048b630`, VMA `0x0048bb1c`, file offset `0x8bb1c`). See section
+3 of the summary for the 2-byte fix.
 
 ---
 
