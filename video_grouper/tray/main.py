@@ -244,8 +244,28 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self.config:
             from video_grouper.task_processors.upload_processor import UploadProcessor
 
+            # Minimal NtfyService for the tray's UploadProcessor so the
+            # playlist-name fallback (when a team has no [YOUTUBE.PLAYLIST_MAP]
+            # entry) can actually send the notification. The full
+            # MatchInfoService wiring lives in the service; here we only need
+            # send_notification / request_playlist_name / is_waiting_for_input.
+            tray_ntfy_service = None
+            if self.config.ntfy.enabled:
+                try:
+                    from video_grouper.task_processors.services.ntfy_service import (
+                        NtfyService,
+                    )
+
+                    tray_ntfy_service = NtfyService(
+                        self.config.ntfy, self.config.storage.path
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not create NtfyService for tray: {e}")
+
             self.upload_processor = UploadProcessor(
-                storage_path=self.config.storage.path, config=self.config
+                storage_path=self.config.storage.path,
+                config=self.config,
+                ntfy_service=tray_ntfy_service,
             )
 
             if self.config.autocam.enabled:
