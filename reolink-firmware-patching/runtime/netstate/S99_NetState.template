@@ -1,0 +1,179 @@
+#!/bin/sh
+# /etc/init.d/S99_NetState
+# Toggles scheduled recording based on the default-gateway MAC address.
+# Idle on home networks (the HOME_MACS_DEFAULT list below, set at build time);
+# record continuously everywhere else.
+#
+# Runtime overrides (on the writable SD card):
+#   /mnt/sda/netstate/home_macs.txt  - one MAC per line, replaces baked-in list
+#   /mnt/sda/netstate/override       - presence => daemon yields, you control rec
+#   /mnt/sda/netstate/log            - decision log (auto-rotates at 256 KB)
+#
+# This script forks a background loop and returns immediately so the rest of
+# the rcS startup sequence can continue.
+
+HOME_MACS_DEFAULT="%%HOME_MACS%%"
+USER="%%CAMERA_USER%%"
+PASS="%%CAMERA_PASS%%"
+
+CONFIG_DIR=/mnt/sda/netstate
+HOME_MACS_FILE=$CONFIG_DIR/home_macs.txt
+OVERRIDE_FILE=$CONFIG_DIR/override
+LOG=$CONFIG_DIR/log
+
+POLL_INTERVAL=30
+INIT_GRACE=45
+LOG_MAX_BYTES=262144
+
+# 168 chars: 7 days * 24 hours, 1 char per hour
+ALL_ON='111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'
+ALL_OFF='000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+
+mkdir -p "$CONFIG_DIR" 2>/dev/null
+
+log() {
+    local MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    if [ -w "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" 2>/dev/null; then
+        # rotate if oversized
+        if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+            mv "$LOG" "$LOG.old" 2>/dev/null
+        fi
+        echo "$MSG" >>"$LOG"
+    fi
+}
+
+home_macs() {
+    if [ -r "$HOME_MACS_FILE" ]; then
+        # one MAC per line, comments allowed with '#'
+        sed 's/#.*//; s/[[:space:]]//g' "$HOME_MACS_FILE" | grep -v '^$'
+    else
+        echo "$HOME_MACS_DEFAULT" | tr ' ' '\n'
+    fi
+}
+
+is_home_mac() {
+    local M
+    local CANDIDATE
+    CANDIDATE=$(echo "$1" | tr 'A-Z' 'a-z')
+    for M in $(home_macs | tr 'A-Z' 'a-z'); do
+        [ "$M" = "$CANDIDATE" ] && return 0
+    done
+    return 1
+}
+
+get_gateway_ip() {
+    # /proc/net/route: "Iface  Destination  Gateway  Flags  ..."
+    # Destination 00000000 = default route. Gateway is hex little-endian.
+    local HEX
+    HEX=$(awk '$2 == "00000000" { print $3; exit }' /proc/net/route)
+    [ -z "$HEX" ] && return 1
+    printf '%d.%d.%d.%d\n' \
+        0x${HEX:6:2} 0x${HEX:4:2} 0x${HEX:2:2} 0x${HEX:0:2}
+}
+
+resolve_arp_mac() {
+    local IP=$1
+    local MAC
+    # try existing arp entry first
+    MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    if [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ]; then
+        # force resolution with a single 1-second ping
+        ping -c 1 -W 1 "$IP" >/dev/null 2>&1
+        MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    fi
+    [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ] && return 1
+    echo "$MAC"
+}
+
+api_login() {
+    local BODY="[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"$USER\",\"password\":\"$PASS\"}}}]"
+    wget -q -O- --header='Content-Type: application/json' \
+        --post-data="$BODY" \
+        "http://127.0.0.1/api.cgi?cmd=Login&token=null" 2>/dev/null \
+        | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' | head -1
+}
+
+set_record_schedule() {
+    # arg: "on" or "off"
+    local TOK BODY RESP TIMING
+    TOK=$(api_login)
+    if [ -z "$TOK" ]; then
+        log "  api_login failed"
+        return 1
+    fi
+    if [ "$1" = "on" ]; then TIMING=$ALL_ON; else TIMING=$ALL_OFF; fi
+    BODY="[{\"cmd\":\"SetRecV20\",\"action\":0,\"param\":{\"Rec\":{\"enable\":1,\"overwrite\":1,\"postRec\":\"15 Seconds\",\"preRec\":1,\"saveDay\":7,\"schedule\":{\"channel\":0,\"table\":{\"TIMING\":\"$TIMING\"}}}}}]"
+    RESP=$(wget -q -O- --header='Content-Type: application/json' \
+        --post-data="$BODY" \
+        "http://127.0.0.1/api.cgi?cmd=SetRecV20&token=$TOK" 2>/dev/null)
+    case "$RESP" in
+        *'"rspCode":200'*) return 0 ;;
+        *) log "  set_record_schedule rsp: $RESP"; return 1 ;;
+    esac
+}
+
+wait_for_api() {
+    local i=0
+    while [ $i -lt 60 ]; do
+        if wget -q -O- --timeout=2 "http://127.0.0.1/api.cgi?cmd=GetTime&token=null" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        i=$((i+1))
+    done
+    return 1
+}
+
+main_loop() {
+    log "===== netstate daemon starting ====="
+    log "  HOME_MACS_DEFAULT=$HOME_MACS_DEFAULT"
+    log "  init_grace=$INIT_GRACE poll_interval=$POLL_INTERVAL"
+
+    sleep $INIT_GRACE
+    wait_for_api && log "  api ready" || log "  api wait timed out, proceeding anyway"
+
+    local LAST_STATE=""
+    while true; do
+        if [ -f "$OVERRIDE_FILE" ]; then
+            if [ "$LAST_STATE" != "override" ]; then
+                log "override file present -- daemon yields control"
+                LAST_STATE="override"
+            fi
+            sleep $POLL_INTERVAL
+            continue
+        fi
+
+        local GW MAC NEW_STATE
+        GW=$(get_gateway_ip)
+        if [ -z "$GW" ]; then
+            NEW_STATE="home"  # safe default while no network
+            MAC=""
+        else
+            MAC=$(resolve_arp_mac "$GW")
+            if [ -z "$MAC" ]; then
+                NEW_STATE="home"  # safe default while ARP unresolved
+            elif is_home_mac "$MAC"; then
+                NEW_STATE="home"
+            else
+                NEW_STATE="away"
+            fi
+        fi
+
+        if [ "$NEW_STATE" != "$LAST_STATE" ]; then
+            log "state change: ${LAST_STATE:-init} -> $NEW_STATE  (gw=${GW:-none} mac=${MAC:-none})"
+            if [ "$NEW_STATE" = "home" ]; then
+                set_record_schedule off && log "  recording schedule DISABLED (home)"
+            else
+                set_record_schedule on  && log "  recording schedule ENABLED  (away)"
+            fi
+            LAST_STATE="$NEW_STATE"
+        fi
+        sleep $POLL_INTERVAL
+    done
+}
+
+# Detach into background so the rest of /etc/init.d/S* can proceed
+( main_loop ) &
+disown 2>/dev/null
+exit 0
