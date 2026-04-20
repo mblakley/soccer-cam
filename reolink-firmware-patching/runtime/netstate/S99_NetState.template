@@ -88,10 +88,32 @@ resolve_arp_mac() {
 
 api_login() {
     local BODY="[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"$USER\",\"password\":\"$PASS\"}}}]"
-    wget -q -O- --header='Content-Type: application/json' \
-        --post-data="$BODY" \
-        "http://127.0.0.1/api.cgi?cmd=Login&token=null" 2>/dev/null \
-        | sed -n 's/.*"name":"\([^"]*\)".*/\1/p' | head -1
+    local URL="http://127.0.0.1/api.cgi?cmd=Login&token=null"
+    local TMP=/tmp/netstate_resp.$$
+    local TMPE=/tmp/netstate_err.$$
+
+    # Try variant 1: wget with --header + --post-data
+    wget -q -O "$TMP" --header='Content-Type: application/json' \
+        --post-data="$BODY" "$URL" 2>"$TMPE"
+    local RC=$?
+    local TOK=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+    if [ -z "$TOK" ]; then
+        # log diagnostics if first variant failed
+        log "  wget v1 rc=$RC stderr=$(head -c 200 "$TMPE" 2>/dev/null)"
+        log "  wget v1 body  =$(head -c 300 "$TMP"  2>/dev/null)"
+        # Try variant 2: no Content-Type header (busybox wget may not support --header)
+        wget -q -O "$TMP" --post-data="$BODY" "$URL" 2>"$TMPE"
+        TOK=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+        if [ -z "$TOK" ]; then
+            log "  wget v2 rc=$? body=$(head -c 300 "$TMP" 2>/dev/null)"
+            # Try variant 3: short -Y form
+            wget -q -O "$TMP" -Y "$BODY" "$URL" 2>"$TMPE"
+            TOK=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+            [ -z "$TOK" ] && log "  wget v3 rc=$? body=$(head -c 300 "$TMP" 2>/dev/null)"
+        fi
+    fi
+    rm -f "$TMP" "$TMPE"
+    [ -n "$TOK" ] && echo "$TOK"
 }
 
 set_record_schedule() {
@@ -107,8 +129,9 @@ set_record_schedule() {
     RESP=$(wget -q -O- --header='Content-Type: application/json' \
         --post-data="$BODY" \
         "http://127.0.0.1/api.cgi?cmd=SetRecV20&token=$TOK" 2>/dev/null)
+    # API pretty-prints — accept either '"rspCode":200' or '"rspCode" : 200'
     case "$RESP" in
-        *'"rspCode":200'*) return 0 ;;
+        *'"rspCode"'*200*) return 0 ;;
         *) log "  set_record_schedule rsp: $RESP"; return 1 ;;
     esac
 }
