@@ -19,11 +19,12 @@ Two distinct goals were pursued and resolved in this session:
 
 A third investigation was completed:
 
-3. **Frame-rate cap (20 → 30 fps)** — initial dropdown-only patch was a dead
-   end: the `router`-level byte patch changed the web UI to offer 25/30 fps
-   but the encoder still produced 19.92 fps. Deeper tracing through the full
-   videocap pipeline (kernel kflow_videocapture.ko ← userspace `device`
-   binary ← Nvt52xAdapter.cpp) located the actual 20 fps hardcode:
+3. **Frame-rate cap (20 → 25 fps usable, full chain mapped)** — the
+   surface-level cap is genuinely lifted but the recorded output stays at
+   ~20 fps because the h.265 ASIC encoder is the real bottleneck at 16MP.
+   Deeper tracing through the full videocap pipeline (kernel
+   kflow_videocapture.ko ← userspace `device` binary ← Nvt52xAdapter.cpp)
+   located the actual 20 fps hardcode:
 
    - **File**: `sections/app_extracted/device` (main userspace IPC binary)
    - **Function**: `Na_video_encoder_build_basic` in Nvt52xAdapter.cpp
@@ -45,23 +46,61 @@ A third investigation was completed:
    in `_isf_vdocap_do_setportparam` case `-0x7fffefdc`, which prints
    `WRN:...could not greater than HD_VIDEOCAP_IN.frc(%d)` if you try.
 
-   **The minimal patch is 2 bytes** (or 1 byte for 60 fps):
-   - File offset `0x8bb1c`..`0x8bb1d` in `device`
-   - Current: `81 02` (imm=0x14=20)
-   - For 30 fps: `c1 03` (imm=0x1e=30)
-   - For 60 fps: leave `81`, change byte at `0x8bb1d` to `07` (imm=0x3c=60)
+   **Two minimal patches in `device` and `router` (build_fps_cap.sh)**:
+   - `device` file offset `0x8bb1c`: `81 02 80 52` → `21 03 80 52`
+     (`movz w1, #20` → `movz w1, #25`) — lifts the userspace HD_VIDEOCAP_IN.frc
+     hardcode for the OS08C10 sensor mask
+   - `router` file offset `0x6565c`: `80 02 80 52` → `20 03 80 52`
+     (`movz w0, #20` → `movz w0, #25`) — lifts the 7680×2160 fps dropdown max
+     in `FUN_00465584` so the web UI lets you pick 25
+   - `router` FUN_004632b0 has 9 additional `mov w0, #0x14` sites that we
+     also patch to 25; these raise the per-resolution fps caps for OTHER
+     resolutions but are not strictly required for the 7680×2160 daily-driver
 
-   **Not yet flashed.** Next steps: build a patched `device`, repack into
-   app.bin, flash. Caveats:
-   - Sensor driver `nvt_sen_os08c10.ko` adjusts VTS in `sen_chg_fps_os08c10`
-     with no hardcoded upper clamp, so 30 fps *should* be achievable
-     electrically given the OS08C10's base_FPS=2500 (25.00) config and
-     pclk=198 MHz.
-   - SIE bandwidth limit (`kdrv_sie_limit_98538` +0x04=150M, VIE=400M) may
-     still fire at higher pixel-rate demand; if so, the encoder will fail
-     with `SetEnc Error -13` or similar and we revert.
-   - The web UI dropdown also needs to offer 25/30 fps for the user to
-     actually request them — the earlier `router` 0x6565c patch handles that.
+   **Flashed and tested (build 4888).** OS08C10 sensor demonstrably runs at
+   25 fps after the patch (verified by frame-timing analysis: 74% of
+   inter-frame gaps are exactly 40 ms = 1/25s cadence). The downstream
+   pipeline forwards every frame. **However, the h.265 ASIC encoder cannot
+   sustain 25 fps at 16MP** and silently drops ~20% of frames to fit its
+   compute budget, producing ~19.83 fps in the recorded mp4.
+
+   **Encoder bottleneck verified by bitrate test:** dropping the bitrate cap
+   from 20 Mbps to 8 Mbps produced statistically-identical drop rates
+   (74% / 73% on-cadence; 20% / 22% single drops). If drops were rate-limited
+   the encoder would saturate the bitrate first; instead it leaves 27% of
+   the budget unused and still drops. This is a hard ASIC pixel-throughput
+   ceiling at ~330 Mpix/s (16.6 Mpix × 19.83 fps). Typical for a Novatek
+   NT9856x marketed as "4K60" (~500 Mpix/s peak, lower sustained).
+
+   **What the patch is still worth despite the encoder ceiling:** the
+   sensor's per-frame exposure window shrinks from 50 ms (at 20 fps) to 40
+   ms (at 25 fps), giving ~20% less motion blur on each retained frame.
+   For sports/motion footage this is a real visible improvement even
+   though the recorded fps stays around 20.
+
+   **Per-resolution validator caps remain at 20 fps for sub-7680×2160 modes.**
+   The 4096×1152 mode shows `frameRate: [20, 18, 16, ...]` because its cap
+   is set by a *computed* csel branch in `FUN_004632b0` rather than a
+   patchable literal — raising it would require non-trivial control-flow
+   reverse engineering. Given the encoder ceiling above, doing so would only
+   prove the obvious (lower-resolution input would be encoder-uncontended)
+   and wouldn't unlock anything practically useful for the dual-sensor
+   16MP product.
+
+   Caveats / context:
+   - Sensor driver `nvt_sen_os08c10.ko` exposes pclk = 150 MHz (not 198 as
+     I initially mis-cited; the 198 MHz figure is a different speed_param
+     field, likely the MIPI/ADC clock). At pclk=150 MHz with HTS=2592 and
+     min VTS≈2170, max sensor fps at 4K is ~26.7 fps — so 25 fps is
+     achievable but 30 is not without modifying the sensor PLL register
+     table (risky).
+   - All inspected Reolink products that ship the OS08C10 (Duo 3 variants,
+     Elite W740) use bit-for-bit identical sensor driver configuration
+     with base_FPS=25 and pclk=150 MHz. Reolink never configures this
+     sensor above 25 fps in any product.
+   - SIE input limit (`kdrv_sie_limit_98538` +0x04 = 150M) matches the
+     pclk exactly, suggesting the SIE is sized for exactly 150 MHz of
+     sensor input — no headroom without a kernel-side bandwidth patch.
 
 The camera was never bricked. **Multiple flashes** total, all via the web
 UI's manual upgrade button. No UART required.
@@ -763,11 +802,15 @@ Found via `rootfs_extracted/lib/modules/5.10.168/hdal/sen_os08c10/nvt_sen_os08c1
 - **Mode table**: `os08c10_mode_1` — 10496-byte register-write sequence
   for the sensor's single supported mode in this firmware
 
-The 20 fps cap on 16MP composite is **a deliberate firmware-level
-ceiling**, located (2026-04-20) as a hardcoded `movz w1, #0x14` in the
-userspace `device` binary's `Na_video_encoder_build_basic` (Ghidra
-`FUN_0048b630`, VMA `0x0048bb1c`, file offset `0x8bb1c`). See section
-3 of the summary for the 2-byte fix.
+The 20 fps cap on 16MP composite is enforced in layers:
+1. **Userspace cap**: a hardcoded `movz w1, #0x14` in `device`
+   `Na_video_encoder_build_basic` (`FUN_0048b630`, file offset `0x8bb1c`) —
+   patched to 25 in build 4888. See section 3.
+2. **UI dropdown cap**: `router` `FUN_00465584` at file offset `0x6565c` —
+   patched to 25. Lets the web UI offer 25 fps at 7680×2160.
+3. **Encoder ASIC ceiling**: ~330 Mpix/s pixel throughput. Cannot sustain
+   25 fps at 16MP; drops ~20% of frames. This is hardware, not firmware —
+   not patchable. Confirmed via bitrate-invariance test (see section 3).
 
 ---
 
