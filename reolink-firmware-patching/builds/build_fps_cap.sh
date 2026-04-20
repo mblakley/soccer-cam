@@ -138,6 +138,34 @@ open("app_unpacked/router","wb").write(bytes(data))
 print(f"   router fps dropdown: {SRC_BYTES.hex()} -> {DST_BYTES.hex()} (= {$FPS} fps max)")
 PY
 
+echo "==> 5c) Patch per-resolution max-fps table in FUN_004632b0"
+# FUN_00465bc4 asks FUN_004632b0 to populate a per-resolution config table
+# (one 0x14c-byte entry per resolution). Each entry has max_fps at offset 0x3c.
+# FUN_004632b0 writes that value via 'mov w0, #N; stur w0, [x28, #-0xbc]'
+# across multiple resolution branches. Stock caps every sub-7680x2160 resolution
+# at 20. Patch every 'mov w0, #0x14' in FUN_004632b0 to 'mov w0, #<fps>' so
+# the per-resolution dropdowns offer the higher fps too.
+python3 - <<PY
+# VMA offsets of 'mov w0, #0x14' sites in FUN_004632b0 (0x004632b0..0x0046459f).
+# All 9 were verified by direct byte search (80 02 80 52 at file offset).
+SITES = [0x637fc, 0x63c48, 0x63c68, 0x63cd4, 0x63ce4,
+         0x63ddc, 0x63e8c, 0x640ac, 0x64384]
+SRC_BYTES = bytes.fromhex("80028052")          # mov w0, #0x14 (=20)
+inst = 0x52800000 | ($FPS << 5)
+DST_BYTES = bytes([inst & 0xff, (inst>>8)&0xff, (inst>>16)&0xff, (inst>>24)&0xff])
+data = bytearray(open("app_unpacked/router","rb").read())
+patched = 0
+for off in SITES:
+    actual = bytes(data[off:off+4])
+    if actual != SRC_BYTES:
+        print(f"   WARNING: router[{hex(off)}] mismatch: got {actual.hex()}, expected {SRC_BYTES.hex()} -- skipping")
+        continue
+    data[off:off+4] = DST_BYTES
+    patched += 1
+open("app_unpacked/router","wb").write(bytes(data))
+print(f"   per-resolution fps table: patched {patched}/{len(SITES)} sites to {$FPS} fps")
+PY
+
 echo "==> 6) Repack app squashfs"
 mksquashfs app_unpacked app_new.bin \
     -comp xz -b 262144 -noappend -no-progress \
