@@ -100,6 +100,14 @@ Section "Uninstall"
     ; Kill tray if running
     nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
 
+    ; Remove the tray lock file from the storage path so a leftover
+    ; lock from a forced-kill doesn't block the next install's tray.
+    ; StoragePath is set by the installer in HKLM\Software\VideoGrouper.
+    ReadRegStr $0 HKLM "Software\${APPNAME}" "StoragePath"
+    ${If} $0 != ""
+        Delete "$0\tray_agent.lock"
+    ${EndIf}
+
     ; Remove files
     Delete "$INSTDIR\VideoGrouperService.exe"
     Delete "$INSTDIR\VideoGrouperTray.exe"

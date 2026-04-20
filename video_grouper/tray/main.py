@@ -117,61 +117,59 @@ class YouTubeAuthRunner(QRunnable):
 
 
 class TrayAgentLock:
-    """File-based lock to ensure only one tray agent runs at a time."""
+    """OS-managed file lock to ensure only one tray agent runs at a time.
+
+    Uses msvcrt.locking (Windows) / fcntl.flock (POSIX) on an open file
+    handle. The handle is held for the lifetime of the process, so the
+    OS releases the lock automatically on exit — even if the process is
+    killed forcefully. This avoids the stale-lock-file problems where a
+    killed tray leaves behind a lock file that the next tray can't
+    delete because Windows hasn't fully closed the dead process's
+    handle yet.
+    """
 
     def __init__(self, lock_file_path: str):
         self.lock_file_path = Path(lock_file_path)
         self.lock_acquired = False
+        self._fh = None  # Held for life of process; closed in release()
 
     def acquire(self, timeout_seconds: int = 30) -> bool:
         """Acquire the lock, waiting up to timeout_seconds."""
+        import sys
+
         start_time = time.time()
 
         while time.time() - start_time < timeout_seconds:
             try:
-                # Try to create the lock file
-                with open(self.lock_file_path, "x") as f:
-                    f.write(f"{os.getpid()}\n")
+                # Open (or create) the lock file and try to take an
+                # OS-level exclusive lock. If another tray holds it,
+                # msvcrt raises OSError; we retry until timeout.
+                fh = open(self.lock_file_path, "a+")
+                try:
+                    if sys.platform == "win32":
+                        import msvcrt
+
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    fh.close()
+                    logger.info("Tray agent already running, waiting...")
+                    time.sleep(1)
+                    continue
+
+                # Got the lock — record PID for diagnostics and keep the
+                # handle open so the OS keeps the lock.
+                fh.seek(0)
+                fh.truncate()
+                fh.write(f"{os.getpid()}\n")
+                fh.flush()
+                self._fh = fh
                 self.lock_acquired = True
                 logger.info(f"Tray agent lock acquired: {self.lock_file_path}")
                 return True
-            except FileExistsError:
-                # Lock file exists, check if the process is still running
-                try:
-                    with open(self.lock_file_path, "r") as f:
-                        pid_str = f.read().strip()
-                        if pid_str:
-                            pid = int(pid_str)
-                            # Check if process is still running
-                            try:
-                                os.kill(
-                                    pid, 0
-                                )  # Signal 0 just checks if process exists
-                                logger.info(
-                                    f"Tray agent already running (PID: {pid}), waiting..."
-                                )
-                                time.sleep(1)
-                                continue
-                            except OSError:
-                                # Process is dead, remove stale lock
-                                logger.info(
-                                    f"Removing stale lock file (PID {pid} not running)"
-                                )
-                                try:
-                                    self.lock_file_path.unlink()
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Could not remove stale lock file: {e}"
-                                    )
-                                continue
-                except (ValueError, IOError) as e:
-                    # Invalid lock file, remove it
-                    logger.info(f"Invalid lock file, removing: {e}")
-                    try:
-                        self.lock_file_path.unlink()
-                    except Exception as e:
-                        logger.warning(f"Could not remove invalid lock file: {e}")
-                    continue
             except Exception as e:
                 logger.error(f"Error acquiring lock: {e}")
                 time.sleep(1)
@@ -184,12 +182,19 @@ class TrayAgentLock:
 
     def release(self):
         """Release the lock."""
-        if self.lock_acquired:
+        if self.lock_acquired and self._fh is not None:
+            try:
+                self._fh.close()  # OS releases the lock
+            except Exception as e:
+                logger.warning(f"Error closing lock handle: {e}")
+            # Best-effort unlink; harmless if it fails (next acquire
+            # will just reuse the file)
             try:
                 self.lock_file_path.unlink()
-                logger.info(f"Tray agent lock released: {self.lock_file_path}")
-            except Exception as e:
-                logger.warning(f"Error releasing lock: {e}")
+            except Exception:
+                pass
+            logger.info(f"Tray agent lock released: {self.lock_file_path}")
+            self._fh = None
             self.lock_acquired = False
 
 
