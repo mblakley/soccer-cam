@@ -36,6 +36,11 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
             servicemanager.PYS_SERVICE_STARTED,
             (self._svc_name_, ""),
         )
+        # Report RUNNING immediately so SCM doesn't time out during the
+        # slow Python import + config load phase. The asyncio loop is
+        # spun up in self.main() afterward. Without this, `sc start`
+        # fails with 1053 on cold-start even though the service is fine.
+        self.ReportServiceStatus(win32service.SERVICE_RUNNING)
         self.running = True
         self.main()
 
