@@ -4,6 +4,31 @@ End-to-end record of reverse-engineering the firmware container and shipping
 working patches for the Reolink Duo 3 PoE running stock firmware
 **v3.0.0.4867_2505072124** (May 2025 build, board `IPC_NT15NA416MP`).
 
+## Recommended daily-driver build
+
+**`build_bitrate_cap.sh stock.pak out.pak 20480`** — produces a PAK that
+carries only the two patches that have been empirically verified to be
+both functional AND consistent:
+
+- HTTP `/downloadfile/` unlock (LAN downloads at full PoE wire-speed)
+- Main-stream max bitrate raised from 12288 to 20480 kbps
+
+Verified consistency at 7680×2160 @ 20 fps gop=1 across 3 back-to-back
+65-second recordings (2026-04-20):
+
+| metric | clip 1 | clip 2 | clip 3 |
+|---|---|---|---|
+| avg fps | 20.005 | 20.005 | 19.997 |
+| jitter (σ) | 0.71 ms | 0.71 ms | 0.16 ms |
+| dropped frames | 0 | 0 | 0 |
+| 50 ms-cadence frames | 99.9% | 99.9% | 100% |
+
+The fps patches (`build_fps_cap.sh`) are kept in the repo for completeness
+and for any future tinkering, but **not recommended for daily use**:
+running the encoder above its native 20 fps target at 16MP introduces
+~20% frame drops with significant jitter. The full investigation that
+established this is in section 3 below.
+
 Two distinct goals were pursued and resolved in this session:
 
 1. **HTTP download path** — fix the broken `cmd=Download` flow so soccer-cam
