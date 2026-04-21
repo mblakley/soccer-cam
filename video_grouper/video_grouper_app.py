@@ -226,7 +226,8 @@ class VideoGrouperApp:
                     self.plugin_manager = PluginManager(
                         ttt_client=ttt_client,
                         storage_path=Path(self.storage_path),
-                        signing_key=self.config.ttt.plugin_signing_key,
+                        public_keys=self.config.ttt.plugin_signing_public_keys,
+                        refresh_headroom_days=self.config.ttt.plugin_refresh_headroom_days,
                     )
                     self.plugin_manager.sync_plugins()
                     self.plugin_manager.load_plugins()

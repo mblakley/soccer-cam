@@ -196,7 +196,12 @@ class TTTConfig(BaseModel):
     password: str = ""
     clip_request_poll_interval: int = 60
     google_drive_folder_id: str = ""
-    plugin_signing_key: str = ""
+    # Hex-encoded Ed25519 public keys accepted for plugin signature verification.
+    # List form lets operators rotate keys by adding a new one, shipping a release,
+    # then later removing the old one.
+    plugin_signing_public_keys: list[str] = []
+    # Re-download a plugin's signed manifest when within this many days of expiry.
+    plugin_refresh_headroom_days: int = 7
     plugin_sync_interval: int = 3600
     camera_id: str = ""
     ttt_sync_enabled: bool = False
