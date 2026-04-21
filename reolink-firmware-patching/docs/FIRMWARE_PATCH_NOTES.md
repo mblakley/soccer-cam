@@ -6,9 +6,21 @@ working patches for the Reolink Duo 3 PoE running stock firmware
 
 ## Recommended daily-driver build
 
-**`build_bitrate_cap.sh stock.pak out.pak 20480`** — produces a PAK that
-carries only the two patches that have been empirically verified to be
-both functional AND consistent:
+For **most users**: `build_bitrate_cap.sh stock.pak out.pak 20480` — HTTP
+unlock + 20 Mbps bitrate cap, nothing else.
+
+For **soccer-cam users (Mark)**: `build_netstate.sh stock.pak out.pak
+20480 admin <password> <home-gateway-mac>` — adds an /etc/init.d/S99_NetState
+daemon that toggles the master `Rec.enable` flag based on the gateway MAC.
+At home → `enable=0`, no recording fires. Anywhere else (or cable
+unplugged) → `enable=1` + `TIMING` all-on, continuous recording starts
+within ~60 s of boot. End-to-end verified 2026-04-20: home boot → idle,
+unplug + boot → recording starts, replug + boot → idle. Decision log at
+`/mnt/sda/netstate/log` (rotates at 256 KB), readable via the HTTP
+unlock at `http://<cam>/downloadfile/netstate/log`.
+
+Both builds carry only the two patches that have been empirically
+verified to be both functional AND consistent:
 
 - HTTP `/downloadfile/` unlock (LAN downloads at full PoE wire-speed)
 - Main-stream max bitrate raised from 12288 to 20480 kbps
