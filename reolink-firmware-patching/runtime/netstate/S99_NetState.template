@@ -25,9 +25,9 @@ POLL_INTERVAL=30
 INIT_GRACE=45
 LOG_MAX_BYTES=262144
 
-# 168 chars: 7 days * 24 hours, 1 char per hour
+# 168 chars: 7 days * 24 hours, 1 char per hour. Daemon always pushes the
+# all-on schedule; only the master Rec.enable flag flips between home/away.
 ALL_ON='111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'
-ALL_OFF='000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
 
 mkdir -p "$CONFIG_DIR" 2>/dev/null
 
@@ -116,23 +116,25 @@ api_login() {
     [ -n "$TOK" ] && echo "$TOK"
 }
 
-set_record_schedule() {
-    # arg: "on" or "off"
-    local TOK BODY RESP TIMING
+set_record_state() {
+    # arg: "on" or "off". Only toggles the master Rec.enable flag. The TIMING
+    # schedule is always set all-on so that whenever enable=1, recording is
+    # continuous. enable=0 idles every trigger source regardless of schedule.
+    local TOK BODY RESP ENABLE
     TOK=$(api_login)
     if [ -z "$TOK" ]; then
         log "  api_login failed"
         return 1
     fi
-    if [ "$1" = "on" ]; then TIMING=$ALL_ON; else TIMING=$ALL_OFF; fi
-    BODY="[{\"cmd\":\"SetRecV20\",\"action\":0,\"param\":{\"Rec\":{\"enable\":1,\"overwrite\":1,\"postRec\":\"15 Seconds\",\"preRec\":1,\"saveDay\":7,\"schedule\":{\"channel\":0,\"table\":{\"TIMING\":\"$TIMING\"}}}}}]"
+    if [ "$1" = "on" ]; then ENABLE=1; else ENABLE=0; fi
+    BODY="[{\"cmd\":\"SetRecV20\",\"action\":0,\"param\":{\"Rec\":{\"enable\":$ENABLE,\"overwrite\":1,\"postRec\":\"15 Seconds\",\"preRec\":1,\"saveDay\":7,\"schedule\":{\"channel\":0,\"table\":{\"TIMING\":\"$ALL_ON\"}}}}}]"
     RESP=$(wget -q -O- --header='Content-Type: application/json' \
         --post-data="$BODY" \
         "http://127.0.0.1/api.cgi?cmd=SetRecV20&token=$TOK" 2>/dev/null)
     # API pretty-prints — accept either '"rspCode":200' or '"rspCode" : 200'
     case "$RESP" in
         *'"rspCode"'*200*) return 0 ;;
-        *) log "  set_record_schedule rsp: $RESP"; return 1 ;;
+        *) log "  set_record_state rsp: $RESP"; return 1 ;;
     esac
 }
 
@@ -186,9 +188,9 @@ main_loop() {
         if [ "$NEW_STATE" != "$LAST_STATE" ]; then
             log "state change: ${LAST_STATE:-init} -> $NEW_STATE  (gw=${GW:-none} mac=${MAC:-none})"
             if [ "$NEW_STATE" = "home" ]; then
-                set_record_schedule off && log "  recording schedule DISABLED (home)"
+                set_record_state off && log "  recording DISABLED (home, master enable=0)"
             else
-                set_record_schedule on  && log "  recording schedule ENABLED  (away)"
+                set_record_state on  && log "  recording ENABLED (away, master enable=1, TIMING all-on)"
             fi
             LAST_STATE="$NEW_STATE"
         fi
