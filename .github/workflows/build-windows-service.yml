@@ -16,7 +16,7 @@ jobs:
       build_number: ${{ steps.version.outputs.build_number }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
