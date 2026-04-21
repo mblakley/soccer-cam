@@ -113,6 +113,12 @@ class TTTReporter:
         """Pull config from TTT web UI. Returns None if TTT unreachable.
 
         Local config.ini is always the fallback/source of truth.
+
+        Side effect: if the synced config includes `stitch_profile` (set via the
+        TTT calibration tool), persist it to the path configured at
+        `processing.seam_realign_profile_path`. Downstream frame consumers use
+        the file at that path. No-op when no profile, no configured path, or
+        the same profile is already on disk.
         """
         if not self.enabled or not self.camera_id:
             return None
@@ -126,10 +132,51 @@ class TTTReporter:
             )
             if config:
                 logger.info("TTT: Pulled camera config from TTT")
+                self._persist_stitch_profile(config.get("stitch_profile"))
             return config
         except Exception as e:
             logger.warning("TTT: Failed to pull config: %s", e)
             return None
+
+    def _persist_stitch_profile(self, profile: dict | None) -> None:
+        """Write (or clear) the stitch profile JSON at the configured path.
+
+        Profile schema is validated by TTT's StitchProfileUpdate on the write
+        side; here we just round-trip the dict. Missing-key / invalid profiles
+        at read time are handled by soccer-cam's stitch_remap.load_profile.
+        """
+        import json
+        from pathlib import Path
+
+        processing = getattr(self.config, "processing", None)
+        if processing is None:
+            return
+        target = getattr(processing, "seam_realign_profile_path", None)
+        if not target:
+            return  # nothing to write to
+        target_path = Path(target)
+
+        if profile is None:
+            # TTT cleared it — remove any stale file so downstream stops applying.
+            if target_path.exists():
+                try:
+                    target_path.unlink()
+                    logger.info("TTT: cleared stitch profile at %s", target_path)
+                except OSError as e:
+                    logger.warning("TTT: failed to clear stitch profile: %s", e)
+            return
+
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            new_text = json.dumps(profile, indent=2, sort_keys=True)
+            if target_path.exists() and target_path.read_text() == new_text:
+                return  # unchanged
+            tmp = target_path.with_suffix(target_path.suffix + ".tmp")
+            tmp.write_text(new_text)
+            tmp.replace(target_path)
+            logger.info("TTT: wrote stitch profile to %s", target_path)
+        except (OSError, TypeError, ValueError) as e:
+            logger.warning("TTT: failed to write stitch profile: %s", e)
 
     async def push_config(self) -> None:
         """Upload current local config to TTT for backup/transfer purposes."""
