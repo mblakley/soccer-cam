@@ -109,7 +109,7 @@ jobs:
         & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer/installer.nsi
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
         path: |
