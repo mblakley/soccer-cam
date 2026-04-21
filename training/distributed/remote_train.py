@@ -1,4 +1,5 @@
 """Remote training script — maps share via WNet, then trains YOLO."""
+
 import sys
 import os
 
@@ -20,6 +21,7 @@ print("Dataset accessible!", flush=True)
 
 # Detect GPU and pick model
 import torch
+
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
 print(f"GPU: {gpu_name}", flush=True)
 
@@ -33,6 +35,7 @@ else:
 print(f"Training {model_name} batch={batch} as {run_name}", flush=True)
 
 from ultralytics import YOLO
+
 model = YOLO(model_name)
 model.train(
     data=os.path.join(os.path.dirname(__file__), "dataset.yaml"),

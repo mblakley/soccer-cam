@@ -7,7 +7,6 @@ Reuses trajectory linking from exp_allrow_gaps.py but generalized for
 any label directory and game list.
 """
 
-import json
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -25,8 +24,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_FRAME_INTERVAL = 4
 MIN_TRAJECTORY_FRAMES = 5
 # Gap threshold: gaps longer than this (in frames) are worth investigating
-SHORT_GAP_THRESHOLD = 50   # ~2 seconds at 25fps
-LONG_GAP_THRESHOLD = 150   # ~6 seconds
+SHORT_GAP_THRESHOLD = 50  # ~2 seconds at 25fps
+LONG_GAP_THRESHOLD = 150  # ~6 seconds
 
 
 def measure_game_coverage(
@@ -55,13 +54,20 @@ def measure_game_coverage(
             frame_dets[(segment, frame_idx)].append((pano_x, pano_y))
 
     if not frame_dets:
-        return {"game_id": game_id, "error": "no detections", "coverage": 0.0, "gaps": []}
+        return {
+            "game_id": game_id,
+            "error": "no detections",
+            "coverage": 0.0,
+            "gaps": [],
+        }
 
     # Auto-detect frame interval
     if frame_interval is None:
         all_fi = sorted(set(fi for _, fi in frame_dets))
         if len(all_fi) >= 2:
-            deltas = [all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))]
+            deltas = [
+                all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))
+            ]
             deltas = [d for d in deltas if d > 0]
             frame_interval = min(deltas) if deltas else DEFAULT_FRAME_INTERVAL
         else:
@@ -82,8 +88,12 @@ def measure_game_coverage(
 
     for segment, frame_indices in seg_frames.items():
         trajectories, gaps = _link_and_find_gaps(
-            segment, frame_indices, frame_dets,
-            game_id, frame_interval, max_frame_gap,
+            segment,
+            frame_indices,
+            frame_dets,
+            game_id,
+            frame_interval,
+            max_frame_gap,
         )
         all_trajectories.extend(trajectories)
         all_gaps.extend(gaps)
@@ -112,7 +122,9 @@ def measure_game_coverage(
         "total_frames": total_frames,
         "frames_with_detection": frames_with_detection,
         "frames_in_trajectories": len(trajectory_frames),
-        "trajectory_count": len([t for t in all_trajectories if len(t) >= MIN_TRAJECTORY_FRAMES]),
+        "trajectory_count": len(
+            [t for t in all_trajectories if len(t) >= MIN_TRAJECTORY_FRAMES]
+        ),
         "frame_interval": frame_interval,
         "gap_count": len(all_gaps),
         "short_gaps": len(short_gaps),
@@ -188,21 +200,23 @@ def _link_and_find_gaps(
 
             displacement = ((x_curr - x_prev) ** 2 + (y_curr - y_prev) ** 2) ** 0.5
 
-            gaps.append({
-                "game_id": game_id,
-                "segment": segment,
-                "frame_start": fi_prev,
-                "frame_end": fi_curr,
-                "gap_frames": gap_frames,
-                "gap_seconds": round(gap_frames / 25.0, 1),
-                "x_start": round(x_prev, 1),
-                "y_start": round(y_prev, 1),
-                "x_end": round(x_curr, 1),
-                "y_end": round(y_curr, 1),
-                "displacement": round(displacement, 1),
-                "trajectory_length": len(traj),
-                "priority": _compute_priority(gap_frames, len(traj), displacement),
-            })
+            gaps.append(
+                {
+                    "game_id": game_id,
+                    "segment": segment,
+                    "frame_start": fi_prev,
+                    "frame_end": fi_curr,
+                    "gap_frames": gap_frames,
+                    "gap_seconds": round(gap_frames / 25.0, 1),
+                    "x_start": round(x_prev, 1),
+                    "y_start": round(y_prev, 1),
+                    "x_end": round(x_curr, 1),
+                    "y_end": round(y_curr, 1),
+                    "displacement": round(displacement, 1),
+                    "trajectory_length": len(traj),
+                    "priority": _compute_priority(gap_frames, len(traj), displacement),
+                }
+            )
 
     return finished, gaps
 
@@ -254,7 +268,9 @@ def measure_all_games(
     total_long = sum(r["long_gaps"] for r in results)
     logger.info(
         "Overall: %.1f%% avg coverage, %d total gaps (%d long)",
-        avg_coverage * 100, total_gaps, total_long,
+        avg_coverage * 100,
+        total_gaps,
+        total_long,
     )
 
     return results

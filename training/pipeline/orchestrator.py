@@ -17,7 +17,6 @@ Usage:
 import argparse
 import json
 import logging
-import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -101,8 +100,7 @@ def get_games_with_labels(conn) -> list[dict]:
         ORDER BY g.game_id
     """).fetchall()
     return [
-        {"game_id": gid, "tiles": tc, "labels": lc}
-        for gid, tc, lc in rows if lc > 100
+        {"game_id": gid, "tiles": tc, "labels": lc} for gid, tc, lc in rows if lc > 100
     ]
 
 
@@ -161,21 +159,28 @@ def action_check_fortnite_labeling(state: dict) -> dict:
 
     # Task is Ready (done or never started)
     # Check if there are labels to collect
-    code, output = mgr.remote_exec("FORTNITE-OP", f"""
+    code, output = mgr.remote_exec(
+        "FORTNITE-OP",
+        f"""
         if (Test-Path "{FORTNITE_OP_LABEL_DB}") {{
             $sz = (Get-Item "{FORTNITE_OP_LABEL_DB}").Length
             Write-Output "DB_SIZE:$sz"
         }} else {{
             Write-Output "NO_DB"
         }}
-    """)
+    """,
+    )
 
     if "DB_SIZE:" in output:
         db_size = int(output.split("DB_SIZE:")[1].strip())
         if db_size > 4096:  # More than empty DB
             # Pull and merge labels
-            logger.info("FORTNITE-OP has labels to collect (DB: %d KB)", db_size // 1024)
-            local_remote_db = Path("D:/training_data/remote_manifests/fortnite_op_manifest.db")
+            logger.info(
+                "FORTNITE-OP has labels to collect (DB: %d KB)", db_size // 1024
+            )
+            local_remote_db = Path(
+                "D:/training_data/remote_manifests/fortnite_op_manifest.db"
+            )
             local_remote_db.parent.mkdir(parents=True, exist_ok=True)
 
             if mgr.pull_file("FORTNITE-OP", FORTNITE_OP_LABEL_DB, str(local_remote_db)):
@@ -185,7 +190,9 @@ def action_check_fortnite_labeling(state: dict) -> dict:
                 conn.close()
                 state["total_labels_merged"] += result["labels_inserted"]
                 state["last_merge_time"] = datetime.now().isoformat()
-                logger.info("Merged %d labels from FORTNITE-OP", result["labels_inserted"])
+                logger.info(
+                    "Merged %d labels from FORTNITE-OP", result["labels_inserted"]
+                )
                 mgr.send_ntfy(
                     f"Merged {result['labels_inserted']} labels from FORTNITE-OP. "
                     f"Total: {state['total_labels_merged']}",
@@ -220,7 +227,9 @@ def action_check_fortnite_labeling(state: dict) -> dict:
 
     if mgr.stage_video("FORTNITE-OP", next_game, video_paths):
         # Update the batch file on FORTNITE-OP to process this game
-        mgr.remote_exec("FORTNITE-OP", f"""
+        mgr.remote_exec(
+            "FORTNITE-OP",
+            f"""
             Remove-Item D:\\labeling\\manifest.db -ErrorAction SilentlyContinue
             Remove-Item D:\\labeling\\label_log.txt -ErrorAction SilentlyContinue
             @"
@@ -228,7 +237,9 @@ C:\\Python313\\python.exe -u C:\\soccer-cam-label\\label_job.py --video-dir "D:\
 "@ | Set-Content C:\\tmp\\run_label.bat -Encoding ASCII
             Start-ScheduledTask -TaskName "RunLabeling"
             Write-Output "STARTED"
-        """, timeout=30)
+        """,
+            timeout=30,
+        )
 
         state["current_fortnite_game"] = next_game
         logger.info("FORTNITE-OP: started labeling %s", next_game)
@@ -246,7 +257,9 @@ def action_check_laptop_training(state: dict) -> dict:
 
     if task_state == "Running":
         # Check progress
-        log = mgr.get_log_tail("jared-laptop", f"{LAPTOP_TRAINING_DIR}\\train_v3.log", 3)
+        log = mgr.get_log_tail(
+            "jared-laptop", f"{LAPTOP_TRAINING_DIR}\\train_v3.log", 3
+        )
         if log:
             logger.info("Laptop training: %s", log.split("\n")[-1][:100])
         return state
@@ -263,21 +276,30 @@ def action_check_laptop_training(state: dict) -> dict:
     # New labels available — should we build a new training set?
     labeled_games = _get_labeled_packed_games()
     if len(labeled_games) < 3:
-        logger.info("Only %d labeled games, need at least 3 for training", len(labeled_games))
+        logger.info(
+            "Only %d labeled games, need at least 3 for training", len(labeled_games)
+        )
         return state
 
     # Build new training set
     version = f"v3.{int(time.time()) % 10000}"
     output_dir = TRAINING_SETS_DIR / version
-    logger.info("Building training set %s (%d labeled games, %d labels)",
-                version, len(labeled_games), current_label_count)
+    logger.info(
+        "Building training set %s (%d labeled games, %d labels)",
+        version,
+        len(labeled_games),
+        current_label_count,
+    )
 
     val_game = labeled_games[-1]  # Last game as val
     train_games = labeled_games[:-1]
 
     # Get camera games for negative diversity
-    camera_games = [d.name for d in MASTER_PACKS.iterdir()
-                    if d.is_dir() and d.name.startswith("camera__")]
+    camera_games = [
+        d.name
+        for d in MASTER_PACKS.iterdir()
+        if d.is_dir() and d.name.startswith("camera__")
+    ]
 
     build_training_set(
         master_db=str(MASTER_DB),
@@ -293,18 +315,23 @@ def action_check_laptop_training(state: dict) -> dict:
     archive_path = ARCHIVE_DIR / version
     if ARCHIVE_DIR.exists():
         import shutil
+
         shutil.copytree(str(output_dir), str(archive_path), dirs_exist_ok=True)
         logger.info("Archived training set to %s", archive_path)
 
     # Deploy to laptop
     logger.info("Deploying training set to laptop...")
-    if mgr.push_directory("jared-laptop", str(output_dir),
-                          f"{LAPTOP_TRAINING_DIR}\\training_set"):
+    if mgr.push_directory(
+        "jared-laptop", str(output_dir), f"{LAPTOP_TRAINING_DIR}\\training_set"
+    ):
         # Start training
-        mgr.remote_exec("jared-laptop", f"""
+        mgr.remote_exec(
+            "jared-laptop",
+            """
             Start-ScheduledTask -TaskName "TrainV3"
             Write-Output "STARTED"
-        """)
+        """,
+        )
         state["last_training_set_version"] = version
         state["last_training_set_label_count"] = current_label_count
         state["last_training_deploy_time"] = datetime.now().isoformat()
@@ -327,7 +354,9 @@ def _get_labeled_packed_games() -> list[str]:
         if not d.is_dir() or not any(d.glob("*.pack")):
             continue
         gid = d.name
-        lc = conn.execute("SELECT COUNT(*) FROM labels WHERE game_id=?", (gid,)).fetchone()[0]
+        lc = conn.execute(
+            "SELECT COUNT(*) FROM labels WHERE game_id=?", (gid,)
+        ).fetchone()[0]
         if lc > 100:
             games.append(gid)
     conn.close()
@@ -352,10 +381,13 @@ def action_collect_training_results(state: dict) -> dict:
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     # Try to find best.pt on laptop
-    code, output = mgr.remote_exec("jared-laptop", """
+    code, output = mgr.remote_exec(
+        "jared-laptop",
+        """
         Get-ChildItem -Recurse C:\\soccer-cam-label\\training_set\\runs -Filter "best.pt" -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
-    """)
+    """,
+    )
 
     if output and "best.pt" in output:
         remote_weights = output.strip()
@@ -383,10 +415,12 @@ def print_status():
     print(f"  Training set:           {state.get('last_training_set_version', 'none')}")
     print(f"  Training in progress:   {state.get('training_in_progress', False)}")
     print(f"  FORTNITE-OP game:       {state.get('current_fortnite_game', 'none')}")
-    print(f"  Games labeled:          {len(state.get('games_labeled_by_fortnite', []))}")
+    print(
+        f"  Games labeled:          {len(state.get('games_labeled_by_fortnite', []))}"
+    )
 
     # Check machine status
-    print(f"\n  Machines:")
+    print("\n  Machines:")
     for hostname in ["FORTNITE-OP", "jared-laptop"]:
         online = mgr.is_online(hostname)
         print(f"    {hostname}: {'ONLINE' if online else 'OFFLINE'}")
@@ -419,8 +453,12 @@ def main():
     parser = argparse.ArgumentParser(description="Training pipeline orchestrator")
     parser.add_argument("--once", action="store_true", help="Run once and exit")
     parser.add_argument("--status", action="store_true", help="Show status and exit")
-    parser.add_argument("--interval", type=int, default=CHECK_INTERVAL,
-                        help=f"Seconds between checks (default: {CHECK_INTERVAL})")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=CHECK_INTERVAL,
+        help=f"Seconds between checks (default: {CHECK_INTERVAL})",
+    )
     args = parser.parse_args()
 
     if args.status:

@@ -11,7 +11,6 @@ Usage on remote machines:
 import argparse
 import os
 import shutil
-import subprocess
 import sys
 import tarfile
 import time
@@ -28,6 +27,7 @@ def ensure_share():
     sys.path.insert(0, str(script_dir))
     try:
         from map_share import map_share
+
         return map_share(
             SHARE_UNC,
             os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),

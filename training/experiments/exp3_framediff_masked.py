@@ -5,6 +5,7 @@ non-player objects (hopefully the ball).
 
 Uses person detection on r0 region to build masks.
 """
+
 import cv2
 import json
 import logging
@@ -75,7 +76,9 @@ def process_segment(video_path: Path, game_id: str, max_frames: int = 2000):
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     seg_name = video_path.stem
-    logger.info("  %s: %d frames (processing %d)", seg_name[:40], total, min(total, max_frames))
+    logger.info(
+        "  %s: %d frames (processing %d)", seg_name[:40], total, min(total, max_frames)
+    )
 
     # Load person detector (CPU)
     person_model = YOLO("yolo11n.pt")
@@ -198,26 +201,32 @@ def process_segment(video_path: Path, game_id: str, max_frames: int = 2000):
     results = []
     for traj in trajectories:
         path_len = sum(
-            ((traj[i][1] - traj[i - 1][1]) ** 2 + (traj[i][2] - traj[i - 1][2]) ** 2) ** 0.5
+            ((traj[i][1] - traj[i - 1][1]) ** 2 + (traj[i][2] - traj[i - 1][2]) ** 2)
+            ** 0.5
             for i in range(1, len(traj))
         )
         if path_len < MIN_PATH_LENGTH:
             continue  # static noise
 
-        results.append({
-            "game_id": game_id,
-            "segment": seg_name,
-            "frames": [(t[0], t[1], t[2]) for t in traj],
-            "path_length": round(path_len, 1),
-            "avg_area": round(sum(t[3] for t in traj) / len(traj), 1),
-            "avg_circularity": round(sum(t[4] for t in traj) / len(traj), 2),
-            "source": "framediff_person_masked",
-        })
+        results.append(
+            {
+                "game_id": game_id,
+                "segment": seg_name,
+                "frames": [(t[0], t[1], t[2]) for t in traj],
+                "path_length": round(path_len, 1),
+                "avg_area": round(sum(t[3] for t in traj) / len(traj), 1),
+                "avg_circularity": round(sum(t[4] for t in traj) / len(traj), 2),
+                "source": "framediff_person_masked",
+            }
+        )
 
     avg_persons = sum(person_counts) / len(person_counts) if person_counts else 0
     logger.info(
         "    %d candidates -> %d trajectories -> %d moving (avg %.1f persons/frame)",
-        len(candidates), len(trajectories), len(results), avg_persons,
+        len(candidates),
+        len(trajectories),
+        len(results),
+        avg_persons,
     )
     return results
 
@@ -256,10 +265,12 @@ def main():
         json.dump(all_results, f, indent=2)
 
     # Record findings
-    findings.append(f"Exp 3: Frame Diff with Person Masking")
+    findings.append("Exp 3: Frame Diff with Person Masking")
     findings.append(f"Time: {elapsed:.0f}s")
     findings.append(f"Total moving trajectories: {len(all_results)}")
-    findings.append(f"Target: < 500 per 200 frames. Got: {len(all_results)} total across all segments")
+    findings.append(
+        f"Target: < 500 per 200 frames. Got: {len(all_results)} total across all segments"
+    )
     if all_results:
         avg_path = sum(r["path_length"] for r in all_results) / len(all_results)
         avg_area = sum(r["avg_area"] for r in all_results) / len(all_results)

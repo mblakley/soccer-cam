@@ -337,8 +337,7 @@ async def get_exclusions():
             det_x = int(det.get("x", -1))
             det_y = int(det.get("y", -1))
             thumb_url = (
-                f"/api/packets/{packet_id}/thumb/{frame_idx}"
-                f"?bx={det_x}&by={det_y}"
+                f"/api/packets/{packet_id}/thumb/{frame_idx}?bx={det_x}&by={det_y}"
             )
 
             frame_info = {
@@ -370,40 +369,46 @@ async def get_exclusions():
     for game_id, wf in sorted(warmup_frames.items()):
         wf.sort(key=lambda x: x["time_secs"])
         max_time = max(f["time_secs"] for f in wf)
-        warmup_ranges.append({
-            "game_id": game_id,
-            "cutoff_secs": max_time,
-            "cutoff_mins": round(max_time / 60, 1),
-            "frame_count": len(wf),
-            "samples": wf[:6],  # show up to 6 sample images
-        })
+        warmup_ranges.append(
+            {
+                "game_id": game_id,
+                "cutoff_secs": max_time,
+                "cutoff_mins": round(max_time / 60, 1),
+                "frame_count": len(wf),
+                "samples": wf[:6],  # show up to 6 sample images
+            }
+        )
 
     # Build game-over summary
     gameover_ranges = []
     for game_id, gf in sorted(gameover_frames.items()):
         gf.sort(key=lambda x: x["time_secs"])
         min_time = min(f["time_secs"] for f in gf)
-        gameover_ranges.append({
-            "game_id": game_id,
-            "cutoff_secs": min_time,
-            "cutoff_mins": round(min_time / 60, 1),
-            "frame_count": len(gf),
-            "samples": gf[:6],
-        })
+        gameover_ranges.append(
+            {
+                "game_id": game_id,
+                "cutoff_secs": min_time,
+                "cutoff_mins": round(min_time / 60, 1),
+                "frame_count": len(gf),
+                "samples": gf[:6],
+            }
+        )
 
     # Build static ball summary — cluster by position proximity
     static_balls = []
     for key, sf in sorted(static_ball_clusters.items()):
         sf.sort(key=lambda x: x["time_secs"])
-        static_balls.append({
-            "position_key": key,
-            "frame_count": len(sf),
-            "time_range": {
-                "min_secs": sf[0]["time_secs"],
-                "max_secs": sf[-1]["time_secs"],
-            },
-            "samples": sf[:6],
-        })
+        static_balls.append(
+            {
+                "position_key": key,
+                "frame_count": len(sf),
+                "time_range": {
+                    "min_secs": sf[0]["time_secs"],
+                    "max_secs": sf[-1]["time_secs"],
+                },
+                "samples": sf[:6],
+            }
+        )
 
     # Count total exclusions that would apply
     total_excluded = (
@@ -486,9 +491,7 @@ async def get_thumb(game_id: str, frame_idx: int, bx: int = -1, by: int = -1):
 
         # Circle at ball
         r = 4
-        draw.ellipse(
-            [tx - r, ty - r, tx + r, ty + r], outline="#ff3333", width=2
-        )
+        draw.ellipse([tx - r, ty - r, tx + r, ty + r], outline="#ff3333", width=2)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
@@ -621,7 +624,9 @@ async def get_tracking_lab_tiles_for_frame(frame_idx: int):
     for row in range(3):  # r0, r1, r2 (include r0 for tracking lab)
         for col in range(7):  # c0-c6
             base = f"{segment}_frame_{frame_idx:06d}_r{row}_c{col}"
-            if (tiles_root / (base + ".jpg")).exists() or (tiles_root / (base + ".excluded")).exists():
+            if (tiles_root / (base + ".jpg")).exists() or (
+                tiles_root / (base + ".excluded")
+            ).exists():
                 tiles.append({"row": row, "col": col})
     return tiles
 
@@ -671,12 +676,14 @@ async def post_lab_message(message: dict):
         with open(msg_path) as f:
             existing = json.load(f)
 
-    existing.append({
-        "text": message.get("text", ""),
-        "frame_idx": message.get("frame_idx"),
-        "tile": message.get("tile"),
-        "timestamp": time.time(),
-    })
+    existing.append(
+        {
+            "text": message.get("text", ""),
+            "frame_idx": message.get("frame_idx"),
+            "tile": message.get("tile"),
+            "timestamp": time.time(),
+        }
+    )
     with open(msg_path, "w") as f:
         json.dump(existing, f, indent=2)
 
@@ -776,12 +783,14 @@ async def submit_ball_verify_result(result: dict):
     """
     results = _load_ball_verify_results()
     results = [r for r in results if r["frame_idx"] != result["frame_idx"]]
-    results.append({
-        "frame_idx": result["frame_idx"],
-        "verdict": result["verdict"],
-        "notes": result.get("notes", ""),
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-    })
+    results.append(
+        {
+            "frame_idx": result["frame_idx"],
+            "verdict": result["verdict"],
+            "notes": result.get("notes", ""),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     results.sort(key=lambda r: r["frame_idx"])
     _save_ball_verify_results(results)
 

@@ -1,4 +1,5 @@
 """Quick start: copy shards from D: share, extract, train."""
+
 import os
 import shutil
 import sys
@@ -86,7 +87,13 @@ from ultralytics import YOLO
 model = YOLO("yolo11s.pt")
 model.train(
     data=os.path.join(local, "dataset.yaml"),
-    epochs=100, imgsz=640, batch=16, device=0,
-    project=os.path.join(local, "runs"), name="ball_v2",
-    patience=30, workers=4, deterministic=True,
+    epochs=100,
+    imgsz=640,
+    batch=16,
+    device=0,
+    project=os.path.join(local, "runs"),
+    name="ball_v2",
+    patience=30,
+    workers=4,
+    deterministic=True,
 )

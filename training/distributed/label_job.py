@@ -34,7 +34,6 @@ import logging
 import os
 import sqlite3
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -57,12 +56,15 @@ FRAME_INTERVAL = 4
 # Set IDLE_CHECK_GAMES="FortniteClient,RobloxPlayerBeta,RocketLeague" to pause
 # when games are running. Checks between segments and every N frames during processing.
 IDLE_CHECK_GAMES = [
-    g.strip().lower() for g in
-    os.environ.get("IDLE_CHECK_GAMES", "FortniteClient,RobloxPlayerBeta,RocketLeague").split(",")
+    g.strip().lower()
+    for g in os.environ.get(
+        "IDLE_CHECK_GAMES", "FortniteClient,RobloxPlayerBeta,RocketLeague"
+    ).split(",")
     if g.strip()
 ]
 IDLE_CHECK_INTERVAL = 60  # seconds between checks while paused
 IDLE_CHECK_FRAME_INTERVAL = 500  # check every N processed frames during a segment
+
 
 def _is_game_running() -> str | None:
     """Check if any known game process is running. Returns process name or None."""
@@ -71,6 +73,7 @@ def _is_game_running() -> str | None:
     except ImportError:
         # psutil not available — check via tasklist (Windows)
         import subprocess
+
         result = subprocess.run(
             ["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True
         )
@@ -104,7 +107,9 @@ def wait_for_idle():
         if not game:
             logger.info("RESUMED — no games detected.")
             return
-        logger.info("  Still paused — %s running. Checking in %ds...", game, IDLE_CHECK_INTERVAL)
+        logger.info(
+            "  Still paused — %s running. Checking in %ds...", game, IDLE_CHECK_INTERVAL
+        )
 
 
 # ---- Field boundary (fisheye panoramic, 4096x1800) ----
@@ -253,15 +258,17 @@ def _collect_frame_labels(seg_name, frame_idx, dets):
     for det in dets:
         for tl in pano_to_tile_labels(det["cx"], det["cy"], det["w"], det["h"]):
             tile_stem = f"{seg_name}_frame_{frame_idx:06d}_r{tl['row']}_c{tl['col']}"
-            rows.append((
-                tile_stem,
-                0,  # class_id (ball)
-                tl["cx_norm"],
-                tl["cy_norm"],
-                tl["w_norm"],
-                tl["h_norm"],
-                det["conf"],
-            ))
+            rows.append(
+                (
+                    tile_stem,
+                    0,  # class_id (ball)
+                    tl["cx_norm"],
+                    tl["cy_norm"],
+                    tl["w_norm"],
+                    tl["h_norm"],
+                    det["conf"],
+                )
+            )
     return rows
 
 
@@ -276,8 +283,10 @@ def _flush_labels(conn, game_id, rows):
         """INSERT OR IGNORE INTO labels
            (game_id, tile_stem, class_id, cx, cy, w, h, source, confidence)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [(game_id, stem, cls, cx, cy, w, h, "onnx", conf)
-         for stem, cls, cx, cy, w, h, conf in rows],
+        [
+            (game_id, stem, cls, cx, cy, w, h, "onnx", conf)
+            for stem, cls, cx, cy, w, h, conf in rows
+        ],
     )
     conn.commit()
     count = len(rows)
@@ -300,6 +309,7 @@ def _get_resume_frame(conn, game_id, seg_name):
         return -1
     # Parse frame index from tile_stem: {seg}_frame_{NNNNNN}_r{R}_c{C}
     import re
+
     m = re.search(r"_frame_(\d{6})_r", row[0])
     return int(m.group(1)) if m else -1
 
@@ -329,12 +339,18 @@ def process_segment(
     # Check for resume point
     resume_after = _get_resume_frame(conn, game_id, seg_name)
     if resume_after >= 0:
-        logger.info("  %s (%d frames) — resuming after frame %d",
-                     seg_name[:50], total, resume_after)
+        logger.info(
+            "  %s (%d frames) — resuming after frame %d",
+            seg_name[:50],
+            total,
+            resume_after,
+        )
         cap.set(cv2.CAP_PROP_POS_FRAMES, resume_after + 1)
         fi = resume_after + 1
     else:
-        logger.info("  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval)
+        logger.info(
+            "  %s (%d frames, interval=%d)", seg_name[:50], total, frame_interval
+        )
         fi = 0
 
     det_count = 0
@@ -426,14 +442,24 @@ def run_label_job(
         else:
             # Check if near the end — open video briefly to get frame count
             cap = cv2.VideoCapture(str(seg))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+            total_frames = (
+                int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+            )
             cap.release()
             if total_frames > 0 and resume_frame >= total_frames - frame_interval * 2:
-                logger.info("  Skipping %s (fully labeled, last frame %d/%d)",
-                           seg.stem[:50], resume_frame, total_frames)
+                logger.info(
+                    "  Skipping %s (fully labeled, last frame %d/%d)",
+                    seg.stem[:50],
+                    resume_frame,
+                    total_frames,
+                )
             else:
-                logger.info("  Resuming %s (from frame %d/%d)",
-                           seg.stem[:50], resume_frame, total_frames)
+                logger.info(
+                    "  Resuming %s (from frame %d/%d)",
+                    seg.stem[:50],
+                    resume_frame,
+                    total_frames,
+                )
                 to_process.append(seg)
 
     unlabeled = to_process
@@ -450,7 +476,12 @@ def run_label_job(
     for seg in unlabeled:
         wait_for_idle()
         total_rows += process_segment(
-            seg, sess, conn, game_id, frame_interval, conf,
+            seg,
+            sess,
+            conn,
+            game_id,
+            frame_interval,
+            conf,
         )
 
     # Update game metadata
@@ -473,12 +504,12 @@ def main():
     parser.add_argument(
         "--video-dir", type=Path, help="Directory with segment .mp4 files"
     )
-    parser.add_argument(
-        "--game-id", type=str, help="Game ID for manifest labels"
-    )
+    parser.add_argument("--game-id", type=str, help="Game ID for manifest labels")
     parser.add_argument("--model", type=Path, default=Path("model.onnx"))
     parser.add_argument(
-        "--db", type=Path, default=Path("manifest.db"),
+        "--db",
+        type=Path,
+        default=Path("manifest.db"),
         help="Local manifest.db to write labels into",
     )
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)

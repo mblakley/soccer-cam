@@ -20,7 +20,6 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import sqlite3
 import time
@@ -39,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Classification constants
 STATIC_DISPLACEMENT_THRESHOLD = 50  # px in panoramic coords — if total trajectory
-                                     # displacement < this, it's static
+# displacement < this, it's static
 FRAME_INTERVAL = 4  # expected frame interval in the label data
 
 # Class IDs
@@ -137,7 +136,9 @@ def classify_game(
         all_fi.add(fi)
     sorted_fi = sorted(all_fi)
     if len(sorted_fi) >= 2:
-        gaps = [sorted_fi[i + 1] - sorted_fi[i] for i in range(min(100, len(sorted_fi) - 1))]
+        gaps = [
+            sorted_fi[i + 1] - sorted_fi[i] for i in range(min(100, len(sorted_fi) - 1))
+        ]
         gaps = [g for g in gaps if g > 0]
         frame_interval = min(gaps) if gaps else FRAME_INTERVAL
     else:
@@ -202,13 +203,16 @@ def classify_game(
                     dy = traj[i][2] - traj[i - 1][2]
                     dt = traj[i][0] - traj[i - 1][0]  # frame gap
                     if dt > 0:
-                        speed = ((dx ** 2 + dy ** 2) ** 0.5) / dt * frame_interval
+                        speed = ((dx**2 + dy**2) ** 0.5) / dt * frame_interval
                         velocities.append(speed)
 
                 # Total path length (sum of all moves, not just start→end)
                 path_length = sum(
-                    ((traj[i][1] - traj[i - 1][1]) ** 2 +
-                     (traj[i][2] - traj[i - 1][2]) ** 2) ** 0.5
+                    (
+                        (traj[i][1] - traj[i - 1][1]) ** 2
+                        + (traj[i][2] - traj[i - 1][2]) ** 2
+                    )
+                    ** 0.5
                     for i in range(1, len(traj))
                 )
 
@@ -281,7 +285,9 @@ def main():
     parser.add_argument("--games", nargs="+", help="Only process specific games")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     qa_verdicts = load_qa_verdicts(args.db)
 
@@ -289,13 +295,22 @@ def main():
     if args.games:
         game_dirs = [d for d in game_dirs if d.name in args.games]
 
-    totals = {"game_ball": 0, "static_ball": 0, "not_ball": 0, "qa_override": 0, "total": 0}
+    totals = {
+        "game_ball": 0,
+        "static_ball": 0,
+        "not_ball": 0,
+        "qa_override": 0,
+        "total": 0,
+    }
     start = time.time()
 
     for game_dir in game_dirs:
         game_id = game_dir.name
         game_stats = classify_game(
-            game_dir, args.output, game_id, qa_verdicts,
+            game_dir,
+            args.output,
+            game_id,
+            qa_verdicts,
         )
         for k, v in game_stats.items():
             totals[k] += v

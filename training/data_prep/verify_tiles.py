@@ -16,6 +16,7 @@ Usage:
                                                   [--db D:/training_data/manifest.db]
                                                   [--rescan]  # force re-catalog all games
 """
+
 import argparse
 import json
 import logging
@@ -83,7 +84,10 @@ def segment_stem(mp4_name: str) -> str:
 # Manifest-based verification (Phase 1)
 # ---------------------------------------------------------------------------
 
-def verify_from_manifest(conn, game_id: str, expected_segments: list[str]) -> GameReport:
+
+def verify_from_manifest(
+    conn, game_id: str, expected_segments: list[str]
+) -> GameReport:
     """Verify a game's tiles using the manifest DB — no filesystem access needed."""
     report = GameReport(game_id=game_id, source="manifest")
     report.segments_expected = [segment_stem(s) for s in expected_segments]
@@ -145,7 +149,9 @@ def verify_from_manifest(conn, game_id: str, expected_segments: list[str]) -> Ga
                 unmatched_extra.add(e)
 
         # Raw-zip pattern: single combined video tiled under one stem
-        if len(unmatched_extra) == 1 and len(report.segments_missing) == len(expected_stems):
+        if len(unmatched_extra) == 1 and len(report.segments_missing) == len(
+            expected_stems
+        ):
             raw_stem = list(unmatched_extra)[0]
             logger.info("    (raw-zip game: all tiles under stem '%s')", raw_stem)
             report.segments_missing = []
@@ -188,6 +194,7 @@ def verify_from_manifest(conn, game_id: str, expected_segments: list[str]) -> Ga
 # Zip verification (Phase 2) — kept as-is, uses in-memory analysis
 # ---------------------------------------------------------------------------
 
+
 def parse_tile_name(name: str) -> dict | None:
     """Parse a tile filename into its components."""
     m = TILE_RE.match(name)
@@ -211,7 +218,7 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
 
     for name in tile_names:
         if name.startswith(game_id + "/"):
-            name = name[len(game_id) + 1:]
+            name = name[len(game_id) + 1 :]
 
         parsed = parse_tile_name(name)
         if parsed is None:
@@ -222,7 +229,9 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
         )
 
     if unparsed:
-        logger.warning("  %d unparseable filenames (first 3: %s)", len(unparsed), unparsed[:3])
+        logger.warning(
+            "  %d unparseable filenames (first 3: %s)", len(unparsed), unparsed[:3]
+        )
 
     reports = {}
     for seg_id in sorted(seg_frames.keys()):
@@ -238,7 +247,9 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
             ]
             report.max_gap = max(gaps)
 
-        expected_tiles = {(r, c) for r in range(EXPECTED_ROWS) for c in range(EXPECTED_COLS)}
+        expected_tiles = {
+            (r, c) for r in range(EXPECTED_ROWS) for c in range(EXPECTED_COLS)
+        }
         for frame_idx in sorted(frames.keys()):
             tiles = frames[frame_idx]
             report.tile_count += len(tiles)
@@ -249,14 +260,18 @@ def analyze_tiles(tile_names: list[str], game_id: str) -> dict[str, SegmentRepor
                 for r, c in missing:
                     report.missing_tiles.append((frame_idx, r, c))
                 if extra:
-                    logger.warning("  %s frame %d: unexpected tiles %s", seg_id, frame_idx, extra)
+                    logger.warning(
+                        "  %s frame %d: unexpected tiles %s", seg_id, frame_idx, extra
+                    )
 
         reports[seg_id] = report
 
     return reports
 
 
-def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> GameReport:
+def verify_zip(
+    zip_path: Path, game_id: str, expected_segments: list[str]
+) -> GameReport:
     """Verify a zip file's integrity and contents."""
     report = GameReport(game_id=game_id, source=f"zip:{zip_path.name}")
     report.segments_expected = [segment_stem(s) for s in expected_segments]
@@ -322,14 +337,19 @@ def verify_zip(zip_path: Path, game_id: str, expected_segments: list[str]) -> Ga
 # Reporting
 # ---------------------------------------------------------------------------
 
+
 def print_report(report: GameReport, verbose: bool = False):
     """Print a game verification report."""
     status = "OK" if not report.issues else "ISSUES"
     seg_info = f"{len(report.segments_found)}/{len(report.segments_expected)} segs"
     logger.info(
         "  [%s] %s: %s, %d frames, %d tiles (%s)",
-        status, report.game_id, seg_info,
-        report.total_frames, report.total_tiles, report.source,
+        status,
+        report.game_id,
+        seg_info,
+        report.total_frames,
+        report.total_tiles,
+        report.source,
     )
 
     if report.issues:
@@ -340,11 +360,16 @@ def print_report(report: GameReport, verbose: bool = False):
         for seg_id, sr in sorted(report.segment_reports.items()):
             frame_range = (
                 f"frames {sr.frame_indices[0]}-{sr.frame_indices[-1]}"
-                if sr.frame_indices else "no frames"
+                if sr.frame_indices
+                else "no frames"
             )
             logger.info(
                 "    seg %s: %d frames, %d tiles, max_gap=%d (%s)",
-                seg_id, sr.frame_count, sr.tile_count, sr.max_gap, frame_range,
+                seg_id,
+                sr.frame_count,
+                sr.tile_count,
+                sr.max_gap,
+                frame_range,
             )
 
 
@@ -357,59 +382,82 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
             continue
 
         for issue in report.issues:
-            if issue.startswith("MISSING:") or issue.startswith("EMPTY:") or issue.startswith("NOT_CATALOGED:"):
-                gaps.append({
-                    "game_id": report.game_id,
-                    "type": "full_game",
-                    "detail": "entire game needs tiling",
-                    "segments": report.segments_expected,
-                })
+            if (
+                issue.startswith("MISSING:")
+                or issue.startswith("EMPTY:")
+                or issue.startswith("NOT_CATALOGED:")
+            ):
+                gaps.append(
+                    {
+                        "game_id": report.game_id,
+                        "type": "full_game",
+                        "detail": "entire game needs tiling",
+                        "segments": report.segments_expected,
+                    }
+                )
                 break
             elif issue.startswith("MISSING_SEGMENTS:"):
-                gaps.append({
-                    "game_id": report.game_id,
-                    "type": "missing_segments",
-                    "detail": f"segments: {report.segments_missing}",
-                    "segments": report.segments_missing,
-                })
+                gaps.append(
+                    {
+                        "game_id": report.game_id,
+                        "type": "missing_segments",
+                        "detail": f"segments: {report.segments_missing}",
+                        "segments": report.segments_missing,
+                    }
+                )
             elif issue.startswith("CORRUPT") or issue.startswith("BAD_ZIP"):
-                gaps.append({
-                    "game_id": report.game_id,
-                    "type": "corrupt_zip",
-                    "detail": issue,
-                    "segments": report.segments_expected,
-                })
+                gaps.append(
+                    {
+                        "game_id": report.game_id,
+                        "type": "corrupt_zip",
+                        "detail": issue,
+                        "segments": report.segments_expected,
+                    }
+                )
                 break
             elif issue.startswith("SUSPICIOUSLY_LOW:"):
                 seg_id = issue.split(":")[1].strip().split(" ")[0]
-                gaps.append({
-                    "game_id": report.game_id,
-                    "type": "truncated_segment",
-                    "detail": issue,
-                    "segments": [seg_id],
-                })
+                gaps.append(
+                    {
+                        "game_id": report.game_id,
+                        "type": "truncated_segment",
+                        "detail": issue,
+                        "segments": [seg_id],
+                    }
+                )
             elif issue.startswith("INCOMPLETE_FRAMES:"):
                 seg_id = issue.split(":")[1].strip().split(" ")[0]
-                gaps.append({
-                    "game_id": report.game_id,
-                    "type": "incomplete_frames",
-                    "detail": issue,
-                    "segments": [seg_id],
-                })
+                gaps.append(
+                    {
+                        "game_id": report.game_id,
+                        "type": "incomplete_frames",
+                        "detail": issue,
+                        "segments": [seg_id],
+                    }
+                )
 
     if not gaps:
         logger.info("\n=== NO GAPS FOUND — all tiles verified ===")
         return gaps
 
-    logger.info("\n=== GAP SUMMARY: %d issues across %d games ===",
-                len(gaps), len(set(g["game_id"] for g in gaps)))
+    logger.info(
+        "\n=== GAP SUMMARY: %d issues across %d games ===",
+        len(gaps),
+        len(set(g["game_id"] for g in gaps)),
+    )
     logger.info("")
 
     by_type = defaultdict(list)
     for g in gaps:
         by_type[g["type"]].append(g)
 
-    for gap_type in ["full_game", "corrupt_zip", "missing_segments", "truncated_segment", "incomplete_frames"]:
+    for gap_type in [
+        "full_game",
+        "corrupt_zip",
+        "missing_segments",
+        "truncated_segment",
+        "incomplete_frames",
+    ]:
         items = by_type.get(gap_type, [])
         if not items:
             continue
@@ -430,21 +478,34 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Verify tile completeness")
-    parser.add_argument("--tiles-dir", default="D:/training_data/tiles_640",
-                        help="Directory containing extracted tile subdirectories")
-    parser.add_argument("--zips-dir", default="F:/tile_zips",
-                        help="Directory containing tile zip archives")
-    parser.add_argument("--registry", default="D:/training_data/game_registry.json",
-                        help="Path to game_registry.json")
-    parser.add_argument("--db", default="D:/training_data/manifest.db",
-                        help="Path to manifest.db")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Show per-segment detail")
+    parser.add_argument(
+        "--tiles-dir",
+        default="D:/training_data/tiles_640",
+        help="Directory containing extracted tile subdirectories",
+    )
+    parser.add_argument(
+        "--zips-dir",
+        default="F:/tile_zips",
+        help="Directory containing tile zip archives",
+    )
+    parser.add_argument(
+        "--registry",
+        default="D:/training_data/game_registry.json",
+        help="Path to game_registry.json",
+    )
+    parser.add_argument(
+        "--db", default="D:/training_data/manifest.db", help="Path to manifest.db"
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show per-segment detail"
+    )
     parser.add_argument("--game", help="Verify a single game only")
-    parser.add_argument("--rescan", action="store_true",
-                        help="Force re-catalog all games from disk")
+    parser.add_argument(
+        "--rescan", action="store_true", help="Force re-catalog all games from disk"
+    )
     args = parser.parse_args()
 
     tiles_dir = Path(args.tiles_dir)
@@ -502,7 +563,10 @@ def main():
             stats = manifest.catalog_game_tiles(conn, gid, game_dir)
             logger.info(
                 "  Cataloged: %d segs, %d frames, %d tiles (%.1fs)%s",
-                stats["segments"], stats["frames"], stats["tiles"], stats["elapsed"],
+                stats["segments"],
+                stats["frames"],
+                stats["tiles"],
+                stats["elapsed"],
                 f" ({stats['unparsed']} unparsed)" if stats["unparsed"] else "",
             )
 
@@ -611,10 +675,14 @@ def main():
             source="none",
             segments_expected=[segment_stem(s) for s in expected_segs],
             segments_missing=[segment_stem(s) for s in expected_segs],
-            issues=[f"NO_TILES: game has no tiles on disk or in zips ({len(expected_segs)} segments)"],
+            issues=[
+                f"NO_TILES: game has no tiles on disk or in zips ({len(expected_segs)} segments)"
+            ],
         )
         all_reports.append(report)
-        logger.info("  [MISSING] %s: %d segments, no tiles anywhere", gid, len(expected_segs))
+        logger.info(
+            "  [MISSING] %s: %d segments, no tiles anywhere", gid, len(expected_segs)
+        )
 
     # Summary
     logger.info("")

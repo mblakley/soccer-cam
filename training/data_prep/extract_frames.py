@@ -19,6 +19,7 @@ DEFAULT_JPEG_QUALITY = 95
 
 try:
     import av
+
     HAS_AV = True
 except ImportError:
     HAS_AV = False
@@ -36,12 +37,22 @@ def extract_frames(
     """Extract frames from a video file at regular intervals."""
     if HAS_AV:
         return _extract_frames_av(
-            video_path, output_dir, interval_sec, diff_threshold,
-            jpeg_quality, frame_interval, flip,
+            video_path,
+            output_dir,
+            interval_sec,
+            diff_threshold,
+            jpeg_quality,
+            frame_interval,
+            flip,
         )
     return _extract_frames_cv2(
-        video_path, output_dir, interval_sec, diff_threshold,
-        jpeg_quality, frame_interval, flip,
+        video_path,
+        output_dir,
+        interval_sec,
+        diff_threshold,
+        jpeg_quality,
+        frame_interval,
+        flip,
     )
 
 
@@ -68,7 +79,10 @@ def _extract_frames_av(
 
     logger.info(
         "Extracting frames from %s (%.1f fps, %d total, every %d frames) [PyAV]",
-        video_path.name, fps, total_frames, frame_interval,
+        video_path.name,
+        fps,
+        total_frames,
+        frame_interval,
     )
 
     prev_frame = None
@@ -88,7 +102,10 @@ def _extract_frames_av(
                     if prev_frame is not None:
                         try:
                             diff = np.mean(
-                                np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))
+                                np.abs(
+                                    frame.astype(np.float32)
+                                    - prev_frame.astype(np.float32)
+                                )
                             )
                         except (MemoryError, ValueError):
                             frame_idx += 1
@@ -98,14 +115,18 @@ def _extract_frames_av(
                             continue
 
                     out_path = output_dir / f"{video_name}_frame_{frame_idx:06d}.jpg"
-                    cv2.imwrite(str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                    cv2.imwrite(
+                        str(out_path), frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+                    )
                     prev_frame = frame.copy()
                     extracted += 1
 
                     if extracted % 100 == 0:
                         logger.info(
                             "Extracted %d frames so far (at frame %d/%d)",
-                            extracted, frame_idx, total_frames,
+                            extracted,
+                            frame_idx,
+                            total_frames,
                         )
 
                 frame_idx += 1
@@ -144,7 +165,10 @@ def _extract_frames_cv2(
 
     logger.info(
         "Extracting frames from %s (%.1f fps, %d total, every %d frames) [cv2]",
-        video_path.name, fps, total_frames, frame_interval,
+        video_path.name,
+        fps,
+        total_frames,
+        frame_interval,
     )
 
     prev_frame = None
@@ -187,7 +211,9 @@ def _extract_frames_cv2(
             if extracted % 100 == 0:
                 logger.info(
                     "Extracted %d frames so far (at frame %d/%d)",
-                    extracted, frame_idx, total_frames,
+                    extracted,
+                    frame_idx,
+                    total_frames,
                 )
 
         frame_idx += 1
