@@ -152,17 +152,7 @@ def sweep_thresholds(
             ("r1_mid", lambda m: m["row"] == 1),
             ("r2_near", lambda m: m["row"] == 2),
         ]:
-            region_frames = [
-                fi
-                for fi in gt_frames
-                if any(
-                    entry.get("action") == "mark_ball"
-                    and entry["frame_idx"] == fi
-                    and row_filter(entry)
-                    for entry in []  # placeholder — need raw feedback
-                )
-            ]
-            # Simplified: use ground truth y-coordinate to determine region
+            # Use ground truth y-coordinate to determine region
             r_frames = []
             for fi in gt_frames:
                 _, uy = ground_truth[fi]

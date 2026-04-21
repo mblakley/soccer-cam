@@ -59,9 +59,7 @@ def extract_shards(shards_dir: Path, local_dir: Path):
 
     # Copy cache files
     for cache in shards_dir.glob("*.cache"):
-        # Put caches in the right spot
-        dest = local_dir / "labels" / cache.stem.replace(".", "/") / cache.name
-        # Actually just copy to labels/train/ and labels/val/
+        # Copy to labels/train/ and labels/val/
         for split_dir in (local_dir / "labels").iterdir():
             if split_dir.is_dir():
                 for game_dir in split_dir.iterdir():
