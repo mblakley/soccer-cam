@@ -74,6 +74,8 @@ class ProcessingConfig(BaseModel):
     retry_delay: int = 60
     trim_end_enabled: bool = False
     ffmpeg_timeout_seconds: int = 1800
+    seam_realign_enabled: bool = False
+    seam_realign_profile_path: Optional[str] = None
 
 
 class LoggingConfig(BaseModel):

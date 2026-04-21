@@ -14,6 +14,11 @@ from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
 )
+from video_grouper.utils.stitch_remap import (
+    load_profile,
+    sidecar_path_for,
+    write_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +121,7 @@ class CombineTask(BaseFfmpegTask):
             )
 
             if success:
+                self._write_stitch_sidecar(output_path)
                 await self._handle_post_combine_actions()
             else:
                 await self._handle_task_failure()
@@ -126,6 +132,36 @@ class CombineTask(BaseFfmpegTask):
             logger.error(f"COMBINE: Error during combine task execution: {e}")
             await self._handle_task_failure()
             return False
+
+    def _write_stitch_sidecar(self, output_path: str) -> None:
+        """Copy the configured stitch profile to `<combined.mp4>.stitch.json`.
+
+        Downstream readers (ball detection, tracking, broadcast-perspective render)
+        look for the sidecar next to the MP4 to apply the per-row dx shift on read.
+        No-op when no profile is configured or the source file is missing — the
+        combined MP4 itself is not modified.
+        """
+        try:
+            cfg = getattr(self, "config", None)
+            processing = getattr(cfg, "processing", None) if cfg else None
+            if not processing or not getattr(processing, "seam_realign_enabled", False):
+                return
+            profile_path = getattr(processing, "seam_realign_profile_path", None)
+            if not profile_path:
+                return
+            profile = load_profile(profile_path)
+            if profile is None:
+                logger.warning(
+                    f"COMBINE: seam_realign_enabled but no readable profile at "
+                    f"{profile_path}; skipping sidecar"
+                )
+                return
+            sidecar = sidecar_path_for(output_path)
+            write_profile(profile, sidecar)
+            logger.info(f"COMBINE: wrote stitch profile sidecar to {sidecar}")
+        except Exception as e:
+            # Sidecar write is non-critical: downstream will just skip the shift.
+            logger.warning(f"COMBINE: failed to write stitch sidecar: {e}")
 
     async def _handle_post_combine_actions(self) -> None:
         """Handle post-combine actions like updating status and checking for trim readiness."""

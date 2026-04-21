@@ -64,9 +64,11 @@ class QueueProcessor(ABC):
         return str(item)
 
     def _inject_storage_path(self, item: BaseTask) -> None:
-        """Ensure the task knows the storage path for later execution."""
+        """Ensure the task knows the storage path and config for later execution."""
         if not hasattr(item, "storage_path"):
             setattr(item, "storage_path", self.storage_path)
+        if not hasattr(item, "config"):
+            setattr(item, "config", self.config)
 
     def _get_priority(self, item: BaseTask) -> int:
         """Return priority for this item. Lower = higher priority. Default: 2 (normal)."""

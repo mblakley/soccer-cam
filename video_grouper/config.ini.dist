@@ -18,6 +18,15 @@ max_concurrent_conversions = 1
 retry_attempts = 3
 retry_delay = 60
 
+# Per-row stitch correction (dual-lens panoramic cameras only). When enabled
+# and a profile is present at seam_realign_profile_path, each completed
+# combined.mp4 gets a `<name>.mp4.stitch.json` sidecar. Downstream readers
+# (ball detection, tracking, broadcast-perspective render) apply the per-row
+# dx shift to the right half on decode. The combined.mp4 itself is NOT
+# modified — keeps combine/trim stream-copy fast.
+# seam_realign_enabled = false
+# seam_realign_profile_path = ./shared_data/stitch_profile.json
+
 [LOGGING]
 level = INFO
 log_dir = logs
