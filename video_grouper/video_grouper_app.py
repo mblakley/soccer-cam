@@ -240,6 +240,31 @@ class VideoGrouperApp:
 
                 drive_uploader = GoogleDriveUploader(self.storage_path)
 
+                # YouTube uploader for delivery_method='youtube' clip requests.
+                # Reuses the camera manager's existing YouTube OAuth tokens.
+                youtube_uploader = None
+                try:
+                    from video_grouper.utils.youtube_upload import (
+                        YouTubeUploader,
+                        get_youtube_paths,
+                    )
+
+                    credentials_file, token_file = get_youtube_paths(self.storage_path)
+                    if os.path.exists(token_file):
+                        youtube_uploader = YouTubeUploader(credentials_file, token_file)
+                        logger.info(
+                            "TTT clip requests: YouTube uploader initialized (camera manager's channel)"
+                        )
+                    else:
+                        logger.info(
+                            "TTT clip requests: YouTube token not present; youtube delivery will be skipped until the manager authenticates"
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to initialize YouTube uploader for clip requests",
+                        exc_info=True,
+                    )
+
                 # Get ntfy_service from ntfy_processor if available
                 ntfy_service = None
                 if self.ntfy_processor and hasattr(self.ntfy_processor, "ntfy_service"):
@@ -251,6 +276,7 @@ class VideoGrouperApp:
                     ttt_client=ttt_client,
                     drive_uploader=drive_uploader,
                     ntfy_service=ntfy_service,
+                    youtube_uploader=youtube_uploader,
                     poll_interval=self.config.ttt.clip_request_poll_interval,
                 )
                 logger.info("TTT ClipRequestProcessor initialized")

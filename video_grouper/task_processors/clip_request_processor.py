@@ -1,4 +1,4 @@
-"""Clip request processor — polls TTT for pending requests, extracts clips, uploads to Drive."""
+"""Clip request processor — polls TTT for pending requests, extracts clips, uploads."""
 
 import asyncio
 import logging
@@ -19,9 +19,10 @@ class ClipRequestProcessor(PollingProcessor):
     1. Mark as in_progress via TTT API
     2. Locate combined.mp4 in recording_group_dir
     3. Extract clips via FFmpeg
-    4. If compilation, merge clips
-    5. Upload to Google Drive
-    6. Report fulfilled URL back to TTT
+    4. Dispatch on delivery_method:
+       - 'youtube': always produce one video (compile multi-segment), upload to YouTube
+       - 'external_storage': honor is_compilation (compile → 1 upload, else N uploads), Drive
+    5. Report fulfilled URL back to TTT
     """
 
     def __init__(
@@ -31,11 +32,13 @@ class ClipRequestProcessor(PollingProcessor):
         ttt_client,
         drive_uploader,
         ntfy_service=None,
+        youtube_uploader=None,
         poll_interval: int = 60,
     ):
         super().__init__(storage_path, config, poll_interval)
         self.ttt_client = ttt_client
         self.drive_uploader = drive_uploader
+        self.youtube_uploader = youtube_uploader
         self.ntfy_service = ntfy_service
         self._processing = set()  # Track in-flight request IDs
 
@@ -64,6 +67,8 @@ class ClipRequestProcessor(PollingProcessor):
     async def _process_request(self, req: dict) -> None:
         """Process a single clip request end-to-end."""
         req_id = req["id"]
+        clip_paths: list[str] = []
+        upload_paths: list[str] = []
         try:
             recording_dir = self._resolve_recording_dir(req)
             if not recording_dir:
@@ -95,41 +100,24 @@ class ClipRequestProcessor(PollingProcessor):
                 logger.error(f"No clips extracted for request {req_id}")
                 return
 
-            # Compile if needed
-            is_compilation = req.get("is_compilation", False)
-            if is_compilation and len(clip_paths) > 1:
-                output_path = os.path.join(
-                    tempfile.gettempdir(), f"ttt_compilation_{req_id}.mp4"
-                )
-                from ..utils.ffmpeg_utils import compile_clips
-
-                await compile_clips(clip_paths, output_path)
-                upload_paths = [output_path]
+            # Dispatch on delivery method
+            delivery_method = req.get("delivery_method", "external_storage")
+            if delivery_method == "youtube":
+                result = await self._upload_via_youtube(req, clip_paths)
+            elif delivery_method == "external_storage":
+                result = await self._upload_via_drive(req, clip_paths)
             else:
-                upload_paths = clip_paths
-
-            # Upload to Google Drive
-            folder_id = self.config.ttt.google_drive_folder_id
-            if not folder_id:
-                logger.error("Google Drive folder ID not configured for TTT")
+                logger.error(
+                    f"Unknown delivery_method {delivery_method!r} for request {req_id}"
+                )
                 return
 
-            share_urls = []
-            for path in upload_paths:
-                filename = os.path.basename(path)
-                try:
-                    url = await asyncio.to_thread(
-                        self.drive_uploader.upload_and_share, path, folder_id, filename
-                    )
-                    share_urls.append(url)
-                except Exception as e:
-                    logger.error(f"Failed to upload {filename} to Drive: {e}")
-                    return
+            if result is None:
+                # Upload failure already logged; leave request in_progress for retry
+                return
+            fulfilled_url, upload_paths = result
 
             # Fulfill the request
-            fulfilled_url = (
-                share_urls[0] if len(share_urls) == 1 else ", ".join(share_urls)
-            )
             notes = f"{len(segments)} clip(s) extracted and uploaded"
             try:
                 await asyncio.to_thread(
@@ -150,24 +138,130 @@ class ClipRequestProcessor(PollingProcessor):
                 except Exception:
                     pass  # Non-critical
 
-            # Clean up temp files
-            for path in clip_paths:
-                if path.startswith(tempfile.gettempdir()):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            for path in upload_paths:
-                if path.startswith(tempfile.gettempdir()) and path not in clip_paths:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-
         except Exception as e:
             logger.error(f"Error processing clip request {req_id}: {e}", exc_info=True)
         finally:
+            self._cleanup_temp_files(clip_paths, upload_paths)
             self._processing.discard(req_id)
+
+    async def _upload_via_drive(
+        self, req: dict, clip_paths: list[str]
+    ) -> Optional[tuple[str, list[str]]]:
+        """Upload clips to Google Drive. Returns (fulfilled_url, upload_paths) or None on failure."""
+        req_id = req["id"]
+        is_compilation = req.get("is_compilation", False)
+
+        if is_compilation and len(clip_paths) > 1:
+            output_path = os.path.join(
+                tempfile.gettempdir(), f"ttt_compilation_{req_id}.mp4"
+            )
+            from ..utils.ffmpeg_utils import compile_clips
+
+            await compile_clips(clip_paths, output_path)
+            upload_paths = [output_path]
+        else:
+            upload_paths = list(clip_paths)
+
+        folder_id = self.config.ttt.google_drive_folder_id
+        if not folder_id:
+            logger.error("Google Drive folder ID not configured for TTT")
+            return None
+
+        share_urls = []
+        for path in upload_paths:
+            filename = os.path.basename(path)
+            try:
+                url = await asyncio.to_thread(
+                    self.drive_uploader.upload_and_share, path, folder_id, filename
+                )
+                share_urls.append(url)
+            except Exception as e:
+                logger.error(f"Failed to upload {filename} to Drive: {e}")
+                return None
+
+        fulfilled_url = share_urls[0] if len(share_urls) == 1 else ", ".join(share_urls)
+        return fulfilled_url, upload_paths
+
+    async def _upload_via_youtube(
+        self, req: dict, clip_paths: list[str]
+    ) -> Optional[tuple[str, list[str]]]:
+        """Upload a single video to YouTube. Always produces one video (compiles if multi-segment).
+
+        Returns (fulfilled_url, upload_paths) or None on failure.
+        """
+        req_id = req["id"]
+        if not self.youtube_uploader:
+            logger.error(
+                f"YouTube delivery requested for {req_id} but no YouTube uploader configured"
+            )
+            return None
+
+        # YouTube path always produces one video per request.
+        if len(clip_paths) > 1:
+            output_path = os.path.join(tempfile.gettempdir(), f"ttt_yt_{req_id}.mp4")
+            from ..utils.ffmpeg_utils import compile_clips
+
+            await compile_clips(clip_paths, output_path)
+            upload_paths = [output_path]
+        else:
+            upload_paths = list(clip_paths)
+
+        title, description = self._youtube_metadata(req)
+
+        try:
+            video_id = await asyncio.to_thread(
+                self.youtube_uploader.upload_video,
+                upload_paths[0],
+                title,
+                description,
+                None,  # tags
+                "unlisted",  # privacy_status
+            )
+        except Exception as e:
+            logger.error(f"YouTube upload failed for request {req_id}: {e}")
+            return None
+
+        if not video_id:
+            logger.error(f"YouTube upload returned no video id for request {req_id}")
+            return None
+
+        return f"https://youtu.be/{video_id}", upload_paths
+
+    def _youtube_metadata(self, req: dict) -> tuple[str, str]:
+        """Build YouTube title + description from request context."""
+        game = req.get("game_session") or {}
+        opponent = game.get("opponent_name") or "Opponent"
+        game_date = game.get("start_time") or ""
+        # start_time is ISO; take date portion if present
+        date_part = game_date.split("T")[0] if "T" in game_date else game_date
+        seg_count = len(req.get("segments", []))
+        if seg_count > 1:
+            title = f"vs {opponent} — highlights ({date_part})".strip(" ()—")
+        else:
+            label = (req.get("segments") or [{}])[0].get("label") or "clip"
+            title = f"vs {opponent} — {label} ({date_part})".strip(" ()—")
+        description_parts = [f"{seg_count} clip(s) from the game."]
+        if notes := req.get("notes"):
+            description_parts.append(f"Notes: {notes}")
+        return title, "\n".join(description_parts)
+
+    def _cleanup_temp_files(
+        self, clip_paths: list[str], upload_paths: list[str]
+    ) -> None:
+        """Remove any temp clip/compilation files we created."""
+        temp_root = tempfile.gettempdir()
+        for path in clip_paths:
+            if path.startswith(temp_root):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        for path in upload_paths:
+            if path.startswith(temp_root) and path not in clip_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def _resolve_recording_dir(self, req: dict) -> Optional[str]:
         """Resolve the recording group directory to an absolute path."""
