@@ -195,6 +195,32 @@ class TTTApiClient:
             return False
         return time.time() < self._expires_at
 
+    @property
+    def current_user_id(self) -> Optional[str]:
+        """Return the authenticated user's id (JWT `sub` claim), or None."""
+        if not self._access_token:
+            return None
+        try:
+            payload = _decode_jwt_payload(self._access_token)
+        except Exception:
+            return None
+        return payload.get("sub")
+
+    def check_entitlement(self, entitlement_key: str) -> bool:
+        """Return True if the current user holds the named entitlement.
+
+        Reads from the capabilities endpoint. Returns False on any error so
+        callers fail closed.
+        """
+        try:
+            caps = self.get_capabilities()
+        except Exception:
+            return False
+        if not isinstance(caps, dict):
+            return False
+        entitlements = caps.get("entitlements") or {}
+        return bool(entitlements.get(entitlement_key))
+
     def _ensure_auth(self) -> None:
         """Ensure we have a valid access token, refreshing if necessary."""
         if not self._access_token:
