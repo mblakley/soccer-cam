@@ -147,8 +147,22 @@ class ClipRequestProcessor(PollingProcessor):
     async def _upload_via_drive(
         self, req: dict, clip_paths: list[str]
     ) -> Optional[tuple[str, list[str]]]:
-        """Upload clips to Google Drive. Returns (fulfilled_url, upload_paths) or None on failure."""
+        """Upload clips to Google Drive. Returns (fulfilled_url, upload_paths) or None on failure.
+
+        Path A (preferred, flag on): TTT minted a per-requester resumable upload
+        URL — PUT bytes directly to the requester's Drive. Always produces one
+        video (compiles if multi-segment) since the URL is single-shot.
+
+        Path B (legacy, flag off): use the camera manager's global
+        google_drive_folder_id via the drive_uploader SDK client.
+        """
         req_id = req["id"]
+        upload_block = req.get("upload")
+
+        if upload_block and upload_block.get("resumable_url"):
+            return await self._upload_via_resumable_url(req, clip_paths, upload_block)
+
+        # Legacy path: camera manager's Drive folder via Google SDK
         is_compilation = req.get("is_compilation", False)
 
         if is_compilation and len(clip_paths) > 1:
@@ -180,6 +194,50 @@ class ClipRequestProcessor(PollingProcessor):
                 return None
 
         fulfilled_url = share_urls[0] if len(share_urls) == 1 else ", ".join(share_urls)
+        return fulfilled_url, upload_paths
+
+    async def _upload_via_resumable_url(
+        self, req: dict, clip_paths: list[str], upload_block: dict
+    ) -> Optional[tuple[str, list[str]]]:
+        """PUT the final clip to a TTT-minted resumable upload URL.
+
+        The URL is single-shot so multi-segment requests always compile first.
+        """
+        req_id = req["id"]
+        from ..utils.resumable_upload import (
+            ResumableUploadError,
+            upload_to_resumable_url,
+        )
+
+        if len(clip_paths) > 1:
+            output_path = os.path.join(tempfile.gettempdir(), f"ttt_drive_{req_id}.mp4")
+            from ..utils.ffmpeg_utils import compile_clips
+
+            await compile_clips(clip_paths, output_path)
+            upload_paths = [output_path]
+        else:
+            upload_paths = list(clip_paths)
+
+        try:
+            fulfilled_url = await upload_to_resumable_url(
+                upload_paths[0],
+                upload_block["resumable_url"],
+                upload_block.get("mime_type", "video/mp4"),
+            )
+        except ResumableUploadError as e:
+            logger.error(f"Resumable upload failed for request {req_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(
+                f"Unexpected error during resumable upload for {req_id}: {e}",
+                exc_info=True,
+            )
+            return None
+
+        if not fulfilled_url:
+            logger.error(f"Resumable upload for {req_id} returned empty final URL")
+            return None
+
         return fulfilled_url, upload_paths
 
     async def _upload_via_youtube(

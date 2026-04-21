@@ -499,6 +499,100 @@ class TestProcessRequestDispatch:
         ttt.fulfill_clip_request.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_external_storage_with_upload_block_uses_resumable_url(
+        self, tmp_path
+    ):
+        """When TTT embeds an upload.resumable_url, soccer-cam PUTs directly to Google."""
+        game_dir = tmp_path / "game-x"
+        game_dir.mkdir()
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+
+        ttt = MagicMock()
+        ttt.is_authenticated = MagicMock(return_value=True)
+        # drive_uploader should NOT be used on this path
+        drive = MagicMock()
+        drive.upload_and_share = MagicMock()
+
+        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        req = _make_request(
+            delivery_method="external_storage",
+            recording_group_dir="game-x",
+            segments=[
+                {"start_time": 0, "end_time": 10, "label": "a"},
+                {"start_time": 20, "end_time": 30, "label": "b"},
+            ],
+        )
+        req["upload"] = {
+            "provider": "google_drive",
+            "resumable_url": "https://uploads.google.com/session-abc",
+            "filename": "vs IYSA req12345.mp4",
+            "mime_type": "video/mp4",
+        }
+
+        with (
+            patch(
+                "video_grouper.utils.ffmpeg_utils.extract_clip",
+                new=AsyncMock(return_value="ok"),
+            ),
+            patch(
+                "video_grouper.utils.ffmpeg_utils.compile_clips",
+                new=AsyncMock(return_value="compiled"),
+            ),
+            patch(
+                "video_grouper.utils.resumable_upload.upload_to_resumable_url",
+                new=AsyncMock(return_value="https://drive.google.com/file/d/abc/view"),
+            ) as mock_upload,
+        ):
+            await proc._process_request(req)
+
+        mock_upload.assert_awaited_once()
+        # Legacy Drive SDK path must not be used when resumable URL is present
+        drive.upload_and_share.assert_not_called()
+        ttt.fulfill_clip_request.assert_called_once()
+        assert (
+            ttt.fulfill_clip_request.call_args.args[1]
+            == "https://drive.google.com/file/d/abc/view"
+        )
+
+    @pytest.mark.asyncio
+    async def test_external_storage_resumable_failure_no_fulfill(self, tmp_path):
+        """Resumable upload failure leaves request in_progress (no fulfill call)."""
+        from video_grouper.utils.resumable_upload import ResumableUploadError
+
+        game_dir = tmp_path / "game-x"
+        game_dir.mkdir()
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+
+        ttt = MagicMock()
+        ttt.is_authenticated = MagicMock(return_value=True)
+        drive = MagicMock()
+
+        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        req = _make_request(
+            delivery_method="external_storage", recording_group_dir="game-x"
+        )
+        req["upload"] = {
+            "provider": "google_drive",
+            "resumable_url": "https://uploads.google.com/session-x",
+            "filename": "x.mp4",
+            "mime_type": "video/mp4",
+        }
+
+        with (
+            patch(
+                "video_grouper.utils.ffmpeg_utils.extract_clip",
+                new=AsyncMock(return_value="ok"),
+            ),
+            patch(
+                "video_grouper.utils.resumable_upload.upload_to_resumable_url",
+                new=AsyncMock(side_effect=ResumableUploadError("403 forbidden")),
+            ),
+        ):
+            await proc._process_request(req)
+
+        ttt.fulfill_clip_request.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_unknown_delivery_method_no_upload(self, tmp_path):
         """Unknown delivery_method → no upload, no fulfill."""
         game_dir = tmp_path / "game-x"
