@@ -127,7 +127,7 @@ jobs:
 
     steps:
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: VideoGrouper-${{ needs.build.outputs.version }}-${{ needs.build.outputs.build_number }}
         path: artifacts
