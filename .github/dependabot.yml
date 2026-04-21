@@ -4,13 +4,29 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      python-minor:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
     directory: "/video_grouper"
     schedule:
       interval: "weekly"
+    ignore:
+      # Python major bumps (e.g. 3.13 → 3.14) need manual verification
+      # that all ML deps (torch, onnxruntime, pyav, etc.) support the new
+      # version before merging.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
