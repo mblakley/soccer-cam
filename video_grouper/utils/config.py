@@ -199,7 +199,9 @@ class TTTConfig(BaseModel):
     # Hex-encoded Ed25519 public keys accepted for plugin signature verification.
     # List form lets operators rotate keys by adding a new one, shipping a release,
     # then later removing the old one.
-    plugin_signing_public_keys: list[str] = []
+    plugin_signing_public_keys: list[str] = [
+        "a0c4e0e103b82c60e567b8521cbff1778e4947116db17f081228b1eeafa899f2",
+    ]
     # Re-download a plugin's signed manifest when within this many days of expiry.
     plugin_refresh_headroom_days: int = 7
     plugin_sync_interval: int = 3600
