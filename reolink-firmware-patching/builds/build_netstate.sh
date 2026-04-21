@@ -18,8 +18,12 @@
 #
 # Usage:
 #   sudo bash build_netstate.sh <stock.pak> <output.pak> <kbps> <user> <pass> <home_mac> [more_macs...]
-# Example (your current home gateway):
+# Example:
 #   sudo bash build_netstate.sh stock.pak duo3_netstate.pak 20480 admin <PW> aa:bb:cc:dd:ee:ff
+#
+# To find your home gateway MAC:
+#   ip route | awk '$1=="default" {print "gateway:", $3}'
+#   arp -n  # find that gateway IP's MAC (or `arp -a` on Windows/macOS)
 set -euo pipefail
 
 STOCK="${1:?usage: $0 <stock.pak> <output.pak> <kbps> <user> <pass> <home_mac> [more_macs...]}"
