@@ -1,4 +1,5 @@
 """Map network share using Windows WNet API (works in any session context)."""
+
 import ctypes
 from ctypes import wintypes
 import os
@@ -6,6 +7,7 @@ import os
 mpr = ctypes.WinDLL("mpr")
 
 RESOURCETYPE_DISK = 1
+
 
 class NETRESOURCE(ctypes.Structure):
     _fields_ = [
@@ -18,6 +20,7 @@ class NETRESOURCE(ctypes.Structure):
         ("lpComment", wintypes.LPWSTR),
         ("lpProvider", wintypes.LPWSTR),
     ]
+
 
 def map_share(remote: str, user: str, password: str, drive_letter: str = None):
     """Map a UNC share. Works from WMI, services, and PSRemoting."""
@@ -39,6 +42,7 @@ def map_share(remote: str, user: str, password: str, drive_letter: str = None):
     else:
         print(f"WNetAddConnection2 failed: rc={rc}")
         return False
+
 
 if __name__ == "__main__":
     ok = map_share(

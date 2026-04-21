@@ -23,7 +23,6 @@ import argparse
 import glob
 import json
 import logging
-import os
 import shutil
 import socket
 import threading
@@ -31,7 +30,7 @@ import time
 from pathlib import Path
 
 from training.data_prep.extract_frames import extract_frames
-from training.data_prep.game_registry import load_registry, build_registry, save_registry
+from training.data_prep.game_registry import load_registry
 from training.data_prep.tile_frames import tile_frame
 
 logging.basicConfig(
@@ -66,7 +65,9 @@ def claim_game(game_id: str, tiles_dir: Path) -> bool:
                 owner = lock_file.read_text().strip()
             except OSError:
                 owner = "unknown"
-            logger.info("Skipping %s (locked by %s, %.0f min ago)", game_id, owner, age / 60)
+            logger.info(
+                "Skipping %s (locked by %s, %.0f min ago)", game_id, owner, age / 60
+            )
             return False
         logger.warning("Breaking stale lock on %s (%.0f min old)", game_id, age / 60)
 
@@ -164,9 +165,15 @@ def tile_game(game: dict, videos: list[Path], tiles_dir: Path) -> dict:
         segment_id = video.stem
 
         # Skip if this segment already has tiles
-        existing = list(game_tiles_dir.glob(f"{glob.escape(segment_id)}_*_r0_c0.jpg")) if game_tiles_dir.exists() else []
+        existing = (
+            list(game_tiles_dir.glob(f"{glob.escape(segment_id)}_*_r0_c0.jpg"))
+            if game_tiles_dir.exists()
+            else []
+        )
         if existing:
-            logger.info("  Skipping %s (already tiled, %d frames)", segment_id, len(existing))
+            logger.info(
+                "  Skipping %s (already tiled, %d frames)", segment_id, len(existing)
+            )
             total_tiles += len(existing) * TILE_ROWS * TILE_COLS
             total_frames += len(existing)
             continue
@@ -281,7 +288,11 @@ def mass_tile(
     remote_mode = video_share is not None
 
     if remote_mode:
-        logger.info("REMOTE MODE: reading video from %s, writing tiles to %s", video_share, tiles_dir)
+        logger.info(
+            "REMOTE MODE: reading video from %s, writing tiles to %s",
+            video_share,
+            tiles_dir,
+        )
     else:
         staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -301,7 +312,9 @@ def mass_tile(
 
     for i, game in enumerate(to_process):
         game_id = game["game_id"]
-        logger.info("=== [%d/%d] %s (%s) ===", i + 1, len(to_process), game_id, HOSTNAME)
+        logger.info(
+            "=== [%d/%d] %s (%s) ===", i + 1, len(to_process), game_id, HOSTNAME
+        )
 
         # Claim with lock file
         if not claim_game(game_id, tiles_dir):
@@ -376,21 +389,31 @@ def mass_tile(
         staging_dir.rmdir()
 
     elapsed = time.time() - start_time
-    logger.info("=== COMPLETE (%s): %d games in %.0f min ===", HOSTNAME, len(to_process), elapsed / 60)
+    logger.info(
+        "=== COMPLETE (%s): %d games in %.0f min ===",
+        HOSTNAME,
+        len(to_process),
+        elapsed / 60,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Mass tile all games from registry")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be processed")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be processed"
+    )
     parser.add_argument("--game", type=str, help="Process a single game_id")
     parser.add_argument("--staging-dir", type=Path, default=STAGING_DIR)
     parser.add_argument("--tiles-dir", type=Path, default=TILES_DIR)
     parser.add_argument(
-        "--remote", nargs=2, metavar=("VIDEO_SHARE", "TRAINING_SHARE"),
+        "--remote",
+        nargs=2,
+        metavar=("VIDEO_SHARE", "TRAINING_SHARE"),
         help="Remote mode: read video from VIDEO_SHARE, write tiles to TRAINING_SHARE/tiles_640",
     )
     parser.add_argument(
-        "--games-file", type=Path,
+        "--games-file",
+        type=Path,
         help="JSON file with list of game_ids to process (for splitting work between machines)",
     )
     args = parser.parse_args()

@@ -13,6 +13,7 @@ Env vars:
     ONNX_MODEL   — path to balldet_fp16.onnx
     LOCAL_CACHE  — local dir for video caching (default: C:\soccer-cam-label\video_cache)
 """
+
 import json
 import logging
 import os
@@ -42,22 +43,34 @@ SERVER = "192.168.86.152"
 
 # Map shares
 try:
-    map_share(f"\\\\{SERVER}\\training", f"DESKTOP-5L867J8\\training", "amy4ever")
-    map_share(f"\\\\{SERVER}\\video", f"DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(f"\\\\{SERVER}\\training", "DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(f"\\\\{SERVER}\\video", "DESKTOP-5L867J8\\training", "amy4ever")
     logger.info("Shares mapped")
 except Exception as e:
     logger.warning("Share mapping: %s", e)
 
 # Paths
-queue_file = Path(os.environ.get("QUEUE_FILE", f"//{SERVER}/video/training_data/onnx_queue.json"))
+queue_file = Path(
+    os.environ.get("QUEUE_FILE", f"//{SERVER}/video/training_data/onnx_queue.json")
+)
 labels_dir = Path(os.environ.get("LABELS_DIR", f"//{SERVER}/training/labels_640_ext"))
 staging_dir = Path(os.environ.get("STAGING_DIR", f"//{SERVER}/training/staging"))
-model_path = Path(os.environ.get("ONNX_MODEL", f"//{SERVER}/video/test/onnx_models/decrypted/balldet_fp16.onnx"))
-LOCAL_CACHE = Path(os.environ.get("LOCAL_CACHE", rf"C:\soccer-cam-label\video_cache_w{WORKER_ID}"))
+model_path = Path(
+    os.environ.get(
+        "ONNX_MODEL", f"//{SERVER}/video/test/onnx_models/decrypted/balldet_fp16.onnx"
+    )
+)
+LOCAL_CACHE = Path(
+    os.environ.get("LOCAL_CACHE", rf"C:\soccer-cam-label\video_cache_w{WORKER_ID}")
+)
 LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
 
 FRAME_INTERVAL = 4
-IDLE_CHECK_GAMES = os.environ.get("IDLE_CHECK_GAMES", "").split(",") if os.environ.get("IDLE_CHECK_GAMES") else []
+IDLE_CHECK_GAMES = (
+    os.environ.get("IDLE_CHECK_GAMES", "").split(",")
+    if os.environ.get("IDLE_CHECK_GAMES")
+    else []
+)
 IDLE_CHECK_INTERVAL = 60  # seconds between idle checks while paused
 CONF_THRESHOLD = 0.45
 NMS_IOU_THRESHOLD = 0.5
@@ -99,6 +112,7 @@ def wait_for_idle():
     if not IDLE_CHECK_GAMES:
         return
     import psutil
+
     while True:
         running = []
         for proc in psutil.process_iter(["name"]):
@@ -111,7 +125,11 @@ def wait_for_idle():
                 pass
         if not running:
             return
-        logger.info("Paused — game running: %s. Checking in %ds...", running[0], IDLE_CHECK_INTERVAL)
+        logger.info(
+            "Paused — game running: %s. Checking in %ds...",
+            running[0],
+            IDLE_CHECK_INTERVAL,
+        )
         time.sleep(IDLE_CHECK_INTERVAL)
 
 
@@ -160,7 +178,9 @@ def detect_balls(frame_bgr):
 
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     if pad_h > 0 or pad_w > 0:
-        rgb = cv2.copyMakeBorder(rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        rgb = cv2.copyMakeBorder(
+            rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0)
+        )
 
     blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
     outputs = sess.run(None, {"images": blob})
@@ -177,18 +197,24 @@ def detect_balls(frame_bgr):
     boxes[:, 2] = filtered[:, 0] + filtered[:, 2] / 2
     boxes[:, 3] = filtered[:, 1] + filtered[:, 3] / 2
 
-    indices = cv2.dnn.NMSBoxes(boxes.tolist(), filtered[:, 5].tolist(), CONF_THRESHOLD, NMS_IOU_THRESHOLD)
+    indices = cv2.dnn.NMSBoxes(
+        boxes.tolist(), filtered[:, 5].tolist(), CONF_THRESHOLD, NMS_IOU_THRESHOLD
+    )
     if len(indices) == 0:
         return []
 
     results = []
     for idx in indices:
         i = idx[0] if isinstance(idx, (list, np.ndarray)) else idx
-        results.append({
-            "cx": float(filtered[i, 0]), "cy": float(filtered[i, 1]),
-            "w": float(filtered[i, 2]), "h": float(filtered[i, 3]),
-            "conf": float(filtered[i, 5]),
-        })
+        results.append(
+            {
+                "cx": float(filtered[i, 0]),
+                "cy": float(filtered[i, 1]),
+                "w": float(filtered[i, 2]),
+                "h": float(filtered[i, 3]),
+                "conf": float(filtered[i, 5]),
+            }
+        )
     return results
 
 
@@ -200,11 +226,16 @@ def pano_to_tile(cx, cy, w, h):
             tx = col * STEP_X
             ty = row * STEP_Y
             if tx <= cx <= tx + TILE_SIZE and ty <= cy <= ty + TILE_SIZE:
-                tiles.append({
-                    "row": row, "col": col,
-                    "cx_norm": (cx - tx) / TILE_SIZE, "cy_norm": (cy - ty) / TILE_SIZE,
-                    "w_norm": w / TILE_SIZE, "h_norm": h / TILE_SIZE,
-                })
+                tiles.append(
+                    {
+                        "row": row,
+                        "col": col,
+                        "cx_norm": (cx - tx) / TILE_SIZE,
+                        "cy_norm": (cy - ty) / TILE_SIZE,
+                        "w_norm": w / TILE_SIZE,
+                        "h_norm": h / TILE_SIZE,
+                    }
+                )
     return tiles
 
 
@@ -236,13 +267,25 @@ def process_segment(video_path, segment_name, game_labels_dir, needs_flip=False)
             if frames_processed % 100 == 0:
                 elapsed = time.time() - t0
                 rate = frames_processed / elapsed if elapsed > 0 else 0
-                logger.info("    %d/%d (%.1f f/s) %d dets", frame_idx, total_frames, rate, len(detections))
+                logger.info(
+                    "    %d/%d (%.1f f/s) %d dets",
+                    frame_idx,
+                    total_frames,
+                    rate,
+                    len(detections),
+                )
         frame_idx += 1
 
     cap.release()
     elapsed = time.time() - t0
     rate = frames_processed / elapsed if elapsed > 0 else 0
-    logger.info("  %s: %d frames, %d dets (%.1f f/s)", segment_name, frames_processed, len(detections), rate)
+    logger.info(
+        "  %s: %d frames, %d dets (%.1f f/s)",
+        segment_name,
+        frames_processed,
+        len(detections),
+        rate,
+    )
 
     # Write per-tile labels
     game_labels_dir.mkdir(parents=True, exist_ok=True)
@@ -312,8 +355,12 @@ while True:
 
     game_labels = labels_dir / gid
     local_labels = Path(rf"C:\soccer-cam-label\labels_local\{gid}")
-    logger.info("=== %s (%d segments, flip=%s) ===",
-                gid, len(game_entry["segments"]), game_entry["needs_flip"])
+    logger.info(
+        "=== %s (%d segments, flip=%s) ===",
+        gid,
+        len(game_entry["segments"]),
+        game_entry["needs_flip"],
+    )
 
     try:
         local_labels.mkdir(parents=True, exist_ok=True)
@@ -334,11 +381,17 @@ while True:
             # Cache video locally
             local_video = LOCAL_CACHE / seg_file
             if not local_video.exists():
-                logger.info("  Downloading %s (%.1f GB)...", seg_file, video_path.stat().st_size / 1e9)
+                logger.info(
+                    "  Downloading %s (%.1f GB)...",
+                    seg_file,
+                    video_path.stat().st_size / 1e9,
+                )
                 shutil.copy2(str(video_path), str(local_video))
 
             # Write labels locally (fast SSD writes)
-            nf, nl = process_segment(local_video, seg_name, local_labels, game_entry["needs_flip"])
+            nf, nl = process_segment(
+                local_video, seg_name, local_labels, game_entry["needs_flip"]
+            )
             local_video.unlink(missing_ok=True)
 
             # Mark segment done so we can resume if killed
@@ -347,6 +400,7 @@ while True:
 
         # Zip labels locally, transfer one zip file, extract on server
         import zipfile as zf_mod
+
         label_files = [f for f in local_labels.iterdir() if f.suffix == ".txt"]
         zip_path = local_labels.parent / f"{gid}_labels.zip"
         logger.info("  Zipping %d label files...", len(label_files))

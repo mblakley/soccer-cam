@@ -3,6 +3,7 @@
 Tracks orientation, corrected video paths, tiling status, and game phases.
 The single source of truth for which games to include in training.
 """
+
 import json
 from pathlib import Path
 
@@ -43,7 +44,9 @@ def _make_game_id(team: str, folder_name: str) -> str:
         return game_id
 
     # Handle tournament names: '07.20.2024-07.21.2024 - Clarence Tournament'
-    m = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})(?:-\d{2}\.\d{2}\.\d{4})?\s*-\s*(.+)", folder_name)
+    m = re.match(
+        r"^(\d{2})\.(\d{2})\.(\d{4})(?:-\d{2}\.\d{2}\.\d{4})?\s*-\s*(.+)", folder_name
+    )
     if m:
         mm, dd, yyyy, desc = m.group(1), m.group(2), m.group(3), m.group(4)
         # Clean description
@@ -58,8 +61,14 @@ def _make_game_id(team: str, folder_name: str) -> str:
         return f"{team}__{yyyy}.{mm}.{dd}_{desc}"
 
     # Fallback
-    clean = folder_name.replace(" ", "_").replace("(", "").replace(")", "").replace(" - ", "_")
+    clean = (
+        folder_name.replace(" ", "_")
+        .replace("(", "")
+        .replace(")", "")
+        .replace(" - ", "_")
+    )
     return f"{team}__{clean}"
+
 
 # Upside-down games and their corrected video sources
 UPSIDE_DOWN_GAMES = {
@@ -94,9 +103,7 @@ def build_registry() -> list[dict]:
                 continue
 
             # Find [F] video segments (recursive for tournament sub-game folders)
-            segments = sorted(
-                [f for f in gdir.rglob("*.mp4") if "[F]" in f.name]
-            )
+            segments = sorted([f for f in gdir.rglob("*.mp4") if "[F]" in f.name])
             if not segments:
                 continue
 
@@ -136,22 +143,24 @@ def build_registry() -> list[dict]:
             labels_dir_f = Path("F:/training_data/labels_640_ext") / game_id
             has_labels = labels_dir_d.exists() or labels_dir_f.exists()
 
-            games.append({
-                "game_id": game_id,
-                "name": name,
-                "team": team,
-                "path": str(gdir),
-                "segments": [s.name for s in segments],
-                "segment_count": len(segments),
-                "orientation": "upside_down" if is_upside_down else "right_side_up",
-                "video_source": video_source,
-                "corrected_video": video_path,
-                "needs_flip": video_source == "flip_in_code",
-                "has_tiles": has_tiles,
-                "has_labels": has_labels,
-                "exclude": False,
-                "exclude_reason": None,
-            })
+            games.append(
+                {
+                    "game_id": game_id,
+                    "name": name,
+                    "team": team,
+                    "path": str(gdir),
+                    "segments": [s.name for s in segments],
+                    "segment_count": len(segments),
+                    "orientation": "upside_down" if is_upside_down else "right_side_up",
+                    "video_source": video_source,
+                    "corrected_video": video_path,
+                    "needs_flip": video_source == "flip_in_code",
+                    "has_tiles": has_tiles,
+                    "has_labels": has_labels,
+                    "exclude": False,
+                    "exclude_reason": None,
+                }
+            )
 
     return games
 

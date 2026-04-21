@@ -74,7 +74,10 @@ def _find_trajectory_breaks(conn, game_id, frame_interval=4):
 
     # Group detections by segment + (row, col) to track per-tile trajectories
     from collections import defaultdict
-    tracks = defaultdict(list)  # (segment, row, col) -> sorted list of (frame_idx, cx, cy, w, h, conf, stem)
+
+    tracks = defaultdict(
+        list
+    )  # (segment, row, col) -> sorted list of (frame_idx, cx, cy, w, h, conf, stem)
 
     for stem, cx, cy, w, h, conf in rows:
         m = TILE_RE.match(stem)
@@ -144,16 +147,22 @@ def get_review_candidates(conn, count=500, game_filter=None):
             row, col = int(m.group(3)), int(m.group(4))
             # Higher gap = more interesting (longer track loss)
             priority = min(200, 120 + gap_len // 4)
-            candidates.append({
-                "game_id": gid,
-                "tile_stem": stem,
-                "cx": cx, "cy": cy, "w": w, "h": h,
-                "confidence": conf,
-                "source": "onnx",
-                "priority": priority,
-                "reason": f"track_break (gap={gap_len} frames, conf={conf:.2f})",
-                "row": row, "col": col,
-            })
+            candidates.append(
+                {
+                    "game_id": gid,
+                    "tile_stem": stem,
+                    "cx": cx,
+                    "cy": cy,
+                    "w": w,
+                    "h": h,
+                    "confidence": conf,
+                    "source": "onnx",
+                    "priority": priority,
+                    "reason": f"track_break (gap={gap_len} frames, conf={conf:.2f})",
+                    "row": row,
+                    "col": col,
+                }
+            )
 
     logger.info("  Found %d trajectory break candidates", len(candidates))
 
@@ -177,14 +186,22 @@ def get_review_candidates(conn, count=500, game_filter=None):
         priority = 100 - int(conf * 100)
         if col in (0, 6) or row == 2:
             priority += 15
-        candidates.append({
-            "game_id": gid, "tile_stem": stem,
-            "cx": cx, "cy": cy, "w": w, "h": h,
-            "confidence": conf, "source": source,
-            "priority": priority,
-            "reason": f"low_conf ({conf:.2f})",
-            "row": row, "col": col,
-        })
+        candidates.append(
+            {
+                "game_id": gid,
+                "tile_stem": stem,
+                "cx": cx,
+                "cy": cy,
+                "w": w,
+                "h": h,
+                "confidence": conf,
+                "source": source,
+                "priority": priority,
+                "reason": f"low_conf ({conf:.2f})",
+                "row": row,
+                "col": col,
+            }
+        )
 
     # Strategy 3: Edge tiles with medium confidence
     edge_query = """
@@ -198,21 +215,31 @@ def get_review_candidates(conn, count=500, game_filter=None):
     edge_query += " ORDER BY RANDOM() LIMIT ?"
     edge_params.append(count // 2)
 
-    for gid, stem, cx, cy, w, h, conf, source in conn.execute(edge_query, edge_params).fetchall():
+    for gid, stem, cx, cy, w, h, conf, source in conn.execute(
+        edge_query, edge_params
+    ).fetchall():
         m = TILE_RE.match(stem)
         if not m:
             continue
         row, col = int(m.group(3)), int(m.group(4))
         if col not in (0, 6) and row != 2:
             continue
-        candidates.append({
-            "game_id": gid, "tile_stem": stem,
-            "cx": cx, "cy": cy, "w": w, "h": h,
-            "confidence": conf, "source": source,
-            "priority": 60,
-            "reason": f"edge r{row}c{col} ({conf:.2f})",
-            "row": row, "col": col,
-        })
+        candidates.append(
+            {
+                "game_id": gid,
+                "tile_stem": stem,
+                "cx": cx,
+                "cy": cy,
+                "w": w,
+                "h": h,
+                "confidence": conf,
+                "source": source,
+                "priority": 60,
+                "reason": f"edge r{row}c{col} ({conf:.2f})",
+                "row": row,
+                "col": col,
+            }
+        )
 
     # Strategy 4: Calibration samples
     cal_query = """
@@ -226,19 +253,29 @@ def get_review_candidates(conn, count=500, game_filter=None):
     cal_query += " ORDER BY RANDOM() LIMIT ?"
     cal_params.append(count // 10)
 
-    for gid, stem, cx, cy, w, h, conf, source in conn.execute(cal_query, cal_params).fetchall():
+    for gid, stem, cx, cy, w, h, conf, source in conn.execute(
+        cal_query, cal_params
+    ).fetchall():
         m = TILE_RE.match(stem)
         if not m:
             continue
         row, col = int(m.group(3)), int(m.group(4))
-        candidates.append({
-            "game_id": gid, "tile_stem": stem,
-            "cx": cx, "cy": cy, "w": w, "h": h,
-            "confidence": conf, "source": source,
-            "priority": 20,
-            "reason": f"calibration ({conf:.2f})",
-            "row": row, "col": col,
-        })
+        candidates.append(
+            {
+                "game_id": gid,
+                "tile_stem": stem,
+                "cx": cx,
+                "cy": cy,
+                "w": w,
+                "h": h,
+                "confidence": conf,
+                "source": source,
+                "priority": 20,
+                "reason": f"calibration ({conf:.2f})",
+                "row": row,
+                "col": col,
+            }
+        )
 
     # Deduplicate, sort by priority, take top N
     seen = {}
@@ -248,12 +285,14 @@ def get_review_candidates(conn, count=500, game_filter=None):
             seen[key] = c
 
     result = sorted(seen.values(), key=lambda x: -x["priority"])[:count]
-    logger.info("Final candidates: %d (breaks: %d, low_conf: %d, edge: %d, cal: %d)",
-                len(result),
-                sum(1 for r in result if "track_break" in r["reason"]),
-                sum(1 for r in result if "low_conf" in r["reason"]),
-                sum(1 for r in result if "edge" in r["reason"]),
-                sum(1 for r in result if "calibration" in r["reason"]))
+    logger.info(
+        "Final candidates: %d (breaks: %d, low_conf: %d, edge: %d, cal: %d)",
+        len(result),
+        sum(1 for r in result if "track_break" in r["reason"]),
+        sum(1 for r in result if "low_conf" in r["reason"]),
+        sum(1 for r in result if "edge" in r["reason"]),
+        sum(1 for r in result if "calibration" in r["reason"]),
+    )
     return result
 
 
@@ -310,19 +349,21 @@ def generate_review_packet(count=500, game_filter=None):
         crop_path = crops_dir / f"crop_{i:05d}.jpg"
         cv2.imwrite(str(crop_path), crop)
 
-        frames.append({
-            "frame_idx": i,
-            "game_id": cand["game_id"],
-            "tile_stem": cand["tile_stem"],
-            "confidence": cand["confidence"],
-            "reason": cand["reason"],
-            "cx": cand["cx"],
-            "cy": cand["cy"],
-            "w": cand["w"],
-            "h": cand["h"],
-            "row": cand["row"],
-            "col": cand["col"],
-        })
+        frames.append(
+            {
+                "frame_idx": i,
+                "game_id": cand["game_id"],
+                "tile_stem": cand["tile_stem"],
+                "confidence": cand["confidence"],
+                "reason": cand["reason"],
+                "cx": cand["cx"],
+                "cy": cand["cy"],
+                "w": cand["w"],
+                "h": cand["h"],
+                "row": cand["row"],
+                "col": cand["col"],
+            }
+        )
 
         written += 1
         if written % 50 == 0:

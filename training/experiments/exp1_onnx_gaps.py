@@ -3,7 +3,7 @@
 Frames where ONNX detected the ball before AND after but NOT in the
 current frame. These gaps are high-confidence missed detections.
 """
-import glob as glob_mod
+
 import json
 import logging
 import time
@@ -145,16 +145,18 @@ def find_gaps_in_game(game_id: str) -> list[dict]:
                     interp_x = x_prev + frac * (x_curr - x_prev)
                     interp_y = y_prev + frac * (y_curr - y_prev)
 
-                    all_gaps.append({
-                        "game_id": game_id,
-                        "segment": segment,
-                        "frame_idx": interp_fi,
-                        "pano_x": round(interp_x, 1),
-                        "pano_y": round(interp_y, 1),
-                        "trajectory_length": len(traj),
-                        "gap_size": gap_frames,
-                        "source": "onnx_gap_interpolation",
-                    })
+                    all_gaps.append(
+                        {
+                            "game_id": game_id,
+                            "segment": segment,
+                            "frame_idx": interp_fi,
+                            "pano_x": round(interp_x, 1),
+                            "pano_y": round(interp_y, 1),
+                            "trajectory_length": len(traj),
+                            "gap_size": gap_frames,
+                            "source": "onnx_gap_interpolation",
+                        }
+                    )
 
     return all_gaps
 
@@ -174,8 +176,10 @@ def main():
 
     elapsed = time.time() - start
     logger.info("Done: %d total gap candidates in %.0fs", len(all_gaps), elapsed)
-    logger.info("Target: >= 50 per game (450 total). Got: %.0f per game avg",
-                len(all_gaps) / len(GAMES) if GAMES else 0)
+    logger.info(
+        "Target: >= 50 per game (450 total). Got: %.0f per game avg",
+        len(all_gaps) / len(GAMES) if GAMES else 0,
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ Usage:
     # With custom settings:
     python -u train_v3.py --data dataset.yaml --epochs 50 --batch 16 --model yolo26l.pt
 """
+
 import argparse
 import logging
 import sys
@@ -27,7 +28,9 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--device", default="0")
     parser.add_argument("--model", default="yolo26l.pt")
-    parser.add_argument("--resume", type=Path, default=None, help="Resume from checkpoint")
+    parser.add_argument(
+        "--resume", type=Path, default=None, help="Resume from checkpoint"
+    )
     parser.add_argument("--project", type=Path, default=None)
     parser.add_argument("--name", default="ball_v3")
     args = parser.parse_args()
@@ -52,8 +55,13 @@ def main():
     model_path = str(args.resume) if args.resume else args.model
     model = YOLO(model_path)
 
-    logger.info("Training v3: %s, %d epochs, batch %d, device %s",
-                model_path, args.epochs, args.batch, args.device)
+    logger.info(
+        "Training v3: %s, %d epochs, batch %d, device %s",
+        model_path,
+        args.epochs,
+        args.batch,
+        args.device,
+    )
     logger.info("Dataset: %s", args.data)
 
     model.train(

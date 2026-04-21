@@ -1,4 +1,5 @@
 """Check if ONNX workers are running. Start them if not and no games are active."""
+
 import os
 import subprocess
 import sys
@@ -55,7 +56,7 @@ for proc in psutil.process_iter(["name", "cmdline"]):
             cmd = " ".join(proc.info.get("cmdline") or [])
             if "run_onnx_all.py" in cmd:
                 # Extract worker ID from command line
-                for part in (proc.info.get("cmdline") or []):
+                for part in proc.info.get("cmdline") or []:
                     if part.isdigit():
                         running_ids.add(int(part))
     except (psutil.NoSuchProcess, psutil.AccessDenied):

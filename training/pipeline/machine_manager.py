@@ -10,11 +10,9 @@ Usage:
         mgr.start_task("FORTNITE-OP", "RunLabeling")
 """
 
-import json
 import logging
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -29,7 +27,7 @@ MACHINES = {
 SERVER_IP = "192.168.86.152"
 SERVER_SHARES = {
     "training": f"\\\\{SERVER_IP}\\training",  # D:\training_data
-    "video": f"\\\\{SERVER_IP}\\video",         # F:\
+    "video": f"\\\\{SERVER_IP}\\video",  # F:\
 }
 
 
@@ -43,8 +41,17 @@ def _run_ps1(script_content: str, timeout: int = 300) -> tuple[int, str]:
 
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
-            capture_output=True, text=True, timeout=timeout,
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                ps1_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         output = result.stdout + result.stderr
         return result.returncode, output.strip()
@@ -70,7 +77,8 @@ class MachineManager:
         """Check if a machine responds to ping."""
         result = subprocess.run(
             ["ping", "-n", "1", "-w", str(timeout * 1000), hostname],
-            capture_output=True, timeout=timeout + 5,
+            capture_output=True,
+            timeout=timeout + 5,
         )
         return result.returncode == 0
 
@@ -139,7 +147,9 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
         dest_dir = f"\\\\{hostname}\\D$\\labeling\\{game_id}"
 
         # Build copy commands
-        copy_lines = [f'New-Item -ItemType Directory -Path "{dest_dir}" -Force | Out-Null']
+        copy_lines = [
+            f'New-Item -ItemType Directory -Path "{dest_dir}" -Force | Out-Null'
+        ]
         for vp in video_paths:
             copy_lines.append(
                 f'Copy-Item -LiteralPath "{vp}" -Destination "{dest_dir}\\" -Force'
@@ -150,7 +160,9 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
         code, output = _run_ps1(script, timeout=600)
         success = f"Staged {len(video_paths)}" in output
         if success:
-            logger.info("Staged %d videos for %s on %s", len(video_paths), game_id, hostname)
+            logger.info(
+                "Staged %d videos for %s on %s", len(video_paths), game_id, hostname
+            )
         else:
             logger.error("Failed to stage videos: %s", output[:200])
         return success
@@ -179,7 +191,9 @@ if ($LASTEXITCODE -le 7) {{ Write-Output "OK" }} else {{ Write-Output "FAILED" }
         code, output = _run_ps1(script, timeout=3600)
         return "OK" in output
 
-    def remote_exec(self, hostname: str, script_block: str, timeout: int = 30) -> tuple[int, str]:
+    def remote_exec(
+        self, hostname: str, script_block: str, timeout: int = 30
+    ) -> tuple[int, str]:
         """Execute arbitrary PowerShell on a remote machine."""
         script = f"""
 {_cred_block(hostname)}
@@ -192,6 +206,7 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
     def send_ntfy(self, message: str, title: str = "Training Pipeline") -> bool:
         """Send a push notification via NTFY."""
         import urllib.request
+
         try:
             req = urllib.request.Request(
                 "https://ntfy.sh/video_grouper_mblakley43431",

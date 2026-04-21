@@ -50,6 +50,7 @@ def sweep_thresholds(
 
     Returns list of {threshold, recall_100, recall_200, avg_dist, ...}
     """
+
     # Inline field check to avoid cv2 dependency
     def is_on_field_curved(x, y, margin=50.0):
         pano_cx = 2048.0
@@ -71,8 +72,10 @@ def sweep_thresholds(
         total_dets = 0
         for fi, dets in by_frame.items():
             good = [
-                d for d in dets
-                if d["conf"] >= thresh and is_on_field_curved(d["cx"], d["cy"], margin=50)
+                d
+                for d in dets
+                if d["conf"] >= thresh
+                and is_on_field_curved(d["cx"], d["cy"], margin=50)
             ]
             if good:
                 filtered_by_frame[fi] = good
@@ -90,7 +93,8 @@ def sweep_thresholds(
         clean_total = 0
         for fi, dets in filtered_by_frame.items():
             clean = [
-                d for d in dets
+                d
+                for d in dets
                 if (round(d["cx"] / 50) * 50, round(d["cy"] / 50) * 50) not in static
             ]
             if clean:
@@ -126,12 +130,20 @@ def sweep_thresholds(
                 match_300 += 1
 
             # Count false positives (detections far from mark)
-            fp = sum(1 for d in dets if ((d["cx"] - ux) ** 2 + (d["cy"] - uy) ** 2) ** 0.5 > 300)
+            fp = sum(
+                1
+                for d in dets
+                if ((d["cx"] - ux) ** 2 + (d["cy"] - uy) ** 2) ** 0.5 > 300
+            )
             false_pos_per_frame.append(fp)
 
         n = len(gt_frames)
         avg_dist = sum(distances) / len(distances) if distances else 0
-        avg_fp = sum(false_pos_per_frame) / len(false_pos_per_frame) if false_pos_per_frame else 0
+        avg_fp = (
+            sum(false_pos_per_frame) / len(false_pos_per_frame)
+            if false_pos_per_frame
+            else 0
+        )
 
         # Per-region breakdown
         region_stats = {}
@@ -141,7 +153,8 @@ def sweep_thresholds(
             ("r2_near", lambda m: m["row"] == 2),
         ]:
             region_frames = [
-                fi for fi in gt_frames
+                fi
+                for fi in gt_frames
                 if any(
                     entry.get("action") == "mark_ball"
                     and entry["frame_idx"] == fi
@@ -165,8 +178,12 @@ def sweep_thresholds(
                 ux, uy = ground_truth[fi]
                 dets = clean_by_frame.get(fi, [])
                 if dets:
-                    closest = min(dets, key=lambda d: (d["cx"] - ux) ** 2 + (d["cy"] - uy) ** 2)
-                    if ((closest["cx"] - ux) ** 2 + (closest["cy"] - uy) ** 2) ** 0.5 < 200:
+                    closest = min(
+                        dets, key=lambda d: (d["cx"] - ux) ** 2 + (d["cy"] - uy) ** 2
+                    )
+                    if (
+                        (closest["cx"] - ux) ** 2 + (closest["cy"] - uy) ** 2
+                    ) ** 0.5 < 200:
                         r_match += 1
 
             region_stats[region_name] = {
@@ -195,7 +212,9 @@ def sweep_thresholds(
 
 def print_results(results: list[dict]):
     """Print results as a formatted table."""
-    print(f"\n{'Thresh':>7s} {'Dets':>6s} {'D/F':>5s} {'R@100':>6s} {'R@200':>6s} {'R@300':>6s} {'NoDet':>6s} {'AvgDist':>7s} {'FP/F':>5s} {'Static':>6s}")
+    print(
+        f"\n{'Thresh':>7s} {'Dets':>6s} {'D/F':>5s} {'R@100':>6s} {'R@200':>6s} {'R@300':>6s} {'NoDet':>6s} {'AvgDist':>7s} {'FP/F':>5s} {'Static':>6s}"
+    )
     print("-" * 75)
     for r in results:
         print(
@@ -229,9 +248,15 @@ def print_results(results: list[dict]):
     # Recommendation
     print("\n--- Recommendation ---")
     best_recall = max(results, key=lambda r: r["recall_200"])
-    best_balance = max(results, key=lambda r: r["recall_200"] - r["avg_false_pos"] * 0.1)
-    print(f"Best recall@200:  conf={best_recall['threshold']:.2f} ({best_recall['recall_200']:.1%})")
-    print(f"Best balance:     conf={best_balance['threshold']:.2f} (recall={best_balance['recall_200']:.1%}, FP={best_balance['avg_false_pos']:.1f}/frame)")
+    best_balance = max(
+        results, key=lambda r: r["recall_200"] - r["avg_false_pos"] * 0.1
+    )
+    print(
+        f"Best recall@200:  conf={best_recall['threshold']:.2f} ({best_recall['recall_200']:.1%})"
+    )
+    print(
+        f"Best balance:     conf={best_balance['threshold']:.2f} (recall={best_balance['recall_200']:.1%}, FP={best_balance['avg_false_pos']:.1f}/frame)"
+    )
 
 
 def main():
@@ -249,7 +274,21 @@ def main():
     gt = load_ground_truth(args.feedback)
     logger.info("Loaded %d ground truth marks", len(gt))
 
-    thresholds = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80]
+    thresholds = [
+        0.05,
+        0.10,
+        0.15,
+        0.20,
+        0.25,
+        0.30,
+        0.35,
+        0.40,
+        0.45,
+        0.50,
+        0.60,
+        0.70,
+        0.80,
+    ]
     results = sweep_thresholds(detections, gt, thresholds)
     print_results(results)
 

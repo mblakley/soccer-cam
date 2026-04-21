@@ -54,18 +54,26 @@ def mark_reviewed(game_id: str, segment: str, frame_start: int, label: dict):
     HUMAN_LABELS_DIR.mkdir(parents=True, exist_ok=True)
     label_file = HUMAN_LABELS_DIR / f"{game_id}_{segment}_{frame_start:06d}.json"
     with open(label_file, "w") as f:
-        json.dump({
-            "game_id": game_id,
-            "segment": segment,
-            "frame_start": frame_start,
-            "label": label,
-            "source": "human",
-        }, f, indent=2)
+        json.dump(
+            {
+                "game_id": game_id,
+                "segment": segment,
+                "frame_start": frame_start,
+                "label": label,
+                "source": "human",
+            },
+            f,
+            indent=2,
+        )
 
     # Mark as reviewed in queue
     queue = load_queue()
     for g in queue:
-        if g["game_id"] == game_id and g["segment"] == segment and g["frame_start"] == frame_start:
+        if (
+            g["game_id"] == game_id
+            and g["segment"] == segment
+            and g["frame_start"] == frame_start
+        ):
             g["reviewed"] = True
             g["review_result"] = label
             break

@@ -57,6 +57,7 @@ def ensure_share():
         script_dir = Path(__file__).resolve().parent
         sys.path.insert(0, str(script_dir))
         from map_share import map_share
+
         return map_share(
             SHARE_UNC,
             os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
@@ -72,7 +73,9 @@ def get_idle_seconds() -> float:
     try:
         result = subprocess.run(
             ["powershell", "-Command", "(quser 2>$null | Select-String '\\d+[+:]')"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in result.stdout.strip().splitlines():
             parts = line.strip().split()
@@ -92,12 +95,16 @@ def get_idle_seconds() -> float:
 def set_active(role: str):
     """Mark this machine as actively training."""
     try:
-        ACTIVE_FILE.write_text(json.dumps({
-            "hostname": socket.gethostname(),
-            "role": role,
-            "heartbeat": time.time(),
-            "pid": os.getpid(),
-        }))
+        ACTIVE_FILE.write_text(
+            json.dumps(
+                {
+                    "hostname": socket.gethostname(),
+                    "role": role,
+                    "heartbeat": time.time(),
+                    "pid": os.getpid(),
+                }
+            )
+        )
     except OSError:
         pass
 
@@ -131,10 +138,14 @@ def is_preempted() -> bool:
 def request_preempt():
     """Signal the server to yield after current epoch."""
     try:
-        PREEMPT_FILE.write_text(json.dumps({
-            "hostname": socket.gethostname(),
-            "heartbeat": time.time(),
-        }))
+        PREEMPT_FILE.write_text(
+            json.dumps(
+                {
+                    "hostname": socket.gethostname(),
+                    "heartbeat": time.time(),
+                }
+            )
+        )
     except OSError:
         pass
 
@@ -185,6 +196,7 @@ def get_batch_size() -> int:
     """Pick batch size based on GPU."""
     try:
         import torch
+
         name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else ""
         if "4070" in name:
             return 16
@@ -223,8 +235,16 @@ def do_train(role: str):
     batch = get_batch_size()
 
     import torch
+
     gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-    logger.info("%s training on %s: epoch %d/%d batch=%d", role, gpu, epoch, TARGET_EPOCHS, batch)
+    logger.info(
+        "%s training on %s: epoch %d/%d batch=%d",
+        role,
+        gpu,
+        epoch,
+        TARGET_EPOCHS,
+        batch,
+    )
 
     set_active(role)
 

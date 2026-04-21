@@ -86,7 +86,9 @@ class SimpleTracker:
             frame_idx: Frame index
             detections: List of (x, y, confidence) in panoramic coords
         """
-        dets = [SimpleDetection(x=x, y=y, frame_idx=frame_idx) for x, y, _ in detections]
+        dets = [
+            SimpleDetection(x=x, y=y, frame_idx=frame_idx) for x, y, _ in detections
+        ]
 
         # Predict all active tracks
         for track in self.tracks:
@@ -216,28 +218,38 @@ class SimpleTracker:
                         next_det = d
 
                 if prev_det and next_det and prev_det.frame_idx != next_det.frame_idx:
-                    t = (fi - prev_det.frame_idx) / (next_det.frame_idx - prev_det.frame_idx)
+                    t = (fi - prev_det.frame_idx) / (
+                        next_det.frame_idx - prev_det.frame_idx
+                    )
                     ix = prev_det.x + t * (next_det.x - prev_det.x)
                     iy = prev_det.y + t * (next_det.y - prev_det.y)
                     trajectory.append((fi, ix, iy, 0.0))
                 elif prev_det:
                     # Extrapolate forward using last known velocity
                     dt = fi - prev_det.frame_idx
-                    trajectory.append((fi, prev_det.x + track.vx * dt, prev_det.y + track.vy * dt, 0.0))
+                    trajectory.append(
+                        (
+                            fi,
+                            prev_det.x + track.vx * dt,
+                            prev_det.y + track.vy * dt,
+                            0.0,
+                        )
+                    )
 
         return trajectory
 
-    def get_game_ball_tracks(
-        self, min_avg_step: float = 8.0
-    ) -> list[SimpleTrack]:
+    def get_game_ball_tracks(self, min_avg_step: float = 8.0) -> list[SimpleTrack]:
         """Get all tracks that move fast enough to be the game ball."""
         result = []
         for t in self.get_tracks():
             if len(t.detections) < 2:
                 continue
             total_path = sum(
-                ((t.detections[i].x - t.detections[i - 1].x) ** 2
-                 + (t.detections[i].y - t.detections[i - 1].y) ** 2) ** 0.5
+                (
+                    (t.detections[i].x - t.detections[i - 1].x) ** 2
+                    + (t.detections[i].y - t.detections[i - 1].y) ** 2
+                )
+                ** 0.5
                 for i in range(1, len(t.detections))
             )
             if total_path / len(t.detections) >= min_avg_step:
