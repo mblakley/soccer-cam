@@ -49,7 +49,7 @@ WORKER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 NUM_WORKERS = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
 sys.path.insert(0, r"C:\soccer-cam-label")
-from map_share import map_share
+from map_share import map_share  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,7 +149,6 @@ def process_video_av(video_path, seg_id, gid, needs_flip, zf):
     """Decode with PyAV, tile in memory, write to zip."""
     container = av.open(str(video_path))
     stream = container.streams.video[0]
-    fps = float(stream.average_rate or 25)
     total_frames = stream.frames or 0
     stream.thread_type = "AUTO"
 

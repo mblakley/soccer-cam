@@ -191,7 +191,7 @@ print("\n=== EXP 4: Cross-reference with ONNX ===", flush=True)
 # Count how many ONNX far-field labels exist per frame in this segment
 seg_name = seg.stem
 onnx_frames = set()
-import glob as g
+import glob as g  # noqa: E402
 
 escaped = g.escape(seg_name)
 for lf in label_dir.glob(f"{escaped}_frame_*_r0_*.txt"):

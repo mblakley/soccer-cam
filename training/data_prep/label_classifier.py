@@ -219,9 +219,6 @@ def classify_game(
                 # Max speed in any frame
                 max_speed = max(velocities) if velocities else 0
 
-                # Average speed
-                avg_speed = sum(velocities) / len(velocities) if velocities else 0
-
                 # Classify based on motion profile:
                 # - Game ball: moves significantly at some point
                 # - Static ball: barely moves across entire trajectory

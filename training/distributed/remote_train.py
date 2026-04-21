@@ -4,7 +4,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from map_share import map_share
+from map_share import map_share  # noqa: E402
 
 # Map the share
 share = r"\\192.168.86.152\video"
@@ -20,7 +20,7 @@ if not os.path.exists(test_path):
 print("Dataset accessible!", flush=True)
 
 # Detect GPU and pick model
-import torch
+import torch  # noqa: E402
 
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
 print(f"GPU: {gpu_name}", flush=True)
@@ -34,7 +34,7 @@ else:
 
 print(f"Training {model_name} batch={batch} as {run_name}", flush=True)
 
-from ultralytics import YOLO
+from ultralytics import YOLO  # noqa: E402
 
 model = YOLO(model_name)
 model.train(
