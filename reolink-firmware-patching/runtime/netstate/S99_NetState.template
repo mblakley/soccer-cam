@@ -172,12 +172,16 @@ main_loop() {
         local GW MAC NEW_STATE
         GW=$(get_gateway_ip)
         if [ -z "$GW" ]; then
-            NEW_STATE="home"  # safe default while no network
+            # No default route at all (cable unplugged or no DHCP).
+            # User intent: this means "deployed somewhere remote" -> record.
+            NEW_STATE="away"
             MAC=""
         else
             MAC=$(resolve_arp_mac "$GW")
             if [ -z "$MAC" ]; then
-                NEW_STATE="home"  # safe default while ARP unresolved
+                # Gateway exists but ARP didn't resolve — treat as away too,
+                # so a brief network blip doesn't accidentally pin us to home.
+                NEW_STATE="away"
             elif is_home_mac "$MAC"; then
                 NEW_STATE="home"
             else
