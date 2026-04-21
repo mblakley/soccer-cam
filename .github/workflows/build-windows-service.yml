@@ -16,12 +16,12 @@ jobs:
       build_number: ${{ steps.version.outputs.build_number }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.13'
 
@@ -109,7 +109,7 @@ jobs:
         & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer/installer.nsi
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
         path: |
@@ -127,13 +127,13 @@ jobs:
 
     steps:
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: VideoGrouper-${{ needs.build.outputs.version }}-${{ needs.build.outputs.build_number }}
         path: artifacts
 
     - name: Create or update GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref_name }}
         body: |
