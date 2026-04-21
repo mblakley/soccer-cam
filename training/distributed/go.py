@@ -82,7 +82,7 @@ shutil.rmtree(cache, ignore_errors=True)
 print("Ready for training!", flush=True)
 
 # Train
-from ultralytics import YOLO
+from ultralytics import YOLO  # noqa: E402
 
 model = YOLO("yolo11s.pt")
 model.train(

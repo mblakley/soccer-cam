@@ -683,7 +683,7 @@ def pack_game(
             logger.info("    Staging %s to SSD (%s)...", game_id, ssd_staging)
             t_stage = time.time()
             # robocopy is fastest for bulk file copy on Windows
-            result = subprocess.run(
+            subprocess.run(
                 [
                     "robocopy",
                     str(hdd_game_dir),
@@ -1621,7 +1621,6 @@ def print_stats(db_path: Path = DEFAULT_DB_PATH) -> None:
             label_count = conn.execute(
                 "SELECT COUNT(*) FROM labels WHERE game_id = ?", (gid,)
             ).fetchone()[0]
-            cataloged = "Y" if g.get("tiles_cataloged") else " "
             print(
                 f"  {gid:<50} {seg_count:>5} {tile_count:>10,} "
                 f"{pack_count:>8,} {label_count:>8,}"

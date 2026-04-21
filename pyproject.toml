@@ -72,7 +72,7 @@ build-backend = "hatchling.build"
 path = "video_grouper/version.py"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py313"
 
 [tool.ruff.lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.

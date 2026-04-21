@@ -27,7 +27,7 @@ WORKER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 HOSTNAME = socket.gethostname()
 
 sys.path.insert(0, r"C:\soccer-cam-label")
-from map_share import map_share
+from map_share import map_share  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,15 +91,15 @@ if not model_path.exists():
     sys.exit(1)
 
 # Load ONNX model
-import cv2
-import numpy as np
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 try:
-    import ultralytics  # noqa: CUDA DLL paths
+    import ultralytics  # noqa: E402,F401  # side-effect: loads CUDA DLL paths
 except ImportError:
     pass
 
-import onnxruntime as ort
+import onnxruntime as ort  # noqa: E402
 
 logger.info("Loading ONNX model...")
 providers = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]

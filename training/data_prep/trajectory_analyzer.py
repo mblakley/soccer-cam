@@ -460,7 +460,6 @@ def analyze_game(
     segment_durations: dict[str, float] = {}
     for t in trajectories:
         fi_max = max(f[0] for f in t.frames)
-        fi_min = min(f[0] for f in t.frames)
         dur = fi_max / FPS_ESTIMATE  # approximate segment duration from max frame
         if t.segment not in segment_durations or dur > segment_durations[t.segment]:
             segment_durations[t.segment] = dur
