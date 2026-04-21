@@ -25,8 +25,14 @@ so you can pick the highest-tier build for your needs:
 - **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon. **Recommended for the soccer-cam use case.**
 - **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended (the h.265 ASIC drops ~20% of frames at 16MP@25fps so recorded output stays around 20 fps anyway, with added jitter).
 
-See `docs/FIRMWARE_PATCH_NOTES.md` for the complete reverse-engineering
-story, byte-level patch recipes, and the encoder-bottleneck investigation.
+**Step-by-step patching procedure**: see `docs/PATCHING_GUIDE.md` —
+walks a fresh user from a stock-firmware camera through to a flashed,
+verified, daily-driver setup. Includes the exact firmware version
+(SHA-256 verified) these patches were developed and tested against.
+
+**Full reverse-engineering story**: see `docs/FIRMWARE_PATCH_NOTES.md` —
+byte-level patch recipes, encoder-bottleneck investigation, sensor
+characterization, and reasoning behind the daily-driver build choices.
 
 ## Directory layout
 
