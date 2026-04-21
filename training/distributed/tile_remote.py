@@ -118,14 +118,19 @@ def tile_game(game: dict, videos: list[Path], tiles_dir: Path):
 
     for video in sorted(videos):
         seg_id = video.stem
-        existing = list(game_tiles.glob(f"{glob_mod.escape(seg_id)}_*_r0_c0.jpg")) if game_tiles.exists() else []
+        existing = (
+            list(game_tiles.glob(f"{glob_mod.escape(seg_id)}_*_r0_c0.jpg"))
+            if game_tiles.exists()
+            else []
+        )
         if existing:
             logger.info("  Skipping %s (already tiled)", seg_id)
             continue
 
         frames_dir = TEMP_FRAMES / seg_id
         n = extract_frames(
-            video, frames_dir,
+            video,
+            frames_dir,
             diff_threshold=DIFF_THRESHOLD,
             frame_interval=FRAME_INTERVAL,
             flip=needs_flip,
@@ -134,7 +139,9 @@ def tile_game(game: dict, videos: list[Path], tiles_dir: Path):
         game_tiles.mkdir(parents=True, exist_ok=True)
         n_tiles = 0
         for fp in sorted(frames_dir.rglob("*.jpg")):
-            tiles = tile_frame(fp, game_tiles, cols=TILE_COLS, rows=TILE_ROWS, tile_size=TILE_SIZE)
+            tiles = tile_frame(
+                fp, game_tiles, cols=TILE_COLS, rows=TILE_ROWS, tile_size=TILE_SIZE
+            )
             n_tiles += len(tiles)
 
         shutil.rmtree(frames_dir, ignore_errors=True)
@@ -188,7 +195,11 @@ def main():
             elapsed = time.time() - start
             logger.info(
                 "Done %s: %d frames, %d tiles (%.0f min elapsed, %d games done)",
-                game_id, frames, tiles, elapsed / 60, processed,
+                game_id,
+                frames,
+                tiles,
+                elapsed / 60,
+                processed,
             )
         except Exception:
             logger.exception("Failed: %s", game_id)

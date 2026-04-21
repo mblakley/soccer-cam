@@ -3,7 +3,7 @@
 Same approach as exp1_onnx_gaps but for r1 and r2 as well.
 This reveals where the ONNX model drops the ball across the entire field.
 """
-import glob as glob_mod
+
 import json
 import logging
 import time
@@ -66,7 +66,9 @@ def find_gaps_in_game(game_id: str) -> list[dict]:
     # Auto-detect frame interval
     all_fi = sorted(set(fi for _, fi in frame_dets))
     if len(all_fi) >= 2:
-        gaps_list = [all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))]
+        gaps_list = [
+            all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))
+        ]
         gaps_list = [g for g in gaps_list if g > 0]
         frame_interval = min(gaps_list) if gaps_list else 4
     else:
@@ -145,16 +147,18 @@ def find_gaps_in_game(game_id: str) -> list[dict]:
                     else:
                         row_name = "r2_near"
 
-                    all_gaps.append({
-                        "game_id": game_id,
-                        "segment": segment,
-                        "frame_idx": interp_fi,
-                        "pano_x": round(interp_x, 1),
-                        "pano_y": round(interp_y, 1),
-                        "row": row_name,
-                        "trajectory_length": len(traj),
-                        "gap_size": gap_frames,
-                    })
+                    all_gaps.append(
+                        {
+                            "game_id": game_id,
+                            "segment": segment,
+                            "frame_idx": interp_fi,
+                            "pano_x": round(interp_x, 1),
+                            "pano_y": round(interp_y, 1),
+                            "row": row_name,
+                            "trajectory_length": len(traj),
+                            "gap_size": gap_frames,
+                        }
+                    )
 
     return all_gaps
 
@@ -173,7 +177,8 @@ def main():
             by_row[g["row"]] += 1
         logger.info(
             "%s: %d gaps (r0=%d, r1=%d, r2=%d)",
-            game_id, len(gaps),
+            game_id,
+            len(gaps),
             by_row.get("r0_far", 0),
             by_row.get("r1_mid", 0),
             by_row.get("r2_near", 0),

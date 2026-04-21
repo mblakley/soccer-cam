@@ -1,8 +1,7 @@
 """Experiments for detecting small balls in the far field."""
+
 import cv2
 import numpy as np
-import json
-import time
 from pathlib import Path
 
 video_dir = Path("F:/Heat_2012s/05.31.2024 - vs Fairport (home)")
@@ -30,8 +29,12 @@ if far_balls:
     widths = [b[0] for b in far_balls]
     heights = [b[1] for b in far_balls]
     print(f"  {len(far_balls)} far-field (r0) detections")
-    print(f"  Width:  min={min(widths):.0f} max={max(widths):.0f} avg={sum(widths)/len(widths):.0f} px")
-    print(f"  Height: min={min(heights):.0f} max={max(heights):.0f} avg={sum(heights)/len(heights):.0f} px")
+    print(
+        f"  Width:  min={min(widths):.0f} max={max(widths):.0f} avg={sum(widths) / len(widths):.0f} px"
+    )
+    print(
+        f"  Height: min={min(heights):.0f} max={max(heights):.0f} avg={sum(heights) / len(heights):.0f} px"
+    )
 else:
     print("  No far-field detections found")
 
@@ -75,8 +78,8 @@ for i in range(N_FRAMES * 4):
 
 for thresh, r in threshold_results.items():
     print(
-        f"  thresh={thresh}: {r['round_small']} round_small ({r['round_small']/N_FRAMES:.1f}/frame), "
-        f"{r['total']} total ({r['total']/N_FRAMES:.0f}/frame)"
+        f"  thresh={thresh}: {r['round_small']} round_small ({r['round_small'] / N_FRAMES:.1f}/frame), "
+        f"{r['total']} total ({r['total'] / N_FRAMES:.0f}/frame)"
     )
 
 # EXPERIMENT 3: Trajectory linking at best threshold

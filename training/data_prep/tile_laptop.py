@@ -7,7 +7,7 @@ memory, write directly to zip. Only disk writes are: video download
 Crash-safe: if we die, the zip for the current game is incomplete and
 gets deleted on restart. But we don't lose tiles from other games.
 """
-import glob as glob_mod
+
 import json
 import logging
 import os
@@ -24,6 +24,7 @@ import numpy as np
 
 try:
     import av
+
     HAS_AV = True
 except ImportError:
     HAS_AV = False
@@ -34,10 +35,15 @@ def log_resources(logger, label=""):
     proc = psutil.Process()
     mem = proc.memory_info()
     vm = psutil.virtual_memory()
-    logger.info("  [MEM %s] process: %dMB, system: %dMB free / %dMB total (%.0f%% used)",
-                label, mem.rss // (1024*1024),
-                vm.available // (1024*1024), vm.total // (1024*1024),
-                vm.percent)
+    logger.info(
+        "  [MEM %s] process: %dMB, system: %dMB free / %dMB total (%.0f%% used)",
+        label,
+        mem.rss // (1024 * 1024),
+        vm.available // (1024 * 1024),
+        vm.total // (1024 * 1024),
+        vm.percent,
+    )
+
 
 WORKER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 NUM_WORKERS = int(sys.argv[2]) if len(sys.argv) > 2 else 1
@@ -46,7 +52,8 @@ sys.path.insert(0, r"C:\soccer-cam-label")
 from map_share import map_share
 
 logging.basicConfig(
-    level=logging.INFO, format=f"%(asctime)s [W{WORKER_ID}] %(message)s",
+    level=logging.INFO,
+    format=f"%(asctime)s [W{WORKER_ID}] %(message)s",
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler(rf"C:\soccer-cam-label\tiling_w{WORKER_ID}.log"),
@@ -67,7 +74,7 @@ QUALITY = 95
 
 # Map share
 try:
-    map_share(f"\\\\{SERVER}\\training", f"DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(f"\\\\{SERVER}\\training", "DESKTOP-5L867J8\\training", "amy4ever")
     logger.info("Share mapped (worker %d of %d)", WORKER_ID, NUM_WORKERS)
 except Exception as e:
     logger.error("Failed to map share: %s", e)
@@ -130,7 +137,7 @@ def tile_frame_to_zip(frame, seg_id, frame_idx, gid, zf):
         for col in range(COLS):
             x = col * step_x
             y = row * step_y
-            tile = frame[y:y+TILE_SIZE, x:x+TILE_SIZE]
+            tile = frame[y : y + TILE_SIZE, x : x + TILE_SIZE]
             _, buf = cv2.imencode(".jpg", tile, [cv2.IMWRITE_JPEG_QUALITY, QUALITY])
             arcname = f"{gid}/{seg_id}_frame_{frame_idx:06d}_r{row}_c{col}.jpg"
             zf.writestr(arcname, buf.tobytes())
@@ -160,9 +167,12 @@ def process_video_av(video_path, seg_id, gid, needs_flip, zf):
                         frame = cv2.flip(frame, -1)
                     if prev_frame is not None:
                         try:
-                            diff = np.mean(np.abs(
-                                frame.astype(np.float32) - prev_frame.astype(np.float32)
-                            ))
+                            diff = np.mean(
+                                np.abs(
+                                    frame.astype(np.float32)
+                                    - prev_frame.astype(np.float32)
+                                )
+                            )
                         except (MemoryError, ValueError):
                             frame_idx += 1
                             continue
@@ -175,7 +185,12 @@ def process_video_av(video_path, seg_id, gid, needs_flip, zf):
                     extracted += 1
 
                     if extracted % 100 == 0:
-                        logger.info("    %d frames tiled (at %d/%d)", extracted, frame_idx, total_frames)
+                        logger.info(
+                            "    %d frames tiled (at %d/%d)",
+                            extracted,
+                            frame_idx,
+                            total_frames,
+                        )
                     if extracted % 500 == 0:
                         log_resources(logger, f"frame {frame_idx}")
 
@@ -187,7 +202,9 @@ def process_video_av(video_path, seg_id, gid, needs_flip, zf):
             logger.error("    OOM at frame %d! Stopping segment.", frame_idx)
             break
         except Exception as e:
-            logger.warning("    Error at frame %d: %s %s", frame_idx, type(e).__name__, e)
+            logger.warning(
+                "    Error at frame %d: %s %s", frame_idx, type(e).__name__, e
+            )
             continue
 
     container.close()
@@ -221,9 +238,9 @@ def process_video_cv2(video_path, seg_id, gid, needs_flip, zf):
                 frame = cv2.flip(frame, -1)
             if prev_frame is not None:
                 try:
-                    diff = np.mean(np.abs(
-                        frame.astype(np.float32) - prev_frame.astype(np.float32)
-                    ))
+                    diff = np.mean(
+                        np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))
+                    )
                 except (MemoryError, ValueError):
                     frame_idx += 1
                     continue
@@ -236,7 +253,9 @@ def process_video_cv2(video_path, seg_id, gid, needs_flip, zf):
             extracted += 1
 
             if extracted % 100 == 0:
-                logger.info("    %d frames tiled (at %d/%d)", extracted, frame_idx, total_frames)
+                logger.info(
+                    "    %d frames tiled (at %d/%d)", extracted, frame_idx, total_frames
+                )
 
         frame_idx += 1
 
@@ -307,8 +326,13 @@ while True:
             total_frames += n
             total_tiles += nt
             seg_zips.append(seg_zip_path)
-            logger.info("  %s: %d frames -> %d tiles (zip: %.1f MB)", seg_id, n, nt,
-                        seg_zip_path.stat().st_size / 1e6)
+            logger.info(
+                "  %s: %d frames -> %d tiles (zip: %.1f MB)",
+                seg_id,
+                n,
+                nt,
+                seg_zip_path.stat().st_size / 1e6,
+            )
 
             # Delete local video copy
             local_video.unlink(missing_ok=True)
@@ -316,7 +340,11 @@ while True:
         # Transfer segment zips to server
         zip_dest.mkdir(parents=True, exist_ok=True)
         for sz_path in seg_zips:
-            logger.info("Transferring %s (%.1f MB)...", sz_path.name, sz_path.stat().st_size / 1e6)
+            logger.info(
+                "Transferring %s (%.1f MB)...",
+                sz_path.name,
+                sz_path.stat().st_size / 1e6,
+            )
             for attempt in range(3):
                 try:
                     shutil.copy2(str(sz_path), str(zip_dest / sz_path.name))
@@ -334,7 +362,13 @@ while True:
 
         done += 1
         elapsed = time.time() - start
-        logger.info("DONE %s: %d tiles | %d games in %.0f min", gid, total_tiles, done, elapsed / 60)
+        logger.info(
+            "DONE %s: %d tiles | %d games in %.0f min",
+            gid,
+            total_tiles,
+            done,
+            elapsed / 60,
+        )
 
     except Exception as e:
         logger.exception("FAILED %s: %s", gid, e)
