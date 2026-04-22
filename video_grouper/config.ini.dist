@@ -18,12 +18,13 @@ max_concurrent_conversions = 1
 retry_attempts = 3
 retry_delay = 60
 
-# Per-row stitch correction (dual-lens panoramic cameras only). When enabled
-# and a profile is present at seam_realign_profile_path, each completed
-# combined.mp4 gets a `<name>.mp4.stitch.json` sidecar. Downstream readers
-# (ball detection, tracking, broadcast-perspective render) apply the per-row
-# dx shift to the right half on decode. The combined.mp4 itself is NOT
-# modified — keeps combine/trim stream-copy fast.
+# Per-row stitch correction (dual-lens panoramic cameras only). The profile
+# is per-camera and lives at seam_realign_profile_path. TTT's calibration tool
+# writes to it via ttt_reporter.sync_config when a coach saves a profile
+# against this camera in the web UI. Downstream readers (ball detection,
+# tracking, broadcast-perspective render) apply the per-row dx shift to the
+# right half on decode. No recording is ever re-encoded — combine/trim stay
+# stream-copy, and the profile is read fresh each time frames are consumed.
 # seam_realign_enabled = false
 # seam_realign_profile_path = ./shared_data/stitch_profile.json
 

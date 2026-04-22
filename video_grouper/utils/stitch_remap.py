@@ -8,8 +8,10 @@ the duplicate without needing to stitch from raw lens streams.
 
 This module is consumed by in-house downstream code (ball detection, tracking,
 broadcast-perspective render). It is deliberately NOT called during combine or
-trim — both remain stream-copy. The sidecar `.stitch.json` is written next to
-`combined.mp4` by CombineTask so readers can find the profile for that file.
+trim — both remain stream-copy. The profile is stored **per-camera** at
+`config.processing.seam_realign_profile_path` (populated by ttt_reporter when
+the TTT calibration tool pushes an update). Readers call `load_profile` on
+that path — there is no per-recording sidecar.
 """
 
 from __future__ import annotations
@@ -77,11 +79,6 @@ def write_profile(profile: StitchProfile, path: str | Path) -> None:
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(profile.to_dict(), indent=2))
     tmp.replace(p)
-
-
-def sidecar_path_for(mp4_path: str | Path) -> Path:
-    """Given `foo/bar/combined.mp4`, return `foo/bar/combined.mp4.stitch.json`."""
-    return Path(str(mp4_path) + ".stitch.json")
 
 
 def build_dx_lookup(
