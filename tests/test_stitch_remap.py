@@ -13,7 +13,6 @@ from video_grouper.utils.stitch_remap import (
     apply_shift_to_frame_rgb,
     build_dx_lookup,
     load_profile,
-    sidecar_path_for,
     write_profile,
 )
 
@@ -47,12 +46,6 @@ def test_load_profile_missing_key(tmp_path: Path) -> None:
     p = tmp_path / "partial.json"
     p.write_text(json.dumps({"source_width": 7680, "source_height": 2160}))
     assert load_profile(p) is None
-
-
-def test_sidecar_path() -> None:
-    assert str(sidecar_path_for("/tmp/foo/combined.mp4")) == str(
-        Path("/tmp/foo/combined.mp4.stitch.json")
-    )
 
 
 def test_build_dx_lookup_identity_resolution() -> None:
