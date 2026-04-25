@@ -13,6 +13,6 @@ class QueueType(Enum):
     UPLOAD = "upload"
     NTFY = "ntfy"
     YOUTUBE = "youtube"
-    AUTOCAM = "autocam"
+    BALL_TRACKING = "ball_tracking"
     CLIP_REQUEST = "clip_request"
     CLIPS = "clips"

@@ -63,7 +63,7 @@ class DownloadProcessor(QueueProcessor):
 
         # Defense-in-depth: skip download if group has already progressed
         # past the download stage to avoid overwriting during combining.
-        skip_statuses = {"combined", "trimmed", "autocam_complete", "complete"}
+        skip_statuses = {"combined", "trimmed", "ball_tracking_complete", "complete"}
         if dir_state.status in skip_statuses:
             logger.info(
                 f"DOWNLOAD: Skipping {file_name} - group already at status '{dir_state.status}'"

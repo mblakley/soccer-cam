@@ -3022,10 +3022,11 @@ class OnboardingWizard(QDialog):
         if self._ntfy_enabled:
             config.ntfy.response_service = True
 
-        # AutoCam
-        config.autocam.enabled = self._video_processor_type == "autocam"
+        # Ball tracking — wizard's "autocam" choice maps to autocam_gui provider.
+        config.ball_tracking.enabled = self._video_processor_type == "autocam"
+        config.ball_tracking.provider = "autocam_gui"
         if self._autocam_path:
-            config.autocam.executable = self._autocam_path
+            config.ball_tracking.autocam_gui.executable = self._autocam_path
 
         # PlayMetrics
         pm = self._playmetrics_config

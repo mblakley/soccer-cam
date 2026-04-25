@@ -11,6 +11,7 @@ from .tasks.upload.youtube_upload_task import YoutubeUploadTask
 from .tasks.clip.clip_request_task import ClipRequestTask
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
+from .tasks.ball_tracking.ball_tracking_task import BallTrackingTask
 
 from video_grouper.task_processors.task_registry import task_registry
 
@@ -26,3 +27,4 @@ def register_all_tasks():
     task_registry.register_task(ClipRequestTask)
     task_registry.register_task(ClipExtractionTask)
     task_registry.register_task(HighlightCompilationTask)
+    task_registry.register_task(BallTrackingTask)

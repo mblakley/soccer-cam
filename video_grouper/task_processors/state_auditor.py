@@ -277,22 +277,22 @@ class StateAuditor(PollingProcessor):
                                 group_dir, combined_path
                             )
 
-            # Handle trimmed status - if autocam is disabled, skip to upload
-            if dir_state.status == "trimmed" and not self.config.autocam.enabled:
+            # Handle trimmed status - if ball-tracking is disabled, skip to upload
+            if dir_state.status == "trimmed" and not self.config.ball_tracking.enabled:
                 logger.info(
-                    f"STATE_AUDITOR: Autocam disabled, transitioning {group_dir} to upload"
+                    f"STATE_AUDITOR: Ball tracking disabled, transitioning {group_dir} to upload"
                 )
-                await dir_state.update_group_status("autocam_complete")
+                await dir_state.update_group_status("ball_tracking_complete")
                 await self._queue_upload(group_dir)
 
-            # Check for videos to upload (autocam_complete status)
-            elif dir_state.status == "autocam_complete":
-                if not self.config.autocam.enabled:
+            # Check for videos to upload (ball_tracking_complete status)
+            elif dir_state.status == "ball_tracking_complete":
+                if not self.config.ball_tracking.enabled:
                     # Headless mode: queue upload directly
                     await self._queue_upload(group_dir)
                 else:
                     logger.debug(
-                        f"STATE_AUDITOR: Found autocam_complete status for {group_dir}, uploads handled by tray agent"
+                        f"STATE_AUDITOR: Found ball_tracking_complete status for {group_dir}, uploads handled by tray agent"
                     )
 
             # Check for not_a_game status (user confirmed there was no match)
