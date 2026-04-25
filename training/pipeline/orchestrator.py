@@ -1,496 +1,714 @@
-"""Pipeline orchestrator — keeps all machines busy automatically.
+"""Pipeline orchestrator — populates work queues and monitors pipeline health.
 
-Long-running process on the server that:
-1. Discovers what work needs doing (unlabeled games, stale training sets)
-2. Checks which machines are available
-3. Stages data and submits jobs
-4. Collects results and merges them
-5. Builds training sets and deploys to laptop
-6. Sends NTFY notifications on milestones
+Starts the API server in a background thread, then uses it as a client
+for all DB operations. Only the API thread touches SQLite directly.
 
 Usage:
-    uv run python -m training.pipeline.orchestrator
-    uv run python -m training.pipeline.orchestrator --once  # single pass
-    uv run python -m training.pipeline.orchestrator --status  # show state
+    uv run python -m training.pipeline run
+    uv run python -m training.pipeline run --once
+    uv run python -m training.pipeline run --dry-run
 """
 
-import argparse
 import json
 import logging
-import os
+import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 
-from training.data_prep.manifest import (
-    backup_db,
-    merge_labels_from,
-    open_db,
+from training.pipeline.client import PipelineClient
+from training.pipeline.config import load_config
+from training.pipeline.state_machine import (
+    advance_state,
+    get_failed_stage,
+    is_failed,
+    next_task_for_game,
 )
-from training.data_prep.manifest_dataset import build_training_set
-from training.pipeline.machine_manager import MachineManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("D:/training_data/orchestrator.log"),
-    ],
-)
 logger = logging.getLogger(__name__)
 
-# Paths
-MASTER_DB = Path("D:/training_data/manifest.db")
-MASTER_PACKS = Path("D:/training_data/tile_packs")
-TRAINING_SETS_DIR = Path("D:/training_data/training_sets")
-ARCHIVE_DIR = Path("F:/training_sets")
-GAME_REGISTRY = Path("D:/training_data/game_registry.json")
-STATE_PATH = Path("D:/training_data/orchestrator_state.json")
 
-# Config
-CHECK_INTERVAL = 300  # seconds between orchestrator loops
-FORTNITE_OP_LABEL_DB = "D:\\labeling\\manifest.db"
-FORTNITE_OP_LABEL_LOG = "D:\\labeling\\label_log.txt"
-FORTNITE_OP_VIDEO_DIR = "D:\\labeling"
-LAPTOP_TRAINING_DIR = "C:\\soccer-cam-label"
+class Orchestrator:
+    """Queue-populating orchestrator. Uses HTTP API for all DB access."""
 
-mgr = MachineManager()
+    def __init__(self, config_path: Path | None = None, dry_run: bool = False):
+        self.cfg = load_config(config_path)
+        self.dry_run = dry_run
+        self.api = PipelineClient("http://127.0.0.1:8643")
+        self._last_qa_time = 0.0
+        self._qa_count_this_hour = 0
+        self._alerted_workers: set[str] = set()
+        self._alerted_stuck: set[str] = (
+            set()
+        )  # games that hit hard limit (notified once)
+        self._last_reset: dict[
+            str, float
+        ] = {}  # game_id -> timestamp of last auto-reset
+        self._qa_exhausted: set[str] = (
+            set()
+        )  # games where sonnet_qa found no candidates (skip re-enqueue)
+        self._last_qa_game: str | None = None  # round-robin continuous QA
 
-
-def load_state() -> dict:
-    if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text())
-    return {
-        "last_merge_time": None,
-        "last_training_set_version": None,
-        "last_training_set_label_count": 0,
-        "last_training_deploy_time": None,
-        "training_in_progress": False,
-        "current_fortnite_game": None,
-        "games_labeled_by_fortnite": [],
-        "total_labels_merged": 0,
-    }
-
-
-def save_state(state: dict):
-    state["last_updated"] = datetime.now().isoformat()
-    STATE_PATH.write_text(json.dumps(state, indent=2))
-
-
-def get_games_needing_labels(conn) -> list[str]:
-    """Find packed games with tiles but no/few labels."""
-    rows = conn.execute("""
-        SELECT g.game_id, g.tile_count,
-               (SELECT COUNT(*) FROM labels WHERE game_id = g.game_id) as label_count
-        FROM games g
-        WHERE g.tiles_cataloged IS NOT NULL AND g.tile_count > 0
-        ORDER BY g.game_id
-    """).fetchall()
-    # Games with <1% labeled tiles need labeling
-    return [gid for gid, tc, lc in rows if tc > 0 and lc / tc < 0.01]
-
-
-def get_games_with_labels(conn) -> list[dict]:
-    """Find packed games that have labels (for training sets)."""
-    rows = conn.execute("""
-        SELECT g.game_id, g.tile_count,
-               (SELECT COUNT(DISTINCT tile_stem) FROM labels WHERE game_id = g.game_id) as label_count
-        FROM games g
-        WHERE g.tiles_cataloged IS NOT NULL AND g.tile_count > 0
-        ORDER BY g.game_id
-    """).fetchall()
-    return [
-        {"game_id": gid, "tiles": tc, "labels": lc} for gid, tc, lc in rows if lc > 100
-    ]
-
-
-def find_video_for_game(game_id: str) -> list[str]:
-    """Find video segment paths for a game on F: drive."""
-    registry = json.loads(GAME_REGISTRY.read_text())
-    game = next((g for g in registry if g["game_id"] == game_id), None)
-    if not game:
-        return []
-
-    # Search for segments in staging or F: drive
-    staging = Path(f"D:/training_data/staging/{game_id}")
-    if staging.exists():
-        # Resolve symlinks
-        paths = []
-        for f in staging.glob("*.mp4"):
-            target = f.resolve() if f.is_symlink() else f
-            if target.exists() and target.stat().st_size > 0:
-                paths.append(str(target))
-        if paths:
-            return paths
-
-    # Search F: drive for segments
-    for segment in game.get("segments", []):
-        # Segments are on F: in various subdirectories
-        for search_dir in Path("F:/").iterdir():
-            if not search_dir.is_dir():
-                continue
-            for subdir in search_dir.iterdir():
-                if not subdir.is_dir():
-                    continue
-                seg_file = subdir / segment
-                if seg_file.exists():
-                    return [str(f) for f in subdir.glob("*[F][0@0]*.mp4")]
-
-    return []
-
-
-# ── Orchestrator actions ──────────────────────────────────────────
-
-
-def action_check_fortnite_labeling(state: dict) -> dict:
-    """Check FORTNITE-OP: collect results, submit next job if idle."""
-    if not mgr.is_online("FORTNITE-OP"):
-        logger.debug("FORTNITE-OP offline")
-        return state
-
-    task_state = mgr.check_task("FORTNITE-OP", "RunLabeling")
-
-    if task_state == "Running":
-        # Still labeling — check progress
-        log = mgr.get_log_tail("FORTNITE-OP", FORTNITE_OP_LABEL_LOG, 5)
-        if log:
-            logger.info("FORTNITE-OP labeling: %s", log.split("\n")[-1][:100])
-        return state
-
-    # Task is Ready (done or never started)
-    # Check if there are labels to collect
-    code, output = mgr.remote_exec(
-        "FORTNITE-OP",
-        f"""
-        if (Test-Path "{FORTNITE_OP_LABEL_DB}") {{
-            $sz = (Get-Item "{FORTNITE_OP_LABEL_DB}").Length
-            Write-Output "DB_SIZE:$sz"
-        }} else {{
-            Write-Output "NO_DB"
-        }}
-    """,
-    )
-
-    if "DB_SIZE:" in output:
-        db_size = int(output.split("DB_SIZE:")[1].strip())
-        if db_size > 4096:  # More than empty DB
-            # Pull and merge labels
-            logger.info(
-                "FORTNITE-OP has labels to collect (DB: %d KB)", db_size // 1024
-            )
-            local_remote_db = Path(
-                "D:/training_data/remote_manifests/fortnite_op_manifest.db"
-            )
-            local_remote_db.parent.mkdir(parents=True, exist_ok=True)
-
-            if mgr.pull_file("FORTNITE-OP", FORTNITE_OP_LABEL_DB, str(local_remote_db)):
-                conn = open_db(MASTER_DB)
-                backup_db(MASTER_DB)
-                result = merge_labels_from(conn, local_remote_db)
-                conn.close()
-                state["total_labels_merged"] += result["labels_inserted"]
-                state["last_merge_time"] = datetime.now().isoformat()
-                logger.info(
-                    "Merged %d labels from FORTNITE-OP", result["labels_inserted"]
-                )
-                mgr.send_ntfy(
-                    f"Merged {result['labels_inserted']} labels from FORTNITE-OP. "
-                    f"Total: {state['total_labels_merged']}",
-                    title="Labels Merged",
-                )
-
-    # Check if we should submit the next labeling job
-    if not mgr.is_idle("FORTNITE-OP"):
-        logger.info("FORTNITE-OP not idle (game running)")
-        return state
-
-    conn = open_db(MASTER_DB)
-    games_needing = get_games_needing_labels(conn)
-    conn.close()
-
-    # Filter out games already done or in progress
-    done = set(state.get("games_labeled_by_fortnite", []))
-    todo = [g for g in games_needing if g not in done]
-
-    if not todo:
-        logger.info("FORTNITE-OP: no games need labeling")
-        return state
-
-    next_game = todo[0]
-    logger.info("FORTNITE-OP: staging %s for labeling", next_game)
-
-    # Find and stage video
-    video_paths = find_video_for_game(next_game)
-    if not video_paths:
-        logger.warning("No video found for %s, skipping", next_game)
-        return state
-
-    if mgr.stage_video("FORTNITE-OP", next_game, video_paths):
-        remote_model_path = os.environ.get("REMOTE_LABEL_MODEL_PATH", "")
-        if not remote_model_path:
-            logger.error(
-                "REMOTE_LABEL_MODEL_PATH env var not set; cannot launch labeling on FORTNITE-OP"
-            )
-            return state
-
-        # Update the batch file on FORTNITE-OP to process this game
-        mgr.remote_exec(
-            "FORTNITE-OP",
-            f"""
-            Remove-Item D:\\labeling\\manifest.db -ErrorAction SilentlyContinue
-            Remove-Item D:\\labeling\\label_log.txt -ErrorAction SilentlyContinue
-            @"
-C:\\Python313\\python.exe -u C:\\soccer-cam-label\\label_job.py --video-dir "D:\\labeling\\{next_game}" --game-id "{next_game}" --model "{remote_model_path}" --db "D:\\labeling\\manifest.db" > D:\\labeling\\label_log.txt 2>&1
-"@ | Set-Content C:\\tmp\\run_label.bat -Encoding ASCII
-            Start-ScheduledTask -TaskName "RunLabeling"
-            Write-Output "STARTED"
-        """,
-            timeout=30,
-        )
-
-        state["current_fortnite_game"] = next_game
-        logger.info("FORTNITE-OP: started labeling %s", next_game)
-
-    return state
-
-
-def action_check_laptop_training(state: dict) -> dict:
-    """Check laptop: is training done? should we deploy new training set?"""
-    if not mgr.is_online("jared-laptop"):
-        logger.debug("Laptop offline")
-        return state
-
-    task_state = mgr.check_task("jared-laptop", "TrainV3")
-
-    if task_state == "Running":
-        # Check progress
-        log = mgr.get_log_tail(
-            "jared-laptop", f"{LAPTOP_TRAINING_DIR}\\train_v3.log", 3
-        )
-        if log:
-            logger.info("Laptop training: %s", log.split("\n")[-1][:100])
-        return state
-
-    # Training not running — check if we have new labels to train on
-    conn = open_db(MASTER_DB)
-    current_label_count = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
-    conn.close()
-
-    if current_label_count <= state.get("last_training_set_label_count", 0):
-        logger.debug("No new labels since last training set")
-        return state
-
-    # New labels available — should we build a new training set?
-    labeled_games = _get_labeled_packed_games()
-    if len(labeled_games) < 3:
+    def run(self, once: bool = False):
+        """Main orchestrator loop. Requires API server to be running separately."""
         logger.info(
-            "Only %d labeled games, need at least 3 for training", len(labeled_games)
+            "Orchestrator starting (interval=%ds, dry_run=%s)",
+            self.cfg.orchestrator.check_interval,
+            self.dry_run,
         )
-        return state
 
-    # Build new training set
-    version = f"v3.{int(time.time()) % 10000}"
-    output_dir = TRAINING_SETS_DIR / version
-    logger.info(
-        "Building training set %s (%d labeled games, %d labels)",
-        version,
-        len(labeled_games),
-        current_label_count,
-    )
+        # Wait for API to be available
+        if not self.dry_run:
+            while not self.api.is_available():
+                logger.info("Waiting for API server at %s...", self.api.base_url)
+                time.sleep(5)
 
-    val_game = labeled_games[-1]  # Last game as val
-    train_games = labeled_games[:-1]
+        while True:
+            try:
+                self._tick()
+            except Exception:
+                logger.exception("Orchestrator tick failed")
 
-    # Get camera games for negative diversity
-    camera_games = [
-        d.name
-        for d in MASTER_PACKS.iterdir()
-        if d.is_dir() and d.name.startswith("camera__")
-    ]
+            if once:
+                break
 
-    build_training_set(
-        master_db=str(MASTER_DB),
-        master_packs=str(MASTER_PACKS),
-        output_dir=str(output_dir),
-        train_games=train_games,
-        val_games=[val_game],
-        neg_ratio=1.0,
-        camera_neg_games=camera_games[:2] if camera_games else None,
-    )
+            time.sleep(self.cfg.orchestrator.check_interval)
 
-    # Archive to F:
-    archive_path = ARCHIVE_DIR / version
-    if ARCHIVE_DIR.exists():
+    def _tick(self):
+        """One pass of the orchestrator loop."""
+        self._collect_results()
+        self.api.reclaim_stale(self.cfg.orchestrator.stale_heartbeat)
+        self._audit_game_states()
+        self._enqueue_work()
+        self._cleanup_serving_tier()
+        # Periodic WAL checkpoint to prevent unbounded WAL growth
+        self.api.maybe_checkpoint()
+
+    # ------------------------------------------------------------------
+    # Collect results
+    # ------------------------------------------------------------------
+
+    def _collect_results(self):
+        """Check completed work items and advance game states."""
+        done_items = self.api.get_queue_items(status="done")
+        for item in done_items:
+            game_id = item.get("game_id")
+            task_type = item["task_type"]
+
+            if game_id:
+                game = self.api.get_game(game_id)
+                if game:
+                    current_state = game.get("pipeline_state", "")
+                    new_state = advance_state(current_state, task_type, success=True)
+                    if new_state != current_state:
+                        # New labels may exist — allow QA re-check
+                        self._qa_exhausted.discard(game_id)
+                        if not self.dry_run:
+                            self.api.set_game_state(game_id, new_state)
+                            self.api.reset_attempts(game_id)
+
+                            result = item.get("result")
+                            if isinstance(result, str):
+                                try:
+                                    result = json.loads(result)
+                                except (json.JSONDecodeError, TypeError):
+                                    result = {}
+                            if result:
+                                self._update_stats_from_result(
+                                    game_id, task_type, result
+                                )
+
+                        logger.info(
+                            "Game %s: %s -> %s (via %s)",
+                            game_id,
+                            current_state,
+                            new_state,
+                            task_type,
+                        )
+                        self.api.log_event(
+                            "info",
+                            f"{game_id} {current_state} -> {new_state}",
+                            category="state_change",
+                            game_id=game_id,
+                        )
+
+            # Track QA-exhausted games and advance round-robin.
+            # Use unreviewed_remaining (actual count of un-QA'd labels in manifest)
+            # rather than tiles_reviewed (which only counts what this run processed).
+            if task_type == "sonnet_qa" and game_id:
+                # Advance round-robin so the next enqueue picks a different game
+                self._last_qa_game = game_id
+                result = item.get("result")
+                if isinstance(result, str):
+                    try:
+                        result_data = json.loads(result)
+                    except (json.JSONDecodeError, TypeError):
+                        result_data = {}
+                else:
+                    result_data = result or {}
+                remaining = result_data.get("unreviewed_remaining")
+                if remaining is not None and remaining == 0:
+                    self._qa_exhausted.add(game_id)
+                    logger.debug(
+                        "QA exhausted for %s — 0 unreviewed labels remain",
+                        game_id,
+                    )
+                elif remaining is not None:
+                    logger.debug(
+                        "QA for %s: %d unreviewed labels remain",
+                        game_id,
+                        remaining,
+                    )
+
+            # Archive processed items so they don't get re-processed
+            if not self.dry_run:
+                self.api.archive(item["id"])
+
+        # Check failed items — set game state and archive
+        failed = self.api.get_queue_items(status="failed")
+        for item in failed:
+            game_id = item.get("game_id")
+            if game_id:
+                game = self.api.get_game(game_id)
+                if game:
+                    current_state = game.get("pipeline_state", "")
+                    if not is_failed(current_state):
+                        new_state = f"FAILED:{current_state}"
+                        if not self.dry_run:
+                            self.api.set_game_state(
+                                game_id, new_state, error=item.get("error")
+                            )
+                            self.api.increment_attempts(game_id)
+
+                        # Notify once when a game hits 20 attempts (hard limit)
+                        game_info = self.api.get_game(game_id)
+                        attempts = (
+                            game_info.get("pipeline_attempts", 0) if game_info else 0
+                        )
+                        if attempts >= 20 and game_id not in self._alerted_stuck:
+                            self._alerted_stuck.add(game_id)
+                            self._ntfy(
+                                f"Game stuck after {attempts} attempts: {game_id}\n"
+                                f"Error: {item.get('error', 'unknown')[:200]}",
+                                title="Game Stuck",
+                                priority="default",
+                            )
+
+            # Always archive failed items so they don't pile up
+            if not self.dry_run:
+                self.api.archive(item["id"])
+
+    def _update_stats_from_result(self, game_id: str, task_type: str, result: dict):
+        if task_type == "tile":
+            self.api.update_game_stats(
+                game_id,
+                tile_count=result.get("tiles"),
+                segment_count=result.get("segments"),
+            )
+        elif task_type == "label":
+            self.api.update_game_stats(
+                game_id,
+                label_count=result.get("labels_written"),
+            )
+        elif task_type == "sonnet_qa":
+            coverage = result.get("track_coverage")
+            if coverage is not None:
+                self.api.update_game_stats(game_id, coverage=coverage)
+        elif task_type == "train":
+            metrics = result.get("metrics", {})
+            if metrics:
+                self._ntfy(
+                    f"Training {result.get('version', '?')} complete!\n"
+                    f"mAP50: {metrics.get('mAP50', 0):.3f}, "
+                    f"P: {metrics.get('precision', 0):.3f}, "
+                    f"R: {metrics.get('recall', 0):.3f}",
+                    title="Training Complete",
+                )
+
+    # ------------------------------------------------------------------
+    # Audit — validate game states match actual data
+    # ------------------------------------------------------------------
+
+    def _audit_game_states(self):
+        """Check that each game's state matches its actual data.
+
+        Demotes games whose state claims more progress than their data
+        supports. Also cleans up FAILED:TRAINABLE (terminal state shouldn't fail)
+        and prunes stale worker entries. Runs every tick.
+        """
+        if self.dry_run:
+            return
+
+        # Clean stale worker entries (> 24 hours old)
+        # Skip if the same hostname also has a fresh entry (WAL corruption
+        # can cause duplicate rows despite PRIMARY KEY constraint).
+        status = self.api.get_status()
+        if status:
+            now = time.time()
+            workers = status.get("workers", [])
+            fresh_hostnames = {
+                w["hostname"]
+                for w in workers
+                if (now - (w.get("last_seen") or 0)) < 86400
+            }
+            for w in workers:
+                age = now - (w.get("last_seen") or 0)
+                if age > 86400 and w["hostname"] not in fresh_hostnames:
+                    self.api.delete_worker(w["hostname"])
+                    logger.info(
+                        "Audit: cleaned stale worker %s (%d hrs old)",
+                        w["hostname"],
+                        age // 3600,
+                    )
+
+        games = self.api.get_games_needing_work()
+        for game in games:
+            game_id = game["game_id"]
+            state = game["pipeline_state"]
+            tiles = game.get("tile_count", 0)
+            labels = game.get("label_count", 0)
+
+            # FAILED:TRAINABLE — just reset to TRAINABLE + clear attempts
+            if state == "FAILED:TRAINABLE":
+                self.api.set_game_state(game_id, "TRAINABLE")
+                self.api.reset_attempts(game_id)
+                logger.info("Audit: fixed %s FAILED:TRAINABLE->TRAINABLE", game_id)
+                continue
+
+            if is_failed(state):
+                state = get_failed_stage(state)
+
+            # LABELED or beyond but has 0 tiles — needs tiling
+            if state in ("LABELED", "QA_PENDING", "QA_DONE") and tiles == 0:
+                self.api.set_game_state(game_id, "TILED")
+                logger.info("Audit: demoted %s %s->TILED (0 tiles)", game_id, state)
+                continue
+
+            # LABELED but has 0 labels — needs labeling
+            if (
+                state in ("LABELED", "QA_PENDING", "QA_DONE")
+                and labels == 0
+                and tiles > 0
+            ):
+                self.api.set_game_state(game_id, "TILED")
+                logger.info("Audit: demoted %s %s->TILED (0 labels)", game_id, state)
+                continue
+
+            # TILED but has 0 tiles — needs staging
+            if state == "TILED" and tiles == 0:
+                self.api.set_game_state(game_id, "STAGING")
+                logger.info("Audit: demoted %s TILED->STAGING (0 tiles)", game_id)
+                continue
+
+    # ------------------------------------------------------------------
+    # Enqueue work
+    # ------------------------------------------------------------------
+
+    def _enqueue_work(self):
+        games = self.api.get_games_needing_work()
+
+        for game in games:
+            game_id = game["game_id"]
+            state = game["pipeline_state"]
+
+            attempts = game.get("pipeline_attempts", 0)
+
+            # Auto-recover FAILED games with cooldown.
+            # Most failures are transient (disk full, USB hiccup).
+            # Wait 5 min between retries, hard limit at 20 attempts.
+            if is_failed(state):
+                if attempts >= 20:
+                    continue  # truly stuck, needs manual investigation
+
+                last_reset = self._last_reset.get(game_id, 0)
+                if time.time() - last_reset < 300:
+                    continue  # 5 min cooldown between retries
+
+                failed_stage = get_failed_stage(state)
+                if failed_stage and not self.dry_run:
+                    self.api.set_game_state(game_id, failed_stage)
+                    self._last_reset[game_id] = time.time()
+                    logger.info("Auto-reset %s (attempt %d)", game_id, attempts)
+                continue
+
+            task_type = next_task_for_game(state)
+            if not task_type:
+                continue
+
+            if self.api.has_active_item(task_type, game_id):
+                continue
+
+            if task_type == "stage":
+                active_stages = self.api.get_queue_items(status="running")
+                claimed_stages = self.api.get_queue_items(status="claimed")
+                stage_count = sum(
+                    1
+                    for i in active_stages + claimed_stages
+                    if i.get("task_type") == "stage"
+                )
+                if stage_count >= self.cfg.orchestrator.max_staging_concurrent:
+                    continue
+
+            if task_type == "sonnet_qa" and not self._can_qa():
+                continue
+
+            payload = self._build_payload(game, task_type)
+            priority = self._get_priority(task_type, game)
+            target = self._get_target_machine(task_type)
+
+            if self.dry_run:
+                logger.info(
+                    "[DRY RUN] Would enqueue %s for %s (priority=%d, target=%s)",
+                    task_type,
+                    game_id,
+                    priority,
+                    target or "any",
+                )
+            else:
+                self.api.enqueue(
+                    task_type,
+                    game_id=game_id,
+                    priority=priority,
+                    target_machine=target,
+                    payload=payload,
+                )
+
+        self._maybe_enqueue_training()
+        self._maybe_enqueue_continuous_qa()
+
+    def _maybe_enqueue_continuous_qa(self):
+        """Keep QA running on any game with un-QA'd labeled tiles.
+
+        QA should never stop — if there are tiles with labels but no
+        qa_verdict, enqueue another QA pass. This covers games in
+        QA_DONE and TRAINABLE that still have unreviewed tiles.
+
+        Uses its own game list (not just needing-work) since TRAINABLE
+        games still need QA on unreviewed tiles.
+        """
+        if self.api.has_active_item("sonnet_qa"):
+            return  # already running one
+
+        # Don't starve generate_review — if one is queued, let it run first
+        if self.api.has_active_item("generate_review"):
+            return
+
+        # Don't pile onto a worker that already has a deep queue.
+        # The QA worker also handles field_boundary, generate_review, etc.
+        # If there's a significant backlog, let it drain first.
+        qa_worker_types = [
+            "sonnet_qa",
+            "generate_review",
+            "ingest_reviews",
+            "field_boundary",
+        ]
+        depth = self.api.get_queue_depth(qa_worker_types)
+        if depth >= 3:
+            return  # enough work queued already
+
+        # Get ALL games, not just needing-work (which excludes TRAINABLE)
+        all_games = self.api.get_all_games()
+        qa_eligible_states = {"LABELED", "QA_PENDING", "QA_DONE", "TRAINABLE"}
+        eligible = [
+            g
+            for g in all_games
+            if g["pipeline_state"] in qa_eligible_states
+            and g.get("label_count", 0) > 0
+            and g["game_id"] not in self._qa_exhausted
+        ]
+        if not eligible:
+            return
+
+        # Round-robin: start after the last game we QA'd
+        if self._last_qa_game:
+            ids = [g["game_id"] for g in eligible]
+            try:
+                last_idx = ids.index(self._last_qa_game)
+                eligible = eligible[last_idx + 1 :] + eligible[: last_idx + 1]
+            except ValueError:
+                pass  # last game no longer eligible, start from top
+
+        for game in eligible:
+            if self.api.has_active_item("sonnet_qa", game["game_id"]):
+                continue
+
+            # Enqueue QA — the task itself checks for un-QA'd tiles
+            # and returns early if there's nothing to do
+            if not self.dry_run:
+                self.api.enqueue(
+                    "sonnet_qa",
+                    game_id=game["game_id"],
+                    priority=self._get_priority("sonnet_qa", game),
+                    target_machine=self._get_target_machine("sonnet_qa"),
+                )
+                self._last_qa_game = game["game_id"]
+                logger.info(
+                    "Continuous QA: enqueued for %s (%s)",
+                    game["game_id"],
+                    game["pipeline_state"],
+                )
+            break  # One at a time to stay within rate limit
+
+    def _build_payload(self, game: dict, task_type: str) -> dict:
+        payload = {}
+        if task_type == "stage":
+            payload["video_path"] = game.get("video_path", "")
+        if task_type in ("tile", "label"):
+            payload["needs_flip"] = bool(game.get("needs_flip"))
+            payload["camera_type"] = game.get("camera_type", "dahua")
+        return payload
+
+    def _get_priority(self, task_type: str, game: dict) -> int:
+        # Lower number = higher priority. Designed so QA and review
+        # interleave with tiling rather than waiting for all tiles.
+        base = {
+            "ingest_reviews": 5,
+            "generate_review": 10,
+            "train": 15,
+            "sonnet_qa": 25,  # between label and tile — runs as games become LABELED
+            "label": 30,
+            "tile": 35,
+            "stage": 40,
+        }.get(task_type, 50)
+        if game.get("label_count", 0) > 0:
+            base -= 5
+        return base
+
+    def _get_target_machine(self, task_type: str) -> str | None:
+        # Stage needs local F: access for video files — server only.
+        # Tile can run on any machine (pulls video via SMB).
+        if task_type == "stage":
+            return self.cfg.server.hostname
+        if task_type == "train":
+            for name, m in self.cfg.machines.items():
+                if "train" in m.capabilities:
+                    return m.hostname
+        return None
+
+    def _maybe_enqueue_training(self):
+        """Enqueue training driven by ball track coverage.
+
+        The flywheel: retrain when track coverage is below target and
+        still improving. Stop when converged or plateaued (need human
+        reviews instead). Falls back to game-count trigger when no
+        coverage data exists yet (bootstrap).
+        """
+        if self.api.has_active_item("train"):
+            return
+
+        trainable = self.api.get_trainable_games()
+        if len(trainable) < self.cfg.orchestrator.min_new_games_for_retrain:
+            return
+
+        # Coverage-aware trigger: check if retraining would help
+        games_with_coverage = [g for g in trainable if g.get("coverage", 0) > 0]
+
+        if games_with_coverage:
+            avg_coverage = sum(g["coverage"] for g in games_with_coverage) / len(
+                games_with_coverage
+            )
+
+            if avg_coverage >= self.cfg.orchestrator.coverage_target:
+                logger.info(
+                    "Track coverage converged at %.1f%% (target %.0f%%) — skipping training",
+                    avg_coverage * 100,
+                    self.cfg.orchestrator.coverage_target * 100,
+                )
+                return
+
+            prev_coverage = getattr(self, "_last_train_coverage", 0.0)
+            delta = avg_coverage - prev_coverage
+            if prev_coverage > 0 and delta < self.cfg.orchestrator.coverage_min_delta:
+                logger.info(
+                    "Track coverage plateaued at %.1f%% (delta=%.1f%%) — need human reviews, skipping training",
+                    avg_coverage * 100,
+                    delta * 100,
+                )
+                return
+        # else: no coverage data yet, fall through to bootstrap trigger
+
+        # Rate limit: at most 1 training run per hour
+        if (
+            hasattr(self, "_last_train_time")
+            and time.time() - self._last_train_time < 3600
+        ):
+            return
+
+        self._enqueue_train(trainable)
+
+    def _enqueue_train(self, trainable: list[dict]):
+        """Build and enqueue a training task from trainable games."""
+        self._last_train_time = time.time()
+
+        game_ids = [g["game_id"] for g in trainable]
+        val_games = game_ids[:1]
+        train_games = game_ids[1:]
+        if not train_games:
+            return
+
+        # Track coverage for plateau detection on next cycle
+        games_with_coverage = [g for g in trainable if g.get("coverage", 0) > 0]
+        if games_with_coverage:
+            self._last_train_coverage = sum(
+                g["coverage"] for g in games_with_coverage
+            ) / len(games_with_coverage)
+
+        # Find previous best weights to resume from (incremental training)
+        resume_from = None
+        training_sets = Path(self.cfg.paths.training_sets)
+        if training_sets.exists():
+            versions = sorted(training_sets.iterdir(), reverse=True)
+            for v in versions:
+                best = v / "weights" / "best.pt"
+                if best.exists():
+                    resume_from = str(best)
+                    break
+
+        version = f"v3.{int(time.time()) % 10000}"
+        if self.dry_run:
+            logger.info(
+                "[DRY RUN] Would enqueue training %s (resume=%s)", version, resume_from
+            )
+        else:
+            self.api.enqueue(
+                "train",
+                priority=10,
+                target_machine=self._get_target_machine("train"),
+                payload={
+                    "train_games": train_games,
+                    "val_games": val_games,
+                    "version": version,
+                    "resume_from": resume_from,
+                },
+            )
+            logger.info(
+                "Enqueued training %s: %d games, resume=%s",
+                version,
+                len(train_games),
+                Path(resume_from).parent.parent.name if resume_from else "scratch",
+            )
+
+    def _can_qa(self) -> bool:
+        now = time.time()
+        if now - self._last_qa_time > 3600:
+            self._qa_count_this_hour = 0
+        if self._qa_count_this_hour >= self.cfg.qa.sonnet_batch_limit:
+            return False
+        self._qa_count_this_hour += 1
+        self._last_qa_time = now
+        return True
+
+    # ------------------------------------------------------------------
+    # Worker health
+    # ------------------------------------------------------------------
+
+    def _cleanup_serving_tier(self):
+        """Clean archived packs from D: when disk usage exceeds 80%.
+
+        Only deletes packs that are verified to exist on F: with matching size.
+        Deletes oldest packs first (by file modification time).
+        """
         import shutil
 
-        shutil.copytree(str(output_dir), str(archive_path), dirs_exist_ok=True)
-        logger.info("Archived training set to %s", archive_path)
+        games_dir = Path(self.cfg.paths.games_dir)
+        archive_base = Path(self.cfg.paths.archive.tile_packs)
 
-    # Deploy to laptop
-    logger.info("Deploying training set to laptop...")
-    if mgr.push_directory(
-        "jared-laptop", str(output_dir), f"{LAPTOP_TRAINING_DIR}\\training_set"
-    ):
-        # Start training
-        mgr.remote_exec(
-            "jared-laptop",
-            """
-            Start-ScheduledTask -TaskName "TrainV3"
-            Write-Output "STARTED"
-        """,
-        )
-        state["last_training_set_version"] = version
-        state["last_training_set_label_count"] = current_label_count
-        state["last_training_deploy_time"] = datetime.now().isoformat()
-        state["training_in_progress"] = True
-        logger.info("Training deployed and started: %s", version)
-        mgr.send_ntfy(
-            f"Training set {version} deployed to laptop. "
-            f"{len(train_games)} train + 1 val games, {current_label_count} labels.",
-            title="Training Started",
-        )
+        total, used, free = shutil.disk_usage(str(games_dir))
+        usage_pct = used / total
+        if usage_pct < 0.80:
+            return
 
-    return state
+        target_free = int(total * 0.3)  # free down to 70% usage
+        freed = 0
 
+        # Collect all reclaimable packs with their modification times
+        reclaimable = []
+        for game_dir in games_dir.iterdir():
+            if not game_dir.is_dir():
+                continue
+            packs_dir = game_dir / "tile_packs"
+            if not packs_dir.exists():
+                continue
+            archive_dir = archive_base / game_dir.name
+            for pack in packs_dir.glob("*.pack"):
+                f_copy = archive_dir / pack.name
+                if f_copy.exists() and f_copy.stat().st_size == pack.stat().st_size:
+                    reclaimable.append((pack.stat().st_mtime, pack))
 
-def _get_labeled_packed_games() -> list[str]:
-    """Get list of packed games that have labels."""
-    conn = open_db(MASTER_DB)
-    games = []
-    for d in sorted(MASTER_PACKS.iterdir()):
-        if not d.is_dir() or not any(d.glob("*.pack")):
-            continue
-        gid = d.name
-        lc = conn.execute(
-            "SELECT COUNT(*) FROM labels WHERE game_id=?", (gid,)
-        ).fetchone()[0]
-        if lc > 100:
-            games.append(gid)
-    conn.close()
-    return games
+        # Sort oldest first
+        reclaimable.sort(key=lambda x: x[0])
 
+        for mtime, pack in reclaimable:
+            if freed >= target_free - (total - used):
+                break
+            size = pack.stat().st_size
+            pack.unlink()
+            freed += size
+            logger.info("D: cleanup: deleted %s (%.1f GB)", pack.name, size / 1e9)
 
-def action_collect_training_results(state: dict) -> dict:
-    """Check if laptop training completed and collect weights."""
-    if not state.get("training_in_progress"):
-        return state
-    if not mgr.is_online("jared-laptop"):
-        return state
-
-    task_state = mgr.check_task("jared-laptop", "TrainV3")
-    if task_state == "Running":
-        return state
-
-    # Training completed — collect weights
-    logger.info("Training completed on laptop, collecting weights...")
-    version = state.get("last_training_set_version", "unknown")
-    weights_dir = Path(f"D:/training_data/models/{version}")
-    weights_dir.mkdir(parents=True, exist_ok=True)
-
-    # Try to find best.pt on laptop
-    code, output = mgr.remote_exec(
-        "jared-laptop",
-        """
-        Get-ChildItem -Recurse C:\\soccer-cam-label\\training_set\\runs -Filter "best.pt" -ErrorAction SilentlyContinue |
-            Select-Object -First 1 -ExpandProperty FullName
-    """,
-    )
-
-    if output and "best.pt" in output:
-        remote_weights = output.strip()
-        local_weights = weights_dir / "best.pt"
-        if mgr.pull_file("jared-laptop", remote_weights, str(local_weights)):
-            logger.info("Collected weights: %s", local_weights)
-            state["training_in_progress"] = False
-            mgr.send_ntfy(
-                f"Training {version} complete! Weights saved to {local_weights}",
-                title="Training Complete",
+        if freed > 0:
+            logger.info(
+                "D: cleanup: freed %.1f GB (was %d%% full)",
+                freed / 1e9,
+                int(usage_pct * 100),
             )
-    else:
-        logger.warning("Could not find best.pt on laptop")
-        state["training_in_progress"] = False
 
-    return state
+    def _check_workers(self):
+        status = self.api.get_status()
+        if not status:
+            return
+        now = time.time()
+        for w in status.get("workers", []):
+            hostname = w.get("hostname", "?")
+            worker_status = w.get("status", "")
+            age = now - (w.get("last_seen") or 0)
 
+            # Don't alert for workers that yielded for games — that's expected
+            if worker_status == "yielded":
+                continue
 
-def print_status():
-    """Print current pipeline status."""
-    state = load_state()
-    print(f"\n=== Pipeline Status ({state.get('last_updated', 'never')}) ===")
-    print(f"  Total labels merged:    {state.get('total_labels_merged', 0):,}")
-    print(f"  Last merge:             {state.get('last_merge_time', 'never')}")
-    print(f"  Training set:           {state.get('last_training_set_version', 'none')}")
-    print(f"  Training in progress:   {state.get('training_in_progress', False)}")
-    print(f"  FORTNITE-OP game:       {state.get('current_fortnite_game', 'none')}")
-    print(
-        f"  Games labeled:          {len(state.get('games_labeled_by_fortnite', []))}"
-    )
+            # Only alert once per worker (track in _alerted_workers set)
+            if age > self.cfg.orchestrator.stale_heartbeat:
+                if hostname not in self._alerted_workers:
+                    self._alerted_workers.add(hostname)
+                    self._ntfy(
+                        f"Worker {hostname} hasn't reported in {age / 60:.0f} min",
+                        title="Worker Down?",
+                        priority="high",
+                    )
+            else:
+                # Worker recovered — clear alert
+                self._alerted_workers.discard(hostname)
 
-    # Check machine status
-    print("\n  Machines:")
-    for hostname in ["FORTNITE-OP", "jared-laptop"]:
-        online = mgr.is_online(hostname)
-        print(f"    {hostname}: {'ONLINE' if online else 'OFFLINE'}")
+            if (w.get("gpu_temp_c") or 0) > 90:
+                self._ntfy(
+                    f"Worker {hostname} GPU at {w['gpu_temp_c']}C!",
+                    title="GPU Overheating",
+                    priority="urgent",
+                )
 
+    # ------------------------------------------------------------------
+    # NTFY
+    # ------------------------------------------------------------------
 
-def run_once(state: dict) -> dict:
-    """Run one orchestration pass."""
-    logger.info("=== Orchestrator pass ===")
-
-    try:
-        state = action_check_fortnite_labeling(state)
-    except Exception as e:
-        logger.error("FORTNITE-OP check failed: %s", e)
-
-    try:
-        state = action_collect_training_results(state)
-    except Exception as e:
-        logger.error("Training result collection failed: %s", e)
-
-    try:
-        state = action_check_laptop_training(state)
-    except Exception as e:
-        logger.error("Laptop training check failed: %s", e)
-
-    save_state(state)
-    return state
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Training pipeline orchestrator")
-    parser.add_argument("--once", action="store_true", help="Run once and exit")
-    parser.add_argument("--status", action="store_true", help="Show status and exit")
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=CHECK_INTERVAL,
-        help=f"Seconds between checks (default: {CHECK_INTERVAL})",
-    )
-    args = parser.parse_args()
-
-    if args.status:
-        print_status()
-        return
-
-    state = load_state()
-
-    if args.once:
-        state = run_once(state)
-        return
-
-    logger.info("Pipeline orchestrator starting (interval: %ds)", args.interval)
-    mgr.send_ntfy("Pipeline orchestrator started", title="Pipeline")
-
-    while True:
+    def _ntfy(self, message: str, title: str = "Pipeline", priority: str = "default"):
+        if not self.cfg.ntfy.enabled or self.dry_run:
+            logger.info("[NTFY %s] %s: %s", priority, title, message)
+            return
         try:
-            state = run_once(state)
+            subprocess.run(
+                [
+                    "curl",
+                    "-s",
+                    "-H",
+                    f"Title: {title}",
+                    "-H",
+                    f"Priority: {priority}",
+                    "-d",
+                    message,
+                    f"https://ntfy.sh/{self.cfg.ntfy.topic}",
+                ],
+                capture_output=True,
+                timeout=10,
+            )
         except Exception as e:
-            logger.error("Orchestrator error: %s", e)
-            mgr.send_ntfy(f"Orchestrator error: {e}", title="Pipeline Error")
-
-        time.sleep(args.interval)
-
-
-if __name__ == "__main__":
-    main()
+            logger.warning("NTFY failed: %s", e)
