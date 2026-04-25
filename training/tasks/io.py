@@ -234,11 +234,22 @@ class TaskIO:
     # ------------------------------------------------------------------
 
     def push_manifest(self):
-        """Copy manifest.db from local SSD back to server."""
+        """Copy manifest.db from local SSD back to server + archive to F:."""
         dest = self.server_manifest()
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(self.local_manifest_path), str(dest))
         logger.debug("Pushed manifest.db for %s", self.game_id)
+
+        # Archive to F: (server only — remote workers don't have F:)
+        if not self.server_share:
+            try:
+                archive_games = Path(self.cfg.paths.archive.tile_packs).parent / "games"
+                archive_dest = archive_games / self.game_id / "manifest.db"
+                archive_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(self.local_manifest_path), str(archive_dest))
+                logger.debug("Archived manifest.db to F: for %s", self.game_id)
+            except Exception as e:
+                logger.warning("Failed to archive manifest.db for %s: %s", self.game_id, e)
 
     def push_packs(self):
         """Copy pack files from local SSD to server per-game dir."""
