@@ -258,6 +258,48 @@ class TTTApiClient:
     # Public API methods
     # ------------------------------------------------------------------
 
+    def list_model_versions(
+        self,
+        model_key: str,
+        channel: Optional[str] = None,
+        pipeline_version: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """List model versions the current user is entitled to.
+
+        GET {api_base_url}/api/models/{model_key}/versions
+        """
+        url = f"{self.api_base_url}/api/models/{model_key}/versions"
+        params: dict[str, str] = {}
+        if channel:
+            params["channel"] = channel
+        if pipeline_version:
+            params["pipeline_version"] = pipeline_version
+        logger.debug("Listing model versions for %s (channel=%s)", model_key, channel)
+        return self._request("GET", url, params=params or None)
+
+    def acquire_model_license(
+        self,
+        model_key: str,
+        channel: Optional[str] = None,
+        pipeline_version: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Request a license for the named model.
+
+        POST {api_base_url}/api/models/{model_key}/license
+
+        Server picks the highest tier the user is entitled to (premium > free).
+        Response shape: license_id, license_token (b64 manifest), license_signature
+        (hex Ed25519), wrapped_key (hex AES-256), model_key, version, tier, expires_at.
+        """
+        url = f"{self.api_base_url}/api/models/{model_key}/license"
+        body: dict[str, Any] = {}
+        if channel:
+            body["channel"] = channel
+        if pipeline_version:
+            body["pipeline_version"] = pipeline_version
+        logger.debug("Acquiring model license for %s", model_key)
+        return self._request("POST", url, json=body)
+
     def get_team_assignments(self) -> Any:
         """Get team assignments for the current device/user.
 
