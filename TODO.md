@@ -33,8 +33,8 @@
 ## Infrastructure
 - [x] Tracking Lab web UI with timeline, tile viewer, mark/drag, feedback
 - [x] Auto-regenerate guide every 10 marks
-- [x] External ball detector (external_ball_detector.py)
-- [x] Curved field boundary filter (external_field_detector.py)
+- [x] External ball detector (video_grouper/inference/ball_detector.py)
+- [x] Curved field boundary filter (video_grouper/inference/field_detector.py)
 - [x] Dewarp tiles (dewarp_tiles.py) — minimal improvement, deprioritized
 - [x] Frame differencing — only works when guided by tracker prediction
 - [x] Annotation server with no-cache headers, tile serving
@@ -56,8 +56,9 @@
 6. Run person detection bootstrap for player clustering validation
 
 ## Key Files
-- training/inference/external_ball_detector.py — external ONNX detector
-- training/inference/external_field_detector.py — field boundary filter
+- video_grouper/inference/ball_detector.py — external ONNX detector
+- video_grouper/inference/field_detector.py — field boundary filter
+- training/cli/run_ball_detector.py — standalone CLI for running detection on a segment
 - training/annotation/tracking_lab.py — tracking lab data generator
 - training/annotation/simple_tracker.py — velocity-gated tracker
 - training/data_prep/dewarp_tiles.py — fisheye dewarper

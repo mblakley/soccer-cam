@@ -74,8 +74,9 @@ training/
   tasks/                # Task implementations (stage, tile, label, sonnet_qa, train, etc.)
   data_prep/            # Dataset preparation (manifest, tiling, trajectory analysis)
   annotation/           # Tracking lab, annotation tools
-  inference/            # Detection models (external ball detector, field filter)
-  experiments/          # Threshold sweeps, analysis scripts
+  cli/                  # Standalone command-line entry points (run_ball_detector, ...)
+  tools/                # Dev utilities (onnx_watchdog, ...)
+  experiments/          # Threshold sweeps, analysis scripts (incl. panoramic_detector)
   static/               # Web UI assets (annotate.html, ball-verify.html)
   annotation_server.py  # FastAPI annotation server (port 8642)
   docs/                 # STATUS.md, DECISIONS.md, EXPERIMENTS.md, GAMES.md, ROADMAP.md

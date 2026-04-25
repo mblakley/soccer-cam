@@ -1,9 +1,9 @@
 """Tracking stage — link per-frame detections into a smoothed trajectory.
 
-Wraps :mod:`training.inference.ball_tracker`. Reads ``detections.json``,
-runs the Kalman filter tracker, picks the longest valid track, and
-writes a per-frame ``trajectory.json`` (one ``[x, y]`` row per source
-frame; ``None`` when no estimate is available).
+Wraps :mod:`video_grouper.inference.ball_tracker`. Reads
+``detections.json``, runs the Kalman filter tracker, picks the longest
+valid track, and writes a per-frame ``trajectory.json`` (one ``[x, y]``
+row per source frame; ``None`` when no estimate is available).
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from video_grouper.ball_tracking.base import ProviderContext
+from video_grouper.inference.ball_tracker import BallTracker, Detection
 
 from . import register_stage
 from .base import ProcessingStage
@@ -28,17 +29,7 @@ def _run_tracking(
     gate_distance: float,
     max_missing: int,
 ) -> int:
-    """Sync helper: load detections, run tracker, write trajectory JSON.
-
-    See :func:`detect._run_detection` for why we go through
-    ``importlib.import_module`` instead of a static ``from … import``.
-    """
-    import importlib
-
-    bt_module = importlib.import_module("training.inference.ball_tracker")
-    BallTracker = bt_module.BallTracker
-    Detection = bt_module.Detection
-
+    """Sync helper: load detections, run tracker, write trajectory JSON."""
     with open(detections_path, "r", encoding="utf-8") as f:
         per_frame: list[dict] = json.load(f)
 

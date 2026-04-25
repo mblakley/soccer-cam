@@ -1,12 +1,16 @@
-import pytest
-import pytest_asyncio
-import asyncio
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-import tempfile
-import configparser
-
-
 import sys
+from unittest.mock import Mock, patch, AsyncMock, MagicMock
+
+# pytest-qt (loaded at plugin discovery) imports PyQt6, whose DLLs collide
+# with onnxruntime-gpu's DLL load on Windows. Stub onnxruntime before any
+# test module tries to import it — unit tests already mock InferenceSession.
+sys.modules.setdefault("onnxruntime", MagicMock())
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+import asyncio  # noqa: E402
+import tempfile  # noqa: E402
+import configparser  # noqa: E402
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
