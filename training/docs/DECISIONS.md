@@ -4,6 +4,26 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-15: Single canonical deploy script for remote workers
+
+**Context:** Laptop worker kept dying after reboots and couldn't restart. Root cause: 3 conflicting scheduled tasks (`GPUWorker`, `LaptopWorker`, `PipelineWorker`) each pointing to different hand-edited bat files with wrong credentials, wrong CUDA paths, and TOML backslash escaping bugs. Each time someone fixed a problem they created a new bat/task instead of fixing the canonical deploy script.
+
+**Decision:** `training/worker/deploy_worker.ps1` is the ONE AND ONLY way to deploy remote workers. It handles everything: code sync, config generation (with correct TOML UNC path escaping), startup bat generation, pip dependencies, scheduled task cleanup + registration, and post-deploy verification. Never create bat files, scheduled tasks, or edit configs by hand on remote machines. If a worker stops, re-run the deploy script.
+
+**Trade-off:** Requires PS remoting enabled on remote machines. No support for partial updates — always does a full redeploy. This is intentional: idempotent full deploys are more reliable than incremental patches.
+
+---
+
+## 2026-04-14: Per-game field boundary replaces row-based spatial filter
+
+**Context:** Trajectory building used `row >= 2` exclusion as a crude proxy for "off-field." This missed off-field detections in rows 0-1 and excluded legitimate on-field detections in row 2. Ball trajectory coverage was only 0-5% across all games, partly due to off-field noise polluting trajectory fragments.
+
+**Decision:** Per-game field boundary polygon stored in manifest metadata (`field_boundary` key). Three-tiered detection: ONNX keypoint model (primary, proven on 9 games) → Sonnet vision fallback → human annotation. Trajectory building requires a valid polygon — skips if none available. Uses **soft filtering**: on-field and near-off-field (within 150px) kept, far-off-field excluded. This preserves throw-in/goal-kick continuity per the field-mask-must-be-soft principle.
+
+**Impact:** Row-based `row >= 2` filter removed. Games need a field polygon before trajectory building runs. Human can draw/adjust polygons via annotation app Field tab.
+
+---
+
 ## 2026-04-07: SQLite manifest + pack files replace loose tile/label files
 
 **Context:** 7.7M loose JPEG tiles across 39 games on HDD. `os.listdir` on 300K-file directories takes 5+ minutes. Label files (500K .txt) are equally slow to scan. Everything is I/O-bound on HDD random reads.
@@ -66,11 +86,34 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 **Decision:** Changed `gdir.iterdir()` to `gdir.rglob("*.mp4")` in `build_registry()`.
 **Impact:** Found 3 new games: Hershey Tournament (17 segs), and correctly detected Heat Tournament + Clarence Tournament.
 
-## 2026-03-30: Upside-down game handling strategy
+## 2026-04-13: Upside-down game handling — `needs_flip` flag
 
-**Context:** 13 of 32 games recorded with camera mounted upside down. 11 have corrected full-res `*-raw.mp4` files. 2 have no corrected version.
-**Decision:** Three strategies: (1) Use corrected .mp4 if available, (2) flip in code via `cv2.flip(frame, -1)` for games without corrected video, (3) exclude from training if too problematic.
-**Alternatives:** Always flip in code — rejected because corrected videos may have other fixes (exposure, color correction).
+**Context:** 9 games (May–June 2024) were recorded with the Dahua camera mounted upside down. Some have corrected `-raw.mp4` files but we don't use them — we always process the individual `[F]` segment files and flip in code.
+
+**Decision:** The game registry has a `needs_flip INTEGER DEFAULT 0` column. When `needs_flip=1`:
+
+1. **Tiling** (`tile.py:288`): `cv2.flip(frame, -1)` before cutting tiles → tiles are right-side up
+2. **Labeling** (`label.py:161`): `cv2.flip(frame, -1)` before ONNX inference → detections are in right-side-up coordinates matching the tiles
+3. **Prescan** (`label.py:268`): also flips before sampling frames for game detection
+
+The flip is carried via the task **payload** (`{"needs_flip": true}`), built by:
+- Orchestrator `_build_payload()` for both `tile` and `label` tasks (reads from game registry)
+- CLI `cmd_enqueue()` also reads from registry when manually enqueueing
+
+**Critical:** If a task is enqueued WITHOUT a payload (e.g., old queue items, direct DB insertion), `needs_flip` defaults to `False` and flipped games will be processed upside down. Always enqueue through the orchestrator or CLI.
+
+**Flipped games (as of 2026-04-13):**
+- `flash__2024.05.01_vs_RNYFC_away`
+- `flash__2024.05.10_vs_NY_Rush_away`
+- `flash__2024.06.01_vs_IYSA_home`
+- `flash__2024.06.02_vs_Flash_2014s_scrimmage`
+- `heat__2024.05.13_vs_Byron_Bergen_home`
+- `heat__2024.05.19_vs_Byron_Bergen_home`
+- `heat__2024.05.28_vs_Chili_home`
+- `heat__2024.05.31_vs_Fairport_home`
+- `heat__2024.06.04_vs_Spencerport_home`
+
+**Files:** `training/pipeline/registry.py` (schema), `training/pipeline/orchestrator.py` (`_build_payload`), `training/tasks/tile.py` (flip at line 288), `training/tasks/label.py` (flip at lines 161, 268), `training/pipeline/__main__.py` (`cmd_enqueue` payload)
 
 ## 2026-03-30: Game naming convention
 
@@ -115,3 +158,68 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 **Context:** `flash__2024.06.01_vs_IYSA_home` and `heat__2024.05.31_vs_Fairport_home` recorded with camera mounted upside down (sky at bottom, spectators at top).
 **Decision:** Exclude both from v2 training dataset. For v3, include them with corrected video or code-flipped tiles.
 **Reason:** Including upside-down frames would confuse the model about field orientation.
+
+---
+
+## 2026-04-09: HTTP API-only architecture for pipeline
+
+**Context:** Multiple machines (server, laptop, FORTNITE-OP) need to coordinate work. Direct SQLite access from remote machines causes corruption.
+**Decision:** Only the PipelineAPI process touches SQLite (registry.db, work_queue.db). Workers communicate exclusively via HTTP API. SMB shares are for bulk file transfer only (packs, manifests, videos).
+**Trade-off:** Extra HTTP round-trips, but eliminates all SQLite concurrency issues.
+**Files:** `training/pipeline/api.py`, `training/pipeline/client.py`, `training/worker/worker.py`
+
+## 2026-04-09: Sonnet QA with Claude CLI for ball detection verification
+
+**Context:** ONNX model produces many false positives (~85% NOT_BALL). Need automated QA before training.
+**Decision:** Use `claude -p` CLI with Sonnet model to verify detections. Build 3x2 grid composites of tiles, ask Sonnet BALL/NOT_BALL for each. ~10s per grid, 120 tiles per game, included in Claude Max subscription.
+**Trade-off:** Slower than a dedicated classifier, but zero additional cost and high accuracy.
+**Files:** `training/tasks/sonnet_qa.py`
+
+## 2026-04-10: Per-segment tiling — skip concatenated videos
+
+**Context:** Video directories contain both individual segment files (`18.30.10-18.46.58[F][0@0][215198]_ch1.mp4`) and concatenated full-game videos (`flash-iysa-home-raw.mp4`, `combined.mp4`). Concatenated videos produce 100GB+ packs that fill the SSD.
+**Decision:** Only tile files with `[F]` or `[0@0]` markers in the filename. Skip all others. Individual segments cover the same footage in manageable ~15-20GB chunks.
+**Files:** `training/tasks/tile.py` (skip filter at line ~60)
+
+## 2026-04-10: Legacy label remapping — raw frame indices to per-segment
+
+**Context:** Legacy labels reference concatenated "raw.mp4" frame numbering (e.g., frame_idx=98444). New tiles use per-segment numbering (e.g., frame_idx=22694 within segment 4). Frame indices map cleanly via cumulative offset table.
+**Decision:** `remap_legacy_labels()` builds offset table from individual segment .mp4 files, remaps label tile_stems and tile frame indices in the manifest. Both tiles and labels end up using per-segment frame numbering.
+**Files:** `training/data_prep/game_manifest.py` (`remap_legacy_labels()`)
+
+## 2026-04-11: F: as permanent pack archive, D: as serving tier
+
+**Context:** D: (HDD, 1.9TB) can't hold all pack files (~80GB/game × 30+ games = 2.4TB). F: (USB, 15TB) has ample space.
+**Decision:** Pack lifecycle: create on G: SSD → push to D: (for SMB serving) → archive to F: (permanent) → clean D:. When a task needs packs, `server_packs()` auto-restores from F: to D:. Remote workers access D: via SMB; they never see F:.
+**Manifest convention:** `pack_file` column always stores D: paths. The system transparently stages from F: when D: copies don't exist.
+**Trade-off:** Extra copy F:→D: when accessing old games. But D: stays small and we never run out of space.
+**Files:** `training/tasks/io.py` (`server_packs`, `cleanup_server_packs`), `training/tasks/tile.py` (archive step), `training/data_prep/manifest_dataset.py` (`_resolve_pack_path`)
+
+## 2026-04-11: Python 3.13 standardized across all machines
+
+**Context:** Server had 3.13, laptop had 3.12. CUDA DLLs were available in system Python's PyTorch installation but not in the uv venv's PATH.
+**Decision:** All machines use Python 3.13. Worker startup bat files add `C:\Python313\Lib\site-packages\torch\lib` to PATH for CUDA 12 DLLs (cublas, cudnn, cufft, etc.). No separate CUDA toolkit installation needed — PyTorch bundles everything.
+**Files:** `training/pipeline/run_laptop_worker.bat`, worker pyproject.toml (`requires-python = ">=3.13"`)
+
+## 2026-04-11: Flywheel improves training data, not labeling model
+
+**Context:** The pipeline uses an external ONNX model for initial ball detection labels. Our trained model may or may not be better.
+**Decision:** The flywheel cycle improves the training DATASET, not the labeling model:
+1. External ONNX labels (`source='onnx'`) — baseline, always preserved
+2. Sonnet QA verdicts (`qa_verdict`) — automated verification, accumulates
+3. Human reviews (`source='human_gap_review'`) — highest-value labels from trajectory gaps
+4. Training uses all verified data to build our model
+5. Our model is only deployed for labeling if it demonstrably outperforms the external model on the human-verified test set
+
+Label sources are tracked separately so we can always compare model performance against ground truth. We never overwrite external model labels — QA verdicts and human labels are additive.
+**Files:** `training/data_prep/game_manifest.py` (labels table: source, qa_verdict columns)
+
+## 2026-04-11: Ball track length is the ground truth metric
+
+**Context:** Multiple metrics could indicate model quality — precision, recall, mAP, false positive rate. But the purpose of the model is to track the game ball continuously.
+**Decision:** The primary metric is **verified game ball track length** — the longest continuous trajectory confirmed by the human reviewer, measured as a percentage of total game time. This directly measures what we care about: can the model see the ball throughout the game?
+- Sonnet QA helps filter false positives but isn't perfect
+- Only human verification of the trajectory confirms ground truth
+- Retraining is valuable when track gaps exist that new labels could fill
+- The flywheel naturally converges: longer tracks → fewer gaps → fewer human reviews → less retraining needed → done
+**Trade-off:** Harder to measure automatically than mAP. Requires trajectory building + human review to evaluate. But it's the metric that actually matters for the autocam use case.
