@@ -8,7 +8,7 @@ name: Build Native Secure Loader
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['v[0-9]*']
     paths:
       - 'video_grouper/ball_tracking/_secure_loader_native.pyx'
       - 'build_native_loader.py'

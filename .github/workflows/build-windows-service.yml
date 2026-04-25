@@ -3,7 +3,7 @@ name: Build Windows Service
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
+    tags: [ 'v[0-9]*' ]
   pull_request:
     branches: [ main ]
 

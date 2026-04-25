@@ -3,7 +3,7 @@ name: Build Docker Container
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*'
     branches: [ main ]
     paths:
       - 'video_grouper/**'

@@ -30,6 +30,7 @@ extensions = [
 
 setup(
     name="video-grouper-native-loader",
+    packages=[],
     ext_modules=cythonize(
         extensions,
         compiler_directives={
