@@ -262,10 +262,13 @@ class SecureLoader:
         ttt_client,
         public_keys: list[str],
         http_client: Optional[httpx.Client] = None,
+        state_storage_path: Optional[str] = None,
     ):
         self._ttt = ttt_client
         self._public_keys = list(public_keys)
         self._http = http_client
+        # When set, every successful acquire is recorded for the tray UI.
+        self._state_storage_path = state_storage_path
 
     def acquire(
         self,
@@ -317,7 +320,7 @@ class SecureLoader:
         except Exception as exc:
             raise SecureLoaderError(f"ONNX Runtime rejected the model: {exc}") from exc
 
-        return LoadedModel(
+        loaded = LoadedModel(
             session=session,
             model_key=manifest["model_key"],
             version=manifest["model_version"],
@@ -326,3 +329,20 @@ class SecureLoader:
             if session.get_providers()
             else "unknown",
         )
+
+        # Record state for the tray UI (best-effort; failure must not break inference).
+        if self._state_storage_path:
+            try:
+                from video_grouper.ball_tracking import license_state
+
+                license_state.record(
+                    self._state_storage_path,
+                    model_key=loaded.model_key,
+                    version=loaded.version,
+                    tier=loaded.tier,
+                    expires_at=manifest.get("expires_at", ""),
+                )
+            except Exception:
+                logger.exception("Failed to record license state")
+
+        return loaded

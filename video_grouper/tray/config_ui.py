@@ -667,6 +667,44 @@ class ConfigWindow(QWidget):
         ttt_account_group.setLayout(ttt_account_layout)
         ttt_layout.addWidget(ttt_account_group)
 
+        # -- Support Grant Code Group --
+        # Customers who can't acquire a license through normal channels
+        # (Stripe webhook miss, billing dispute, goodwill, prospect demo)
+        # can redeem a code issued by support to unlock ball detection
+        # for the duration encoded in the grant.
+        support_grant_group = QGroupBox("Support Grant Code")
+        support_grant_layout = QFormLayout()
+
+        self.support_grant_code = QLineEdit()
+        self.support_grant_code.setPlaceholderText("Enter the code from support")
+        support_grant_layout.addRow("Code:", self.support_grant_code)
+
+        self.support_grant_redeem_button = QPushButton("Redeem")
+        self.support_grant_redeem_button.clicked.connect(self.redeem_support_grant_code)
+        support_grant_layout.addRow("", self.support_grant_redeem_button)
+
+        self.support_grant_status_label = QLabel("Enter a code and click Redeem")
+        self.support_grant_status_label.setWordWrap(True)
+        support_grant_layout.addRow("Status:", self.support_grant_status_label)
+
+        support_grant_group.setLayout(support_grant_layout)
+        ttt_layout.addWidget(support_grant_group)
+
+        # -- Ball Detection License Status Group --
+        license_status_group = QGroupBox("Ball Detection License")
+        license_status_layout = QFormLayout()
+
+        self.license_status_label = QLabel("No license recorded yet")
+        self.license_status_label.setWordWrap(True)
+        license_status_layout.addRow("Status:", self.license_status_label)
+
+        self.license_refresh_button = QPushButton("Refresh")
+        self.license_refresh_button.clicked.connect(self.refresh_license_status)
+        license_status_layout.addRow("", self.license_refresh_button)
+
+        license_status_group.setLayout(license_status_layout)
+        ttt_layout.addWidget(license_status_group)
+
         # -- Clip Request Settings Group --
         clip_request_group = QGroupBox("Clip Request Settings")
         clip_request_layout = QFormLayout()
@@ -719,6 +757,12 @@ class ConfigWindow(QWidget):
 
         # Storage settings
         self.storage_path.setText(self.config.storage.path)
+
+        # Ball detection license status (best-effort — never block UI load on it)
+        try:
+            self.refresh_license_status()
+        except Exception:  # noqa: BLE001 — UI must always render
+            pass
 
         # Timezone
         tz = getattr(self.config.app, "timezone", "America/New_York")
@@ -995,6 +1039,97 @@ class ConfigWindow(QWidget):
                 QTimer.singleShot(0, show_error)
 
         thread = threading.Thread(target=auth_thread, daemon=True)
+        thread.start()
+
+    def refresh_license_status(self):
+        """Reload license state from disk and update the status label."""
+        from video_grouper.ball_tracking import license_state
+
+        storage = self.storage_path.text().strip()
+        if not storage:
+            self.license_status_label.setText("Set a Storage Path first.")
+            return
+        state = license_state.load(storage)
+        if state is None:
+            self.license_status_label.setText(
+                "No license recorded yet — enable TTT integration "
+                "and run the pipeline to acquire one."
+            )
+            return
+        self.license_status_label.setText(state.status_label())
+
+    def redeem_support_grant_code(self):
+        """Redeem a support-issued grant code.
+
+        The redeem endpoint is intentionally unauthenticated (the code
+        itself is the credential), so this works even if TTT login is
+        broken or no credentials are configured. Only --api-base-url is
+        needed from config.
+        """
+        code = self.support_grant_code.text().strip()
+        if not code:
+            QMessageBox.warning(self, "Warning", "Please enter a code.")
+            return
+
+        api_url = self.ttt_api_base_url.text().strip()
+        if not api_url:
+            QMessageBox.warning(
+                self,
+                "Warning",
+                "TTT API Base URL is not configured. Set it in this tab first.",
+            )
+            return
+
+        self.support_grant_status_label.setText("Redeeming...")
+        self.support_grant_redeem_button.setEnabled(False)
+
+        def redeem_thread():
+            try:
+                from video_grouper.api_integrations.ttt_api import TTTApiClient
+
+                # Use a throwaway client — no login required for redemption.
+                client = TTTApiClient(
+                    supabase_url=self.ttt_supabase_url.text().strip()
+                    or "https://placeholder.supabase.co",
+                    anon_key=self.ttt_anon_key.text().strip() or "placeholder",
+                    api_base_url=api_url,
+                    storage_path=self.storage_path.text(),
+                )
+                result = client.redeem_support_grant(code)
+                entitlement = result.get("entitlement_key", "")
+                expires = result.get("expires_at", "")
+
+                def update_ui():
+                    self.support_grant_redeem_button.setEnabled(True)
+                    self.support_grant_status_label.setText(
+                        f"Redeemed — {entitlement} until {expires}"
+                    )
+                    self.support_grant_code.clear()
+                    QMessageBox.information(
+                        self,
+                        "Redeemed",
+                        f"Support grant redeemed.\n\n"
+                        f"Entitlement: {entitlement}\n"
+                        f"Active until: {expires}\n\n"
+                        f"Sign in to TTT (TTT Account section above) to start using it.",
+                    )
+
+                QTimer.singleShot(0, update_ui)
+
+            except Exception as e:
+
+                def show_error(err=e):
+                    self.support_grant_redeem_button.setEnabled(True)
+                    self.support_grant_status_label.setText(f"Failed: {err}")
+                    QMessageBox.warning(
+                        self,
+                        "Redemption Failed",
+                        f"Could not redeem the code:\n{err}",
+                    )
+
+                QTimer.singleShot(0, show_error)
+
+        thread = threading.Thread(target=redeem_thread, daemon=True)
         thread.start()
 
     def authenticate_google_drive(self):
