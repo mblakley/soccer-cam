@@ -28,8 +28,16 @@ def _run_tracking(
     gate_distance: float,
     max_missing: int,
 ) -> int:
-    """Sync helper: load detections, run tracker, write trajectory JSON."""
-    from training.inference.ball_tracker import BallTracker, Detection
+    """Sync helper: load detections, run tracker, write trajectory JSON.
+
+    See :func:`detect._run_detection` for why we go through
+    ``importlib.import_module`` instead of a static ``from … import``.
+    """
+    import importlib
+
+    bt_module = importlib.import_module("training.inference.ball_tracker")
+    BallTracker = bt_module.BallTracker
+    Detection = bt_module.Detection
 
     with open(detections_path, "r", encoding="utf-8") as f:
         per_frame: list[dict] = json.load(f)

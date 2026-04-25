@@ -33,16 +33,20 @@ def _run_detection(
     frame_interval: int,
     use_gpu: bool,
 ) -> int:
-    """Sync helper: run detection, write JSON. Returns detection count."""
+    """Sync helper: run detection, write JSON. Returns detection count.
+
+    Uses ``importlib.import_module`` rather than a ``from … import`` to keep
+    the heavy training-pipeline deps (torch, ultralytics, opencv) outside
+    PyInstaller's static modulegraph. Otherwise the service / tray exes
+    balloon past NSIS's 32-bit mmap ceiling at install time.
+    """
+    import importlib
     from pathlib import Path as _Path
 
-    from training.inference.external_ball_detector import (
-        create_session,
-        detect_video,
-    )
+    ext_ball = importlib.import_module("training.inference.external_ball_detector")
 
-    sess = create_session(_Path(model_path), use_gpu=use_gpu)
-    detections = detect_video(
+    sess = ext_ball.create_session(_Path(model_path), use_gpu=use_gpu)
+    detections = ext_ball.detect_video(
         _Path(video_path),
         sess,
         frame_interval=frame_interval,
