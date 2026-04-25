@@ -1,0 +1,23 @@
+# Worker configuration template
+# Copy to each machine and customize hostname/capabilities.
+#
+# Server:    capabilities = ["stage", "tile", "sonnet_qa", "generate_review", "ingest_reviews"]
+# Laptop:    capabilities = ["tile", "label", "train"]
+# FORTNITE:  capabilities = ["label", "tile"]
+
+[worker]
+hostname = ""                      # set to machine hostname
+capabilities = []                  # set per machine (see above)
+api_url = "http://your-server-ip:8643"
+server_share = '\\your-server-ip\training'  # SMB for bulk file copy only (single quotes = literal)
+local_work_dir = "C:/soccer-cam-label/work"
+local_models_dir = "C:/soccer-cam-label/models"
+
+[resources]
+max_gpu_temp = 85
+min_disk_free_gb = 20
+gpu_device = 0
+idle_games = ["FortniteClient-Win64-Shipping", "RobloxPlayerBeta", "RocketLeague"]
+
+[heartbeat]
+interval = 30
