@@ -45,70 +45,121 @@ def create_session(model_path: Path, use_gpu: bool = True) -> ort.InferenceSessi
     return sess
 
 
+def _tile_origins(
+    frame_w: int, frame_h: int, tile_size: int, step: int
+) -> list[tuple[int, int]]:
+    """Return (x0, y0) origins for tiles covering the frame.
+
+    Tiles are tile_size x tile_size with `step` pixels between origins
+    (so tile_size - step pixels of overlap). The right and bottom edges
+    are anchored to (frame_w - tile_size, frame_h - tile_size) so the
+    full frame is covered without partial tiles.
+    """
+    if frame_w <= tile_size:
+        xs = [0]
+    else:
+        xs = list(range(0, frame_w - tile_size, step))
+        if not xs or xs[-1] != frame_w - tile_size:
+            xs.append(frame_w - tile_size)
+    if frame_h <= tile_size:
+        ys = [0]
+    else:
+        ys = list(range(0, frame_h - tile_size, step))
+        if not ys or ys[-1] != frame_h - tile_size:
+            ys.append(frame_h - tile_size)
+    return [(x, y) for y in ys for x in xs]
+
+
 def detect_balls(
     frame_bgr: np.ndarray,
     sess: ort.InferenceSession,
     conf_threshold: float = CONF_THRESHOLD,
     nms_iou: float = NMS_IOU_THRESHOLD,
+    tile_size: int = TILE_SIZE,
+    tile_step: int = STEP_X,
 ) -> list[dict]:
-    """Detect balls in a BGR frame at full resolution.
+    """Detect balls in a BGR panoramic frame by tiling into square windows.
 
-    Returns a list of ``{cx, cy, w, h, conf, mask_coeffs?}`` dicts in the
-    input frame's pixel coords.
+    The ONNX model expects ``(1, 3, tile_size, tile_size)`` and was trained on
+    tiles cut from a ``PANO_W x PANO_H`` panoramic. If the input frame is
+    larger than that (cameras have shipped 4K and 8K-wide panoramics), the
+    frame is first resized to the training resolution so ball pixel-size
+    matches the training distribution. Detections are then mapped back to
+    the original frame's pixel coords.
+
+    Model output is the post-NMS Ultralytics format: ``(N, 6)`` rows of
+    ``[x1, y1, x2, y2, conf, class]`` in tile pixel coords.
+
+    Returns ``{cx, cy, w, h, conf}`` dicts in the input frame's pixel coords.
     """
     orig_h, orig_w = frame_bgr.shape[:2]
 
-    stride = 32
-    pad_h = (stride - orig_h % stride) % stride
-    pad_w = (stride - orig_w % stride) % stride
+    # Downscale to training resolution if the input is larger.
+    if orig_w > PANO_W or orig_h > PANO_H:
+        scale_x = orig_w / PANO_W
+        scale_y = orig_h / PANO_H
+        work = cv2.resize(frame_bgr, (PANO_W, PANO_H), interpolation=cv2.INTER_AREA)
+    else:
+        scale_x = 1.0
+        scale_y = 1.0
+        work = frame_bgr
 
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    if pad_h > 0 or pad_w > 0:
-        rgb = cv2.copyMakeBorder(
-            rgb, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0)
-        )
+    rgb = cv2.cvtColor(work, cv2.COLOR_BGR2RGB)
+    work_h, work_w = rgb.shape[:2]
 
-    blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
+    all_boxes: list[list[float]] = []
+    all_scores: list[float] = []
+    all_centers: list[
+        tuple[float, float, float, float]
+    ] = []  # (cx, cy, w, h) in original frame coords
 
-    outputs = sess.run(None, {"images": blob})
-    det = outputs[0][0]  # (N, 6): [cx, cy, w, h, 1.0, confidence]
+    for x0, y0 in _tile_origins(work_w, work_h, tile_size, tile_step):
+        tile = rgb[y0 : y0 + tile_size, x0 : x0 + tile_size]
+        blob = (tile.astype(np.float32) / 255.0).transpose(2, 0, 1)[np.newaxis]
+        outputs = sess.run(None, {"images": blob})
+        det = outputs[0][0]  # (N, 6): [x1, y1, x2, y2, conf, class]
 
-    mask = det[:, 5] > conf_threshold
-    filtered = det[mask]
-    if len(filtered) == 0:
+        mask = det[:, 4] > conf_threshold
+        if not mask.any():
+            continue
+
+        for row in det[mask]:
+            x1, y1, x2, y2, conf, _cls = row.tolist()
+            # Tile-local -> work-frame coords
+            wx1 = x1 + x0
+            wy1 = y1 + y0
+            wx2 = x2 + x0
+            wy2 = y2 + y0
+            # Work-frame -> original-frame coords
+            ox1, oy1 = wx1 * scale_x, wy1 * scale_y
+            ox2, oy2 = wx2 * scale_x, wy2 * scale_y
+            cx = (ox1 + ox2) / 2
+            cy = (oy1 + oy2) / 2
+            w = ox2 - ox1
+            h = oy2 - oy1
+            all_centers.append((cx, cy, w, h))
+            all_boxes.append([ox1, oy1, ox2, oy2])
+            all_scores.append(conf)
+
+    if not all_centers:
         return []
 
-    boxes = np.zeros((len(filtered), 4))
-    boxes[:, 0] = filtered[:, 0] - filtered[:, 2] / 2
-    boxes[:, 1] = filtered[:, 1] - filtered[:, 3] / 2
-    boxes[:, 2] = filtered[:, 0] + filtered[:, 2] / 2
-    boxes[:, 3] = filtered[:, 1] + filtered[:, 3] / 2
-
-    indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(),
-        filtered[:, 5].tolist(),
-        conf_threshold,
-        nms_iou,
-    )
-
-    mask_data = outputs[2][0] if len(outputs) > 2 else None  # (N, 33)
-    orig_indices = np.where(mask)[0] if mask_data is not None else None
+    indices = cv2.dnn.NMSBoxes(all_boxes, all_scores, conf_threshold, nms_iou)
+    if indices is None or len(indices) == 0:
+        return []
 
     results = []
-    for i in indices:
-        row = filtered[i]
-        d = {
-            "cx": float(row[0]),
-            "cy": float(row[1]),
-            "w": float(row[2]),
-            "h": float(row[3]),
-            "conf": float(row[5]),
-        }
-        if mask_data is not None:
-            orig_idx = int(orig_indices[i])
-            d["mask_coeffs"] = mask_data[orig_idx, 1:].tolist()
-        results.append(d)
-
+    for i in np.asarray(indices).flatten():
+        cx, cy, w, h = all_centers[i]
+        results.append(
+            {
+                "cx": float(cx),
+                "cy": float(cy),
+                "w": float(w),
+                "h": float(h),
+                "conf": float(all_scores[i]),
+            }
+        )
     return results
 
 
