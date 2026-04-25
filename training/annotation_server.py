@@ -1676,6 +1676,16 @@ async def get_field_boundary_panoramic(
     gm.close()
 
     if pano is None:
+        # Fallback: try pre-saved panoramic frame
+        import cv2 as _cv2
+
+        for fallback in [game_dir / "field_boundary_pano.jpg", game_dir / "pano.jpg"]:
+            if fallback.exists():
+                pano = _cv2.imread(str(fallback))
+                if pano is not None:
+                    break
+
+    if pano is None:
         raise HTTPException(404, "Could not reconstruct panoramic")
 
     if flip:

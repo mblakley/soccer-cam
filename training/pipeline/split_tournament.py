@@ -450,7 +450,6 @@ def verify(spec_path: Path) -> bool:
         new_id = group["new_id"]
         segments = group["segments"]
         new_dir = games_dir / new_id
-        new_packs_dir = new_dir / "tile_packs"
 
         print(f"  Checking {new_id}...")
 

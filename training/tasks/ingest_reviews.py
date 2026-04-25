@@ -33,7 +33,7 @@ def run_ingest_reviews(
     local_models_dir: Path | None = None,
 ) -> dict:
     """Ingest human review verdicts into per-game manifests."""
-    payload = item.get("payload") or {}
+    _payload = item.get("payload") or {}  # noqa: F841
 
     from training.pipeline.config import load_config
 

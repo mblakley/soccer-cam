@@ -896,7 +896,7 @@ def track_pass(
         if best:
             rough_kf.update(np.array([best[0], best[1]]))
             rough_track[fi] = best
-            rough_last_x, rough_last_y = best[0], best[1]
+            rough_last_x, rough_last_y = best[0], best[1]  # noqa: F841
 
     logger.info("Rough track: %d frames", len(rough_track))
 
@@ -974,7 +974,7 @@ def track_pass(
                 # Restart: search near last known position, on-field only
                 best = None
                 best_score = -1
-                prev_fi = frames_list[idx - 1] if idx > 0 else None
+                _prev_fi = frames_list[idx - 1] if idx > 0 else None  # noqa: F841
 
                 for x, y, conf in dets:
                     if not _on_field(x, y):
@@ -1028,7 +1028,7 @@ def track_pass(
 
             if best:
                 # Check movement BEFORE updating last position
-                move = math.sqrt((best[0] - last_x) ** 2 + (best[1] - last_y) ** 2)
+                _move = math.sqrt((best[0] - last_x) ** 2 + (best[1] - last_y) ** 2)  # noqa: F841
 
                 kf.update(np.array([best[0], best[1]]))
                 track[fi] = best
@@ -1053,8 +1053,8 @@ def track_pass(
 
                 if miss_count >= max_miss:
                     kf = None
-                    off_field_count = 0
-                    stuck_count = 0
+                    off_field_count = 0  # noqa: F841
+                    stuck_count = 0  # noqa: F841
 
         detected = sum(1 for _, _, c in track.values() if c > 0)
         logger.info("  %s: %d detected + %d predicted = %d total",
@@ -1212,7 +1212,7 @@ def render_pass(
 
     trajectory = traj_data["trajectory"]
     traj_fps = traj_data["fps"]
-    total_frames = traj_data.get("total_frames", 0)
+    _total_frames = traj_data.get("total_frames", 0)  # noqa: F841
 
     # Build sparse lookup from trajectory points
     sparse_lookup: dict[int, tuple[float, float, float]] = {}
@@ -1262,7 +1262,7 @@ def render_pass(
     in_container = av.open(str(video_path))
     in_video = in_container.streams.video[0]
     fps_frac = in_video.average_rate or 25
-    fps = float(fps_frac)
+    _fps = float(fps_frac)  # noqa: F841
 
     # Open output video
     out_container = av.open(str(output_path), mode="w")
