@@ -8,7 +8,7 @@ name: Build Native Secure Loader
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['v[0-9]*']
     paths:
       - 'video_grouper/ball_tracking/_secure_loader_native.pyx'
       - 'build_native_loader.py'
@@ -65,8 +65,25 @@ jobs:
           python build_native_loader.py build_ext --inplace
 
       - name: Verify the artifact loads
+        # Load the compiled extension by file path so we don't trigger
+        # video_grouper/__init__.py — this step intentionally installs
+        # only the build-time deps (cython, cryptography), not the full
+        # package's runtime deps (pydantic et al.).
+        shell: bash
         run: |
-          python -c "from video_grouper.ball_tracking import _secure_loader_native as m; assert callable(m.canonical_json); print('OK')"
+          python -c "
+          import glob, importlib.util, os
+          matches = glob.glob('video_grouper/ball_tracking/_secure_loader_native*.${{ matrix.ext }}')
+          assert matches, 'native extension not found'
+          ext_path = matches[0]
+          spec = importlib.util.spec_from_file_location('_secure_loader_native', ext_path)
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          assert callable(m.canonical_json), 'canonical_json not exported'
+          size = os.path.getsize(ext_path)
+          assert size > 50_000, f'compiled module suspiciously small: {size} bytes'
+          print(f'OK: {ext_path} ({size} bytes)')
+          "
 
       - name: Verify decompilation does not recover security logic (Phase 5 acceptance)
         # uncompyle6 / decompyle3 only work on .pyc bytecode — confirms our
@@ -76,15 +93,6 @@ jobs:
           if command -v uncompyle6 >/dev/null 2>&1; then
             ! python -c "import uncompyle6"  # any import error is fine; we just need to assert .pyx isn't a .pyc target
           fi
-          # Sanity: the compiled extension exists and has a non-trivial size.
-          python -c "
-          import importlib.util, os
-          spec = importlib.util.find_spec('video_grouper.ball_tracking._secure_loader_native')
-          assert spec is not None and spec.origin, 'native extension not found'
-          size = os.path.getsize(spec.origin)
-          assert size > 50_000, f'compiled module suspiciously small: {size} bytes'
-          print(f'native extension at {spec.origin} ({size} bytes)')
-          "
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
