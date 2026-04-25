@@ -237,9 +237,9 @@ def _select_providers() -> list[str]:
 
 def _download_artifact(url: str, http_client: Optional[httpx.Client] = None) -> bytes:
     """Fetch the encrypted artifact bytes from `url`."""
-    client = http_client or httpx.Client(timeout=60.0)
+    client = http_client or httpx.Client(timeout=60.0, follow_redirects=True)
     try:
-        resp = client.get(url)
+        resp = client.get(url, follow_redirects=True)
         if resp.status_code >= 400:
             raise SecureLoaderError(
                 f"Artifact download failed (HTTP {resp.status_code}) for {url}"
