@@ -6,6 +6,8 @@ from typing import Dict, Optional, List
 
 from pydantic import BaseModel, Field, RootModel
 
+from video_grouper.ball_tracking.config import BallTrackingConfig
+
 
 # Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
 if not hasattr(configparser.ConfigParser, "__getattr__"):
@@ -281,6 +283,9 @@ class Config(BaseModel):
         default_factory=MomentTaggingConfig, alias="MOMENT_TAGGING"
     )
     setup: SetupConfig = Field(alias="SETUP", default_factory=SetupConfig)
+    ball_tracking: BallTrackingConfig = Field(
+        alias="BALL_TRACKING", default_factory=BallTrackingConfig
+    )
 
     model_config = {"validate_by_name": True}
 
@@ -312,6 +317,15 @@ def load_config(config_path: Path) -> Config:
         config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
             YouTubePlaylistMapConfig(config_dict.pop("YOUTUBE.PLAYLIST_MAP"))
         )
+
+    # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).
+    # `[BALL_TRACKING.AUTOCAM_GUI]` -> nested under BALL_TRACKING.AUTOCAM_GUI
+    # `[BALL_TRACKING.PER_TEAM]` -> dict of team_name -> provider_name
+    for section in list(config_dict.keys()):
+        if section.startswith("BALL_TRACKING."):
+            sub_alias = section.split(".", 1)[1]  # e.g. "AUTOCAM_GUI" or "PER_TEAM"
+            sub_value = config_dict.pop(section)
+            config_dict.setdefault("BALL_TRACKING", {})[sub_alias] = sub_value
 
     # Handle PlayMetrics teams
     playmetrics_teams = []
@@ -416,6 +430,15 @@ def save_config(config: Config, config_path: Path):
                         for k, v in sub_value.model_dump().items()
                         if v is not None
                     }
+
+                elif isinstance(sub_value, dict):
+                    # Non-empty dict[str, str] -> [PARENT.SUBALIAS] sub-section.
+                    # Empty dicts are skipped so reload doesn't see "{}" as a string.
+                    if sub_value:
+                        nested_section_name = f"{alias}.{sub_alias.upper()}"
+                        parser[nested_section_name] = {
+                            k: str(v) for k, v in sub_value.items()
+                        }
 
                 elif sub_value is not None:
                     section_items[sub_alias] = str(sub_value)
