@@ -33,8 +33,15 @@ class HomegrownProviderConfig(BaseModel):
     # stitch_correct
     stitch_profile_path: Optional[str] = None
 
-    # detect
+    # detect — pick exactly one source:
+    #   model_key: ask TTT for a license + encrypted artifact (production)
+    #   model_path: load a plaintext .onnx from disk (dev / local testing)
+    model_key: Optional[str] = None
     model_path: Optional[str] = None
+    detect_channel: Optional[str] = (
+        None  # canary / beta / stable; defaults to stable on TTT
+    )
+    detect_pipeline_version: Optional[str] = None
     device: str = "cuda:0"
     detect_confidence: float = 0.45
     detect_frame_interval: int = 4

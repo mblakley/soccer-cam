@@ -34,6 +34,7 @@ class BallTrackingTask(BaseTask):
         provider_config: Dict[str, Any],
         team_name: str | None = None,
         storage_path: str | None = None,
+        ttt_config: Dict[str, Any] | None = None,
     ):
         """
         Args:
@@ -45,6 +46,9 @@ class BallTrackingTask(BaseTask):
             team_name: Optional team identifier (passed through ``ProviderContext``).
             storage_path: Storage root (passed through ``ProviderContext``);
                 falls back to ``group_dir.parent`` when not supplied.
+            ttt_config: Pydantic-dumped TTTConfig dict, used by providers
+                that fetch licensed artifacts from TTT (homegrown). Pass
+                ``None`` when TTT integration is disabled.
         """
         self.group_dir = group_dir
         self.input_path = input_path
@@ -53,6 +57,7 @@ class BallTrackingTask(BaseTask):
         self.provider_config = provider_config
         self.team_name = team_name
         self.storage_path = storage_path
+        self.ttt_config = ttt_config
 
     @classmethod
     def queue_type(cls) -> QueueType:
@@ -75,10 +80,12 @@ class BallTrackingTask(BaseTask):
             "provider_config": dict(self.provider_config),
             "team_name": self.team_name,
             "storage_path": self.storage_path,
+            "ttt_config": dict(self.ttt_config) if self.ttt_config else None,
         }
 
     @classmethod
     def deserialize(cls, data: Dict[str, object]) -> "BallTrackingTask":
+        ttt_cfg = data.get("ttt_config")
         return cls(
             group_dir=Path(data["group_dir"]),
             input_path=data["input_path"],
@@ -87,6 +94,7 @@ class BallTrackingTask(BaseTask):
             provider_config=dict(data.get("provider_config") or {}),
             team_name=data.get("team_name"),
             storage_path=data.get("storage_path"),
+            ttt_config=dict(ttt_cfg) if ttt_cfg else None,
         )
 
     def _validate_video_file(self, path: str) -> bool:
@@ -151,6 +159,7 @@ class BallTrackingTask(BaseTask):
                 group_dir=self.group_dir,
                 team_name=self.team_name,
                 storage_path=Path(self.storage_path or self.group_dir.parent),
+                ttt_config=self.ttt_config,
             )
             success = await provider.run(self.input_path, self.output_path, ctx)
             if success:

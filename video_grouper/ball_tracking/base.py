@@ -16,11 +16,17 @@ class ProviderContext:
         team_name: Team identifier (e.g. ``"flash"``, ``"heat"``) or
             ``None`` if unknown. Used by per-team overrides upstream.
         storage_path: Absolute path to soccer-cam's shared-data root.
+        ttt_config: Dict-form TTTConfig (or None when TTT integration is
+            disabled). Providers that need to call TTT — e.g. license
+            acquisition for the homegrown detector — read credentials and
+            public keys from here. Plain dict to keep this base module
+            free of upstream config imports.
     """
 
     group_dir: Path
     team_name: str | None
     storage_path: Path
+    ttt_config: dict | None = None
 
 
 class BallTrackingProvider(ABC):
