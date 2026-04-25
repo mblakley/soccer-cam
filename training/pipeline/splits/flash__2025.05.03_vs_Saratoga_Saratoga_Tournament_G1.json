@@ -1,0 +1,27 @@
+{
+  "source": "flash__2025.05.03_vs_Saratoga_Saratoga_Tournament_G1",
+  "groups": [
+    {
+      "new_id": "flash__2025.05.03_vs_Saratoga_Saratoga_Tournament_G1_v2",
+      "action": "game",
+      "note": "Game 1 - temp name to avoid collision with source dir. Rename to _G1 during cleanup.",
+      "segments": [
+        "10.31.37-10.31.45[F][0@0][109149]",
+        "10.31.37-10.48.26[F][0@0][109149]",
+        "10.48.27-11.05.13[F][0@0][110144]",
+        "11.05.13-11.15.21[F][0@0][111139]"
+      ]
+    },
+    {
+      "new_id": "flash__2025.05.03_vs_Saratoga_Saratoga_Tournament_G2",
+      "action": "game",
+      "note": "Game 2 - starts at 11:16",
+      "segments": [
+        "11.16.08-11.32.58[F][0@0][111736]",
+        "11.32.58-11.49.50[F][0@0][112731]",
+        "11.49.50-12.06.43[F][0@0][113726]",
+        "12.06.43-12.10.36[F][0@0][114721]"
+      ]
+    }
+  ]
+}

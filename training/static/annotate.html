@@ -2767,10 +2767,25 @@ async function loadGamePhases() {
     const withPhases = games.filter(g => g.has_phases);
     const without = games.filter(g => !g.has_phases);
 
-    html += `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPhases.length} games with phases, ${without.length} pending</div>`;
+    // Split into confirmed vs needs-attention, show needs-attention first
+    const isConfirmed = g => g.phases.some(p => p.confirmed_by === 'human' || p.source === 'human');
+    const needsAttention = withPhases.filter(g => !isConfirmed(g));
+    const confirmed = withPhases.filter(g => isConfirmed(g));
 
-    for (const game of withPhases) {
-      html += renderGamePhaseCard(game);
+    html += `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${confirmed.length} confirmed, ${needsAttention.length} need review, ${without.length} pending detection</div>`;
+
+    if (needsAttention.length > 0) {
+      html += '<div style="padding:8px 16px"><h3 style="color:#f59e0b;font-size:14px;margin:0">Needs Review</h3></div>';
+      for (const game of needsAttention) {
+        html += renderGamePhaseCard(game);
+      }
+    }
+
+    if (confirmed.length > 0) {
+      html += '<div style="padding:8px 16px;margin-top:16px"><h3 style="color:#22c55e;font-size:14px;margin:0">Confirmed</h3></div>';
+      for (const game of confirmed) {
+        html += renderGamePhaseCard(game);
+      }
     }
 
     if (without.length > 0) {
@@ -2806,7 +2821,7 @@ function renderGamePhaseCard(game) {
   const totalFrames = cumOffset || 1;
 
   const source = game.summary ? game.summary.source : 'unknown';
-  const confirmed = phases.some(p => p.confirmed_by === 'human');
+  const confirmed = phases.some(p => p.confirmed_by === 'human' || p.source === 'human');
 
   let timelineHtml = '<div style="display:flex;height:24px;border-radius:6px;overflow:hidden;margin:8px 0">';
   for (const p of phases) {
@@ -2828,8 +2843,10 @@ function renderGamePhaseCard(game) {
   }
   detailHtml += '</div>';
 
+  const checkmark = confirmed ? ' <span style="color:#22c55e">&#x2705;</span>' : '';
+
   return `<div class="packet-card" onclick="viewPhaseEditor('${game.game_id}')" style="cursor:pointer">
-    <div class="title">${game.game_id}</div>
+    <div class="title">${game.game_id}${checkmark}</div>
     <div class="meta">Source: ${source} ${confirmed ? '(confirmed)' : '(auto)'} &mdash; ${allSegs.length} segments</div>
     ${timelineHtml}
     ${detailHtml}
@@ -2887,6 +2904,7 @@ async function viewPhaseEditor(gameId) {
         <button class="header-btn" onclick="phaseStep(-1)">&larr;</button>
         <span id="phase-time" style="font-size:13px;font-weight:600;flex:1;text-align:center">00:00:00</span>
         <button class="header-btn" onclick="phaseStep(1)">&rarr;</button>
+        <button class="header-btn" id="phase-flip-btn" onclick="phaseToggleFlip()" title="Flip 180">Flip</button>
       </div>
       <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
         ${boundaryBtns}
@@ -2904,6 +2922,7 @@ async function viewPhaseEditor(gameId) {
       activeBoundary: null,
       boundaries: {},
       preloaded: {},
+      flipped: false,
     };
 
     // Pre-populate from existing phases
@@ -2965,6 +2984,15 @@ function phaseGoTo(index) {
 function phaseStep(delta) {
   if (!phaseEditorState) return;
   phaseGoTo(phaseEditorState.currentIndex + delta);
+}
+
+function phaseToggleFlip() {
+  if (!phaseEditorState) return;
+  phaseEditorState.flipped = !phaseEditorState.flipped;
+  const img = document.getElementById('phase-frame');
+  img.style.transform = phaseEditorState.flipped ? 'rotate(180deg)' : '';
+  const btn = document.getElementById('phase-flip-btn');
+  btn.style.background = phaseEditorState.flipped ? 'var(--blue)' : '';
 }
 
 function phaseMarkAt(key) {

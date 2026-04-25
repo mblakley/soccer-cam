@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS games (
-    game_id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id TEXT UNIQUE NOT NULL,
     team TEXT,
     date TEXT,
     opponent TEXT,
@@ -58,6 +59,14 @@ CREATE INDEX IF NOT EXISTS idx_games_state ON games(pipeline_state);
 CREATE INDEX IF NOT EXISTS idx_games_team ON games(team);
 """
 
+_GAME_COLUMNS = (
+    "game_id, team, date, opponent, location, video_path, "
+    "needs_flip, game_type, camera_type, trainable, "
+    "pipeline_state, pipeline_updated, pipeline_error, pipeline_attempts, "
+    "tile_count, label_count, positive_count, segment_count, coverage, "
+    "created_at, staged_at, tiled_at, labeled_at, qa_done_at, last_trained_at"
+)
+
 
 class GameRegistry:
     """Lightweight game registry backed by SQLite."""
@@ -74,8 +83,63 @@ class GameRegistry:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA wal_autocheckpoint=100")
+            self._migrate_if_needed(self._conn)
             self._conn.executescript(SCHEMA_SQL)
         return self._conn
+
+    @staticmethod
+    def _migrate_if_needed(conn: sqlite3.Connection):
+        """Add auto-increment id if registry uses old game_id-as-PK schema."""
+        # Check if games table exists at all
+        has_table = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='games'"
+        ).fetchone()[0]
+        if not has_table:
+            return  # fresh DB — SCHEMA_SQL will create the table
+
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(games)").fetchall()]
+        if "id" in cols:
+            return  # already migrated
+
+        logger.info("Migrating registry.db: adding auto-increment id column")
+        conn.executescript(f"""
+            ALTER TABLE games RENAME TO _games_old;
+            CREATE TABLE games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id TEXT UNIQUE NOT NULL,
+                team TEXT,
+                date TEXT,
+                opponent TEXT,
+                location TEXT,
+                video_path TEXT,
+                needs_flip INTEGER DEFAULT 0,
+                game_type TEXT,
+                camera_type TEXT DEFAULT 'dahua',
+                trainable INTEGER DEFAULT 1,
+                pipeline_state TEXT DEFAULT 'REGISTERED',
+                pipeline_updated REAL,
+                pipeline_error TEXT,
+                pipeline_attempts INTEGER DEFAULT 0,
+                tile_count INTEGER DEFAULT 0,
+                label_count INTEGER DEFAULT 0,
+                positive_count INTEGER DEFAULT 0,
+                segment_count INTEGER DEFAULT 0,
+                coverage REAL DEFAULT 0.0,
+                created_at REAL,
+                staged_at REAL,
+                tiled_at REAL,
+                labeled_at REAL,
+                qa_done_at REAL,
+                last_trained_at REAL
+            );
+            INSERT INTO games ({_GAME_COLUMNS})
+            SELECT {_GAME_COLUMNS} FROM _games_old;
+            DROP TABLE _games_old;
+            CREATE INDEX IF NOT EXISTS idx_games_state ON games(pipeline_state);
+            CREATE INDEX IF NOT EXISTS idx_games_team ON games(team);
+        """)
+        count = conn.execute("SELECT COUNT(*) FROM games").fetchone()[0]
+        logger.info("Registry migration complete: %d games", count)
 
     def close(self):
         if self._conn:
@@ -206,6 +270,16 @@ class GameRegistry:
             (game_id,),
         )
         conn.commit()
+
+    def rename_game(self, old_game_id: str, new_game_id: str):
+        """Rename a game_id. The auto-increment id stays the same."""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE games SET game_id = ?, pipeline_updated = ? WHERE game_id = ?",
+            (new_game_id, time.time(), old_game_id),
+        )
+        conn.commit()
+        logger.info("Game renamed: %s → %s", old_game_id, new_game_id)
 
     # ------------------------------------------------------------------
     # Queries
