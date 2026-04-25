@@ -31,7 +31,7 @@ ACTIVE = JOBS_DIR / "active"
 DONE = JOBS_DIR / "done"
 FAILED = JOBS_DIR / "failed"
 
-MODEL_PATH = f"{SHARE}/test/***REDACTED***/model.onnx"
+MODEL_PATH = os.environ.get("BALL_MODEL_PATH", "")
 LABELS_DIR = f"{SHARE}/training_data/labels_640_ext"
 TILES_DIR = f"{SHARE}/training_data/tiles_640"
 

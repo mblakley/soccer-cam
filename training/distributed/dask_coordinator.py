@@ -15,6 +15,7 @@ Usage:
 import argparse
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -32,7 +33,7 @@ LABEL_OUTPUT_DIR = Path(r"F:\training_data\labels_640_ext")
 
 # UNC paths that work from any machine on the network
 SHARE = "//192.168.86.152/video"
-UNC_MODEL = f"{SHARE}/test/***REDACTED***/model.onnx"
+UNC_MODEL = os.environ.get("BALL_MODEL_PATH", "")
 UNC_OUTPUT = f"{SHARE}/training_data/labels_640_ext"
 UNC_TILES = f"{SHARE}/training_data/tiles_640"
 

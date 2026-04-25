@@ -15,7 +15,7 @@ Usage:
         create_field_session, detect_field_boundary, is_on_field
     )
 
-    field_sess = create_field_session()
+    field_sess = create_field_session(Path("path/to/model.onnx"))
     boundary = detect_field_boundary(frame, field_sess)
     filtered = [d for d in detections if is_on_field(d['cx'], d['cy'], boundary)]
 """
@@ -35,13 +35,12 @@ import onnxruntime as ort
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = Path("F:/test/***REDACTED***/model.onnx")
 INPUT_W = 768
 INPUT_H = 384
 
 
 def create_field_session(
-    model_path: Path = DEFAULT_MODEL, use_gpu: bool = True
+    model_path: Path, use_gpu: bool = True
 ) -> ort.InferenceSession:
     """Create an ONNX inference session for the field keypoint model."""
     providers = []
