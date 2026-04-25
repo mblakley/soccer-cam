@@ -83,12 +83,34 @@ privacy_status = private
 
 
 
-[AUTOCAM]
-# Whether to enable autocam processing
+[BALL_TRACKING]
+# Master switch — when false, video stops at trimmed and skips straight to upload
 enabled = true
 
-# The path to the autocam executable
+# Which ball-tracking provider to run. Options: autocam_gui, homegrown
+provider = autocam_gui
+
+[BALL_TRACKING.AUTOCAM_GUI]
+# Path to the Once Sport AutoCam executable (used when provider = autocam_gui)
 executable = /path/to/autocam
+
+[BALL_TRACKING.HOMEGROWN]
+# Pipeline stages, in order (used when provider = homegrown).
+# Comment out a stage name to skip it.
+stages = stitch_correct, detect, track, render
+
+# Path to the homegrown ball-detection model (required when provider = homegrown)
+# model_path =
+# device = cuda:0
+
+# Optional path to the per-camera stitch calibration profile.
+# When unset, stitch_correct passes the source video through unchanged.
+# stitch_profile_path =
+
+# [BALL_TRACKING.PER_TEAM]
+# # Per-team override of the default provider. Key = MatchInfo team_name.
+# # flash = homegrown
+# # heat = autocam_gui
 
 # Playlist configuration for processed videos
 [YOUTUBE.PLAYLIST.PROCESSED]

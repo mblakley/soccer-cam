@@ -9,3 +9,4 @@ from __future__ import annotations
 
 # noqa: F401 — imports are for side effects (registration on import)
 from video_grouper.ball_tracking.providers import autocam_gui  # noqa: F401
+from video_grouper.ball_tracking.providers import homegrown  # noqa: F401
