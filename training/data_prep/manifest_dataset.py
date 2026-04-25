@@ -711,7 +711,7 @@ def build_training_set(
             ).fetchall()
 
             if not tile_rows:
-                print(f"    No packed tiles found, skipping")
+                print("    No packed tiles found, skipping")
                 continue
 
             game_pack_path = packs_out / f"{gid}.pack"
@@ -770,7 +770,7 @@ def build_training_set(
     if camera_neg_games:
         for g in camera_neg_games:
             yaml_content += f"  - {g}\n"
-    yaml_content += f"manifest_val_games:\n"
+    yaml_content += "manifest_val_games:\n"
     for g in val_games:
         yaml_content += f"  - {g}\n"
     yaml_content += f"manifest_neg_ratio: {neg_ratio}\n"
