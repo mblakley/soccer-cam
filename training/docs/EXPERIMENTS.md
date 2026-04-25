@@ -70,3 +70,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 **Result:** 568K → 488K files, 759K → 606K detections (20% removed).
 **Follow-up:** Trajectory validator removed additional 24% (606K → 462K), keeping only detections in trajectories ≥3 frames.
 **Code:** `training/data_prep/label_filters.py`, `training/data_prep/trajectory_validator.py`
+
+---
+
+## EXP-012: Phase detection signal analysis (2026-04-17)
+
+**Hypothesis:** Combining whistle audio, label density, field boundary, and crowd energy signals can detect game phase boundaries within 2 minutes of human annotation.
+
+**Method:** Series of experiments on 31 human-tagged games:
+- EXP 1-3: Analyzed label density, spatial distribution, and field boundary coverage by phase
+- EXP 4: Combined 4-signal scoring (whistle + density + field + blast count)
+- EXP 5: Sequential density-only detection (no whistles)
+- EXP 6: Whistle candidates + asymmetric density scoring
+- EXP 7: Deep audio analysis around human-tagged boundaries
+
+**Results:**
+
+Signal analysis findings:
+- Label density drops ~0.49x at kickoff (warmup multi-ball -> single game ball) in 52% of games
+- Pre-game has 64% in-field labels vs 41-46% during game play (field boundary signal)
+- Multi-blast whistles (3+) are NOT discriminating — 93% at boundaries AND 93% mid-game (too noisy)
+- Crowd/player energy jumps 1.70x at 2H start (players cheering before going back on field)
+
+Detector comparison (MAE in minutes, excluding Byron Bergen camera-died outlier):
+| Approach | Kickoff | HT Start | 2H Start | Game End |
+|----------|---------|----------|----------|----------|
+| Old whistle-only | 7.8m | 9.6m | 13.7m | 10.3m |
+| Combined scoring (exp4) | 6.8m | - | - | 9.6m |
+| Whistle + asymmetric density (exp6) | 4.4m | 5.0m | 4.5m | 3.9m |
+| Exp6 + calibrated offsets | 2.1m | 2.2m | 2.0m | 2.1m |
+
+Best result (exp6 + offsets): 10/29 games within 2m on ALL boundaries. Systematic -5m bias corrected by post-detection offsets: kickoff +5m, halftime +3m, 2H start +2m.
+
+**Conclusion:**
+- Whistle detection alone is unreliable in noisy outdoor environments (coaches, adjacent fields)
+- Label density is a useful secondary signal for kickoff detection but not halftime
+- Duration constraints (25-38m halves, 3-12m halftime) are the strongest filter
+- Calibrated offsets fix the systematic early-detection bias from warmup whistles
+- The crowd energy jump at 2H start is team-specific (players cheering) — useful for our games but not universal
+- Practical accuracy limit is ~2m MAE with current approach. Sub-1m accuracy would require better audio isolation or visual-only detection.

@@ -63,8 +63,8 @@ def run_sonnet_qa(
 
 def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
     """Inner QA logic — separated so manifest.close() is guaranteed by caller."""
-    # Phase 0: Detect game phases (pre-game, halftime, post-game) if not yet done
-    _ensure_game_phases(manifest, task_io)
+    # Phase detection is now a separate task (phase_detect) — skip here.
+    # Phases should already exist from a prior phase_detect run.
 
     # Phase 0.5: Detect field boundary polygon if not yet done
     _ensure_field_boundary(manifest, task_io)
@@ -539,26 +539,6 @@ def _pull_selective_packs(task_io: TaskIO, pack_files: set[str]):
         else:
             logger.warning("Pack source not found: %s", src)
     logger.info("Pulled %d/%d needed pack files to SSD", copied, len(pack_files))
-
-
-def _ensure_game_phases(manifest, task_io: TaskIO):
-    """Run game phase detection if phases haven't been detected yet."""
-    existing = manifest.get_metadata("game_phases_summary")
-    if existing:
-        return  # already done
-
-    try:
-        from training.tasks.phase_detect import detect_game_phases
-
-        result = detect_game_phases(manifest, task_io)
-        if result:
-            logger.info(
-                "Phase 0: detected %d phases for %s",
-                result.get("phase_count", 0),
-                manifest.game_id,
-            )
-    except Exception as e:
-        logger.warning("Phase 0 failed for %s: %s", manifest.game_id, e)
 
 
 def _ensure_field_boundary(manifest, task_io: TaskIO):

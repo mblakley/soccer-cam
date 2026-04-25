@@ -1096,7 +1096,10 @@ async def list_game_phases():
             continue
 
         # Skip games not fully tiled (if we have pipeline state info)
-        if pipeline_states and pipeline_states.get(game_dir.name, "") not in tiled_states:
+        if (
+            pipeline_states
+            and pipeline_states.get(game_dir.name, "") not in tiled_states
+        ):
             continue
 
         try:
@@ -1359,8 +1362,8 @@ async def get_phase_samples(game_id: str, interval: int = 30):
             idx += 1
             t += interval
 
-        # Ensure packs exist on D: for all sampled frames
-        _ensure_sample_packs(gm, game_dir, samples)
+        # Pack restoration is no longer needed here — the frame endpoint
+        # reads from phase_samples cache or falls back to F: archive directly.
 
     finally:
         gm.close()
@@ -1427,9 +1430,24 @@ async def get_phase_frame(game_id: str, segment: str, frame_idx: int):
     if not game_dir.exists():
         raise HTTPException(404, f"Game not found: {game_id}")
 
+    # Check pre-loaded cache on G: SSD first, then D: fallback
+    frame_name = f"{segment}_{int(frame_idx):06d}.jpg"
+    for cache_base in [
+        Path("G:/pipeline_work/phase_samples") / game_id,
+        game_dir / "phase_samples",
+    ]:
+        cache_file = cache_base / frame_name
+        if cache_file.exists():
+            return Response(
+                content=cache_file.read_bytes(),
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=604800, immutable"},
+            )
+
     gm = GameManifest(game_dir)
     gm.open(create=False)
 
+    # Try D: packs, then F: archive directly (no full pack restore)
     packs_dir = game_dir / "tile_packs"
     pano = reconstruct_panoramic(gm, segment, int(frame_idx), packs_dir)
     gm.close()
@@ -1437,12 +1455,35 @@ async def get_phase_frame(game_id: str, segment: str, frame_idx: int):
     if pano is None:
         raise HTTPException(404, "Could not reconstruct panoramic frame")
 
+    # Flip 180 if this game was recorded upside down
+    try:
+        from training.pipeline.config import load_config
+        from training.pipeline.registry import GameRegistry
+
+        cfg = load_config()
+        reg = GameRegistry(cfg.paths.registry_db)
+        game = reg.get_game(game_id)
+        if game and game.get("needs_flip"):
+            pano = cv2.rotate(pano, cv2.ROTATE_180)
+        reg.close()
+    except Exception:
+        pass
+
     # Downscale to half-res (same as field boundary panoramic endpoint)
     h, w = pano.shape[:2]
     small = cv2.resize(pano, (w // 2, h // 2))
     _, jpeg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
 
-    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+    # Cache on G: SSD for next time
+    ssd_cache = Path("G:/pipeline_work/phase_samples") / game_id / frame_name
+    ssd_cache.parent.mkdir(parents=True, exist_ok=True)
+    ssd_cache.write_bytes(jpeg.tobytes())
+
+    return Response(
+        content=jpeg.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
 
 
 # ------------------------------------------------------------------
