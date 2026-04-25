@@ -1,4 +1,4 @@
-# Phase 3 — Secure Loader (soccer-cam side)
+# Phase 3 — Secure Loader (soccer-cam side) [DONE 2026-04-25]
 
 Branch: `feature/ball-detection-loader` (worktree off `origin/main`)
 Started: 2026-04-25

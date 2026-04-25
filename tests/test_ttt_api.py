@@ -405,6 +405,95 @@ class TestTTTApiClient(unittest.TestCase):
         body = call_args[1]["json"]
         self.assertEqual(body["response_value"], "__cancelled__")
 
+    # ------------------------------------------------------------------
+    # Model licensing + support grants
+    # ------------------------------------------------------------------
+
+    def test_list_model_versions(self):
+        data = [{"version": "1.0.0", "tier": "free", "channel": "stable"}]
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.list_model_versions("video.ball_detection")
+        self.assertEqual(result, data)
+        call_args = self.client._http.request.call_args
+        self.assertEqual(call_args[0][0], "GET")
+        self.assertIn("/api/models/video.ball_detection/versions", call_args[0][1])
+
+    def test_list_model_versions_with_filters(self):
+        self.client._http.request = Mock(return_value=_mock_response(200, []))
+        self.client.list_model_versions(
+            "video.ball_detection", channel="beta", pipeline_version="2.0.0"
+        )
+        call_args = self.client._http.request.call_args
+        self.assertEqual(
+            call_args[1]["params"], {"channel": "beta", "pipeline_version": "2.0.0"}
+        )
+
+    def test_acquire_model_license(self):
+        data = {
+            "license_id": "abcd",
+            "license_token": "TOKEN",
+            "license_signature": "SIG",
+            "wrapped_key": "KEY",
+            "model_key": "video.ball_detection",
+            "version": "1.0.0",
+            "tier": "free",
+            "expires_at": "2026-05-25T00:00:00Z",
+        }
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.acquire_model_license("video.ball_detection")
+        self.assertEqual(result["wrapped_key"], "KEY")
+        call_args = self.client._http.request.call_args
+        self.assertEqual(call_args[0][0], "POST")
+        self.assertIn("/api/models/video.ball_detection/license", call_args[0][1])
+
+    def test_redeem_support_grant_happy_path(self):
+        data = {
+            "grant_id": "g-1",
+            "target_user_id": "u-1",
+            "entitlement_key": "premium.video.ball_detection",
+            "expires_at": "2026-05-25T00:00:00Z",
+        }
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.redeem_support_grant("test-code-abc")
+        self.assertEqual(result["grant_id"], "g-1")
+        call_args = self.client._http.request.call_args
+        self.assertEqual(call_args[0][0], "POST")
+        self.assertIn("/api/grants/redeem", call_args[0][1])
+        body = call_args[1]["json"]
+        self.assertEqual(body, {"code": "test-code-abc"})
+
+    def test_redeem_support_grant_does_not_send_bearer_auth(self):
+        """The redeem endpoint is intentionally public; the code is the
+        credential. Sending an Authorization header would defeat the point
+        when the calling user can't authenticate normally."""
+        self.client._http.request = Mock(return_value=_mock_response(200, {}))
+        self.client.redeem_support_grant("test-code-abc")
+        headers = self.client._http.request.call_args[1].get("headers", {})
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+
+    def test_redeem_support_grant_propagates_4xx(self):
+        self.client._http.request = Mock(
+            return_value=_mock_response(404, text="not found")
+        )
+        with self.assertRaises(TTTApiError) as ctx:
+            self.client.redeem_support_grant("bad-code")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_redeem_support_grant_works_when_not_authenticated(self):
+        """Even with no access token, redemption must work — that's the
+        whole point of a support code."""
+        self.client._access_token = None
+        data = {
+            "grant_id": "g-1",
+            "target_user_id": "u-1",
+            "entitlement_key": "free.video.ball_detection",
+            "expires_at": "2026-05-25T00:00:00Z",
+        }
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.redeem_support_grant("test-code-abc")
+        self.assertEqual(result["grant_id"], "g-1")
+
 
 if __name__ == "__main__":
     unittest.main()

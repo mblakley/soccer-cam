@@ -300,6 +300,35 @@ class TTTApiClient:
         logger.debug("Acquiring model license for %s", model_key)
         return self._request("POST", url, json=body)
 
+    def redeem_support_grant(self, code: str) -> dict[str, Any]:
+        """Redeem a support-issued grant code.
+
+        POST {api_base_url}/api/grants/redeem
+
+        No auth header — the code itself is the credential. The grant is
+        applied to the user_id locked at issuance time, regardless of who
+        calls this. Response shape: grant_id, target_user_id,
+        entitlement_key, expires_at.
+        """
+        url = f"{self.api_base_url}/api/grants/redeem"
+        body = {"code": code}
+        logger.debug("Redeeming support grant code")
+        # Bypass _request() — that helper attaches Bearer auth + auto-refresh,
+        # which we don't want here (the redeem endpoint is intentionally public).
+        resp = self._http.request(
+            "POST",
+            url,
+            headers={"Content-Type": "application/json"},
+            json=body,
+        )
+        if resp.status_code >= 400:
+            raise TTTApiError(
+                f"Support grant redemption failed (HTTP {resp.status_code}): {resp.text}",
+                status_code=resp.status_code,
+                response_body=resp.text,
+            )
+        return resp.json()
+
     def get_team_assignments(self) -> Any:
         """Get team assignments for the current device/user.
 
