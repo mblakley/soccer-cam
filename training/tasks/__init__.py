@@ -78,6 +78,10 @@ def _load_handlers():
         from training.tasks import phase_detect_task  # noqa: F401
     except ImportError:
         pass
+    try:
+        from training.tasks import build_shard  # noqa: F401
+    except ImportError:
+        pass
 
 
 def list_tasks() -> list[str]:

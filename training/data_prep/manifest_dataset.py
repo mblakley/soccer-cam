@@ -14,6 +14,8 @@ Usage:
         train_games=["flash__2024.05.01_vs_RNYFC_away", ...],
         val_games=["flash__2024.06.02_vs_Flash_2014s_scrimmage"],
         neg_ratio=1.0,
+        phase_filter=True,   # skip warmup/halftime/post-game
+        field_filter=True,    # skip off-field detections
     )
 
     # Train (on laptop after transferring training set)
@@ -23,6 +25,7 @@ Usage:
     model.train(data="training_sets/v3.1/dataset.yaml", trainer=ManifestTrainer, ...)
 """
 
+import io
 import math
 import random
 import re
@@ -97,33 +100,26 @@ TILE_RE = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
 TILE_SIZE = 640
 EXCLUDE_ROWS = {0}  # row 0 is sky/far-field
 
+DEFAULT_GAMES_DIR = Path("D:/training_data/games")
+
 
 # ---------------------------------------------------------------------------
 # ManifestDataset — reads images from packs, labels from SQLite
 # ---------------------------------------------------------------------------
 
-
 class ManifestDataset(YOLODataset):
     """YOLO dataset that reads from manifest.db + pack files."""
 
-    def __init__(
-        self,
-        *args,
-        db_path=None,
-        game_ids=None,
-        neg_ratio=1.0,
-        hard_neg_ratio=0.5,
-        seed=42,
-        **kwargs,
-    ):
+    def __init__(self, *args, db_path=None, game_ids=None,
+                 neg_ratio=1.0, hard_neg_ratio=0.5, seed=42, **kwargs):
         # Store config BEFORE super().__init__ calls get_img_files/get_labels
         self._db_path = db_path
         self._game_ids = game_ids or []
         self._neg_ratio = neg_ratio
         self._hard_neg_ratio = hard_neg_ratio
         self._seed = seed
-        self._tile_index = []  # (pack_file, offset, size) per image
-        self._label_data = []  # label dict per image
+        self._tile_index = []    # (pack_file, offset, size) per image
+        self._label_data = []    # label dict per image
         self._conn = None
         self._pack_handles = {}  # cache open file handles
 
@@ -183,21 +179,17 @@ class ManifestDataset(YOLODataset):
                 tile_index.append((pf, po, ps))
 
                 cls_arr = np.array([[d[0]] for d in detections], dtype=np.float32)
-                bbox_arr = np.array(
-                    [[d[1], d[2], d[3], d[4]] for d in detections], dtype=np.float32
-                )
-                label_data.append(
-                    {
-                        "im_file": f"pack://{gid}/{stem}.jpg",
-                        "shape": (TILE_SIZE, TILE_SIZE),
-                        "cls": cls_arr,
-                        "bboxes": bbox_arr,
-                        "segments": [],
-                        "keypoints": None,
-                        "normalized": True,
-                        "bbox_format": "xywh",
-                    }
-                )
+                bbox_arr = np.array([[d[1], d[2], d[3], d[4]] for d in detections], dtype=np.float32)
+                label_data.append({
+                    "im_file": f"pack://{gid}/{stem}.jpg",
+                    "shape": (TILE_SIZE, TILE_SIZE),
+                    "cls": cls_arr,
+                    "bboxes": bbox_arr,
+                    "segments": [],
+                    "keypoints": None,
+                    "normalized": True,
+                    "bbox_format": "xywh",
+                })
 
             # Hard negatives: spatial + temporal neighbors
             hard_neg_keys = set()
@@ -219,15 +211,11 @@ class ManifestDataset(YOLODataset):
                 hard_neg_keys = set(random.sample(list(hard_neg_keys), max_hard))
 
             # Random negatives
-            max_random = int(
-                len(positive_keys) * self._neg_ratio * (1 - self._hard_neg_ratio)
-            )
+            max_random = int(len(positive_keys) * self._neg_ratio * (1 - self._hard_neg_ratio))
             all_neg = set(tile_info.keys()) - positive_keys - hard_neg_keys
             random_neg_keys = set()
             if max_random > 0 and all_neg:
-                random_neg_keys = set(
-                    random.sample(list(all_neg), min(max_random, len(all_neg)))
-                )
+                random_neg_keys = set(random.sample(list(all_neg), min(max_random, len(all_neg))))
 
             # Add negatives
             empty_cls = np.zeros((0, 1), dtype=np.float32)
@@ -239,33 +227,27 @@ class ManifestDataset(YOLODataset):
                 vpath = f"pack://{gid}/{stem}.jpg"
                 im_files.append(vpath)
                 tile_index.append((pf, po, ps))
-                label_data.append(
-                    {
-                        "im_file": vpath,
-                        "shape": (TILE_SIZE, TILE_SIZE),
-                        "cls": empty_cls,
-                        "bboxes": empty_bbox,
-                        "segments": [],
-                        "keypoints": None,
-                        "normalized": True,
-                        "bbox_format": "xywh",
-                    }
-                )
+                label_data.append({
+                    "im_file": vpath,
+                    "shape": (TILE_SIZE, TILE_SIZE),
+                    "cls": empty_cls,
+                    "bboxes": empty_bbox,
+                    "segments": [],
+                    "keypoints": None,
+                    "normalized": True,
+                    "bbox_format": "xywh",
+                })
 
             n_pos = len(positive_keys)
             n_neg = len(hard_neg_keys) + len(random_neg_keys)
-            LOGGER.info(
-                f"  {gid}: {n_pos} pos + {n_neg} neg ({len(hard_neg_keys)} hard, {len(random_neg_keys)} random)"
-            )
+            LOGGER.info(f"  {gid}: {n_pos} pos + {n_neg} neg ({len(hard_neg_keys)} hard, {len(random_neg_keys)} random)")
 
         self._tile_index = tile_index
         self._label_data = label_data
 
-        LOGGER.info(
-            f"ManifestDataset: {len(im_files)} total tiles "
-            f"({sum(1 for ld in label_data if len(ld['cls']) > 0)} pos, "
-            f"{sum(1 for ld in label_data if len(ld['cls']) == 0)} neg)"
-        )
+        LOGGER.info(f"ManifestDataset: {len(im_files)} total tiles "
+                     f"({sum(1 for ld in label_data if len(ld['cls']) > 0)} pos, "
+                     f"{sum(1 for ld in label_data if len(ld['cls']) == 0)} neg)")
         return im_files
 
     def get_labels(self):
@@ -316,15 +298,10 @@ class ManifestDataset(YOLODataset):
         if rect_mode:
             r = self.imgsz / max(h0, w0)
             if r != 1:
-                w, h = (
-                    min(math.ceil(w0 * r), self.imgsz),
-                    min(math.ceil(h0 * r), self.imgsz),
-                )
+                w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
                 im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
         elif not (h0 == w0 == self.imgsz):
-            im = cv2.resize(
-                im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR
-            )
+            im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
 
         if im.ndim == 2:
             im = im[..., None]
@@ -350,7 +327,6 @@ class ManifestDataset(YOLODataset):
 # ManifestTrainer — plugs ManifestDataset into YOLO training
 # ---------------------------------------------------------------------------
 
-
 class ManifestTrainer(DetectionTrainer):
     """Detection trainer that uses ManifestDataset."""
 
@@ -364,14 +340,10 @@ class ManifestTrainer(DetectionTrainer):
         neg_ratio = self.data.get("manifest_neg_ratio", 1.0)
 
         if not db_path or not game_ids:
-            LOGGER.warning(
-                f"No manifest config for {mode}, falling back to standard dataset"
-            )
+            LOGGER.warning(f"No manifest config for {mode}, falling back to standard dataset")
             return super().build_dataset(img_path, mode, batch)
 
-        LOGGER.info(
-            f"ManifestDataset ({mode}): {len(game_ids)} games, neg_ratio={neg_ratio}"
-        )
+        LOGGER.info(f"ManifestDataset ({mode}): {len(game_ids)} games, neg_ratio={neg_ratio}")
 
         return ManifestDataset(
             img_path=img_path,
@@ -400,7 +372,6 @@ class ManifestTrainer(DetectionTrainer):
 # build_training_set — curate a versioned training dataset
 # ---------------------------------------------------------------------------
 
-
 def build_training_set(
     master_db,
     master_packs,
@@ -412,6 +383,10 @@ def build_training_set(
     seed=42,
     camera_neg_games=None,
     neg_per_camera_game=2000,
+    phase_filter=True,
+    field_filter=True,
+    exclude_rows=None,
+    games_dir=None,
 ):
     """Build a curated training set from the master manifest.
 
@@ -431,12 +406,20 @@ def build_training_set(
         seed: random seed
         camera_neg_games: optional list of unlabeled games for additional negatives
         neg_per_camera_game: how many random negatives per camera game
+        phase_filter: skip tiles outside active play phases (first_half, second_half)
+        field_filter: skip off-field detections using field boundary polygon
+        exclude_rows: set of row indices to exclude (default: {0})
+        games_dir: path to per-game manifest directories (for phase/field data)
     """
+    import json
 
     random.seed(seed)
     output_dir = Path(output_dir)
     master_db = Path(master_db)
     master_packs = Path(master_packs)
+    games_dir = Path(games_dir) if games_dir else DEFAULT_GAMES_DIR
+    if exclude_rows is None:
+        exclude_rows = EXCLUDE_ROWS
 
     output_dir.mkdir(parents=True, exist_ok=True)
     packs_out = output_dir / "packs"
@@ -450,9 +433,14 @@ def build_training_set(
     if camera_neg_games:
         all_games += list(camera_neg_games)
 
-    print(
-        f"Building training set: {len(train_games)} train, {len(val_games)} val games"
-    )
+    filters_desc = []
+    if phase_filter:
+        filters_desc.append("phase")
+    if field_filter:
+        filters_desc.append("field")
+    filters_str = f" [filters: {', '.join(filters_desc)}]" if filters_desc else ""
+
+    print(f"Building training set: {len(train_games)} train, {len(val_games)} val games{filters_str}")
     print(f"Output: {output_dir}")
 
     # Open master DB
@@ -498,9 +486,48 @@ def build_training_set(
     t0 = time.time()
     total_pos = 0
     total_neg = 0
+    total_skipped_phase = 0
+    total_skipped_field = 0
+    games_with_phases = 0
+    games_with_field = 0
 
     for gid in train_games + val_games:
         print(f"\n  Processing {gid}...")
+        rng = random.Random(seed + hash(gid))
+
+        # --- Load per-game phase + field boundary data ---
+        game_phases = None
+        game_manifest = None
+        polygon = None
+
+        game_manifest_path = games_dir / gid / "manifest.db"
+        if game_manifest_path.exists() and (phase_filter or field_filter):
+            from training.data_prep.game_manifest import GameManifest
+
+            game_manifest = GameManifest(games_dir / gid)
+            game_manifest.open(create=False)
+
+            if phase_filter:
+                game_phases = game_manifest.get_phases()
+                if game_phases:
+                    games_with_phases += 1
+
+            if field_filter:
+                fb_json = game_manifest.get_metadata("field_boundary")
+                if fb_json:
+                    try:
+                        fb_data = json.loads(fb_json)
+                        poly_pts = (
+                            fb_data if isinstance(fb_data, list) else fb_data.get("polygon", [])
+                        )
+                        if poly_pts:
+                            polygon = np.asarray(poly_pts, dtype=np.float32).reshape(-1, 1, 2)
+                            games_with_field += 1
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+        skipped_phase = 0
+        skipped_field = 0
 
         # Get labels from master
         label_rows = master.execute(
@@ -519,19 +546,55 @@ def build_training_set(
         ).fetchall()
         tile_info = {}
         for seg, fidx, r, c, pf, po, ps in tile_rows:
-            if r in EXCLUDE_ROWS:
+            if r in exclude_rows:
                 continue
+            # Phase filter: skip tiles outside active play
+            if phase_filter and game_phases and game_manifest:
+                if not game_manifest.is_active_play(seg, fidx):
+                    stem = f"{seg}_frame_{fidx:06d}_r{r}_c{c}"
+                    if stem in labels_by_stem:
+                        skipped_phase += 1
+                    continue
             tile_info[(seg, fidx, r, c)] = (pf, po, ps)
 
-        # Identify positive tiles
+        # Identify positive tiles (with field boundary filtering)
         positive_keys = set()
         for stem in labels_by_stem:
             m = TILE_RE.match(stem)
             if not m:
                 continue
             key = (m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4)))
-            if key in tile_info:
-                positive_keys.add(key)
+            if key not in tile_info:
+                continue
+            # Field boundary filter on positives
+            if field_filter and polygon is not None:
+                from training.data_prep.field_mask_filter import (
+                    NEAR_OFF_FIELD_KEEP_RATE,
+                    classify_label_position,
+                )
+
+                lbl = labels_by_stem[stem][0]  # first label for this tile
+                position = classify_label_position(
+                    lbl[2], lbl[3],  # cx, cy (tile_stem=0, class_id=1, cx=2, cy=3)
+                    int(m.group(3)), int(m.group(4)),  # row, col
+                    polygon,
+                )
+                if position == "far_off_field":
+                    skipped_field += 1
+                    continue
+                if position == "near_off_field":
+                    if rng.random() > NEAR_OFF_FIELD_KEEP_RATE:
+                        skipped_field += 1
+                        continue
+            positive_keys.add(key)
+
+        if skipped_phase or skipped_field:
+            print(f"    Filtered: {skipped_phase} phase, {skipped_field} field")
+        total_skipped_phase += skipped_phase
+        total_skipped_field += skipped_field
+
+        if game_manifest:
+            game_manifest.close()
 
         # Hard negatives
         hard_neg_keys = set()
@@ -552,14 +615,22 @@ def build_training_set(
         if len(hard_neg_keys) > max_hard:
             hard_neg_keys = set(random.sample(list(hard_neg_keys), max_hard))
 
-        # Random negatives
+        # Random negatives (field filter on negatives: skip far-off-field tiles)
         max_random = int(len(positive_keys) * neg_ratio * (1 - hard_neg_ratio))
         all_neg_pool = set(tile_info.keys()) - positive_keys - hard_neg_keys
+        if field_filter and polygon is not None:
+            from training.data_prep.field_mask_filter import classify_label_position
+
+            filtered_neg_pool = set()
+            for key in all_neg_pool:
+                _, _, r, c = key
+                position = classify_label_position(0.5, 0.5, r, c, polygon)
+                if position != "far_off_field":
+                    filtered_neg_pool.add(key)
+            all_neg_pool = filtered_neg_pool
         random_neg_keys = set()
         if max_random > 0 and all_neg_pool:
-            random_neg_keys = set(
-                random.sample(list(all_neg_pool), min(max_random, len(all_neg_pool)))
-            )
+            random_neg_keys = set(random.sample(list(all_neg_pool), min(max_random, len(all_neg_pool))))
 
         selected_keys = positive_keys | hard_neg_keys | random_neg_keys
 
@@ -576,9 +647,7 @@ def build_training_set(
 
         with open(game_pack_path, "wb") as out_fh:
             for src_pack in sorted(by_pack.keys()):
-                entries = sorted(
-                    by_pack[src_pack]
-                )  # sort by offset for sequential read
+                entries = sorted(by_pack[src_pack])  # sort by offset for sequential read
                 with open(src_pack, "rb") as src_fh:
                     for offset, size, key in entries:
                         src_fh.seek(offset)
@@ -586,18 +655,10 @@ def build_training_set(
                         out_fh.write(data)
 
                         seg, fidx, r, c = key
-                        tile_inserts.append(
-                            (
-                                gid,
-                                seg,
-                                fidx,
-                                r,
-                                c,
-                                str(game_pack_path),
-                                new_offset,
-                                len(data),
-                            )
-                        )
+                        tile_inserts.append((
+                            gid, seg, fidx, r, c,
+                            str(game_pack_path), new_offset, len(data),
+                        ))
                         new_offset += len(data)
 
         # Insert tiles into training manifest
@@ -636,9 +697,7 @@ def build_training_set(
         total_pos += n_pos
         total_neg += n_neg
         pack_mb = new_offset / 1024 / 1024
-        print(
-            f"    {n_pos} pos + {n_neg} neg = {len(selected_keys)} tiles, pack: {pack_mb:.0f}MB"
-        )
+        print(f"    {n_pos} pos + {n_neg} neg = {len(selected_keys)} tiles, pack: {pack_mb:.0f}MB")
 
     # Handle camera game negatives
     if camera_neg_games:
@@ -652,7 +711,7 @@ def build_training_set(
             ).fetchall()
 
             if not tile_rows:
-                print("    No packed tiles found, skipping")
+                print(f"    No packed tiles found, skipping")
                 continue
 
             game_pack_path = packs_out / f"{gid}.pack"
@@ -672,18 +731,10 @@ def build_training_set(
                             data = src_fh.read(size)
                             out_fh.write(data)
                             seg, fidx, r, c = key
-                            tile_inserts.append(
-                                (
-                                    gid,
-                                    seg,
-                                    fidx,
-                                    r,
-                                    c,
-                                    str(game_pack_path),
-                                    new_offset,
-                                    len(data),
-                                )
-                            )
+                            tile_inserts.append((
+                                gid, seg, fidx, r, c,
+                                str(game_pack_path), new_offset, len(data),
+                            ))
                             new_offset += len(data)
 
             train_conn.executemany(
@@ -697,9 +748,7 @@ def build_training_set(
             )
             train_conn.commit()
             total_neg += len(tile_inserts)
-            print(
-                f"    {len(tile_inserts)} negative tiles, pack: {new_offset / 1024 / 1024:.0f}MB"
-            )
+            print(f"    {len(tile_inserts)} negative tiles, pack: {new_offset/1024/1024:.0f}MB")
 
     master.close()
     train_conn.close()
@@ -721,7 +770,7 @@ def build_training_set(
     if camera_neg_games:
         for g in camera_neg_games:
             yaml_content += f"  - {g}\n"
-    yaml_content += "manifest_val_games:\n"
+    yaml_content += f"manifest_val_games:\n"
     for g in val_games:
         yaml_content += f"  - {g}\n"
     yaml_content += f"manifest_neg_ratio: {neg_ratio}\n"
@@ -735,9 +784,15 @@ def build_training_set(
     print(f"  Positives:   {total_pos:,}")
     print(f"  Negatives:   {total_neg:,}")
     print(f"  Total:       {total_pos + total_neg:,}")
-    print(f"  Ratio:       1:{total_neg / max(total_pos, 1):.1f}")
-    print(f"  Packs:       {total_pack_size / 1024 / 1024 / 1024:.1f} GB")
-    print(f"  Manifest DB: {db_size / 1024 / 1024:.0f} MB")
+    print(f"  Ratio:       1:{total_neg/max(total_pos, 1):.1f}")
+    print(f"  Packs:       {total_pack_size/1024/1024/1024:.1f} GB")
+    print(f"  Manifest DB: {db_size/1024/1024:.0f} MB")
+    if phase_filter or field_filter:
+        print("  --- Filters ---")
+        if phase_filter:
+            print(f"  Phase filter: {total_skipped_phase:,} labels skipped ({games_with_phases}/{len(train_games)+len(val_games)} games had phases)")
+        if field_filter:
+            print(f"  Field filter: {total_skipped_field:,} labels skipped ({games_with_field}/{len(train_games)+len(val_games)} games had boundaries)")
     print(f"  YAML:        {yaml_path}")
     print(f"\nTransfer {output_dir} to laptop to train.")
 

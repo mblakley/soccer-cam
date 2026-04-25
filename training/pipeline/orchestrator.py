@@ -552,40 +552,104 @@ class Orchestrator:
                 g["coverage"] for g in games_with_coverage
             ) / len(games_with_coverage)
 
-        # Find previous best weights to resume from (incremental training)
-        resume_from = None
-        training_sets = Path(self.cfg.paths.training_sets)
-        if training_sets.exists():
-            versions = sorted(training_sets.iterdir(), reverse=True)
-            for v in versions:
-                best = v / "weights" / "best.pt"
-                if best.exists():
-                    resume_from = str(best)
-                    break
+        # Find previous best weights to resume from (incremental training).
+        # Search multiple locations: training_sets on D:, checkpoints on F:,
+        # and models dir. The model with the most recent mtime wins.
+        resume_from = self._find_best_checkpoint()
 
-        version = f"v3.{int(time.time()) % 10000}"
+        # Find latest pre-built shard
+        shard_version = self._find_latest_shard()
+
+        from datetime import datetime
+
+        shard_tag = shard_version if shard_version else "live"
+        version = f"{shard_tag}_{datetime.now().strftime('%Y%m%d_%H%M')}"
         if self.dry_run:
             logger.info(
-                "[DRY RUN] Would enqueue training %s (resume=%s)", version, resume_from
+                "[DRY RUN] Would enqueue training %s (resume=%s, shard=%s)",
+                version, resume_from, shard_version,
             )
         else:
+            payload = {
+                "train_games": train_games,
+                "val_games": val_games,
+                "version": version,
+                "resume_from": resume_from,
+            }
+            if shard_version:
+                payload["shard_version"] = shard_version
+
             self.api.enqueue(
                 "train",
                 priority=10,
                 target_machine=self._get_target_machine("train"),
-                payload={
-                    "train_games": train_games,
-                    "val_games": val_games,
-                    "version": version,
-                    "resume_from": resume_from,
-                },
+                payload=payload,
             )
             logger.info(
-                "Enqueued training %s: %d games, resume=%s",
+                "Enqueued training %s: %d games, resume=%s, shard=%s",
                 version,
                 len(train_games),
                 Path(resume_from).parent.parent.name if resume_from else "scratch",
+                shard_version or "build-from-games",
             )
+
+    def _find_best_checkpoint(self) -> str | None:
+        """Find the most recent best.pt checkpoint across all storage locations."""
+        candidates: list[tuple[float, str]] = []
+
+        # Check D:/training_data/training_sets/*/weights/best.pt
+        training_sets = Path(self.cfg.paths.training_sets)
+        if training_sets.exists():
+            for v in training_sets.iterdir():
+                best = v / "weights" / "best.pt"
+                if best.exists():
+                    candidates.append((best.stat().st_mtime, str(best)))
+
+        # Check F:/training_checkpoints/*/best.pt
+        checkpoints_dir = Path(self.cfg.paths.archive.checkpoints)
+        if checkpoints_dir.exists():
+            for v in checkpoints_dir.iterdir():
+                best = v / "best.pt"
+                if best.exists():
+                    candidates.append((best.stat().st_mtime, str(best)))
+
+        # Check F:/training_data/runs/*/weights/best.pt (legacy location)
+        legacy_runs = Path(self.cfg.paths.archive.video_sources) / "runs"
+        if legacy_runs.exists():
+            for v in legacy_runs.iterdir():
+                best = v / "weights" / "best.pt"
+                if best.exists():
+                    candidates.append((best.stat().st_mtime, str(best)))
+
+        if not candidates:
+            logger.info("No previous checkpoint found — training from pretrained base")
+            return None
+
+        # Use the most recent checkpoint
+        candidates.sort(reverse=True)
+        best_path = candidates[0][1]
+        logger.info("Resuming from checkpoint: %s", best_path)
+        return best_path
+
+    def _find_latest_shard(self) -> str | None:
+        """Find the latest pre-built training shard."""
+        shard_base = Path(self.cfg.paths.training_sets).parent / "training_shards"
+        if not shard_base.exists():
+            # Check via server share
+            shard_base = Path(self.cfg.server.share_training) / "training_shards"
+        if not shard_base.exists():
+            return None
+
+        shards = []
+        for d in shard_base.iterdir():
+            if d.is_dir() and (d / "dataset.yaml").exists():
+                shards.append(d.name)
+        if not shards:
+            return None
+
+        latest = sorted(shards)[-1]
+        logger.info("Using pre-built shard: %s", latest)
+        return latest
 
     def _can_qa(self) -> bool:
         now = time.time()
