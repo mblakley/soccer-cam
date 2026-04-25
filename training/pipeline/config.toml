@@ -1,0 +1,82 @@
+# Unified Pipeline Configuration
+# All paths, machines, thresholds in one place.
+
+[paths]
+# Server data directories (D: is HDD — sequential OK, avoid random I/O)
+registry_db = "G:/pipeline_db/registry.db"
+work_queue_db = "G:/pipeline_db/work_queue.db"
+games_dir = "D:/training_data/games"          # per-game dirs: manifest.db + tile_packs/
+staging = "D:/training_data/staging"
+training_sets = "D:/training_data/training_sets"
+game_registry = "D:/training_data/game_registry.json"
+log_dir = "G:/pipeline_db/logs"
+# Server local SSD for processing (pull-local-process-push)
+server_work_dir = "G:/pipeline_work"
+
+[paths.archive]
+# F: is USB archive — source for videos, permanent home for tile packs
+root = "F:/"
+video_sources = "F:/training_data"
+tile_packs = "F:/training_data/tile_packs"   # per-game pack archive: {game_id}/*.pack
+checkpoints = "F:/training_checkpoints"
+backups = "F:/training_backups"
+
+[server]
+hostname = "your-server-hostname"
+ip = "your-server-ip"
+share_training = "\\\\your-server-ip\\training"
+share_video = "\\\\your-server-ip\\video"
+
+[resources]
+min_disk_free_gb = 5          # minimum free disk before tasks stop/skip
+
+[orchestrator]
+check_interval = 60           # seconds between passes
+stale_heartbeat = 300         # 5 minutes → assume worker died (heartbeats every 30s)
+max_staging_concurrent = 1    # one game staging at a time (HDD)
+min_new_games_for_retrain = 999 # disabled until all games are tiled and labeled
+min_new_labels_for_retrain = 5000
+coverage_target = 0.90        # track coverage goal (0-1), retrain until reached
+coverage_min_delta = 0.02     # min coverage improvement to justify retraining
+
+# Add machine entries for each worker. Example:
+# [machines.worker1]
+# hostname = "worker-hostname"
+# gpu = "RTX 4070"
+# capabilities = ["tile", "label", "train"]
+# deploy_dir = "C:/soccer-cam-label"
+
+[tiling]
+frame_interval = 4
+diff_threshold = 2.0
+tile_cols = 7
+tile_rows = 3
+tile_size = 640
+# Pipeline parallelism (0 = auto-detect from CPU count at task start)
+# Override per machine via worker_config.toml if needed
+encode_threads = 0
+read_ahead = 0
+batch_frames = 0
+
+[labeling]
+onnx_model = "model.onnx"
+confidence = 0.45
+nms_iou = 0.5
+
+[training]
+model_base = "yolo26l.pt"
+epochs = 50
+batch_size = 16
+imgsz = 640
+neg_ratio = 1.0
+patience = 30
+
+[qa]
+sonnet_batch_limit = 20       # max grids per game (20 grids = 120 tiles, ~7 min)
+sonnet_batch_size = 6         # tiles per grid (matches 3x2 layout)
+gap_budget = 20               # max filmstrips for trajectory gap checking (Phase 2)
+min_trajectory_length = 5     # min frames to consider a trajectory for gap analysis
+
+[ntfy]
+topic = "video_grouper_mblakley43431"
+enabled = true
