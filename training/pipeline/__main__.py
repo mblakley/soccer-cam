@@ -330,6 +330,47 @@ def cmd_events(args):
         print(f"  {ts}  {cat:12s}  {msg}")
 
 
+def cmd_split_tournament(args):
+    from pathlib import Path
+
+    from training.pipeline.split_tournament import cleanup, dry_run, execute, verify
+
+    # Hardcoded source tournaments for dry-run discovery
+    TOURNAMENT_SOURCES = [
+        "heat__2024.06.07_Heat_Tournament",
+        "heat__2024.07.20_Clarence_Tournament",
+        "flash__2025.05.03_vs_Saratoga_Saratoga_Tournament_G1",
+    ]
+
+    splits_dir = Path("training/pipeline/splits")
+
+    if args.dry_run:
+        sources = [args.game] if args.game else TOURNAMENT_SOURCES
+        for source in sources:
+            try:
+                dry_run(source, splits_dir)
+            except (FileNotFoundError, ValueError) as e:
+                print(f"\n  ERROR: {e}")
+    elif args.execute:
+        if not args.spec:
+            print("--execute requires --spec <file>")
+            return
+        execute(Path(args.spec), no_packs=args.no_packs)
+    elif args.verify:
+        if not args.spec:
+            print("--verify requires --spec <file>")
+            return
+        ok = verify(Path(args.spec))
+        raise SystemExit(0 if ok else 1)
+    elif args.cleanup:
+        if not args.spec:
+            print("--cleanup requires --spec <file>")
+            return
+        cleanup(Path(args.spec), confirm=args.confirm)
+    else:
+        print("Specify one of: --dry-run, --execute, --verify, --cleanup")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="training.pipeline", description="Pipeline orchestrator"
@@ -387,6 +428,32 @@ def main():
     p_events.add_argument("--category", help="Filter by category (e.g. state_change)")
     p_events.add_argument("--limit", type=int, default=100, help="Max events to show")
 
+    p_split = sub.add_parser(
+        "split-tournament", help="Split multi-game tournament into individual games"
+    )
+    p_split.add_argument(
+        "--dry-run", action="store_true", help="Detect games and generate spec file"
+    )
+    p_split.add_argument(
+        "--execute", action="store_true", help="Execute split from confirmed spec"
+    )
+    p_split.add_argument("--verify", action="store_true", help="Verify split integrity")
+    p_split.add_argument(
+        "--cleanup", action="store_true", help="Remove source after verified split"
+    )
+    p_split.add_argument(
+        "--no-packs",
+        action="store_true",
+        help="Skip pack file copies (create manifests and registry only)",
+    )
+    p_split.add_argument("--spec", help="Path to confirmation spec JSON file")
+    p_split.add_argument("--game", help="Source game_id (for --dry-run)")
+    p_split.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm cleanup (required with --cleanup)",
+    )
+
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -434,6 +501,7 @@ def main():
         "priority": cmd_priority,
         "delete": cmd_delete,
         "events": cmd_events,
+        "split-tournament": cmd_split_tournament,
     }
 
     if args.command in commands:

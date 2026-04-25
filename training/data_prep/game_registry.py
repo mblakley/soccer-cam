@@ -25,8 +25,9 @@ OLD_TO_NEW = {
     "heat__05.31.2024_vs_Fairport_home": "heat__2024.05.31_vs_Fairport_home",
     "heat__06.20.2024_vs_Chili_away": "heat__2024.06.20_vs_Chili_away",
     "heat__07.17.2024_vs_Fairport_away": "heat__2024.07.17_vs_Fairport_away",
-    "heat__Clarence_Tournament": "heat__2024.07.20_Clarence_Tournament",
-    "heat__Heat_Tournament": "heat__2024.06.07_Heat_Tournament",
+    # Old tournament IDs no longer valid — split into per-game IDs (2026-04-16)
+    # "heat__Clarence_Tournament" -> heat__2024.07.20_Clarence_Tournament_G1/G2/G3
+    # "heat__Heat_Tournament" -> heat__2024.06.07_Heat_Tournament_G1/G2/G3/G4
     "heat__2025.05.13": "heat__2025.05.13_vs_GUFC_home",
 }
 
@@ -109,18 +110,19 @@ def _detect_video_format(gdir: Path) -> tuple[str, list[Path]]:
     Returns (format, segment_list) where format is one of:
       dahua_segments, reolink_segments, dav_only, gopro, processed, none
     """
-    # Dahua [F][0@0] segments (.mp4)
-    dahua_mp4 = sorted(f for f in gdir.rglob("*.mp4") if "[F]" in f.name)
+    # Dahua [F][0@0] segments (.mp4) — non-recursive to avoid merging
+    # multi-game tournament subdirectories into one game
+    dahua_mp4 = sorted(f for f in gdir.glob("*.mp4") if "[F]" in f.name)
     if dahua_mp4:
         return "dahua_segments", dahua_mp4
 
     # Reolink RecM09 segments
-    reolink = sorted(f for f in gdir.rglob("*.mp4") if f.name.startswith("RecM09"))
+    reolink = sorted(f for f in gdir.glob("*.mp4") if f.name.startswith("RecM09"))
     if reolink:
         return "reolink_segments", reolink
 
     # Dahua .dav files (raw, need remux)
-    dav_files = sorted(f for f in gdir.rglob("*.dav") if "[F]" in f.name)
+    dav_files = sorted(f for f in gdir.glob("*.dav") if "[F]" in f.name)
     if dav_files:
         return "dav_only", dav_files
 
@@ -130,14 +132,18 @@ def _detect_video_format(gdir: Path) -> tuple[str, list[Path]]:
         return "gopro", gopro
 
     # Processed combined video
-    processed = [f for f in gdir.glob("*raw*.mp4")] + [f for f in gdir.glob("combined*.mp4")]
+    processed = [f for f in gdir.glob("*raw*.mp4")] + [
+        f for f in gdir.glob("combined*.mp4")
+    ]
     if processed:
         return "processed", processed
 
     return "none", []
 
 
-def _classify_game(name: str, team: str, video_format: str) -> tuple[str, bool, str | None]:
+def _classify_game(
+    name: str, team: str, video_format: str
+) -> tuple[str, bool, str | None]:
     """Classify a game as trainable or excluded.
 
     Returns (game_type, trainable, exclude_reason).
@@ -167,17 +173,94 @@ def _classify_game(name: str, team: str, video_format: str) -> tuple[str, bool, 
 
 # Camera folder timestamps that are confirmed futsal
 FUTSAL_CAMERA_DATES = {
-    "2025.03.03", "2025.03.10", "2025.03.17", "2025.03.24",
-    "2025.03.31", "2025.04.07",  # YouTube-confirmed futsal
-    "2025.01.16", "2025.02.02", "2025.02.06", "2025.02.13",
-    "2025.02.22", "2025.02.27",  # Frame-check confirmed indoor
+    "2025.03.03",
+    "2025.03.10",
+    "2025.03.17",
+    "2025.03.24",
+    "2025.03.31",
+    "2025.04.07",  # YouTube-confirmed futsal
+    "2025.01.16",
+    "2025.02.02",
+    "2025.02.06",
+    "2025.02.13",
+    "2025.02.22",
+    "2025.02.27",  # Frame-check confirmed indoor
 }
 
 # Camera folder timestamps that are confirmed non-game
 NON_GAME_CAMERA = {
-    "2024.11.01", "2025.01.23", "2025.01.25", "2025.02.01",
-    "2025.02.26", "2025.03.02", "2025.03.25", "2025.04.01",
+    "2024.11.01",
+    "2025.01.23",
+    "2025.01.25",
+    "2025.02.01",
+    "2025.02.26",
+    "2025.03.02",
+    "2025.03.25",
+    "2025.04.01",
 }
+
+
+def _register_game_dir(
+    games: list[dict],
+    team: str,
+    gdir: Path,
+    video_format: str,
+    segments: list[Path],
+    game_id_override: str | None = None,
+):
+    """Register a single game directory into the games list."""
+    name = gdir.name
+    is_upside_down = name in UPSIDE_DOWN_GAMES
+
+    if is_upside_down:
+        corrected = UPSIDE_DOWN_GAMES[name]
+        if corrected:
+            corrected_path = gdir / corrected
+            if corrected_path.exists():
+                video_source = "corrected"
+                video_path = str(corrected_path)
+            else:
+                video_source = "flip_in_code"
+                video_path = None
+        else:
+            video_source = "flip_in_code"
+            video_path = None
+    else:
+        video_source = "segments"
+        video_path = None
+
+    game_id = game_id_override or _make_game_id(team, gdir.name)
+    game_type, trainable, exclude_reason = _classify_game(name, team, video_format)
+
+    tiles_dir_d = Path("D:/training_data/tiles_640") / game_id
+    tiles_dir_f = Path("F:/training_data/tiles_640") / game_id
+    has_tiles = tiles_dir_d.exists() or tiles_dir_f.exists()
+
+    labels_dir_d = Path("D:/training_data/labels_640_ext") / game_id
+    labels_dir_f = Path("F:/training_data/labels_640_ext") / game_id
+    has_labels = labels_dir_d.exists() or labels_dir_f.exists()
+
+    games.append(
+        {
+            "game_id": game_id,
+            "name": name,
+            "team": team,
+            "path": str(gdir),
+            "segments": [s.name for s in segments],
+            "segment_count": len(segments),
+            "orientation": "upside_down" if is_upside_down else "right_side_up",
+            "video_source": video_source,
+            "video_format": video_format,
+            "corrected_video": video_path,
+            "needs_flip": video_source == "flip_in_code",
+            "game_type": game_type,
+            "trainable": trainable,
+            "has_tiles": has_tiles,
+            "has_labels": has_labels,
+            "exclude": not trainable,
+            "exclude_reason": exclude_reason,
+        }
+    )
 
 
 def build_registry() -> list[dict]:
@@ -198,63 +281,29 @@ def build_registry() -> list[dict]:
                 continue
 
             video_format, segments = _detect_video_format(gdir)
+
+            # Tournament dirs have subdirs per game, no segments at top level.
+            # Iterate into each subdir as a separate game.
+            # Game IDs use the parent tournament name + _G{n} suffix.
             if video_format == "none":
+                subdirs = sorted(
+                    d
+                    for d in gdir.iterdir()
+                    if d.is_dir() and _detect_video_format(d)[0] != "none"
+                )
+                if subdirs:
+                    tournament_id = _make_game_id(team, gdir.name)
+                    for i, subdir in enumerate(subdirs, 1):
+                        _register_game_dir(
+                            games,
+                            team,
+                            subdir,
+                            *_detect_video_format(subdir),
+                            game_id_override=f"{tournament_id}_G{i}",
+                        )
                 continue
 
-            name = gdir.name
-            is_upside_down = name in UPSIDE_DOWN_GAMES
-
-            # Determine video source for tiling
-            if is_upside_down:
-                corrected = UPSIDE_DOWN_GAMES[name]
-                if corrected:
-                    corrected_path = gdir / corrected
-                    if corrected_path.exists():
-                        video_source = "corrected"
-                        video_path = str(corrected_path)
-                    else:
-                        video_source = "flip_in_code"
-                        video_path = None
-                else:
-                    video_source = "flip_in_code"
-                    video_path = None
-            else:
-                video_source = "segments"
-                video_path = None
-
-            game_id = _make_game_id(team, name)
-            game_type, trainable, exclude_reason = _classify_game(
-                name, team, video_format
-            )
-
-            # Check existing tiles and labels
-            tiles_dir_d = Path("D:/training_data/tiles_640") / game_id
-            tiles_dir_f = Path("F:/training_data/tiles_640") / game_id
-            has_tiles = tiles_dir_d.exists() or tiles_dir_f.exists()
-
-            labels_dir_d = Path("D:/training_data/labels_640_ext") / game_id
-            labels_dir_f = Path("F:/training_data/labels_640_ext") / game_id
-            has_labels = labels_dir_d.exists() or labels_dir_f.exists()
-
-            games.append({
-                "game_id": game_id,
-                "name": name,
-                "team": team,
-                "path": str(gdir),
-                "segments": [s.name for s in segments],
-                "segment_count": len(segments),
-                "orientation": "upside_down" if is_upside_down else "right_side_up",
-                "video_source": video_source,
-                "video_format": video_format,
-                "corrected_video": video_path,
-                "needs_flip": video_source == "flip_in_code",
-                "game_type": game_type,
-                "trainable": trainable,
-                "has_tiles": has_tiles,
-                "has_labels": has_labels,
-                "exclude": not trainable,
-                "exclude_reason": exclude_reason,
-            })
+            _register_game_dir(games, team, gdir, video_format, segments)
 
     # Scan Camera directory for futsal/indoor games (excluded from training)
     camera_dir = Path("F:/Camera")
@@ -282,25 +331,27 @@ def build_registry() -> list[dict]:
 
             game_id = _make_game_id("camera", name)
 
-            games.append({
-                "game_id": game_id,
-                "name": name,
-                "team": "camera",
-                "path": str(gdir),
-                "segments": [s.name for s in segments],
-                "segment_count": len(segments),
-                "orientation": "right_side_up",
-                "video_source": "segments",
-                "video_format": video_format,
-                "corrected_video": None,
-                "needs_flip": False,
-                "game_type": game_type,
-                "trainable": False,
-                "has_tiles": False,
-                "has_labels": False,
-                "exclude": True,
-                "exclude_reason": exclude_reason,
-            })
+            games.append(
+                {
+                    "game_id": game_id,
+                    "name": name,
+                    "team": "camera",
+                    "path": str(gdir),
+                    "segments": [s.name for s in segments],
+                    "segment_count": len(segments),
+                    "orientation": "right_side_up",
+                    "video_source": "segments",
+                    "video_format": video_format,
+                    "corrected_video": None,
+                    "needs_flip": False,
+                    "game_type": game_type,
+                    "trainable": False,
+                    "has_tiles": False,
+                    "has_labels": False,
+                    "exclude": True,
+                    "exclude_reason": exclude_reason,
+                }
+            )
 
     return games
 
@@ -358,7 +409,9 @@ def main():
     for gt, gs in sorted(by_type.items()):
         print(f"  {gt}: {len(gs)}")
     print()
-    print(f"Trainable games: {len(trainable)} ({len(tiled)} tiled, {len(labeled)} labeled)")
+    print(
+        f"Trainable games: {len(trainable)} ({len(tiled)} tiled, {len(labeled)} labeled)"
+    )
     print(f"Need tiling: {len(trainable) - len(tiled)}")
     print(f"Need labeling: {len(trainable) - len(labeled)}")
     print(f"\nRegistry saved to {REGISTRY_PATH}")

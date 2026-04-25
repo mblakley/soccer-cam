@@ -135,6 +135,9 @@ def run_generate_review(
             "items": items,
         }
         (review_dir / "manifest.json").write_text(json.dumps(review_manifest, indent=2))
+
+        # Pre-extract phase editor sample frames so human review is instant
+        _preload_phase_samples(manifest, task_io, cfg)
     finally:
         manifest.close()
 
@@ -184,3 +187,115 @@ def run_generate_review(
         "review_type": "confirm_game_ball",
         "track_coverage_pct": coverage,
     }
+
+
+def _preload_phase_samples(manifest, task_io, cfg, interval: int = 30):
+    """Pre-extract panoramic frames for the phase editor.
+
+    Reads tiles directly from pack files (local or F: archive) and stitches
+    them into downscaled panoramic JPEGs cached at:
+        D:/training_data/games/{game_id}/phase_samples/{segment}_{frame_idx}.jpg
+
+    This avoids copying entire multi-GB pack files to D: just for phase review.
+    """
+    import cv2
+
+    from training.tasks.field_boundary import reconstruct_panoramic
+    from training.tasks.phase_detect import FPS, _build_segment_timeline
+
+    game_id = manifest.game_id
+    cache_dir = Path(cfg.paths.games_dir) / game_id / "phase_samples"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check if this game needs 180-degree rotation
+    needs_flip = False
+    try:
+        from training.pipeline.registry import GameRegistry
+
+        reg = GameRegistry(cfg.paths.registry_db)
+        game_info = reg.get_game(game_id)
+        if game_info and game_info.get("needs_flip"):
+            needs_flip = True
+        reg.close()
+    except Exception:
+        pass
+
+    segments = manifest.get_segments()
+    timeline = _build_segment_timeline(segments, manifest)
+    if not timeline:
+        logger.info("No timeline for %s, skipping phase sample preload", game_id)
+        return
+
+    first_start = timeline[0]["start_sec"]
+    last_end = timeline[-1]["end_sec"]
+    total_duration = last_end - first_start
+
+    # Determine where to read packs from — prefer local, fallback to F:
+    packs_dir = Path(cfg.paths.games_dir) / game_id / "tile_packs"
+    if not packs_dir.exists() or not any(packs_dir.glob("*.pack")):
+        # Try F: archive
+        f_packs = Path(cfg.paths.archive.tile_packs) / game_id
+        if f_packs.exists():
+            packs_dir = f_packs
+        else:
+            logger.warning("No packs found for %s, skipping preload", game_id)
+            return
+
+    # Build sample points at regular intervals (same logic as annotation_server)
+    samples_created = 0
+    t = 0.0
+    while t <= total_duration:
+        abs_time = first_start + t
+
+        best_seg = None
+        for seg_info in timeline:
+            if seg_info["start_sec"] <= abs_time <= seg_info["end_sec"]:
+                best_seg = seg_info
+                break
+        if best_seg is None:
+            best_seg = min(
+                timeline,
+                key=lambda s: min(
+                    abs(s["start_sec"] - abs_time), abs(s["end_sec"] - abs_time)
+                ),
+            )
+
+        offset_in_seg = abs_time - best_seg["start_sec"]
+        frame_idx = best_seg["frame_min"] + int(offset_in_seg * FPS)
+        frame_idx = (frame_idx // 4) * 4
+        frame_idx = max(best_seg["frame_min"], min(frame_idx, best_seg["frame_max"]))
+
+        # Snap to nearest tiled frame
+        tile_check = manifest.conn.execute(
+            "SELECT COUNT(*) FROM tiles WHERE segment=? AND frame_idx=?",
+            (best_seg["segment"], frame_idx),
+        ).fetchone()[0]
+        if tile_check == 0:
+            nearest = manifest.conn.execute(
+                "SELECT frame_idx FROM tiles WHERE segment=? ORDER BY ABS(frame_idx - ?) LIMIT 1",
+                (best_seg["segment"], frame_idx),
+            ).fetchone()
+            if nearest:
+                frame_idx = nearest[0]
+
+        cache_file = cache_dir / f"{best_seg['segment']}_{frame_idx:06d}.jpg"
+        if not cache_file.exists():
+            pano = reconstruct_panoramic(
+                manifest, best_seg["segment"], frame_idx, packs_dir
+            )
+            if pano is not None:
+                if needs_flip:
+                    pano = cv2.rotate(pano, cv2.ROTATE_180)
+                h, w = pano.shape[:2]
+                small = cv2.resize(pano, (w // 2, h // 2))
+                cv2.imwrite(str(cache_file), small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                samples_created += 1
+
+        t += interval
+
+    logger.info(
+        "Pre-loaded %d phase sample frames for %s in %s",
+        samples_created,
+        game_id,
+        cache_dir,
+    )

@@ -4,6 +4,26 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-15: Tournament game naming convention
+
+**Context:** Three tournament recordings (`heat__2024.06.07_Heat_Tournament`, `heat__2024.07.20_Clarence_Tournament`, `flash__2025.05.03_vs_Saratoga_Saratoga_Tournament_G1`) each combined multiple games into a single manifest.db, preventing per-game phase annotation, QA, and training. Splitting after the fact required copying 80-190 GB of pack files per tournament.
+
+**Decision:** Each game in a tournament gets its own game_id from registration, using the format `{team}__{date}_{Tournament_Name}_G{n}`. Never combine multiple games into a single game_id. The existing tournaments were split using `training/pipeline/split_tournament.py`.
+
+**Rule:** When registering tournament games, create one game_id per game from the start.
+
+---
+
+## 2026-04-15: Registry.db uses auto-increment id as primary key
+
+**Context:** `registry.db` used `game_id TEXT PRIMARY KEY`, coupling database identity to directory names. Renaming a game required deleting and re-inserting the row. This made the tournament split migration needlessly complex and fragile.
+
+**Decision:** Changed to `id INTEGER PRIMARY KEY AUTOINCREMENT` with `game_id TEXT UNIQUE NOT NULL`. Added `rename_game()` method that updates game_id via a simple UPDATE statement. Auto-migration converts existing databases on first access.
+
+**Impact:** All existing queries use `WHERE game_id = ?` which works identically against the UNIQUE index. No changes needed in workers, tasks, queue, or API endpoints.
+
+---
+
 ## 2026-04-15: Single canonical deploy script for remote workers
 
 **Context:** Laptop worker kept dying after reboots and couldn't restart. Root cause: 3 conflicting scheduled tasks (`GPUWorker`, `LaptopWorker`, `PipelineWorker`) each pointing to different hand-edited bat files with wrong credentials, wrong CUDA paths, and TOML backslash escaping bugs. Each time someone fixed a problem they created a new bat/task instead of fixing the canonical deploy script.
