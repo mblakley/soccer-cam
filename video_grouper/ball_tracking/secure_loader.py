@@ -28,6 +28,20 @@ def _onnxruntime():
     return importlib.import_module("onnxruntime")
 
 
+# Native (Cython-compiled) implementations are loaded when available.
+# Production builds compile _secure_loader_native.pyx to .pyd/.so/.dylib;
+# dev/test workflows fall back to the pure-Python definitions below.
+try:
+    from video_grouper.ball_tracking import _secure_loader_native as _native
+
+    _NATIVE_AVAILABLE = True
+    logger.debug("secure_loader: using native module")
+except ImportError:
+    _native = None
+    _NATIVE_AVAILABLE = False
+    logger.debug("secure_loader: native module not built; using pure-Python fallback")
+
+
 class SecureLoaderError(Exception):
     """Raised when a model cannot be loaded for any reason."""
 
@@ -41,11 +55,20 @@ class LoadedModel:
     provider: str
 
 
+def _translate_native_error(exc: Exception) -> SecureLoaderError:
+    """Re-raise native module's NativeSecureLoaderError as SecureLoaderError."""
+    return SecureLoaderError(str(exc))
+
+
 def _canonical_json(obj: dict) -> bytes:
+    if _NATIVE_AVAILABLE:
+        return _native.canonical_json(obj)
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _parse_expires_at(value: str) -> datetime:
+    if _NATIVE_AVAILABLE:
+        return _native.parse_expires_at(value)
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     dt = datetime.fromisoformat(value)
@@ -57,6 +80,8 @@ def _parse_expires_at(value: str) -> datetime:
 def _verify_signature(
     message: bytes, signature_hex: str, public_keys: list[str]
 ) -> bool:
+    if _NATIVE_AVAILABLE:
+        return _native.verify_signature(message, signature_hex, public_keys)
     try:
         sig = bytes.fromhex(signature_hex.strip())
     except ValueError:
@@ -78,6 +103,14 @@ def _verify_license(
     now: Optional[datetime] = None,
 ) -> dict:
     """Validate the license response shape and signature; return the parsed manifest."""
+    if _NATIVE_AVAILABLE:
+        try:
+            return _native.verify_license(
+                license_response, public_keys, expected_user_id, now
+            )
+        except _native.NativeSecureLoaderError as exc:
+            raise _translate_native_error(exc) from exc
+
     check_time = now or datetime.now(UTC)
     try:
         token_b64 = license_response["license_token"]
@@ -113,6 +146,11 @@ def _verify_license(
 
 
 def _parse_artifact(artifact_bytes: bytes) -> tuple[dict, bytes]:
+    if _NATIVE_AVAILABLE:
+        try:
+            return _native.parse_artifact(artifact_bytes)
+        except _native.NativeSecureLoaderError as exc:
+            raise _translate_native_error(exc) from exc
     if len(artifact_bytes) < 9:
         raise SecureLoaderError("Artifact too short")
     if artifact_bytes[:4] != ARTIFACT_MAGIC:
@@ -131,6 +169,8 @@ def _parse_artifact(artifact_bytes: bytes) -> tuple[dict, bytes]:
 
 
 def _build_aad(model_key: str, version: str, master_key_id: str) -> bytes:
+    if _NATIVE_AVAILABLE:
+        return _native.build_aad(model_key, version, master_key_id)
     return _canonical_json(
         {
             "master_key_id": master_key_id,
@@ -147,6 +187,14 @@ def _decrypt_artifact(
     expected_version: str,
 ) -> bytes:
     """Validate the artifact header against the license, then AES-GCM decrypt."""
+    if _NATIVE_AVAILABLE:
+        try:
+            return _native.decrypt_artifact(
+                artifact_bytes, wrapped_key_hex, expected_model_key, expected_version
+            )
+        except _native.NativeSecureLoaderError as exc:
+            raise _translate_native_error(exc) from exc
+
     header, ciphertext = _parse_artifact(artifact_bytes)
 
     if header.get("model_key") != expected_model_key:

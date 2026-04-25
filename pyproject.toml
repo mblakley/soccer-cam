@@ -51,6 +51,8 @@ dev = [
     "ruff>=0.5.5",
     "pre-commit>=3.7.1",
     "pyinstaller>=6.0.0",
+    "cython>=3.0.0",
+    "setuptools>=70.0.0",
 ]
 ml = [
     "torch>=2.7.0",
