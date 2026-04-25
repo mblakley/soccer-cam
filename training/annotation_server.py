@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -24,7 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 logger = logging.getLogger(__name__)
 
 # Configurable via environment or CLI args
-REVIEW_PACKETS_DIR = Path("review_packets")
+REVIEW_PACKETS_DIR = Path("D:/training_data/review_packets")
 LABELS_OUTPUT_DIR = Path("training_data/labels/annotations")
 
 app = FastAPI(title="Ball Tracking Annotation Server", version="0.1.0")
@@ -844,6 +844,825 @@ async def service_worker():
 async def root_redirect():
     """Redirect root to the annotation UI."""
     return RedirectResponse(url="/static/annotate.html")
+
+
+# --- Gap Review endpoints (trajectory gaps for human review) ---
+
+
+@app.get("/api/gap-reviews")
+def get_gap_reviews():
+    """List all pending gap review packets."""
+    packets = []
+    if not REVIEW_PACKETS_DIR.exists():
+        return packets
+
+    for packet_dir in sorted(REVIEW_PACKETS_DIR.iterdir()):
+        if not packet_dir.is_dir() or packet_dir.name.startswith("_"):
+            continue
+        manifest_path = packet_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        with open(manifest_path) as f:
+            m = json.load(f)
+        # Include packets with gap items OR confirm_game_ball type
+        gap_items = [
+            i
+            for i in m.get("items", [])
+            if i.get("reason", "").startswith("trajectory_gap")
+        ]
+        review_type = m.get("review_type", "gap_review")
+        if not gap_items and review_type != "confirm_game_ball":
+            continue
+
+        results_path = packet_dir / "annotation_results.json"
+        reviewed = 0
+        if results_path.exists():
+            with open(results_path) as f:
+                reviewed = len(json.load(f))
+
+        review_type = m.get("review_type", "gap_review")
+        all_items = m.get("items", [])
+        total = len(all_items)
+        packets.append(
+            {
+                "packet_id": packet_dir.name,
+                "game_id": m.get("game_id", ""),
+                "review_type": review_type,
+                "total_gaps": total,
+                "item_count": total,
+                "tile_count": m.get("tile_count", 0),
+                "reviewed": reviewed,
+                "remaining": total - reviewed,
+                "created_at": m.get("created_at", 0),
+            }
+        )
+
+    packets.sort(key=lambda p: p["remaining"], reverse=True)
+    return packets
+
+
+@app.get("/api/gap-reviews/{packet_id}")
+def get_gap_review_detail(packet_id: str):
+    """Get full gap review packet with items and review status."""
+    packet_dir = REVIEW_PACKETS_DIR / packet_id
+    manifest_path = packet_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "Packet not found")
+
+    with open(manifest_path) as f:
+        m = json.load(f)
+
+    # Load existing results
+    results_path = packet_dir / "annotation_results.json"
+    results = []
+    if results_path.exists():
+        with open(results_path) as f:
+            results = json.load(f)
+    reviewed_stems = {r.get("tile_stem") for r in results}
+
+    # All reviewable items (gap reviews + track confirmations)
+    all_items = m.get("items", [])
+    for item in all_items:
+        stem = item.get("tile_stem", "")
+        item["has_image"] = (packet_dir / f"{stem}.jpg").exists()
+        item["reviewed"] = stem in reviewed_stems
+
+    unreviewed = [i for i in all_items if not i.get("reviewed")]
+
+    return {
+        **m,
+        "packet_id": packet_id,
+        "items": all_items,
+        "reviewed_count": len(reviewed_stems),
+        "remaining_count": len(unreviewed),
+        "next_item": unreviewed[0] if unreviewed else None,
+    }
+
+
+@app.get("/api/gap-reviews/{packet_id}/tile/{tile_stem:path}")
+def get_gap_tile(packet_id: str, tile_stem: str):
+    """Serve a tile image from a gap review packet.
+
+    First checks for a pre-extracted JPG. If not found, reads the tile
+    on demand from the game's manifest + pack files.
+    """
+    _img_cache = {"Cache-Control": "public, max-age=604800, immutable"}
+    tile_path = REVIEW_PACKETS_DIR / packet_id / f"{tile_stem}.jpg"
+    if tile_path.exists():
+        return FileResponse(tile_path, media_type="image/jpeg", headers=_img_cache)
+
+    # Read on demand from pack
+    manifest_path = REVIEW_PACKETS_DIR / packet_id / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "Packet not found")
+
+    with open(manifest_path) as f:
+        pkt = json.load(f)
+    game_id = pkt.get("game_id", "")
+
+    game_dir = Path("D:/training_data/games") / game_id
+    if not (game_dir / "manifest.db").exists():
+        raise HTTPException(404, "Game manifest not found")
+
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.io import TaskIO
+    from training.tasks.sonnet_qa import _read_tile_from_packs
+
+    manifest = GameManifest(game_dir)
+    manifest.open(create=False)
+    try:
+        io = TaskIO(game_id, Path("G:/pipeline_work"), "")
+        packs_dir = io.server_packs()
+        jpeg_bytes = _read_tile_from_packs(manifest, tile_stem, packs_dir)
+    finally:
+        manifest.close()
+
+    if not jpeg_bytes:
+        raise HTTPException(404, "Tile not found in packs")
+
+    # Cache for next time
+    tile_path.write_bytes(jpeg_bytes)
+    return Response(
+        content=jpeg_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@app.get("/api/gap-reviews/{packet_id}/filmstrip/{tile_stem:path}")
+def get_gap_filmstrip(packet_id: str, tile_stem: str):
+    """Serve the filmstrip composite for a gap tile."""
+    filmstrip_path = (
+        REVIEW_PACKETS_DIR / packet_id / "filmstrips" / f"{tile_stem}_filmstrip.jpg"
+    )
+    if not filmstrip_path.exists():
+        raise HTTPException(404, "Filmstrip not found")
+    return FileResponse(
+        filmstrip_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@app.post("/api/gap-reviews/{packet_id}/result")
+def submit_gap_result(packet_id: str, result: dict):
+    """Submit a gap review result.
+
+    Expected: {
+        "tile_stem": str,
+        "action": "locate"|"out_of_play"|"obscured"|"cant_tell",
+        "ball_position": {"x": int, "y": int} | null,  (for "locate")
+    }
+    """
+    packet_dir = REVIEW_PACKETS_DIR / packet_id
+    results_path = packet_dir / "annotation_results.json"
+
+    results = []
+    if results_path.exists():
+        with open(results_path) as f:
+            results = json.load(f)
+
+    # Replace existing result for same tile_stem
+    tile_stem = result.get("tile_stem", "")
+    results = [r for r in results if r.get("tile_stem") != tile_stem]
+    results.append(
+        {
+            "tile_stem": tile_stem,
+            "action": result.get("action", ""),
+            "ball_position": result.get("ball_position"),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    # Return updated status
+    manifest_path = packet_dir / "manifest.json"
+    total_gaps = 0
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            m = json.load(f)
+        total_gaps = sum(
+            1
+            for i in m.get("items", [])
+            if i.get("reason", "").startswith("trajectory_gap")
+        )
+
+    return {
+        "accepted": True,
+        "reviewed": len(results),
+        "remaining": total_gaps - len(results),
+    }
+
+
+# ------------------------------------------------------------------
+# Game Phases API
+# ------------------------------------------------------------------
+
+GAMES_DIR = Path("D:/training_data/games")
+
+
+@app.get("/api/game-phases")
+async def list_game_phases():
+    """List all games with their detected phases.
+
+    Only includes games that are at least TILED in the pipeline
+    (excludes REGISTERED, STAGING, EXCLUDED).
+    """
+    from training.data_prep.game_manifest import GameManifest
+
+    # Get pipeline states to filter out incomplete games
+    tiled_states = {"TILED", "LABELED", "QA_DONE", "TRAINABLE"}
+    pipeline_states = {}
+    try:
+        from training.pipeline.client import PipelineClient
+
+        client = PipelineClient()
+        for g in client.get_all_games():
+            pipeline_states[g["game_id"]] = g.get("pipeline_state", "")
+    except Exception:
+        pass  # If pipeline API unavailable, show all games
+
+    results = []
+    if not GAMES_DIR.exists():
+        return results
+
+    for game_dir in sorted(GAMES_DIR.iterdir()):
+        if not game_dir.is_dir():
+            continue
+        manifest_path = game_dir / "manifest.db"
+        if not manifest_path.exists():
+            continue
+
+        # Skip games not fully tiled (if we have pipeline state info)
+        if pipeline_states and pipeline_states.get(game_dir.name, "") not in tiled_states:
+            continue
+
+        try:
+            gm = GameManifest(game_dir)
+            gm.open(create=False)
+            phases = gm.get_phases()
+            summary = gm.get_metadata("game_phases_summary")
+            segments = gm.get_segment_summary()
+            gm.close()
+
+            results.append(
+                {
+                    "game_id": game_dir.name,
+                    "has_phases": len(phases) > 0,
+                    "phases": [
+                        {
+                            "phase": p["phase"],
+                            "segment_start": p["segment_start"],
+                            "frame_start": p["frame_start"],
+                            "segment_end": p["segment_end"],
+                            "frame_end": p["frame_end"],
+                            "source": p["source"],
+                            "confidence": p.get("confidence"),
+                            "confirmed_by": p.get("confirmed_by"),
+                        }
+                        for p in phases
+                    ],
+                    "segments": [
+                        {
+                            "segment": s["segment"],
+                            "frame_min": s["frame_min"],
+                            "frame_max": s["frame_max"],
+                            "frame_count": s["frame_count"],
+                        }
+                        for s in segments
+                    ],
+                    "summary": json.loads(summary) if summary else None,
+                }
+            )
+        except Exception as e:
+            logger.debug("Skipping %s for phases: %s", game_dir.name, e)
+
+    return results
+
+
+@app.get("/api/game-phases/{game_id}")
+async def get_game_phases(game_id: str):
+    """Get phase details for a specific game."""
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.phase_detect import parse_segment_time
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    phases = gm.get_phases()
+    segments = gm.get_segment_summary()
+    gm.close()
+
+    # Enrich segments with parsed time info
+    enriched_segments = []
+    for s in segments:
+        start_sec = parse_segment_time(s["segment"])
+        enriched_segments.append(
+            {
+                "segment": s["segment"],
+                "frame_min": s["frame_min"],
+                "frame_max": s["frame_max"],
+                "frame_count": s["frame_count"],
+                "start_time_sec": start_sec,
+                "start_time_str": _fmt_secs(start_sec) if start_sec else None,
+            }
+        )
+
+    return {
+        "game_id": game_id,
+        "phases": [
+            {
+                "id": p.get("id"),
+                "phase": p["phase"],
+                "segment_start": p["segment_start"],
+                "frame_start": p["frame_start"],
+                "segment_end": p["segment_end"],
+                "frame_end": p["frame_end"],
+                "source": p["source"],
+                "confidence": p.get("confidence"),
+                "confirmed_by": p.get("confirmed_by"),
+            }
+            for p in phases
+        ],
+        "segments": enriched_segments,
+    }
+
+
+@app.post("/api/game-phases/{game_id}")
+async def save_game_phases(game_id: str, request: Request):
+    """Save human-adjusted phase boundaries.
+
+    Expects JSON body: {"phases": [{"phase": str, "segment_start": str,
+    "frame_start": int, "segment_end": str, "frame_end": int}, ...]}
+    """
+    from training.data_prep.game_manifest import GameManifest
+
+    body = await request.json()
+    phases = body.get("phases", [])
+
+    if not phases:
+        raise HTTPException(400, "No phases provided")
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    gm.replace_phases(phases, source="human")
+    gm.close()
+
+    logger.info(
+        "Saved %d human-confirmed phases for %s: %s",
+        len(phases),
+        game_id,
+        ", ".join(p["phase"] for p in phases),
+    )
+
+    return {"accepted": True, "phase_count": len(phases)}
+
+
+@app.get("/api/game-phases/{game_id}/thumb/{segment}/{frame_idx}")
+async def get_phase_thumbnail(game_id: str, segment: str, frame_idx: int):
+    """Serve a center tile thumbnail for a phase boundary."""
+    from training.data_prep.game_manifest import GameManifest
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    # Try center tile (row=1, col=3), then fallbacks
+    jpeg_bytes = None
+    for row, col in [(1, 3), (0, 3), (1, 2), (1, 4)]:
+        jpeg_bytes = gm.read_tile_from_pack(segment, int(frame_idx), row, col)
+        if jpeg_bytes:
+            break
+
+    gm.close()
+
+    if not jpeg_bytes:
+        raise HTTPException(404, "Tile not found")
+
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+
+def _fmt_secs(secs: float) -> str:
+    h = int(secs // 3600)
+    m = int((secs % 3600) // 60)
+    s = int(secs % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ------------------------------------------------------------------
+# Phase Editor: sample points + panoramic frame serving
+# ------------------------------------------------------------------
+
+
+@app.get("/api/game-phases/{game_id}/samples")
+async def get_phase_samples(game_id: str, interval: int = 30):
+    """Return evenly-spaced sample frames for the phase editor filmstrip.
+
+    Each sample is a (segment, frame_idx) pair at ~`interval` seconds apart,
+    spanning the full game timeline.
+    """
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.phase_detect import (
+        FPS,
+        _build_segment_timeline,
+    )
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    try:
+        segments = gm.get_segments()
+        timeline = _build_segment_timeline(segments, gm)
+        if not timeline:
+            return {
+                "game_id": game_id,
+                "interval_sec": interval,
+                "samples": [],
+                "total_duration_sec": 0,
+            }
+
+        # Compute total duration from first segment start to last segment end
+        first_start = timeline[0]["start_sec"]
+        last_end = timeline[-1]["end_sec"]
+        total_duration = last_end - first_start
+
+        # Build sample points at regular intervals
+        samples = []
+        t = 0.0
+        idx = 0
+        while t <= total_duration:
+            abs_time = first_start + t
+
+            # Find the segment containing this absolute time
+            best_seg = None
+            for seg_info in timeline:
+                if seg_info["start_sec"] <= abs_time <= seg_info["end_sec"]:
+                    best_seg = seg_info
+                    break
+            # If between segments (gap), use the nearest segment
+            if best_seg is None:
+                best_seg = min(
+                    timeline,
+                    key=lambda s: min(
+                        abs(s["start_sec"] - abs_time), abs(s["end_sec"] - abs_time)
+                    ),
+                )
+
+            # Convert abs time to frame_idx within segment
+            offset_in_seg = abs_time - best_seg["start_sec"]
+            frame_idx = best_seg["frame_min"] + int(offset_in_seg * FPS)
+            # Snap to nearest tiled frame (multiple of 4)
+            frame_idx = (frame_idx // 4) * 4
+            frame_idx = max(
+                best_seg["frame_min"], min(frame_idx, best_seg["frame_max"])
+            )
+
+            # Verify this frame has tiles
+            tile_check = gm.conn.execute(
+                "SELECT COUNT(*) FROM tiles WHERE segment=? AND frame_idx=?",
+                (best_seg["segment"], frame_idx),
+            ).fetchone()[0]
+            if tile_check == 0:
+                # Find nearest frame with tiles
+                nearest = gm.conn.execute(
+                    "SELECT frame_idx FROM tiles WHERE segment=? ORDER BY ABS(frame_idx - ?) LIMIT 1",
+                    (best_seg["segment"], frame_idx),
+                ).fetchone()
+                if nearest:
+                    frame_idx = nearest[0]
+
+            samples.append(
+                {
+                    "index": idx,
+                    "segment": best_seg["segment"],
+                    "frame_idx": frame_idx,
+                    "time_sec": round(t, 1),
+                    "time_str": _fmt_secs(t),
+                }
+            )
+            idx += 1
+            t += interval
+
+        # Ensure packs exist on D: for all sampled frames
+        _ensure_sample_packs(gm, game_dir, samples)
+
+    finally:
+        gm.close()
+
+    return {
+        "game_id": game_id,
+        "interval_sec": interval,
+        "samples": samples,
+        "total_duration_sec": round(total_duration, 1),
+    }
+
+
+def _ensure_sample_packs(gm, game_dir: Path, samples: list[dict]):
+    """Ensure pack files for sampled frames exist on D:, restoring from F: if needed."""
+    import shutil
+
+    try:
+        from training.pipeline.config import load_config
+
+        cfg = load_config()
+        archive_base = Path(cfg.paths.archive.tile_packs) / game_dir.name
+    except Exception:
+        return
+
+    if not archive_base.exists():
+        return
+
+    packs_dir = game_dir / "tile_packs"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect unique pack files needed
+    needed = set()
+    for sample in samples:
+        tiles = gm.conn.execute(
+            "SELECT DISTINCT pack_file FROM tiles WHERE segment=? AND frame_idx=?",
+            (sample["segment"], sample["frame_idx"]),
+        ).fetchall()
+        for row in tiles:
+            if row[0]:
+                needed.add(Path(row[0]).name)
+
+    # Restore missing packs
+    for pack_name in needed:
+        dest = packs_dir / pack_name
+        if not dest.exists():
+            src = archive_base / pack_name
+            if src.exists():
+                logger.info(
+                    "Phase editor: restoring %s from F: (%.1f GB)",
+                    pack_name,
+                    src.stat().st_size / 1e9,
+                )
+                shutil.copy2(str(src), str(dest))
+
+
+@app.get("/api/game-phases/{game_id}/frame/{segment}/{frame_idx}")
+async def get_phase_frame(game_id: str, segment: str, frame_idx: int):
+    """Serve a full panoramic frame stitched from tiles, downscaled for the browser."""
+    import cv2
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.field_boundary import reconstruct_panoramic
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    packs_dir = game_dir / "tile_packs"
+    pano = reconstruct_panoramic(gm, segment, int(frame_idx), packs_dir)
+    gm.close()
+
+    if pano is None:
+        raise HTTPException(404, "Could not reconstruct panoramic frame")
+
+    # Downscale to half-res (same as field boundary panoramic endpoint)
+    h, w = pano.shape[:2]
+    small = cv2.resize(pano, (w // 2, h // 2))
+    _, jpeg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+
+
+# ------------------------------------------------------------------
+# Field Boundary API
+# ------------------------------------------------------------------
+
+
+@app.get("/api/field-boundary")
+async def list_field_boundaries():
+    """List all games with their field boundary status."""
+    from training.data_prep.game_manifest import GameManifest
+
+    results = []
+    if not GAMES_DIR.exists():
+        return results
+
+    for game_dir in sorted(GAMES_DIR.iterdir()):
+        if not game_dir.is_dir():
+            continue
+        manifest_path = game_dir / "manifest.db"
+        if not manifest_path.exists():
+            continue
+
+        try:
+            gm = GameManifest(game_dir)
+            gm.open(create=False)
+            segs = gm.get_segments()
+            if not segs:
+                gm.close()
+                continue  # empty manifest (still tiling)
+            fb_raw = gm.get_metadata("field_boundary")
+            gm.close()
+
+            fb = json.loads(fb_raw) if fb_raw else None
+            results.append(
+                {
+                    "game_id": game_dir.name,
+                    "has_polygon": fb is not None and fb.get("polygon") is not None,
+                    "source": fb.get("source") if fb else None,
+                    "confidence": fb.get("confidence") if fb else None,
+                    "needs_human_review": fb.get("needs_human_review", True)
+                    if fb
+                    else True,
+                }
+            )
+        except Exception as e:
+            logger.debug("Skipping %s for field boundary: %s", game_dir.name, e)
+
+    # Find games still tiling (have no manifest yet) via pipeline API
+    not_tiled = []
+    try:
+        import httpx
+
+        pipe_resp = httpx.get("http://127.0.0.1:8643/api/games", timeout=5)
+        pipe_games = pipe_resp.json()
+        known_ids = {r["game_id"] for r in results}
+        for g in pipe_games:
+            if g["game_id"] not in known_ids and g.get("pipeline_state") in (
+                "REGISTERED",
+                "STAGING",
+            ):
+                not_tiled.append(g["game_id"])
+    except Exception:
+        pass
+
+    return {"games": results, "not_tiled": not_tiled}
+
+
+@app.get("/api/field-boundary/{game_id}")
+async def get_field_boundary(game_id: str):
+    """Get field boundary polygon for a specific game."""
+    from training.data_prep.game_manifest import GameManifest
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    fb_raw = gm.get_metadata("field_boundary")
+    gm.close()
+
+    if not fb_raw:
+        # Return a default 10-point template so the editor has something to drag
+        default_poly = [
+            [100, 1300],
+            [800, 1500],
+            [1600, 1600],
+            [2500, 1600],
+            [3400, 1500],
+            [3900, 400],
+            [3000, 350],
+            [2100, 320],
+            [1200, 350],
+            [200, 400],
+        ]
+        return {
+            "game_id": game_id,
+            "polygon": default_poly,
+            "source": "template",
+            "confidence": 0,
+            "needs_human_review": True,
+        }
+
+    fb = json.loads(fb_raw)
+    fb["game_id"] = game_id
+    return fb
+
+
+@app.post("/api/field-boundary/{game_id}")
+async def save_field_boundary(game_id: str, request: Request):
+    """Save human-drawn field boundary polygon.
+
+    Expects JSON body: {"polygon": [[x1,y1], [x2,y2], ...]}
+    """
+    from training.data_prep.game_manifest import GameManifest
+
+    body = await request.json()
+    polygon = body.get("polygon")
+
+    if not polygon or len(polygon) < 4:
+        raise HTTPException(400, "Polygon must have at least 4 points")
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    fb_result = {
+        "polygon": polygon,
+        "source": "human",
+        "confidence": 1.0,
+        "needs_human_review": False,
+        "created_at": time.time(),
+    }
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+    gm.set_metadata("field_boundary", json.dumps(fb_result))
+    gm.close()
+
+    logger.info("Saved human field boundary for %s: %d points", game_id, len(polygon))
+    return {"accepted": True, "point_count": len(polygon)}
+
+
+@app.get("/api/field-boundary/{game_id}/panoramic")
+async def get_field_boundary_panoramic(
+    game_id: str, overlay: bool = True, flip: bool = False
+):
+    """Serve a panoramic JPEG, optionally with the field boundary polygon overlaid."""
+    from training.data_prep.game_manifest import GameManifest
+    from training.tasks.field_boundary import reconstruct_panoramic
+
+    game_dir = GAMES_DIR / game_id
+    if not game_dir.exists():
+        raise HTTPException(404, f"Game not found: {game_id}")
+
+    gm = GameManifest(game_dir)
+    gm.open(create=False)
+
+    packs_dir = game_dir / "tile_packs"
+    pano = None
+
+    # Try to find a frame with tiles available in packs on disk.
+    # Start from the middle of the segment list (more likely to be
+    # actual game footage, not setup/transport at the start).
+    segments = gm.get_segments()
+    mid = len(segments) // 2
+    segments = segments[mid:] + segments[:mid]
+    for seg in segments:
+        # Find a frame in this segment that has pack files on D:
+        row = gm.conn.execute(
+            """SELECT frame_idx FROM tiles
+               WHERE segment = ? AND pack_file IS NOT NULL
+               GROUP BY frame_idx HAVING COUNT(*) >= 10
+               ORDER BY frame_idx LIMIT 1 OFFSET (
+                   SELECT COUNT(DISTINCT frame_idx)/2 FROM tiles
+                   WHERE segment = ? AND pack_file IS NOT NULL
+               )""",
+            (seg, seg),
+        ).fetchone()
+        if not row:
+            continue
+        fi = row[0]
+        pano = reconstruct_panoramic(gm, seg, fi, packs_dir)
+        if pano is not None:
+            break
+
+    # Draw polygon overlay if one exists
+    fb_raw = gm.get_metadata("field_boundary")
+    gm.close()
+
+    if pano is None:
+        raise HTTPException(404, "Could not reconstruct panoramic")
+
+    if flip:
+        import cv2 as _cv2
+
+        pano = _cv2.flip(pano, -1)
+
+    if overlay and fb_raw:
+        fb = json.loads(fb_raw)
+        if fb.get("polygon"):
+            import numpy as np
+
+            pts = np.array(fb["polygon"], dtype=np.int32)
+            poly_layer = pano.copy()
+            import cv2
+
+            cv2.fillPoly(poly_layer, [pts], (0, 180, 0))
+            pano = cv2.addWeighted(pano, 0.7, poly_layer, 0.3, 0)
+            cv2.polylines(pano, [pts], True, (0, 255, 0), 3)
+
+    # Downscale to half for web serving
+    import cv2
+
+    h, w = pano.shape[:2]
+    small = cv2.resize(pano, (w // 2, h // 2))
+    _, jpeg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
 # Static file mount must come AFTER all API routes (catch-all).

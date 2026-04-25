@@ -1,36 +1,116 @@
 # Current Status
 
-*Last updated: 2026-04-08 20:10*
+*Last updated: 2026-04-15*
 
-## Running Processes
+## What's Running
 
-| Process | Machine | Status | Detail |
-|---------|---------|--------|--------|
-| Pack job (loose to pack) | Server | Running | Game 13+/23, 8-thread concurrent reads |
-| Orchestrator | Server | Running | Checks every 5 min, manages FORTNITE-OP + laptop |
-| YOLO26l training v3.1 | Laptop RTX 4070 | Epoch 1/50 | 155K tiles, 5.6s/batch, ManifestDataset from packs |
-| ONNX labeling | FORTNITE-OP | Paused (kid gaming) | Auto-resume when idle, checkpoint resume works |
+Five processes on the server, two remote workers:
 
-## Architecture
+| Process | Machine | Port | What it does |
+|---------|---------|------|-------------|
+| PipelineAPI | Server | 8643 | FastAPI, sole SQLite accessor for registry + work queue |
+| PipelineOrchestrator | Server | — | Populates work queues via API every 60s |
+| PipelineWorker | Server | — | Pulls stage/tile/QA/review tasks |
+| AnnotationServer | Server | 8642 | Human review UI (Tailscale: trainer.goat-rattlesnake.ts.net) |
+| PipelineWorker | jared-laptop | — | Tile/label/train tasks (RTX 4070, CUDA) |
+| PipelineWorker | FORTNITE-OP | — | Label/tile tasks (RTX 3060 Ti), yields for games |
 
-- Manifest DB: D:/training_data/manifest.db (7.7M tiles, 1M+ labels, pack offsets)
-- Pack files: D:/training_data/tile_packs/{game}/{segment}.pack (~756GB, 14 games packed)
-- Orchestrator: training/pipeline/orchestrator.py (auto-manages all machines)
-- ManifestDataset: training/data_prep/manifest_dataset.py (reads from packs + SQLite)
-- Curated training sets: D:/training_data/training_sets/v3.1/ (28GB, archived to F:)
-- Label job: training/distributed/label_job.py (idle detection + checkpoint resume)
-- Human review: training/pipeline/generate_review.py (trajectory breaks, Sonnet QA filter)
+**Restart server services:** `powershell -ExecutionPolicy Bypass -File training\pipeline\install_service.ps1`
+**Deploy remote worker:** `powershell -ExecutionPolicy Bypass -File training\worker\deploy_worker.ps1 -Machine laptop|fortnite`
 
-## Dataset v3.1 Stats
+## Storage Architecture
 
-- 75,598 positives + 79,594 negatives = 155,192 tiles
-- 6 train Flash games + 1 val + 2 camera negative games
-- 1:1.1 pos:neg ratio, row 0 excluded
+```
+F: (USB, 7.4TB free)     — PERMANENT storage
+  /training_data/tile_packs/{game_id}/*.pack   — archived pack files
+  /Flash_2013s/...         — original video files
+  /Heat_2012s/...          — original video files
 
-## Next Steps
+D: (HDD, ~1.8TB free)    — SERVING storage (SMB shared to remote workers)
+  /training_data/games/{game_id}/manifest.db   — per-game manifests (~50-200MB each)
+  /training_data/games/{game_id}/tile_packs/   — temporary pack staging (restored from F: on demand)
+  /training_data/review_packets/               — human review packets
+  /training_data/deploy/                       — remote worker deployment files
 
-1. Add Sonnet Vision QA filter for human review candidates
-2. Generate review packets and start human review of trajectory breaks
-3. Wire review verdicts back into manifest
-4. Build v3.2 with corrections + new ONNX labels + Heat games
-5. Resume training with expanded data
+G: (SSD, 141GB)           — PROCESSING storage (local to server)
+  /pipeline_db/registry.db                     — game registry
+  /pipeline_db/work_queue.db                   — work queue
+  /pipeline_work/{game_id}/                    — temporary work dirs (cleaned after each task)
+```
+
+### Pack File Lifecycle
+
+```
+TILE:    video on F: → extract to G: SSD → push packs to D: → archive to F: → clean D:
+LABEL:   manifest says D: path → server_packs() restores F:→D: if missing → pull to G: SSD → ONNX
+QA:      same as label (restore + pull)
+TRAIN:   _resolve_pack_path() checks D: then F: → stages to local SSD → extract tiles → train
+```
+
+**Rule:** Manifests store pack_file paths as D: paths. Packs live permanently on F:. When a task needs packs, they're auto-restored from F: to D:, then cleaned after use. Remote workers access D: via SMB share `\\192.168.86.152\training`.
+
+## Pipeline States
+
+```
+REGISTERED → STAGING → TILED → LABELING → LABELED →
+QA_PENDING → QA_DONE → generate_review → TRAINABLE
+```
+
+- `FAILED:{stage}` — failed at a stage, reset with `reset-attempts` + state change
+- `EXCLUDED` — not trainable (futsal, indoor)
+
+## Game Pipeline Status
+
+| State | Count | Notes |
+|-------|-------|-------|
+| LABELED | ~17 | Have labels, need tiling to complete |
+| TILED | ~3 | Need ONNX labeling |
+| STAGING | ~3 | Video path verified, need tiling |
+| QA_DONE | 1 | Kenmore — ready for review |
+| EXCLUDED | 7 | Futsal/indoor games |
+
+~21 games need tiling to complete (server worker processing, ~1hr/game).
+
+## What Needs to Happen
+
+### Active (running now)
+1. **D:→F: pack archive** — moving existing packs to F:, freeing D: (~975GB)
+2. **Tiling** — server worker processing 21 games from F: video files
+3. **Labeling** — laptop running ONNX on tiled games (CUDA via torch/lib PATH)
+
+### After tiling/labeling completes
+4. **Sonnet QA** — auto-enqueued for LABELED games (~18min/game)
+5. **Game ball track confirmation** — human reviews filmstrip in annotation app
+6. **Training** — auto-triggers when 2+ games reach TRAINABLE
+
+### Known issues
+- FORTNITE-OP needs redeployment when it comes online: `deploy_worker.ps1 -Machine fortnite`
+- Phase 2 trajectory gap detection needs end-to-end test with properly tiled+labeled game
+- 4 games had corrupt/missing packs (0-byte on F:), reset to REGISTERED on 2026-04-15:
+  `flash__2024.05.01_vs_RNYFC_away`, `flash__2024.05.10_vs_NY_Rush_away`,
+  `flash__2024.06.01_vs_IYSA_home`, `flash__2024.06.02_vs_Flash_2014s_scrimmage`
+
+## Key Commands
+
+```bash
+# Pipeline status
+uv run python -m training.pipeline status
+
+# Game list
+uv run python -m training.pipeline games
+
+# Event log (last 6 hours)
+uv run python -m training.pipeline events
+
+# Queue management
+uv run python -m training.pipeline enqueue tile --game GAME_ID --priority 30
+uv run python -m training.pipeline priority ITEM_ID PRIORITY
+uv run python -m training.pipeline delete ITEM_ID
+
+# Reset failed games
+# Via API: POST /api/game/{game_id}/reset-attempts + POST /api/game/{game_id}/state
+
+# Audit all games
+uv run python G:/pipeline_work/audit_all_games.py
+uv run python G:/pipeline_work/audit_all_games.py --fix
+```

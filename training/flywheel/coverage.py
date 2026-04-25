@@ -3,11 +3,14 @@
 Coverage = fraction of active-play frames with a tracked ball detection.
 A gap is a stretch of N+ consecutive frames with no detection in a trajectory.
 
-Reuses trajectory linking from exp_allrow_gaps.py but generalized for
-any label directory and game list.
+Two entry points:
+- measure_game_coverage() — reads from flat label directories (legacy)
+- measure_game_coverage_from_manifest() — reads from manifest.db (pipeline)
 """
 
 import logging
+import sqlite3
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -132,6 +135,156 @@ def measure_game_coverage(
         "very_long_gaps": len(very_long_gaps),
         "gaps": all_gaps,
     }
+
+
+def measure_game_coverage_from_manifest(conn: sqlite3.Connection) -> dict:
+    """Measure tracking coverage from a manifest database.
+
+    Uses the trajectory building from trajectory_gaps.py (manifest-aware)
+    and accounts for out-of-play events from ball_events table.
+
+    Returns dict with coverage stats and gap list.
+    """
+    from training.data_prep.trajectory_gaps import (
+        build_trajectories_from_manifest,
+        stitch_game_ball_track,
+    )
+
+    # Check if game phases exist — if so, focus coverage on play phases only
+    has_phases = False
+    try:
+        phase_check = conn.execute(
+            "SELECT COUNT(*) FROM game_phases WHERE phase IN ('first_half', 'second_half')"
+        ).fetchone()
+        has_phases = (phase_check[0] or 0) > 0
+    except Exception:
+        pass  # table may not exist in older manifests
+
+    trajectories = build_trajectories_from_manifest(conn, play_phases_only=has_phases)
+    stitched = stitch_game_ball_track(trajectories)
+
+    # Total frames: use play-phase frames if available, otherwise all segments
+    if has_phases:
+        play_frame_count = conn.execute(
+            """SELECT SUM(s.frame_count) FROM segments s
+               INNER JOIN game_phases gp
+               ON s.segment >= gp.segment_start AND s.segment <= gp.segment_end
+               WHERE gp.phase IN ('first_half', 'second_half')"""
+        ).fetchone()
+        total_frames = (play_frame_count[0] or 0) if play_frame_count else 0
+        if not total_frames:
+            # Fallback if join didn't work (segment ranges cross boundaries)
+            row = conn.execute("SELECT SUM(frame_count) FROM segments").fetchone()
+            total_frames = (row[0] or 0) if row else 0
+    else:
+        row = conn.execute("SELECT SUM(frame_count) FROM segments").fetchone()
+        total_frames = (row[0] or 0) if row else 0
+
+    if not total_frames:
+        return {
+            "coverage": 0.0,
+            "total_frames": 0,
+            "tracked_frames": 0,
+            "out_of_play_frames": 0,
+            "gap_count": 0,
+            "gaps": [],
+            "computed_at": time.time(),
+        }
+
+    # Frames covered by dominant track (longest stitched trajectory)
+    tracked_frame_set: set[int] = set()
+    dominant_gaps = []
+    if stitched:
+        dominant = stitched[0]
+        for fi, _seg, _px, _py in dominant:
+            tracked_frame_set.add(fi)
+
+        # Find gaps within the dominant track
+        for i in range(1, len(dominant)):
+            fi_prev, seg_prev, x_prev, y_prev = dominant[i - 1]
+            fi_curr, seg_curr, x_curr, y_curr = dominant[i]
+            gap_frames = fi_curr - fi_prev
+            if gap_frames <= DEFAULT_FRAME_INTERVAL:
+                continue
+            displacement = ((x_curr - x_prev) ** 2 + (y_curr - y_prev) ** 2) ** 0.5
+            dominant_gaps.append(
+                {
+                    "segment": seg_prev,
+                    "frame_start": fi_prev,
+                    "frame_end": fi_curr,
+                    "gap_frames": gap_frames,
+                    "gap_seconds": round(gap_frames / 25.0, 1),
+                    "x_start": round(x_prev, 1),
+                    "y_start": round(y_prev, 1),
+                    "x_end": round(x_curr, 1),
+                    "y_end": round(y_curr, 1),
+                    "displacement": round(displacement, 1),
+                    "priority": _compute_priority(
+                        gap_frames, len(dominant), displacement
+                    ),
+                }
+            )
+
+    tracked_frames = len(tracked_frame_set)
+
+    # Out-of-play frame count from ball_events
+    out_of_play_frames = _count_out_of_play_frames(conn)
+
+    # Coverage: (tracked + out_of_play) / total
+    accounted = tracked_frames + out_of_play_frames
+    coverage = min(accounted / max(total_frames, 1), 1.0)
+
+    # Categorize gaps
+    short_gaps = [g for g in dominant_gaps if g["gap_frames"] <= SHORT_GAP_THRESHOLD]
+    long_gaps = [g for g in dominant_gaps if g["gap_frames"] > SHORT_GAP_THRESHOLD]
+    very_long_gaps = [g for g in dominant_gaps if g["gap_frames"] > LONG_GAP_THRESHOLD]
+
+    logger.info(
+        "Manifest coverage: %.1f%% (%d tracked + %d out-of-play / %d total), %d gaps",
+        coverage * 100,
+        tracked_frames,
+        out_of_play_frames,
+        total_frames,
+        len(dominant_gaps),
+    )
+
+    return {
+        "coverage": round(coverage, 4),
+        "play_phases_only": has_phases,
+        "total_frames": total_frames,
+        "tracked_frames": tracked_frames,
+        "out_of_play_frames": out_of_play_frames,
+        "trajectory_count": len(
+            [t for t in stitched if len(t) >= MIN_TRAJECTORY_FRAMES]
+        ),
+        "gap_count": len(dominant_gaps),
+        "short_gaps": len(short_gaps),
+        "long_gaps": len(long_gaps),
+        "very_long_gaps": len(very_long_gaps),
+        "gaps": dominant_gaps,
+        "computed_at": time.time(),
+    }
+
+
+def _count_out_of_play_frames(conn: sqlite3.Connection) -> int:
+    """Count frames covered by out_of_play → back_in_play event pairs."""
+    try:
+        events = conn.execute(
+            "SELECT segment, frame_idx, event_type FROM ball_events "
+            "ORDER BY segment, frame_idx"
+        ).fetchall()
+    except Exception:
+        return 0
+
+    total = 0
+    out_start = None
+    for segment, frame_idx, event_type in events:
+        if event_type == "out_of_play":
+            out_start = frame_idx
+        elif event_type == "back_in_play" and out_start is not None:
+            total += max(frame_idx - out_start, 0)
+            out_start = None
+    return total
 
 
 def _link_and_find_gaps(

@@ -5,12 +5,13 @@ Never inline PowerShell with UNC paths through bash.
 
 Usage:
     mgr = MachineManager()
-    if mgr.is_online("FORTNITE-OP"):
-        mgr.stage_video("FORTNITE-OP", "flash__2024.05.01", ["/path/to/seg1.mp4"])
-        mgr.start_task("FORTNITE-OP", "RunLabeling")
+    if mgr.is_online("worker-hostname"):
+        mgr.stage_video("worker-hostname", "flash__2024.05.01", ["/path/to/seg1.mp4"])
+        mgr.start_task("worker-hostname", "RunLabeling")
 """
 
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,12 +20,12 @@ logger = logging.getLogger(__name__)
 
 # Machine credentials
 MACHINES = {
-    "FORTNITE-OP": {"user": "training", "password": "amy4ever"},
-    "jared-laptop": {"user": "training", "password": "amy4ever"},
+    # Add machine credentials here (or load from environment):
+    # "worker-hostname": {"user": "training", "password": "changeme"},
 }
 
 # Server info
-SERVER_IP = "192.168.86.152"
+SERVER_IP = os.environ.get("PIPELINE_SERVER_IP", "127.0.0.1")
 SERVER_SHARES = {
     "training": f"\\\\{SERVER_IP}\\training",  # D:\training_data
     "video": f"\\\\{SERVER_IP}\\video",  # F:\
@@ -63,7 +64,7 @@ def _run_ps1(script_content: str, timeout: int = 300) -> tuple[int, str]:
 
 def _cred_block(hostname: str) -> str:
     """Return PowerShell credential creation for a hostname."""
-    creds = MACHINES.get(hostname, MACHINES["FORTNITE-OP"])
+    creds = MACHINES.get(hostname, {"user": "training", "password": "changeme"})
     return (
         f'$cred = New-Object PSCredential("{creds["user"]}", '
         f'(ConvertTo-SecureString "{creds["password"]}" -AsPlainText -Force))'
@@ -205,15 +206,15 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
 
     def send_ntfy(self, message: str, title: str = "Training Pipeline") -> bool:
         """Send a push notification via NTFY."""
-        import urllib.request
+        import httpx
 
         try:
-            req = urllib.request.Request(
+            httpx.post(
                 "https://ntfy.sh/video_grouper_mblakley43431",
-                data=message.encode(),
+                content=message.encode(),
                 headers={"Title": title},
+                timeout=10,
             )
-            urllib.request.urlopen(req, timeout=10)
             return True
         except Exception as e:
             logger.warning("NTFY failed: %s", e)
