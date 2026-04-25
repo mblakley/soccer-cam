@@ -84,7 +84,7 @@ def _make_signed_zip(
 
 def _make_ttt_client(priv: Ed25519PrivateKey, *, available: list[dict]) -> MagicMock:
     client = MagicMock()
-    client.current_user_id = USER_ID
+    client.current_user_id = MagicMock(return_value=USER_ID)
     client.get_available_plugins = MagicMock(return_value=available)
 
     def fake_download(key: str, dest_path: Path) -> None:
@@ -200,7 +200,7 @@ class TestSyncInstall:
                 {"key": "premium.test.feature", "version": "1.0.0"},
             ],
         )
-        client.current_user_id = None
+        client.current_user_id = MagicMock(return_value=None)
         mgr = PluginManager(client, tmp_path, public_keys=[pub])
         mgr.sync_plugins()
         assert not (tmp_path / "plugins" / "premium.test.feature").exists()

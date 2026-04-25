@@ -110,7 +110,7 @@ class PluginManager:
             self.plugins_dir.mkdir(parents=True, exist_ok=True)
             self.ttt_client.download_plugin(key, zip_path)
 
-            user_id = self.ttt_client.current_user_id
+            user_id = self.ttt_client.current_user_id()
             if not user_id:
                 logger.warning("Cannot install plugin %s: no authenticated user", key)
                 zip_path.unlink(missing_ok=True)
@@ -146,7 +146,7 @@ class PluginManager:
         if not self.plugins_dir.exists():
             return
 
-        user_id = self.ttt_client.current_user_id
+        user_id = self.ttt_client.current_user_id()
         if not user_id:
             logger.warning("Cannot load plugins: no authenticated user")
             return

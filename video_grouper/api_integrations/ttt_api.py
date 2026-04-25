@@ -195,7 +195,6 @@ class TTTApiClient:
             return False
         return time.time() < self._expires_at
 
-    @property
     def current_user_id(self) -> Optional[str]:
         """Return the authenticated user's id (JWT `sub` claim), or None."""
         if not self._access_token:
