@@ -298,7 +298,7 @@ def _detect_with_onnx(pano: np.ndarray, manifest: GameManifest) -> dict | None:
     Returns result dict if successful, None if detection fails validation.
     """
     try:
-        from training.inference.external_field_detector import (
+        from video_grouper.inference.field_detector import (
             create_field_session,
             detect_field_keypoints,
             build_field_polygon,

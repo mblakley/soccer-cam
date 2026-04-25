@@ -93,41 +93,13 @@ jobs:
           Write-Host "INFO: TTT secrets not configured in GitHub - using production defaults"
         }
 
-    # The homegrown ball-tracking stages (under video_grouper/ball_tracking/
-    # providers/homegrown/stages) reach into training/inference/* at runtime.
-    # PyInstaller's modulegraph follows those into torch + cv2 + ultralytics +
-    # scipy, ballooning each exe past NSIS's 32-bit mmap ceiling (~2 GB) at
-    # install time. Bundled exes are aimed at the autocam_gui happy path; users
-    # who select provider = homegrown should install soccer-cam from source so
-    # they have the full ML stack. The runtime falls back to an ImportError
-    # with a clear message if those modules are missing.
     - name: Build service executable
       run: |
-        uv run pyinstaller --noconfirm --onefile --windowed `
-          --exclude-module training `
-          --exclude-module torch --exclude-module torchvision `
-          --exclude-module cv2 --exclude-module ultralytics `
-          --exclude-module onnxruntime --exclude-module onnxruntime-directml `
-          --exclude-module scipy --exclude-module filterpy `
-          --icon=video_grouper/icon.ico `
-          --name=VideoGrouperService `
-          --distpath=video_grouper/dist `
-          --workpath=video_grouper/build `
-          video_grouper/service/main.py
+        uv run pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperService --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/service/main.py
 
     - name: Build tray agent executable
       run: |
-        uv run pyinstaller --noconfirm --onefile --windowed `
-          --exclude-module training `
-          --exclude-module torch --exclude-module torchvision `
-          --exclude-module cv2 --exclude-module ultralytics `
-          --exclude-module onnxruntime --exclude-module onnxruntime-directml `
-          --exclude-module scipy --exclude-module filterpy `
-          --icon=video_grouper/icon.ico `
-          --name=VideoGrouperTray `
-          --distpath=video_grouper/dist `
-          --workpath=video_grouper/build `
-          video_grouper/tray/main.py
+        uv run pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperTray --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray/main.py
 
     - name: Install NSIS
       run: choco install nsis -y

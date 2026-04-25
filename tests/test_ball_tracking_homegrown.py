@@ -1,10 +1,10 @@
 """Tests for the homegrown provider scaffolding + stage registry.
 
-The stage *implementations* themselves call into heavy training-pipeline
-code (PyAV, onnxruntime, filterpy) and need real video / model files
-to verify. Those are exercised by integration tests once footage is
-available. These unit tests cover the registry + orchestrator path:
-config defaults, stage ordering, error propagation, output validation.
+The stage *implementations* themselves call into ``video_grouper.inference``
+(cv2 + onnxruntime) and need real video / model files to verify. Those
+are exercised by integration tests once footage is available. These unit
+tests cover the registry + orchestrator path: config defaults, stage
+ordering, error propagation, output validation.
 """
 
 from __future__ import annotations
