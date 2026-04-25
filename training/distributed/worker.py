@@ -29,7 +29,7 @@ logger = logging.getLogger(f"worker-{socket.gethostname()}")
 
 # ---- Shared paths (UNC for cross-machine access) ----
 SHARE = os.environ.get("SHARE_PATH", "//192.168.86.152/video")
-MODEL_PATH = f"{SHARE}/test/***REDACTED***/model.onnx"
+MODEL_PATH = os.environ.get("BALL_MODEL_PATH", "")
 LABELS_DIR = f"{SHARE}/training_data/labels_640_ext"
 TILES_DIR = f"{SHARE}/training_data/tiles_640"
 LOCKS_DIR = f"{SHARE}/training_data/worker_locks"

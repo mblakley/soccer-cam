@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -226,6 +227,13 @@ def action_check_fortnite_labeling(state: dict) -> dict:
         return state
 
     if mgr.stage_video("FORTNITE-OP", next_game, video_paths):
+        remote_model_path = os.environ.get("REMOTE_LABEL_MODEL_PATH", "")
+        if not remote_model_path:
+            logger.error(
+                "REMOTE_LABEL_MODEL_PATH env var not set; cannot launch labeling on FORTNITE-OP"
+            )
+            return state
+
         # Update the batch file on FORTNITE-OP to process this game
         mgr.remote_exec(
             "FORTNITE-OP",
@@ -233,7 +241,7 @@ def action_check_fortnite_labeling(state: dict) -> dict:
             Remove-Item D:\\labeling\\manifest.db -ErrorAction SilentlyContinue
             Remove-Item D:\\labeling\\label_log.txt -ErrorAction SilentlyContinue
             @"
-C:\\Python313\\python.exe -u C:\\soccer-cam-label\\label_job.py --video-dir "D:\\labeling\\{next_game}" --game-id "{next_game}" --model "C:\\soccer-cam-label\\models\\model.onnx" --db "D:\\labeling\\manifest.db" > D:\\labeling\\label_log.txt 2>&1
+C:\\Python313\\python.exe -u C:\\soccer-cam-label\\label_job.py --video-dir "D:\\labeling\\{next_game}" --game-id "{next_game}" --model "{remote_model_path}" --db "D:\\labeling\\manifest.db" > D:\\labeling\\label_log.txt 2>&1
 "@ | Set-Content C:\\tmp\\run_label.bat -Encoding ASCII
             Start-ScheduledTask -TaskName "RunLabeling"
             Write-Output "STARTED"

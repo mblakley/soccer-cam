@@ -36,11 +36,8 @@ import onnxruntime as ort
 
 logger = logging.getLogger(__name__)
 
-# Model paths
-DEFAULT_MODEL = Path("F:/test/***REDACTED***/model.onnx")
-
 # Detection parameters — conf=0.45 based on 300-tile Sonnet spot check
-# 67% precision at 0.45 vs 5% at 0.10. Matches Autocam's production threshold.
+# (67% precision at 0.45 vs 5% at 0.10).
 CONF_THRESHOLD = 0.45
 NMS_IOU_THRESHOLD = 0.5
 
@@ -54,9 +51,7 @@ PANO_W = 4096
 PANO_H = 1800
 
 
-def create_session(
-    model_path: Path = DEFAULT_MODEL, use_gpu: bool = True
-) -> ort.InferenceSession:
+def create_session(model_path: Path, use_gpu: bool = True) -> ort.InferenceSession:
     """Create an ONNX inference session, trying GPU first."""
     providers = []
     if use_gpu:
@@ -307,7 +302,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run external ball detection")
     parser.add_argument("--video", type=Path, required=True, help="Input video")
     parser.add_argument("--output", type=Path, default=None, help="Output JSON")
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--frame-interval", type=int, default=8)
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
     parser.add_argument(

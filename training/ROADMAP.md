@@ -243,7 +243,7 @@ runner.py (long-running, restartable)
 ```
 Video segments (.mp4)
   → Tile extraction (7x3 grid, 640x640, every 4 frames)
-  → External model detection (ONNX model)
+  → External model detection (ONNX)
   → Trajectory classification (game_ball / static_ball / not_ball)
   → Sonnet QA verification (spot-check 10% of labels)
   → Tar shards (organized by game/zone, ~200 MB each)

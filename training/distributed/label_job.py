@@ -16,7 +16,7 @@ Usage (on the node):
     python label_job.py \
         --video-dir "D:/videos/flash__2024.09.30_vs_Chili_home" \
         --game-id "flash__2024.09.30_vs_Chili_home" \
-        --model "C:/soccer-cam-label/models/model.onnx" \
+        --model "<path-to-model>" \
         --db "D:/labels/manifest.db" \
         --conf 0.45 \
         --frame-interval 4
@@ -505,7 +505,7 @@ def main():
         "--video-dir", type=Path, help="Directory with segment .mp4 files"
     )
     parser.add_argument("--game-id", type=str, help="Game ID for manifest labels")
-    parser.add_argument("--model", type=Path, default=Path("model.onnx"))
+    parser.add_argument("--model", type=Path, required=True)
     parser.add_argument(
         "--db",
         type=Path,
