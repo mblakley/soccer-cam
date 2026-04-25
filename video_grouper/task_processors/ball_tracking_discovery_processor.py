@@ -86,6 +86,13 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
         provider_name, provider_cfg = self.config.ball_tracking.resolve_provider_for(
             team_name
         )
+        # Pass the TTT config through when integration is enabled — the
+        # homegrown provider's detect stage uses it for license acquisition.
+        ttt_dump = (
+            self.config.ttt.model_dump()
+            if getattr(self.config, "ttt", None) and self.config.ttt.enabled
+            else None
+        )
         task = BallTrackingTask(
             group_dir=group_dir,
             input_path=input_path,
@@ -94,6 +101,7 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
             provider_config=provider_cfg.model_dump(),
             team_name=team_name,
             storage_path=str(self.storage_path),
+            ttt_config=ttt_dump,
         )
         try:
             await self.ball_tracking_processor.add_work(task)

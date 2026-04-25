@@ -199,16 +199,113 @@ class TestStitchCorrectPassThrough:
 
 class TestDetectStageRequiresModel:
     @pytest.mark.asyncio
-    async def test_raises_when_model_path_missing(self, context, tmp_path):
+    async def test_raises_when_neither_model_key_nor_model_path_set(
+        self, context, tmp_path
+    ):
         from video_grouper.ball_tracking.providers.homegrown.stages.detect import (
             DetectStage,
         )
 
-        cfg = HomegrownProviderConfig()  # model_path is None
+        cfg = HomegrownProviderConfig()  # both model_key and model_path are None
         stage = DetectStage(cfg)
         artifacts = {"input_path": str(tmp_path / "in.mp4")}
-        with pytest.raises(RuntimeError, match="model_path is not configured"):
+        with pytest.raises(
+            RuntimeError, match="neither model_key nor model_path is configured"
+        ):
             await stage.run(artifacts, context)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_model_key_set_but_no_ttt_config(self, context, tmp_path):
+        from video_grouper.ball_tracking.providers.homegrown.stages.detect import (
+            DetectStage,
+        )
+
+        cfg = HomegrownProviderConfig(model_key="video.ball_detection")
+        stage = DetectStage(cfg)
+        artifacts = {"input_path": str(tmp_path / "in.mp4")}
+        # context fixture doesn't set ttt_config — production path needs it
+        with pytest.raises(RuntimeError, match="TTT integration is disabled"):
+            await stage.run(artifacts, context)
+
+    @pytest.mark.asyncio
+    async def test_uses_secure_loader_when_model_key_and_ttt_config_set(self, tmp_path):
+        """End-to-end mock: model_key + ttt_config drives SecureLoader,
+        the resulting session is passed to detect_video, detections JSON
+        is written. Verifies the wiring without touching real ONNX/TTT."""
+        from unittest.mock import MagicMock
+
+        from video_grouper.ball_tracking.base import ProviderContext
+        from video_grouper.ball_tracking.providers.homegrown.stages.detect import (
+            DetectStage,
+        )
+
+        # Spell out the production-mode context — model_key + ttt_config set.
+        ctx = ProviderContext(
+            group_dir=tmp_path,
+            team_name="flash",
+            storage_path=tmp_path,
+            ttt_config={
+                "supabase_url": "https://test.supabase.co",
+                "anon_key": "anon",
+                "api_base_url": "https://api.test",
+                "plugin_signing_public_keys": ["abcd1234"],
+            },
+        )
+
+        # Source video file must exist for the path argument; contents
+        # don't matter because detect_video is mocked.
+        video = tmp_path / "in.mp4"
+        video.write_bytes(b"fake video bytes")
+
+        cfg = HomegrownProviderConfig(model_key="video.ball_detection")
+        stage = DetectStage(cfg)
+
+        loaded_session = MagicMock(name="loaded_session")
+        fake_loaded = MagicMock(
+            session=loaded_session,
+            model_key="video.ball_detection",
+            version="1.0.0",
+            tier="premium",
+            provider="CPUExecutionProvider",
+        )
+
+        # Patch SecureLoader.acquire — verifies the production path is taken.
+        # Patch detect_video at the call site — verifies the session flows
+        # through to the inference helper.
+        captured = {}
+
+        def fake_detect_video(video_path, session, frame_interval, conf_threshold):
+            captured["session"] = session
+            captured["video_path"] = video_path
+            captured["frame_interval"] = frame_interval
+            captured["conf_threshold"] = conf_threshold
+            return [
+                {"frame_idx": 1, "cx": 100, "cy": 200, "w": 10, "h": 10, "conf": 0.9}
+            ]
+
+        with (
+            patch("video_grouper.ball_tracking.secure_loader.SecureLoader") as MockSL,
+            patch(
+                "video_grouper.ball_tracking.providers.homegrown.stages.detect.detect_video",
+                side_effect=fake_detect_video,
+            ),
+        ):
+            MockSL.return_value.acquire.return_value = fake_loaded
+
+            artifacts = {"input_path": str(video)}
+            result = await stage.run(artifacts, ctx)
+
+        # The session that detect_video saw is the one SecureLoader produced
+        assert captured["session"] is loaded_session
+        # Detections JSON was written next to the source
+        det_path = Path(result["detections_path"])
+        assert det_path.exists()
+        # SecureLoader was constructed with the configured public keys
+        # and called with the configured model_key
+        MockSL.assert_called_once()
+        MockSL.return_value.acquire.assert_called_once_with(
+            "video.ball_detection", channel=None, pipeline_version=None
+        )
 
 
 class TestTrackStageRequiresDetections:
