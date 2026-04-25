@@ -94,7 +94,7 @@ class VideoProcessor(QueueProcessor):
                 # Trigger event-driven transitions based on task type
                 if item.task_type == "combine":
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
-                elif item.task_type == "trim" and not self.config.autocam.enabled:
+                elif item.task_type == "trim" and not self.config.ball_tracking.enabled:
                     asyncio.create_task(self._on_trim_complete(item.get_item_path()))
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
@@ -177,13 +177,15 @@ class VideoProcessor(QueueProcessor):
             )
 
     async def _on_trim_complete(self, group_dir: str) -> None:
-        """Skip autocam and transition directly to upload when autocam is disabled."""
+        """Skip ball-tracking and transition directly to upload when disabled."""
         try:
             from video_grouper.models import DirectoryState
 
             dir_state = DirectoryState(group_dir)
-            await dir_state.update_group_status("autocam_complete")
-            logger.info(f"VIDEO: Autocam disabled, set {group_dir} to autocam_complete")
+            await dir_state.update_group_status("ball_tracking_complete")
+            logger.info(
+                f"VIDEO: Ball tracking disabled, set {group_dir} to ball_tracking_complete"
+            )
 
             if self.config.youtube.enabled and self.upload_processor:
                 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask

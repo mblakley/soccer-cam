@@ -1,4 +1,10 @@
-"""Tests for the autocam_gui provider — adapter around run_autocam_on_file."""
+"""Tests for the autocam_gui provider.
+
+We patch ``_invoke_autocam`` (the lazy-import helper inside the provider
+module) so the tests don't transitively import ``pywinauto`` — that
+library loads UIAutomationCore.dll's COM type library at import time,
+which only works on a real desktop session.
+"""
 
 from __future__ import annotations
 
@@ -21,24 +27,21 @@ def context(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_routes_to_run_autocam_on_file_via_executor(context):
-    """Adapter must call run_autocam_on_file with the legacy AutocamConfig
-    shape and the input/output paths.
-    """
+async def test_routes_to_invoke_autocam_via_executor(context):
+    """Provider must call _invoke_autocam with the executable + paths."""
     cfg = AutocamGuiProviderConfig(executable="C:/Path/To/AutoCam.exe")
     provider = AutocamGuiProvider(cfg)
 
     with patch(
-        "video_grouper.tray.autocam_automation.run_autocam_on_file",
+        "video_grouper.ball_tracking.providers.autocam_gui._invoke_autocam",
         return_value=True,
-    ) as mock_run:
+    ) as mock_invoke:
         result = await provider.run("in.mp4", "out.mp4", context)
 
     assert result is True
-    assert mock_run.call_count == 1
-    legacy_cfg, in_path, out_path = mock_run.call_args.args
-    assert legacy_cfg.enabled is True
-    assert legacy_cfg.executable == "C:/Path/To/AutoCam.exe"
+    assert mock_invoke.call_count == 1
+    executable, in_path, out_path = mock_invoke.call_args.args
+    assert executable == "C:/Path/To/AutoCam.exe"
     assert in_path == "in.mp4"
     assert out_path == "out.mp4"
 
@@ -49,7 +52,7 @@ async def test_returns_false_when_driver_returns_false(context):
     provider = AutocamGuiProvider(cfg)
 
     with patch(
-        "video_grouper.tray.autocam_automation.run_autocam_on_file",
+        "video_grouper.ball_tracking.providers.autocam_gui._invoke_autocam",
         return_value=False,
     ):
         result = await provider.run("in.mp4", "out.mp4", context)
@@ -63,7 +66,7 @@ async def test_swallows_driver_exceptions_and_returns_false(context):
     provider = AutocamGuiProvider(cfg)
 
     with patch(
-        "video_grouper.tray.autocam_automation.run_autocam_on_file",
+        "video_grouper.ball_tracking.providers.autocam_gui._invoke_autocam",
         side_effect=RuntimeError("pywinauto exploded"),
     ):
         result = await provider.run("in.mp4", "out.mp4", context)
@@ -73,7 +76,7 @@ async def test_swallows_driver_exceptions_and_returns_false(context):
 
 
 def test_provider_self_registers_under_autocam_gui_name():
-    # Importing the module above triggers register_provider('autocam_gui', ...).
+    # Importing the provider module above triggers register_provider(...).
     from video_grouper.ball_tracking import _PROVIDER_REGISTRY
 
     assert "autocam_gui" in _PROVIDER_REGISTRY

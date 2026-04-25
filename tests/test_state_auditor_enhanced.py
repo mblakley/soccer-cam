@@ -16,12 +16,12 @@ from video_grouper.utils.config import (
     YouTubeConfig,
     AppConfig,
     CameraConfig,
-    AutocamConfig,
     StorageConfig,
     RecordingConfig,
     ProcessingConfig,
     LoggingConfig,
 )
+from video_grouper.ball_tracking.config import BallTrackingConfig
 
 
 @pytest.fixture
@@ -50,7 +50,6 @@ def mock_config():
         playmetrics_teams=[],
         ntfy=NtfyConfig(enabled=True, server_url="http://ntfy.sh", topic="soccercam"),
         youtube=YouTubeConfig(enabled=True),
-        autocam=AutocamConfig(enabled=True),
         cloud_sync=CloudSyncConfig(enabled=True),
     )
 
@@ -480,8 +479,8 @@ class TestStateAuditorAutocamToggle:
                 enabled=True, server_url="http://ntfy.sh", topic="soccercam"
             ),
             youtube=YouTubeConfig(enabled=True),
-            autocam=AutocamConfig(enabled=False),
             cloud_sync=CloudSyncConfig(enabled=True),
+            ball_tracking=BallTrackingConfig(enabled=False),
         )
 
         mock_teamsnap.return_value.enabled = True
@@ -517,7 +516,7 @@ class TestStateAuditorAutocamToggle:
 
         await auditor._audit_directory(str(test_dir))
 
-        mock_state.update_group_status.assert_called_once_with("autocam_complete")
+        mock_state.update_group_status.assert_called_once_with("ball_tracking_complete")
         mock_upload_processor.add_work.assert_called_once()
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
@@ -561,7 +560,6 @@ class TestStateAuditorAutocamToggle:
                 enabled=True, server_url="http://ntfy.sh", topic="soccercam"
             ),
             youtube=YouTubeConfig(enabled=True),
-            autocam=AutocamConfig(enabled=True),
             cloud_sync=CloudSyncConfig(enabled=True),
         )
 

@@ -42,7 +42,7 @@ class _OtherProvider(_FakeProvider):
 
 class TestRegistry:
     def test_register_and_create_round_trip(self, isolated_registry):
-        register_provider("fake_test_provider", _FakeProvider)
+        register_provider("fake_test_provider", _FakeProvider, AutocamGuiProviderConfig)
 
         cfg = AutocamGuiProviderConfig(executable="dummy.exe")
         provider = create_provider("fake_test_provider", cfg)
@@ -50,13 +50,21 @@ class TestRegistry:
         assert isinstance(provider, _FakeProvider)
         assert provider.config is cfg
 
+    def test_create_from_dict_validates_via_registered_config_class(
+        self, isolated_registry
+    ):
+        register_provider("fake_test_provider", _FakeProvider, AutocamGuiProviderConfig)
+        provider = create_provider("fake_test_provider", {"executable": "dummy.exe"})
+        assert isinstance(provider.config, AutocamGuiProviderConfig)
+        assert provider.config.executable == "dummy.exe"
+
     def test_create_unknown_provider_raises(self, isolated_registry):
         with pytest.raises(ValueError, match="Unknown ball-tracking provider"):
             create_provider("nonexistent", AutocamGuiProviderConfig())
 
     def test_register_overwrites_same_name(self, isolated_registry):
-        register_provider("dup", _FakeProvider)
-        register_provider("dup", _OtherProvider)
+        register_provider("dup", _FakeProvider, AutocamGuiProviderConfig)
+        register_provider("dup", _OtherProvider, AutocamGuiProviderConfig)
 
         provider = create_provider("dup", AutocamGuiProviderConfig())
         assert isinstance(provider, _OtherProvider)

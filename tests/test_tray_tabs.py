@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # ---------------------------------------------------------------------------
 # Stub out Windows-only native modules BEFORE importing anything from
 # video_grouper.  Importing video_grouper.tray.config_ui triggers
-# video_grouper/__init__.py → VideoGrouperApp → autocam_processor →
+# video_grouper/__init__.py → VideoGrouperApp → ball_tracking_processor →
 # autocam_automation → pywinauto, which requires UIAutomationCore.dll.
 # That COM DLL is unavailable in the test environment, so we stub the whole
 # chain here at module load time.
@@ -195,15 +195,15 @@ class TestEmptyStates:
 
     def test_autocam_queue_empty(self, config_window):
         config_window._read_json_file = MagicMock(return_value=None)
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
-        assert texts == ["No autocam tasks queued."]
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
+        assert texts == ["No processing tasks queued."]
 
     def test_autocam_queue_empty_list(self, config_window):
         config_window._read_json_file = MagicMock(return_value=[])
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
-        assert texts == ["No autocam tasks queued."]
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
+        assert texts == ["No processing tasks queued."]
 
     def test_youtube_upload_empty(self, config_window):
         config_window._read_json_file = MagicMock(return_value=None)
@@ -264,9 +264,9 @@ class TestDataDisplay:
             {"group_name": "2024.01.16-10.30.00", "status": "processing"},
         ]
         config_window._read_json_file = MagicMock(return_value=data)
-        config_window.refresh_autocam_queue_display()
+        config_window.refresh_ball_tracking_queue_display()
 
-        texts = _get_list_texts(config_window.autocam_queue_list)
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
         assert len(texts) == 2
         assert "2024.01.15-09.00.00" in texts[0]
         assert "pending" in texts[0]
@@ -512,8 +512,8 @@ class TestLockedFile:
 
     def test_autocam_queue_locked(self, config_window):
         config_window._read_json_file = MagicMock(return_value="locked")
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
         assert texts == ["Queue file is busy, will retry..."]
 
     def test_youtube_upload_locked(self, config_window):
@@ -723,21 +723,19 @@ class TestRealProcessorStateFormat:
                 {
                     "priority": 2,
                     "seq": 0,
-                    "task_type": "autocam_process",
+                    "task_type": "ball_tracking_process",
                     "group_dir": "/storage/2024.01.15-09.00.00",
                     "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
                     "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
-                    "autocam_config": {
-                        "executable": "C:/autocam/autocam.exe",
-                        "enabled": True,
-                    },
+                    "provider_name": "autocam_gui",
+                    "provider_config": {"executable": "C:/autocam/autocam.exe"},
                 },
             ],
             "in_progress": None,
         }
         config_window._read_json_file = MagicMock(return_value=data)
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
         assert len(texts) == 1
         assert "2024.01.15-09.00.00" in texts[0]
 
@@ -746,19 +744,17 @@ class TestRealProcessorStateFormat:
         data = {
             "queue": [],
             "in_progress": {
-                "task_type": "autocam_process",
+                "task_type": "ball_tracking_process",
                 "group_dir": "/storage/2024.01.15-09.00.00",
                 "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
                 "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
-                "autocam_config": {
-                    "executable": "C:/autocam/autocam.exe",
-                    "enabled": True,
-                },
+                "provider_name": "autocam_gui",
+                "provider_config": {"executable": "C:/autocam/autocam.exe"},
             },
         }
         config_window._read_json_file = MagicMock(return_value=data)
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
         assert len(texts) == 1
         assert "2024.01.15-09.00.00" in texts[0]
 
@@ -832,19 +828,17 @@ class TestInProgressDisplay:
         data = {
             "queue": [],
             "in_progress": {
-                "task_type": "autocam_process",
+                "task_type": "ball_tracking_process",
                 "group_dir": "/storage/2024.01.15-09.00.00",
                 "input_path": "/storage/2024.01.15-09.00.00/trimmed/video-raw.mp4",
                 "output_path": "/storage/2024.01.15-09.00.00/trimmed/video.mp4",
-                "autocam_config": {
-                    "executable": "C:/autocam/autocam.exe",
-                    "enabled": True,
-                },
+                "provider_name": "autocam_gui",
+                "provider_config": {"executable": "C:/autocam/autocam.exe"},
             },
         }
         config_window._read_json_file = MagicMock(return_value=data)
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
         assert len(texts) == 1
         assert "2024.01.15-09.00.00" in texts[0]
 
@@ -886,9 +880,9 @@ class TestErrorState:
 
     def test_autocam_queue_error(self, config_window):
         config_window._read_json_file = MagicMock(return_value="error")
-        config_window.refresh_autocam_queue_display()
-        texts = _get_list_texts(config_window.autocam_queue_list)
-        assert texts == ["Error reading autocam queue."]
+        config_window.refresh_ball_tracking_queue_display()
+        texts = _get_list_texts(config_window.ball_tracking_queue_list)
+        assert texts == ["Error reading ball-tracking queue."]
 
     def test_youtube_upload_error(self, config_window):
         config_window._read_json_file = MagicMock(return_value="error")
@@ -1370,7 +1364,9 @@ class TestRefreshAllDisplays:
             patch.object(
                 config_window, "refresh_processing_queue_display"
             ) as mock_proc,
-            patch.object(config_window, "refresh_autocam_queue_display") as mock_auto,
+            patch.object(
+                config_window, "refresh_ball_tracking_queue_display"
+            ) as mock_auto,
             patch.object(config_window, "refresh_youtube_upload_display") as mock_yt,
             patch.object(config_window, "refresh_skipped_files_display") as mock_skip,
             patch.object(config_window, "refresh_match_info_display") as mock_match,
@@ -1397,7 +1393,9 @@ class TestRefreshAllDisplays:
             patch.object(
                 config_window, "refresh_processing_queue_display"
             ) as mock_proc,
-            patch.object(config_window, "refresh_autocam_queue_display") as mock_auto,
+            patch.object(
+                config_window, "refresh_ball_tracking_queue_display"
+            ) as mock_auto,
             patch.object(config_window, "refresh_youtube_upload_display") as mock_yt,
         ):
             config_window.refresh_queue_displays()

@@ -272,7 +272,7 @@ class TestVideoProcessorTransitions:
         mock_mis.populate_match_info_from_apis = AsyncMock()
         mock_ntfy = Mock()
         mock_ntfy.request_match_info_for_directory = AsyncMock()
-        mock_config.autocam.enabled = True
+        mock_config.ball_tracking.enabled = True
 
         processor = VideoProcessor(
             temp_storage,
@@ -298,7 +298,7 @@ class TestVideoProcessorTransitions:
         self, temp_storage, mock_config
     ):
         """When autocam is disabled, trim success should queue upload directly."""
-        mock_config.autocam.enabled = False
+        mock_config.ball_tracking.enabled = False
         mock_config.youtube.enabled = True
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
@@ -319,7 +319,7 @@ class TestVideoProcessorTransitions:
             await asyncio.sleep(0.05)
 
             mock_ds_instance.update_group_status.assert_called_once_with(
-                "autocam_complete"
+                "ball_tracking_complete"
             )
             mock_upload.add_work.assert_called_once()
 
@@ -328,7 +328,7 @@ class TestVideoProcessorTransitions:
         self, temp_storage, mock_config
     ):
         """When autocam and youtube are both disabled, no upload is queued."""
-        mock_config.autocam.enabled = False
+        mock_config.ball_tracking.enabled = False
         mock_config.youtube.enabled = False
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
@@ -349,7 +349,7 @@ class TestVideoProcessorTransitions:
             await asyncio.sleep(0.05)
 
             mock_ds_instance.update_group_status.assert_called_once_with(
-                "autocam_complete"
+                "ball_tracking_complete"
             )
             mock_upload.add_work.assert_not_called()
 
@@ -358,7 +358,7 @@ class TestVideoProcessorTransitions:
         self, temp_storage, mock_config
     ):
         """When autocam is enabled, trim success should NOT queue upload."""
-        mock_config.autocam.enabled = True
+        mock_config.ball_tracking.enabled = True
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
 

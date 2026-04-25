@@ -71,7 +71,8 @@ class TTTJobProcessor(PollingProcessor):
             machine_name = self.config.ttt.machine_name or platform.node()
             capabilities = {
                 "ffmpeg": True,
-                "autocam": self.config.autocam.enabled,
+                "ball_tracking": self.config.ball_tracking.enabled,
+                "ball_tracking_provider": self.config.ball_tracking.provider,
                 "camera_type": self.config.camera.type,
                 "camera_ip": self.config.camera.device_ip,
             }

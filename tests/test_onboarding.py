@@ -43,7 +43,7 @@ class TestCreateDefaultConfig:
 
         assert config.youtube.enabled is False
         assert config.ntfy.enabled is False
-        assert config.autocam.enabled is False
+        assert config.ball_tracking.enabled is False
         assert config.ttt.enabled is False
         assert config.setup.onboarding_completed is False
 

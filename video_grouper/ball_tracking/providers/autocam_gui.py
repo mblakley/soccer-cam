@@ -10,12 +10,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
 from video_grouper.ball_tracking import register_provider
 from video_grouper.ball_tracking.base import BallTrackingProvider, ProviderContext
 from video_grouper.ball_tracking.config import AutocamGuiProviderConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _invoke_autocam(
+    executable: Optional[str], input_path: str, output_path: str
+) -> bool:
+    """Lazy-import the GUI driver and run AutoCam on a single file.
+
+    Indirection point: tests patch this function directly so they don't have
+    to import ``pywinauto`` (which loads UIAutomationCore.dll at import time
+    and is unsafe to load in non-desktop test environments).
+    """
+    from video_grouper.tray.autocam_automation import run_autocam_on_file
+    from video_grouper.utils.config import AutocamConfig
+
+    legacy_cfg = AutocamConfig(enabled=True, executable=executable)
+    return run_autocam_on_file(legacy_cfg, input_path, output_path)
 
 
 class AutocamGuiProvider(BallTrackingProvider):
@@ -25,17 +42,14 @@ class AutocamGuiProvider(BallTrackingProvider):
     async def run(
         self, input_path: str, output_path: str, ctx: ProviderContext
     ) -> bool:
-        # Build the legacy AutocamConfig the GUI driver expects.
-        # Imports are local so unit tests can stub the driver without
-        # pulling in pywinauto / win32gui at module-import time.
-        from video_grouper.tray.autocam_automation import run_autocam_on_file
-        from video_grouper.utils.config import AutocamConfig
-
-        legacy_cfg = AutocamConfig(enabled=True, executable=self.config.executable)
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(
-                None, run_autocam_on_file, legacy_cfg, input_path, output_path
+                None,
+                _invoke_autocam,
+                self.config.executable,
+                input_path,
+                output_path,
             )
         except Exception:
             logger.exception(
@@ -46,4 +60,4 @@ class AutocamGuiProvider(BallTrackingProvider):
             return False
 
 
-register_provider("autocam_gui", AutocamGuiProvider)
+register_provider("autocam_gui", AutocamGuiProvider, AutocamGuiProviderConfig)

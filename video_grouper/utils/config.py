@@ -276,7 +276,6 @@ class Config(BaseModel):
     playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
     ntfy: NtfyConfig = Field(alias="NTFY")
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
-    autocam: AutocamConfig = Field(alias="AUTOCAM")
     cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
     moment_tagging: MomentTaggingConfig = Field(
@@ -467,7 +466,7 @@ def create_default_config(config_path: Path, storage_path: str) -> Config:
             "PLAYMETRICS": {},
             "NTFY": {},
             "YOUTUBE": {},
-            "AUTOCAM": {"enabled": False},
+            "BALL_TRACKING": {"enabled": False},
             "CLOUD_SYNC": {},
             "TTT": {},
             "SETUP": {"onboarding_completed": False},

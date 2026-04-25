@@ -176,13 +176,13 @@ class ConfigWindow(QWidget):
         tabs.addTab(processing_queue_tab, "Processing Queue")
 
         # Autocam Queue Tab
-        autocam_queue_tab = QWidget()
-        autocam_queue_layout = QVBoxLayout()
-        self.autocam_queue_list = QListWidget()
-        self.autocam_queue_list.setSpacing(5)
-        autocam_queue_layout.addWidget(self.autocam_queue_list)
-        autocam_queue_tab.setLayout(autocam_queue_layout)
-        tabs.addTab(autocam_queue_tab, "Autocam Queue")
+        ball_tracking_queue_tab = QWidget()
+        ball_tracking_queue_layout = QVBoxLayout()
+        self.ball_tracking_queue_list = QListWidget()
+        self.ball_tracking_queue_list.setSpacing(5)
+        ball_tracking_queue_layout.addWidget(self.ball_tracking_queue_list)
+        ball_tracking_queue_tab.setLayout(ball_tracking_queue_layout)
+        tabs.addTab(ball_tracking_queue_tab, "Ball Tracking Queue")
 
         # YouTube Uploads Tab
         youtube_upload_tab = QWidget()
@@ -1128,7 +1128,7 @@ class ConfigWindow(QWidget):
         """Refreshes the text in the queue display tabs."""
         self.refresh_download_queue_display()
         self.refresh_processing_queue_display()
-        self.refresh_autocam_queue_display()
+        self.refresh_ball_tracking_queue_display()
         self.refresh_youtube_upload_display()
 
     def refresh_download_queue_display(self):
@@ -1195,26 +1195,26 @@ class ConfigWindow(QWidget):
         except Exception as e:
             logger.error(f"Error refreshing download queue display: {e}")
 
-    def refresh_autocam_queue_display(self):
-        """Reads and displays the autocam queue state."""
-        queue_file = get_shared_data_path() / "autocam_queue_state.json"
-        self.autocam_queue_list.clear()
+    def refresh_ball_tracking_queue_display(self):
+        """Reads and displays the ball-tracking queue state."""
+        queue_file = get_shared_data_path() / "ball_tracking_queue_state.json"
+        self.ball_tracking_queue_list.clear()
 
         queue_data = self._read_json_file(queue_file)
         if queue_data is None or queue_data == []:
-            self.autocam_queue_list.addItem("No autocam tasks queued.")
+            self.ball_tracking_queue_list.addItem("No processing tasks queued.")
             return
         if queue_data == "locked":
-            self.autocam_queue_list.addItem("Queue file is busy, will retry...")
+            self.ball_tracking_queue_list.addItem("Queue file is busy, will retry...")
             return
         if queue_data == "error":
-            self.autocam_queue_list.addItem("Error reading autocam queue.")
+            self.ball_tracking_queue_list.addItem("Error reading ball-tracking queue.")
             return
 
         in_progress, items = self._normalize_queue_data(queue_data)
 
         if not in_progress and not items:
-            self.autocam_queue_list.addItem("No autocam tasks queued.")
+            self.ball_tracking_queue_list.addItem("No processing tasks queued.")
             return
 
         try:
@@ -1225,7 +1225,7 @@ class ConfigWindow(QWidget):
                     "group_name", os.path.basename(group_dir) or "Unknown"
                 )
                 display_text = f"{group_name} - Status: processing"
-                self.autocam_queue_list.addItem(display_text)
+                self.ball_tracking_queue_list.addItem(display_text)
 
             # Show queued items
             for item in items:
@@ -1235,13 +1235,13 @@ class ConfigWindow(QWidget):
                 )
                 status = item.get("status", "pending")
                 display_text = f"{group_name} - Status: {status}"
-                self.autocam_queue_list.addItem(display_text)
+                self.ball_tracking_queue_list.addItem(display_text)
         except Exception as e:
-            logger.error(f"Error refreshing autocam queue display: {e}")
+            logger.error(f"Error refreshing ball-tracking queue display: {e}")
 
-    def refresh_autocam_queue_tab(self):
-        """Refreshes the autocam queue tab."""
-        self.refresh_autocam_queue_display()
+    def refresh_ball_tracking_queue_tab(self):
+        """Refreshes the ball-tracking queue tab."""
+        self.refresh_ball_tracking_queue_display()
 
     def refresh_youtube_upload_display(self):
         """Reads and displays the YouTube upload queue state."""

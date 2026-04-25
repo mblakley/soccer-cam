@@ -23,8 +23,9 @@ from video_grouper.utils.youtube_upload import authenticate_youtube
 from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.config import load_config, save_config, Config
-from video_grouper.task_processors import AutocamProcessor
+from video_grouper.task_processors import BallTrackingProcessor
 from video_grouper.task_processors.register_tasks import register_all_tasks
+import video_grouper.ball_tracking.register_providers  # noqa: F401  -- registers providers at import time
 from typing import Optional
 
 from video_grouper.utils.logger import setup_logging, get_logger
@@ -238,8 +239,8 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         # Initialize processors only if config is loaded
         self.upload_processor = None
-        self.autocam_processor = None
-        self.autocam_discovery_processor = None
+        self.ball_tracking_processor = None
+        self.ball_tracking_discovery_processor = None
 
         if self.config:
             from video_grouper.task_processors.upload_processor import UploadProcessor
@@ -268,26 +269,26 @@ class SystemTrayIcon(QSystemTrayIcon):
                 ntfy_service=tray_ntfy_service,
             )
 
-            if self.config.autocam.enabled:
-                self.autocam_processor = AutocamProcessor(
+            if self.config.ball_tracking.enabled:
+                self.ball_tracking_processor = BallTrackingProcessor(
                     storage_path=self.config.storage.path,
                     config=self.config,
                     upload_processor=self.upload_processor,
                 )
 
-                from video_grouper.task_processors.autocam_discovery_processor import (
-                    AutocamDiscoveryProcessor,
+                from video_grouper.task_processors.ball_tracking_discovery_processor import (
+                    BallTrackingDiscoveryProcessor,
                 )
 
-                self.autocam_discovery_processor = AutocamDiscoveryProcessor(
+                self.ball_tracking_discovery_processor = BallTrackingDiscoveryProcessor(
                     storage_path=self.config.storage.path,
                     config=self.config,
-                    autocam_processor=self.autocam_processor,
+                    ball_tracking_processor=self.ball_tracking_processor,
                     poll_interval=30,
                 )
             else:
                 logger.info(
-                    "Autocam is disabled in configuration, skipping processor init"
+                    "Ball tracking is disabled in configuration, skipping processor init"
                 )
         else:
             logger.warning("No config loaded, skipping processor initialization")
@@ -297,22 +298,22 @@ class SystemTrayIcon(QSystemTrayIcon):
         logger.info("Initializing SystemTrayIcon...")
         if self.upload_processor:
             await self.upload_processor.start()
-        if self.autocam_processor:
-            await self.autocam_processor.start()
-        if self.autocam_discovery_processor:
-            await self.autocam_discovery_processor.start()
+        if self.ball_tracking_processor:
+            await self.ball_tracking_processor.start()
+        if self.ball_tracking_discovery_processor:
+            await self.ball_tracking_discovery_processor.start()
         logger.info("SystemTrayIcon initialization complete")
 
     async def shutdown(self):
         """Shutdown the tray app asynchronously."""
         logger.info("Shutting down SystemTrayIcon...")
         if (
-            hasattr(self, "autocam_discovery_processor")
-            and self.autocam_discovery_processor
+            hasattr(self, "ball_tracking_discovery_processor")
+            and self.ball_tracking_discovery_processor
         ):
-            await self.autocam_discovery_processor.stop()
-        if hasattr(self, "autocam_processor") and self.autocam_processor:
-            await self.autocam_processor.stop()
+            await self.ball_tracking_discovery_processor.stop()
+        if hasattr(self, "ball_tracking_processor") and self.ball_tracking_processor:
+            await self.ball_tracking_processor.stop()
         if hasattr(self, "upload_processor") and self.upload_processor:
             await self.upload_processor.stop()
         logger.info("SystemTrayIcon shutdown complete")

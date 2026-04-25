@@ -16,6 +16,9 @@ class AutocamGuiProviderConfig(BaseModel):
 class BallTrackingConfig(BaseModel):
     """Top-level ``[BALL_TRACKING]`` config.
 
+    ``enabled`` is the master switch — when False, video stops at ``trimmed``
+    and skips straight to upload.
+
     ``provider`` selects the default provider for all games. ``per_team``
     allows overriding by team name (key matches ``MatchInfo.team_name``).
 
@@ -24,6 +27,7 @@ class BallTrackingConfig(BaseModel):
     (e.g. ``[BALL_TRACKING.AUTOCAM_GUI]``).
     """
 
+    enabled: bool = True
     provider: str = "autocam_gui"
     autocam_gui: AutocamGuiProviderConfig = Field(
         default_factory=AutocamGuiProviderConfig, alias="AUTOCAM_GUI"
