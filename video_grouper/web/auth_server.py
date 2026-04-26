@@ -530,9 +530,15 @@ def create_app(
     # Mount the schema-driven config editor at /config when we know the
     # path on disk (the orchestrator passes it in; tests can opt in).
     if config_path is not None:
-        from video_grouper.web.config_editor import build_router
+        from video_grouper.web.config_editor import build_router as _build_config
 
-        app.include_router(build_router(config_path))
+        app.include_router(_build_config(config_path))
+
+        # And the onboarding wizard at /setup/*. Same trigger as the config
+        # editor — both need a writable config path.
+        from video_grouper.web.setup.router import build_router as _build_setup
+
+        app.include_router(_build_setup(config_path))
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #
