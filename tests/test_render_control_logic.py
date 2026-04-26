@@ -246,6 +246,68 @@ class TestCoachModeIsWider:
         assert coach_state.smoothed_zoom > broadcast_state.smoothed_zoom
 
 
+class TestMissingBallGap:
+    def _common(self):
+        return dict(
+            src_w=SRC_W,
+            src_h=SRC_H,
+            src_hfov_deg=SRC_HFOV,
+            homography=None,
+            mode=BROADCAST_MODE,
+            yaw_min=-90.0,
+            yaw_max=90.0,
+        )
+
+    def test_short_gap_holds_yaw_and_zoom(self):
+        state = _CameraState()
+        # Establish a known state with a few real ticks.
+        for _ in range(10):
+            _tick(state, (SRC_W * 0.7, SRC_H / 2.0, 5.0, 0.0), **self._common())
+        before_yaw = state.smoothed_yaw
+        before_zoom = state.smoothed_zoom
+        # Short gap (under threshold): should hold.
+        for _ in range(BROADCAST_MODE.missing_ball_short_frames - 1):
+            _tick(state, None, **self._common())
+        assert state.smoothed_yaw == pytest.approx(before_yaw)
+        assert state.smoothed_zoom == pytest.approx(before_zoom)
+
+    def test_medium_gap_drifts_zoom_toward_midfield(self):
+        state = _CameraState()
+        # Establish a tight zoom (right_box → broadcast box zoom = 0.25).
+        for _ in range(20):
+            _tick(state, (SRC_W * 0.95, SRC_H / 2.0, 0.0, 0.0), **self._common())
+        before_zoom = state.smoothed_zoom
+        # Run for many None ticks so the medium-gap drift kicks in.
+        for _ in range(40):  # > short_frames=15
+            _tick(state, None, **self._common())
+        # Zoom should have widened toward midfield (0.45).
+        assert state.smoothed_zoom > before_zoom
+        assert state.smoothed_zoom < BROADCAST_MODE.zoom_midfield  # not all the way
+
+    def test_long_gap_drifts_yaw_to_center_and_zoom_to_wide_default(self):
+        state = _CameraState()
+        # Far-right tight framing.
+        for _ in range(20):
+            _tick(state, (SRC_W * 0.95, SRC_H / 2.0, 0.0, 0.0), **self._common())
+        # Long gap: many ticks past medium_frames=60.
+        for _ in range(300):
+            _tick(state, None, **self._common())
+        # Yaw should have drifted toward 0 (centered field).
+        assert abs(state.smoothed_yaw) < 5.0
+        # Zoom should have approached missing_ball_long_zoom (0.55).
+        assert state.smoothed_zoom == pytest.approx(
+            BROADCAST_MODE.missing_ball_long_zoom, abs=0.05
+        )
+
+    def test_real_entry_resets_missing_counter(self):
+        state = _CameraState()
+        for _ in range(20):
+            _tick(state, None, **self._common())
+        assert state.missing_frames == 20
+        _tick(state, (SRC_W / 2.0, SRC_H / 2.0, 0.0, 0.0), **self._common())
+        assert state.missing_frames == 0
+
+
 def test_smoothed_yaw_decays_to_zero_over_many_ticks_with_no_movement():
     """Sanity check: a stationary ball at source center → smoothed yaw stays near 0."""
     state = _CameraState()

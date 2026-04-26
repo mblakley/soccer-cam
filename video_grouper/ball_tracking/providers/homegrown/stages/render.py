@@ -98,6 +98,12 @@ class CameraMode:
     # Speed normalization constant — speed at which lead/zoom-bias hit max
     max_expected_speed_px_per_frame: float = 100.0
 
+    # Missing-ball gap thresholds (spec §"Missing Ball Handling")
+    # short: hold pan/zoom; medium: drift zoom toward midfield; long: full reset.
+    missing_ball_short_frames: int = 15
+    missing_ball_medium_frames: int = 60
+    missing_ball_long_zoom: float = 0.55
+
 
 BROADCAST_MODE = CameraMode()
 
@@ -291,6 +297,7 @@ class _CameraState:
     smoothed_zoom: float | None = None
     last_target_zoom: float | None = None
     stationary_frames: int = 0
+    missing_frames: int = 0
 
 
 def _tick(
@@ -310,15 +317,36 @@ def _tick(
     Updates ``state`` in place.
     """
     if entry is None:
-        # Hold last frame's smoothed yaw + zoom; nothing to update.
-        # Defaults if we've never had an entry yet.
+        # Spec §"Missing Ball Handling":
+        #   short gap (< short_frames): hold pan/zoom
+        #   medium gap (short..medium): drift zoom toward midfield, hold pan
+        #   long gap (≥ medium): reset to wide default framing (centered)
+        state.missing_frames += 1
         if state.smoothed_yaw is None:
             state.smoothed_yaw = _clamp(0.0, yaw_min, yaw_max)
         if state.smoothed_zoom is None:
             state.smoothed_zoom = mode.zoom_midfield
+
+        if state.missing_frames >= mode.missing_ball_medium_frames:
+            # Long gap: drift to a wide default framing.
+            state.smoothed_zoom = state.smoothed_zoom + mode.zoom_smoothing * (
+                mode.missing_ball_long_zoom - state.smoothed_zoom
+            )
+            target_yaw_long = _clamp(0.0, yaw_min, yaw_max)
+            state.smoothed_yaw = state.smoothed_yaw + mode.zoom_smoothing * (
+                target_yaw_long - state.smoothed_yaw
+            )
+        elif state.missing_frames >= mode.missing_ball_short_frames:
+            # Medium gap: zoom out toward midfield, hold pan.
+            state.smoothed_zoom = state.smoothed_zoom + mode.zoom_smoothing * (
+                mode.zoom_midfield - state.smoothed_zoom
+            )
+        # else short gap: hold (no change)
+
         view_hfov = state.smoothed_zoom * src_hfov_deg
         return state.smoothed_yaw, view_hfov
 
+    state.missing_frames = 0
     px, py, vx, vy = entry
     speed = math.hypot(vx, vy)
     norm_speed = _normalized_speed(vx, vy, mode.max_expected_speed_px_per_frame)
