@@ -396,6 +396,70 @@ def test_post_login_password_rejects_cross_origin(client):
     assert resp.status_code == 403
 
 
+# ---------------------------------------------------------------------------
+# Phase 0b: auth-needed banner + flag helpers
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_no_banner_when_no_flag(client):
+    body = client.get("/").text
+    assert 'class="banner"' not in body
+
+
+def test_dashboard_renders_banner_when_youtube_flag_present(storage, client):
+    from video_grouper.web.auth_status import write_auth_needed
+
+    write_auth_needed(
+        storage, "youtube", "invalid_grant: Token has been expired or revoked."
+    )
+    body = client.get("/").text
+    assert 'class="banner"' in body
+    assert "youtube" in body
+    assert "invalid_grant" in body
+
+
+def test_dashboard_banner_clears_when_flag_removed(storage, client):
+    from video_grouper.web.auth_status import (
+        clear_auth_needed,
+        write_auth_needed,
+    )
+
+    write_auth_needed(storage, "youtube", "boom")
+    assert 'class="banner"' in client.get("/").text
+    clear_auth_needed(storage, "youtube")
+    assert 'class="banner"' not in client.get("/").text
+
+
+def test_is_hard_youtube_auth_failure_classifier():
+    from video_grouper.web.auth_status import is_hard_youtube_auth_failure
+
+    # Hard cases — refresh token broken, can't recover headlessly.
+    assert is_hard_youtube_auth_failure(
+        Exception("invalid_grant: Token has been expired or revoked.")
+    )
+    assert is_hard_youtube_auth_failure(Exception("unauthorized_client"))
+    assert is_hard_youtube_auth_failure(Exception("No refresh token; reauth"))
+
+    # Transient — should NOT be flagged as hard.
+    assert not is_hard_youtube_auth_failure(Exception("Connection reset by peer"))
+    assert not is_hard_youtube_auth_failure(Exception("HTTP 503 Service Unavailable"))
+    assert not is_hard_youtube_auth_failure(Exception("rateLimitExceeded"))
+
+
+def test_list_auth_needed_collects_multiple_flags(storage):
+    from video_grouper.web.auth_status import (
+        list_auth_needed,
+        write_auth_needed,
+    )
+
+    write_auth_needed(storage, "youtube", "y err")
+    write_auth_needed(storage, "ttt", "t err")
+
+    flags = list_auth_needed(storage)
+    providers = {f["provider"] for f in flags}
+    assert providers == {"youtube", "ttt"}
+
+
 def test_login_password_success_persists_tokens_and_redirects(storage, client):
     exp = int(time.time()) + 3600
     jwt = _make_jwt(sub="user-pw", exp=exp, email="pw@example.com")

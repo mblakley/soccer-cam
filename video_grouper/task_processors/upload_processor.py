@@ -86,6 +86,12 @@ class UploadProcessor(QueueProcessor):
 
             if not token_valid:
                 logger.error(f"UPLOAD: YouTube auth issue: {message}")
+                # Phase 0b: write the cross-process flag so the dashboard
+                # banner + (later) tray notification surface a "needs
+                # interactive re-auth" state to the user.
+                from video_grouper.web.auth_status import write_auth_needed
+
+                write_auth_needed(self.storage_path, "youtube", message)
                 # Send NTFY notification if service available
                 if self.ntfy_service:
                     try:
@@ -108,6 +114,11 @@ class UploadProcessor(QueueProcessor):
 
             if success:
                 logger.info(f"UPLOAD: Successfully completed task: {item}")
+                # Phase 0b: a successful upload proves the YouTube token is
+                # valid, so any "needs re-auth" flag is stale. Clear it.
+                from video_grouper.web.auth_status import clear_auth_needed
+
+                clear_auth_needed(self.storage_path, "youtube")
                 # Report upload complete to TTT (best-effort)
                 if self.ttt_reporter:
                     group_dir = item.get_item_path()

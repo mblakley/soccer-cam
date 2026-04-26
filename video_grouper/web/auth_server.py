@@ -45,6 +45,7 @@ from video_grouper.api_integrations.ttt_api import (
     _decode_jwt_payload,
 )
 from video_grouper.utils.config import TTTConfig
+from video_grouper.web.auth_status import list_auth_needed
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,16 @@ form.inline { display: inline; margin-left: 0.5rem; }
 .auth-form input { padding: 0.45rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9rem; }
 .auth-form input:focus { outline: 2px solid #2563eb; outline-offset: -1px; border-color: #2563eb; }
 .auth-form button { align-self: flex-start; }
+.banner { padding: 0.85rem 1.1rem; border-radius: 6px; background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; margin: 1rem 0; }
+.banner strong { color: #78350f; }
+.banner code { background: #fde68a; }
 </style>
 </head>
 <body>
 <h1>Soccer-Cam</h1>
 <p class="muted">Auto-refreshes every 10s.</p>
+
+__AUTH_FLAGS_BANNER__
 
 <section>
 <h2>Authentication</h2>
@@ -348,6 +354,31 @@ def _fmt_ts(ts: Optional[int]) -> str:
     )
 
 
+def _render_auth_flags_banner(storage: Path) -> str:
+    """Render a banner if any provider has flagged itself for re-auth."""
+    flags = list_auth_needed(storage)
+    if not flags:
+        return ""
+    rows = []
+    for f in flags:
+        provider = html.escape(f.get("provider", "?"))
+        msg = html.escape(f.get("last_error", ""))
+        since = html.escape(f.get("since", ""))
+        rows.append(
+            f"<li><strong>{provider}</strong> &mdash; "
+            f"<code>{msg}</code> "
+            f'<span class="muted">(since {since})</span></li>'
+        )
+    return (
+        '<div class="banner">'
+        "<strong>One or more providers need interactive sign-in:</strong>"
+        f'<ul style="margin: 0.5rem 0 0 1.2rem; padding: 0;">{"".join(rows)}</ul>'
+        "<p>Re-run the onboarding wizard's relevant step (or restart the "
+        "service after refreshing tokens manually) to clear this notice.</p>"
+        "</div>"
+    )
+
+
 def _render_auth_section(token_file: Path, providers: tuple[str, ...]) -> str:
     s = _read_status(token_file)
     if s["authenticated"]:
@@ -555,8 +586,9 @@ def create_app(
             status = None
         body = (
             _DASHBOARD_PAGE.replace(
-                "__AUTH_BLOCK__", _render_auth_section(token_file, providers)
+                "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
             )
+            .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
             .replace("__QUEUES_BLOCK__", _render_queues_section(status))
             .replace("__CAMERAS_BLOCK__", _render_cameras_section(status))
             .replace("__GAMES_BLOCK__", _render_games_section(_scan_games(storage)))
