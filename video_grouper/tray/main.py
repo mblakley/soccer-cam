@@ -5,7 +5,7 @@ import atexit
 import asyncio
 import threading
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QDialog, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import (
     QRunnable,
     QThreadPool,
@@ -20,12 +20,17 @@ from video_grouper.tray.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.youtube_upload import authenticate_youtube
-from .config_ui import ConfigWindow
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.config import load_config, save_config, Config
 from video_grouper.task_processors import BallTrackingProcessor
 from video_grouper.task_processors.register_tasks import register_all_tasks
-import video_grouper.ball_tracking.register_providers  # noqa: F401  -- registers providers at import time
+
+# NOTE: ``register_providers`` is imported lazily inside the autocam_gui
+# branch of __init__. Importing it eagerly here would pull in the
+# homegrown ONNX stack (cv2 + onnxruntime + CUDA DLLs), which the tray
+# never needs — it only runs autocam_gui ball-tracking. Doing it lazy
+# keeps the tray bootable on machines without GPU drivers.
+import webbrowser
 from typing import Optional
 
 from video_grouper.utils.logger import setup_logging, get_logger
@@ -249,6 +254,11 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         if self.config and self.config.ball_tracking.enabled:
             if self.config.ball_tracking.provider == "autocam_gui":
+                # Register provider implementations lazily so the import
+                # chain (onnxruntime, cv2, CUDA DLLs) only runs when we
+                # actually need ball-tracking.
+                import video_grouper.ball_tracking.register_providers  # noqa: F401
+
                 self.ball_tracking_processor = BallTrackingProcessor(
                     storage_path=self.config.storage.path,
                     config=self.config,
@@ -371,20 +381,24 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
-        # Configuration action
-        config_action = QAction("Configuration", self)
-        config_action.triggered.connect(self.show_config)
+        # Phase 3: configuration + setup wizard now live in the browser at
+        # the local web app. The tray's job here is just to launch them.
+        dashboard_action = QAction("Open Dashboard", self)
+        dashboard_action.triggered.connect(self.open_dashboard)
+        menu.addAction(dashboard_action)
+
+        config_action = QAction("Open Configuration", self)
+        config_action.triggered.connect(self.open_config)
         menu.addAction(config_action)
+
+        setup_wizard_action = QAction("Open Setup Wizard", self)
+        setup_wizard_action.triggered.connect(self.open_setup_wizard)
+        menu.addAction(setup_wizard_action)
 
         # Update action
         self.update_action = QAction("Check for Updates", self)
         self.update_action.triggered.connect(self.check_updates)
         menu.addAction(self.update_action)
-
-        # Setup wizard
-        setup_wizard_action = QAction("Setup Wizard", self)
-        setup_wizard_action.triggered.connect(self.show_setup_wizard)
-        menu.addAction(setup_wizard_action)
 
         menu.addSeparator()
 
@@ -408,43 +422,55 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.show_config()
+            self.open_dashboard()
 
-    def show_config(self):
+    def _web_url(self, path: str = "/") -> str:
+        """Build the local web app URL using configured port (default 8765)."""
+        port = 8765
+        if self.config is not None:
+            port = getattr(self.config.ttt, "auth_server_port", 8765) or 8765
+        return f"http://localhost:{port}{path}"
+
+    def open_dashboard(self):
+        """Open the dashboard / status page in the default browser."""
         try:
-            if not hasattr(self, "config_window") or self.config_window is None:
-                self.config_window = ConfigWindow(config_path=self.config_path)
-                self.config_window.config_saved.connect(self.on_config_saved)
-
-            self.config_window.show()
-            self.config_window.raise_()
-            self.config_window.activateWindow()
-            self.refresh_autocam_queue_ui()
+            webbrowser.open(self._web_url("/"))
         except Exception as e:
-            logger.error(f"Error showing config window: {e}", exc_info=True)
+            logger.error(f"Could not launch browser: {e}", exc_info=True)
             self.showMessage(
-                "Error",
-                f"Failed to open config window: {e}",
+                "Dashboard",
+                f"Could not open browser: {e}",
                 QSystemTrayIcon.MessageIcon.Critical,
             )
 
-    def refresh_autocam_queue_ui(self):
-        if hasattr(self, "config_window") and self.config_window:
-            self.config_window.refresh_autocam_queue_tab()
+    def open_config(self):
+        try:
+            webbrowser.open(self._web_url("/config"))
+        except Exception as e:
+            logger.error(f"Could not launch browser: {e}", exc_info=True)
+            self.showMessage(
+                "Configuration",
+                f"Could not open browser: {e}",
+                QSystemTrayIcon.MessageIcon.Critical,
+            )
+
+    def open_setup_wizard(self):
+        """Open the web wizard. Replaces the PyQt6 OnboardingWizard."""
+        try:
+            webbrowser.open(self._web_url("/setup/welcome"))
+        except Exception as e:
+            logger.error(f"Could not launch browser: {e}", exc_info=True)
+            self.showMessage(
+                "Setup Wizard",
+                f"Could not open browser: {e}",
+                QSystemTrayIcon.MessageIcon.Critical,
+            )
 
     def on_config_saved(self):
+        """Hook for any post-save reloads. The web config editor saves
+        directly so this is currently a no-op kept for legacy callers."""
         self.config = load_config(self.config_path)
         logger.info("Configuration saved.")
-
-    def show_setup_wizard(self):
-        """Re-launch the onboarding wizard from the tray menu."""
-        from video_grouper.tray.onboarding_wizard import OnboardingWizard
-
-        wizard = OnboardingWizard(self.config_path)
-        if wizard.exec() == QDialog.DialogCode.Accepted:
-            # Reload config after wizard completes
-            self.config = load_config(self.config_path)
-            logger.info("Setup wizard completed, config reloaded.")
 
     def toggle_recording(self):
         """Toggle camera recording on/off via the Reolink API."""
@@ -616,18 +642,17 @@ async def main():
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
-        # First-run detection: show onboarding wizard if needed
+        # First-run detection: open the browser to the web wizard if needed.
+        # The web wizard is hosted by the service (or Docker container) at
+        # localhost:8765/setup. The tray no longer ships its own wizard.
         from video_grouper.utils.config import config_needs_onboarding
-        from video_grouper.tray.onboarding_wizard import OnboardingWizard
 
         if config_needs_onboarding(config_path):
-            logger.info("Config needs onboarding, launching setup wizard")
-            wizard = OnboardingWizard(config_path)
-            result = wizard.exec()
-            if result != QDialog.DialogCode.Accepted:
-                logger.info("Setup wizard cancelled, exiting")
-                sys.exit(0)
-            logger.info("Setup wizard completed")
+            logger.info("Config needs onboarding; opening web wizard")
+            try:
+                webbrowser.open("http://localhost:8765/setup/welcome")
+            except Exception as e:
+                logger.error(f"Could not launch browser for setup: {e}")
 
         # Initialize the tray application
         tray_app = SystemTrayIcon(config_path)
