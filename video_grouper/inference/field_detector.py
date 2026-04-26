@@ -11,6 +11,10 @@ Two strategies are exposed:
    ``filter_detections_field``. Pure math, no model — used when the
    keypoint model has not been trained for the camera geometry.
 
+Pure-geometry helpers (polygon, on-field test, homography, yaw extent)
+live in :mod:`video_grouper.inference.field_geometry` and are re-exported
+here for backwards compatibility with existing import sites.
+
 Keypoint layout (panoramic view from the side)::
 
          9---8---7---6---5       <- far sideline (top of image)
@@ -28,10 +32,31 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from video_grouper.inference.field_geometry import (
+    build_field_polygon,
+    is_on_field,
+)
+
 logger = logging.getLogger(__name__)
 
 INPUT_W = 768
 INPUT_H = 384
+
+# Re-exports — keep training code's existing imports working.
+__all__ = [
+    "INPUT_W",
+    "INPUT_H",
+    "build_field_polygon",
+    "create_field_session",
+    "detect_field_boundary",
+    "detect_field_keypoints",
+    "field_y_far",
+    "field_y_near",
+    "filter_detections",
+    "filter_detections_field",
+    "is_on_field",
+    "is_on_field_curved",
+]
 
 
 def create_field_session(
@@ -75,39 +100,6 @@ def detect_field_keypoints(
             results.append((None, None, float(scores[i])))
 
     return results
-
-
-def build_field_polygon(
-    keypoints: list[tuple[float | None, float | None, float]],
-) -> np.ndarray | None:
-    """Assemble a polygon from detected keypoints.
-
-    Traces near sideline 0→4, then far sideline 5→9 (already right→left
-    by index). Returns ``None`` if too few keypoints were detected.
-    """
-    near = [(kp[0], kp[1]) for kp in keypoints[:5] if kp[0] is not None]
-    far = [(kp[0], kp[1]) for kp in keypoints[5:] if kp[0] is not None]
-
-    if len(near) < 2 or len(far) < 2:
-        logger.warning(
-            "Too few keypoints for field polygon: %d near, %d far",
-            len(near),
-            len(far),
-        )
-        return None
-
-    polygon = near + far
-    return np.array(polygon, dtype=np.float32)
-
-
-def is_on_field(
-    x: float, y: float, polygon: np.ndarray | None, margin: float = 50.0
-) -> bool:
-    """Return True if ``(x, y)`` is inside the polygon (with pixel margin)."""
-    if polygon is None:
-        return True
-    dist = cv2.pointPolygonTest(polygon.reshape(-1, 1, 2), (x, y), measureDist=True)
-    return dist >= -margin
 
 
 def detect_field_boundary(

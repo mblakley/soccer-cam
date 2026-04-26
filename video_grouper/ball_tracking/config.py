@@ -26,12 +26,26 @@ class HomegrownProviderConfig(BaseModel):
     """
 
     enabled_stages: List[str] = Field(
-        default_factory=lambda: ["stitch_correct", "detect", "track", "render"],
+        default_factory=lambda: [
+            "stitch_correct",
+            "field_mask",
+            "detect",
+            "track",
+            "render",
+        ],
         alias="stages",
     )
 
     # stitch_correct
     stitch_profile_path: Optional[str] = None
+
+    # field_mask — same model-source contract as detect (mutually-exclusive
+    # model_key vs model_path); skips silently if neither is set.
+    field_mask_model_key: Optional[str] = None
+    field_mask_model_path: Optional[str] = None
+    field_mask_channel: Optional[str] = None
+    field_mask_pipeline_version: Optional[str] = None
+    field_mask_confidence: float = 0.7
 
     # detect — pick exactly one source:
     #   model_key: ask TTT for a license + encrypted artifact (production)

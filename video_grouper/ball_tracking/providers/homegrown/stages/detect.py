@@ -26,6 +26,9 @@ from pathlib import Path
 from typing import Any
 
 from video_grouper.ball_tracking.base import ProviderContext
+from video_grouper.ball_tracking.providers.homegrown._secure_loader_helpers import (
+    acquire_session,
+)
 from video_grouper.inference.ball_detector import create_session, detect_video
 
 from . import register_stage
@@ -70,50 +73,6 @@ def _run_detection_from_path(
     )
 
 
-def _build_secure_loader_session(
-    model_key: str,
-    channel: str | None,
-    pipeline_version: str | None,
-    ctx: ProviderContext,
-) -> Any:
-    """Acquire a license + decrypted ONNX session from TTT.
-
-    Constructs a TTTApiClient from ``ctx.ttt_config`` (auto-loads stored
-    tokens from disk; refreshes on demand) and runs the SecureLoader
-    against it. Returns the loaded ``InferenceSession``.
-    """
-    from video_grouper.api_integrations.ttt_api import TTTApiClient
-    from video_grouper.ball_tracking.secure_loader import SecureLoader
-
-    if not ctx.ttt_config:
-        raise RuntimeError(
-            "detect: model_key is set but TTT integration is disabled "
-            "(set [TTT] enabled = true and configure credentials, "
-            "or fall back to model_path for local testing)"
-        )
-
-    cfg = ctx.ttt_config
-    client = TTTApiClient(
-        supabase_url=cfg.get("supabase_url", ""),
-        anon_key=cfg.get("anon_key", ""),
-        api_base_url=cfg.get("api_base_url", ""),
-        storage_path=str(ctx.storage_path),
-    )
-    public_keys = cfg.get("plugin_signing_public_keys") or []
-    loader = SecureLoader(client, public_keys, state_storage_path=str(ctx.storage_path))
-    loaded = loader.acquire(
-        model_key, channel=channel, pipeline_version=pipeline_version
-    )
-    logger.info(
-        "detect: licensed %s v%s (%s, provider=%s)",
-        loaded.model_key,
-        loaded.version,
-        loaded.tier,
-        loaded.provider,
-    )
-    return loaded.session
-
-
 class DetectStage(ProcessingStage):
     name = "detect"
 
@@ -127,11 +86,12 @@ class DetectStage(ProcessingStage):
         if cfg.model_key:
             # Production path: license-acquire, decrypt in memory, run.
             session = await asyncio.to_thread(
-                _build_secure_loader_session,
-                cfg.model_key,
-                cfg.detect_channel,
-                cfg.detect_pipeline_version,
-                ctx,
+                acquire_session,
+                model_key=cfg.model_key,
+                channel=cfg.detect_channel,
+                pipeline_version=cfg.detect_pipeline_version,
+                ctx=ctx,
+                log_label="detect",
             )
             count = await asyncio.to_thread(
                 _run_detection_with_session,

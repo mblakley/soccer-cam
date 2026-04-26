@@ -44,7 +44,7 @@ class TestRegistration:
 
     def test_default_stages_are_registered(self):
         names = set(list_stages())
-        assert {"stitch_correct", "detect", "track", "render"} <= names
+        assert {"stitch_correct", "field_mask", "detect", "track", "render"} <= names
 
     def test_create_provider_returns_homegrown(self):
         cfg = HomegrownProviderConfig()
@@ -57,6 +57,7 @@ class TestConfigDefaults:
         cfg = HomegrownProviderConfig()
         assert cfg.enabled_stages == [
             "stitch_correct",
+            "field_mask",
             "detect",
             "track",
             "render",
@@ -72,6 +73,12 @@ class TestConfigDefaults:
             "track",
             "render",
         ]
+
+    def test_field_mask_defaults(self):
+        cfg = HomegrownProviderConfig()
+        assert cfg.field_mask_model_key is None
+        assert cfg.field_mask_model_path is None
+        assert cfg.field_mask_confidence == 0.7
 
     def test_render_defaults(self):
         cfg = HomegrownProviderConfig()
