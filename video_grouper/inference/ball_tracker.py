@@ -48,6 +48,12 @@ class Track:
     track_id: int
     detections: list[Detection] = field(default_factory=list)
     predictions: list[tuple[int, float, float]] = field(default_factory=list)
+    # Full per-frame Kalman state for every frame the track was active:
+    # ``(frame_idx, x, y, vx, vy)``. Captured AFTER the predict+update cycle
+    # so the velocity reflects the latest measurement when one was matched
+    # (otherwise it's the propagated estimate). Used by downstream consumers
+    # — e.g. the render stage uses vx/vy for lead-room offsets.
+    states: list[tuple[int, float, float, float, float]] = field(default_factory=list)
     missing_frames: int = 0
     active: bool = True
     _state: _KalmanState | None = field(default=None, repr=False)
@@ -209,6 +215,16 @@ class BallTracker:
         for di, det in enumerate(detections):
             if di not in used_dets:
                 self.tracks.append(self._new_track(det))
+
+        # Capture per-frame full state for active tracks AFTER predict+update
+        # so velocity reflects the latest measurement when one matched.
+        for track in self.tracks:
+            if not track.active or track._state is None:
+                continue
+            sx = track._state.x
+            track.states.append(
+                (frame_idx, float(sx[0]), float(sx[1]), float(sx[2]), float(sx[3]))
+            )
 
         return [t for t in self.tracks if t.active]
 

@@ -92,3 +92,56 @@ class TestShortTrackFiltering:
         # Track exists but is below min length, so get_tracks() filters it out.
         assert tracker.get_tracks() == []
         assert tracker.get_best_track() is None
+
+
+class TestStatesContainVelocity:
+    """The Track.states field captures full Kalman state per frame."""
+
+    def test_states_grow_each_active_frame(self):
+        tracker = BallTracker()
+        # 8 frames of detections: state should grow to 8 entries.
+        for frame_idx in range(8):
+            tracker.update(
+                frame_idx,
+                [
+                    Detection(
+                        x=100.0 + 10.0 * frame_idx,
+                        y=200.0,
+                        confidence=0.9,
+                        frame_idx=frame_idx,
+                    )
+                ],
+            )
+
+        best = tracker.get_best_track()
+        assert best is not None
+        assert len(best.states) == 8
+        # Each state row is (frame_idx, x, y, vx, vy)
+        for i, row in enumerate(best.states):
+            assert row[0] == i
+            assert len(row) == 5
+
+    def test_velocity_converges_to_input(self):
+        tracker = BallTracker()
+        # Constant velocity: +10 px/frame in x, 0 in y. Kalman estimate
+        # should converge near vx=10, vy=0 after several updates.
+        for frame_idx in range(15):
+            tracker.update(
+                frame_idx,
+                [
+                    Detection(
+                        x=100.0 + 10.0 * frame_idx,
+                        y=500.0,
+                        confidence=0.9,
+                        frame_idx=frame_idx,
+                    )
+                ],
+            )
+
+        best = tracker.get_best_track()
+        assert best is not None
+        last_state = best.states[-1]
+        _frame_idx, _x, _y, vx, vy = last_state
+        # Constant-velocity Kalman should land within ~1 px/frame of truth.
+        assert abs(vx - 10.0) < 1.0
+        assert abs(vy) < 1.0

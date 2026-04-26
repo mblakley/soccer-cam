@@ -65,14 +65,13 @@ class HomegrownProviderConfig(BaseModel):
     track_max_missing: int = 15
 
     # render
-    render_ema: float = 0.975
-    render_lead_room: float = 0.15
     render_output_width: int = 1920
     render_output_height: int = 1080
-    render_fov_deg: float = 50.0
-    # Cylindrical projection — source has ~180° HFOV after stitch; view is the
-    # rendered perspective FOV (render_fov_deg above). vfovs of -1 mean
-    # "derive automatically for square pixels".
+    # broadcast (default) tightens for action; coach holds wider for
+    # tactical context. See CameraMode in stages/render.py.
+    render_mode: str = "broadcast"
+    # Cylindrical projection — source has ~180° HFOV after stitch.
+    # vfov defaults of -1 mean "derive automatically for square pixels".
     render_src_hfov_deg: float = 180.0
     render_src_vfov_deg: float = -1.0
     render_view_vfov_deg: float = -1.0
@@ -82,6 +81,11 @@ class HomegrownProviderConfig(BaseModel):
     # side so the camera can drift slightly past the touchline for
     # context. Falls back to ±src_hfov/2 when no polygon is available.
     render_yaw_padding_deg: float = 5.0
+    # Phase-1 legacy config (now superseded by render_mode's CameraMode but
+    # kept as fields so existing INI files continue to parse cleanly).
+    render_ema: float = 0.975
+    render_lead_room: float = 0.15
+    render_fov_deg: float = 50.0
 
     model_config = {"validate_by_name": True}
 

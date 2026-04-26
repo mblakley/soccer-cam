@@ -2,8 +2,14 @@
 
 Wraps :mod:`video_grouper.inference.ball_tracker`. Reads
 ``detections.json``, runs the Kalman filter tracker, picks the longest
-valid track, and writes a per-frame ``trajectory.json`` (one ``[x, y]``
-row per source frame; ``None`` when no estimate is available).
+valid track, and writes a per-frame ``trajectory.json`` (one
+``{"x", "y", "vx", "vy"}`` dict per source frame; ``None`` when no
+estimate is available).
+
+The velocity components come from the Kalman state and are consumed by
+the render stage for lead-room offsets and asymmetric pan smoothing.
+The render stage also accepts the legacy ``[x, y]`` list format for
+backwards compatibility.
 """
 
 from __future__ import annotations
@@ -58,13 +64,19 @@ def _run_tracking(
         tracker.update(frame_idx, by_frame.get(frame_idx, []))
 
     best = tracker.get_best_track() if hasattr(tracker, "get_best_track") else None
-    trajectory: list[list[float] | None] = [None] * (last_frame + 1)
-    if best is not None and getattr(best, "detections", None):
-        for det in best.detections:
-            trajectory[det.frame_idx] = [det.x, det.y]
-        for frame_idx, x, y in getattr(best, "predictions", []):
-            if 0 <= frame_idx < len(trajectory) and trajectory[frame_idx] is None:
-                trajectory[frame_idx] = [float(x), float(y)]
+    trajectory: list[dict | None] = [None] * (last_frame + 1)
+    if best is not None and getattr(best, "states", None):
+        # `states` is the per-frame post-update Kalman state with velocity.
+        # Where a real detection matched the track, x/y reflect the
+        # measurement; otherwise they're the propagated prediction.
+        for frame_idx, x, y, vx, vy in best.states:
+            if 0 <= frame_idx < len(trajectory):
+                trajectory[frame_idx] = {
+                    "x": float(x),
+                    "y": float(y),
+                    "vx": float(vx),
+                    "vy": float(vy),
+                }
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(trajectory, f)
