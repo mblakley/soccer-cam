@@ -1,15 +1,28 @@
-"""Tracking stage — link per-frame detections into a smoothed trajectory.
+"""Tracking stage — link per-frame detections into a smooth trajectory.
 
-Wraps :mod:`video_grouper.inference.ball_tracker`. Reads
-``detections.json``, runs the Kalman filter tracker, picks the longest
-valid track, and writes a per-frame ``trajectory.json`` (one
-``{"x", "y", "vx", "vy"}`` dict per source frame; ``None`` when no
-estimate is available).
+Two-stage process:
 
-The velocity components come from the Kalman state and are consumed by
-the render stage for lead-room offsets and asymmetric pan smoothing.
-The render stage also accepts the legacy ``[x, y]`` list format for
-backwards compatibility.
+1. **Kalman tracker** (``BallTracker``) does *spatial association* and
+   *false-positive rejection*. Multi-detection frames get linked into
+   tracks; we pick the best (longest × highest-confidence) track. Only
+   real measurements from that track survive — the Kalman extrapolated
+   states are NOT used downstream because they drift wildly during long
+   gaps (we observed extrapolation to 60,000 px when ``max_missing`` was
+   set high enough to span typical detection misses).
+
+2. **smooth_with_memory** (``trajectory_smoothing``) does *visual
+   smoothness* and *gap filling*. Given the surviving real measurements
+   from the best track, it produces a fully-populated per-frame
+   trajectory using a 3-second exponentially-weighted buffer — the same
+   approach AutoCam uses internally per the reverse-engineered
+   ``smooth_with_memory`` function. Missing frames get the buffer's
+   weighted-average value rather than ``None``.
+
+Output ``trajectory.json``: one ``{"x", "y", "vx", "vy"}`` dict per
+source frame from the first detection onward (``None`` only for the
+initial pre-detection frames). Velocity is computed by finite differencing
+the smoothed positions. The render stage also still accepts the legacy
+``[x, y]`` list format for backwards compatibility.
 """
 
 from __future__ import annotations
@@ -22,6 +35,7 @@ from typing import Any
 
 from video_grouper.ball_tracking.base import ProviderContext
 from video_grouper.inference.ball_tracker import BallTracker, Detection
+from video_grouper.inference.trajectory_smoothing import smooth_with_memory
 
 from . import register_stage
 from .base import ProcessingStage
@@ -34,8 +48,10 @@ def _run_tracking(
     output_json_path: str,
     gate_distance: float,
     max_missing: int,
+    smooth_buffer_frames: int,
+    smooth_decay_per_frame: float,
 ) -> int:
-    """Sync helper: load detections, run tracker, write trajectory JSON."""
+    """Sync helper: load detections, run tracker + smoother, write JSON."""
     with open(detections_path, "r", encoding="utf-8") as f:
         per_frame: list[dict] = json.load(f)
 
@@ -64,24 +80,40 @@ def _run_tracking(
         tracker.update(frame_idx, by_frame.get(frame_idx, []))
 
     best = tracker.get_best_track() if hasattr(tracker, "get_best_track") else None
-    trajectory: list[dict | None] = [None] * (last_frame + 1)
-    if best is not None and getattr(best, "states", None):
-        # `states` is the per-frame post-update Kalman state with velocity.
-        # Where a real detection matched the track, x/y reflect the
-        # measurement; otherwise they're the propagated prediction.
-        for frame_idx, x, y, vx, vy in best.states:
-            if 0 <= frame_idx < len(trajectory):
-                trajectory[frame_idx] = {
-                    "x": float(x),
-                    "y": float(y),
-                    "vx": float(vx),
-                    "vy": float(vy),
+
+    # Build the raw per-frame state list using ONLY real measurements from the
+    # best track. Kalman extrapolations (Track.states for unmeasured frames)
+    # are intentionally excluded — they drift quadratically during gaps.
+    raw: list[dict | None] = [None] * (last_frame + 1)
+    if best is not None and getattr(best, "detections", None):
+        for det in best.detections:
+            if 0 <= det.frame_idx <= last_frame:
+                raw[det.frame_idx] = {
+                    "x": float(det.x),
+                    "y": float(det.y),
+                    "conf": float(det.confidence),
                 }
 
-    with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(trajectory, f)
+    n_real = sum(1 for r in raw if r is not None)
 
-    populated = sum(1 for p in trajectory if p is not None)
+    # Apply smooth_with_memory. Buffer size + decay tuned to AutoCam-like
+    # behavior (~3 sec window with gentle decay).
+    smoothed = smooth_with_memory(
+        raw,
+        buffer_frames=smooth_buffer_frames,
+        decay_per_frame=smooth_decay_per_frame,
+    )
+
+    with open(output_json_path, "w", encoding="utf-8") as f:
+        json.dump(smoothed, f)
+
+    populated = sum(1 for p in smoothed if p is not None)
+    logger.info(
+        "track: %d real detections in best track → %d/%d frames after smoothing",
+        n_real,
+        populated,
+        len(smoothed),
+    )
     return populated
 
 
@@ -106,6 +138,8 @@ class TrackStage(ProcessingStage):
             str(trajectory_path),
             self.provider_config.track_kalman_gate,
             self.provider_config.track_max_missing,
+            self.provider_config.track_smooth_buffer_frames,
+            self.provider_config.track_smooth_decay_per_frame,
         )
         logger.info(
             "track: wrote trajectory with %d populated frames to %s",

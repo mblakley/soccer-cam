@@ -63,6 +63,13 @@ class HomegrownProviderConfig(BaseModel):
     # track
     track_kalman_gate: float = 200.0
     track_max_missing: int = 15
+    # smooth_with_memory (AutoCam-style 3-sec exponentially-weighted buffer)
+    # applied to the best-track's real measurements after Kalman linking.
+    # Defaults are tuned for ~20 fps source with detection every 4 frames
+    # (~5 detections/sec). 60 frames ≈ 3 sec at 20 fps; decay 0.985 gives
+    # weight ≈ 0.40 at age=60.
+    track_smooth_buffer_frames: int = 60
+    track_smooth_decay_per_frame: float = 0.985
 
     # render
     render_output_width: int = 1920
