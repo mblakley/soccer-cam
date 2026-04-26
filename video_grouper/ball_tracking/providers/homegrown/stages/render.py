@@ -384,6 +384,16 @@ def _tick(
 # ---------- Render loop ----------
 
 
+def _parse_bitrate(bitrate: str) -> int:
+    """Parse '8M' / '500k' / '2000000' into bits/sec."""
+    s = bitrate.strip().lower()
+    if s.endswith("m"):
+        return int(float(s[:-1]) * 1_000_000)
+    if s.endswith("k"):
+        return int(float(s[:-1]) * 1_000)
+    return int(s)
+
+
 def _render_video(
     input_path: str,
     output_path: str,
@@ -397,6 +407,7 @@ def _render_video(
     view_vfov_deg: float,
     view_pitch_deg: float,
     yaw_padding_deg: float,
+    video_bitrate: str,
 ) -> None:
     """Sync helper: per-frame cylindrical render with full control logic."""
     import av
@@ -413,6 +424,13 @@ def _render_video(
         in_video = in_container.streams.video[0]
         src_w = in_video.width
         src_h = in_video.height
+
+        # Source audio (if present) is copied through to the output container.
+        in_audio = None
+        for s in in_container.streams:
+            if s.type == "audio":
+                in_audio = s
+                break
 
         yaw_min, yaw_max = _yaw_bounds(polygon, src_w, src_hfov_deg, yaw_padding_deg)
         if polygon is not None:
@@ -434,55 +452,105 @@ def _render_video(
             out_stream.width = out_width
             out_stream.height = out_height
             out_stream.pix_fmt = "yuv420p"
+            out_stream.bit_rate = _parse_bitrate(video_bitrate)
 
-            for frame_idx, frame in enumerate(in_container.decode(in_video)):
-                entry = (
-                    _trajectory_entry(raw_trajectory[frame_idx])
-                    if frame_idx < len(raw_trajectory)
-                    else None
-                )
-                yaw, view_hfov = _tick(
-                    state,
-                    entry,
-                    src_w,
-                    src_h,
-                    src_hfov_deg,
-                    homography,
-                    mode,
-                    yaw_min,
-                    yaw_max,
-                )
+            out_audio = None
+            if in_audio is not None:
+                # Copy audio (no re-encode) when codec is mp4-friendly; transcode
+                # to AAC otherwise. PyAV's add_stream(template=...) does an
+                # in-place stream copy.
+                try:
+                    out_audio = out_container.add_stream(template=in_audio)
+                    audio_passthrough = True
+                    logger.info(
+                        "render(%s): copying audio stream (codec=%s)",
+                        mode_name,
+                        in_audio.codec_context.codec.name,
+                    )
+                except Exception:
+                    out_audio = out_container.add_stream("aac", rate=in_audio.rate)
+                    audio_passthrough = False
+                    logger.info(
+                        "render(%s): transcoding audio to AAC (source codec=%s)",
+                        mode_name,
+                        in_audio.codec_context.codec.name,
+                    )
+            else:
+                audio_passthrough = False
+                logger.info("render(%s): no audio stream in source", mode_name)
 
-                params = CylindricalViewParams(
-                    src_w=src_w,
-                    src_h=src_h,
-                    src_hfov_deg=src_hfov_deg,
-                    src_vfov_deg=src_vfov_deg,
-                    out_w=out_width,
-                    out_h=out_height,
-                    view_hfov_deg=view_hfov,
-                    view_vfov_deg=view_vfov_deg,
-                    view_pitch_deg=view_pitch_deg,
-                )
-                map_x, map_y = cylindrical_remap(params, view_yaw_deg=yaw)
+            frame_idx = 0
+            for packet in in_container.demux(
+                (in_video, in_audio) if in_audio else (in_video,)
+            ):
+                if packet.dts is None:
+                    continue
 
-                rgb = frame.to_ndarray(format="rgb24")
-                rendered = cv2.remap(
-                    rgb,
-                    map_x,
-                    map_y,
-                    interpolation=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0,
-                )
+                if packet.stream is in_video:
+                    for frame in packet.decode():
+                        entry = (
+                            _trajectory_entry(raw_trajectory[frame_idx])
+                            if frame_idx < len(raw_trajectory)
+                            else None
+                        )
+                        yaw, view_hfov = _tick(
+                            state,
+                            entry,
+                            src_w,
+                            src_h,
+                            src_hfov_deg,
+                            homography,
+                            mode,
+                            yaw_min,
+                            yaw_max,
+                        )
 
-                new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
-                new_frame.pts = frame.pts
-                for packet in out_stream.encode(new_frame):
-                    out_container.mux(packet)
+                        params = CylindricalViewParams(
+                            src_w=src_w,
+                            src_h=src_h,
+                            src_hfov_deg=src_hfov_deg,
+                            src_vfov_deg=src_vfov_deg,
+                            out_w=out_width,
+                            out_h=out_height,
+                            view_hfov_deg=view_hfov,
+                            view_vfov_deg=view_vfov_deg,
+                            view_pitch_deg=view_pitch_deg,
+                        )
+                        map_x, map_y = cylindrical_remap(params, view_yaw_deg=yaw)
 
-            for packet in out_stream.encode():
-                out_container.mux(packet)
+                        rgb = frame.to_ndarray(format="rgb24")
+                        rendered = cv2.remap(
+                            rgb,
+                            map_x,
+                            map_y,
+                            interpolation=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=0,
+                        )
+
+                        new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
+                        new_frame.pts = frame.pts
+                        for v_packet in out_stream.encode(new_frame):
+                            out_container.mux(v_packet)
+                        frame_idx += 1
+
+                elif in_audio is not None and packet.stream is in_audio:
+                    if audio_passthrough:
+                        # Reassign packet to the output audio stream so PyAV
+                        # remuxes it into the output container untouched.
+                        packet.stream = out_audio
+                        out_container.mux(packet)
+                    else:
+                        for a_frame in packet.decode():
+                            for a_packet in out_audio.encode(a_frame):
+                                out_container.mux(a_packet)
+
+            # Flush video encoder + audio (if transcoding)
+            for v_packet in out_stream.encode():
+                out_container.mux(v_packet)
+            if in_audio is not None and not audio_passthrough and out_audio is not None:
+                for a_packet in out_audio.encode():
+                    out_container.mux(a_packet)
 
 
 class RenderStage(ProcessingStage):
@@ -515,6 +583,7 @@ class RenderStage(ProcessingStage):
             cfg.render_view_vfov_deg,
             cfg.render_pitch_deg,
             cfg.render_yaw_padding_deg,
+            cfg.render_video_bitrate,
         )
         logger.info("render: wrote broadcast-style output to %s", out_path)
         return None  # output_path is already in artifacts

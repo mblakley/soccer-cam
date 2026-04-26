@@ -81,6 +81,10 @@ class HomegrownProviderConfig(BaseModel):
     # side so the camera can drift slightly past the touchline for
     # context. Falls back to ±src_hfov/2 when no polygon is available.
     render_yaw_padding_deg: float = 5.0
+    # Output container — bitrate matches the AutoCam GUI default for 1080p
+    # (8 Mbps); audio is copied from the source mp4 (no re-encode if the
+    # source codec is mp4-compatible).
+    render_video_bitrate: str = "8M"
     # Phase-1 legacy config (now superseded by render_mode's CameraMode but
     # kept as fields so existing INI files continue to parse cleanly).
     render_ema: float = 0.975
