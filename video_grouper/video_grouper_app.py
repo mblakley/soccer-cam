@@ -1,5 +1,6 @@
 import os
 import asyncio
+import platform
 from pathlib import Path
 
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
@@ -38,6 +39,20 @@ class VideoGrouperApp:
             config: Configuration object
             camera: Camera object or dict of {name: Camera} (optional, will be created if not provided)
         """
+        # Fail fast on incompatible platform/provider combinations BEFORE any
+        # side effects (logging setup, file handles). Otherwise a downstream
+        # raise leaves loggers open and breaks test cleanup on Windows.
+        if (
+            config.ball_tracking.enabled
+            and config.ball_tracking.provider == "autocam_gui"
+            and platform.system() != "Windows"
+        ):
+            raise RuntimeError(
+                "[BALL_TRACKING].provider = 'autocam_gui' is Windows-only "
+                "(the AutoCam GUI app does not run on Linux/Docker). "
+                "Switch to provider = 'homegrown'."
+            )
+
         # Setup logging from config
         setup_logging_from_config(config)
 
@@ -74,8 +89,46 @@ class VideoGrouperApp:
             upload_processor=self.upload_processor,
         )
 
-        # AutoCam processors run in the TRAY APP (needs desktop for GUI automation),
-        # not in the service. See video_grouper/tray/main.py SystemTrayIcon.__init__.
+        # Ball-tracking placement is gated on the configured provider.
+        # - autocam_gui: drives the Once Sport GUI app (needs Session 1+); the
+        #   tray runs the BallTrackingProcessor for this provider, not us.
+        # - homegrown: pure ONNX/CUDA compute (Session 0 fine); we run it.
+        # See `~/.claude/plans/web-ui-consolidation.md` Phase 0a for the matrix.
+        self.ball_tracking_processor = None
+        self.ball_tracking_discovery_processor = None
+        bt = self.config.ball_tracking
+        if bt.enabled and bt.provider == "homegrown":
+            # Side-effect import: registers the BallTrackingProvider implementations.
+            import video_grouper.ball_tracking.register_providers  # noqa: F401
+            from video_grouper.task_processors.ball_tracking_processor import (
+                BallTrackingProcessor,
+            )
+            from video_grouper.task_processors.ball_tracking_discovery_processor import (
+                BallTrackingDiscoveryProcessor,
+            )
+
+            self.ball_tracking_processor = BallTrackingProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                upload_processor=self.upload_processor,
+            )
+            self.ball_tracking_discovery_processor = BallTrackingDiscoveryProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                ball_tracking_processor=self.ball_tracking_processor,
+            )
+        elif bt.enabled and bt.provider == "autocam_gui":
+            # Linux refusal already happened at the top of __init__.
+            logger.info(
+                "BALL_TRACKING: provider = autocam_gui; the service does not run "
+                "ball-tracking processors (Session 0 has no GUI). Run the tray "
+                "for AutoCam, or switch [BALL_TRACKING].provider to 'homegrown'."
+            )
+        elif bt.enabled:
+            logger.warning(
+                "BALL_TRACKING: unknown provider %r; ball-tracking disabled",
+                bt.provider,
+            )
 
         # Initialize per-camera processors
         self.cameras: dict = {}
@@ -436,7 +489,12 @@ class VideoGrouperApp:
             self.processors.append(self.clip_discovery_processor)
         if self.ttt_job_processor:
             self.processors.append(self.ttt_job_processor)
-        # AutoCam processors run in the tray app, not the service
+        # Ball-tracking placement (homegrown only, see __init__ above).
+        # autocam_gui ball-tracking lives in the tray.
+        if self.ball_tracking_processor:
+            self.processors.append(self.ball_tracking_processor)
+        if self.ball_tracking_discovery_processor:
+            self.processors.append(self.ball_tracking_discovery_processor)
         # Polling processors last -- StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
