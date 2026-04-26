@@ -3,8 +3,13 @@
 # when CUDA isn't available. To actually use the GPU on a capable host,
 # pass `--gpus all` (docker run) or set deploy.resources.reservations.devices
 # (docker compose).
+#
+# Sized down by basing on the `:base` CUDA image (driver stub + apt repo
+# config only, no actual CUDA libs) and apt-installing only the specific
+# runtime libraries onnxruntime-gpu needs: cudart and cublas. cuDNN is
+# bundled inside the ORT wheel itself.
 
-ARG CUDA_BASE=nvidia/cuda:12.6.3-runtime-ubuntu22.04
+ARG CUDA_BASE=nvidia/cuda:12.6.3-base-ubuntu22.04
 ARG PYTHON_VERSION=3.13
 
 # ─── Builder ──────────────────────────────────────────────────────────
@@ -36,6 +41,10 @@ COPY video_grouper/ ./video_grouper/
 # --frozen requires uv.lock to match pyproject.toml.
 RUN uv sync --frozen --no-dev
 
+# Strip debug symbols from compiled extensions (~100-200 MB savings on
+# onnxruntime, opencv, av, numpy, pillow).
+RUN find /app/.venv -name "*.so*" -type f -exec strip --strip-unneeded {} + 2>/dev/null || true
+
 # ─── Runtime ──────────────────────────────────────────────────────────
 FROM ${CUDA_BASE} AS runtime
 
@@ -44,18 +53,24 @@ ARG BUILD_NUMBER=0
 ARG PYTHON_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Only the interpreter in the runtime stage. PyAV bundles libav* via wheel —
-# no system ffmpeg needed. software-properties-common is purged after we're
-# done with deadsnakes to keep the image small.
+# Install only what's needed at runtime:
+#   - python interpreter (deadsnakes)
+#   - cuda-cudart-12-6 (CUDA runtime API — required by onnxruntime-gpu)
+#   - libcublas-12-6 (BLAS for matmul; cuDNN is bundled in the ORT wheel)
+# software-properties-common is purged after we're done with the PPA.
+# PyAV bundles libavcodec/libavformat — no system ffmpeg needed.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         software-properties-common ca-certificates && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && \
-    apt-get install -y --no-install-recommends python${PYTHON_VERSION} && \
+    apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} \
+        cuda-cudart-12-6 \
+        libcublas-12-6 && \
     apt-get purge -y software-properties-common && \
     apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
     ln -sf /usr/bin/python${PYTHON_VERSION} /usr/local/bin/python
 
 WORKDIR /app
