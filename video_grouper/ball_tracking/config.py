@@ -59,6 +59,13 @@ class HomegrownProviderConfig(BaseModel):
     device: str = "cuda:0"
     detect_confidence: float = 0.45
     detect_frame_interval: int = 4
+    # When the field_mask stage produces a polygon, drop detections that
+    # fall outside it (with a small pixel margin for off-by-one tolerance).
+    # On the AutoCam comparison clip this rejected ~51% of raw detections
+    # as off-field false positives (sideline/spectator-area spikes that
+    # the same model architecture confidently detects). 0 = strict in-polygon;
+    # set negative to skip the filter entirely.
+    detect_field_filter_margin_px: float = 50.0
 
     # track
     track_kalman_gate: float = 200.0

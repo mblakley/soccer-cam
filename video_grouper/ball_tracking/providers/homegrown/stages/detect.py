@@ -30,11 +30,44 @@ from video_grouper.ball_tracking.providers.homegrown._secure_loader_helpers impo
     acquire_session,
 )
 from video_grouper.inference.ball_detector import create_session, detect_video
+from video_grouper.inference.field_geometry import is_on_field
 
 from . import register_stage
 from .base import ProcessingStage
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_by_polygon(
+    detections: list[dict],
+    field_polygon_path: str | None,
+    margin_px: float,
+) -> tuple[list[dict], int]:
+    """Drop detections that fall outside the field polygon (with optional margin).
+
+    No-op when ``field_polygon_path`` is missing or has no polygon. Returns
+    ``(filtered_detections, n_dropped)``.
+    """
+    if not field_polygon_path:
+        return detections, 0
+    try:
+        with open(field_polygon_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        return detections, 0
+    poly_raw = payload.get("polygon")
+    if not poly_raw:
+        return detections, 0
+
+    import numpy as np
+
+    polygon = np.array(poly_raw, dtype=np.float32)
+    kept = [
+        d
+        for d in detections
+        if is_on_field(float(d["cx"]), float(d["cy"]), polygon, margin=margin_px)
+    ]
+    return kept, len(detections) - len(kept)
 
 
 def _run_detection_with_session(
@@ -43,6 +76,8 @@ def _run_detection_with_session(
     session: Any,
     confidence: float,
     frame_interval: int,
+    field_polygon_path: str | None,
+    field_filter_margin_px: float,
 ) -> int:
     """Sync helper: run detection against a pre-built session, write JSON."""
     detections = detect_video(
@@ -51,6 +86,18 @@ def _run_detection_with_session(
         frame_interval=frame_interval,
         conf_threshold=confidence,
     )
+
+    raw_count = len(detections)
+    detections, dropped = _filter_by_polygon(
+        detections, field_polygon_path, field_filter_margin_px
+    )
+    if dropped > 0:
+        logger.info(
+            "detect: field-polygon filter dropped %d/%d off-field detections (margin=%dpx)",
+            dropped,
+            raw_count,
+            int(field_filter_margin_px),
+        )
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(detections, f)
@@ -65,11 +112,19 @@ def _run_detection_from_path(
     confidence: float,
     frame_interval: int,
     use_gpu: bool,
+    field_polygon_path: str | None,
+    field_filter_margin_px: float,
 ) -> int:
     """Local-path variant: load the model from disk, then run detection."""
     sess = create_session(Path(model_path), use_gpu=use_gpu)
     return _run_detection_with_session(
-        video_path, output_json_path, sess, confidence, frame_interval
+        video_path,
+        output_json_path,
+        sess,
+        confidence,
+        frame_interval,
+        field_polygon_path,
+        field_filter_margin_px,
     )
 
 
@@ -82,6 +137,8 @@ class DetectStage(ProcessingStage):
         cfg = self.provider_config
         in_path = Path(artifacts["input_path"])
         detections_path = in_path.with_name("detections.json")
+
+        field_polygon_path = artifacts.get("field_polygon_path")
 
         if cfg.model_key:
             # Production path: license-acquire, decrypt in memory, run.
@@ -100,6 +157,8 @@ class DetectStage(ProcessingStage):
                 session,
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
+                field_polygon_path,
+                cfg.detect_field_filter_margin_px,
             )
         elif cfg.model_path:
             # Dev path: plaintext on disk.
@@ -112,6 +171,8 @@ class DetectStage(ProcessingStage):
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
                 use_gpu,
+                field_polygon_path,
+                cfg.detect_field_filter_margin_px,
             )
         else:
             raise RuntimeError(
