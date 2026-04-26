@@ -1,11 +1,18 @@
 # Virtual Broadcast Camera — Ball Position Only
 
-Render a broadcast-style cropped video from a wide-angle static camera using only ball position as input. The system digitally pans and zooms (crops from the full frame) to simulate a professional camera operator.
+Render a broadcast-style cropped video from a wide-angle static camera using only ball position as input. The system digitally pans and zooms to simulate a professional camera operator.
+
+## Rendering Layer
+
+Output frames are produced by **cylindrical projection**, not flat 2D crop. The source is a stitched ~180° panorama that is still effectively fisheye-curved (`StitchCorrectStage` reduces inter-camera stitch artifacts but does not de-fisheye); a flat crop of that source curves goal lines and stretches players near output-frame edges. A cylindrical render projects the source onto a virtual cylinder and renders a perspective view from inside it, keeping straight lines straight at all yaw angles.
+
+Implementation lives in `video_grouper/inference/cylindrical_view.py` and is invoked from the render stage (`video_grouper/ball_tracking/providers/homegrown/stages/render.py`). The control logic described below — pan target, lead room, zoom selection, dead-ball overrides, broadcast vs coach modes — operates on yaw/pitch/zoom inputs to that renderer rather than on a 2D crop rectangle, but the algorithm is unchanged. Where the spec below talks about "crop rectangle" or "crop width", read it as "rendered viewport" or "viewport horizontal field of view".
 
 ## Inputs
 
 - **Ball position** (x, y) per frame in pixel coordinates
 - **Source video** resolution (e.g., 7680x2160 from Reolink, 4096x1800 from Dahua)
+- **Source horizontal FOV** (default 180°)
 - **Output resolution** (e.g., 1920x1080)
 
 ## Core Concepts

@@ -4,6 +4,18 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-04-26: Virtual camera renders cylindrically; control logic from VIRTUAL_CAMERA.md sits on top
+
+**Context:** `docs/VIRTUAL_CAMERA.md` (added 2026-04-25) specified the homegrown virtual broadcast camera as a flat 2D crop with intelligent control (lead room, zone-based zoom, dead-ball overrides, broadcast/coach modes). Reverse engineering of AutoCam (the third-party tool we are replacing) showed cylindrical projection is its single biggest visual marker and the reason its output looks broadcast-grade rather than "cropped from a fisheye." Our pipeline runs `StitchCorrectStage` upstream, which reduces inter-camera stitch artifacts but does not de-fisheye — the renderer's input is still effectively a ~180° fisheye-like panorama. A flat crop of that source curves straight lines (goal posts, sidelines) and stretches players near output edges; the further off-center the pan, the worse it looks. AutoCam picks cylindrical for the same reason.
+
+**Decision:** Render layer is cylindrical projection (per the AutoCam reference doc at `\\DESKTOP-5L867J8\video\test\onnx_models\camera_viewport_algorithm.md`). The intelligent control logic from `docs/VIRTUAL_CAMERA.md` is unchanged — it sits on top of the cylindrical renderer, operating on yaw/pitch/zoom rather than a 2D crop rectangle. Field-zone classification upgrades from x-position-normalized to ball-projected-through-field-homography (real polygon model from a field-keypoint stage, replacing the heuristic). Smoothing constants borrow AutoCam's two-tier defaults (position EMA much heavier than zoom EMA). Lead room uses Kalman velocity from the existing `BallTracker` rather than a per-frame velocity EMA.
+
+**Trade-off:** Cylindrical render adds per-frame `cv2.remap` cost (mitigated by caching the per-(out_w, out_h, fov) remap LUT) and adds a `field_mask` stage to the homegrown pipeline. In exchange we eliminate the fisheye-edge-distortion failure mode and gain a more accurate field-zone classifier.
+
+**Files:** `docs/VIRTUAL_CAMERA.md` (rendering-layer addendum), `video_grouper/inference/cylindrical_view.py` (NEW), `video_grouper/inference/field_geometry.py` (NEW), `video_grouper/ball_tracking/providers/homegrown/stages/{render,field_mask,track}.py`. Branch `feature/render-cylindrical-and-field`, one commit per phase.
+
+---
+
 ## 2026-04-15: Single canonical deploy script for remote workers
 
 **Context:** Laptop worker kept dying after reboots and couldn't restart. Root cause: 3 conflicting scheduled tasks (`GPUWorker`, `LaptopWorker`, `PipelineWorker`) each pointing to different hand-edited bat files with wrong credentials, wrong CUDA paths, and TOML backslash escaping bugs. Each time someone fixed a problem they created a new bat/task instead of fixing the canonical deploy script.
