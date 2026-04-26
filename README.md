@@ -74,6 +74,8 @@ docker compose build
 docker compose up -d
 ```
 
+The image is GPU-capable: ball detection runs on a CUDA GPU when one is exposed via `--gpus all` (or the compose `deploy.resources` reservation), otherwise it falls back to CPU. See [video_grouper/docs/docker/README.md](video_grouper/docs/docker/README.md) for prerequisites and verification.
+
 ## Configuration
 
 Edit `config.ini` with your settings. At minimum you need:

@@ -26,7 +26,7 @@ dependencies = [
     "pillow>=11.3.0",
     "numpy>=2.2.0",
     "opencv-python-headless>=4.13.0",
-    "onnxruntime-gpu>=1.24.4; sys_platform == 'win32'",
+    "onnxruntime-gpu>=1.24.4",
     "uvicorn>=0.42.0",
     "fastapi>=0.135.2",
     "av>=17.0.0",

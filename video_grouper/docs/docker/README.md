@@ -56,4 +56,58 @@ The Docker setup includes two volume mounts:
 1. `./shared_data:/shared_data` - For storing downloaded and processed videos
 2. `./video_grouper/config.ini:/app/config.ini` - For the application configuration
 
-Make sure these directories exist and have the correct permissions. 
+Make sure these directories exist and have the correct permissions.
+
+## GPU Acceleration (Optional)
+
+The image is GPU-capable: ONNX-based ball detection runs on a CUDA GPU when one is available, otherwise it transparently falls back to CPU. The same image works on GPU and non-GPU hosts — no separate tag.
+
+### Prerequisites for GPU
+
+- NVIDIA driver (Linux) or current NVIDIA Windows driver (for Docker Desktop / WSL2)
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on the host (Linux); Docker Desktop ships it preinstalled in its WSL2 backend (Windows)
+
+### Sanity-check the host can expose its GPU to a container
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 nvidia-smi
+```
+
+If the GPU table prints, the host is configured correctly.
+
+### Run with GPU access
+
+```bash
+# docker run
+docker run --rm --gpus all video-grouper
+
+# docker compose (already includes the device reservation in docker-compose.yaml)
+docker compose up
+```
+
+### Enabling ball detection
+
+Ball detection is opt-in via `config.ini`:
+
+```ini
+[BALL_TRACKING]
+enabled = true
+provider = homegrown
+
+[BALL_TRACKING.HOMEGROWN]
+device = cuda:0   # use cpu to force the CPU execution provider
+```
+
+### Verifying the GPU is actually being used
+
+Once a game reaches the ball-tracking stage, the inference session logs which execution provider it picked:
+
+```bash
+docker compose logs video-grouper | grep "ONNX session using"
+# GPU host:  ONNX session using: ['CUDAExecutionProvider', 'CPUExecutionProvider']
+# CPU host:  ONNX session using: ['CPUExecutionProvider']
+```
+
+### Falling back to CPU
+
+Drop the `--gpus all` flag (or set `device = cpu` in `[BALL_TRACKING.HOMEGROWN]`). No code change needed; ORT picks `CPUExecutionProvider` automatically.
