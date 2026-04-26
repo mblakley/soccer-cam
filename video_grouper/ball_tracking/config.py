@@ -70,13 +70,16 @@ class HomegrownProviderConfig(BaseModel):
     # track
     track_kalman_gate: float = 200.0
     track_max_missing: int = 15
-    # smooth_with_memory (AutoCam-style 3-sec exponentially-weighted buffer)
+    # smooth_with_memory (AutoCam-style exponentially-weighted buffer)
     # applied to the best-track's real measurements after Kalman linking.
-    # Defaults are tuned for ~20 fps source with detection every 4 frames
-    # (~5 detections/sec). 60 frames ≈ 3 sec at 20 fps; decay 0.985 gives
-    # weight ≈ 0.40 at age=60.
-    track_smooth_buffer_frames: int = 60
-    track_smooth_decay_per_frame: float = 0.985
+    # Hand-fit against AutoCam's per-frame xy ground-truth on the WNY
+    # Flash 2026-04-18 1-min comparison clip (T:\onnx_models\compare\) —
+    # see findings_smoothing_fit.md. Best ABS fit was (240, 0.97) with
+    # RMSE 642 px vs AutoCam; (120, 0.95) at RMSE 669 px is the chosen
+    # balance — roughly half the lag of (240) for only +27 px RMSE, and
+    # much closer to AutoCam's spec'd 3-sec buffer in time-constant feel.
+    track_smooth_buffer_frames: int = 120
+    track_smooth_decay_per_frame: float = 0.95
 
     # render
     render_output_width: int = 1920
