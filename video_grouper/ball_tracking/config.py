@@ -77,6 +77,11 @@ class HomegrownProviderConfig(BaseModel):
     render_src_vfov_deg: float = -1.0
     render_view_vfov_deg: float = -1.0
     render_pitch_deg: float = 0.0
+    # Bound camera pan to the field polygon's lateral extent (when the
+    # field_mask stage produced one); padding extends the bound on each
+    # side so the camera can drift slightly past the touchline for
+    # context. Falls back to ±src_hfov/2 when no polygon is available.
+    render_yaw_padding_deg: float = 5.0
 
     model_config = {"validate_by_name": True}
 

@@ -29,6 +29,7 @@ from video_grouper.inference.cylindrical_view import (
     cylindrical_remap,
     pixel_to_yaw_pitch,
 )
+from video_grouper.inference.field_geometry import field_lateral_yaw_extent
 
 from . import register_stage
 from .base import ProcessingStage
@@ -50,6 +51,39 @@ def _smooth_yaw(yaws: list[float | None], ema: float) -> list[float | None]:
             last = last * ema + y * (1.0 - ema)
         smoothed.append(last)
     return smoothed
+
+
+def _load_polygon(polygon_path: str | None):
+    """Read field_polygon.json and return the polygon ndarray (or None)."""
+    if not polygon_path:
+        return None
+    try:
+        with open(polygon_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        logger.warning("render: field_polygon_path %s not found", polygon_path)
+        return None
+    poly = payload.get("polygon")
+    if poly is None:
+        return None
+    import numpy as np
+
+    return np.array(poly, dtype=np.float32)
+
+
+def _yaw_bounds(
+    polygon, src_w: int, src_hfov_deg: float, padding_deg: float
+) -> tuple[float, float]:
+    """Field yaw extent ± padding, clamped to the source's representable range."""
+    yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, src_hfov_deg)
+    yaw_min -= padding_deg
+    yaw_max += padding_deg
+    half_src = src_hfov_deg / 2.0
+    return max(yaw_min, -half_src), min(yaw_max, half_src)
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
 
 
 def _trajectory_to_yaws(
@@ -75,6 +109,7 @@ def _render_video(
     input_path: str,
     output_path: str,
     trajectory_path: str,
+    field_polygon_path: str | None,
     out_width: int,
     out_height: int,
     ema: float,
@@ -83,13 +118,17 @@ def _render_video(
     view_hfov_deg: float,
     view_vfov_deg: float,
     view_pitch_deg: float,
+    yaw_padding_deg: float,
 ) -> None:
-    """Sync helper: cylindrical-render the source around the EMA-smoothed yaw."""
+    """Sync helper: cylindrical-render the source around the EMA-smoothed yaw,
+    optionally clamped to the field polygon's lateral extent."""
     import av
     import cv2
 
     with open(trajectory_path, "r", encoding="utf-8") as f:
         raw = json.load(f)
+
+    polygon = _load_polygon(field_polygon_path)
 
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
@@ -108,6 +147,15 @@ def _render_video(
             view_pitch_deg=view_pitch_deg,
         )
 
+        yaw_min, yaw_max = _yaw_bounds(polygon, src_w, src_hfov_deg, yaw_padding_deg)
+        if polygon is not None:
+            logger.info(
+                "render: yaw bounds [%.1f°, %.1f°] from field polygon (padding %.1f°)",
+                yaw_min,
+                yaw_max,
+                yaw_padding_deg,
+            )
+
         yaws = _trajectory_to_yaws(raw, src_w, src_h, src_hfov_deg)
         smoothed = _smooth_yaw(yaws, ema)
 
@@ -117,7 +165,7 @@ def _render_video(
             out_stream.height = out_height
             out_stream.pix_fmt = "yuv420p"
 
-            fallback_yaw = 0.0  # straight-ahead until we get a fix
+            fallback_yaw = _clamp(0.0, yaw_min, yaw_max)
 
             for frame_idx, frame in enumerate(in_container.decode(in_video)):
                 yaw = (
@@ -125,6 +173,7 @@ def _render_video(
                     if frame_idx < len(smoothed) and smoothed[frame_idx] is not None
                     else fallback_yaw
                 )
+                yaw = _clamp(yaw, yaw_min, yaw_max)
 
                 map_x, map_y = cylindrical_remap(params, view_yaw_deg=yaw)
                 rgb = frame.to_ndarray(format="rgb24")
@@ -167,6 +216,7 @@ class RenderStage(ProcessingStage):
             str(in_path),
             str(out_path),
             trajectory_path,
+            artifacts.get("field_polygon_path"),
             cfg.render_output_width,
             cfg.render_output_height,
             cfg.render_ema,
@@ -175,6 +225,7 @@ class RenderStage(ProcessingStage):
             cfg.render_fov_deg,
             cfg.render_view_vfov_deg,
             cfg.render_pitch_deg,
+            cfg.render_yaw_padding_deg,
         )
         logger.info("render: wrote broadcast-style output to %s", out_path)
         return None  # output_path is already in artifacts
