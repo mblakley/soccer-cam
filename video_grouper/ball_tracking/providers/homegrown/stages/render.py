@@ -62,21 +62,28 @@ class CameraMode:
     """Tunables that change how aggressively the camera tracks the ball.
 
     All "zoom" values are crop-width fractions of the source horizontal
-    FOV (per the spec). The cylindrical renderer multiplies by
-    ``src_hfov_deg`` to get a view ``hfov`` in degrees.
+    FOV. The cylindrical renderer multiplies by ``src_hfov_deg`` (typically
+    180°) to get the rendered view's horizontal FOV in degrees. So
+    ``zoom_midfield=0.20`` ⇒ 36° rendered hfov, comparable to a 50 mm lens
+    on a full-frame body — the broadcast-tight feel we observed in
+    AutoCam's GUI output (``zoomf 1.2:2`` setting on the same source).
     """
 
     # Field-zone boundaries (normalized to [0, 1] across field width)
     zone_box_boundary: float = 0.10
     zone_third_boundary: float = 0.33
 
-    # Per-zone base zoom (crop width fraction)
-    zoom_box: float = 0.25
-    zoom_third: float = 0.35
-    zoom_midfield: float = 0.45
+    # Per-zone base zoom (crop width fraction). Tuned 2026-04-26 against
+    # AutoCam's GUI output on the WNY Flash 2026-04-18 1-min comparison
+    # clip — the prior values (0.25/0.35/0.45) produced output ~2× wider
+    # than AutoCam at every test frame. These tighter defaults bring the
+    # framing to within a player-width of AutoCam's at the same trajectory.
+    zoom_box: float = 0.13
+    zoom_third: float = 0.18
+    zoom_midfield: float = 0.22
 
     # Speed-derived bias on top of the zone base
-    zoom_speed_bias_max: float = 0.10
+    zoom_speed_bias_max: float = 0.06
 
     # Lead room (pan offset in direction of motion), as fraction of crop width
     max_lead_room_fraction: float = 0.20
@@ -86,10 +93,12 @@ class CameraMode:
     pan_smoothing_max: float = 0.12
     zoom_smoothing: float = 0.03
 
-    # Dead-ball overrides per zone (crop width fraction)
-    deadball_box_zoom: float = 0.25
-    deadball_third_zoom: float = 0.35
-    deadball_midfield_zoom: float = 0.50
+    # Dead-ball overrides per zone (crop width fraction). Per AutoCam:
+    # box dead-balls match the regular box zoom (no widening for goal
+    # action); midfield dead-balls widen modestly to show context.
+    deadball_box_zoom: float = 0.13
+    deadball_third_zoom: float = 0.20
+    deadball_midfield_zoom: float = 0.28
 
     # Stationary detection
     deadball_speed_threshold_px_per_frame: float = 4.0
@@ -102,23 +111,28 @@ class CameraMode:
     # short: hold pan/zoom; medium: drift zoom toward midfield; long: full reset.
     missing_ball_short_frames: int = 15
     missing_ball_medium_frames: int = 60
-    missing_ball_long_zoom: float = 0.55
+    missing_ball_long_zoom: float = 0.30
 
 
 BROADCAST_MODE = CameraMode()
 
+# Coach mode stays wider than broadcast (tactical context > drama) but
+# still tighter than the pre-tuning Phase 4 values — same comparison
+# anchor: AutoCam's GUI output on the test clip, with coach-mode logic of
+# "wider zoom floor + reduced lead room" applied on top.
 COACH_MODE = CameraMode(
-    zoom_box=0.40,
-    zoom_third=0.50,
-    zoom_midfield=0.55,
-    zoom_speed_bias_max=0.05,
+    zoom_box=0.22,
+    zoom_third=0.28,
+    zoom_midfield=0.32,
+    zoom_speed_bias_max=0.04,
     max_lead_room_fraction=0.08,
     pan_smoothing_min=0.03,
     pan_smoothing_max=0.08,
     zoom_smoothing=0.02,
-    deadball_box_zoom=0.50,
-    deadball_third_zoom=0.55,
-    deadball_midfield_zoom=0.55,
+    deadball_box_zoom=0.30,
+    deadball_third_zoom=0.32,
+    deadball_midfield_zoom=0.35,
+    missing_ball_long_zoom=0.40,
 )
 
 
