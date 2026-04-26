@@ -97,7 +97,7 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         os.chdir(storage_dir)
         logger.info(f"Set working directory to {storage_dir}")
 
-        app = VideoGrouperApp(config)
+        app = VideoGrouperApp(config, config_path=config_path)
 
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
