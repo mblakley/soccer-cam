@@ -284,7 +284,9 @@ class Config(BaseModel):
     playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
     ntfy: NtfyConfig = Field(alias="NTFY")
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
-    cloud_sync: CloudSyncConfig = Field(alias="CLOUD_SYNC")
+    cloud_sync: CloudSyncConfig = Field(
+        alias="CLOUD_SYNC", default_factory=CloudSyncConfig
+    )
     ttt: TTTConfig = Field(alias="TTT", default_factory=TTTConfig)
     moment_tagging: MomentTaggingConfig = Field(
         default_factory=MomentTaggingConfig, alias="MOMENT_TAGGING"
