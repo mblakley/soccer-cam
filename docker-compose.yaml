@@ -7,8 +7,12 @@ services:
         VERSION: "1.0.0"
         BUILD_NUMBER: "1"
     volumes:
-      - ./shared_data:/shared_data
-      - ./video_grouper/config.ini:/app/config.ini
+      # Mount target matches what `__main__.py` expects: the app's default
+      # shared-data directory is `<project_root>/shared_data`, which inside
+      # the container resolves to `/app/shared_data`. config.ini lives at
+      # `<shared_data>/config.ini` and game state / queue files / TTT
+      # tokens.json all live under the same directory.
+      - ./shared_data:/app/shared_data
     environment:
       - PYTHONUNBUFFERED=1
 
