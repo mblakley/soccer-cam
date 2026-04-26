@@ -19,7 +19,8 @@ Bring up the pipeline against your camera with no ball detection:
 mkdir -p shared_data
 cp video_grouper/config.ini.dist shared_data/config.ini
 # edit shared_data/config.ini: set [CAMERA.default] device_ip / username / password,
-# [STORAGE] path = /shared_data, [YOUTUBE] credentials, etc.
+# [YOUTUBE] credentials, etc. The default [STORAGE] path = ./shared_data
+# is correct -- it resolves to /app/shared_data inside the container.
 # Make sure [BALL_TRACKING] enabled = false (default) for now.
 
 # 2. Build (or pull) and run
@@ -45,22 +46,25 @@ docker build \
 
 ## Volume mounts
 
-The default `docker-compose.yaml` mounts two paths:
+The default `docker-compose.yaml` mounts one path:
 
 ```yaml
 volumes:
-  - ./shared_data:/shared_data            # queue state + TTT auth tokens
-  - ./video_grouper/config.ini:/app/config.ini
+  - ./shared_data:/app/shared_data
 ```
+
+The container's working directory is `/app`, and the app's default
+shared-data location resolves to `<cwd>/shared_data` = `/app/shared_data`,
+so this single mount covers config, state, and tokens.
 
 What lives where:
 
 | Path inside container | Holds |
 |---|---|
-| `/shared_data/<game>/` | Per-game video directory (downloaded clips, combined MP4, trimmed MP4, `state.json`, **and the ball-tracking outputs `detections.json` + `trajectory.json` if enabled**) |
-| `/shared_data/*_queue_state.json` | Persisted async queues (download / video / upload / ball-tracking) |
-| `/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
-| `/app/config.ini` | Application configuration (read-only is fine) |
+| `/app/shared_data/config.ini` | Application configuration |
+| `/app/shared_data/<game>/` | Per-game video directory (downloaded clips, combined MP4, trimmed MP4, `state.json`, **and the ball-tracking outputs `detections.json` + `trajectory.json` if enabled**) |
+| `/app/shared_data/*_queue_state.json` | Persisted async queues (download / video / upload / ball-tracking) |
+| `/app/app/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
 
 **There is no separate "output" volume** — ball detection writes its `detections.json` and `trajectory.json` into the same per-game directory as the input video. Mount whatever directory tree holds your games; outputs land alongside inputs.
 
@@ -105,7 +109,7 @@ password = <your-ttt-password>
 # plugin_signing_public_keys = ["...hex..."]   # optional override; default ships in code
 ```
 
-Email + password are used for the **first** authentication only — after that, Supabase access + refresh tokens are persisted to `/shared_data/ttt/tokens.json` and refreshed automatically. You can clear `password` from `config.ini` once tokens exist if you don't want it stored at rest.
+Email + password are used for the **first** authentication only — after that, Supabase access + refresh tokens are persisted to `/app/shared_data/ttt/tokens.json` and refreshed automatically. You can clear `password` from `config.ini` once tokens exist if you don't want it stored at rest.
 
 ### Run
 
@@ -119,8 +123,7 @@ GPU mode (requires NVIDIA Container Toolkit on the host; Docker Desktop on Windo
 
 ```bash
 docker run --rm --gpus all \
-  -v $(pwd)/shared_data:/shared_data \
-  -v $(pwd)/video_grouper/config.ini:/app/config.ini \
+  -v $(pwd)/shared_data:/app/shared_data \
   video-grouper
 ```
 
@@ -130,7 +133,7 @@ Or, to keep using `docker compose` with GPU, append a `deploy.resources.reservat
 
 When a game reaches the ball-tracking stage:
 
-1. `TTTApiClient` loads tokens from `/shared_data/ttt/tokens.json` (or signs in with email/password if no tokens yet).
+1. `TTTApiClient` loads tokens from `/app/shared_data/ttt/tokens.json` (or signs in with email/password if no tokens yet).
 2. `SecureLoader.acquire("premium.video.ball_detection")` calls `POST {api_base_url}/api/models/premium.video.ball_detection/license` with the JWT.
 3. TTT returns a signed license + the AES-GCM key.
 4. `SecureLoader` downloads the `.enc` artifact from `artifact_url` (the GitHub release), verifies the SHA-256, and decrypts in memory.
@@ -248,12 +251,12 @@ The container's `plugin_signing_public_keys` doesn't include the key the TTT bac
 
 ### `Artifact SHA-256 does not match license manifest`
 
-The `.enc` artifact at `artifact_url` was modified or replaced after the license was issued. Re-acquire (clear `/shared_data/ttt/tokens.json` and restart so a fresh license is requested).
+The `.enc` artifact at `artifact_url` was modified or replaced after the license was issued. Re-acquire (clear `/app/shared_data/ttt/tokens.json` and restart so a fresh license is requested).
 
 ### `Configuration file not found at /app/shared_data/config.ini`
 
-Either the `./shared_data:/shared_data` volume isn't mounted, or `config.ini` isn't inside it. The default compose file mounts `./video_grouper/config.ini:/app/config.ini` — that path also works.
+The `./shared_data:/app/shared_data` volume isn't mounted, or `config.ini` isn't inside it. Make sure `./shared_data/config.ini` exists on the host before `docker compose up`.
 
 ### Container starts but `ONNX session using` never appears in logs
 
-Ball-tracking only runs once a game reaches the `trimmed` state. If you don't have a fully-downloaded game yet, no inference will happen. Check the queue state files in `/shared_data/` to see what stage games are at.
+Ball-tracking only runs once a game reaches the `trimmed` state. If you don't have a fully-downloaded game yet, no inference will happen. Check the queue state files in `/app/shared_data/` to see what stage games are at.
