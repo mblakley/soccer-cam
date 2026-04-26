@@ -74,12 +74,19 @@ async def main():
     else:
         logger.info("Using default config file from shared_data directory")
 
+    # Resolve the default path BEFORE load so we can pass the same Path
+    # to VideoGrouperApp (used by the auth server's /config editor).
+    if config_path is None:
+        from video_grouper.utils.paths import get_shared_data_path
+
+        config_path = get_shared_data_path() / "config.ini"
+
     config = load_application_config(config_path)
     if not config:
         logger.error("Failed to load configuration. Exiting.")
         return
 
-    app = VideoGrouperApp(config)
+    app = VideoGrouperApp(config, config_path=config_path)
 
     try:
         await app.run()

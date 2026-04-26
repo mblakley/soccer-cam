@@ -109,8 +109,11 @@ class TestMainFunction:
 
         # Verify calls
         mock_parse_args.assert_called_once()
-        mock_load_config.assert_called_once_with(Path("C:/custom/config.ini"))
-        mock_app_class.assert_called_once_with(mock_config)
+        custom_path = Path("C:/custom/config.ini")
+        mock_load_config.assert_called_once_with(custom_path)
+        # Phase 1: __main__ now passes config_path through so the auth
+        # server's /config editor knows where to write back to.
+        mock_app_class.assert_called_once_with(mock_config, config_path=custom_path)
         mock_app.run.assert_called_once()
         # shutdown is called by app.run()'s finally block, not by main()
         mock_app.shutdown.assert_not_called()
@@ -143,8 +146,16 @@ class TestMainFunction:
 
         # Verify calls
         mock_parse_args.assert_called_once()
-        mock_load_config.assert_called_once_with(None)
-        mock_app_class.assert_called_once_with(mock_config)
+        # Phase 1: when no --config is given, __main__ resolves the default
+        # to <shared_data>/config.ini and passes it through to VideoGrouperApp
+        # so the auth server's /config editor knows where to save.
+        load_config_args = mock_load_config.call_args[0]
+        assert len(load_config_args) == 1
+        assert load_config_args[0] is not None
+        assert load_config_args[0].name == "config.ini"
+        # Same Path passed to VideoGrouperApp
+        app_kwargs = mock_app_class.call_args.kwargs
+        assert app_kwargs["config_path"] == load_config_args[0]
         mock_app.run.assert_called_once()
         # shutdown is called by app.run()'s finally block, not by main()
         mock_app.shutdown.assert_not_called()

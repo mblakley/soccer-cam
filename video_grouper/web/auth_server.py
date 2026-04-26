@@ -491,6 +491,7 @@ def create_app(
     storage_path: str,
     status_provider: Optional[Callable[[], dict[str, Any]]] = None,
     providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
+    config_path: Optional[Path] = None,
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 
@@ -525,6 +526,13 @@ def create_app(
     token_file = storage / "ttt" / "tokens.json"
 
     app = FastAPI(title="Soccer-Cam Headless TTT Auth", version="0.3.0")
+
+    # Mount the schema-driven config editor at /config when we know the
+    # path on disk (the orchestrator passes it in; tests can opt in).
+    if config_path is not None:
+        from video_grouper.web.config_editor import build_router
+
+        app.include_router(build_router(config_path))
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #

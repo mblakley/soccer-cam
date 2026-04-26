@@ -2,6 +2,7 @@ import os
 import asyncio
 import platform
 from pathlib import Path
+from typing import Optional
 
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
@@ -31,7 +32,7 @@ class VideoGrouperApp:
     Each task processor is self-contained and manages its own queue and state.
     """
 
-    def __init__(self, config: Config, camera=None):
+    def __init__(self, config: Config, camera=None, config_path: Optional[Path] = None):
         """
         Initialize the VideoGrouperApp with task processors.
 
@@ -55,6 +56,9 @@ class VideoGrouperApp:
 
         # Setup logging from config
         setup_logging_from_config(config)
+
+        # Stash for the auth server's config editor (Phase 1).
+        self.config_path: Optional[Path] = config_path
 
         # Initialize mock services if environment variables are set
         try:
@@ -652,6 +656,7 @@ class VideoGrouperApp:
                     self.config.ttt,
                     self.storage_path,
                     status_provider=_auth_status_provider,
+                    config_path=self.config_path,
                 )
                 uv_config = uvicorn.Config(
                     auth_app,

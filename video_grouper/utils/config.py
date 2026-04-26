@@ -4,7 +4,7 @@ import configparser
 from pathlib import Path
 from typing import Dict, Optional, List
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, field_validator
 
 from video_grouper.ball_tracking.config import BallTrackingConfig
 
@@ -223,6 +223,31 @@ class TTTConfig(BaseModel):
     # container, while supabase_url stays as the browser-facing URL emitted
     # in OAuth redirects. Leave blank to use supabase_url for both legs.
     supabase_internal_url: str = ""
+
+    @field_validator("plugin_signing_public_keys", mode="before")
+    @classmethod
+    def _parse_str_list(cls, v):
+        """Round-trip the list through INI: save_config writes
+        ``str(list)`` (e.g. ``"['key1', 'key2']"``); on reload
+        configparser returns that as a string. Parse it back to a list
+        so reload doesn't fail validation.
+        """
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped in ("", "[]"):
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+            # Comma-separated fallback for hand-edited values.
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        return v
 
 
 class MomentTaggingConfig(BaseModel):
