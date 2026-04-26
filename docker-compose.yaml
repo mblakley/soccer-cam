@@ -11,6 +11,10 @@ services:
       - ./video_grouper/config.ini:/app/config.ini
     environment:
       - PYTHONUNBUFFERED=1
+    # Uncomment to expose the headless TTT auth server (also set
+    # [TTT] auth_server_enabled = true in config.ini):
+    ports:
+      - "8765:8765"
 
   reolink-simulator:
     profiles:

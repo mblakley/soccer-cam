@@ -129,3 +129,27 @@ name_format = {my_team_name} 2013s - Full Field
 description = Raw full field videos for {my_team_name} 2013s team
 # Privacy status for the playlist (private, unlisted, public)
 privacy_status = unlisted
+
+[TTT]
+# Headless auth web server: lets a Docker / Linux user sign in to TTT via a
+# browser instead of putting their password in this file. When enabled, the
+# pipeline starts an HTTP server on auth_server_bind:auth_server_port; open
+# it in a browser, submit your TTT credentials, and tokens are written to
+# shared_data/ttt/tokens.json. Restart the pipeline (or wait one tick) for
+# the rest of the app to pick the tokens up.
+auth_server_enabled = false
+# Default to localhost. Anyone reachable on this address+port becomes the
+# signed-in TTT user, so only switch to 0.0.0.0 on a trusted network.
+auth_server_bind = 127.0.0.1
+auth_server_port = 8765
+
+# Optional, for local-Supabase testing only. When Supabase runs as a
+# sibling container on the same docker network, the auth_server's HTTP
+# calls reach it by container name (and internal port), while the OAuth
+# redirect we emit to the browser must use the host-published URL. Set
+# supabase_url to the host-published URL (browser-facing) and
+# supabase_internal_url to the docker-network URL (container-facing):
+# supabase_url = http://localhost:54321
+# supabase_internal_url = http://supabase_kong_<project>:8000
+# Leave blank in production; one URL serves both legs.
+# supabase_internal_url =

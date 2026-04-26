@@ -536,12 +536,70 @@ class VideoGrouperApp:
         # Start periodic status reporting
         status_task = asyncio.create_task(self._periodic_status_report())
 
+        # Start the headless TTT auth web server when enabled
+        auth_server = None
+        auth_task = None
+        if self.config.ttt.auth_server_enabled:
+            try:
+                from video_grouper.web.auth_server import create_app
+                import uvicorn
+
+                def _auth_status_provider() -> dict:
+                    # get_queue_sizes() reports -1 for processors that aren't
+                    # enabled in this config (ntfy/clip_request/ttt_jobs gates).
+                    # Filter those out so the dashboard only shows live ones.
+                    queue_sizes = {
+                        k: v for k, v in self.get_queue_sizes().items() if v >= 0
+                    }
+                    return {
+                        "queue_sizes": queue_sizes,
+                        "cameras": [
+                            {
+                                "name": n,
+                                "ip": getattr(c, "device_ip", "?"),
+                                "connected": getattr(c, "is_connected", None),
+                            }
+                            for n, c in self.cameras.items()
+                            if c is not None
+                        ],
+                    }
+
+                auth_app = create_app(
+                    self.config.ttt,
+                    self.storage_path,
+                    status_provider=_auth_status_provider,
+                )
+                uv_config = uvicorn.Config(
+                    auth_app,
+                    host=self.config.ttt.auth_server_bind,
+                    port=self.config.ttt.auth_server_port,
+                    log_level="info",
+                    access_log=False,
+                )
+                auth_server = uvicorn.Server(uv_config)
+                auth_task = asyncio.create_task(auth_server.serve())
+                logger.info(
+                    "Headless TTT auth server listening on http://%s:%d",
+                    self.config.ttt.auth_server_bind,
+                    self.config.ttt.auth_server_port,
+                )
+            except Exception as e:
+                logger.error(f"Failed to start headless TTT auth server: {e}")
+
         # All processors are already running their own loops
         # Just wait for shutdown event
         try:
             await self._shutdown_event.wait()
         finally:
             status_task.cancel()
+
+            if auth_server is not None:
+                auth_server.should_exit = True
+                if auth_task is not None:
+                    try:
+                        await auth_task
+                    except Exception as e:
+                        logger.error(f"Error stopping auth server: {e}")
 
             # Stop NTFY response service if it was started
             if ntfy_response_service:
