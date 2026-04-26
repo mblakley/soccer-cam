@@ -74,7 +74,7 @@ docker compose build
 docker compose up -d
 ```
 
-The image is GPU-capable: ball detection runs on a CUDA GPU when one is exposed via `--gpus all` (or the compose `deploy.resources` reservation), otherwise it falls back to CPU. See [video_grouper/docs/docker/README.md](video_grouper/docs/docker/README.md) for prerequisites and verification.
+The image is GPU-capable: ball detection auto-detects an available CUDA GPU and otherwise falls back to CPU — the same image runs on either host. To expose a host GPU to the container, use `docker run --gpus all video-grouper` or add the standard NVIDIA `deploy.resources.reservations.devices` block to your compose file. See [video_grouper/docs/docker/README.md](video_grouper/docs/docker/README.md) for prerequisites and verification.
 
 ## Configuration
 

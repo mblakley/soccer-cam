@@ -70,20 +70,35 @@ The image is GPU-capable: ONNX-based ball detection runs on a CUDA GPU when one 
 ### Sanity-check the host can expose its GPU to a container
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi
 ```
 
 If the GPU table prints, the host is configured correctly.
 
 ### Run with GPU access
 
+The container falls back to CPU when no GPU is exposed to it, so the same image works on either host. To actually use a GPU, the host must expose it explicitly:
+
 ```bash
 # docker run
 docker run --rm --gpus all video-grouper
-
-# docker compose (already includes the device reservation in docker-compose.yaml)
-docker compose up
 ```
+
+To use GPU under `docker compose`, add the standard NVIDIA reservation block to your local `docker-compose.yaml` (or a compose override):
+
+```yaml
+services:
+  video-grouper:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+This block is intentionally NOT in the default `docker-compose.yaml` because compose hard-fails on hosts without an NVIDIA runtime — keeping it out lets the same compose file work for everyone.
 
 ### Enabling ball detection
 
