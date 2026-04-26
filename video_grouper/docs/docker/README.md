@@ -64,7 +64,7 @@ What lives where:
 | `/app/shared_data/config.ini` | Application configuration |
 | `/app/shared_data/<game>/` | Per-game video directory (downloaded clips, combined MP4, trimmed MP4, `state.json`, **and the ball-tracking outputs `detections.json` + `trajectory.json` if enabled**) |
 | `/app/shared_data/*_queue_state.json` | Persisted async queues (download / video / upload / ball-tracking) |
-| `/app/app/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
+| `/app/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
 
 **There is no separate "output" volume** — ball detection writes its `detections.json` and `trajectory.json` into the same per-game directory as the input video. Mount whatever directory tree holds your games; outputs land alongside inputs.
 
@@ -110,6 +110,49 @@ password = <your-ttt-password>
 ```
 
 Email + password are used for the **first** authentication only — after that, Supabase access + refresh tokens are persisted to `/app/shared_data/ttt/tokens.json` and refreshed automatically. You can clear `password` from `config.ini` once tokens exist if you don't want it stored at rest.
+
+### Headless sign-in via the in-container web server
+
+The container can run a small HTTP server with a status dashboard at `/` that lets you sign in to TTT from a browser without putting credentials in `config.ini`. It supports every method TTT's Supabase project enables:
+
+- **OAuth providers**: Google, Discord, Apple, Facebook, Twitter — buttons redirect to Supabase, which redirects to the provider, which redirects back to the server's `/callback`. The access token is extracted from the URL fragment and persisted to `shared_data/ttt/tokens.json`.
+- **Email + password**: an inline form posts to `/login/password`, which calls Supabase's password grant.
+- **Magic link**: an inline form posts to `/login/magic`, which asks Supabase to email a sign-in link. Clicking the link in the email lands on the server's `/callback` the same way the OAuth flow does.
+
+The dashboard also shows pipeline queue sizes, camera connectivity, and per-game progress, and refreshes every 10 seconds.
+
+Set in `config.ini`:
+
+```ini
+[TTT]
+enabled = true
+# email and password can be left blank — the OAuth flow populates tokens.json directly.
+
+auth_server_enabled = true
+auth_server_bind = 127.0.0.1
+auth_server_port = 8765
+```
+
+In `docker-compose.yaml`, uncomment the port mapping for the `video-grouper` service:
+
+```yaml
+    ports:
+      - "8765:8765"
+```
+
+Then:
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:8765` in your browser and click the OAuth provider button. On success, `shared_data/ttt/tokens.json` appears with the access token; the rest of the pipeline uses it automatically (restart the container if it was already running, or wait for the next TTT call to pick the file up).
+
+> **Email/password TTT accounts.** If you don't sign in to TTT via an OAuth provider, this server won't help — Supabase's hosted auth UI doesn't cover password sign-in. Use the `[TTT] email` + `password` config.ini fields above instead. After the first call, refresh tokens take over and you can clear `password` from disk if you prefer.
+
+> **Supabase redirect URL allowlist.** The server tells Supabase to redirect back to whatever host you typed in your address bar, e.g. `http://localhost:8765/callback`. That URL must be on the TTT Supabase project's redirect allowlist. `http://localhost:*` is on it for local dev; if you sign in via a non-localhost name (Tailscale, LAN host, etc.), add that URL too — otherwise Supabase rejects the redirect with `redirect_to URL not allowed`.
+
+**Security model.** The auth server is unauthenticated — anyone who can reach the port becomes the signed-in TTT user. The defaults keep that local: `bind = 127.0.0.1` inside the container, exposed only via the explicit Docker port mapping above. Don't change `auth_server_bind` to `0.0.0.0` or expose `8765` on a non-trusted network.
 
 ### Run
 

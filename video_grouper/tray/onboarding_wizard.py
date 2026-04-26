@@ -57,14 +57,14 @@ logger = logging.getLogger(__name__)
 # Values are injected at build time via _ttt_config.py (generated from
 # environment variables by the build script).  Fall back to production
 # defaults when running from source or when the generated file is absent.
-_TTT_DEFAULT_SUPABASE_URL = "https://lfnqnfbkresbbprgribe.supabase.co"
+_TTT_DEFAULT_SUPABASE_URL = "https://zmuwmngqqiaectpcqlfj.supabase.co"
 _TTT_DEFAULT_ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxm"
-    "bnFuZmJrcmVzYmJwcmdyaWJlIiwicm9sZSI6"
-    "ImFub24iLCJpYXQiOjE3MzMxNjI5NjYsImV4"
-    "cCI6MjA0ODczODk2Nn0.bVPADfD5v6E5a7Y3"
-    "2BGeJJYuiVqsMnyexVj0KNpblh4"
+    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpt"
+    "dXdtbmdxcWlhZWN0cGNxbGZqIiwicm9sZSI6"
+    "ImFub24iLCJpYXQiOjE3NjU1MDE1MDksImV4"
+    "cCI6MjA4MTA3NzUwOX0.UzAKgFWmXSFSN7uu"
+    "JsmCXRR5c_0oSHyFjJYeBxbmzmY"
 )
 _TTT_DEFAULT_API_BASE_URL = "https://team-tech-tools.vercel.app"
 

@@ -15,6 +15,10 @@ services:
       - ./shared_data:/app/shared_data
     environment:
       - PYTHONUNBUFFERED=1
+    # Uncomment to expose the headless TTT auth server (also set
+    # [TTT] auth_server_enabled = true in config.ini):
+    # ports:
+    #   - "8765:8765"
 
   reolink-simulator:
     profiles:

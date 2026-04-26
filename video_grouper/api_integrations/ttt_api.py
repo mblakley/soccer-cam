@@ -144,6 +144,35 @@ class TTTApiClient:
         self._store_auth_response(resp.json())
         logger.info("TTT login successful")
 
+    def send_magic_link(self, email: str, redirect_to: str) -> None:
+        """Ask Supabase to email a magic-link / OTP to the user.
+
+        Mirrors the supabase-js ``signInWithOtp`` flow: the email contains a
+        link that, when clicked, lands on ``redirect_to`` with an access
+        token in the URL fragment. The headless auth server's ``/callback``
+        page extracts that fragment the same way the OAuth flow does.
+        """
+        url = f"{self.supabase_url}/auth/v1/otp"
+        headers = {
+            "apikey": self.anon_key,
+            "Content-Type": "application/json",
+        }
+        body = {
+            "email": email,
+            "create_user": True,
+            "data": {},
+            "options": {"email_redirect_to": redirect_to},
+        }
+
+        logger.info("Requesting magic link for %s", email)
+        resp = self._http.post(url, headers=headers, json=body)
+        if resp.status_code not in (200, 201):
+            raise TTTApiError(
+                f"Magic-link request failed (HTTP {resp.status_code}): {resp.text}",
+                status_code=resp.status_code,
+                response_body=resp.text,
+            )
+
     def refresh_token(self) -> None:
         """Refresh the access token using the stored refresh token."""
         if not self._refresh_token_value:
