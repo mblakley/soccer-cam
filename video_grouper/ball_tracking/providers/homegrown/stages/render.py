@@ -480,7 +480,21 @@ def _render_video(
             out_stream.width = out_width
             out_stream.height = out_height
             out_stream.pix_fmt = "yuv420p"
-            out_stream.bit_rate = _parse_bitrate(video_bitrate)
+            # CRITICAL: must set codec_context.time_base. PyAV's default
+            # (1/1,215,000) doesn't match source's (typically 1/90,000) —
+            # the encoder budgets bits-per-second relative to its own
+            # time_base, so a wrong default produces output ~13× larger
+            # than the configured bit_rate AND breaks duration metadata
+            # (output appears as 23,000 sec long for a 60 sec source).
+            # Matching source's time_base fixes both at once.
+            out_stream.codec_context.time_base = in_video.time_base
+            out_stream.codec_context.bit_rate = _parse_bitrate(video_bitrate)
+            # maxrate + bufsize tighten the rate-control window so we
+            # don't overshoot the bit_rate target on busy frames.
+            out_stream.options = {
+                "maxrate": video_bitrate,
+                "bufsize": str(_parse_bitrate(video_bitrate) * 2),
+            }
 
             out_audio = None
             if in_audio is not None:
