@@ -1,59 +1,259 @@
 # Docker Setup for VideoGrouper
 
-This document explains how to use VideoGrouper with Docker.
+This document explains how to run VideoGrouper in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
 
-## Prerequisites
+- [Quick start](#quick-start) — get the pipeline running, no ball detection
+- [Volume mounts](#volume-mounts) — where data goes in and out
+- [Ball detection (homegrown ONNX, GPU-capable)](#ball-detection-homegrown-onnx-gpu-capable) — the licensed inference path
+- [GPU acceleration](#gpu-acceleration) — when the container should use a CUDA GPU
+- [Troubleshooting](#troubleshooting)
 
-- Docker
-- Docker Compose
+---
 
-## Configuration
+## Quick start
 
-1. Create a `config.ini` file in the video_grouper directory of the project (you can copy from `video_grouper/config.ini.dist`)
-2. Ensure the `storage_path` in the config points to `/shared_data` (this is mounted as a volume)
-
-## Files Included in Docker Image
-
-The Docker image includes only the necessary files to run VideoGrouper:
-
-- `video_grouper/__init__.py`
-- `video_grouper/__main__.py` (consolidated entry point)
-- `video_grouper/video_grouper.py`
-- `video_grouper/ffmpeg_utils.py`
-- `video_grouper/models.py`
-- `video_grouper/match_info.ini.dist`
-- `video_grouper/cameras/` directory
-- Auto-generated `video_grouper/version.py`
-
-## Running with Docker Compose
+Bring up the pipeline against your camera with no ball detection:
 
 ```bash
-# Build and start the container
-docker-compose up -d
+# 1. Create a config from the template
+mkdir -p shared_data
+cp video_grouper/config.ini.dist shared_data/config.ini
+# edit shared_data/config.ini: set [CAMERA.default] device_ip / username / password,
+# [STORAGE] path = /shared_data, [YOUTUBE] credentials, etc.
+# Make sure [BALL_TRACKING] enabled = false (default) for now.
 
-# View logs
-docker-compose logs -f
+# 2. Build (or pull) and run
+docker compose build
+docker compose up -d
 
-# Stop the container
-docker-compose down
+# 3. Watch the logs
+docker compose logs -f video-grouper
 ```
 
-## Building with Version Information
+The container polls the camera, downloads new clips, combines/trims them, prompts for game start/end via NTFY, and uploads to YouTube. Standard pipeline.
 
-You can specify version information when building:
+To rebuild from a specific version tag:
 
 ```bash
-docker build -t video-grouper \
+docker build \
   --build-arg VERSION=1.0.0 \
   --build-arg BUILD_NUMBER=123 \
-  -f video_grouper/Dockerfile .
+  -t video-grouper -f video_grouper/Dockerfile .
 ```
 
-## Volume Mounts
+---
 
-The Docker setup includes two volume mounts:
+## Volume mounts
 
-1. `./shared_data:/shared_data` - For storing downloaded and processed videos
-2. `./video_grouper/config.ini:/app/config.ini` - For the application configuration
+The default `docker-compose.yaml` mounts two paths:
 
-Make sure these directories exist and have the correct permissions. 
+```yaml
+volumes:
+  - ./shared_data:/shared_data            # queue state + TTT auth tokens
+  - ./video_grouper/config.ini:/app/config.ini
+```
+
+What lives where:
+
+| Path inside container | Holds |
+|---|---|
+| `/shared_data/<game>/` | Per-game video directory (downloaded clips, combined MP4, trimmed MP4, `state.json`, **and the ball-tracking outputs `detections.json` + `trajectory.json` if enabled**) |
+| `/shared_data/*_queue_state.json` | Persisted async queues (download / video / upload / ball-tracking) |
+| `/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
+| `/app/config.ini` | Application configuration (read-only is fine) |
+
+**There is no separate "output" volume** — ball detection writes its `detections.json` and `trajectory.json` into the same per-game directory as the input video. Mount whatever directory tree holds your games; outputs land alongside inputs.
+
+If your game videos live elsewhere (e.g., a NAS mount), change `STORAGE.path` in `config.ini` to wherever you mount it (e.g., `/mnt/games`) and add the matching volume to compose.
+
+---
+
+## Ball detection (homegrown ONNX, GPU-capable)
+
+Soccer-cam ships a homegrown ball-detection provider that runs an ONNX model via onnxruntime. The model is **licensed** — fetched at runtime via Team Tech Tools using the user's account, decrypted in memory, and never written to disk. Premium tier required.
+
+### Prerequisites
+
+1. A Team Tech Tools account (`https://teamtechtools.com`) with the ball-detection entitlement.
+2. The encrypted model artifact accessible from where the container runs. Public release URLs:
+   - `https://github.com/mblakley/soccer-cam/releases/download/model-vX.Y.Z/model-vX.Y.Z.enc`
+   - The container fetches this URL automatically — you don't need to download it manually.
+3. (Optional) An NVIDIA GPU exposed to the container. CPU works too, just slower; see [GPU acceleration](#gpu-acceleration).
+
+### Configure `config.ini`
+
+Two sections need to be set up. Replace the placeholder values with your TTT credentials.
+
+```ini
+[BALL_TRACKING]
+enabled = true
+provider = homegrown
+
+[BALL_TRACKING.HOMEGROWN]
+# Triggers the licensed/encrypted path (vs. local plaintext model_path for testing)
+model_key = premium.video.ball_detection
+device = cuda:0           # cuda:0 prefers GPU; falls back to CPU automatically. Use 'cpu' to force CPU.
+stages = stitch_correct, detect, track, render
+
+[TTT]
+enabled = true
+supabase_url = https://<your-supabase-project>.supabase.co
+anon_key = <your-supabase-anon-key>
+api_base_url = https://api.teamtechtools.com
+email = <your-ttt-email>
+password = <your-ttt-password>
+# plugin_signing_public_keys = ["...hex..."]   # optional override; default ships in code
+```
+
+Email + password are used for the **first** authentication only — after that, Supabase access + refresh tokens are persisted to `/shared_data/ttt/tokens.json` and refreshed automatically. You can clear `password` from `config.ini` once tokens exist if you don't want it stored at rest.
+
+### Run
+
+CPU mode (works everywhere):
+
+```bash
+docker compose up -d
+```
+
+GPU mode (requires NVIDIA Container Toolkit on the host; Docker Desktop on Windows ships it):
+
+```bash
+docker run --rm --gpus all \
+  -v $(pwd)/shared_data:/shared_data \
+  -v $(pwd)/video_grouper/config.ini:/app/config.ini \
+  video-grouper
+```
+
+Or, to keep using `docker compose` with GPU, append a `deploy.resources.reservations.devices` block to your local `docker-compose.yaml` (it's intentionally not in the default — see [GPU acceleration](#gpu-acceleration)).
+
+### What happens at runtime
+
+When a game reaches the ball-tracking stage:
+
+1. `TTTApiClient` loads tokens from `/shared_data/ttt/tokens.json` (or signs in with email/password if no tokens yet).
+2. `SecureLoader.acquire("premium.video.ball_detection")` calls `POST {api_base_url}/api/models/premium.video.ball_detection/license` with the JWT.
+3. TTT returns a signed license + the AES-GCM key.
+4. `SecureLoader` downloads the `.enc` artifact from `artifact_url` (the GitHub release), verifies the SHA-256, and decrypts in memory.
+5. The decrypted ONNX model is loaded into `onnxruntime.InferenceSession` with the available execution providers (`[CUDA, CPU]` if GPU exposed, `[CPU]` otherwise).
+6. The detect stage runs `detect_balls()` per frame, writing `detections.json` to the game directory.
+7. The track stage consumes `detections.json` and writes `trajectory.json`.
+8. The render stage produces the broadcast-perspective output video.
+
+Plaintext model bytes never touch the disk.
+
+### Verify it actually loaded the model and picked the right execution provider
+
+After a game runs through, check the logs:
+
+```bash
+docker compose logs video-grouper | grep -E "ONNX session using|licensed.*tier"
+# Expected on a GPU host:
+#   detect: licensed premium.video.ball_detection v0.1.0 (premium, provider=CUDAExecutionProvider)
+#   ONNX session using: ['CUDAExecutionProvider', 'CPUExecutionProvider']
+# Expected on a CPU host:
+#   detect: licensed premium.video.ball_detection v0.1.0 (premium, provider=CPUExecutionProvider)
+#   ONNX session using: ['CPUExecutionProvider']
+```
+
+And confirm outputs landed in the per-game directory:
+
+```bash
+ls -la shared_data/<your-game>/
+# detections.json    <- per-frame detections
+# trajectory.json    <- smoothed ball track
+```
+
+### Local testing without TTT licensing
+
+For development, skip TTT and point at a plain ONNX file:
+
+```ini
+[BALL_TRACKING.HOMEGROWN]
+model_path = /models/ball_detector.onnx   # plain .onnx, no encryption
+device = cuda:0
+# leave model_key unset
+```
+
+Add a volume mount for the model directory:
+
+```yaml
+volumes:
+  - ./models:/models:ro
+```
+
+This bypasses `SecureLoader` entirely — useful for inference tuning or running against a custom model.
+
+---
+
+## GPU acceleration
+
+The image is GPU-capable. When CUDA is available inside the container, ball detection runs on the GPU. Otherwise it falls back to `CPUExecutionProvider`. **Same image either way** — no `:gpu`/`:cpu` tag split.
+
+### Prerequisites for GPU
+
+- **Linux host:** NVIDIA driver + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+- **Windows host (Docker Desktop):** current NVIDIA Windows driver. Docker Desktop ships the WSL2 GPU passthrough preinstalled — nothing to install inside WSL.
+
+Sanity-check the host can expose its GPU to a container:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi
+```
+
+If the GPU table prints, the host is configured.
+
+### Adding GPU to compose
+
+The default `docker-compose.yaml` does **not** request a GPU because compose hard-fails on hosts without an NVIDIA runtime. To use GPU under compose, add this to your local override:
+
+```yaml
+services:
+  video-grouper:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+Or pass `--gpus all` to `docker run` directly (works on every host with the toolkit installed).
+
+### Forcing CPU on a GPU host
+
+Two ways:
+
+- Drop `--gpus all` (or remove the `deploy.resources` block) — the container won't see the GPU.
+- Set `device = cpu` in `[BALL_TRACKING.HOMEGROWN]` — the inference session is built with CPU-only providers regardless of host.
+
+---
+
+## Troubleshooting
+
+### `nvidia-container-cli: initialization error: WSL environment detected but no adapters were found`
+
+The host doesn't have a usable NVIDIA driver. On Windows, install the latest NVIDIA Game Ready / Studio driver and restart Docker Desktop. Or just run without `--gpus all` — ORT will use CPU.
+
+### `detect: model_key is set but TTT integration is disabled`
+
+`[BALL_TRACKING.HOMEGROWN] model_key` is set but `[TTT] enabled` is `false`. Either flip TTT on (and configure credentials) or use `model_path` instead for local testing.
+
+### `License signature did not validate against any known key`
+
+The container's `plugin_signing_public_keys` doesn't include the key the TTT backend signed the license with. Either:
+
+- The default in code is stale — check for a soccer-cam release that ships the new key, or
+- Your TTT instance is signing with a non-default key — set `[TTT] plugin_signing_public_keys = ["<hex>"]` to override.
+
+### `Artifact SHA-256 does not match license manifest`
+
+The `.enc` artifact at `artifact_url` was modified or replaced after the license was issued. Re-acquire (clear `/shared_data/ttt/tokens.json` and restart so a fresh license is requested).
+
+### `Configuration file not found at /app/shared_data/config.ini`
+
+Either the `./shared_data:/shared_data` volume isn't mounted, or `config.ini` isn't inside it. The default compose file mounts `./video_grouper/config.ini:/app/config.ini` — that path also works.
+
+### Container starts but `ONNX session using` never appears in logs
+
+Ball-tracking only runs once a game reaches the `trimmed` state. If you don't have a fully-downloaded game yet, no inference will happen. Check the queue state files in `/shared_data/` to see what stage games are at.
