@@ -72,8 +72,20 @@ def storage(tmp_path):
 @pytest.fixture
 def client(storage):
     app = create_app(_ttt_config(), str(storage))
-    with TestClient(app) as c:
+    # Use a loopback base_url so the auth server's Host-allowlist middleware
+    # accepts the requests; the default `http://testserver` would 403.
+    with TestClient(app, base_url="http://localhost:8765") as c:
         yield c
+
+
+def _start_oauth_flow(client) -> str:
+    """Hit /login to set the OAuth state cookie; return the state value
+    so the caller can include it in /receive-token query."""
+    resp = client.get("/login?provider=google", follow_redirects=False)
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    qs = parse_qs(urlparse(location).query)
+    return qs["state"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +164,7 @@ def test_dashboard_includes_pipeline_status_from_provider(storage):
         }
 
     app = create_app(_ttt_config(), str(storage), status_provider=provider)
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost:8765") as c:
         body = c.get("/").text
 
     # Queues
@@ -175,7 +187,7 @@ def test_dashboard_status_provider_exception_falls_back_silently(storage):
         raise RuntimeError("orchestrator down")
 
     app = create_app(_ttt_config(), str(storage), status_provider=boom)
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost:8765") as c:
         resp = c.get("/")
     assert resp.status_code == 200
     # Falls back to "no live status" rather than 500ing.
@@ -234,23 +246,27 @@ def test_login_redirects_to_supabase_authorize(client):
     assert qs["redirect_to"] == ["http://localhost:8765/callback"]
 
 
-def test_login_uses_request_host_for_redirect_uri(client):
-    resp = client.get(
-        "/login?provider=google",
-        follow_redirects=False,
-        headers={"host": "nas.local:8765"},
-    )
+def test_login_uses_request_host_for_redirect_uri(storage):
+    """User signing in via a non-localhost name needs that name on the
+    Host allowlist (configured via auth_server_bind) AND in the redirect."""
+    cfg = _ttt_config(auth_server_bind="nas.local")
+    app = create_app(cfg, str(storage))
+    with TestClient(app, base_url="http://nas.local:8765") as c:
+        resp = c.get("/login?provider=google", follow_redirects=False)
     assert resp.status_code == 302
     qs = parse_qs(urlparse(resp.headers["location"]).query)
     assert qs["redirect_to"] == ["http://nas.local:8765/callback"]
 
 
-def test_login_respects_x_forwarded_proto(client):
-    resp = client.get(
-        "/login?provider=google",
-        follow_redirects=False,
-        headers={"host": "auth.example.com", "x-forwarded-proto": "https"},
-    )
+def test_login_respects_x_forwarded_proto(storage):
+    cfg = _ttt_config(auth_server_bind="auth.example.com")
+    app = create_app(cfg, str(storage))
+    with TestClient(app, base_url="http://auth.example.com") as c:
+        resp = c.get(
+            "/login?provider=google",
+            follow_redirects=False,
+            headers={"x-forwarded-proto": "https"},
+        )
     assert resp.status_code == 302
     qs = parse_qs(urlparse(resp.headers["location"]).query)
     assert qs["redirect_to"] == ["https://auth.example.com/callback"]
@@ -266,10 +282,11 @@ def test_callback_serves_fragment_extraction_page(client):
 
 
 def test_receive_token_persists_tokens_and_returns_success(storage, client):
+    state = _start_oauth_flow(client)
     exp = int(time.time()) + 3600
     jwt = _make_jwt(sub="user-abc", exp=exp)
 
-    resp = client.get(f"/receive-token?access_token={jwt}")
+    resp = client.get(f"/receive-token?access_token={jwt}&state={state}")
     assert resp.status_code == 200
     assert "Signed in" in resp.text
 
@@ -282,17 +299,101 @@ def test_receive_token_persists_tokens_and_returns_success(storage, client):
 
 
 def test_receive_token_with_error_returns_400_page(client):
+    state = _start_oauth_flow(client)
     resp = client.get(
-        "/receive-token?error=access_denied&error_description=User+canceled"
+        f"/receive-token?error=access_denied&error_description=User+canceled&state={state}"
     )
     assert resp.status_code == 400
     assert "User canceled" in resp.text
 
 
 def test_receive_token_missing_token_returns_400(client):
-    resp = client.get("/receive-token")
+    state = _start_oauth_flow(client)
+    resp = client.get(f"/receive-token?state={state}")
     assert resp.status_code == 400
     assert "No access token returned" in resp.text
+
+
+def test_receive_token_rejects_missing_state_cookie(client):
+    """The single most important hardening: an attacker page can't
+    `<img src=/receive-token?access_token=ATTACKER>` and silently sign
+    the local pipeline into the attacker's TTT account, because no
+    matching cookie was ever set."""
+    resp = client.get("/receive-token?access_token=fake&state=somestate")
+    assert resp.status_code == 400
+    assert "state mismatch" in resp.text
+
+
+def test_receive_token_rejects_state_mismatch(client):
+    """Even with the cookie set (e.g. concurrent sign-in started elsewhere),
+    a wrong state in the query is rejected."""
+    _start_oauth_flow(client)  # sets cookie
+    resp = client.get("/receive-token?access_token=fake&state=wrong")
+    assert resp.status_code == 400
+    assert "state mismatch" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Local-web-app hardening: DNS rebinding + Origin/Referer
+# ---------------------------------------------------------------------------
+
+
+def test_host_header_rejected_for_unknown_host(client):
+    """DNS rebinding defense: an attacker-resolved name that points at
+    127.0.0.1 should not be able to drive our endpoints."""
+    resp = client.get("/", headers={"host": "evil.com"})
+    assert resp.status_code == 403
+
+
+def test_host_header_accepted_for_loopback_variants(storage):
+    app = create_app(_ttt_config(), str(storage))
+    for host in ("localhost", "127.0.0.1"):
+        with TestClient(app, base_url=f"http://{host}") as c:
+            resp = c.get("/")
+            assert resp.status_code == 200, host
+
+
+def test_post_logout_rejects_cross_origin(client, storage):
+    """Cross-origin POST from a malicious page is blocked."""
+    # Set up a token so the test isn't testing the no-op path.
+    _write_tokens(
+        storage,
+        jwt=_make_jwt(exp=int(time.time()) + 60),
+        expires_at=float(time.time() + 60),
+    )
+    resp = client.post(
+        "/logout",
+        headers={"origin": "https://evil.com"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    # Token should NOT have been deleted.
+    assert (storage / "ttt" / "tokens.json").exists()
+
+
+def test_post_logout_accepts_same_origin(client, storage):
+    _write_tokens(
+        storage,
+        jwt=_make_jwt(exp=int(time.time()) + 60),
+        expires_at=float(time.time() + 60),
+    )
+    resp = client.post(
+        "/logout",
+        headers={"origin": "http://localhost:8765"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert not (storage / "ttt" / "tokens.json").exists()
+
+
+def test_post_login_password_rejects_cross_origin(client):
+    resp = client.post(
+        "/login/password",
+        headers={"origin": "https://evil.com"},
+        data={"email": "x@y.com", "password": "x"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
 
 
 def test_login_password_success_persists_tokens_and_redirects(storage, client):

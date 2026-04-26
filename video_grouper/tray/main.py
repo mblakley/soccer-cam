@@ -237,43 +237,22 @@ class SystemTrayIcon(QSystemTrayIcon):
             f"Using a thread pool with {self.threadpool.maxThreadCount()} threads."
         )
 
-        # Initialize processors only if config is loaded
-        self.upload_processor = None
+        # The tray's only processor responsibility is autocam_gui ball-tracking
+        # (Once Sport's commercial GUI app needs Session 1+, which the service
+        # can't provide). homegrown ball-tracking and the rest of the pipeline
+        # (upload, video, ntfy, etc.) live in the service. When ball-tracking
+        # finishes here, we set state.json -> ball_tracking_complete and the
+        # service's StateAuditor picks it up to queue the YouTube upload.
+        # See `~/.claude/plans/web-ui-consolidation.md` Phase 0a.
         self.ball_tracking_processor = None
         self.ball_tracking_discovery_processor = None
 
-        if self.config:
-            from video_grouper.task_processors.upload_processor import UploadProcessor
-
-            # Minimal NtfyService for the tray's UploadProcessor so the
-            # playlist-name fallback (when a team has no [YOUTUBE.PLAYLIST_MAP]
-            # entry) can actually send the notification. The full
-            # MatchInfoService wiring lives in the service; here we only need
-            # send_notification / request_playlist_name / is_waiting_for_input.
-            tray_ntfy_service = None
-            if self.config.ntfy.enabled:
-                try:
-                    from video_grouper.task_processors.services.ntfy_service import (
-                        NtfyService,
-                    )
-
-                    tray_ntfy_service = NtfyService(
-                        self.config.ntfy, self.config.storage.path
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not create NtfyService for tray: {e}")
-
-            self.upload_processor = UploadProcessor(
-                storage_path=self.config.storage.path,
-                config=self.config,
-                ntfy_service=tray_ntfy_service,
-            )
-
-            if self.config.ball_tracking.enabled:
+        if self.config and self.config.ball_tracking.enabled:
+            if self.config.ball_tracking.provider == "autocam_gui":
                 self.ball_tracking_processor = BallTrackingProcessor(
                     storage_path=self.config.storage.path,
                     config=self.config,
-                    upload_processor=self.upload_processor,
+                    upload_processor=None,
                 )
 
                 from video_grouper.task_processors.ball_tracking_discovery_processor import (
@@ -288,16 +267,17 @@ class SystemTrayIcon(QSystemTrayIcon):
                 )
             else:
                 logger.info(
-                    "Ball tracking is disabled in configuration, skipping processor init"
+                    "Tray: ball-tracking provider is %r; nothing to run here "
+                    "(homegrown ball-tracking and other processors live in the "
+                    "service). The tray will only run AutoCam-related work.",
+                    self.config.ball_tracking.provider,
                 )
-        else:
+        elif not self.config:
             logger.warning("No config loaded, skipping processor initialization")
 
     async def initialize(self):
         """Initialize the tray app asynchronously."""
         logger.info("Initializing SystemTrayIcon...")
-        if self.upload_processor:
-            await self.upload_processor.start()
         if self.ball_tracking_processor:
             await self.ball_tracking_processor.start()
         if self.ball_tracking_discovery_processor:
@@ -314,8 +294,6 @@ class SystemTrayIcon(QSystemTrayIcon):
             await self.ball_tracking_discovery_processor.stop()
         if hasattr(self, "ball_tracking_processor") and self.ball_tracking_processor:
             await self.ball_tracking_processor.stop()
-        if hasattr(self, "upload_processor") and self.upload_processor:
-            await self.upload_processor.stop()
         logger.info("SystemTrayIcon shutdown complete")
 
     def init_ui(self):

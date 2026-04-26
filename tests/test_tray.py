@@ -40,6 +40,7 @@ def mock_config(tmp_path):
     config.storage.path = str(tmp_path)
     config.ball_tracking = MagicMock(spec=BallTrackingConfig)
     config.ball_tracking.enabled = True
+    config.ball_tracking.provider = "autocam_gui"
     config.paths = MagicMock()
     config.paths.shared_data_path = str(tmp_path / "shared")
     return config
