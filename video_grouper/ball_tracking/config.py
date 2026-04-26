@@ -56,6 +56,13 @@ class HomegrownProviderConfig(BaseModel):
     render_output_width: int = 1920
     render_output_height: int = 1080
     render_fov_deg: float = 50.0
+    # Cylindrical projection — source has ~180° HFOV after stitch; view is the
+    # rendered perspective FOV (render_fov_deg above). vfovs of -1 mean
+    # "derive automatically for square pixels".
+    render_src_hfov_deg: float = 180.0
+    render_src_vfov_deg: float = -1.0
+    render_view_vfov_deg: float = -1.0
+    render_pitch_deg: float = 0.0
 
     model_config = {"validate_by_name": True}
 
