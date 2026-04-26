@@ -189,6 +189,49 @@ class CloudSyncConfig(BaseModel):
     provider: Optional[str] = None
 
 
+class NodeConfig(BaseModel):
+    """Per-node role for distributed video processing.
+
+    - ``standalone`` (default): single-host setup. Orchestrator runs the full
+      pipeline; no worker API, no remote workers.
+    - ``master``: orchestrator + ``/api/work/*`` worker-coordination API.
+      Remote workers register here and pull tasks.
+    - ``worker``: this node does NOT run the orchestrator. Polls a master
+      via ``master_url`` for work and processes it. ``python -m
+      video_grouper.worker`` is the entry point.
+    """
+
+    role: str = "standalone"  # 'standalone' | 'master' | 'worker'
+    master_url: str = ""  # worker only
+    # Tokens master issues to workers at /api/work/register. Stored
+    # comma-separated; worker keeps its own in worker_state.json after
+    # registration.
+    worker_tokens: list[str] = Field(default_factory=list)
+    # Worker-side: which capabilities this node advertises to the master.
+    capabilities: list[str] = Field(
+        default_factory=lambda: ["combine", "trim", "ball_tracking"]
+    )
+
+    @field_validator("worker_tokens", "capabilities", mode="before")
+    @classmethod
+    def _parse_str_list(cls, v):
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped in ("", "[]"):
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        return v
+
+
 class TTTConfig(BaseModel):
     """Configuration for Team Tech Tools integration (clip request automation)."""
 
@@ -320,6 +363,7 @@ class Config(BaseModel):
     ball_tracking: BallTrackingConfig = Field(
         alias="BALL_TRACKING", default_factory=BallTrackingConfig
     )
+    node: NodeConfig = Field(alias="NODE", default_factory=NodeConfig)
 
     model_config = {"validate_by_name": True}
 

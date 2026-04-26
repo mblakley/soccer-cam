@@ -492,6 +492,7 @@ def create_app(
     status_provider: Optional[Callable[[], dict[str, Any]]] = None,
     providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
     config_path: Optional[Path] = None,
+    node_role: str = "standalone",
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 
@@ -539,6 +540,12 @@ def create_app(
         from video_grouper.web.setup.router import build_router as _build_setup
 
         app.include_router(_build_setup(config_path))
+
+    # Phase 4: master nodes expose the worker-coordination API.
+    if node_role == "master":
+        from video_grouper.web.worker_api import build_router as _build_worker
+
+        app.include_router(_build_worker(storage_path))
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #

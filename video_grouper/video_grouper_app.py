@@ -54,6 +54,17 @@ class VideoGrouperApp:
                 "Switch to provider = 'homegrown'."
             )
 
+        # Phase 4: a node configured as a worker MUST run via
+        # `python -m video_grouper.worker` — the regular orchestrator
+        # entry point doesn't know how to poll a master. Refuse to start
+        # the orchestrator under role=worker.
+        if config.node.role == "worker":
+            raise RuntimeError(
+                "[NODE].role = 'worker'; this node is configured as a "
+                "remote worker. Use `python -m video_grouper.worker` "
+                "instead of the orchestrator entry point."
+            )
+
         # Setup logging from config
         setup_logging_from_config(config)
 
@@ -657,6 +668,7 @@ class VideoGrouperApp:
                     self.storage_path,
                     status_provider=_auth_status_provider,
                     config_path=self.config_path,
+                    node_role=self.config.node.role,
                 )
                 uv_config = uvicorn.Config(
                     auth_app,
