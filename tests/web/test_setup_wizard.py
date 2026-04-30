@@ -9,6 +9,12 @@ from video_grouper.utils.config import TTTConfig, load_config
 from video_grouper.web.auth_server import create_app
 
 
+# Same-origin Origin header so auth_server's middleware accepts the
+# wizard's POSTs (host_and_origin_check rejects state-changing requests
+# with no Origin/Referer).
+_SAME_ORIGIN = {"origin": "http://localhost:8765"}
+
+
 @pytest.fixture
 def config_path(tmp_path):
     # Wizard is the path users hit when there's no config yet, so the
@@ -19,7 +25,7 @@ def config_path(tmp_path):
 @pytest.fixture
 def client(tmp_path, config_path):
     app = create_app(TTTConfig(), str(tmp_path), config_path=config_path)
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         yield c
 
 
@@ -112,6 +118,6 @@ def test_finish_rejects_incomplete_state(client):
 def test_setup_not_mounted_without_config_path(tmp_path):
     """Without a config_path, /setup/* is 404 (same gating as /config)."""
     app = create_app(TTTConfig(), str(tmp_path))
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         resp = c.get("/setup/welcome")
     assert resp.status_code == 404

@@ -89,42 +89,15 @@ def test_system_tray_icon_initialization(
     mock_start_update_checker.assert_called_once()
 
 
-@patch("video_grouper.tray.main.win32serviceutil.StartService")
-@patch("video_grouper.tray.main.win32serviceutil.StopService")
 @patch("video_grouper.tray.main.win32serviceutil.RestartService")
-def test_start_service_success(
-    mock_restart_service, mock_stop_service, mock_start_service
-):
-    """Test the start_service method for success."""
+def test_restart_service_success(mock_restart_service):
+    """Restart Service is the only service-control item left in the slim
+    tray menu (Start/Stop were dropped)."""
     with patch("video_grouper.tray.main.SystemTrayIcon.__init__", lambda x: None):
         tray_icon = SystemTrayIcon()
         tray_icon.showMessage = MagicMock()
-        tray_icon.start_service()
-        mock_start_service.assert_called_once_with("VideoGrouperService")
+        tray_icon.restart_service()
+        mock_restart_service.assert_called_once_with("VideoGrouperService")
         tray_icon.showMessage.assert_called_once_with(
-            "Service", "Service started successfully"
-        )
-
-
-@patch(
-    "video_grouper.tray.main.win32serviceutil.StartService",
-    side_effect=Exception("Test Error"),
-)
-@patch("video_grouper.tray.main.win32serviceutil.StopService")
-@patch("video_grouper.tray.main.win32serviceutil.RestartService")
-def test_start_service_failure(
-    mock_restart_service, mock_stop_service, mock_start_service
-):
-    """Test the start_service method for failure."""
-    with patch("video_grouper.tray.main.SystemTrayIcon.__init__", lambda x: None):
-        tray_icon = SystemTrayIcon()
-        tray_icon.showMessage = MagicMock()
-
-        tray_icon.start_service()
-
-        mock_start_service.assert_called_once_with("VideoGrouperService")
-        tray_icon.showMessage.assert_called_with(
-            "Service",
-            "Failed to start service: Test Error",
-            3,  # Corresponds to QSystemTrayIcon.MessageIcon.Critical
+            "Service", "Service restarted successfully"
         )

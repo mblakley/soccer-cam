@@ -86,37 +86,90 @@ async def _process_task(task: dict) -> tuple[bool, dict | str]:
     return True, {"runner": "stub", "task_type": task_type}
 
 
-async def _poll_loop(master_url: str, token: str, poll_interval: float = 5.0) -> None:
+async def _heartbeat_loop(
+    client: httpx.AsyncClient,
+    master_url: str,
+    task_id: str,
+    interval: float,
+    stop: asyncio.Event,
+) -> None:
+    """Ping the master's heartbeat endpoint every `interval` seconds
+    until `stop` is set. The master uses last_heartbeat to detect dead
+    workers; without this, anything longer than the master's grace
+    window would look stalled."""
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+            return  # stop_event was set
+        except asyncio.TimeoutError:
+            try:
+                await client.post(f"{master_url}/api/work/{task_id}/heartbeat")
+            except httpx.HTTPError as exc:
+                logger.warning("WORKER: heartbeat failed for %s: %s", task_id, exc)
+
+
+async def _poll_once(
+    client: httpx.AsyncClient,
+    master_url: str,
+    *,
+    heartbeat_interval: float = 20.0,
+) -> bool:
+    """Run one iteration of the poll loop. Returns True iff a task was
+    claimed (regardless of completion outcome). Tests drive this
+    directly so they don't need to interrupt the outer while-True."""
+    try:
+        resp = await client.get(f"{master_url}/api/work/next")
+    except httpx.HTTPError as exc:
+        logger.warning("WORKER: poll failed: %s", exc)
+        return False
+    if resp.status_code == 204:
+        return False
+    if not resp.is_success:
+        logger.warning("WORKER: /api/work/next returned %s", resp.status_code)
+        return False
+    task = resp.json()
+    task_id = task["task_id"]
+
+    stop_hb = asyncio.Event()
+    hb_task = asyncio.create_task(
+        _heartbeat_loop(client, master_url, task_id, heartbeat_interval, stop_hb)
+    )
+    try:
+        success, result = await _process_task(task)
+    finally:
+        stop_hb.set()
+        await hb_task
+
+    try:
+        if success:
+            await client.post(
+                f"{master_url}/api/work/{task_id}/complete",
+                json={"outputs": result},
+            )
+        else:
+            await client.post(
+                f"{master_url}/api/work/{task_id}/fail",
+                json={"error": str(result), "retry": True},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("WORKER: failed to report task %s: %s", task_id, exc)
+    return True
+
+
+async def _poll_loop(
+    master_url: str,
+    token: str,
+    poll_interval: float = 5.0,
+    heartbeat_interval: float = 20.0,
+) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(headers=headers, timeout=15.0) as client:
         while True:
-            try:
-                resp = await client.get(f"{master_url}/api/work/next")
-                if resp.status_code == 204:
-                    await asyncio.sleep(poll_interval)
-                    continue
-                resp.raise_for_status()
-                task = resp.json()
-            except httpx.HTTPError as exc:
-                logger.warning("WORKER: poll failed: %s", exc)
+            processed = await _poll_once(
+                client, master_url, heartbeat_interval=heartbeat_interval
+            )
+            if not processed:
                 await asyncio.sleep(poll_interval)
-                continue
-
-            success, result = await _process_task(task)
-            task_id = task["task_id"]
-            try:
-                if success:
-                    await client.post(
-                        f"{master_url}/api/work/{task_id}/complete",
-                        json={"outputs": result},
-                    )
-                else:
-                    await client.post(
-                        f"{master_url}/api/work/{task_id}/fail",
-                        json={"error": str(result), "retry": True},
-                    )
-            except httpx.HTTPError as exc:
-                logger.error("WORKER: failed to report task %s: %s", task_id, exc)
 
 
 async def main() -> int:

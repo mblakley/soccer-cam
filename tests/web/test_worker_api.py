@@ -10,10 +10,16 @@ from video_grouper.web.auth_server import create_app
 from video_grouper.web.worker_api import enqueue_task
 
 
+# auth_server's middleware requires same-origin Origin/Referer on every
+# state-changing method; bake it into the test client so each POST/PUT
+# is treated as a same-origin browser request.
+_SAME_ORIGIN = {"origin": "http://localhost:8765"}
+
+
 @pytest.fixture
 def client(tmp_path):
     app = create_app(TTTConfig(), str(tmp_path), node_role="master")
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         yield c
 
 
@@ -25,7 +31,7 @@ def storage(tmp_path):
 def test_worker_api_not_mounted_in_standalone_mode(tmp_path):
     """The worker API only ships with role=master, never standalone."""
     app = create_app(TTTConfig(), str(tmp_path))  # default role
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         resp = c.post("/api/work/register", json={"node_id": "x"})
     assert resp.status_code == 404
 

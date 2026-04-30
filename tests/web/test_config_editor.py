@@ -9,6 +9,11 @@ from video_grouper.utils.config import TTTConfig, load_config
 from video_grouper.web.auth_server import create_app
 
 
+# Same-origin header so auth_server's middleware accepts the editor's
+# POSTs (rejected without Origin/Referer after the OAuth-state CSRF fix).
+_SAME_ORIGIN = {"origin": "http://localhost:8765"}
+
+
 _DIST_INI = """\
 [CAMERA.default]
 type = dahua
@@ -68,13 +73,13 @@ def config_path(tmp_path):
 @pytest.fixture
 def client(tmp_path, config_path):
     app = create_app(TTTConfig(), str(tmp_path), config_path=config_path)
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         yield c
 
 
 def test_get_config_renders_form_with_existing_values(client):
     body = client.get("/config").text
-    assert "<title>Soccer-Cam configuration</title>" in body
+    assert "<title>Soccer-Cam · Configuration</title>" in body
     # Several known fields should appear with their current values.
     assert 'name="STORAGE.path"' in body
     assert 'value="/shared_data"' in body
@@ -180,6 +185,6 @@ def test_post_config_invalid_returns_422(client, config_path):
 def test_config_editor_not_mounted_when_path_missing(tmp_path):
     """Without config_path, /config returns 404."""
     app = create_app(TTTConfig(), str(tmp_path))  # no config_path
-    with TestClient(app, base_url="http://localhost:8765") as c:
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         resp = c.get("/config")
     assert resp.status_code == 404
