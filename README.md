@@ -32,8 +32,9 @@ The pipeline is fully automatic after initial setup. It recovers from crashes, r
 - **NTFY push notifications** -- asks you to identify game start/end times from your phone
 - **YouTube upload** -- automatic upload with playlist organization and quota handling
 - **Crash recovery** -- persistent state means nothing is lost on restart
-- **Windows service + tray app** -- runs in the background with a system tray GUI
-- **Docker support** -- run on Linux with Docker Compose
+- **Web dashboard, config editor, and onboarding wizard** -- runs on loopback at `http://localhost:8765`; same UI on Windows, Linux, and Docker
+- **Windows service + minimal tray** -- background service plus a tray icon for AutoCam and dashboard shortcuts
+- **Docker support** -- run on Linux with Docker Compose; full UI via the loopback web app
 - **Modular camera system** -- add support for new cameras by implementing a simple interface
 
 ## Quick Start
@@ -42,8 +43,7 @@ The pipeline is fully automatic after initial setup. It recovers from crashes, r
 
 1. Download `VideoGrouperSetup.exe` from the [Releases](https://github.com/mblakley/soccer-cam/releases) page
 2. Run the installer
-3. Configure your camera and storage settings in the tray app
-4. The service starts automatically and runs in the background
+3. The service starts automatically. Open `http://localhost:8765` in your browser, complete the onboarding wizard at `/setup`, and adjust settings later from `/config`. The tray icon's "Open Dashboard" item points at the same URL.
 
 ### Option 2: From Source
 
@@ -78,7 +78,9 @@ The image is GPU-capable: ball detection auto-detects an available CUDA GPU and 
 
 ## Configuration
 
-Edit `config.ini` with your settings. At minimum you need:
+Easiest path: open `http://localhost:8765/setup` in your browser — the onboarding wizard walks you through camera, storage, YouTube, and integration settings. After setup, edit individual fields at `http://localhost:8765/config`.
+
+If you'd rather edit `config.ini` directly, the minimum is:
 
 ```ini
 [CAMERA.default]
@@ -188,7 +190,9 @@ soccer-cam/
 │   ├── cameras/               # Camera implementations (Dahua, Reolink)
 │   ├── api_integrations/      # TeamSnap, PlayMetrics, NTFY
 │   ├── task_processors/       # Pipeline processors and task system
-│   ├── tray/                  # System tray GUI (PyQt6)
+│   ├── web/                   # FastAPI app: dashboard, /config editor, /setup wizard
+│   ├── worker/                # Distributed worker entry point (phase 6)
+│   ├── tray/                  # Windows tray icon + AutoCam plumbing (PyQt6)
 │   ├── service/               # Windows service wrapper
 │   ├── utils/                 # Config, FFmpeg, YouTube upload, etc.
 │   └── video_grouper_app.py   # Main application orchestrator

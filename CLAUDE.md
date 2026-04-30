@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Soccer-cam (video-grouper) is an automated pipeline for downloading, processing, and uploading soccer game videos from Dahua IP cameras. It runs as a Windows service with a PyQt6 system tray GUI, or via Docker on Linux.
+Soccer-cam (video-grouper) is an automated pipeline for downloading, processing, and uploading soccer game videos from IP cameras (Dahua, Reolink). The orchestrator runs as a Windows service or a plain Python process on Linux/Docker. It hosts a FastAPI web app on loopback (port 8765) that serves the dashboard, configuration editor (`/config`), and onboarding wizard (`/setup/*`) — Linux/Docker users get full UI parity with Windows. On Windows, a small PyQt6 tray icon parents AutoCam (when `[BALL_TRACKING].provider = autocam_gui`) and offers Open Dashboard / Restart Service / Exit shortcuts; otherwise the tray is unnecessary.
 
 ## Task Execution Rules
 

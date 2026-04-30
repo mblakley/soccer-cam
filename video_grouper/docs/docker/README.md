@@ -12,10 +12,35 @@ This document explains how to run VideoGrouper in Docker on Linux (or Windows vi
 
 ## Quick start
 
-Bring up the pipeline against your camera with no ball detection:
+Two paths: configure via the in-container web UI, or edit `config.ini` by hand.
+
+### Path A: configure from your browser (recommended)
 
 ```bash
-# 1. Create a config from the template
+# 1. Empty shared_data is fine -- the wizard creates config.ini for you.
+mkdir -p shared_data
+
+# 2. Build (or pull) and start.
+docker compose build
+docker compose up -d
+
+# 3. Open the onboarding wizard. Map the UI port first if it's not already
+#    in your compose file (see "Headless sign-in via the in-container web
+#    server" below for the `ports: 8765:8765` snippet).
+#    Then in your browser: http://localhost:8765/setup
+#
+#    The wizard walks through camera / storage / YouTube / NTFY / integration
+#    settings and writes /app/shared_data/config.ini. After setup, the same
+#    server hosts /config for ongoing edits and / (the dashboard) for
+#    pipeline status.
+
+# 4. Watch the logs
+docker compose logs -f video-grouper
+```
+
+### Path B: hand-edit `config.ini`
+
+```bash
 mkdir -p shared_data
 cp video_grouper/config.ini.dist shared_data/config.ini
 # edit shared_data/config.ini: set [CAMERA.default] device_ip / username / password,
@@ -23,11 +48,8 @@ cp video_grouper/config.ini.dist shared_data/config.ini
 # is correct -- it resolves to /app/shared_data inside the container.
 # Make sure [BALL_TRACKING] enabled = false (default) for now.
 
-# 2. Build (or pull) and run
 docker compose build
 docker compose up -d
-
-# 3. Watch the logs
 docker compose logs -f video-grouper
 ```
 
