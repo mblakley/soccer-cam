@@ -133,6 +133,11 @@ form.inline { display: inline; margin-left: 0.5rem; }
 <h1>Soccer-Cam</h1>
 <p class="muted">Auto-refreshes every 10s.</p>
 
+<nav style="margin: 0 0 1rem;">
+<a class="btn btn-ghost" href="/config">Configure</a>
+<a class="btn btn-ghost" href="/setup">Setup wizard</a>
+</nav>
+
 __AUTH_FLAGS_BANNER__
 
 <section>

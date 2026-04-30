@@ -21,7 +21,7 @@ from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.youtube_upload import authenticate_youtube
 from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.utils.config import load_config, save_config, Config
+from video_grouper.utils.config import load_config, Config
 from video_grouper.task_processors import BallTrackingProcessor
 from video_grouper.task_processors.register_tasks import register_all_tasks
 
@@ -338,71 +338,33 @@ class SystemTrayIcon(QSystemTrayIcon):
             )
         self.setToolTip(f"VideoGrouper v{self.full_version}")
 
-        # Create context menu
+        # Create context menu. Plan target: ≤ 4 items. The dashboard is
+        # the entry point for everything else (config editor, setup
+        # wizard, queue/camera/game state) — both nav links are on it.
         menu = QMenu()
 
-        # Service control actions
-        start_action = QAction("Start Service", self)
-        start_action.triggered.connect(self.start_service)
-        menu.addAction(start_action)
-
-        stop_action = QAction("Stop Service", self)
-        stop_action.triggered.connect(self.stop_service)
-        menu.addAction(stop_action)
+        dashboard_action = QAction("Open Dashboard", self)
+        dashboard_action.triggered.connect(self.open_dashboard)
+        menu.addAction(dashboard_action)
 
         restart_action = QAction("Restart Service", self)
         restart_action.triggered.connect(self.restart_service)
         menu.addAction(restart_action)
 
-        menu.addSeparator()
-
-        # Recording control
-        self.recording_action = QAction("Pause Recording", self)
-        self.recording_action.triggered.connect(self.toggle_recording)
-        menu.addAction(self.recording_action)
-        self._recording_enabled = True
-
-        # Per-camera enable/disable
-        if self.config and len(self.config.cameras) > 0:
-            cameras_menu = QMenu("Cameras")
-            for cam_config in self.config.cameras:
-                cam_action = QAction(
-                    f"{cam_config.name} ({cam_config.device_ip})", self
-                )
-                cam_action.setCheckable(True)
-                cam_action.setChecked(cam_config.enabled)
-                cam_action.triggered.connect(
-                    lambda checked, name=cam_config.name: self._toggle_camera(
-                        name, checked
-                    )
-                )
-                cameras_menu.addAction(cam_action)
-            menu.addMenu(cameras_menu)
+        # Pause/resume recording. Only meaningful for cameras that
+        # support it (Reolink); skip the menu item otherwise to keep
+        # the menu under the 4-item budget.
+        has_reolink_camera = bool(
+            self.config and any(c.type == "reolink" for c in self.config.cameras)
+        )
+        if has_reolink_camera:
+            self.recording_action = QAction("Pause Recording", self)
+            self.recording_action.triggered.connect(self.toggle_recording)
+            menu.addAction(self.recording_action)
+            self._recording_enabled = True
 
         menu.addSeparator()
 
-        # Phase 3: configuration + setup wizard now live in the browser at
-        # the local web app. The tray's job here is just to launch them.
-        dashboard_action = QAction("Open Dashboard", self)
-        dashboard_action.triggered.connect(self.open_dashboard)
-        menu.addAction(dashboard_action)
-
-        config_action = QAction("Open Configuration", self)
-        config_action.triggered.connect(self.open_config)
-        menu.addAction(config_action)
-
-        setup_wizard_action = QAction("Open Setup Wizard", self)
-        setup_wizard_action.triggered.connect(self.open_setup_wizard)
-        menu.addAction(setup_wizard_action)
-
-        # Update action
-        self.update_action = QAction("Check for Updates", self)
-        self.update_action.triggered.connect(self.check_updates)
-        menu.addAction(self.update_action)
-
-        menu.addSeparator()
-
-        # Exit action
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.exit_app)
         menu.addAction(exit_action)
@@ -439,29 +401,6 @@ class SystemTrayIcon(QSystemTrayIcon):
             logger.error(f"Could not launch browser: {e}", exc_info=True)
             self.showMessage(
                 "Dashboard",
-                f"Could not open browser: {e}",
-                QSystemTrayIcon.MessageIcon.Critical,
-            )
-
-    def open_config(self):
-        try:
-            webbrowser.open(self._web_url("/config"))
-        except Exception as e:
-            logger.error(f"Could not launch browser: {e}", exc_info=True)
-            self.showMessage(
-                "Configuration",
-                f"Could not open browser: {e}",
-                QSystemTrayIcon.MessageIcon.Critical,
-            )
-
-    def open_setup_wizard(self):
-        """Open the web wizard. Replaces the PyQt6 OnboardingWizard."""
-        try:
-            webbrowser.open(self._web_url("/setup/welcome"))
-        except Exception as e:
-            logger.error(f"Could not launch browser: {e}", exc_info=True)
-            self.showMessage(
-                "Setup Wizard",
                 f"Could not open browser: {e}",
                 QSystemTrayIcon.MessageIcon.Critical,
             )
@@ -516,61 +455,6 @@ class SystemTrayIcon(QSystemTrayIcon):
                 QSystemTrayIcon.MessageIcon.Critical.value,
             )
 
-    def _toggle_camera(self, camera_name: str, enabled: bool):
-        """Enable or disable a camera and save to config."""
-        try:
-            config = load_config(self.config_path)
-            for cam in config.cameras:
-                if cam.name == camera_name:
-                    cam.enabled = enabled
-                    break
-            else:
-                logger.warning("Camera %s not found in config", camera_name)
-                return
-
-            from video_grouper.utils.locking import FileLock
-
-            with FileLock(self.config_path):
-                save_config(config, self.config_path)
-
-            state = "enabled" if enabled else "disabled"
-            self.showMessage(
-                "Camera",
-                f"{camera_name} {state}. Restart the service to apply.",
-            )
-            logger.info("Camera %s %s", camera_name, state)
-        except Exception as e:
-            logger.error("Error toggling camera %s: %s", camera_name, e)
-            self.showMessage(
-                "Camera",
-                f"Error: {str(e)}",
-                QSystemTrayIcon.MessageIcon.Critical.value,
-            )
-
-    def start_service(self):
-        try:
-            win32serviceutil.StartService("VideoGrouperService")
-            self.showMessage("Service", "Service started successfully")
-        except Exception as e:
-            logger.error(f"Error starting service: {e}")
-            self.showMessage(
-                "Service",
-                f"Failed to start service: {str(e)}",
-                QSystemTrayIcon.MessageIcon.Critical.value,
-            )
-
-    def stop_service(self):
-        try:
-            win32serviceutil.StopService("VideoGrouperService")
-            self.showMessage("Service", "Service stopped successfully")
-        except Exception as e:
-            logger.error(f"Error stopping service: {e}")
-            self.showMessage(
-                "Service",
-                f"Failed to stop service: {str(e)}",
-                QSystemTrayIcon.MessageIcon.Critical.value,
-            )
-
     def restart_service(self):
         try:
             win32serviceutil.RestartService("VideoGrouperService")
@@ -581,25 +465,6 @@ class SystemTrayIcon(QSystemTrayIcon):
                 "Service",
                 f"Failed to restart service: {str(e)}",
                 QSystemTrayIcon.MessageIcon.Critical.value,
-            )
-
-    async def check_updates(self):
-        """Manually check for updates."""
-        try:
-            has_update = await check_and_update(self.version, self.github_repo)
-            if has_update:
-                self.showMessage(
-                    "Updates",
-                    "Update installed successfully. Please restart the application.",
-                )
-            else:
-                self.showMessage("Updates", "No updates available.")
-        except Exception as e:
-            logger.error(f"Error checking for updates: {e}")
-            self.showMessage(
-                "Updates",
-                f"Error checking for updates: {str(e)}",
-                QSystemTrayIcon.MessageIcon.Critical,
             )
 
     def show_update_notification(self, message):
