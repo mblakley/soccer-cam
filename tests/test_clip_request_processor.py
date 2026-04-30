@@ -593,6 +593,49 @@ class TestProcessRequestDispatch:
         ttt.fulfill_clip_request.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_external_storage_credential_error_logs_and_skips(
+        self, tmp_path, caplog
+    ):
+        """When TTT surfaces a credential_error, soccer-cam must log it and skip
+        the upload — silently falling through to the camera-manager Drive would
+        put the requester's footage in the wrong account."""
+        import logging as _logging
+
+        game_dir = tmp_path / "game-x"
+        game_dir.mkdir()
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+
+        ttt = MagicMock()
+        ttt.is_authenticated = MagicMock(return_value=True)
+        drive = MagicMock()  # legacy SDK path must NOT be called
+
+        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        req = _make_request(
+            delivery_method="external_storage", recording_group_dir="game-x"
+        )
+        # No upload block, but a credential_error from TTT
+        req["upload"] = None
+        req["credential_error"] = "Requester has not linked a Google Drive account."
+
+        with (
+            patch(
+                "video_grouper.utils.ffmpeg_utils.extract_clip",
+                new=AsyncMock(return_value="ok"),
+            ),
+            caplog.at_level(_logging.ERROR),
+        ):
+            await proc._process_request(req)
+
+        # Must surface the error and must NOT touch the legacy Drive SDK
+        assert any(
+            "Requester has not linked a Google Drive account" in rec.message
+            for rec in caplog.records
+        )
+        drive.upload_and_share.assert_not_called()
+        # Request stays in_progress (no fulfill) so it can be retried after re-link
+        ttt.fulfill_clip_request.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_unknown_delivery_method_no_upload(self, tmp_path):
         """Unknown delivery_method → no upload, no fulfill."""
         game_dir = tmp_path / "game-x"

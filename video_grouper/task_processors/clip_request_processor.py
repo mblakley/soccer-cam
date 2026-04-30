@@ -158,9 +158,22 @@ class ClipRequestProcessor(PollingProcessor):
         """
         req_id = req["id"]
         upload_block = req.get("upload")
+        credential_error = req.get("credential_error")
 
         if upload_block and upload_block.get("resumable_url"):
             return await self._upload_via_resumable_url(req, clip_paths, upload_block)
+
+        # When TTT signals a credential error, the requester needs to take action
+        # (re-link Drive, pick a different folder). Silently falling through to
+        # the camera-manager Drive would put their footage in the wrong account,
+        # so log and bail — leaves the request in_progress for retry once the
+        # requester re-links.
+        if credential_error:
+            logger.error(
+                f"TTT could not mint a per-requester upload block for {req_id}: "
+                f"{credential_error}"
+            )
+            return None
 
         # Legacy path: camera manager's Drive folder via Google SDK
         is_compilation = req.get("is_compilation", False)
