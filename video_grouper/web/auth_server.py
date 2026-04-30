@@ -29,14 +29,13 @@ import html
 import json
 import logging
 import re
-import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi import Body, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from video_grouper.api_integrations.ttt_api import (
@@ -83,9 +82,6 @@ _DEFAULT_PROVIDERS = ("google", "discord", "apple", "facebook", "twitter")
 
 # Game group directory format from camera_poller.py / DirectoryState.
 _GAME_DIR_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}$")
-
-# Anti-CSRF cookie name for the OAuth state round-trip.
-_OAUTH_STATE_COOKIE = "soccer_cam_oauth_state"
 
 # Loopback Host values always accepted by the rebinding-defense middleware,
 # regardless of the configured bind. Anything else has to be the explicit bind.
@@ -185,23 +181,32 @@ body { font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; p
         return;
     }
     var params = new URLSearchParams(hash);
-    var accessToken = params.get('access_token');
-    var error = params.get('error');
-    var errorDesc = params.get('error_description');
-    var state = params.get('state') || '';
-    var url = '/receive-token?';
-    if (accessToken) {
-        url += 'access_token=' + encodeURIComponent(accessToken);
-    } else {
-        url += 'error=' + encodeURIComponent(error || 'unknown');
-        if (errorDesc) {
-            url += '&error_description=' + encodeURIComponent(errorDesc);
-        }
-    }
-    if (state) {
-        url += '&state=' + encodeURIComponent(state);
-    }
-    window.location.replace(url);
+    // POST to /receive-token so the existing same-origin Origin/Referer
+    // CSRF middleware applies. A GET endpoint would be reachable via
+    // <img src=...> from any page; POST + same-origin enforcement isn't.
+    var body = {
+        access_token: params.get('access_token') || null,
+        error: params.get('error') || null,
+        error_description: params.get('error_description') || null
+    };
+    fetch('/receive-token', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(body)
+    }).then(function(resp) {
+        return resp.text();
+    }).then(function(text) {
+        // Replace the page with the server-rendered success/error page so
+        // _SUCCESS_PAGE's <meta http-equiv="refresh"> can return the user
+        // to the dashboard.
+        document.open();
+        document.write(text);
+        document.close();
+    }).catch(function(err) {
+        document.getElementById('status').textContent =
+            'Error contacting local server: ' + err;
+    });
 })();
 </script>
 </body>
@@ -560,8 +565,9 @@ def create_app(
     #   2. CSRF on state-changing endpoints — a malicious page can drive
     #      `<img src="http://localhost:8765/receive-token?access_token=...">`
     #      to silently sign the local pipeline into the attacker's TTT
-    #      account. Defenses: round-trip the OAuth state cookie on the
-    #      OAuth flow, and reject cross-origin POSTs.
+    #      account. Defense: state-changing endpoints (including
+    #      /receive-token) only accept POST, and POSTs must have a
+    #      same-origin Origin or Referer.
     bind = (ttt_config.auth_server_bind or "127.0.0.1").strip()
     allowed_hosts = set(_LOOPBACK_HOSTS)
     if bind and bind not in {"0.0.0.0", "127.0.0.1", "::1", "[::1]", "localhost"}:
@@ -580,21 +586,29 @@ def create_app(
                 status_code=403,
             )
 
-        # Origin/Referer check on state-changing methods. Curl callers
-        # (no Origin/Referer) are allowed; cross-origin browsers are not.
+        # Origin/Referer check on state-changing methods. Browsers send
+        # one or both on every cross-origin request; we require the value
+        # to point at us. Requests with neither header (curl, scripts) are
+        # also rejected — there is no legitimate non-browser caller of
+        # these endpoints, and accepting headerless POSTs would re-open
+        # the CSRF gap that <img>-style attacks would otherwise hit.
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
             origin = request.headers.get("origin")
             referer = request.headers.get("referer")
             check_value = origin or referer
-            if check_value:
-                from urllib.parse import urlparse
+            if not check_value:
+                return PlainTextResponse(
+                    "Missing Origin/Referer on state-changing request.",
+                    status_code=403,
+                )
+            from urllib.parse import urlparse
 
-                check_host = urlparse(check_value).hostname or ""
-                if check_host.lower() not in allowed_hosts:
-                    return PlainTextResponse(
-                        f"Origin '{check_value}' does not match this server.",
-                        status_code=403,
-                    )
+            check_host = urlparse(check_value).hostname or ""
+            if check_host.lower() not in allowed_hosts:
+                return PlainTextResponse(
+                    f"Origin '{check_value}' does not match this server.",
+                    status_code=403,
+                )
 
         return await call_next(request)
 
@@ -623,34 +637,21 @@ def create_app(
 
     @app.get("/login")
     def login(request: Request, provider: str = "google") -> RedirectResponse:
-        # Anti-CSRF nonce: included in the redirect to Supabase, set as an
-        # HttpOnly cookie. Supabase echoes the same value back in the URL
-        # fragment to /callback; the page-side JS forwards it as ?state=...
-        # to /receive-token, which validates against the cookie before
-        # persisting any token. Closes the <img src=...> attack on
-        # /receive-token.
-        state = secrets.token_urlsafe(32)
+        # Do NOT pass `state` to Supabase. GoTrue treats client-supplied
+        # state as authoritative for the redirect to Google but never
+        # creates a flow_state row for it, so /auth/v1/callback rejects
+        # with "OAuth state parameter is invalid". CSRF for /receive-token
+        # is handled by POST + same-origin Origin/Referer enforcement
+        # (see the host_and_origin_check middleware).
         params = urlencode(
             {
                 "provider": provider,
                 "redirect_to": _redirect_uri(request),
-                "state": state,
             }
         )
         authorize_url = f"{supabase_url}/auth/v1/authorize?{params}"
         logger.info("Redirecting to OAuth authorize: provider=%s", provider)
-        response = RedirectResponse(url=authorize_url, status_code=302)
-        # Cookie scoped to /, HttpOnly to prevent JS access, SameSite=Lax
-        # so it survives the cross-site OAuth bounce. Not Secure: this is
-        # an HTTP loopback server.
-        response.set_cookie(
-            key=_OAUTH_STATE_COOKIE,
-            value=state,
-            max_age=600,  # 10 minutes is enough for any sane OAuth flow
-            httponly=True,
-            samesite="lax",
-        )
-        return response
+        return RedirectResponse(url=authorize_url, status_code=302)
 
     @app.post("/login/password")
     def login_password(email: str = Form(...), password: str = Form(...)) -> Response:
@@ -681,58 +682,33 @@ def create_app(
     def callback() -> HTMLResponse:
         return HTMLResponse(_CALLBACK_PAGE)
 
-    @app.get("/receive-token", response_class=HTMLResponse)
-    def receive_token(
-        request: Request,
-        access_token: Optional[str] = None,
-        error: Optional[str] = None,
-        error_description: Optional[str] = None,
-        state: Optional[str] = None,
-    ) -> HTMLResponse:
-        # Validate the OAuth state nonce round-trip. Closes the
-        # <img src="/receive-token?access_token=ATTACKER"> attack:
-        # the attacker doesn't know the cookie value we set in /login.
-        cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
-        if (
-            not cookie_state
-            or not state
-            or not secrets.compare_digest(cookie_state, state)
-        ):
-            response = HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=html.escape(
-                        "Sign-in state mismatch — please start the sign-in "
-                        "flow from the dashboard at /."
-                    )
-                ),
-                status_code=400,
-            )
-            response.delete_cookie(_OAUTH_STATE_COOKIE)
-            return response
+    @app.post("/receive-token", response_class=HTMLResponse)
+    def receive_token(payload: dict[str, Any] = Body(default={})) -> HTMLResponse:
+        # POST + same-origin Origin/Referer (enforced by middleware) is
+        # the CSRF defense for this endpoint; <img>/<script> attacks can
+        # only do GET, and cross-origin form/fetch POSTs fail the
+        # middleware check.
+        access_token = payload.get("access_token")
+        error = payload.get("error")
+        error_description = payload.get("error_description")
 
         if not access_token:
             msg = error_description or error or "No access token returned."
-            response = HTMLResponse(
+            return HTMLResponse(
                 _ERROR_TEMPLATE.format(message=html.escape(msg)), status_code=400
             )
-            response.delete_cookie(_OAUTH_STATE_COOKIE)
-            return response
         try:
             client.set_session_from_token(access_token)
         except (ValueError, KeyError) as exc:
             logger.error("Failed to persist OAuth token: %s", exc)
-            response = HTMLResponse(
+            return HTMLResponse(
                 _ERROR_TEMPLATE.format(
                     message=f"Token rejected: {html.escape(str(exc))}"
                 ),
                 status_code=400,
             )
-            response.delete_cookie(_OAUTH_STATE_COOKIE)
-            return response
         logger.info("OAuth sign-in complete; tokens persisted")
-        response = HTMLResponse(_SUCCESS_PAGE)
-        response.delete_cookie(_OAUTH_STATE_COOKIE)
-        return response
+        return HTMLResponse(_SUCCESS_PAGE)
 
     @app.post("/logout")
     def logout() -> Response:

@@ -78,14 +78,9 @@ def client(storage):
         yield c
 
 
-def _start_oauth_flow(client) -> str:
-    """Hit /login to set the OAuth state cookie; return the state value
-    so the caller can include it in /receive-token query."""
-    resp = client.get("/login?provider=google", follow_redirects=False)
-    assert resp.status_code == 302
-    location = resp.headers["location"]
-    qs = parse_qs(urlparse(location).query)
-    return qs["state"][0]
+# Same-origin headers for state-changing POSTs (matches the test client's
+# base_url). The middleware now requires Origin or Referer to be present.
+_SAME_ORIGIN = {"origin": "http://localhost:8765"}
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +239,10 @@ def test_login_redirects_to_supabase_authorize(client):
     qs = parse_qs(parsed.query)
     assert qs["provider"] == ["google"]
     assert qs["redirect_to"] == ["http://localhost:8765/callback"]
+    # GoTrue manages OAuth state itself; our /login must NOT inject one
+    # or GoTrue's /callback rejects with "OAuth state parameter is invalid".
+    assert "state" not in qs
+    assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}
 
 
 def test_login_uses_request_host_for_redirect_uri(storage):
@@ -276,17 +275,26 @@ def test_callback_serves_fragment_extraction_page(client):
     resp = client.get("/callback")
     assert resp.status_code == 200
     body = resp.text
+    # Reads the OAuth response from the URL fragment.
     assert "window.location.hash" in body
+    # POSTs (not GETs) to /receive-token so the same-origin middleware
+    # applies; an <img>/<script> attack can only do GET.
     assert "/receive-token" in body
+    assert "method: 'POST'" in body
     assert "access_token" in body
+    # Should no longer build a GET URL with query-string params.
+    assert "window.location.replace" not in body
 
 
 def test_receive_token_persists_tokens_and_returns_success(storage, client):
-    state = _start_oauth_flow(client)
     exp = int(time.time()) + 3600
     jwt = _make_jwt(sub="user-abc", exp=exp)
 
-    resp = client.get(f"/receive-token?access_token={jwt}&state={state}")
+    resp = client.post(
+        "/receive-token",
+        json={"access_token": jwt},
+        headers=_SAME_ORIGIN,
+    )
     assert resp.status_code == 200
     assert "Signed in" in resp.text
 
@@ -299,38 +307,60 @@ def test_receive_token_persists_tokens_and_returns_success(storage, client):
 
 
 def test_receive_token_with_error_returns_400_page(client):
-    state = _start_oauth_flow(client)
-    resp = client.get(
-        f"/receive-token?error=access_denied&error_description=User+canceled&state={state}"
+    resp = client.post(
+        "/receive-token",
+        json={"error": "access_denied", "error_description": "User canceled"},
+        headers=_SAME_ORIGIN,
     )
     assert resp.status_code == 400
     assert "User canceled" in resp.text
 
 
 def test_receive_token_missing_token_returns_400(client):
-    state = _start_oauth_flow(client)
-    resp = client.get(f"/receive-token?state={state}")
+    resp = client.post(
+        "/receive-token",
+        json={},
+        headers=_SAME_ORIGIN,
+    )
     assert resp.status_code == 400
     assert "No access token returned" in resp.text
 
 
-def test_receive_token_rejects_missing_state_cookie(client):
-    """The single most important hardening: an attacker page can't
-    `<img src=/receive-token?access_token=ATTACKER>` and silently sign
-    the local pipeline into the attacker's TTT account, because no
-    matching cookie was ever set."""
-    resp = client.get("/receive-token?access_token=fake&state=somestate")
-    assert resp.status_code == 400
-    assert "state mismatch" in resp.text
+def test_receive_token_get_returns_405(client):
+    """Replaces the old state-cookie defense: <img src=/receive-token?...>
+    can't drive sign-in because GET is no longer accepted."""
+    resp = client.get("/receive-token?access_token=fake")
+    assert resp.status_code == 405
 
 
-def test_receive_token_rejects_state_mismatch(client):
-    """Even with the cookie set (e.g. concurrent sign-in started elsewhere),
-    a wrong state in the query is rejected."""
-    _start_oauth_flow(client)  # sets cookie
-    resp = client.get("/receive-token?access_token=fake&state=wrong")
-    assert resp.status_code == 400
-    assert "state mismatch" in resp.text
+def test_receive_token_post_rejects_no_origin_or_referer(client):
+    """Curl-style POST with no Origin or Referer is now rejected; the
+    middleware fails closed for state-changing methods."""
+    resp = client.post("/receive-token", json={"access_token": "fake"})
+    assert resp.status_code == 403
+
+
+def test_receive_token_post_rejects_cross_origin(client):
+    resp = client.post(
+        "/receive-token",
+        json={"access_token": "fake"},
+        headers={"origin": "https://evil.com"},
+    )
+    assert resp.status_code == 403
+
+
+def test_receive_token_post_accepts_same_origin_referer(storage, client):
+    """Referer-only is sufficient — some browsers strip Origin on
+    same-origin navigations and we accept either signal."""
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-ref", exp=exp)
+    resp = client.post(
+        "/receive-token",
+        json={"access_token": jwt},
+        headers={"referer": "http://localhost:8765/callback"},
+    )
+    assert resp.status_code == 200
+    assert (storage / "ttt" / "tokens.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +506,7 @@ def test_login_password_success_persists_tokens_and_redirects(storage, client):
         resp = client.post(
             "/login/password",
             data={"email": "pw@example.com", "password": "hunter2"},
+            headers=_SAME_ORIGIN,
             follow_redirects=False,
         )
 
@@ -495,6 +526,7 @@ def test_login_password_failure_returns_401(client):
         resp = client.post(
             "/login/password",
             data={"email": "x@y.com", "password": "wrong"},
+            headers=_SAME_ORIGIN,
             follow_redirects=False,
         )
     assert resp.status_code == 401
@@ -514,7 +546,7 @@ def test_login_magic_calls_supabase_with_correct_redirect_to(client):
         resp = client.post(
             "/login/magic",
             data={"email": "user@example.com"},
-            headers={"host": "localhost:8765"},
+            headers={"host": "localhost:8765", **_SAME_ORIGIN},
             follow_redirects=False,
         )
 
@@ -535,6 +567,7 @@ def test_login_magic_failure_returns_400(client):
         resp = client.post(
             "/login/magic",
             data={"email": "x@y.com"},
+            headers=_SAME_ORIGIN,
             follow_redirects=False,
         )
     assert resp.status_code == 400
@@ -546,13 +579,13 @@ def test_logout_redirects_to_dashboard_and_is_idempotent(storage, client):
     _write_tokens(storage, jwt=_make_jwt(exp=exp), expires_at=float(exp))
     token_file = storage / "ttt" / "tokens.json"
 
-    resp = client.post("/logout", follow_redirects=False)
+    resp = client.post("/logout", headers=_SAME_ORIGIN, follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/"
     assert not token_file.exists()
 
     # Second call: still redirects, no error.
-    resp2 = client.post("/logout", follow_redirects=False)
+    resp2 = client.post("/logout", headers=_SAME_ORIGIN, follow_redirects=False)
     assert resp2.status_code == 303
 
 
