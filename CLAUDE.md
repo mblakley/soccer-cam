@@ -153,6 +153,20 @@ uv run python -m training.pipeline games
 uv run python -m training.pipeline events --hours 6
 uv run python -m training.pipeline queue
 
+# Training progress — read results.csv from the active run
+# Results live at: training/runs/{run_name}/results.csv (local)
+#   or: D:/training_data/training_sets/{version}/results.csv (server)
+# Columns: epoch, time, train/box_loss, train/cls_loss, train/dfl_loss,
+#   metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B),
+#   val/box_loss, val/cls_loss, val/dfl_loss, lr/pg0-pg7
+#
+# Quick check latest epoch:
+tail -1 training/runs/*/results.csv
+# Or on the server:
+tail -1 D:/training_data/training_sets/*/results.csv
+# Best weights: training/runs/{run_name}/weights/best.pt
+# Archived checkpoints: F:/training_checkpoints/{version}/best.pt
+
 # Task management
 uv run python -m training.pipeline enqueue tile --game GAME_ID --priority 30
 uv run python -m training.pipeline enqueue label --game GAME_ID --priority 20
