@@ -180,6 +180,23 @@ def test_post_config_invalid_returns_422(client, config_path):
     )
     # Either Python coercion or Pydantic validation rejects it.
     assert resp.status_code in (422, 500)
+    # Validation flash must include both classes — `flash` provides the
+    # padding/border/font, `flash-err` provides the red signal color.
+    if resp.status_code == 422:
+        assert 'class="flash flash-err"' in resp.text
+
+
+def test_get_config_rail_nav_anchors_match_sections(client):
+    """Every rail entry must point at a real section id, and every
+    rendered section must have a rail entry — otherwise the sticky
+    nav and the scroll observer fall out of sync."""
+    body = client.get("/config").text
+    import re
+
+    rail_anchors = set(re.findall(r'data-anchor="([^"]+)"', body))
+    section_ids = set(re.findall(r'<section class="cfg" id="([^"]+)"', body))
+    assert rail_anchors  # not empty
+    assert rail_anchors == section_ids
 
 
 def test_config_editor_not_mounted_when_path_missing(tmp_path):
