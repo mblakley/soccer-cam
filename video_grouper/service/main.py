@@ -79,8 +79,14 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
             config_path = exe_dir / "config.ini"
 
         if not config_path.exists():
-            logger.error(f"Config file not found at {config_path}")
-            return
+            # Phase 2 done-criterion: a fresh shared_data with no
+            # config.ini still boots the service; the dashboard will
+            # bounce the user to /setup/welcome.
+            from video_grouper.utils.config import create_default_config
+
+            logger.info(f"No config at {config_path}; writing onboarding stub.")
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            create_default_config(config_path, str(config_path.parent))
 
         logger.info(f"Loading config from {config_path}")
         try:

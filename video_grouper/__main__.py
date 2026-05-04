@@ -7,7 +7,7 @@ from pathlib import Path
 from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.locking import FileLock
-from video_grouper.utils.config import load_config
+from video_grouper.utils.config import load_config, create_default_config
 from video_grouper.utils.logger import setup_logging, get_logger
 
 # Configure basic logging first, will be updated with config later
@@ -49,10 +49,12 @@ def load_application_config(config_path: Path = None):
     try:
         with FileLock(config_path):
             if not config_path.exists():
-                logger.error(
-                    f"Configuration file not found at {config_path}. Please create it or run the UI first."
-                )
-                return None
+                # Phase 2 done-criterion: a fresh shared_data must boot.
+                # Stub a minimal config so the orchestrator can come up
+                # with the web server bound; the dashboard at "/" will
+                # then redirect the user to /setup/welcome.
+                logger.info("No config at %s; writing onboarding stub.", config_path)
+                return create_default_config(config_path, str(config_path.parent))
             return load_config(config_path)
     except TimeoutError:
         logger.error(f"Could not acquire lock to read config file at {config_path}.")

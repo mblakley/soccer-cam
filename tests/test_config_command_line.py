@@ -31,14 +31,18 @@ class TestCommandLineArguments:
 class TestConfigLoading:
     """Test configuration loading with custom paths."""
 
-    def test_load_application_config_nonexistent_file(self):
-        """Test loading config from a nonexistent file."""
+    def test_load_application_config_writes_stub_when_missing(self):
+        """A missing config triggers the onboarding stub (Phase 2: a fresh
+        shared_data must boot the service so the dashboard can redirect
+        to /setup/welcome)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             nonexistent_path = Path(tmpdir) / "does_not_exist.ini"
             with patch("video_grouper.__main__.logger") as mock_logger:
                 config = load_application_config(nonexistent_path)
-                assert config is None
-                mock_logger.error.assert_called()
+            assert config is not None
+            assert nonexistent_path.exists()
+            assert config.setup.onboarding_completed is False
+            mock_logger.info.assert_called()
 
     def test_load_application_config_default_path(self):
         """Test loading config from default path."""

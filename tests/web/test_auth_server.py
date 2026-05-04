@@ -220,6 +220,62 @@ def test_dashboard_auto_refreshes(client):
 
 
 # ---------------------------------------------------------------------------
+# Dashboard redirect to /setup/welcome when onboarding isn't done
+# (Phase 2 done-criterion: a fresh shared_data with no config.ini boots
+# the service; the dashboard sends the user to the wizard.)
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_redirects_to_setup_when_config_missing(tmp_path):
+    """When config_path is wired but the file doesn't exist, '/' bounces
+    to /setup/welcome instead of rendering the dashboard."""
+    config_path = tmp_path / "config.ini"  # deliberately not created
+    app = create_app(_ttt_config(), str(tmp_path), config_path=config_path)
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        resp = c.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/setup/welcome"
+
+
+def test_dashboard_redirects_to_setup_when_onboarding_incomplete(tmp_path):
+    """A config that exists but with onboarding_completed=False also
+    bounces — covers the 'wizard partway through' case."""
+    from video_grouper.utils.config import create_default_config
+
+    config_path = tmp_path / "config.ini"
+    create_default_config(
+        config_path, str(tmp_path)
+    )  # writes onboarding_completed=False
+    app = create_app(_ttt_config(), str(tmp_path), config_path=config_path)
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        resp = c.get("/", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/setup/welcome"
+
+
+def test_dashboard_renders_when_onboarding_completed(tmp_path):
+    """Once the user finishes the wizard, the dashboard is the default
+    landing page again."""
+    from video_grouper.utils.config import (
+        create_default_config,
+        load_config,
+        save_config,
+    )
+
+    config_path = tmp_path / "config.ini"
+    create_default_config(config_path, str(tmp_path))
+    cfg = load_config(config_path)
+    cfg.setup.onboarding_completed = True
+    save_config(cfg, config_path)
+
+    app = create_app(_ttt_config(), str(tmp_path), config_path=config_path)
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        resp = c.get("/")
+    assert resp.status_code == 200
+    assert "Soccer-Cam" in resp.text
+
+
+# ---------------------------------------------------------------------------
 # OAuth flow
 # ---------------------------------------------------------------------------
 

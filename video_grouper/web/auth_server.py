@@ -617,8 +617,16 @@ def create_app(
 
         return await call_next(request)
 
-    @app.get("/", response_class=HTMLResponse)
-    def dashboard() -> HTMLResponse:
+    @app.get("/")
+    def dashboard() -> Response:
+        # Phase 2 done-criterion: when shared_data has no real config yet
+        # (or onboarding wasn't finished), bounce the user to the wizard
+        # so the headless flow matches the tray's auto-launch behavior.
+        if config_path is not None:
+            from video_grouper.utils.config import config_needs_onboarding
+
+            if config_needs_onboarding(config_path):
+                return RedirectResponse(url="/setup/welcome", status_code=303)
         try:
             status = status_provider() if status_provider else None
         except Exception as exc:
