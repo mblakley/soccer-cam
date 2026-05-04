@@ -351,9 +351,10 @@ def _tile_segment_to_pack(
     batch_size = batch_frames
     frames_processed = 0
 
-    with open(pack_path, open_mode) as pf, ThreadPoolExecutor(
-        max_workers=num_encoders
-    ) as pool:
+    with (
+        open(pack_path, open_mode) as pf,
+        ThreadPoolExecutor(max_workers=num_encoders) as pool,
+    ):
         while True:
             # Drain up to batch_size frames from the queue
             batch = []

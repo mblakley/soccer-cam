@@ -130,14 +130,18 @@ def _detect_video_format(gdir: Path) -> tuple[str, list[Path]]:
         return "gopro", gopro
 
     # Processed combined video
-    processed = [f for f in gdir.glob("*raw*.mp4")] + [f for f in gdir.glob("combined*.mp4")]
+    processed = [f for f in gdir.glob("*raw*.mp4")] + [
+        f for f in gdir.glob("combined*.mp4")
+    ]
     if processed:
         return "processed", processed
 
     return "none", []
 
 
-def _classify_game(name: str, team: str, video_format: str) -> tuple[str, bool, str | None]:
+def _classify_game(
+    name: str, team: str, video_format: str
+) -> tuple[str, bool, str | None]:
     """Classify a game as trainable or excluded.
 
     Returns (game_type, trainable, exclude_reason).
@@ -167,16 +171,30 @@ def _classify_game(name: str, team: str, video_format: str) -> tuple[str, bool, 
 
 # Camera folder timestamps that are confirmed futsal
 FUTSAL_CAMERA_DATES = {
-    "2025.03.03", "2025.03.10", "2025.03.17", "2025.03.24",
-    "2025.03.31", "2025.04.07",  # YouTube-confirmed futsal
-    "2025.01.16", "2025.02.02", "2025.02.06", "2025.02.13",
-    "2025.02.22", "2025.02.27",  # Frame-check confirmed indoor
+    "2025.03.03",
+    "2025.03.10",
+    "2025.03.17",
+    "2025.03.24",
+    "2025.03.31",
+    "2025.04.07",  # YouTube-confirmed futsal
+    "2025.01.16",
+    "2025.02.02",
+    "2025.02.06",
+    "2025.02.13",
+    "2025.02.22",
+    "2025.02.27",  # Frame-check confirmed indoor
 }
 
 # Camera folder timestamps that are confirmed non-game
 NON_GAME_CAMERA = {
-    "2024.11.01", "2025.01.23", "2025.01.25", "2025.02.01",
-    "2025.02.26", "2025.03.02", "2025.03.25", "2025.04.01",
+    "2024.11.01",
+    "2025.01.23",
+    "2025.01.25",
+    "2025.02.01",
+    "2025.02.26",
+    "2025.03.02",
+    "2025.03.25",
+    "2025.04.01",
 }
 
 
@@ -236,25 +254,27 @@ def build_registry() -> list[dict]:
             labels_dir_f = Path("F:/training_data/labels_640_ext") / game_id
             has_labels = labels_dir_d.exists() or labels_dir_f.exists()
 
-            games.append({
-                "game_id": game_id,
-                "name": name,
-                "team": team,
-                "path": str(gdir),
-                "segments": [s.name for s in segments],
-                "segment_count": len(segments),
-                "orientation": "upside_down" if is_upside_down else "right_side_up",
-                "video_source": video_source,
-                "video_format": video_format,
-                "corrected_video": video_path,
-                "needs_flip": video_source == "flip_in_code",
-                "game_type": game_type,
-                "trainable": trainable,
-                "has_tiles": has_tiles,
-                "has_labels": has_labels,
-                "exclude": not trainable,
-                "exclude_reason": exclude_reason,
-            })
+            games.append(
+                {
+                    "game_id": game_id,
+                    "name": name,
+                    "team": team,
+                    "path": str(gdir),
+                    "segments": [s.name for s in segments],
+                    "segment_count": len(segments),
+                    "orientation": "upside_down" if is_upside_down else "right_side_up",
+                    "video_source": video_source,
+                    "video_format": video_format,
+                    "corrected_video": video_path,
+                    "needs_flip": video_source == "flip_in_code",
+                    "game_type": game_type,
+                    "trainable": trainable,
+                    "has_tiles": has_tiles,
+                    "has_labels": has_labels,
+                    "exclude": not trainable,
+                    "exclude_reason": exclude_reason,
+                }
+            )
 
     # Scan Camera directory for futsal/indoor games (excluded from training)
     camera_dir = Path("F:/Camera")
@@ -282,25 +302,27 @@ def build_registry() -> list[dict]:
 
             game_id = _make_game_id("camera", name)
 
-            games.append({
-                "game_id": game_id,
-                "name": name,
-                "team": "camera",
-                "path": str(gdir),
-                "segments": [s.name for s in segments],
-                "segment_count": len(segments),
-                "orientation": "right_side_up",
-                "video_source": "segments",
-                "video_format": video_format,
-                "corrected_video": None,
-                "needs_flip": False,
-                "game_type": game_type,
-                "trainable": False,
-                "has_tiles": False,
-                "has_labels": False,
-                "exclude": True,
-                "exclude_reason": exclude_reason,
-            })
+            games.append(
+                {
+                    "game_id": game_id,
+                    "name": name,
+                    "team": "camera",
+                    "path": str(gdir),
+                    "segments": [s.name for s in segments],
+                    "segment_count": len(segments),
+                    "orientation": "right_side_up",
+                    "video_source": "segments",
+                    "video_format": video_format,
+                    "corrected_video": None,
+                    "needs_flip": False,
+                    "game_type": game_type,
+                    "trainable": False,
+                    "has_tiles": False,
+                    "has_labels": False,
+                    "exclude": True,
+                    "exclude_reason": exclude_reason,
+                }
+            )
 
     return games
 
@@ -358,7 +380,9 @@ def main():
     for gt, gs in sorted(by_type.items()):
         print(f"  {gt}: {len(gs)}")
     print()
-    print(f"Trainable games: {len(trainable)} ({len(tiled)} tiled, {len(labeled)} labeled)")
+    print(
+        f"Trainable games: {len(trainable)} ({len(tiled)} tiled, {len(labeled)} labeled)"
+    )
     print(f"Need tiling: {len(trainable) - len(tiled)}")
     print(f"Need labeling: {len(trainable) - len(labeled)}")
     print(f"\nRegistry saved to {REGISTRY_PATH}")

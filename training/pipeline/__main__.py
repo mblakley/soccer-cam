@@ -14,7 +14,6 @@ Usage:
 
 import argparse
 import logging
-import sys
 import time
 from datetime import datetime
 

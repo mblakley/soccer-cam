@@ -18,15 +18,12 @@ Endpoints:
 
 import logging
 import threading
-import time
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from pydantic import BaseModel
 
-from training.pipeline.config import load_config
 from training.pipeline.queue import WorkQueue
 from training.pipeline.registry import GameRegistry
 

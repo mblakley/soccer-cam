@@ -1096,7 +1096,10 @@ async def list_game_phases():
             continue
 
         # Skip games not fully tiled (if we have pipeline state info)
-        if pipeline_states and pipeline_states.get(game_dir.name, "") not in tiled_states:
+        if (
+            pipeline_states
+            and pipeline_states.get(game_dir.name, "") not in tiled_states
+        ):
             continue
 
         try:

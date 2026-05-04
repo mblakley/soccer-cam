@@ -8,7 +8,6 @@ The tile task handles pulling video to local SSD before processing.
 """
 
 import logging
-import os
 from pathlib import Path
 
 from training.tasks import register_task

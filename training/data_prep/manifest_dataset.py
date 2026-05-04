@@ -40,6 +40,7 @@ import shutil
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils import LOGGER, colorstr
+from ultralytics.utils.torch_utils import unwrap_model
 
 _logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def _get_archive_tile_packs() -> Path:
     """Get the F: archive path from config, with fallback."""
     try:
         from training.pipeline.config import load_config
+
         cfg = load_config()
         return Path(cfg.paths.archive.tile_packs)
     except Exception:
@@ -77,7 +79,9 @@ def _resolve_pack_path(pack_file: str) -> str:
         game_id = parts[games_idx + 1]
         pack_name = parts[-1]
     except (ValueError, IndexError):
-        raise FileNotFoundError(f"Pack file not found and can't parse game_id: {pack_file}")
+        raise FileNotFoundError(
+            f"Pack file not found and can't parse game_id: {pack_file}"
+        )
 
     archive_packs = _get_archive_tile_packs()
     archive_path = archive_packs / game_id / pack_name
@@ -88,10 +92,14 @@ def _resolve_pack_path(pack_file: str) -> str:
 
     # Stage from F: → D:
     p.parent.mkdir(parents=True, exist_ok=True)
-    _logger.info("Staging pack %s from F: archive (%.1f GB)", pack_name, archive_path.stat().st_size / 1e9)
+    _logger.info(
+        "Staging pack %s from F: archive (%.1f GB)",
+        pack_name,
+        archive_path.stat().st_size / 1e9,
+    )
     shutil.copy2(str(archive_path), str(p))
     return pack_file
-from ultralytics.utils.torch_utils import unwrap_model
+
 
 TILE_RE = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")
 TILE_SIZE = 640

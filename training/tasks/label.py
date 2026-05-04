@@ -99,13 +99,9 @@ def run_label(
                 if "[F]" in v.name or "[0@0]" in v.name
             )
         if not segment_videos:
-            raise FileNotFoundError(
-                f"No segment videos found in {video_dir}"
-            )
+            raise FileNotFoundError(f"No segment videos found in {video_dir}")
 
-        logger.info(
-            "Found %d segment videos for %s", len(segment_videos), game_id
-        )
+        logger.info("Found %d segment videos for %s", len(segment_videos), game_id)
 
         total_labels = 0
         total_frames = 0
@@ -234,7 +230,9 @@ def run_label(
     }
 
 
-def _prescan_segment(video_path: Path, session, conf_threshold: float, cv2, flip: bool = False) -> bool:
+def _prescan_segment(
+    video_path: Path, session, conf_threshold: float, cv2, flip: bool = False
+) -> bool:
     """Sample 5 frames from a segment to check for game footage.
 
     Returns True if any sampled frame produces a detection — meaning

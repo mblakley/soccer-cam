@@ -14,7 +14,6 @@ Pull-local-process-push pattern:
 
 import json
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
@@ -33,8 +32,6 @@ def run_ingest_reviews(
     local_models_dir: Path | None = None,
 ) -> dict:
     """Ingest human review verdicts into per-game manifests."""
-    payload = item.get("payload") or {}
-
     from training.pipeline.config import load_config
 
     cfg = load_config()

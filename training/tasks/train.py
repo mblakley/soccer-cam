@@ -7,9 +7,7 @@ Pull-local-process-push pattern:
   - Cleanup: remove local training data (keep weights)
 """
 
-import json
 import logging
-import os
 import shutil
 import time
 from pathlib import Path

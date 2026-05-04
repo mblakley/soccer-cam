@@ -14,7 +14,7 @@ Usage:
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,13 @@ class ResourceMonitor:
             # psutil not available — use wmic on Windows
             try:
                 result = subprocess.run(
-                    ["wmic", "OS", "get", "FreePhysicalMemory,TotalVisibleMemorySize", "/value"],
+                    [
+                        "wmic",
+                        "OS",
+                        "get",
+                        "FreePhysicalMemory,TotalVisibleMemorySize",
+                        "/value",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=10,

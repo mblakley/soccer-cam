@@ -119,7 +119,9 @@ class WorkQueue:
         """Add columns that may not exist in older DBs."""
         cols = {r[1] for r in conn.execute("PRAGMA table_info(work_items)").fetchall()}
         if "failed_workers" not in cols:
-            conn.execute("ALTER TABLE work_items ADD COLUMN failed_workers TEXT DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE work_items ADD COLUMN failed_workers TEXT DEFAULT ''"
+            )
             conn.commit()
 
     def _verify_integrity(self):
@@ -517,7 +519,9 @@ class WorkQueue:
         been re-enqueued too many times (total attempts >= max_attempts * max_reenqueues),
         it goes to 'dead' status instead — requiring manual intervention.
         """
-        max_reenqueues = 3  # max times we'll create a fresh item (so 3 * 3 = 9 total attempts)
+        max_reenqueues = (
+            3  # max times we'll create a fresh item (so 3 * 3 = 9 total attempts)
+        )
         task_type = old_item["task_type"]
         game_id = old_item["game_id"]
 
@@ -629,7 +633,9 @@ class WorkQueue:
                     ),
                 )
                 if row.get("game_id"):
-                    self._reenqueue_fresh(conn, row, "stale heartbeat exhausted attempts")
+                    self._reenqueue_fresh(
+                        conn, row, "stale heartbeat exhausted attempts"
+                    )
                 logger.error(
                     "Item %d permanently failed after %d attempts",
                     row["id"],

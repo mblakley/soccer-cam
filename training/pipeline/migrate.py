@@ -21,7 +21,6 @@ import logging
 import os
 import shutil
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
@@ -67,9 +66,7 @@ def migrate(
                 registry_meta[gid] = game
 
     # Get all games from old DB
-    games = old_conn.execute(
-        "SELECT * FROM games ORDER BY game_id"
-    ).fetchall()
+    games = old_conn.execute("SELECT * FROM games ORDER BY game_id").fetchall()
     games = [dict(g) for g in games]
 
     if game_filter:
@@ -92,7 +89,6 @@ def migrate(
 
     # Create registry DB
     from training.pipeline.registry import GameRegistry
-    from training.pipeline.state_machine import infer_initial_state
 
     registry = GameRegistry(registry_db_path)
 
@@ -127,7 +123,9 @@ def migrate(
             if existing_size > 4096:  # not just schema
                 logger.info("  Already migrated (%d bytes), skipping", existing_size)
                 # Still register in registry
-                _register_game(registry, game_id, game, registry_meta, tile_count, label_count)
+                _register_game(
+                    registry, game_id, game, registry_meta, tile_count, label_count
+                )
                 continue
 
         # Create per-game SQLite DB
@@ -137,12 +135,14 @@ def migrate(
 
         # Create schema (from game_manifest module)
         from training.data_prep.game_manifest import SCHEMA_SQL
+
         new_conn.executescript(SCHEMA_SQL)
 
         # Copy segments
         segments = old_conn.execute(
             "SELECT segment, frame_count, tile_count, frame_min, frame_max, max_gap "
-            "FROM segments WHERE game_id = ?", (game_id,)
+            "FROM segments WHERE game_id = ?",
+            (game_id,),
         ).fetchall()
         if segments:
             new_conn.executemany(
@@ -209,7 +209,10 @@ def migrate(
             new_conn.executemany(
                 "INSERT OR IGNORE INTO labels (tile_stem, class_id, cx, cy, w, h, source, confidence) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7]) for l in labels],
+                [
+                    (lbl[0], lbl[1], lbl[2], lbl[3], lbl[4], lbl[5], lbl[6], lbl[7])
+                    for lbl in labels
+                ],
             )
             total_labels += len(labels)
             offset += BATCH
@@ -233,12 +236,17 @@ def migrate(
         db_size = os.path.getsize(game_db_path)
         logger.info(
             "  %d tiles, %d labels → %s (%.1f MB, %.1fs)",
-            total_tiles, total_labels, game_db_path,
-            db_size / 1e6, elapsed,
+            total_tiles,
+            total_labels,
+            game_db_path,
+            db_size / 1e6,
+            elapsed,
         )
 
         # Register in registry
-        _register_game(registry, game_id, game, registry_meta, total_tiles, total_labels)
+        _register_game(
+            registry, game_id, game, registry_meta, total_tiles, total_labels
+        )
 
     registry.close()
     old_conn.close()
@@ -279,7 +287,8 @@ def _register_game(
         opponent=meta.get("opponent"),
         location=meta.get("location"),
         video_path=meta.get("video_path") or meta.get("path"),
-        needs_flip=meta.get("needs_flip", False) or meta.get("orientation") == "upside_down",
+        needs_flip=meta.get("needs_flip", False)
+        or meta.get("orientation") == "upside_down",
         game_type=meta.get("game_type"),
         camera_type=meta.get("camera_type", "dahua"),
         trainable=trainable,
@@ -293,29 +302,54 @@ def _register_game(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Migrate monolithic manifest to per-game DBs")
-    parser.add_argument("--source", default="D:/training_data/manifest.db",
-                        help="Path to monolithic manifest.db")
-    parser.add_argument("--games-dir", default="D:/training_data/games",
-                        help="Output directory for per-game manifests")
-    parser.add_argument("--registry", default="D:/training_data/registry.db",
-                        help="Output path for registry.db")
-    parser.add_argument("--game-registry-json", default="D:/training_data/game_registry.json",
-                        help="Path to game_registry.json for metadata")
-    parser.add_argument("--old-pack-dir", default="D:/training_data/tile_packs",
-                        help="Path to existing pack files")
-    parser.add_argument("--move-packs", action="store_true",
-                        help="Move pack files to per-game directories")
+    parser = argparse.ArgumentParser(
+        description="Migrate monolithic manifest to per-game DBs"
+    )
+    parser.add_argument(
+        "--source",
+        default="D:/training_data/manifest.db",
+        help="Path to monolithic manifest.db",
+    )
+    parser.add_argument(
+        "--games-dir",
+        default="D:/training_data/games",
+        help="Output directory for per-game manifests",
+    )
+    parser.add_argument(
+        "--registry",
+        default="D:/training_data/registry.db",
+        help="Output path for registry.db",
+    )
+    parser.add_argument(
+        "--game-registry-json",
+        default="D:/training_data/game_registry.json",
+        help="Path to game_registry.json for metadata",
+    )
+    parser.add_argument(
+        "--old-pack-dir",
+        default="D:/training_data/tile_packs",
+        help="Path to existing pack files",
+    )
+    parser.add_argument(
+        "--move-packs",
+        action="store_true",
+        help="Move pack files to per-game directories",
+    )
     parser.add_argument("--games", nargs="*", help="Only migrate specific games")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be migrated without doing it")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be migrated without doing it",
+    )
     args = parser.parse_args()
 
     migrate(
         old_db_path=Path(args.source),
         games_dir=Path(args.games_dir),
         registry_db_path=Path(args.registry),
-        game_registry_json=Path(args.game_registry_json) if args.game_registry_json else None,
+        game_registry_json=Path(args.game_registry_json)
+        if args.game_registry_json
+        else None,
         old_pack_dir=Path(args.old_pack_dir) if args.old_pack_dir else None,
         move_packs=args.move_packs,
         game_filter=args.games,

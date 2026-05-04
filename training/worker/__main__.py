@@ -11,7 +11,6 @@ Usage:
 import argparse
 import logging
 import platform
-import sys
 from pathlib import Path
 
 
