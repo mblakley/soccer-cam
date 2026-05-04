@@ -55,18 +55,17 @@ dev = [
     "cython>=3.0.0",
     "setuptools>=70.0.0",
 ]
+# Training-only extras. The core `[project] dependencies` already covers
+# the inference path (onnxruntime-gpu + opencv-python-headless + numpy +
+# av + pillow), so end-user installs don't need this.
 ml = [
     "torch>=2.7.0",
     "torchvision>=0.22.0",
     "ultralytics>=8.4.27",
-    "opencv-python>=4.13.0",
-    "numpy>=2.2.0",
     "supervision>=0.26.0",
     "lapx>=0.5.0",
     "filterpy>=1.4.5",
     "scipy>=1.13",
-    "fastapi>=0.115.0",
-    "uvicorn>=0.34.0",
 ]
 
 [build-system]
