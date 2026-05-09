@@ -97,36 +97,14 @@ jobs:
           Write-Host "INFO: TTT secrets not configured in GitHub - using production defaults"
         }
 
-    # Excludes drop the training-only ML stack (torch is 3.85 GB alone,
-    # plus ultralytics + scipy + matplotlib + transitive bloat). Inference
-    # needs `cv2` + `onnxruntime` only (see the docstring at the top of
-    # video_grouper/inference/ball_detector.py) so those stay in the
-    # service bundle for users who run the homegrown ball-tracking
-    # provider with their own ONNX model. The tray excludes more
-    # aggressively since it doesn't process video or run inference.
-    - name: Build service executable
+    # Multi-target spec builds service + tray sharing one _internal/.
+    # See video_grouper/installer/VideoGrouper.spec for the analysis,
+    # MERGE, and COLLECT setup, plus the rationale for each module exclude.
+    - name: Build service + tray executables
       run: |
-        uv run pyinstaller --noconfirm --onedir --windowed `
-          --icon=video_grouper/icon.ico --name=VideoGrouperService `
+        uv run pyinstaller --noconfirm `
           --distpath=video_grouper/dist --workpath=video_grouper/build `
-          --exclude-module=torch --exclude-module=torchvision `
-          --exclude-module=ultralytics --exclude-module=ultralytics_thop `
-          --exclude-module=scipy --exclude-module=matplotlib `
-          --exclude-module=sympy --exclude-module=networkx `
-          video_grouper/service/main.py
-
-    - name: Build tray agent executable
-      run: |
-        uv run pyinstaller --noconfirm --onedir --windowed `
-          --icon=video_grouper/icon.ico --name=VideoGrouperTray `
-          --distpath=video_grouper/dist --workpath=video_grouper/build `
-          --exclude-module=torch --exclude-module=torchvision `
-          --exclude-module=ultralytics --exclude-module=ultralytics_thop `
-          --exclude-module=onnxruntime --exclude-module=cv2 `
-          --exclude-module=scipy --exclude-module=matplotlib `
-          --exclude-module=sympy --exclude-module=networkx `
-          --exclude-module=googleapiclient --exclude-module=av `
-          video_grouper/tray/main.py
+          video_grouper/installer/VideoGrouper.spec
 
     - name: Install NSIS
       run: choco install nsis -y

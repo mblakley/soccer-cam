@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import html
 import logging
+import os
+import string
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from video_grouper.utils.config import (
@@ -45,7 +47,7 @@ _PAGE_TEMPLATE = """\
 <meta charset="utf-8">
 <title>Soccer-Cam setup &mdash; __TITLE__</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 540px; margin: 2.5em auto; padding: 0 1em; color: #222; }
+body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2.5em auto; padding: 0 1em; color: #222; }
 h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
 p.lede { color: #6b7280; margin-top: 0; margin-bottom: 1.25rem; }
 form { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -62,6 +64,9 @@ input, select { padding: 0.5rem 0.6rem; font: inherit; border: 1px solid #cbd5e1
 .summary dd { margin: 0 0 0.4rem; }
 .muted { color: #6b7280; font-size: 0.85rem; }
 .err { padding: 0.5rem 0.75rem; background: #fee2e2; color: #7f1d1d; border-radius: 4px; }
+.path-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 280px; overflow-y: auto; }
+.path-chip { text-align: left; padding: 0.4rem 0.6rem; background: white; border: 1px solid #e5e7eb; border-radius: 4px; cursor: pointer; font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; color: #1f2937; }
+.path-chip:hover { background: #eff6ff; border-color: #2563eb; }
 </style>
 </head>
 <body>
@@ -73,6 +78,93 @@ __BODY__
 </html>
 """
 
+_STORAGE_PICKER_JS = """
+<script>
+(function () {
+  const browseBtn = document.getElementById("browse-btn");
+  const modal = document.getElementById("browse-modal");
+  const input = document.getElementById("storage-input");
+  if (!browseBtn || !modal || !input) return;
+
+  function showModal(html) { modal.style.display = "block"; modal.innerHTML = html; }
+  function closeModal() { modal.style.display = "none"; modal.innerHTML = ""; }
+
+  // Try a native PyQt6 dialog first (signaled to the running tray);
+  // if the tray doesn't respond, fall back to in-page server-side
+  // browsing. Linux/Docker installs have no tray and skip step 1.
+  browseBtn.addEventListener("click", async () => {
+    showModal('<div class="muted">Opening folder picker…</div>');
+    let id = null;
+    try {
+      const resp = await fetch("/setup/storage/request-pick", { method: "POST" });
+      if (resp.ok) { id = (await resp.json()).id; }
+    } catch (e) { /* tray-pick not supported; fall through */ }
+    if (id) {
+      pollNative(id);
+    } else {
+      openServerBrowser("");
+    }
+  });
+
+  async function pollNative(id) {
+    let tries = 0;
+    const tick = async () => {
+      tries++;
+      try {
+        const r = await fetch(
+          "/setup/storage/pick-result?id=" + encodeURIComponent(id));
+        if (r.status === 200) {
+          const data = await r.json();
+          if (data.path) { input.value = data.path; closeModal(); return; }
+          if (data.cancelled) {
+            showModal(
+              '<div class="muted">Cancelled. ' +
+              '<a href="#" id="server-fallback">Browse server-side instead</a>' +
+              "</div>");
+            document.getElementById("server-fallback").addEventListener(
+              "click", (e) => { e.preventDefault(); openServerBrowser(""); });
+            return;
+          }
+        }
+      } catch (e) { /* ignore, keep polling */ }
+      // 60 ticks * 500ms = 30s of patience for the native dialog.
+      if (tries < 60) {
+        setTimeout(tick, 500);
+      } else {
+        showModal('<div class="muted">No response from tray; loading server-side browser…</div>');
+        setTimeout(() => openServerBrowser(""), 600);
+      }
+    };
+    setTimeout(tick, 250);
+  }
+
+  function openServerBrowser(at) {
+    showModal('<div class="muted">Loading…</div>');
+    fetch("/setup/storage/browse?at=" + encodeURIComponent(at || ""))
+      .then((r) => r.text())
+      .then((html) => {
+        modal.innerHTML = html;
+        modal.querySelectorAll(".path-chip").forEach((b) => {
+          b.addEventListener("click", (e) => {
+            openServerBrowser(e.currentTarget.dataset.path);
+          });
+        });
+        const use = modal.querySelector("#use-this-path");
+        if (use) {
+          use.addEventListener("click", (e) => {
+            input.value = e.currentTarget.dataset.path;
+            closeModal();
+          });
+        }
+      })
+      .catch((err) => {
+        modal.innerHTML = '<div class="err">Browse failed: ' + err + "</div>";
+      });
+  }
+})();
+</script>
+"""
+
 _STEPS = ("welcome", "storage", "camera", "summary")
 _STEP_LABELS = {
     "welcome": "Welcome",
@@ -80,6 +172,63 @@ _STEP_LABELS = {
     "camera": "Camera",
     "summary": "Review & save",
 }
+
+
+def _default_storage_path() -> str:
+    """Return an OS-appropriate default for the storage path field.
+
+    Windows: a path under %ProgramData% the LocalSystem service can
+    write to without bumping into Program Files' admin-only ACLs.
+    Other platforms (Linux/Docker mostly) keep the historical
+    /shared_data convention since that's the documented in-container
+    mount point.
+    """
+    if os.name == "nt":
+        program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+        return os.path.join(program_data, "VideoGrouper", "storage")
+    return "/shared_data"
+
+
+def _list_drives() -> list[str]:
+    """Enumerate drive letters that currently have mounted volumes."""
+    drives = []
+    for letter in string.ascii_uppercase:
+        path = f"{letter}:\\"
+        if os.path.exists(path):
+            drives.append(path)
+    return drives
+
+
+def _picker_ipc_dir() -> Path:
+    """Shared dir for native-picker request/response files.
+
+    Lives under ProgramData so service (LocalSystem) and tray (user
+    session) can both read+write without permissions wrangling.
+    """
+    if os.name == "nt":
+        program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+        return Path(program_data) / "VideoGrouper" / "picker"
+    return Path("/tmp/videogrouper-picker")
+
+
+def _list_subdirs(path: str) -> list[str]:
+    """Return immediate subdirectories under ``path``, sorted, hidden filtered."""
+    try:
+        entries = os.listdir(path)
+    except (PermissionError, OSError):
+        return []
+    subdirs = []
+    for name in entries:
+        if name.startswith(".") or name.startswith("$"):
+            continue
+        full = os.path.join(path, name)
+        try:
+            if os.path.isdir(full):
+                subdirs.append(name)
+        except OSError:
+            continue
+    subdirs.sort(key=str.lower)
+    return subdirs
 
 
 def _render_steps(active: str) -> str:
@@ -155,20 +304,43 @@ def build_router(config_path: Path) -> APIRouter:
     @router.get("/storage", response_class=HTMLResponse)
     def storage_get(request: Request) -> HTMLResponse:
         token, state = get_or_create(request.cookies.get(cookie_name()))
-        path_val = html.escape(state.storage_path or "/shared_data")
+        path_val = html.escape(state.storage_path or _default_storage_path())
+        is_windows = os.name == "nt"
+        # On Windows, prefer the native tray-mediated picker (QFileDialog).
+        # On Linux/Docker, the server-side browser is the only option since
+        # no PyQt tray is running. The page-level JS picks the right one.
+        if is_windows:
+            help_html = (
+                '<span class="muted">Where game videos and per-game state are saved. '
+                "Pre-filled with a path the service can write to without "
+                "elevating; pick a different drive (e.g., a larger one) "
+                "if you want videos elsewhere.</span>"
+            )
+        else:
+            help_html = (
+                '<span class="muted">Where game videos and per-game state are saved. '
+                "On a Linux/Docker host this is the path inside the container "
+                "(typically <code>/app/shared_data</code>).</span>"
+            )
         body = (
-            '<form method="post" action="/setup/storage">'
+            '<form method="post" action="/setup/storage" id="storage-form">'
             "<label>Storage path"
-            f'<input name="storage_path" type="text" value="{path_val}" required>'
-            '<span class="muted">Where game videos and per-game state are saved. '
-            "On a Linux/Docker host this is the path inside the container "
-            "(typically <code>/app/shared_data</code>); on Windows, an absolute "
-            "path like <code>C:/SoccerCam</code>.</span>"
+            f'<input name="storage_path" id="storage-input" type="text" '
+            f'value="{path_val}" required spellcheck="false" '
+            'style="font-family: ui-monospace, Consolas, monospace;">'
+            f"{help_html}"
             "</label>"
+            '<div class="row">'
+            '<button type="button" class="btn btn-ghost" id="browse-btn">'
+            "Browse…</button>"
+            "</div>"
+            '<div id="browse-modal" style="display:none; margin-top:0.75rem; '
+            "padding:0.75rem; border:1px solid #cbd5e1; border-radius:6px; "
+            'background:#f8fafc;"></div>'
             '<div class="row">'
             '<a class="btn-ghost btn" href="/setup/welcome">Back</a>'
             '<button class="btn" type="submit">Next</button>'
-            "</div></form>"
+            "</div></form>" + _STORAGE_PICKER_JS
         )
         resp = HTMLResponse(_page("storage", "Storage", "Where do videos go?", body))
         resp.set_cookie(
@@ -179,6 +351,143 @@ def build_router(config_path: Path) -> APIRouter:
             samesite="lax",
         )
         return resp
+
+    @router.get("/storage/browse", response_class=HTMLResponse)
+    def storage_browse(at: Optional[str] = Query(None)) -> HTMLResponse:
+        """Render a directory listing fragment for the in-page browse modal.
+
+        ``at`` is the directory to list. If empty/missing, list the
+        machine's available drive letters (Windows) or "/" (Unix).
+        Returns HTML, not a full page — meant to be loaded into the
+        modal div.
+        """
+        if not at:
+            # Top-level: drives on Windows, / on Unix.
+            if os.name == "nt":
+                items = _list_drives()
+                title = "Drives"
+            else:
+                items = ["/"]
+                title = "Filesystem"
+            buttons = "".join(
+                f'<button type="button" class="path-chip" '
+                f'data-path="{html.escape(p)}">{html.escape(p)}</button>'
+                for p in items
+            )
+            return HTMLResponse(
+                f'<div class="muted">{title}</div>'
+                f'<div class="path-list">{buttons}</div>'
+            )
+
+        # Reject paths that don't exist; the input could be anything.
+        path_obj = Path(at)
+        if not path_obj.is_dir():
+            return HTMLResponse(
+                f'<div class="err">Not a directory: {html.escape(str(path_obj))}</div>'
+            )
+
+        # Parent link (unless we're at a drive root).
+        parent_html = ""
+        parent = path_obj.parent
+        # On Windows, Path("C:\\").parent == Path("C:\\"), so we'd loop;
+        # detect that and offer "back to drives" instead.
+        if str(parent) == str(path_obj):
+            parent_html = (
+                '<button type="button" class="path-chip" data-path="">← Drives</button>'
+            )
+        else:
+            parent_html = (
+                '<button type="button" class="path-chip" '
+                f'data-path="{html.escape(str(parent))}">'
+                f"← {html.escape(parent.name or str(parent))}</button>"
+            )
+
+        subdirs = _list_subdirs(str(path_obj))
+        subdir_buttons = "".join(
+            f'<button type="button" class="path-chip" '
+            f'data-path="{html.escape(str(path_obj / name))}">'
+            f"{html.escape(name)}/</button>"
+            for name in subdirs
+        )
+        if not subdirs:
+            subdir_buttons = '<span class="muted">(no subdirectories)</span>'
+
+        return HTMLResponse(
+            f'<div class="row" style="justify-content:space-between;">'
+            f"<div>{parent_html}</div>"
+            f'<button type="button" class="btn" id="use-this-path" '
+            f'data-path="{html.escape(str(path_obj))}">Use this folder</button>'
+            f"</div>"
+            f'<div class="muted" style="margin-top:0.5rem; '
+            f'font-family: ui-monospace, Consolas, monospace;">'
+            f"{html.escape(str(path_obj))}</div>"
+            f'<div class="path-list" style="margin-top:0.5rem;">'
+            f"{subdir_buttons}</div>"
+        )
+
+    @router.post("/storage/request-pick")
+    def storage_request_pick() -> dict:
+        """Ask the running tray to show a native folder-picker dialog.
+
+        Drops a request file in the picker IPC dir; the tray polls for
+        it, shows QFileDialog, and writes the response file. Returns
+        404 on non-Windows or when the IPC dir isn't writable so the
+        wizard JS can fall back to the in-page server-side browser.
+        """
+        if os.name != "nt":
+            raise HTTPException(status_code=404, detail="native picker not available")
+        ipc_dir = _picker_ipc_dir()
+        try:
+            ipc_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"picker IPC dir unwritable: {exc}"
+            )
+        # Clean stale responses from prior runs to keep the protocol simple.
+        for stale in ipc_dir.glob("response_*.json"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+        import json
+        import secrets
+        import time
+
+        req_id = secrets.token_hex(8)
+        request_file = ipc_dir / "request.json"
+        request_file.write_text(
+            json.dumps({"id": req_id, "ts": time.time()}), encoding="utf-8"
+        )
+        return {"id": req_id}
+
+    @router.get("/storage/pick-result")
+    def storage_pick_result(id: str = Query(...)) -> dict:
+        """Poll for the tray's response to a native folder-picker request.
+
+        Returns ``{path: "..."}`` once the tray has written the response,
+        ``{cancelled: true}`` if the user dismissed the dialog, or 204
+        while still waiting.
+        """
+        ipc_dir = _picker_ipc_dir()
+        response_file = ipc_dir / f"response_{id}.json"
+        if not response_file.exists():
+            from fastapi.responses import Response
+
+            return Response(status_code=204)
+
+        import json
+
+        try:
+            data = json.loads(response_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"cancelled": True}
+        finally:
+            try:
+                response_file.unlink()
+            except OSError:
+                pass
+        return data
 
     @router.post("/storage", response_class=HTMLResponse)
     def storage_post(

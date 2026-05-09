@@ -1,15 +1,17 @@
 import sys
 import os
+import json
 import time
 import atexit
 import asyncio
 import threading
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QFileDialog
 from PyQt6.QtCore import (
     QRunnable,
     QThreadPool,
     QObject,
+    QTimer,
     pyqtSignal as Signal,
     pyqtSlot as Slot,
 )
@@ -236,6 +238,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         self.init_ui()
         self.start_update_checker()
+        self._start_folder_picker_poll()
 
         self.threadpool = QThreadPool()
         logger.info(
@@ -385,6 +388,70 @@ class SystemTrayIcon(QSystemTrayIcon):
     def icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.open_dashboard()
+
+    def _start_folder_picker_poll(self):
+        """Poll the picker IPC dir for wizard folder-pick requests.
+
+        The setup wizard's ``Browse…`` button drops a request file
+        which we read here and answer with a real Windows folder
+        dialog. See video_grouper/web/setup/router.py for the wizard
+        side. No-op on non-Windows since the wizard's JS won't issue
+        the request there.
+        """
+        if os.name != "nt":
+            return
+        program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+        self._picker_ipc_dir = Path(program_data) / "VideoGrouper" / "picker"
+        try:
+            self._picker_ipc_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("folder picker IPC dir unavailable: %s", exc)
+            return
+        self._picker_timer = QTimer(self)
+        self._picker_timer.timeout.connect(self._poll_folder_picker_request)
+        self._picker_timer.start(500)
+
+    def _poll_folder_picker_request(self):
+        request_file = self._picker_ipc_dir / "request.json"
+        if not request_file.exists():
+            return
+        try:
+            data = json.loads(request_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("folder picker: bad request file: %s", exc)
+            data = None
+        # Always remove the request, even on error, so we don't loop.
+        try:
+            request_file.unlink()
+        except OSError:
+            pass
+        if not data:
+            return
+        req_id = data.get("id")
+        ts = data.get("ts", 0)
+        # Drop stale requests (>60s) — the wizard tab was probably closed.
+        if not req_id or (time.time() - ts) > 60:
+            return
+
+        # Pre-fill the dialog at the path currently in the wizard input
+        # if we can guess it; fall back to ProgramData.
+        start_at = os.environ.get("ProgramData", r"C:\\")
+        path = QFileDialog.getExistingDirectory(
+            None,
+            "Select VideoGrouper storage folder",
+            start_at,
+            QFileDialog.Option.ShowDirsOnly,
+        )
+
+        response_file = self._picker_ipc_dir / f"response_{req_id}.json"
+        if path:
+            payload = {"id": req_id, "path": path}
+        else:
+            payload = {"id": req_id, "cancelled": True}
+        try:
+            response_file.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("folder picker: could not write response: %s", exc)
 
     def _web_url(self, path: str = "/") -> str:
         """Build the local web app URL using configured port (default 8765)."""

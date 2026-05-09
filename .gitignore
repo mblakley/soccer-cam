@@ -43,9 +43,13 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
-# Keep our two build spec files tracked (source of truth for PyInstaller config)
+# Keep our build spec files tracked (source of truth for PyInstaller config).
+# VideoGrouperService.spec / VideoGrouperTray.spec are auto-regenerated when
+# pyinstaller runs from a .py entry point (kept for historical compatibility);
+# VideoGrouper.spec is the multi-target spec we drive the actual build from.
 !VideoGrouperService.spec
 !VideoGrouperTray.spec
+!video_grouper/installer/VideoGrouper.spec
 
 # Installer logs
 pip-log.txt
