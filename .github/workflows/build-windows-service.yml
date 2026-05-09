@@ -95,11 +95,11 @@ jobs:
 
     - name: Build service executable
       run: |
-        uv run pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperService --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/service/main.py
+        uv run pyinstaller --noconfirm --onedir --windowed --icon=video_grouper/icon.ico --name=VideoGrouperService --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/service/main.py
 
     - name: Build tray agent executable
       run: |
-        uv run pyinstaller --noconfirm --onefile --windowed --icon=video_grouper/icon.ico --name=VideoGrouperTray --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray/main.py
+        uv run pyinstaller --noconfirm --onedir --windowed --icon=video_grouper/icon.ico --name=VideoGrouperTray --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray/main.py
 
     - name: Install NSIS
       run: choco install nsis -y
@@ -114,8 +114,6 @@ jobs:
         name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
         path: |
           video_grouper/dist/VideoGrouperSetup.exe
-          video_grouper/dist/VideoGrouperService.exe
-          video_grouper/dist/VideoGrouperTray.exe
 
   release:
     name: Create Release
@@ -141,13 +139,7 @@ jobs:
 
           ## Windows Installer
           Download and run `VideoGrouperSetup.exe` to install the Windows application.
-
-          ## Individual Executables
-          - `VideoGrouperService.exe` - Windows service
-          - `VideoGrouperTray.exe` - System tray agent
         files: |
           artifacts/VideoGrouperSetup.exe
-          artifacts/VideoGrouperService.exe
-          artifacts/VideoGrouperTray.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

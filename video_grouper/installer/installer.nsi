@@ -56,27 +56,52 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${COMPANYNAME}"
 Section "Install" SecInstall
     ; Use 64-bit registry view so the 64-bit service can find the keys
     SetRegView 64
-    SetOutPath "$INSTDIR"
 
-    ; Copy files
-    File "..\dist\VideoGrouperService.exe"
-    File "..\dist\VideoGrouperTray.exe"
+    ; Copy the icon to the install root for shortcuts
+    SetOutPath "$INSTDIR"
     File "..\icon.ico"
 
-    ; Install the Windows service silently (do not start -- onboarding wizard must run first)
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" install'
+    ; Copy the PyInstaller --onedir output for the service.
+    ; Each onedir build is a tree containing the .exe plus an
+    ; _internal/ folder with bundled Python + deps. We put service
+    ; and tray in separate subdirs so their _internal trees don't
+    ; collide.
+    SetOutPath "$INSTDIR\service"
+    File /r "..\dist\VideoGrouperService\*"
+
+    SetOutPath "$INSTDIR\tray"
+    File /r "..\dist\VideoGrouperTray\*"
+
+    SetOutPath "$INSTDIR"
+
+    ; Register the Windows service with delayed-auto-start so it survives
+    ; reboots without slowing boot. pywin32's HandleCommandLine accepts
+    ; --startup before the verb. Valid values: auto, delayed, manual,
+    ; disabled. "delayed" maps to SERVICE_AUTO_START + DelayedAutoStart=1.
+    nsExec::ExecToLog '"$INSTDIR\service\VideoGrouperService.exe" --startup delayed install'
+
+    ; Configure service recovery: restart 3 times on failure, then leave
+    ; alone. Reset failure count after 24h of clean operation.
+    nsExec::ExecToLog 'sc.exe failure VideoGrouperService reset= 86400 actions= restart/5000/restart/30000/restart/60000'
+
+    ; Start the service so the FastAPI wizard at :8765 is reachable
+    ; before the tray opens the browser. Skip in silent mode so /S
+    ; CI runs stay headless.
+    ${IfNot} ${Silent}
+        nsExec::ExecToLog 'sc.exe start VideoGrouperService'
+    ${EndIf}
 
     ; Create startup shortcut for tray agent (no config path arg - wizard handles it)
-    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
+    CreateShortCut "$SMSTARTUP\VideoGrouperTray.lnk" "$INSTDIR\tray\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
 
     ; Also create a desktop shortcut
-    CreateShortCut "$DESKTOP\VideoGrouper.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
+    CreateShortCut "$DESKTOP\VideoGrouper.lnk" "$INSTDIR\tray\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
 
     ; Launch tray agent (will show onboarding wizard on first run).
     ; Skip in silent mode -- /S installs need to stay headless, otherwise
     ; the wizard blocks automation (e.g. CI and scripted upgrades).
     ${IfNot} ${Silent}
-        Exec '"$INSTDIR\VideoGrouperTray.exe"'
+        Exec '"$INSTDIR\tray\VideoGrouperTray.exe"'
     ${EndIf}
 
     ; Create uninstaller
@@ -94,8 +119,8 @@ SectionEnd
 Section "Uninstall"
     SetRegView 64
     ; Stop and remove the service silently
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" stop'
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" remove'
+    nsExec::ExecToLog '"$INSTDIR\service\VideoGrouperService.exe" stop'
+    nsExec::ExecToLog '"$INSTDIR\service\VideoGrouperService.exe" remove'
 
     ; Kill tray if running
     nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
@@ -108,9 +133,11 @@ Section "Uninstall"
         Delete "$0\tray_agent.lock"
     ${EndIf}
 
-    ; Remove files
-    Delete "$INSTDIR\VideoGrouperService.exe"
-    Delete "$INSTDIR\VideoGrouperTray.exe"
+    ; Remove the bundled directory trees recursively
+    RMDir /r "$INSTDIR\service"
+    RMDir /r "$INSTDIR\tray"
+
+    ; Remove root-level files
     Delete "$INSTDIR\icon.ico"
     Delete "$INSTDIR\uninstall.exe"
 
