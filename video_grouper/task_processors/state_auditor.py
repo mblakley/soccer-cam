@@ -332,6 +332,31 @@ class StateAuditor(PollingProcessor):
         if self.match_info_service:
             await self.match_info_service.populate_match_info_from_apis(group_dir)
 
+        # If the API call filled in everything, skip NTFY entirely and
+        # queue trim directly. Without this re-check, a successful TeamSnap
+        # /PlayMetrics lookup writes match_info.ini but the auditor's
+        # earlier "is_populated" check (run BEFORE this call) saw it
+        # empty, so the trim only fires on the NEXT service boot. That
+        # made every fresh install need a restart to actually process
+        # games — and made the user think the system was stuck.
+        match_info_path = get_match_info_path(group_dir, self.storage_path)
+        if os.path.exists(match_info_path):
+            match_info = MatchInfo.from_file(match_info_path)
+            if match_info and match_info.is_populated() and self.video_processor:
+                logger.info(
+                    f"STATE_AUDITOR: API populated full match_info for "
+                    f"{group_dir}, queuing trim directly (skipping NTFY)"
+                )
+                trim_end = getattr(self.config.processing, "trim_end_enabled", False)
+                await self.video_processor.add_work(
+                    TrimTask.from_match_info(
+                        group_dir, match_info, trim_end_enabled=trim_end
+                    )
+                )
+                if self.ntfy_processor:
+                    self.ntfy_processor.ntfy_service.mark_as_processed(group_dir)
+                return
+
         # Route NTFY through ntfy_processor so responses are handled correctly
         if self.ntfy_processor:
             await self.ntfy_processor.request_match_info_for_directory(
