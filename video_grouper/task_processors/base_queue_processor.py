@@ -205,6 +205,34 @@ class QueueProcessor(ABC):
                     )
                 except Exception as e:
                     from video_grouper.utils.youtube_upload import YouTubeQuotaError
+                    from video_grouper.cameras.base import CameraUnreachableError
+
+                    if isinstance(e, CameraUnreachableError):
+                        # Camera-offline failures aren't the file's fault —
+                        # stall the queue with a fixed sleep, requeue at
+                        # original priority, and DON'T increment the retry
+                        # counter. Without this, a single 30-min camera
+                        # unplug burns 3 strikes on every queued file in
+                        # rapid succession and marks them all terminally
+                        # failed; CameraPoller's high-water mark then
+                        # advances past those timestamps and they're never
+                        # rediscovered. See CameraUnreachableError doc.
+                        logger.warning(
+                            f"{self.__class__.__name__}: camera unreachable "
+                            f"while processing {item}: {e}. Pausing the "
+                            f"queue for 60s, then requeuing without a "
+                            f"retry-strike. [trace_id: {trace_id}]"
+                        )
+                        self._queue.task_done()
+                        self._in_progress_item = None
+                        await asyncio.sleep(60)
+                        new_seq = self._sequence
+                        self._sequence += 1
+                        await self._queue.put((priority, new_seq, item))
+                        self._items_by_key[item_key] = (priority, new_seq, item)
+                        # Deliberately do NOT touch self._retry_counts
+                        await self.save_state()
+                        continue
 
                     if isinstance(e, YouTubeQuotaError):
                         # Quota errors should not be retried immediately.

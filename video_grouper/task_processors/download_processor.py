@@ -1,7 +1,7 @@
 import os
 import logging
 
-from video_grouper.cameras.base import Camera
+from video_grouper.cameras.base import Camera, CameraUnreachableError
 from video_grouper.task_processors.video_processor import VideoProcessor
 from .base_queue_processor import QueueProcessor
 from video_grouper.models import DirectoryState
@@ -12,6 +12,31 @@ from video_grouper.utils.disk_space import check_disk_space
 from .queue_type import QueueType
 
 logger = logging.getLogger(__name__)
+
+
+async def _check_camera(camera: Camera) -> bool:
+    """Run ``camera.check_availability`` regardless of sync/async signature.
+
+    Tests mock the camera with a vanilla ``Mock`` whose attribute calls
+    return a Mock object (not a coroutine), so an unconditional ``await``
+    blows up. Detect a coroutine return value and only ``await`` then.
+    Any exception inside the probe is treated as "unreachable" — we'd
+    rather fail safe and stall the queue than burn retries on a
+    transient probe error.
+    """
+    import inspect
+
+    try:
+        result = camera.check_availability()
+        if inspect.iscoroutine(result):
+            result = await result
+        return bool(result)
+    except Exception as exc:
+        logger.info(
+            f"DOWNLOAD: camera availability probe raised {exc!r}; "
+            f"treating as unreachable"
+        )
+        return False
 
 
 class DownloadProcessor(QueueProcessor):
@@ -106,6 +131,19 @@ class DownloadProcessor(QueueProcessor):
                     )
                 return
 
+        # Camera-availability gate. If the camera is unreachable we want
+        # to stall the queue, not burn retry strikes per file. Without
+        # this gate, an offline camera makes every queued download fail
+        # immediately, bumping each item's per-file retry count, and
+        # within a few seconds every queued file is at 3/3 and gets
+        # marked `download_failed` permanently — see CameraUnreachable
+        # Error's docstring for the 2026-05-09 incident this prevents.
+        camera_up = await _check_camera(self.camera)
+        if not camera_up:
+            raise CameraUnreachableError(
+                f"camera {self.camera.name} unreachable before downloading {file_name}"
+            )
+
         # Check disk space before downloading
         min_free_gb = self.config.storage.min_free_gb
         has_space, free_gb = check_disk_space(self.storage_path, min_free_gb)
@@ -187,6 +225,19 @@ class DownloadProcessor(QueueProcessor):
                             f"DOWNLOAD: No video processor available to queue combine task for {group_dir}"
                         )
             else:
+                # Mid-download failures: if the camera dropped offline mid-
+                # stream the camera class returned False because the network
+                # went away, not because the file is bad. Probe once more
+                # so the queue can pause without burning a retry strike.
+                # Leave the file's status at `pending` (not download_failed)
+                # so it gets retried cleanly when the camera returns.
+                camera_still_up = await _check_camera(self.camera)
+                if not camera_still_up:
+                    await dir_state.update_file_state(file_path, status="pending")
+                    raise CameraUnreachableError(
+                        f"camera {self.camera.name} went offline while "
+                        f"downloading {file_name}"
+                    )
                 await dir_state.update_file_state(file_path, status="download_failed")
                 if self.ttt_reporter:
                     await self.ttt_reporter.update_recording_status(

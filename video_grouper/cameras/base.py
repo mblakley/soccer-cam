@@ -3,6 +3,21 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from datetime import datetime
 
 
+class CameraUnreachableError(Exception):
+    """Raised when a download fails because the camera is offline.
+
+    The queue processor's retry loop catches this specifically and
+    requeues the item WITHOUT incrementing the per-item retry counter
+    — camera-unreachable is a global state, not the file's fault, and
+    the file should be tried again after a backoff once the camera is
+    back. Burning 3 strikes per file during a 30-minute camera unplug
+    would mark every queued file terminally failed: exactly the bug
+    we hit on 2026-05-09 when 10 of a 19-file game's recordings got
+    stuck `download_failed` and CameraPoller's high-water mark
+    advanced past them so they were never rediscovered.
+    """
+
+
 class DeviceInfo(TypedDict):
     """Represents device information from a camera."""
 
