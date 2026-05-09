@@ -3,7 +3,7 @@ Version information for VideoGrouper.
 This file is automatically updated during the build process.
 """
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 BUILD_NUMBER = "0"  # 0 for releases, commit count for dev builds
 
 # Full version string including build number

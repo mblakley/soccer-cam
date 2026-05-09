@@ -53,8 +53,12 @@ jobs:
       shell: pwsh
       run: |
         $content = Get-Content video_grouper/version.py -Raw
-        $content = $content -replace 'VERSION = "0\.0\.0"', "VERSION = `"${{ env.VERSION }}`""
-        $content = $content -replace 'BUILD_NUMBER = "0"', "BUILD_NUMBER = `"${{ env.BUILD_NUMBER }}`""
+        # Match ANY current VERSION = "x.y.z" line, not just "0.0.0".
+        # The previous narrow regex silently no-op'd whenever someone
+        # bumped version.py manually, so the published binary's version
+        # would lag the git tag.
+        $content = $content -replace 'VERSION = "[^"]*"', "VERSION = `"${{ env.VERSION }}`""
+        $content = $content -replace 'BUILD_NUMBER = "[^"]*"', "BUILD_NUMBER = `"${{ env.BUILD_NUMBER }}`""
         Set-Content video_grouper/version.py $content
 
     - name: Inject YouTube OAuth credentials
@@ -93,13 +97,36 @@ jobs:
           Write-Host "INFO: TTT secrets not configured in GitHub - using production defaults"
         }
 
+    # Excludes drop the training-only ML stack (torch is 3.85 GB alone,
+    # plus ultralytics + scipy + matplotlib + transitive bloat). Inference
+    # needs `cv2` + `onnxruntime` only (see the docstring at the top of
+    # video_grouper/inference/ball_detector.py) so those stay in the
+    # service bundle for users who run the homegrown ball-tracking
+    # provider with their own ONNX model. The tray excludes more
+    # aggressively since it doesn't process video or run inference.
     - name: Build service executable
       run: |
-        uv run pyinstaller --noconfirm --onedir --windowed --icon=video_grouper/icon.ico --name=VideoGrouperService --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/service/main.py
+        uv run pyinstaller --noconfirm --onedir --windowed `
+          --icon=video_grouper/icon.ico --name=VideoGrouperService `
+          --distpath=video_grouper/dist --workpath=video_grouper/build `
+          --exclude-module=torch --exclude-module=torchvision `
+          --exclude-module=ultralytics --exclude-module=ultralytics_thop `
+          --exclude-module=scipy --exclude-module=matplotlib `
+          --exclude-module=sympy --exclude-module=networkx `
+          video_grouper/service/main.py
 
     - name: Build tray agent executable
       run: |
-        uv run pyinstaller --noconfirm --onedir --windowed --icon=video_grouper/icon.ico --name=VideoGrouperTray --distpath=video_grouper/dist --workpath=video_grouper/build video_grouper/tray/main.py
+        uv run pyinstaller --noconfirm --onedir --windowed `
+          --icon=video_grouper/icon.ico --name=VideoGrouperTray `
+          --distpath=video_grouper/dist --workpath=video_grouper/build `
+          --exclude-module=torch --exclude-module=torchvision `
+          --exclude-module=ultralytics --exclude-module=ultralytics_thop `
+          --exclude-module=onnxruntime --exclude-module=cv2 `
+          --exclude-module=scipy --exclude-module=matplotlib `
+          --exclude-module=sympy --exclude-module=networkx `
+          --exclude-module=googleapiclient --exclude-module=av `
+          video_grouper/tray/main.py
 
     - name: Install NSIS
       run: choco install nsis -y
