@@ -163,7 +163,19 @@ class NtfyAPI:
             logger.warning("Cannot listen for NTFY responses - integration not enabled")
             return
 
-        url = f"{self.base_url}/{self.topic}/json"
+        # ?since=24h replays any messages from the last 24 hours on each
+        # reconnect. ntfy.sh free tier retains messages ~12h so this
+        # captures everything the server still has. Critical for survival
+        # across service restarts: without it, taps the user makes
+        # while the service is briefly down (config-watch restart, the
+        # 30-second auto-restart window from the recovery handler, etc.)
+        # land on the topic but the new listener never sees them, and
+        # the question that fired before the restart sits stuck at
+        # waiting_for_input forever.
+        # Replay is safe — process_response filters on
+        # status=waiting_for_input, so an already-answered task drops
+        # any duplicate response on the floor.
+        url = f"{self.base_url}/{self.topic}/json?since=24h"
         retry_count = 0
         max_retries = 10  # Increased from 5
         retry_delay = 3  # Reduced from 5
