@@ -177,6 +177,24 @@ class GameStartTask(BaseNtfyTask):
 
         elif "not a game" in response_lower:
             logger.info(f"Video is not a game for {self.group_dir}")
+            # Persist the user's verdict to state.json. Without this, the
+            # task gets cleared from pending_tasks but the group's
+            # state.status stays at "combined" — so state_auditor's next
+            # boot scan re-queues team_info / game_start_time questions
+            # for the same group, and the user sees the question they
+            # just answered. Recurring class of bug; we hit it on
+            # 2026-05-09 with a 90-second test clip that asked for
+            # team info four times across an afternoon.
+            try:
+                from video_grouper.models import DirectoryState
+
+                dir_state = DirectoryState(self.group_dir)
+                await dir_state.update_group_status("not_a_game")
+                logger.info(f"GameStartTask: marked {self.group_dir} state=not_a_game")
+            except Exception as exc:
+                logger.error(
+                    f"GameStartTask: failed to mark {self.group_dir} not_a_game: {exc}"
+                )
             return NtfyTaskResult(
                 success=True,
                 should_continue=False,
