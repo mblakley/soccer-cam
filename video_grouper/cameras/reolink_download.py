@@ -1129,10 +1129,12 @@ async def _download_via_http_async(
                 _HTTP_PATH_SUPPORTED[host] = True
                 logger.info(f"{host}: patched firmware detected, using HTTP fast path")
 
-            # Stream GET → output file
+            # Stream GET → output file. Stage to <name>.partial so a
+            # crash mid-stream leaves an obvious orphan that StateAuditor
+            # can clean up without confusing it for a finished MP4.
             t0 = time.monotonic()
             written = 0
-            tmp = output_mp4 + ".http.tmp"
+            tmp = output_mp4 + ".partial"
             try:
                 async with client.stream("GET", url) as resp:
                     if resp.status_code != 200:
@@ -1207,7 +1209,14 @@ async def _download_and_mux_async(
             "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
         )
 
-    temp_raw = output_mp4 + ".raw.tmp"
+    # Baichuan delivers raw video + raw audio frames (no container);
+    # we stage them as <name>.partial.video and <name>.partial.audio,
+    # remux into <name>.partial, then atomic-rename to <name>.mp4.
+    # Single ".partial" prefix everywhere makes orphan cleanup trivial
+    # — StateAuditor can match all in-flight artifacts with one glob.
+    raw_video = output_mp4 + ".partial.video"
+    raw_audio = output_mp4 + ".partial.audio"
+    muxed = output_mp4 + ".partial"
     client = BaichuanStreamClient(host, port, username, password)
 
     try:
@@ -1216,7 +1225,7 @@ async def _download_and_mux_async(
 
         stats = await client.download_file_replay(
             file_path=file_path,
-            output_path=temp_raw,
+            output_path=raw_video,
             channel=channel,
             on_progress=on_progress,
         )
@@ -1233,17 +1242,21 @@ async def _download_and_mux_async(
             f"{stats['duration_seconds']:.1f}s"
         )
 
-        # Remux raw bitstream (+ audio sidecar) -> MP4
+        # Remux raw bitstream (+ audio sidecar) -> .partial MP4
         codec = stats.get("video_codec") or "H265"
-        audio_raw = temp_raw + ".audio"
         _remux_raw_to_mp4(
-            temp_raw,
-            output_mp4,
+            raw_video,
+            muxed,
             codec,
-            audio_path=audio_raw if os.path.exists(audio_raw) else None,
+            audio_path=raw_audio if os.path.exists(raw_audio) else None,
             audio_sample_rate=stats.get("audio_sample_rate") or 16000,
             audio_channels=stats.get("audio_channels") or 1,
         )
+
+        # Atomic publish: <name>.partial -> <name>.mp4. Drops the
+        # ".partial" suffix in one step so a watching process never
+        # sees a half-written .mp4.
+        os.replace(muxed, output_mp4)
         logger.info(f"Remuxed to {os.path.basename(output_mp4)}")
 
         return True
@@ -1253,7 +1266,7 @@ async def _download_and_mux_async(
         return False
     finally:
         await client.close()
-        for tmp in (temp_raw, temp_raw + ".audio"):
+        for tmp in (raw_video, raw_audio, muxed):
             if os.path.exists(tmp):
                 try:
                     os.remove(tmp)

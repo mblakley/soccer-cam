@@ -107,20 +107,30 @@ class StateAuditor(PollingProcessor):
 
     @staticmethod
     def _cleanup_temp_files(group_dir: str) -> None:
-        """Remove .tmp files left by crashed downloads or FFmpeg operations."""
+        """Remove staging files left by crashed downloads / mux operations.
+
+        Catches both the current convention (``*.partial``,
+        ``*.partial.video``, ``*.partial.audio``) and legacy suffixes
+        (``*.tmp``, ``*.http.tmp``, ``*.raw.tmp``, ``*.raw.tmp.audio``)
+        so an upgrade with leftover staging files from the prior naming
+        scheme cleans up cleanly on first boot.
+        """
         try:
             for fname in os.listdir(group_dir):
-                if fname.endswith(".tmp"):
-                    tmp_path = os.path.join(group_dir, fname)
-                    try:
-                        os.remove(tmp_path)
-                        logger.info(
-                            f"STATE_AUDITOR: Cleaned up orphaned temp file: {fname}"
-                        )
-                    except OSError as exc:
-                        logger.warning(
-                            f"STATE_AUDITOR: Could not remove temp file {fname}: {exc}"
-                        )
+                if not (
+                    ".partial" in fname or fname.endswith(".tmp") or ".tmp." in fname
+                ):
+                    continue
+                tmp_path = os.path.join(group_dir, fname)
+                try:
+                    os.remove(tmp_path)
+                    logger.info(
+                        f"STATE_AUDITOR: Cleaned up orphaned temp file: {fname}"
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        f"STATE_AUDITOR: Could not remove temp file {fname}: {exc}"
+                    )
         except OSError:
             pass
 

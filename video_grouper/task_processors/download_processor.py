@@ -86,9 +86,12 @@ class DownloadProcessor(QueueProcessor):
                 self.error_tracker.record("download", error_msg, {"file": file_name})
             raise RuntimeError(error_msg)
 
-        # Download to a temp file first so a crash mid-download never
-        # leaves a partial file at the final path.  Only rename on success.
-        temp_path = file_path + ".tmp"
+        # The camera handles its own staging (writes to <file>.partial,
+        # atomic-renames to the final path on success). We just pass the
+        # destination and inspect what's on disk afterwards. The previous
+        # double-wrapping (download_processor adding .tmp on top of the
+        # camera's own .http.tmp / .raw.tmp) made for unreadable
+        # filenames like RecM09_xxxxx.mp4.tmp.http.tmp.
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
@@ -97,12 +100,6 @@ class DownloadProcessor(QueueProcessor):
                     dir_state.ttt_recording_id, "download", "downloading"
                 )
 
-            # Clean up any leftover temp file from a previous crashed attempt
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-
             # The camera implementation may expose either a synchronous or an
             # asynchronous `download_file` method depending on the concrete
             # subclass or the way it is mocked in unit-tests.  Detect the
@@ -110,7 +107,7 @@ class DownloadProcessor(QueueProcessor):
             # are supported seamlessly.
 
             download_result = self.camera.download_file(
-                file_path=item.metadata["path"], local_path=temp_path
+                file_path=item.metadata["path"], local_path=file_path
             )
 
             import asyncio
@@ -121,13 +118,6 @@ class DownloadProcessor(QueueProcessor):
                 download_successful = download_result
 
             if download_successful:
-                # Atomic rename: temp -> final (only on success).
-                # If the camera wrote directly to file_path (legacy behavior
-                # or mock), the temp file won't exist -- that's OK.
-                try:
-                    os.replace(temp_path, file_path)
-                except OSError:
-                    pass
                 await dir_state.update_file_state(file_path, status="downloaded")
                 if self.ttt_reporter:
                     await self.ttt_reporter.update_recording_status(
@@ -173,11 +163,10 @@ class DownloadProcessor(QueueProcessor):
                 f"DOWNLOAD: An error occurred during download of {file_name}: {e}",
                 exc_info=True,
             )
-            # Clean up temp file on any error
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
+            # The camera's download_file owns its own staging files (.partial,
+            # .partial.video, .partial.audio) and cleans them up on failure;
+            # nothing to do here. StateAuditor mops up any orphans on the next
+            # scan if the camera couldn't reach its own finally block.
             await dir_state.update_file_state(file_path, status="download_failed")
             if self.ttt_reporter:
                 await self.ttt_reporter.update_recording_status(
