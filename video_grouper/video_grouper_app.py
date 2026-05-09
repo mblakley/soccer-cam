@@ -731,69 +731,183 @@ class VideoGrouperApp:
 
             await self.shutdown()
 
-    async def _watch_config_for_restart(self) -> None:
-        """Trigger a service restart when ``self.config_path`` is rewritten.
+    # Restart safety knobs. Tuned for the wizard-save-then-/config-edit
+    # path the user actually walks during onboarding.
+    _CONFIG_POLL_INTERVAL = 5  # seconds between mtime checks while idle
+    _CONFIG_COALESCE_QUIET = 10  # seconds of mtime stability before restart
+    _CONFIG_DEFER_TICK = 30  # seconds between active-download checks
+    _CONFIG_DEFER_MAX = 30 * 60  # cap on total deferral while downloading
 
-        Polls mtime every 5s. On change, schedules a detached
-        ``sc start`` (so it survives our exit) and signals shutdown.
-        Windows SCM brings the service back up with the new config.
-        Sub-second writes within the same poll window are coalesced —
-        if the user saves the wizard and immediately opens /config
-        the second save is caught on the next tick.
+    def _has_active_download(self) -> bool:
+        """True if any DownloadProcessor is currently writing a file.
+
+        Used to defer config-change restarts so we don't trash a
+        partial Baichuan stream that can't be range-resumed.
+        """
+        return any(
+            getattr(dp, "_in_progress_item", None) is not None
+            for dp in self.download_processors.values()
+        )
+
+    async def _watch_config_for_restart(self) -> None:
+        """Trigger a clean restart when ``self.config_path`` is rewritten.
+
+        Three-phase loop:
+
+          1. Poll mtime every 5s while waiting for any change.
+          2. Once changed, coalesce: wait 10s of stability before
+             committing — back-to-back saves (wizard /finish + /config
+             tweak) batch into one restart instead of three.
+          3. Defer: if a download is mid-flight, wait up to 30 min for
+             it to finish before restarting. The Reolink Baichuan
+             stream isn't range-resumable, so a mid-download restart
+             throws away the bytes already on disk.
+
+        On commit, schedules a detached ``sc start`` so SCM brings us
+        back up after our clean shutdown (recovery actions only fire
+        on FAILURE, not graceful exit).
         """
         if self.config_path is None:
             return
         try:
-            initial_mtime = self.config_path.stat().st_mtime
+            last_seen_mtime = self.config_path.stat().st_mtime
         except OSError as exc:
             logger.warning("config-watch: cannot stat %s: %s", self.config_path, exc)
             return
 
         while True:
             try:
-                await asyncio.sleep(5)
+                await asyncio.sleep(self._CONFIG_POLL_INTERVAL)
             except asyncio.CancelledError:
                 return
             try:
                 current_mtime = self.config_path.stat().st_mtime
             except OSError:
                 continue
-            # 0.5s tolerance to avoid spurious restarts when an editor
-            # touches mtime without changing content.
-            if current_mtime <= initial_mtime + 0.5:
+            # 0.5s tolerance — some editors bump mtime without
+            # actually changing bytes.
+            if current_mtime <= last_seen_mtime + 0.5:
                 continue
 
+            last_seen_mtime = current_mtime
             logger.info(
-                "Config %s modified (mtime %.0f -> %.0f); restarting service "
-                "so processors pick up the new values.",
+                "Config-watch: %s changed; coalescing %ds before restart.",
                 self.config_path,
-                initial_mtime,
-                current_mtime,
+                self._CONFIG_COALESCE_QUIET,
             )
 
-            # Spawn a detached process that waits for us to stop, then
-            # `sc start`s us back up. Without this, a clean exit would
-            # leave the service Stopped (recovery only triggers on
-            # FAILURE), so we'd need a manual restart to apply.
-            if os.name == "nt":
-                try:
-                    import subprocess
+            # Phase 2: wait for the file to be stable.
+            settled = await self._wait_for_config_stable(last_seen_mtime)
+            if settled is None:
+                return  # cancelled
+            last_seen_mtime = settled
 
-                    subprocess.Popen(
-                        'cmd.exe /c "timeout /t 5 /nobreak > nul & '
-                        'sc start VideoGrouperService"',
-                        shell=True,
-                        creationflags=(
-                            subprocess.DETACHED_PROCESS
-                            | subprocess.CREATE_NEW_PROCESS_GROUP
-                            | 0x08000000  # CREATE_NO_WINDOW
-                        ),
-                    )
-                except Exception as exc:
-                    logger.error("config-watch: could not schedule restart: %s", exc)
+            # Phase 3: defer while a download is active.
+            settled = await self._wait_for_download_idle(last_seen_mtime)
+            if settled is None:
+                return  # cancelled
+            last_seen_mtime = settled
 
+            logger.info(
+                "Config-watch: %s settled (mtime %.0f); restarting service.",
+                self.config_path,
+                last_seen_mtime,
+            )
+            self._schedule_restart()
             self._shutdown_event.set()
             return
+
+    async def _wait_for_config_stable(self, last_mtime: float) -> Optional[float]:
+        """Sleep until the config has been stable for the coalesce window.
+
+        Returns the new last_mtime, or None if cancelled. If more
+        edits keep arriving the wait restarts — handy when the
+        wizard's /finish and a /config tweak happen back-to-back.
+        """
+        while True:
+            try:
+                await asyncio.sleep(self._CONFIG_COALESCE_QUIET)
+            except asyncio.CancelledError:
+                return None
+            try:
+                current = self.config_path.stat().st_mtime
+            except OSError:
+                continue
+            if current > last_mtime + 0.5:
+                last_mtime = current
+                logger.info(
+                    "Config-watch: still changing (mtime now %.0f); coalescing.",
+                    current,
+                )
+                continue
+            return last_mtime
+
+    async def _wait_for_download_idle(self, last_mtime: float) -> Optional[float]:
+        """Defer restart while any download is in-flight.
+
+        Returns the (possibly updated) last_mtime, or None if
+        cancelled. Bails out at ``_CONFIG_DEFER_MAX`` even if downloads
+        are still running — the user's config change has to land
+        eventually. New mtime bumps during the defer reset the
+        coalesce window so we don't restart with a half-written file.
+        """
+        deferred = 0
+        while self._has_active_download() and deferred < self._CONFIG_DEFER_MAX:
+            logger.info(
+                "Config-watch: deferring restart — download in progress (%ds elapsed of %ds max).",
+                deferred,
+                self._CONFIG_DEFER_MAX,
+            )
+            try:
+                await asyncio.sleep(self._CONFIG_DEFER_TICK)
+            except asyncio.CancelledError:
+                return None
+            deferred += self._CONFIG_DEFER_TICK
+            # Catch a fresh edit during the defer so we don't fire
+            # a restart with a still-mutating config file.
+            try:
+                current = self.config_path.stat().st_mtime
+            except OSError:
+                continue
+            if current > last_mtime + 0.5:
+                logger.info("Config-watch: edited during defer; re-coalescing.")
+                last_mtime = current
+                settled = await self._wait_for_config_stable(last_mtime)
+                if settled is None:
+                    return None
+                last_mtime = settled
+        if self._has_active_download():
+            logger.warning(
+                "Config-watch: deferral cap reached (%ds); restarting despite "
+                "active download — partial bytes will be re-fetched.",
+                self._CONFIG_DEFER_MAX,
+            )
+        return last_mtime
+
+    def _schedule_restart(self) -> None:
+        """Spawn a detached ``sc start`` so SCM brings us back up.
+
+        Without this, a clean exit leaves the service Stopped —
+        recovery actions only fire on FAILURE. The 5s timeout gives
+        our shutdown room to complete before the start fires.
+        """
+        if os.name != "nt":
+            return
+        try:
+            import subprocess
+
+            subprocess.Popen(
+                'cmd.exe /c "timeout /t 5 /nobreak > nul & '
+                'sc start VideoGrouperService"',
+                shell=True,
+                creationflags=(
+                    subprocess.DETACHED_PROCESS
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                    | 0x08000000  # CREATE_NO_WINDOW
+                ),
+            )
+        except Exception as exc:
+            logger.error("config-watch: could not schedule restart: %s", exc)
 
     async def _periodic_status_report(self):
         """Report queue status every 5 minutes."""
