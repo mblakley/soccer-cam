@@ -42,6 +42,23 @@ class NtfyService:
         self._processed_dirs: Set[str] = set()
         self._state_file = get_ntfy_service_state_path(storage_path)
 
+        # Buffer for responses that arrived before any task was registered
+        # to receive them. The recurring race: state_auditor queues a new
+        # NTFY question while the listener is replaying the user's earlier
+        # tap (?since=24h on reconnect). The replay arrives microseconds
+        # before mark_waiting_for_input completes, so process_response
+        # finds no matching task and drops the response — and then the
+        # task registers and the user's phone shows the SAME question
+        # again, even though they already answered.
+        # Buffer entries are (received_at, response_text). When a new task
+        # registers we replay the buffer against it; entries older than
+        # the TTL get pruned on every check so the buffer doesn't grow.
+        from collections import deque
+
+        self._unmatched_responses: deque = deque(maxlen=64)
+        self._unmatched_response_ttl_seconds = 300  # 5 min — far longer
+        # than the listener replay window typically needs.
+
         # For handling direct responses to prompts
         self._response_events: Dict[str, asyncio.Event] = {}
         self._response_data: Dict[str, Optional[str]] = {}
@@ -184,6 +201,21 @@ class NtfyService:
         logger.info(
             f"NTFY: Marked {group_dir} as waiting for input (task_type: {task_type})"
         )
+
+        # Replay any unmatched responses that arrived before this task
+        # registered — this is the bug Mark hit where he answers, the
+        # response gets dropped because the task hadn't registered yet,
+        # and his phone gets the same question again. _try_buffered_responses_for
+        # is async (it awaits _process_task_response), so schedule it
+        # rather than blocking. If the buffer is empty, this is a no-op.
+        if self._unmatched_responses:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._try_buffered_responses_for(group_dir))
+            except RuntimeError:
+                # No running loop — synchronous test path. Skip; the buffer
+                # will remain populated and there's no async work to do.
+                pass
 
     def mark_failed_to_send(
         self, group_dir: str, task_type: str, metadata: Optional[Dict[str, Any]] = None
@@ -522,8 +554,63 @@ class NtfyService:
                     group_dir, task_type, metadata, response
                 )
                 return
-        logger.warning(f"No matching task found for response: {response}")
+        # No task currently waiting for this response. Buffer it — a task
+        # registration may be moments away (state_auditor and the response
+        # listener both run on startup; the listener can replay an old
+        # tap before mark_waiting_for_input completes). When the task
+        # finally registers, _try_buffered_responses_for replays this
+        # against it. See the buffer's docstring on __init__.
+        import time
+
+        self._prune_unmatched_buffer()
+        self._unmatched_responses.append((time.monotonic(), response))
+        logger.warning(
+            f"No matching task found for response: {response} "
+            f"(buffered {len(self._unmatched_responses)} unmatched responses, "
+            f"will retry when next task registers)"
+        )
         logger.debug(f"Current pending tasks: {self._pending_tasks}")
+
+    def _prune_unmatched_buffer(self) -> None:
+        """Drop unmatched responses older than the TTL."""
+        import time
+
+        cutoff = time.monotonic() - self._unmatched_response_ttl_seconds
+        while self._unmatched_responses and self._unmatched_responses[0][0] < cutoff:
+            self._unmatched_responses.popleft()
+
+    async def _try_buffered_responses_for(self, group_dir: str) -> bool:
+        """Replay buffered unmatched responses against a freshly-registered task.
+
+        Returns True if a buffered response matched and was processed.
+        """
+        self._prune_unmatched_buffer()
+        if not self._unmatched_responses:
+            return False
+        task_data = self._pending_tasks.get(group_dir)
+        if not task_data or task_data.get("status") != "waiting_for_input":
+            return False
+        task_type = task_data.get("task_type")
+        metadata = task_data.get("task_metadata", {})
+
+        # Iterate a snapshot so we can mutate the deque safely.
+        snapshot = list(self._unmatched_responses)
+        for received_at, response in snapshot:
+            if self._response_matches_task(group_dir, task_type, metadata, response):
+                logger.info(
+                    f"NTFY: Replaying buffered response '{response}' against "
+                    f"newly-registered task {task_type} for {group_dir}"
+                )
+                # Remove from buffer first so we don't loop on it.
+                try:
+                    self._unmatched_responses.remove((received_at, response))
+                except ValueError:
+                    pass
+                await self._process_task_response(
+                    group_dir, task_type, metadata, response
+                )
+                return True
+        return False
 
     def _response_matches_task(
         self, group_dir: str, input_type: str, metadata: Dict[str, Any], response: str
