@@ -1054,9 +1054,84 @@ def _download_and_mux_sync(
         loop.close()
 
 
-# Per-host cache: True = patched firmware (HTTP works), False = stock firmware
-# (use Baichuan), missing = unprobed. Probed lazily on first download attempt.
+# Per-host cache: True = patched firmware confirmed (HTTP works);
+# False = HTTP unavailable, use Baichuan for the rest of the session.
+# Once decided per host, never oscillates — mixing HTTP and Baichuan
+# downloads within a single service run would interleave protocols
+# under load and surprise the user. Service restart re-probes.
+#
+# The probe at the start of the session does up to N retries with
+# backoff, so a transient 503 / connection reset right after the
+# camera has booted doesn't lock us onto Baichuan for hours.
 _HTTP_PATH_SUPPORTED: dict[str, bool] = {}
+# Probe retry tuning. 5 attempts cover ~30 seconds of probe time —
+# enough to ride through a busy nginx worker on the camera right after
+# Baichuan login, while still bounded so a truly-unpatched camera
+# doesn't keep us blocked indefinitely. Backoff is exponential.
+_HTTP_PROBE_RETRIES = 5
+_HTTP_PROBE_BACKOFF = (0.5, 1.5, 4.0, 10.0, 15.0)
+
+
+async def _probe_http_path(
+    client: "httpx.AsyncClient", host: str, url: str
+) -> Optional[bool]:
+    """Decide whether ``url`` is reachable via the patched-firmware HTTP path.
+
+    Uses a real 1 KB range GET rather than HEAD — Reolink's nginx
+    sometimes returns 5xx on HEAD requests during busy moments even
+    when GET works fine. Retries with exponential backoff so a
+    transient probe failure doesn't lock the whole session onto
+    Baichuan.
+
+    Returns:
+        True  — HTTP confirmed reachable (server returned content)
+        False — HTTP definitively unavailable (404, multiple times)
+        None  — inconclusive after all retries (caller decides)
+    """
+    headers = {"Range": "bytes=0-1023"}
+    last_status = None
+    last_exc = None
+    saw_404_count = 0
+    for attempt in range(_HTTP_PROBE_RETRIES):
+        if attempt > 0:
+            await asyncio.sleep(_HTTP_PROBE_BACKOFF[attempt - 1])
+        try:
+            r = await client.get(url, headers=headers, timeout=HTTP_PROBE_TIMEOUT)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            last_exc = e
+            logger.debug(
+                f"{host}: HTTP probe attempt {attempt + 1}/{_HTTP_PROBE_RETRIES} "
+                f"raised {type(e).__name__}; retrying"
+            )
+            continue
+        last_status = r.status_code
+        # 200 and 206 (partial content) both mean the server served bytes.
+        if r.status_code in (200, 206) and len(r.content) > 0:
+            logger.debug(
+                f"{host}: HTTP probe attempt {attempt + 1} returned "
+                f"{r.status_code} with {len(r.content)} bytes — confirmed"
+            )
+            return True
+        if r.status_code == 404:
+            saw_404_count += 1
+            # Two 404s in a row = definitely unpatched. The retry loop
+            # is mostly there for transient 5xx; persistent 404 means
+            # the endpoint genuinely doesn't exist on this firmware.
+            if saw_404_count >= 2:
+                return False
+            continue
+        # Anything else (5xx, 401, 403, weird 200 with no body) — retry.
+        logger.debug(
+            f"{host}: HTTP probe attempt {attempt + 1} returned {r.status_code}; "
+            "retrying"
+        )
+
+    logger.info(
+        f"{host}: HTTP probe inconclusive — last status={last_status}, "
+        f"last exception={last_exc!r}"
+    )
+    return None
+
 
 CAMERA_RECORD_PREFIX = "/mnt/sda/"  # stripped to form the /downloadfile/ URL path
 HTTP_PROBE_TIMEOUT = 5.0
@@ -1101,33 +1176,40 @@ async def _download_via_http_async(
             )
         ) as client:
             if cached is None:
-                # First request to this camera — probe with HEAD.
-                try:
-                    head = await client.head(url, timeout=HTTP_PROBE_TIMEOUT)
-                except (
-                    httpx.ConnectError,
-                    httpx.ConnectTimeout,
-                    httpx.ReadTimeout,
-                ) as e:
-                    logger.info(f"HTTP probe to {host} failed ({e!r}); using Baichuan")
-                    _HTTP_PATH_SUPPORTED[host] = False
-                    return None
-                if head.status_code == 404:
-                    logger.info(
-                        f"{host}: /downloadfile/ returns 404 — firmware not patched, "
-                        "using Baichuan"
+                # First download of this session — probe HTTP with
+                # retries before deciding. The probe does a real
+                # 1 KB GET (range: bytes=0-1023) rather than HEAD —
+                # HEAD can return 5xx on busy nginx workers even when
+                # GET works fine, and a single transient probe failure
+                # would otherwise lock us onto Baichuan for the
+                # entire session. Each retry waits a bit longer to
+                # ride through camera-boot or DST-rollover hiccups.
+                supported = await _probe_http_path(client, host, url)
+                if supported is None:
+                    # Probe was inconclusive: tried, retried, got
+                    # transient errors throughout. Commit to Baichuan
+                    # for the session — better one slower-than-ideal
+                    # session than oscillating between protocols on
+                    # every download.
+                    logger.warning(
+                        f"{host}: HTTP probe inconclusive after %d attempts; "
+                        f"committing to Baichuan for this session",
+                        _HTTP_PROBE_RETRIES,
                     )
                     _HTTP_PATH_SUPPORTED[host] = False
                     return None
-                if head.status_code != 200:
-                    logger.warning(
-                        f"{host}: /downloadfile/ HEAD returned {head.status_code}; "
-                        "treating as unpatched"
+                if supported is False:
+                    logger.info(
+                        f"{host}: /downloadfile/ confirmed unavailable — "
+                        "firmware not patched, using Baichuan for this session"
                     )
                     _HTTP_PATH_SUPPORTED[host] = False
                     return None
                 _HTTP_PATH_SUPPORTED[host] = True
-                logger.info(f"{host}: patched firmware detected, using HTTP fast path")
+                logger.info(
+                    f"{host}: patched firmware confirmed, using HTTP fast path "
+                    "for this session"
+                )
 
             # Stream GET → output file. Stage to <name>.partial so a
             # crash mid-stream leaves an obvious orphan that StateAuditor
@@ -1170,8 +1252,10 @@ async def _download_via_http_async(
                     except OSError:
                         pass
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-        logger.info(f"HTTP connection to {host} failed ({e!r}); using Baichuan")
-        _HTTP_PATH_SUPPORTED[host] = False
+        logger.info(
+            f"HTTP connection to {host} failed ({e!r}); using Baichuan "
+            "for this attempt — will retry HTTP next time."
+        )
         return None
     except Exception as e:
         logger.error(f"HTTP download to {url} failed: {e!r}", exc_info=True)
