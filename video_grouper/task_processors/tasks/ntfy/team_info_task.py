@@ -180,7 +180,19 @@ class TeamInfoTask(BaseNtfyTask):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_path = os.path.join(group_dir_abs, f"team_screenshot_{ts}.jpg")
 
-            success = await create_screenshot(combined, screenshot_path, offset_str)
+            # NTFY's free tier caps attachments at ~4 MB; 4K Reolink
+            # panoramas at full quality routinely blow past that and the
+            # send returns 413, leaving the team_info question stuck in
+            # `failed_to_send` so the user never sees it on their phone.
+            # 1280px / quality 75 keeps the JPEG well under 1 MB and
+            # is plenty for "which team is this" identification.
+            success = await create_screenshot(
+                combined,
+                screenshot_path,
+                offset_str,
+                max_dim=1280,
+                quality=75,
+            )
             if success and os.path.exists(screenshot_path):
                 return screenshot_path
         except Exception as e:

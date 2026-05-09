@@ -280,13 +280,22 @@ def _is_frame_corrupt(image) -> bool:
 
 
 def _create_screenshot_sync(
-    video_path: str, output_path: str, time_offset: str
+    video_path: str,
+    output_path: str,
+    time_offset: str,
+    max_dim: Optional[int] = None,
+    quality: int = 95,
 ) -> bool:
     """Synchronous implementation: extract a single frame as JPEG.
 
     For HEVC stream-copy files, seeking can land between keyframes and produce
     corrupt (green) frames.  Strategy: try the requested offset first, then
     fall back to progressively later positions until a clean frame is found.
+
+    ``max_dim`` (longest-side pixels) and ``quality`` (1-100) let callers
+    cap the output size — the NTFY notification path uses 1280/75 to stay
+    under ntfy.sh's ~4 MB free-tier attachment cap. The default leaves
+    full-resolution / quality-95 output unchanged for everything else.
     """
     # Parse time offset string (HH:MM:SS or seconds)
     try:
@@ -328,7 +337,14 @@ def _create_screenshot_sync(
                     break
                 image = frame.to_image()
                 if not _is_frame_corrupt(image):
-                    image.save(output_path, "JPEG", quality=95)
+                    if max_dim:
+                        image.thumbnail(
+                            (max_dim, max_dim),
+                            resample=image.Resampling.LANCZOS
+                            if hasattr(image, "Resampling")
+                            else 1,
+                        )
+                    image.save(output_path, "JPEG", quality=quality, optimize=True)
                     return True
 
         # All attempts failed
@@ -339,12 +355,28 @@ def _create_screenshot_sync(
 
 
 async def create_screenshot(
-    video_path: str, output_path: str, time_offset: str = "00:00:01"
+    video_path: str,
+    output_path: str,
+    time_offset: str = "00:00:01",
+    max_dim: Optional[int] = None,
+    quality: int = 95,
 ) -> bool:
-    """Creates a screenshot from a video file."""
+    """Creates a screenshot from a video file.
+
+    Pass ``max_dim``/``quality`` to produce a smaller JPEG (NTFY
+    notifications need to stay under ntfy.sh's free-tier attachment
+    cap of ~4 MB; 4K Reolink panoramas at quality 95 routinely
+    exceed that).
+    """
     try:
         result = await _run_in_thread_with_timeout(
-            _create_screenshot_sync, video_path, output_path, time_offset, timeout=60
+            _create_screenshot_sync,
+            video_path,
+            output_path,
+            time_offset,
+            max_dim,
+            quality,
+            timeout=60,
         )
         if result:
             logger.info(
