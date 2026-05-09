@@ -259,7 +259,7 @@ class TTTConfig(BaseModel):
     job_poll_interval: int = 30
     machine_name: str = ""
 
-    auth_server_enabled: bool = False
+    auth_server_enabled: bool = True
     auth_server_bind: str = "127.0.0.1"
     auth_server_port: int = 8765
     # Optional: container-side Supabase URL used by HTTP clients inside the

@@ -97,6 +97,9 @@ def test_full_flow_persists_config(client, config_path):
     assert cam.device_ip == "192.168.1.50"
     assert cam.username == "admin"
     assert cam.password == "hunter2"
+    # Wizard must mark onboarding complete; otherwise dashboards keep
+    # bouncing the user back to /setup forever.
+    assert cfg.setup.onboarding_completed is True
 
 
 def test_summary_redirects_when_state_incomplete(client):

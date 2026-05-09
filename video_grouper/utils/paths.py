@@ -59,8 +59,13 @@ def get_shared_data_path() -> Path:
         reg_path = _get_storage_path_from_registry()
         if reg_path and reg_path.exists():
             return reg_path
-        # Fall back to directory containing the executable
-        return Path(os.path.dirname(sys.executable))
+        # Fall back to %PROGRAMDATA%\VideoGrouper. The install dir lives
+        # under Program Files which is admin-only and shouldn't hold app
+        # state; ProgramData is the canonical Windows home for it.
+        program_data = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+        fallback = program_data / "VideoGrouper"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
     path = get_project_root() / "shared_data"
     path.mkdir(parents=True, exist_ok=True)

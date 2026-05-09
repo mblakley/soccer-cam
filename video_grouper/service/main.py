@@ -75,8 +75,12 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
                 pass
 
         if not config_path or not config_path.exists():
-            exe_dir = Path(os.path.dirname(sys.executable))
-            config_path = exe_dir / "config.ini"
+            # Fallback to %PROGRAMDATA%\VideoGrouper. Writing config + state
+            # under Program Files (the install dir) requires admin and litters
+            # protected paths; ProgramData is the canonical Windows home for
+            # per-machine app state.
+            program_data = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+            config_path = program_data / "VideoGrouper" / "config.ini"
 
         if not config_path.exists():
             # Phase 2 done-criterion: a fresh shared_data with no

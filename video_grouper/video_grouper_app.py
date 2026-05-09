@@ -676,6 +676,12 @@ class VideoGrouperApp:
                     port=self.config.ttt.auth_server_port,
                     log_level="info",
                     access_log=False,
+                    # log_config=None tells uvicorn to leave Python logging alone.
+                    # The default LOGGING_CONFIG references uvicorn.logging.DefaultFormatter
+                    # by string name, which fails to resolve inside frozen
+                    # PyInstaller bundles ("Unable to configure formatter 'default'").
+                    # The app already configured logging via setup_logging().
+                    log_config=None,
                 )
                 auth_server = uvicorn.Server(uv_config)
                 auth_task = asyncio.create_task(auth_server.serve())
