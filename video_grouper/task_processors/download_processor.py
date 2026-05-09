@@ -70,6 +70,42 @@ class DownloadProcessor(QueueProcessor):
             )
             return
 
+        # Skip if the file already exists on disk at (or near) the expected
+        # size. State.json can get reset (manual edit, version upgrade,
+        # service restart hitting a race) — re-downloading bytes that are
+        # already on the local disk would waste 10+ minutes per file at the
+        # patched-firmware HTTP rate of ~80 Mbps. We accept anything within
+        # 1% of the expected camera-reported size to tolerate small remux
+        # differences in container framing.
+        expected_size = item.metadata.get("size") if item.metadata else None
+        if expected_size and os.path.exists(file_path):
+            try:
+                actual_size = os.path.getsize(file_path)
+            except OSError:
+                actual_size = 0
+            if (
+                actual_size > 0
+                and abs(actual_size - expected_size) / expected_size < 0.01
+            ):
+                logger.info(
+                    f"DOWNLOAD: Skipping {file_name} — already on disk "
+                    f"({actual_size / 1024 / 1024:.1f}MB, expected "
+                    f"{expected_size / 1024 / 1024:.1f}MB)"
+                )
+                await dir_state.update_file_state(file_path, status="downloaded")
+                if dir_state.is_ready_for_combining() and self.video_processor:
+                    combine_task = CombineTask(group_dir=group_dir)
+                    add_work_result = self.video_processor.add_work(combine_task)
+                    import inspect
+
+                    if inspect.isawaitable(add_work_result):
+                        await add_work_result
+                    logger.info(
+                        f"DOWNLOAD: Group {os.path.basename(group_dir)} ready "
+                        f"for combining (skip-download path)."
+                    )
+                return
+
         # Check disk space before downloading
         min_free_gb = self.config.storage.min_free_gb
         has_space, free_gb = check_disk_space(self.storage_path, min_free_gb)
