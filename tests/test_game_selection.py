@@ -43,6 +43,32 @@ class TestSelectBestGame:
         result = select_best_game([(game, g_start, g_end)], rec_start, rec_end)
         assert result is None
 
+    def test_am_pm_data_entry_error_matched_via_12h_shift(self):
+        """Game scheduled 12 hours off (AM vs PM mistake in TeamSnap/PlayMetrics)
+        should still match the recording. Recurring class of data-entry error."""
+        # Real recording: 6:30 PM EDT (= 22:30 UTC) for a 2-hour game
+        rec_start = _utc(2024, 6, 15, 22, 30)
+        rec_end = _utc(2024, 6, 16, 0, 30)
+        # TeamSnap stored the game at 6:30 AM (= 10:30 UTC) by mistake
+        game = {"name": "AM/PM Mistake Game"}
+        g_start = _utc(2024, 6, 15, 10, 30)
+        g_end = _utc(2024, 6, 15, 12, 30)
+
+        result = select_best_game([(game, g_start, g_end)], rec_start, rec_end)
+        assert result is game
+
+    def test_minus_12h_shift_also_caught(self):
+        """The shift goes both ways — game stored as PM but actually AM."""
+        rec_start = _utc(2024, 6, 15, 10, 30)
+        rec_end = _utc(2024, 6, 15, 12, 30)
+        # Game stored 12h LATER than the recording
+        game = {"name": "Reverse AM/PM"}
+        g_start = _utc(2024, 6, 15, 22, 30)
+        g_end = _utc(2024, 6, 16, 0, 30)
+
+        result = select_best_game([(game, g_start, g_end)], rec_start, rec_end)
+        assert result is game
+
     def test_game_at_exactly_2h_boundary_accepted(self):
         """Game whose midpoint is exactly 2 hours away -> accepted (<=)."""
         rec_start = _utc(2024, 6, 15, 10, 0)

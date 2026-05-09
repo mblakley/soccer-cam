@@ -73,9 +73,33 @@ def select_best_game(
             )
 
     if not nearby:
+        # Before giving up: check the ±12h shift. TeamSnap and PlayMetrics
+        # both let users input game times manually, and an AM/PM data-entry
+        # error (a 6:30 PM game scheduled as 6:30 AM) is a recurring class
+        # of mistake — for the recording to overlap the *intended* game
+        # window we'd need to compare against the time-shifted version.
+        # Only one shift can pass the proximity guard against a real
+        # recording, so this can never coexist with a literal-time match.
+        for game, g_start, g_end in candidates:
+            g_mid = g_start + (g_end - g_start) / 2
+            for shift in (timedelta(hours=12), timedelta(hours=-12)):
+                shifted_mid = g_mid + shift
+                distance = abs(shifted_mid - recording_mid)
+                if distance <= MAX_PROXIMITY:
+                    logger.warning(
+                        f"AM/PM mismatch detected: game "
+                        f"{game_label_fn(game)} scheduled at "
+                        f"{g_start.isoformat()} but the recording is "
+                        f"{recording_start.isoformat()} — treating as a "
+                        f"12-hour-shift match. The source schedule "
+                        f"(TeamSnap/PlayMetrics) probably has the wrong "
+                        f"AM/PM for this game."
+                    )
+                    return game
         logger.info(
             "No matching game found within 2-hour proximity of recording "
-            f"(midpoint: {recording_mid})"
+            f"(midpoint: {recording_mid}) — checked literal times and "
+            f"\xb112-hour AM/PM shift."
         )
         return None
 
