@@ -46,34 +46,110 @@ _PAGE_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <title>Soccer-Cam setup &mdash; __TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2.5em auto; padding: 0 1em; color: #222; }
-h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-p.lede { color: #6b7280; margin-top: 0; margin-bottom: 1.25rem; }
-form { display: flex; flex-direction: column; gap: 0.75rem; }
-label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; color: #475569; }
-input, select { padding: 0.5rem 0.6rem; font: inherit; border: 1px solid #cbd5e1; border-radius: 4px; }
-.row { display: flex; gap: 0.5rem; align-items: center; }
-.btn { padding: 0.55rem 1rem; background: #2563eb; color: white !important; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; text-decoration: none; }
-.btn:hover { background: #1d4ed8; }
-.btn-ghost { background: transparent; color: #2563eb !important; border: 1px solid #2563eb; }
-.steps { display: flex; gap: 0.4rem; margin-bottom: 1.25rem; font-size: 0.8rem; color: #94a3b8; }
-.steps .step.now { color: #2563eb; font-weight: 600; }
-.summary { padding: 1rem 1.25rem; border: 1px solid #e5e7eb; border-radius: 6px; background: #f9fafb; }
-.summary dt { font-weight: 600; color: #475569; margin-top: 0.5rem; }
-.summary dd { margin: 0 0 0.4rem; }
-.muted { color: #6b7280; font-size: 0.85rem; }
-.err { padding: 0.5rem 0.75rem; background: #fee2e2; color: #7f1d1d; border-radius: 4px; }
-.path-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 280px; overflow-y: auto; }
-.path-chip { text-align: left; padding: 0.4rem 0.6rem; background: white; border: 1px solid #e5e7eb; border-radius: 4px; cursor: pointer; font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; color: #1f2937; }
-.path-chip:hover { background: #eff6ff; border-color: #2563eb; }
+:root {
+  --bg-base: #0a0b0f;
+  --bg-surface: #13141a;
+  --bg-elev: #181a22;
+  --bg-input: #0f1015;
+  --rule: #2a2c34;
+  --rule-strong: #3b3e48;
+  --text: #e6e7ec;
+  --text-mute: #94969f;
+  --text-faint: #5e616b;
+  --accent: #fb923c;
+  --accent-glow: rgba(251,146,60,0.16);
+  --signal-on: #22c55e;
+  --signal-bad: #f43f5e;
+  --display: 'Barlow Condensed', 'Bebas Neue', sans-serif;
+  --body: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251,146,60,0.06), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(34,197,94,0.04), transparent 60%),
+    var(--bg-base);
+  background-attachment: fixed;
+  position: relative;
+}
+body::before {
+  content: ""; position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg, transparent 0, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 3px);
+  pointer-events: none; z-index: 1;
+}
+.topbar { position: relative; z-index: 2; border-bottom: 1px solid var(--rule); background: rgba(10,11,15,0.72); backdrop-filter: blur(8px); }
+.topbar-inner { max-width: 720px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; }
+.brand { font-family: var(--display); font-weight: 700; letter-spacing: 0.18em; font-size: 18px; text-transform: uppercase; }
+.brand .dot { color: var(--accent); }
+.crumb { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-mute); }
+.shell {
+  position: relative; z-index: 2;
+  max-width: 720px; margin: 0 auto;
+  padding: 32px 28px 80px;
+  animation: page-in 320ms ease-out both;
+}
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+.steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); }
+.steps .step { padding: 6px 10px; border: 1px solid var(--rule); }
+.steps .step.now { color: var(--accent); border-color: var(--accent); }
+.headline { font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: clamp(32px, 5vw, 48px); line-height: 0.95; margin: 0 0 8px; }
+.lede { color: var(--text-mute); max-width: 56ch; margin: 0 0 24px; }
+.lede code { font-family: var(--mono); font-size: 12px; background: var(--bg-elev); padding: 1px 6px; border: 1px solid var(--rule); }
+form { display: flex; flex-direction: column; gap: 18px; }
+label { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
+input[type="text"], input[type="password"], input[type="number"], select {
+  width: 100%; font: inherit; font-family: var(--mono); font-size: 13px;
+  color: var(--text); background: var(--bg-input);
+  border: 1px solid var(--rule); padding: 10px 12px; border-radius: 0;
+  outline: none; transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow);
+}
+input::placeholder { color: var(--text-faint); font-style: italic; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.btn { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; padding: 11px 22px; background: var(--accent); color: #1a0e02 !important; border: 0; cursor: pointer; text-decoration: none; transition: filter 120ms ease, transform 120ms ease; }
+.btn:hover { filter: brightness(1.08); }
+.btn:active { transform: translateY(1px); }
+.btn-ghost { background: transparent; color: var(--text-mute) !important; border: 1px solid var(--rule); }
+.btn-ghost:hover { color: var(--text); border-color: var(--rule-strong); }
+.summary { padding: 18px 22px; border: 1px solid var(--rule); background: var(--bg-elev); }
+.summary dt { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); margin-top: 10px; }
+.summary dt:first-child { margin-top: 0; }
+.summary dd { margin: 0 0 6px; font-family: var(--mono); font-size: 13px; }
+.summary code { color: var(--accent); }
+.muted { color: var(--text-mute); font-family: var(--mono); font-size: 12px; }
+.err { padding: 10px 14px; background: rgba(244,63,94,0.06); color: var(--signal-bad); border: 1px solid rgba(244,63,94,0.4); font-family: var(--mono); font-size: 12px; }
+.path-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.path-chip { text-align: left; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--rule); cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--text); }
+.path-chip:hover { background: var(--bg-elev); border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">SOCCER<span class="dot">·</span>CAM</div>
+    <div class="crumb">Setup</div>
+  </div>
+</header>
+<div class="shell">
 <__STEPS__>
-<h1>__TITLE__</h1>
+<h1 class="headline">__TITLE__</h1>
 <p class="lede">__LEDE__</p>
 __BODY__
+</div>
 </body>
 </html>
 """
@@ -89,56 +165,9 @@ _STORAGE_PICKER_JS = """
   function showModal(html) { modal.style.display = "block"; modal.innerHTML = html; }
   function closeModal() { modal.style.display = "none"; modal.innerHTML = ""; }
 
-  // Try a native PyQt6 dialog first (signaled to the running tray);
-  // if the tray doesn't respond, fall back to in-page server-side
-  // browsing. Linux/Docker installs have no tray and skip step 1.
-  browseBtn.addEventListener("click", async () => {
-    showModal('<div class="muted">Opening folder picker…</div>');
-    let id = null;
-    try {
-      const resp = await fetch("/setup/storage/request-pick", { method: "POST" });
-      if (resp.ok) { id = (await resp.json()).id; }
-    } catch (e) { /* tray-pick not supported; fall through */ }
-    if (id) {
-      pollNative(id);
-    } else {
-      openServerBrowser("");
-    }
-  });
+  browseBtn.addEventListener("click", () => openBrowser(input.value || ""));
 
-  async function pollNative(id) {
-    let tries = 0;
-    const tick = async () => {
-      tries++;
-      try {
-        const r = await fetch(
-          "/setup/storage/pick-result?id=" + encodeURIComponent(id));
-        if (r.status === 200) {
-          const data = await r.json();
-          if (data.path) { input.value = data.path; closeModal(); return; }
-          if (data.cancelled) {
-            showModal(
-              '<div class="muted">Cancelled. ' +
-              '<a href="#" id="server-fallback">Browse server-side instead</a>' +
-              "</div>");
-            document.getElementById("server-fallback").addEventListener(
-              "click", (e) => { e.preventDefault(); openServerBrowser(""); });
-            return;
-          }
-        }
-      } catch (e) { /* ignore, keep polling */ }
-      // 60 ticks * 500ms = 30s of patience for the native dialog.
-      if (tries < 60) {
-        setTimeout(tick, 500);
-      } else {
-        showModal('<div class="muted">No response from tray; loading server-side browser…</div>');
-        setTimeout(() => openServerBrowser(""), 600);
-      }
-    };
-    setTimeout(tick, 250);
-  }
-
-  function openServerBrowser(at) {
+  function openBrowser(at) {
     showModal('<div class="muted">Loading…</div>');
     fetch("/setup/storage/browse?at=" + encodeURIComponent(at || ""))
       .then((r) => r.text())
@@ -146,21 +175,62 @@ _STORAGE_PICKER_JS = """
         modal.innerHTML = html;
         modal.querySelectorAll(".path-chip").forEach((b) => {
           b.addEventListener("click", (e) => {
-            openServerBrowser(e.currentTarget.dataset.path);
+            openBrowser(e.currentTarget.dataset.path);
           });
         });
-        const use = modal.querySelector("#use-this-path");
-        if (use) {
-          use.addEventListener("click", (e) => {
+        const useBtn = modal.querySelector("#use-this-path");
+        if (useBtn) {
+          useBtn.addEventListener("click", (e) => {
             input.value = e.currentTarget.dataset.path;
             closeModal();
           });
+        }
+        const goForm = modal.querySelector("#browse-go-form");
+        if (goForm) {
+          goForm.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const goInput = modal.querySelector("#browse-go-input");
+            openBrowser(goInput.value.trim());
+          });
+        }
+        const closeBtn = modal.querySelector("#browse-close");
+        if (closeBtn) {
+          closeBtn.addEventListener("click", closeModal);
         }
       })
       .catch((err) => {
         modal.innerHTML = '<div class="err">Browse failed: ' + err + "</div>";
       });
   }
+})();
+</script>
+"""
+
+_CAMERA_TEST_JS = """
+<script>
+(function () {
+  const btn = document.getElementById("test-btn");
+  const out = document.getElementById("test-result");
+  if (!btn || !out) return;
+  btn.addEventListener("click", async () => {
+    const form = new FormData();
+    form.set("camera_type", document.getElementById("camera-type").value);
+    form.set("camera_ip", document.getElementById("camera-ip").value);
+    form.set("camera_username", document.getElementById("camera-username").value);
+    form.set("camera_password", document.getElementById("camera-password").value);
+    out.textContent = "Testing…";
+    out.className = "muted";
+    try {
+      const r = await fetch("/setup/camera/test", { method: "POST", body: form });
+      const data = await r.json();
+      out.textContent = (data.ok ? "✓ " : "✗ ") + (data.message || "");
+      out.className = data.ok ? "muted" : "err";
+      out.style.color = data.ok ? "#15803d" : "#7f1d1d";
+    } catch (e) {
+      out.textContent = "✗ " + e;
+      out.style.color = "#7f1d1d";
+    }
+  });
 })();
 </script>
 """
@@ -197,18 +267,6 @@ def _list_drives() -> list[str]:
         if os.path.exists(path):
             drives.append(path)
     return drives
-
-
-def _picker_ipc_dir() -> Path:
-    """Shared dir for native-picker request/response files.
-
-    Lives under ProgramData so service (LocalSystem) and tray (user
-    session) can both read+write without permissions wrangling.
-    """
-    if os.name == "nt":
-        program_data = os.environ.get("ProgramData", r"C:\ProgramData")
-        return Path(program_data) / "VideoGrouper" / "picker"
-    return Path("/tmp/videogrouper-picker")
 
 
 def _list_subdirs(path: str) -> list[str]:
@@ -356,42 +414,82 @@ def build_router(config_path: Path) -> APIRouter:
     def storage_browse(at: Optional[str] = Query(None)) -> HTMLResponse:
         """Render a directory listing fragment for the in-page browse modal.
 
-        ``at`` is the directory to list. If empty/missing, list the
-        machine's available drive letters (Windows) or "/" (Unix).
-        Returns HTML, not a full page — meant to be loaded into the
-        modal div.
+        ``at`` is the directory to list. Empty/missing → top level
+        (drives on Windows, root on Unix). Accepts UNC paths
+        (``\\\\server\\share``) so users can pick into network shares
+        the service can reach.
         """
-        if not at:
-            # Top-level: drives on Windows, / on Unix.
+        # Persistent header lets users type any path (drive letter,
+        # UNC, anywhere) and Go to it — useful for network shares
+        # that aren't in the drive listing.
+        current = at or ""
+        header_html = (
+            '<form id="browse-go-form" class="row" style="margin-bottom:0.5rem;">'
+            f'<input id="browse-go-input" type="text" value="{html.escape(current)}" '
+            'placeholder="C:\\path\\to\\folder or \\\\server\\share" '
+            'spellcheck="false" '
+            'style="flex:1; font-family: ui-monospace, Consolas, monospace;">'
+            '<button type="submit" class="btn btn-ghost">Go</button>'
+            '<button type="button" class="btn btn-ghost" id="browse-close">Close</button>'
+            "</form>"
+        )
+
+        if not current:
             if os.name == "nt":
-                items = _list_drives()
-                title = "Drives"
-            else:
-                items = ["/"]
-                title = "Filesystem"
-            buttons = "".join(
-                f'<button type="button" class="path-chip" '
-                f'data-path="{html.escape(p)}">{html.escape(p)}</button>'
-                for p in items
-            )
+                drives = _list_drives()
+                drive_buttons = "".join(
+                    f'<button type="button" class="path-chip" '
+                    f'data-path="{html.escape(p)}">{html.escape(p)}</button>'
+                    for p in drives
+                )
+                network_help = (
+                    '<div class="muted" style="margin-top:0.75rem;">'
+                    "Network share? Type the UNC path "
+                    "(<code>\\\\server\\share</code>) into the box above "
+                    "and click Go. Per-user mapped letter drives won't "
+                    "appear here — the service runs as <code>LocalSystem</code> "
+                    "and doesn't see your session's drive mappings."
+                    "</div>"
+                )
+                return HTMLResponse(
+                    header_html
+                    + '<div class="muted">Local drives</div>'
+                    + f'<div class="path-list">{drive_buttons}</div>'
+                    + network_help
+                )
             return HTMLResponse(
-                f'<div class="muted">{title}</div>'
-                f'<div class="path-list">{buttons}</div>'
+                header_html
+                + '<div class="muted">Filesystem</div>'
+                + '<div class="path-list">'
+                + '<button type="button" class="path-chip" data-path="/">/</button>'
+                + "</div>"
             )
 
-        # Reject paths that don't exist; the input could be anything.
-        path_obj = Path(at)
-        if not path_obj.is_dir():
+        path_obj = Path(current)
+        try:
+            is_dir = path_obj.is_dir()
+        except OSError as exc:
             return HTMLResponse(
-                f'<div class="err">Not a directory: {html.escape(str(path_obj))}</div>'
+                header_html
+                + f'<div class="err">Cannot access: {html.escape(str(path_obj))} '
+                + f"&mdash; {html.escape(str(exc))}</div>"
+            )
+        if not is_dir:
+            return HTMLResponse(
+                header_html
+                + f'<div class="err">Not a directory: {html.escape(str(path_obj))}</div>'
             )
 
-        # Parent link (unless we're at a drive root).
-        parent_html = ""
+        # Parent navigation. Drive roots (C:\) and UNC share roots
+        # (\\server\share) loop back on .parent — send those to the
+        # top-level "Drives" view instead.
         parent = path_obj.parent
-        # On Windows, Path("C:\\").parent == Path("C:\\"), so we'd loop;
-        # detect that and offer "back to drives" instead.
-        if str(parent) == str(path_obj):
+        s = str(path_obj)
+        is_drive_root = os.name == "nt" and str(parent) == s
+        is_unc_share_root = (
+            os.name == "nt" and s.startswith("\\\\") and len(path_obj.parts) <= 2
+        )
+        if is_drive_root or is_unc_share_root:
             parent_html = (
                 '<button type="button" class="path-chip" data-path="">← Drives</button>'
             )
@@ -413,81 +511,18 @@ def build_router(config_path: Path) -> APIRouter:
             subdir_buttons = '<span class="muted">(no subdirectories)</span>'
 
         return HTMLResponse(
-            f'<div class="row" style="justify-content:space-between;">'
-            f"<div>{parent_html}</div>"
-            f'<button type="button" class="btn" id="use-this-path" '
-            f'data-path="{html.escape(str(path_obj))}">Use this folder</button>'
-            f"</div>"
-            f'<div class="muted" style="margin-top:0.5rem; '
-            f'font-family: ui-monospace, Consolas, monospace;">'
-            f"{html.escape(str(path_obj))}</div>"
-            f'<div class="path-list" style="margin-top:0.5rem;">'
-            f"{subdir_buttons}</div>"
+            header_html
+            + '<div class="row" style="justify-content:space-between;">'
+            + f"<div>{parent_html}</div>"
+            + '<button type="button" class="btn" id="use-this-path" '
+            + f'data-path="{html.escape(str(path_obj))}">Use this folder</button>'
+            + "</div>"
+            + '<div class="muted" style="margin-top:0.5rem; '
+            + 'font-family: ui-monospace, Consolas, monospace;">'
+            + f"{html.escape(str(path_obj))}</div>"
+            + '<div class="path-list" style="margin-top:0.5rem;">'
+            + f"{subdir_buttons}</div>"
         )
-
-    @router.post("/storage/request-pick")
-    def storage_request_pick() -> dict:
-        """Ask the running tray to show a native folder-picker dialog.
-
-        Drops a request file in the picker IPC dir; the tray polls for
-        it, shows QFileDialog, and writes the response file. Returns
-        404 on non-Windows or when the IPC dir isn't writable so the
-        wizard JS can fall back to the in-page server-side browser.
-        """
-        if os.name != "nt":
-            raise HTTPException(status_code=404, detail="native picker not available")
-        ipc_dir = _picker_ipc_dir()
-        try:
-            ipc_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=503, detail=f"picker IPC dir unwritable: {exc}"
-            )
-        # Clean stale responses from prior runs to keep the protocol simple.
-        for stale in ipc_dir.glob("response_*.json"):
-            try:
-                stale.unlink()
-            except OSError:
-                pass
-
-        import json
-        import secrets
-        import time
-
-        req_id = secrets.token_hex(8)
-        request_file = ipc_dir / "request.json"
-        request_file.write_text(
-            json.dumps({"id": req_id, "ts": time.time()}), encoding="utf-8"
-        )
-        return {"id": req_id}
-
-    @router.get("/storage/pick-result")
-    def storage_pick_result(id: str = Query(...)) -> dict:
-        """Poll for the tray's response to a native folder-picker request.
-
-        Returns ``{path: "..."}`` once the tray has written the response,
-        ``{cancelled: true}`` if the user dismissed the dialog, or 204
-        while still waiting.
-        """
-        ipc_dir = _picker_ipc_dir()
-        response_file = ipc_dir / f"response_{id}.json"
-        if not response_file.exists():
-            from fastapi.responses import Response
-
-            return Response(status_code=204)
-
-        import json
-
-        try:
-            data = json.loads(response_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {"cancelled": True}
-        finally:
-            try:
-                response_file.unlink()
-            except OSError:
-                pass
-        return data
 
     @router.post("/storage", response_class=HTMLResponse)
     def storage_post(
@@ -505,28 +540,33 @@ def build_router(config_path: Path) -> APIRouter:
         token, state = get_or_create(request.cookies.get(cookie_name()))
         # No password echo on render (sensitive)
         body = (
-            '<form method="post" action="/setup/camera">'
+            '<form method="post" action="/setup/camera" id="camera-form">'
             "<label>Camera type"
-            '<select name="camera_type" required>'
+            '<select name="camera_type" id="camera-type" required>'
             f'<option value="dahua" {"selected" if state.camera_type == "dahua" else ""}>Dahua</option>'
             f'<option value="reolink" {"selected" if state.camera_type == "reolink" else ""}>Reolink</option>'
             "</select></label>"
             "<label>Camera name"
-            f'<input name="camera_name" type="text" value="{html.escape(state.camera_name)}" required>'
+            f'<input name="camera_name" id="camera-name" type="text" value="{html.escape(state.camera_name)}" required>'
             '<span class="muted">Used as the [CAMERA.&lt;name&gt;] section in '
             "config.ini. Pick anything (e.g. <code>field</code>).</span></label>"
             "<label>IP address"
-            f'<input name="camera_ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
+            f'<input name="camera_ip" id="camera-ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
             "</label>"
             "<label>Username"
-            f'<input name="camera_username" type="text" value="{html.escape(state.camera_username)}" required></label>'
+            f'<input name="camera_username" id="camera-username" type="text" value="{html.escape(state.camera_username)}" required></label>'
             "<label>Password"
-            '<input name="camera_password" type="password" value="" placeholder="(set on save)" required>'
+            '<input name="camera_password" id="camera-password" type="password" value="" placeholder="(set on save)" required>'
             "</label>"
+            '<div class="row">'
+            '<button type="button" class="btn btn-ghost" id="test-btn">'
+            "Test connection</button>"
+            '<span id="test-result" class="muted"></span>'
+            "</div>"
             '<div class="row">'
             '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
             '<button class="btn" type="submit">Next</button>'
-            "</div></form>"
+            "</div></form>" + _CAMERA_TEST_JS
         )
         resp = HTMLResponse(
             _page(
@@ -544,6 +584,79 @@ def build_router(config_path: Path) -> APIRouter:
             samesite="lax",
         )
         return resp
+
+    @router.post("/camera/test")
+    async def camera_test(
+        camera_type: str = Form(...),
+        camera_ip: str = Form(...),
+        camera_username: str = Form(...),
+        camera_password: str = Form(...),
+    ) -> dict:
+        """Probe the camera with the user's typed credentials.
+
+        TCP-connects to port 80 first so a typo / wrong subnet fails
+        fast with a clear message; then runs the camera class's
+        ``check_availability`` (HTTP Digest auth for Dahua, Reolink's
+        login API for Reolink) for an end-to-end verdict.
+        """
+        import socket
+
+        ip = camera_ip.strip()
+        if not ip:
+            return {"ok": False, "message": "IP address is empty."}
+
+        # Step 1: cheap TCP probe so unreachable IPs fail in <2s
+        # rather than hanging for the full HTTP timeout.
+        try:
+            with socket.create_connection((ip, 80), timeout=2):
+                pass
+        except OSError as exc:
+            return {
+                "ok": False,
+                "message": f"Cannot reach {ip}:80 — {exc}. "
+                "Check the camera is powered on and on the same network.",
+            }
+
+        # Step 2: real auth check.
+        try:
+            cam_config = CameraConfig(
+                name="setup-probe",
+                type=camera_type,
+                device_ip=ip,
+                username=camera_username,
+                password=camera_password,
+            )
+        except Exception as exc:
+            return {"ok": False, "message": f"Bad camera config: {exc}"}
+
+        if camera_type == "dahua":
+            from video_grouper.cameras.dahua import DahuaCamera
+
+            cam = DahuaCamera(cam_config, storage_path=str(config_path.parent))
+        elif camera_type == "reolink":
+            from video_grouper.cameras.reolink import ReolinkCamera
+
+            cam = ReolinkCamera(cam_config, storage_path=str(config_path.parent))
+        else:
+            return {"ok": False, "message": f"Unknown camera type: {camera_type}"}
+
+        try:
+            ok = await cam.check_availability()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": f"Connect failed: {exc}",
+            }
+        if ok:
+            return {"ok": True, "message": f"Connected to {camera_type} at {ip}."}
+        return {
+            "ok": False,
+            "message": (
+                "TCP reached the device but auth check failed. "
+                "Verify username/password, and that this is a "
+                f"{camera_type} camera."
+            ),
+        }
 
     @router.post("/camera", response_class=HTMLResponse)
     def camera_post(
