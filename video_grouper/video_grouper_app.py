@@ -693,12 +693,25 @@ class VideoGrouperApp:
             except Exception as e:
                 logger.error(f"Failed to start headless TTT auth server: {e}")
 
+        # Watch config.ini and trigger a clean restart whenever it
+        # changes on disk — wizard /finish, /config save, and direct
+        # edits all rewrite the file. Live in-process reload would
+        # require threading new values into camera pollers, integrations,
+        # and the auth server (each holds a copy of the old config),
+        # so we tear down and let SCM bring us back up instead. Recovery
+        # is configured in NSIS: 5s after stop, the service auto-starts.
+        config_watch_task = None
+        if self.config_path is not None:
+            config_watch_task = asyncio.create_task(self._watch_config_for_restart())
+
         # All processors are already running their own loops
         # Just wait for shutdown event
         try:
             await self._shutdown_event.wait()
         finally:
             status_task.cancel()
+            if config_watch_task is not None:
+                config_watch_task.cancel()
 
             if auth_server is not None:
                 auth_server.should_exit = True
@@ -717,6 +730,70 @@ class VideoGrouperApp:
                     logger.error(f"Error stopping NTFY response service: {e}")
 
             await self.shutdown()
+
+    async def _watch_config_for_restart(self) -> None:
+        """Trigger a service restart when ``self.config_path`` is rewritten.
+
+        Polls mtime every 5s. On change, schedules a detached
+        ``sc start`` (so it survives our exit) and signals shutdown.
+        Windows SCM brings the service back up with the new config.
+        Sub-second writes within the same poll window are coalesced —
+        if the user saves the wizard and immediately opens /config
+        the second save is caught on the next tick.
+        """
+        if self.config_path is None:
+            return
+        try:
+            initial_mtime = self.config_path.stat().st_mtime
+        except OSError as exc:
+            logger.warning("config-watch: cannot stat %s: %s", self.config_path, exc)
+            return
+
+        while True:
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                return
+            try:
+                current_mtime = self.config_path.stat().st_mtime
+            except OSError:
+                continue
+            # 0.5s tolerance to avoid spurious restarts when an editor
+            # touches mtime without changing content.
+            if current_mtime <= initial_mtime + 0.5:
+                continue
+
+            logger.info(
+                "Config %s modified (mtime %.0f -> %.0f); restarting service "
+                "so processors pick up the new values.",
+                self.config_path,
+                initial_mtime,
+                current_mtime,
+            )
+
+            # Spawn a detached process that waits for us to stop, then
+            # `sc start`s us back up. Without this, a clean exit would
+            # leave the service Stopped (recovery only triggers on
+            # FAILURE), so we'd need a manual restart to apply.
+            if os.name == "nt":
+                try:
+                    import subprocess
+
+                    subprocess.Popen(
+                        'cmd.exe /c "timeout /t 5 /nobreak > nul & '
+                        'sc start VideoGrouperService"',
+                        shell=True,
+                        creationflags=(
+                            subprocess.DETACHED_PROCESS
+                            | subprocess.CREATE_NEW_PROCESS_GROUP
+                            | 0x08000000  # CREATE_NO_WINDOW
+                        ),
+                    )
+                except Exception as exc:
+                    logger.error("config-watch: could not schedule restart: %s", exc)
+
+            self._shutdown_event.set()
+            return
 
     async def _periodic_status_report(self):
         """Report queue status every 5 minutes."""
