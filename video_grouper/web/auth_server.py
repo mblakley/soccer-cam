@@ -150,6 +150,11 @@ __AUTH_BLOCK__
 __YOUTUBE_BLOCK__
 </section>
 
+<section id="tray">
+<h2>Tray (autocam_gui)</h2>
+__TRAY_BLOCK__
+</section>
+
 <section>
 <h2>Pipeline</h2>
 __QUEUES_BLOCK__
@@ -485,6 +490,87 @@ the GCP Console clicks.</p>
 """
 
 
+def _render_tray_section(storage: Path) -> str:
+    """Render a "Tray" status section on the dashboard.
+
+    The tray runs in the interactive user's session and writes its log
+    to ``%LOCALAPPDATA%\\VideoGrouper\\logs\\video_grouper_tray.log``
+    (per-user-writable to avoid LocalSystem ACL conflicts). The tray
+    drops a marker at ``<storage>/.tray_log_path`` on startup so the
+    service-side dashboard can locate the log without baking in
+    user-profile assumptions.
+    """
+    marker = storage / ".tray_log_path"
+    if not marker.exists():
+        return (
+            '<p><span class="status-dot off"></span>Tray not detected.</p>'
+            '<p class="muted">Marker file <code>.tray_log_path</code> not '
+            "found in the storage directory. The tray writes this on "
+            "startup once it knows the storage path. If the tray isn't "
+            "expected to run on this install (Linux/Docker, or "
+            "<code>[BALL_TRACKING].provider != autocam_gui</code>), "
+            "this is normal.</p>"
+        )
+    try:
+        log_path_str = marker.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return (
+            '<p class="warn"><span class="status-dot bad"></span>Could not '
+            f"read tray marker: {html.escape(str(exc))}</p>"
+        )
+    log_path = Path(log_path_str)
+    if not log_path.exists():
+        return (
+            '<p class="warn"><span class="status-dot bad"></span>Tray marker '
+            f"points at <code>{html.escape(log_path_str)}</code> but the file "
+            "is missing. The tray may have been uninstalled or hasn't run "
+            "yet since boot.</p>"
+        )
+    try:
+        # Last 20 lines is enough to spot recent activity / errors
+        # without flooding the dashboard. Tail the file by reading
+        # backwards rather than loading it all into memory — these
+        # logs grow fast under DEBUG.
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = 8192
+            data = b""
+            while size > 0 and data.count(b"\n") < 25:
+                read = min(chunk, size)
+                size -= read
+                f.seek(size)
+                data = f.read(read) + data
+            lines = data.decode("utf-8", errors="replace").splitlines()[-20:]
+    except OSError as exc:
+        return (
+            '<p class="warn"><span class="status-dot bad"></span>Could not '
+            f"read tray log: {html.escape(str(exc))}</p>"
+        )
+    mtime = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
+    age_seconds = (datetime.now(tz=timezone.utc) - mtime).total_seconds()
+    if age_seconds < 120:
+        dot = "on"
+        age_label = f"active &mdash; last entry {int(age_seconds)}s ago"
+    elif age_seconds < 600:
+        dot = "on"
+        age_label = f"active &mdash; last entry {int(age_seconds // 60)} min ago"
+    else:
+        dot = "bad"
+        age_label = (
+            f"stale &mdash; last entry {int(age_seconds // 60)} min ago "
+            "(tray may be hung or stopped)"
+        )
+    body = "\n".join(html.escape(line) for line in lines)
+    return (
+        f'<p><span class="status-dot {dot}"></span>{age_label}</p>'
+        f'<p class="muted">Log: <code>{html.escape(str(log_path))}</code></p>'
+        f'<pre style="background:#f3f4f6;padding:0.6rem;border-radius:4px;'
+        f"overflow-x:auto;font-size:0.78rem;line-height:1.35;max-height:280px;"
+        f'overflow-y:auto;">{body}</pre>'
+    )
+
+
 def _render_youtube_section(storage: Path) -> str:
     """Render the YouTube auth status block on the dashboard.
 
@@ -784,6 +870,7 @@ def create_app(
             )
             .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
             .replace("__YOUTUBE_BLOCK__", _render_youtube_section(storage))
+            .replace("__TRAY_BLOCK__", _render_tray_section(storage))
             .replace("__QUEUES_BLOCK__", _render_queues_section(status))
             .replace("__CAMERAS_BLOCK__", _render_cameras_section(status))
             .replace("__GAMES_BLOCK__", _render_games_section(_scan_games(storage)))
