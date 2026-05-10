@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
-from .tasks.ball_tracking import BallTrackingTask
+from .tasks.ball_tracking import BallTrackingTaskBase
 from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class BallTrackingProcessor(QueueProcessor):
     def queue_type(self) -> QueueType:
         return QueueType.BALL_TRACKING
 
-    async def process_item(self, item: BallTrackingTask) -> None:
+    async def process_item(self, item: BallTrackingTaskBase) -> None:
         try:
             logger.info("BALL_TRACKING: processing task: %s", item)
             success = await item.execute()
@@ -47,10 +47,10 @@ class BallTrackingProcessor(QueueProcessor):
         except Exception as e:
             logger.error("BALL_TRACKING: error processing task %s: %s", item, e)
 
-    def get_item_key(self, item: BallTrackingTask) -> str:
+    def get_item_key(self, item: BallTrackingTaskBase) -> str:
         return f"{item.task_type}:{item.get_item_path()}:{hash(item)}"
 
-    async def _handle_successful_completion(self, item: BallTrackingTask) -> None:
+    async def _handle_successful_completion(self, item: BallTrackingTaskBase) -> None:
         group_dir = item.group_dir
         group_name = group_dir.name
 

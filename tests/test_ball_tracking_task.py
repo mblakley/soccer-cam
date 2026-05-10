@@ -9,7 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from video_grouper.task_processors.queue_type import QueueType
-from video_grouper.task_processors.tasks.ball_tracking import BallTrackingTask
+from video_grouper.task_processors.tasks.ball_tracking.ball_tracking_task import (
+    BallTrackingTask,
+)
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ class TestInitialization:
         assert task.queue_type() == QueueType.BALL_TRACKING
 
     def test_task_type(self, task):
-        assert task.task_type == "ball_tracking_process"
+        assert task.task_type == "ball_tracking_homegrown"
 
     def test_get_item_path(self, task, sample_group_dir):
         assert task.get_item_path() == str(sample_group_dir)
@@ -73,7 +75,7 @@ class TestSerialization:
         assert restored.team_name is None
 
     def test_serialize_includes_task_type(self, task):
-        assert task.serialize()["task_type"] == "ball_tracking_process"
+        assert task.serialize()["task_type"] == "ball_tracking_homegrown"
 
 
 class TestExecute:

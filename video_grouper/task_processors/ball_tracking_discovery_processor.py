@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 from .base_polling_processor import PollingProcessor
-from .tasks.ball_tracking import BallTrackingTask
+from .tasks.ball_tracking import BallTrackingTaskBase
 from .tasks.ball_tracking.utils import get_ball_tracking_io_paths
 from video_grouper.utils.config import Config
 
@@ -93,7 +93,8 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
             if getattr(self.config, "ttt", None) and self.config.ttt.enabled
             else None
         )
-        task = BallTrackingTask(
+        task_cls = self._task_class_for_provider(provider_name)
+        task = task_cls(
             group_dir=group_dir,
             input_path=input_path,
             output_path=output_path,
@@ -116,6 +117,29 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
                 group_dir.name,
                 e,
             )
+
+    @staticmethod
+    def _task_class_for_provider(provider_name: str) -> type[BallTrackingTaskBase]:
+        """Pick the concrete task class for the resolved provider.
+
+        Lazy-imports the concrete classes so a tray-only bundle (which
+        excludes ``av`` / ``cv2`` / ``onnxruntime``) never imports the
+        homegrown task even on installs where ``provider`` is set to
+        ``autocam_gui``. Tray installs only ever resolve to autocam_gui;
+        if a tray ever sees ``homegrown`` here it'll fail loudly at the
+        import line, which is the right signal that the install is
+        misconfigured.
+        """
+        if provider_name == "autocam_gui":
+            from .tasks.ball_tracking.external_ball_tracking_task import (
+                ExternalBallTrackingTask,
+            )
+
+            return ExternalBallTrackingTask
+
+        from .tasks.ball_tracking.ball_tracking_task import BallTrackingTask
+
+        return BallTrackingTask
 
     @staticmethod
     def _read_team_name(group_dir: Path) -> str | None:

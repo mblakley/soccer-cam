@@ -23,7 +23,7 @@ from video_grouper.utils.youtube_upload import authenticate_youtube
 from video_grouper.utils.paths import get_shared_data_path
 from video_grouper.utils.config import load_config, Config
 from video_grouper.task_processors import BallTrackingProcessor
-from video_grouper.task_processors.register_tasks import register_all_tasks
+from video_grouper.task_processors.register_tasks import register_tray_tasks
 
 # NOTE: ``register_providers`` is imported lazily inside the autocam_gui
 # branch of __init__. Importing it eagerly here would pull in the
@@ -210,7 +210,7 @@ class SystemTrayIcon(QSystemTrayIcon):
     def __init__(self, config_path=None):
         super().__init__()
         # Ensure task types are registered for deserialization (safety net)
-        register_all_tasks()
+        register_tray_tasks()
         self.version = get_version()
         self.full_version = get_full_version()
 

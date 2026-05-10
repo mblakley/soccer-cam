@@ -1,10 +1,10 @@
-"""Homegrown ball-tracking task — runs the in-house ML pipeline.
+"""External ball-tracking task — drives the Once AutoCam GUI.
 
-Pairs with :class:`ExternalBallTrackingTask` (which spawns an external GUI
-tool); both inherit from :class:`BallTrackingTaskBase`. This class owns
-the dependency surface that the homegrown provider needs — PyAV for
-source validation, then the ONNX/CV2 stack inside the provider stages.
-That makes the import safe to skip in the tray PyInstaller target.
+Pairs with :class:`BallTrackingTask` (homegrown ML pipeline) — both inherit
+from :class:`BallTrackingTaskBase`. This class deliberately avoids the
+heavy inference stack (PyAV / ONNX / OpenCV) so the tray PyInstaller
+target can drop those modules and sidestep the onnxruntime/PyQt6
+MSVCP140.dll initialization conflict.
 """
 
 from __future__ import annotations
@@ -13,24 +13,24 @@ import logging
 import os
 from pathlib import Path
 
-import av
-
-from video_grouper.utils.ffmpeg_utils import av_open_read
-
 from .base import BallTrackingTaskBase
 
 logger = logging.getLogger(__name__)
 
 
-class BallTrackingTask(BallTrackingTaskBase):
-    """Homegrown ball-tracking via the in-house ONNX/CV2 provider stages."""
+class ExternalBallTrackingTask(BallTrackingTaskBase):
+    """Run ball-tracking by spawning an external GUI tool (autocam_gui)."""
 
     @property
     def task_type(self) -> str:
-        return "ball_tracking_homegrown"
+        return "ball_tracking_external"
 
     def _validate_video_file(self, path: str) -> bool:
-        """Use PyAV to verify the source file exists, has size, and decodes."""
+        """Lightweight check — file exists and is non-trivially sized.
+
+        The external tool decodes the file itself; we don't pull in PyAV
+        just to pre-validate. A failed decode surfaces from the GUI driver.
+        """
         if not os.path.isfile(path):
             logger.error("BALL_TRACKING: input file does not exist: %s", path)
             return False
@@ -42,31 +42,12 @@ class BallTrackingTask(BallTrackingTaskBase):
             )
             return False
 
-        try:
-            with av_open_read(path) as container:
-                duration = None
-                if container.duration is not None:
-                    duration = container.duration / av.time_base
-                else:
-                    for stream in container.streams.video:
-                        if stream.duration is not None and stream.time_base is not None:
-                            duration = float(stream.duration * stream.time_base)
-                            break
-                if duration is None or duration <= 0:
-                    logger.error(
-                        "BALL_TRACKING: invalid duration (%s) for %s", duration, path
-                    )
-                    return False
-                logger.info(
-                    "BALL_TRACKING: input validated — duration=%.1fs, size=%.1fMB: %s",
-                    duration,
-                    file_size / (1024 * 1024),
-                    path,
-                )
-                return True
-        except (ValueError, av.error.FFmpegError) as e:
-            logger.error("BALL_TRACKING: error validating input file: %s", e)
-            return False
+        logger.info(
+            "BALL_TRACKING: input ready — size=%.1fMB: %s",
+            file_size / (1024 * 1024),
+            path,
+        )
+        return True
 
     async def execute(self) -> bool:
         try:
@@ -79,7 +60,6 @@ class BallTrackingTask(BallTrackingTaskBase):
             if not self._validate_video_file(self.input_path):
                 return False
 
-            # Ensure built-in providers are registered.
             from video_grouper.ball_tracking import (  # noqa: F401
                 register_providers,
             )

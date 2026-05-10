@@ -20,7 +20,7 @@ from video_grouper.task_processors import (
     ClipProcessor,
     ClipDiscoveryProcessor,
 )
-from video_grouper.task_processors.register_tasks import register_all_tasks
+from video_grouper.task_processors.register_tasks import register_service_tasks
 
 # Configure logging will be done after config is loaded
 logger = get_logger(__name__)
@@ -518,7 +518,7 @@ class VideoGrouperApp:
         self._shutdown_event = asyncio.Event()
 
         # Register all task types with the task registry
-        register_all_tasks()
+        register_service_tasks()
 
         logger.info("VideoGrouperApp initialized with task processors")
 

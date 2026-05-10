@@ -12,7 +12,9 @@ import pytest
 from video_grouper.task_processors.ball_tracking_processor import (
     BallTrackingProcessor,
 )
-from video_grouper.task_processors.tasks.ball_tracking import BallTrackingTask
+from video_grouper.task_processors.tasks.ball_tracking.ball_tracking_task import (
+    BallTrackingTask,
+)
 
 
 @pytest.fixture
