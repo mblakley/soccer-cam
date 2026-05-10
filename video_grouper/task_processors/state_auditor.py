@@ -376,6 +376,14 @@ class StateAuditor(PollingProcessor):
             youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
             await self.video_processor.upload_processor.add_work(youtube_task)
             logger.info(f"STATE_AUDITOR: Queued YouTube upload for {group_dir}")
+        else:
+            logger.warning(
+                "STATE_AUDITOR: skipping YouTube upload for %s "
+                "(youtube.enabled=%s, upload_processor=%s)",
+                group_dir,
+                self.config.youtube.enabled,
+                self.video_processor.upload_processor is not None,
+            )
 
     async def _handle_cleanup(self, group_dir: str) -> None:
         """Handle cleanup tasks for a directory."""

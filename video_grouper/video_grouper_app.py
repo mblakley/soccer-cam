@@ -145,6 +145,24 @@ class VideoGrouperApp:
                 bt.provider,
             )
 
+        # Cross-app handoff for autocam_gui: tray flips state.json to
+        # ``ball_tracking_complete`` but has no UploadProcessor of its own.
+        # StateAuditor only runs at startup so it can't catch the transition
+        # post-boot. This polling processor scans state.json files every 60s
+        # and queues uploads to the service's UploadProcessor. Also acts as
+        # a safety net for the homegrown in-process handoff.
+        self.upload_recovery_processor = None
+        if self.config.youtube.enabled:
+            from video_grouper.task_processors.upload_recovery_processor import (
+                UploadRecoveryProcessor,
+            )
+
+            self.upload_recovery_processor = UploadRecoveryProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                upload_processor=self.upload_processor,
+            )
+
         # Initialize per-camera processors
         self.cameras: dict = {}
         self.download_processors: dict = {}
@@ -510,6 +528,8 @@ class VideoGrouperApp:
             self.processors.append(self.ball_tracking_processor)
         if self.ball_tracking_discovery_processor:
             self.processors.append(self.ball_tracking_discovery_processor)
+        if self.upload_recovery_processor:
+            self.processors.append(self.upload_recovery_processor)
         # Polling processors last -- StateAuditor discover_work() must see
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
