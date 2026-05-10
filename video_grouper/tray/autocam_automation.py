@@ -289,23 +289,41 @@ def _set_file_via_browse_dialog(
 
 
 def _wait_for_completion_and_cleanup(
-    main_window, state: Optional[DirectoryState]
+    main_window,
+    state: Optional[DirectoryState],
+    output_path: Optional[str] = None,
+    tracked_pids: Optional[list[int]] = None,
 ) -> bool:
     """Poll AutoCam's Notification text until processing finishes, then clean up.
 
     Both the fresh-launch path (after Browse/Mark/Start) and the resume
     path (skipping setup, attaching to a running window) end here. The
-    polling loop reads ``auto_id="Notification"`` every 30s and looks for
-    the terminal strings "finished processing" or "error". A 24h ceiling
-    keeps a stuck job from pinning the queue forever; a 5-min "did
-    processing actually start?" guard catches AutoCam getting wedged on
-    boot. Always taskkills GUI.exe at the end and clears the resume
-    marker, regardless of outcome.
+    polling loop reads ``auto_id="Notification"`` every 30s and looks
+    for the terminal strings "finished processing" or "error".
+
+    A second exit-detection signal runs alongside the notification poll
+    when ``output_path`` and ``tracked_pids`` are supplied: if every
+    tracked GUI.exe PID has exited AND the expected output file exists
+    with non-trivial size, treat the run as a success. Some AutoCam
+    builds (observed 2026-05-10) print a C-level ``FrameReader_close``
+    cleanup message instead of "finished processing" right before
+    exiting, which would otherwise hang this loop until the 24h
+    timeout. Watching the process plus the output file removes that
+    dependency on AutoCam's UI strings.
+
+    A 24h ceiling keeps a stuck job from pinning the queue forever; a
+    5-min "did processing actually start?" guard catches AutoCam
+    getting wedged on boot. Always taskkills GUI.exe at the end and
+    clears the resume marker, regardless of outcome.
     """
     start_time = datetime.datetime.now()
     timeout_seconds = 60 * 60 * 24  # 24 hours
     startup_timeout_seconds = 300  # 5 minutes to start processing
     poll_interval = 30  # 30 seconds
+    # Min size below which we treat the output file as a partial-write
+    # rather than a real success. Anything smaller than this means
+    # AutoCam exited before producing a usable processed video.
+    output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
 
@@ -345,6 +363,36 @@ def _wait_for_completion_and_cleanup(
                     logger.debug(f"Autocam status: '{notification.window_text()}'")
             except Exception as e:
                 logger.warning(f"Error while checking for success message: {e}")
+
+            # Exit-detection fallback: if AutoCam's GUI processes have
+            # all exited, infer success/failure from the output file
+            # rather than waiting for a notification string that may
+            # never come (some AutoCam builds end with a C-level
+            # cleanup message instead of a user-facing success).
+            if tracked_pids and not _live_autocam_pids(tracked_pids):
+                if output_path and os.path.isfile(output_path):
+                    try:
+                        size = os.path.getsize(output_path)
+                    except OSError:
+                        size = 0
+                    if size >= output_min_bytes:
+                        found = True
+                        logger.info(
+                            "AutoCam GUI exited and output exists "
+                            f"({size / 1024 / 1024:.1f} MB at {output_path}); "
+                            "treating as success."
+                        )
+                        break
+                    logger.error(
+                        "AutoCam GUI exited but output file is too small "
+                        f"({size} bytes at {output_path}); treating as failure."
+                    )
+                    break
+                logger.error(
+                    "AutoCam GUI exited without producing the expected "
+                    f"output at {output_path}; treating as failure."
+                )
+                break
 
             # If processing hasn't started within 5 minutes, bail out.
             # (Skip this guard on the resume path: an in-flight pass has
@@ -447,7 +495,12 @@ def _execute_autocam_gui_automation(
                         e,
                     )
                 else:
-                    return _wait_for_completion_and_cleanup(main_window, state)
+                    return _wait_for_completion_and_cleanup(
+                        main_window,
+                        state,
+                        output_path=existing.get("output_path", abs_output_path),
+                        tracked_pids=live,
+                    )
             else:
                 logger.info(
                     "Stale autocam_run marker (live_pids=%s, hwnd=%s); clearing and relaunching",
@@ -672,7 +725,19 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        return _wait_for_completion_and_cleanup(main_window, state)
+        # Re-snapshot the GUI.exe PIDs now that processing has started.
+        # The processing pass usually re-spawns or stabilizes the worker
+        # processes, and the post-launch list captured up at line 498+
+        # reflects that final set. The exit-detection fallback in
+        # _wait_for_completion_and_cleanup needs the right PIDs to know
+        # when AutoCam is "done" via process exit.
+        final_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+        return _wait_for_completion_and_cleanup(
+            main_window,
+            state,
+            output_path=abs_output_path,
+            tracked_pids=final_pids,
+        )
 
     except Exception as e:
         logger.error(f"An error occurred during Once Autocam automation: {e}")

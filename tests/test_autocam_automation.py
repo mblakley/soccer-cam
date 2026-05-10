@@ -8,6 +8,7 @@ import pytest
 from video_grouper.tray.autocam_automation import (
     run_autocam_on_file,
     _validate_autocam_inputs,
+    _wait_for_completion_and_cleanup,
 )
 
 
@@ -266,3 +267,130 @@ class TestValidateAutocamInputs:
             )
 
             assert result is False
+
+
+class TestWaitForCompletionExitDetection:
+    """Test the exit-detection fallback added to _wait_for_completion_and_cleanup.
+
+    Background: some AutoCam builds (observed 2026-05-10) end with a
+    C-level ``FrameReader_close`` cleanup message instead of "finished
+    processing". The notification-based detection then misses the end
+    of the run and waits 24h. The fallback watches the GUI.exe PIDs:
+    when they all exit, we infer success/failure from the output file.
+    """
+
+    @pytest.fixture
+    def mock_main_window(self):
+        """A main_window whose Notification child returns a stub whose
+        window_text() raises, so the notification-text branch is a
+        no-op every poll. (mock.side_effect treats Exception INSTANCES
+        as iterables, not raise targets — only Exception classes get
+        raised. Putting the raise on window_text() sidesteps this.)"""
+        notification = MagicMock()
+        notification.window_text.side_effect = RuntimeError("no notification")
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+        return mw
+
+    def test_exit_with_real_output_returns_success(
+        self, mock_main_window, mock_file_system
+    ):
+        """GUI.exe PIDs exit + output file is large enough → True.
+
+        The autouse ``mock_file_system`` conftest fixture pins
+        ``os.path.getsize`` to 1 MB; we override it here so the size
+        check exercises the success branch.
+        """
+        mock_file_system["getsize"].return_value = 11 * 1024 * 1024  # > 10 MB threshold
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            output.touch()
+            with (
+                patch(
+                    "video_grouper.tray.autocam_automation._live_autocam_pids",
+                    return_value=[],
+                ),
+                patch("video_grouper.tray.autocam_automation.time.sleep"),
+                patch(
+                    "video_grouper.tray.autocam_automation.subprocess.run"
+                ),  # taskkill no-op
+            ):
+                result = _wait_for_completion_and_cleanup(
+                    mock_main_window,
+                    state=None,
+                    output_path=str(output),
+                    tracked_pids=[12345],
+                )
+        assert result is True
+
+    def test_exit_with_partial_output_returns_failure(self, mock_main_window):
+        """GUI.exe exits + output file is too small → False (treated as crash)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            output.write_bytes(b"\x00" * 1024)  # 1 KB << 10 MB threshold
+            with (
+                patch(
+                    "video_grouper.tray.autocam_automation._live_autocam_pids",
+                    return_value=[],
+                ),
+                patch("video_grouper.tray.autocam_automation.time.sleep"),
+                patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            ):
+                result = _wait_for_completion_and_cleanup(
+                    mock_main_window,
+                    state=None,
+                    output_path=str(output),
+                    tracked_pids=[12345],
+                )
+        assert result is False
+
+    def test_exit_with_missing_output_returns_failure(self, mock_main_window):
+        """GUI.exe exits + no output file at all → False."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "never_created.mp4"
+            with (
+                patch(
+                    "video_grouper.tray.autocam_automation._live_autocam_pids",
+                    return_value=[],
+                ),
+                patch("video_grouper.tray.autocam_automation.time.sleep"),
+                patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            ):
+                result = _wait_for_completion_and_cleanup(
+                    mock_main_window,
+                    state=None,
+                    output_path=str(output),
+                    tracked_pids=[12345],
+                )
+        assert result is False
+
+    def test_pids_still_alive_does_not_trigger_exit_branch(
+        self, mock_main_window, mock_file_system
+    ):
+        """When at least one tracked PID is still running, the
+        exit-detection branch must NOT fire even if the output happens
+        to already exist on disk (could be from a previous run). On
+        the next poll, after the PIDs go away, the branch then
+        succeeds normally."""
+        mock_file_system["getsize"].return_value = 50 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            output.touch()
+            # First poll: PID still alive (branch must NOT trigger).
+            # Second poll: PID gone (branch fires + output present → success).
+            live_results = iter([[12345], []])
+            with (
+                patch(
+                    "video_grouper.tray.autocam_automation._live_autocam_pids",
+                    side_effect=lambda pids: next(live_results),
+                ),
+                patch("video_grouper.tray.autocam_automation.time.sleep"),
+                patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            ):
+                result = _wait_for_completion_and_cleanup(
+                    mock_main_window,
+                    state=None,
+                    output_path=str(output),
+                    tracked_pids=[12345],
+                )
+        assert result is True
