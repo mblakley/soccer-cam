@@ -35,8 +35,29 @@ from typing import Optional
 
 from video_grouper.utils.logger import setup_logging, get_logger
 
-# Configure logging - get_shared_data_path() handles PyInstaller vs dev
-setup_logging(level="DEBUG", app_name="video_grouper_tray")
+
+def _bootstrap_log_dir() -> Path:
+    """Per-user-writable log dir for tray bootstrap logging.
+
+    The service writes to ``%PROGRAMDATA%\\VideoGrouper\\logs`` as
+    LocalSystem; pointing the tray at the same directory makes the tray
+    fail to rotate the file (LocalSystem-owned with restrictive ACLs).
+    Use ``%LOCALAPPDATA%\\VideoGrouper\\logs`` for the bootstrap window
+    so tray logs always land in a path the running user owns. After
+    ``load_config()`` we call ``setup_logging_from_config()`` to honor
+    any explicit log_dir/log_file from the user's config.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return Path(base) / "VideoGrouper" / "logs"
+    # Non-Windows fallback (tray is Windows-only in practice, but keep
+    # the path logic working for dev runs on macOS/Linux).
+    return Path.home() / ".videogrouper" / "logs"
+
+
+setup_logging(
+    level="DEBUG", log_dir=_bootstrap_log_dir(), app_name="video_grouper_tray"
+)
 logger = get_logger(__name__)
 
 
@@ -521,6 +542,12 @@ async def main():
 
         # Initialize the tray application
         tray_app = SystemTrayIcon(config_path)
+        # Note: tray logs stay in %LOCALAPPDATA%\VideoGrouper\logs for
+        # the lifetime of the process. The service writes to a separate
+        # ProgramData/storage-path directory as LocalSystem, and merging
+        # the two is asking for ACL conflicts on rotation. If a user
+        # wants centralized log collection, a Filebeat-style sidecar is
+        # the right answer, not shared file paths.
         await tray_app.initialize()
         tray_app.show()
 

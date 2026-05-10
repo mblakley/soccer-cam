@@ -57,6 +57,16 @@ Section "Install" SecInstall
     ; Use 64-bit registry view so the 64-bit service can find the keys
     SetRegView 64
 
+    ; Resolve $SMSTARTUP / $DESKTOP / $SMPROGRAMS to the all-users folders
+    ; (C:\ProgramData\... and C:\Users\Public\Desktop), not the running
+    ; user's profile. Without this, the installer running elevated as
+    ; whatever account UAC prompted (training in PSRemoting, jared on
+    ; interactive RDP) would create a per-user shortcut that's invisible
+    ; to other users on the box. The tray needs to auto-start under the
+    ; interactive desktop user — most reliably, that's whoever logs in,
+    ; so the shortcut lives in the all-users Startup.
+    SetShellVarContext all
+
     ; Copy the merged onedir output (service + tray + shared _internal/).
     ; The multi-target spec at video_grouper/installer/VideoGrouper.spec
     ; builds both exes against one dependency tree, so service and tray
@@ -109,6 +119,9 @@ SectionEnd
 
 Section "Uninstall"
     SetRegView 64
+    ; Match the install side: target the all-users shortcut folders,
+    ; not the per-user profile of whoever is running the uninstaller.
+    SetShellVarContext all
     ; Stop and remove the service silently
     nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" stop'
     nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" remove'
