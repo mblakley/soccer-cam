@@ -682,8 +682,16 @@ class TestCameraPollerIntegration:
         real_download_processor,
     ):
         """Test that CameraPoller retries when camera becomes available."""
-        # Initially unavailable, then available
-        mock_camera.check_availability.side_effect = [False, True]
+        # Initially unavailable, then available — and stays available so the
+        # DownloadProcessor's pre-download availability probe (added in v0.3.2
+        # to short-circuit unreachable cameras without burning retry strikes)
+        # can also pass. A bare two-element list would StopIteration on that
+        # third call and get treated as "unreachable", masking the download.
+        import itertools
+
+        mock_camera.check_availability.side_effect = itertools.chain(
+            [False], itertools.repeat(True)
+        )
 
         # Mock files when camera becomes available
         mock_files = [
