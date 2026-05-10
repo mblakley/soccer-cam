@@ -3,12 +3,93 @@ import logging
 import os
 import subprocess
 import win32gui
+import psutil
 from pywinauto import Desktop
 import datetime
+from typing import Optional
 
 from video_grouper.utils.config import AutocamConfig
+from video_grouper.models.directory_state import DirectoryState
 
 logger = logging.getLogger(__name__)
+
+
+# Window title prefix the AutoCam main window uses on Windows. Keeping
+# this as a module constant lets the resume + fresh-launch paths agree.
+_AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
+_AUTOCAM_PROCESS_NAME = "GUI.exe"
+
+
+def _find_autocam_hwnd() -> Optional[int]:
+    """Return the hwnd of an Once Sport Autocam window, or None.
+
+    Uses win32gui.EnumWindows (fast, non-blocking) instead of
+    Desktop(backend="uia").window(), which can hang while enumerating
+    UIA elements on a busy desktop.
+    """
+    found = []
+
+    def _cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title.startswith(_AUTOCAM_WINDOW_PREFIX):
+                found.append(hwnd)
+
+    win32gui.EnumWindows(_cb, None)
+    return found[0] if found else None
+
+
+def _find_autocam_gui_pids(
+    since_epoch: Optional[float] = None,
+) -> list[int]:
+    """Return PIDs of running GUI.exe processes (case-insensitive).
+
+    The AutoCam launcher (subprocess.Popen target) is GUI.exe and it
+    spawns a grandchild — also GUI.exe — for the actual UI window.
+    Both PIDs go into the resume marker; reattach validates that at
+    least one is still alive.
+
+    Args:
+        since_epoch: If provided, only return processes whose create_time
+            is at-or-after this Unix timestamp (seconds). Used by the
+            launch path to avoid grabbing PIDs of unrelated GUI.exe
+            instances that were already running.
+    """
+    pids: list[int] = []
+    for proc in psutil.process_iter(["pid", "name", "create_time"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            if name != _AUTOCAM_PROCESS_NAME.lower():
+                continue
+            if (
+                since_epoch is not None
+                and proc.info.get("create_time", 0) < since_epoch
+            ):
+                continue
+            pids.append(proc.info["pid"])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return pids
+
+
+def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
+    """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
+
+    A bare ``pid_exists`` check would accept a PID that's been recycled
+    by an unrelated process; the name guard prevents that.
+    """
+    live: list[int] = []
+    for pid in candidate_pids:
+        try:
+            proc = psutil.Process(pid)
+            if (
+                proc.is_running()
+                and proc.name().lower() == _AUTOCAM_PROCESS_NAME.lower()
+            ):
+                live.append(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return live
 
 
 def _validate_autocam_inputs(
@@ -207,8 +288,96 @@ def _set_file_via_browse_dialog(
     return True
 
 
+def _wait_for_completion_and_cleanup(
+    main_window, state: Optional[DirectoryState]
+) -> bool:
+    """Poll AutoCam's Notification text until processing finishes, then clean up.
+
+    Both the fresh-launch path (after Browse/Mark/Start) and the resume
+    path (skipping setup, attaching to a running window) end here. The
+    polling loop reads ``auto_id="Notification"`` every 30s and looks for
+    the terminal strings "finished processing" or "error". A 24h ceiling
+    keeps a stuck job from pinning the queue forever; a 5-min "did
+    processing actually start?" guard catches AutoCam getting wedged on
+    boot. Always taskkills GUI.exe at the end and clears the resume
+    marker, regardless of outcome.
+    """
+    start_time = datetime.datetime.now()
+    timeout_seconds = 60 * 60 * 24  # 24 hours
+    startup_timeout_seconds = 300  # 5 minutes to start processing
+    poll_interval = 30  # 30 seconds
+    found = False
+    processing_started = False
+
+    try:
+        while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
+            try:
+                notification = main_window.child_window(
+                    auto_id="Notification", control_type="Text"
+                )
+                notification_text = notification.window_text().lower()
+
+                if "finished processing" in notification_text:
+                    found = True
+                    logger.info(
+                        f"Detected success message: '{notification.window_text()}'"
+                    )
+                    break
+                elif "error" in notification_text:
+                    logger.error(
+                        f"Autocam reported an error: '{notification.window_text()}'"
+                    )
+                    break
+                elif (
+                    "processing" in notification_text
+                    or "processed" in notification_text
+                ):
+                    # Autocam reports "% of video processed" during active processing.
+                    # Both "processing" and "processed" indicate the job is underway.
+                    if not processing_started:
+                        processing_started = True
+                        logger.info(
+                            f"Processing started: '{notification.window_text()}'"
+                        )
+                    else:
+                        logger.debug(f"Autocam status: '{notification.window_text()}'")
+                else:
+                    logger.debug(f"Autocam status: '{notification.window_text()}'")
+            except Exception as e:
+                logger.warning(f"Error while checking for success message: {e}")
+
+            # If processing hasn't started within 5 minutes, bail out.
+            # (Skip this guard on the resume path: an in-flight pass has
+            # already started — we just attached late.)
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if not processing_started and elapsed > startup_timeout_seconds:
+                logger.error(
+                    "Autocam did not start processing within "
+                    f"{startup_timeout_seconds // 60} minutes. "
+                    "A reboot may be required."
+                )
+                break
+
+            time.sleep(poll_interval)
+
+        if not found:
+            logger.error(
+                f"Timeout waiting for success message after "
+                f"{(datetime.datetime.now() - start_time).total_seconds() / 60:.1f} minutes."
+            )
+        return found
+    finally:
+        logger.info("Automation script finished, closing application.")
+        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        if state is not None:
+            state.clear_autocam_run()
+
+
 def _execute_autocam_gui_automation(
-    executable_path: str, input_path: str, output_path: str
+    executable_path: str,
+    input_path: str,
+    output_path: str,
+    group_dir: Optional[str] = None,
 ) -> bool:
     """
     Execute the autocam GUI automation process for Once Sport Autocam 3.x.
@@ -219,10 +388,21 @@ def _execute_autocam_gui_automation(
     - "Start Processing" button (auto_id="StartProcessingButton")
     - Notification text control (auto_id="Notification") for status messages
 
+    When ``group_dir`` is provided, an "autocam_run" marker is written to
+    ``<group_dir>/state.json`` containing the launcher PID and any GUI.exe
+    PIDs we observed after launch. If a marker already exists for the same
+    input_path AND its PIDs are still alive AND a matching AutoCam window
+    is present on the desktop, the function reattaches to the existing run
+    instead of killing-and-relaunching — the resume path that lets a tray
+    crash mid-pass not cost the user 1-2 hours of GPU work.
+
     Args:
         executable_path: Path to the autocam executable
         input_path: Path to input video file
         output_path: Path for output video file
+        group_dir: Optional video group directory; enables resume tracking
+            via state.json. When omitted, behaves like the old launch-fresh
+            path (no marker writes, no resume check).
 
     Returns:
         bool: True if automation was successful, False otherwise
@@ -233,33 +413,69 @@ def _execute_autocam_gui_automation(
     logger.info(f"Starting Once Autocam automation for {abs_input_path}")
     logger.info(f"Output path will be {abs_output_path}")
 
+    state = DirectoryState(group_dir) if group_dir else None
+    desktop = Desktop(backend="uia")
+
+    # ------------------------------------------------------------------
+    # Resume path: if a previous tray run wrote an autocam_run marker for
+    # this same input AND those processes + window are still alive, skip
+    # the kill+launch+setup sequence and drop straight into polling.
+    # The "finished processing" notification persists in the AutoCam UI
+    # until the window is closed, so a delayed reattach can still detect
+    # completion of a job that finished while the tray was down.
+    # ------------------------------------------------------------------
+    if state is not None:
+        existing = state.get_autocam_run()
+        if existing and existing.get("input_path") == abs_input_path:
+            live = _live_autocam_pids(existing.get("gui_pids", []))
+            hwnd = _find_autocam_hwnd() if live else None
+            if live and hwnd:
+                logger.info(
+                    "Reattaching to running AutoCam: pids=%s hwnd=%s "
+                    "(skipping kill+launch+setup)",
+                    live,
+                    hwnd,
+                )
+                main_window = desktop.window(handle=hwnd)
+                try:
+                    main_window.wait("visible", timeout=10)
+                except Exception as e:
+                    logger.warning(
+                        "Could not attach to AutoCam window %s: %s; "
+                        "falling through to fresh launch",
+                        hwnd,
+                        e,
+                    )
+                else:
+                    return _wait_for_completion_and_cleanup(main_window, state)
+            else:
+                logger.info(
+                    "Stale autocam_run marker (live_pids=%s, hwnd=%s); clearing and relaunching",
+                    live,
+                    bool(hwnd),
+                )
+                state.clear_autocam_run()
+
     try:
         # Kill any existing Autocam instance before launching a new one
         subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
         time.sleep(1)
 
+        # Capture the wall-clock so PID discovery only picks up GUI.exe
+        # processes that postdate our launch (avoids grabbing an unrelated
+        # AutoCam if the user happened to start one manually).
+        launch_epoch = time.time()
+
         # Use Popen so we don't block on the launcher process.
         # The new Autocam (GUI.exe) spawns a child process for the actual window,
         # so app.window() cannot track it — we search the desktop instead.
-        subprocess.Popen([executable_path])
-        logger.info(f"Launched Autocam: {executable_path}")
+        launcher = subprocess.Popen([executable_path])
+        logger.info(
+            f"Launched Autocam: {executable_path} (launcher pid={launcher.pid})"
+        )
 
         # Give Autocam time to start its child window process
         time.sleep(5)
-
-        # Find the Autocam window using win32gui.EnumWindows (fast, non-blocking).
-        # Desktop(backend="uia").window() can hang when enumerating all UIA elements.
-        def _find_autocam_hwnd():
-            found = []
-
-            def _cb(hwnd, _):
-                if win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
-                    if title.startswith("Once Sport Autocam"):
-                        found.append(hwnd)
-
-            win32gui.EnumWindows(_cb, None)
-            return found[0] if found else None
 
         hwnd = None
         deadline = time.time() + 30
@@ -275,8 +491,27 @@ def _execute_autocam_gui_automation(
         if hwnd is None:
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
+        # Persist PIDs to state.json so a tray crash mid-pass can reattach
+        # on restart. We capture every GUI.exe whose create_time is after
+        # launch_epoch — typically the launcher + the spawned UI process.
+        if state is not None:
+            gui_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+            state.set_autocam_run(
+                {
+                    "launcher_pid": launcher.pid,
+                    "gui_pids": gui_pids,
+                    "input_path": abs_input_path,
+                    "output_path": abs_output_path,
+                    "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+                }
+            )
+            logger.info(
+                "Recorded autocam_run marker: launcher_pid=%s gui_pids=%s",
+                launcher.pid,
+                gui_pids,
+            )
+
         # Wrap the hwnd in a pywinauto window wrapper for interaction
-        desktop = Desktop(backend="uia")
         main_window = desktop.window(handle=hwnd)
         main_window.wait("visible", timeout=10)
         logger.info(f"Once Autocam main window found: '{main_window.window_text()}'")
@@ -437,80 +672,21 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        # Wait for processing to finish by monitoring the Notification text control
-        start_time = datetime.datetime.now()
-        timeout_seconds = 60 * 60 * 24  # 24 hours
-        startup_timeout_seconds = 300  # 5 minutes to start processing
-        poll_interval = 30  # 30 seconds
-        found = False
-        processing_started = False
-
-        while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
-            try:
-                notification = main_window.child_window(
-                    auto_id="Notification", control_type="Text"
-                )
-                notification_text = notification.window_text().lower()
-
-                if "finished processing" in notification_text:
-                    found = True
-                    logger.info(
-                        f"Detected success message: '{notification.window_text()}'"
-                    )
-                    break
-                elif "error" in notification_text:
-                    logger.error(
-                        f"Autocam reported an error: '{notification.window_text()}'"
-                    )
-                    break
-                elif (
-                    "processing" in notification_text
-                    or "processed" in notification_text
-                ):
-                    # Autocam reports "% of video processed" during active processing.
-                    # Both "processing" and "processed" indicate the job is underway.
-                    if not processing_started:
-                        processing_started = True
-                        logger.info(
-                            f"Processing started: '{notification.window_text()}'"
-                        )
-                    else:
-                        logger.debug(f"Autocam status: '{notification.window_text()}'")
-                else:
-                    logger.debug(f"Autocam status: '{notification.window_text()}'")
-            except Exception as e:
-                logger.warning(f"Error while checking for success message: {e}")
-
-            # If processing hasn't started within 5 minutes, bail out
-            elapsed = (datetime.datetime.now() - start_time).total_seconds()
-            if not processing_started and elapsed > startup_timeout_seconds:
-                logger.error(
-                    "Autocam did not start processing within "
-                    f"{startup_timeout_seconds // 60} minutes. "
-                    "A reboot may be required."
-                )
-                break
-
-            time.sleep(poll_interval)
-
-        if not found:
-            logger.error(
-                f"Timeout waiting for success message after "
-                f"{(datetime.datetime.now() - start_time).total_seconds() / 60:.1f} minutes."
-            )
-
-        logger.info("Automation script finished, closing application.")
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
-        return found
+        return _wait_for_completion_and_cleanup(main_window, state)
 
     except Exception as e:
         logger.error(f"An error occurred during Once Autocam automation: {e}")
         subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        if state is not None:
+            state.clear_autocam_run()
         return False
 
 
 def run_autocam_on_file(
-    autocam_config: AutocamConfig, input_path: str, output_path: str
+    autocam_config: AutocamConfig,
+    input_path: str,
+    output_path: str,
+    group_dir: Optional[str] = None,
 ) -> bool:
     """
     Automates the Once Autocam GUI to process a video file.
@@ -519,6 +695,10 @@ def run_autocam_on_file(
         autocam_config: Autocam configuration
         input_path: The path to the trimmed video file.
         output_path: The path to save the processed video file.
+        group_dir: Optional video group directory. When provided,
+            ``_execute_autocam_gui_automation`` writes a resume marker to
+            ``<group_dir>/state.json`` and reattaches to a running
+            AutoCam on tray restart instead of relaunching from scratch.
 
     Returns:
         bool: True if processing was successful, False otherwise.
@@ -530,7 +710,7 @@ def run_autocam_on_file(
 
         # Execute GUI automation
         return _execute_autocam_gui_automation(
-            autocam_config.executable, input_path, output_path
+            autocam_config.executable, input_path, output_path, group_dir=group_dir
         )
     except Exception as e:
         logger.error(f"Error running autocam: {e}")

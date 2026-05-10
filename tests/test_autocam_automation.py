@@ -58,7 +58,10 @@ class TestAutocamAutomation:
                 mock_autocam_config, input_path, output_path
             )
             mock_execute.assert_called_once_with(
-                mock_autocam_config.executable, input_path, output_path
+                mock_autocam_config.executable,
+                input_path,
+                output_path,
+                group_dir=None,
             )
 
     def test_run_autocam_on_file_validation_failure(
@@ -109,7 +112,10 @@ class TestAutocamAutomation:
                 mock_autocam_config, input_path, output_path
             )
             mock_execute.assert_called_once_with(
-                mock_autocam_config.executable, input_path, output_path
+                mock_autocam_config.executable,
+                input_path,
+                output_path,
+                group_dir=None,
             )
 
     def test_run_autocam_on_file_exception(self, mock_autocam_config, temp_files):

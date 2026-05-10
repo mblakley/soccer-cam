@@ -20,19 +20,26 @@ logger = logging.getLogger(__name__)
 
 
 def _invoke_autocam(
-    executable: Optional[str], input_path: str, output_path: str
+    executable: Optional[str],
+    input_path: str,
+    output_path: str,
+    group_dir: Optional[str] = None,
 ) -> bool:
     """Lazy-import the GUI driver and run AutoCam on a single file.
 
     Indirection point: tests patch this function directly so they don't have
     to import ``pywinauto`` (which loads UIAutomationCore.dll at import time
     and is unsafe to load in non-desktop test environments).
+
+    ``group_dir`` is optional and back-compat with existing test patches
+    that bind only the original three arguments — when omitted, the
+    automation falls back to the no-resume launch-from-scratch path.
     """
     from video_grouper.tray.autocam_automation import run_autocam_on_file
     from video_grouper.utils.config import AutocamConfig
 
     legacy_cfg = AutocamConfig(enabled=True, executable=executable)
-    return run_autocam_on_file(legacy_cfg, input_path, output_path)
+    return run_autocam_on_file(legacy_cfg, input_path, output_path, group_dir=group_dir)
 
 
 class AutocamGuiProvider(BallTrackingProvider):
@@ -50,6 +57,7 @@ class AutocamGuiProvider(BallTrackingProvider):
                 self.config.executable,
                 input_path,
                 output_path,
+                str(ctx.group_dir),
             )
         except Exception:
             logger.exception(

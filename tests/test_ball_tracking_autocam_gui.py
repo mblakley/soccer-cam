@@ -40,10 +40,13 @@ async def test_routes_to_invoke_autocam_via_executor(context):
 
     assert result is True
     assert mock_invoke.call_count == 1
-    executable, in_path, out_path = mock_invoke.call_args.args
+    executable, in_path, out_path, group_dir = mock_invoke.call_args.args
     assert executable == "C:/Path/To/AutoCam.exe"
     assert in_path == "in.mp4"
     assert out_path == "out.mp4"
+    # The provider passes ctx.group_dir through so the GUI driver can
+    # write its resume marker to <group_dir>/state.json.
+    assert group_dir == str(context.group_dir)
 
 
 @pytest.mark.asyncio

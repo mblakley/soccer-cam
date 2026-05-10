@@ -84,13 +84,26 @@ class DirectoryState:
             logger.error(f"Could not load state for {self.directory_path}: {e}")
 
     def _save_state_nolock(self):
-        """Saves the current state to the JSON file without acquiring the lock."""
+        """Saves the current state to the JSON file without acquiring the lock.
+
+        Reads existing state.json first so out-of-band fields written by
+        sibling helpers (set_youtube_playlist_name, set_autocam_run, ...)
+        survive a status update. Without this read-merge, calling
+        update_group_status after set_autocam_run would wipe the
+        autocam_run marker — which would defeat the resume-after-crash
+        path during normal operation.
+        """
         files_dict = {fp: fs.to_dict() for fp, fs in self.files.items()}
-        state_data = {
-            "status": self.status,
-            "error_message": self.error_message,
-            "files": files_dict,
-        }
+        state_data: dict = {}
+        if os.path.exists(self.state_file_path):
+            try:
+                with open(self.state_file_path, "r") as f:
+                    state_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                state_data = {}
+        state_data["status"] = self.status
+        state_data["error_message"] = self.error_message
+        state_data["files"] = files_dict
         if self.ttt_recording_id is not None:
             state_data["ttt_recording_id"] = self.ttt_recording_id
         try:
@@ -266,3 +279,74 @@ class DirectoryState:
         except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
             pass
         return None
+
+    # ------------------------------------------------------------------
+    # AutoCam run tracking
+    # ------------------------------------------------------------------
+    # The tray's _execute_autocam_gui_automation can take 1-2 hours per
+    # game. If the tray dies mid-run, the AutoCam process keeps writing
+    # to disk; on tray restart we want to reattach to the running window
+    # rather than throw away progress and relaunch from frame 0. These
+    # helpers persist the launch's PIDs + paths to state.json so the
+    # resume path can validate (a) the processes are still alive,
+    # (b) the input_path matches the current task, before reattaching.
+    #
+    # Sync (not async) because the caller runs inside a thread executor
+    # via loop.run_in_executor — the same shape as set_youtube_playlist_name.
+
+    def set_autocam_run(self, run_data: dict) -> None:
+        """Persist an active AutoCam run marker to state.json.
+
+        Args:
+            run_data: Dict with launcher_pid, gui_pids (list), input_path,
+                output_path, started_at (ISO8601). Stored verbatim under
+                the "autocam_run" key.
+        """
+        self._update_state_field("autocam_run", run_data)
+
+    def clear_autocam_run(self) -> None:
+        """Remove the autocam_run marker (run finished successfully or failed)."""
+        self._update_state_field("autocam_run", None)
+
+    def get_autocam_run(self) -> Optional[dict]:
+        """Read the autocam_run marker, or None if no run is recorded."""
+        try:
+            with FileLock(self.state_file_path):
+                if os.path.exists(self.state_file_path):
+                    with open(self.state_file_path, "r") as f:
+                        state_data = json.load(f)
+                    return state_data.get("autocam_run")
+        except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
+            pass
+        return None
+
+    def _update_state_field(self, key: str, value) -> None:
+        """Read-modify-write a single state.json field under FileLock.
+
+        Setting *value* to ``None`` deletes the key. Atomic via temp file
+        + os.replace so a crash mid-write can't corrupt state.json.
+        """
+        try:
+            with FileLock(self.state_file_path):
+                state_data = {"files": {}, "status": "pending", "error_message": None}
+                if os.path.exists(self.state_file_path):
+                    try:
+                        with open(self.state_file_path, "r") as f:
+                            state_data = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        pass
+
+                if value is None:
+                    state_data.pop(key, None)
+                else:
+                    state_data[key] = value
+
+                os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
+                temp_path = self.state_file_path + ".tmp"
+                with open(temp_path, "w") as f:
+                    json.dump(state_data, f, indent=4)
+                os.replace(temp_path, self.state_file_path)
+        except TimeoutError as e:
+            logger.error("Timeout updating %s for %s: %s", key, self.directory_path, e)
+        except Exception as e:
+            logger.error("Could not update %s for %s: %s", key, self.directory_path, e)
