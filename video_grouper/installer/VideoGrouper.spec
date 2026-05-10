@@ -53,13 +53,16 @@ TRAINING_EXCLUDES = [
 # ~500 MB AND sidesteps a DLL initialization conflict between
 # onnxruntime's pybind11 .pyd and PyQt6's bundled MSVCP140.dll that
 # crashed the tray on jared's RDP session (2026-05-09 incident).
-# The service still has cv2/onnxruntime/av/googleapiclient — those
-# are excluded only from the tray.
+# The service still has cv2/onnxruntime/av — those are excluded
+# only from the tray.
+#
+# googleapiclient stays bundled: the tray imports authenticate_youtube
+# at module top for the YouTube re-auth menu action, so dropping it
+# would crash the tray at startup with ModuleNotFoundError.
 TRAY_EXCLUDES = TRAINING_EXCLUDES + [
     "onnxruntime",
     "cv2",
     "av",
-    "googleapiclient",
 ]
 
 a_service = Analysis(
