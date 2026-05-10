@@ -4,7 +4,27 @@ import logging
 import shutil
 from typing import Optional
 
-import av
+
+# ``av`` is loaded lazily via the proxy below. The tray PyInstaller
+# bundle excludes PyAV (TRAY_EXCLUDES in VideoGrouper.spec) to dodge an
+# onnxruntime/PyQt6 MSVCP140.dll initialization conflict; any module
+# that pulls this file shouldn't fail at import time just because the
+# tray has no av installed. Functions reference ``av`` as a normal
+# attribute access; the first such call triggers the import (Python
+# caches the module afterwards).
+class _LazyAv:
+    _module = None
+
+    def __getattr__(self, name):
+        if _LazyAv._module is None:
+            import av as _av_module
+
+            _LazyAv._module = _av_module
+        return getattr(_LazyAv._module, name)
+
+
+av = _LazyAv()
+
 
 logger = logging.getLogger(__name__)
 

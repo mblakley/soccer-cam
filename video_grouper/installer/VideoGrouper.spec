@@ -31,8 +31,9 @@ SERVICE_MAIN = os.path.join(PROJECT_ROOT, "video_grouper", "service", "main.py")
 TRAY_MAIN = os.path.join(PROJECT_ROOT, "video_grouper", "tray", "main.py")
 ICON_PATH = os.path.join(PROJECT_ROOT, "video_grouper", "icon.ico")
 
-EXCLUDES = [
-    # Training stack (torch alone is 3.85 GB)
+# Training stack (torch alone is 3.85 GB) — never used at runtime
+# in either the service or the tray.
+TRAINING_EXCLUDES = [
     "torch",
     "torchvision",
     "ultralytics",
@@ -44,6 +45,23 @@ EXCLUDES = [
     "networkx",
 ]
 
+# Tray-only additional excludes. The tray's only ball-tracking
+# responsibility is the autocam_gui provider, which spawns an external
+# Once Sport AutoCam GUI process — it never imports the inference
+# stack itself. The homegrown provider lives entirely in the service
+# (which DOES bundle these), so leaving them out of the tray drops
+# ~500 MB AND sidesteps a DLL initialization conflict between
+# onnxruntime's pybind11 .pyd and PyQt6's bundled MSVCP140.dll that
+# crashed the tray on jared's RDP session (2026-05-09 incident).
+# The service still has cv2/onnxruntime/av/googleapiclient — those
+# are excluded only from the tray.
+TRAY_EXCLUDES = TRAINING_EXCLUDES + [
+    "onnxruntime",
+    "cv2",
+    "av",
+    "googleapiclient",
+]
+
 a_service = Analysis(
     [SERVICE_MAIN],
     pathex=[],
@@ -53,7 +71,7 @@ a_service = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=EXCLUDES,
+    excludes=TRAINING_EXCLUDES,
     noarchive=False,
     optimize=0,
 )
@@ -67,7 +85,7 @@ a_tray = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=EXCLUDES,
+    excludes=TRAY_EXCLUDES,
     noarchive=False,
     optimize=0,
 )
