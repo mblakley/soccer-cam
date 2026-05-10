@@ -20,7 +20,13 @@ if (-not (Test-Path $BUILD_DIR)) {
 
 # Install dev dependencies (including PyInstaller) using uv
 Write-Host "Installing dependencies including PyInstaller..."
-uv sync --extra dev
+# All extras the bundled service + tray import at runtime. Without
+# `metrics`, psutil is missing and tray.autocam_automation crashes on
+# import (ModuleNotFoundError) the moment the tray is launched. tray
+# and service share most deps via the merged spec but each has its own
+# extras (PyQt6, pywin32) that PyInstaller's Analysis pass needs to
+# discover during the build.
+uv sync --extra dev --extra tray --extra service --extra metrics
 
 # Read the master version from video_grouper/version.py
 $VERSION = (uv run python -c "from video_grouper.version import VERSION; print(VERSION)").Trim()
