@@ -412,6 +412,7 @@ input::placeholder { color: var(--text-faint); font-style: italic; }
   <main>
     <h1 class="headline">Configuration</h1>
     <p class="lede">Every persisted field across the pipeline. Sensitive entries (passwords, secrets) are blanked on render &mdash; leave empty on save to keep the stored value.</p>
+    <p class="lede">YouTube <code>client_secret.json</code> + token are managed on the <a href="/#youtube">dashboard's YouTube section</a> (binary credential files don't fit this form).</p>
     __FLASH__
     <form method="post" action="/config">
       __SECTIONS__

@@ -73,6 +73,22 @@ def _load_embedded_client_config():
 EMBEDDED_CLIENT_CONFIG = _load_embedded_client_config()
 
 
+def make_youtube_flow(credentials_file: str, redirect_uri: str) -> InstalledAppFlow:
+    """Build an InstalledAppFlow against the user's BYO ``client_secret.json``.
+
+    The wizard's per-user model: each user creates their own GCP OAuth
+    Desktop client (so their daily YouTube API quota is isolated from
+    every other soccer-cam install) and drops the downloaded
+    ``client_secret.json`` into ``<storage>/youtube/``. The web OAuth
+    endpoints in ``web/auth_server.py`` use this flow to redirect the
+    user's browser to Google's authorize URL with the loopback callback
+    pointing back at the service's own port.
+    """
+    flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
+    flow.redirect_uri = redirect_uri
+    return flow
+
+
 def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
     """Get the paths for YouTube credentials and token files.
 

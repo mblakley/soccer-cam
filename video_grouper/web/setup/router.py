@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import os
 import string
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from video_grouper.utils.config import (
@@ -235,11 +236,12 @@ _CAMERA_TEST_JS = """
 </script>
 """
 
-_STEPS = ("welcome", "storage", "camera", "summary")
+_STEPS = ("welcome", "storage", "camera", "youtube", "summary")
 _STEP_LABELS = {
     "welcome": "Welcome",
     "storage": "Storage",
     "camera": "Camera",
+    "youtube": "YouTube",
     "summary": "Review & save",
 }
 
@@ -287,6 +289,116 @@ def _list_subdirs(path: str) -> list[str]:
             continue
     subdirs.sort(key=str.lower)
     return subdirs
+
+
+def _render_youtube_body(has_secret: bool, has_token: bool) -> str:
+    """Render the wizard body for the YouTube step.
+
+    Three states:
+      - No client_secret yet: show GCP setup instructions + file upload
+      - client_secret uploaded, not authorized yet: show "Authorize" button
+      - Both done: show "Authorized" status + "Continue" button
+
+    Skip is always available — YouTube is optional.
+    """
+    setup_steps = (
+        '<ol class="muted" style="line-height:1.7;">'
+        "<li>Open the "
+        '<a href="https://console.cloud.google.com/" target="_blank" '
+        'rel="noopener">Google Cloud Console</a> and create (or pick) '
+        "a project.</li>"
+        "<li>In the project, open <strong>APIs &amp; Services &rsaquo; "
+        "Library</strong>, find <em>YouTube Data API v3</em>, click "
+        "<strong>Enable</strong>.</li>"
+        "<li>Open <strong>APIs &amp; Services &rsaquo; OAuth consent "
+        "screen</strong>, configure as <em>External</em>, and add these "
+        "scopes:"
+        '<pre style="margin:0.4rem 0;font-size:11px;">'
+        "https://www.googleapis.com/auth/youtube.upload\n"
+        "https://www.googleapis.com/auth/youtube.readonly\n"
+        "https://www.googleapis.com/auth/youtube"
+        "</pre>"
+        "Add your own Google account as a Test user.</li>"
+        "<li>Open <strong>APIs &amp; Services &rsaquo; Credentials</strong>, "
+        "click <strong>Create credentials &rsaquo; OAuth client ID</strong>, "
+        "pick <em>Desktop app</em>, and authorize "
+        "<code>http://127.0.0.1:8765/auth/youtube/callback</code> as a "
+        "redirect URI.</li>"
+        "<li>Download the JSON file and upload it below.</li>"
+        "</ol>"
+    )
+    why_byo = (
+        '<p class="muted">Why your own GCP project? '
+        "YouTube limits API uploads to ~3 games/day per OAuth client. "
+        "If every soccer-cam install shared one client they'd fight "
+        "over a single quota; with your own client you get your own "
+        "limit (and can request more from Google later if you need to).</p>"
+    )
+    upload_form = (
+        '<form method="post" action="/setup/youtube/upload" '
+        'enctype="multipart/form-data" '
+        'style="display:flex;flex-direction:column;gap:8px;'
+        'border:1px solid var(--rule);padding:14px;">'
+        '<label style="font-family:var(--mono);font-size:11px;'
+        "letter-spacing:0.12em;text-transform:uppercase;"
+        'color:var(--text-mute);">Upload client_secret.json'
+        '<input type="file" name="client_secret" accept="application/json" '
+        'required style="font-family:var(--mono);"></label>'
+        '<button class="btn" type="submit" style="align-self:flex-start;">'
+        "Upload</button>"
+        "</form>"
+    )
+    skip_form = (
+        '<form method="post" action="/setup/youtube/skip" '
+        'style="display:inline;">'
+        '<button class="btn-ghost btn" type="submit">'
+        "Skip &mdash; set up later</button></form>"
+    )
+    if not has_secret:
+        body = (
+            "<p>Soccer-cam can upload your finished games to <strong>your own"
+            " YouTube channel</strong>. This step is optional and can also "
+            'be set up later from the <a href="/">dashboard</a>.</p>'
+            f"{why_byo}"
+            "<h3>One-time setup</h3>"
+            f"{setup_steps}"
+            f"{upload_form}"
+            '<div class="row" style="margin-top:18px;">'
+            '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
+            f"{skip_form}"
+            "</div>"
+        )
+        return body
+    if not has_token:
+        body = (
+            "<p><span style='color:var(--signal-on);'>&#10003;</span> "
+            "<code>client_secret.json</code> uploaded. Now sign into the "
+            "Google account whose YouTube channel should receive the "
+            "uploads.</p>"
+            "<p>The browser will redirect you to Google, you'll sign in, "
+            "Google will redirect you back here, and the resulting token "
+            "will be saved to <code>&lt;storage&gt;/youtube/token.json</code>."
+            "</p>"
+            '<div class="row">'
+            '<a class="btn" href="/auth/youtube/start?return_to=/setup/youtube">'
+            "Authorize with YouTube</a>"
+            "</div>"
+            '<div class="row" style="margin-top:18px;">'
+            '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
+            f"{skip_form}"
+            "</div>"
+        )
+        return body
+    body = (
+        "<p><span style='color:var(--signal-on);'>&#10003;</span> "
+        "Authorized &mdash; soccer-cam can upload to this YouTube channel.</p>"
+        '<div class="row">'
+        '<a class="btn-ghost btn" href="/auth/youtube/start?return_to=/setup/youtube">'
+        "Re-authorize a different account</a>"
+        '<a class="btn" href="/setup/summary">Continue</a>'
+        "</div>"
+    )
+    return body
 
 
 def _render_steps(active: str) -> str:
@@ -676,6 +788,78 @@ def build_router(config_path: Path) -> APIRouter:
         state.camera_ip = camera_ip.strip()
         state.camera_username = camera_username.strip() or "admin"
         state.camera_password = camera_password
+        return _redirect_with_cookie("/setup/youtube", token)
+
+    @router.get("/youtube", response_class=HTMLResponse)
+    def youtube_get(request: Request) -> HTMLResponse:
+        token, state = get_or_create(request.cookies.get(cookie_name()))
+        # State is read from disk: did the user already drop in a
+        # client_secret, and have they completed OAuth? The OAuth
+        # callback in auth_server.py writes to the same path we read
+        # here.
+        yt_dir = Path(state.storage_path or "") / "youtube"
+        has_secret = (yt_dir / "client_secret.json").exists()
+        has_token = (yt_dir / "token.json").exists()
+        body = _render_youtube_body(has_secret, has_token)
+        resp = HTMLResponse(
+            _page(
+                "youtube",
+                "YouTube uploads",
+                "Upload your finished games to your own channel.",
+                body,
+            )
+        )
+        resp.set_cookie(
+            key=cookie_name(),
+            value=token,
+            max_age=3600,
+            httponly=True,
+            samesite="lax",
+        )
+        return resp
+
+    @router.post("/youtube/upload", response_class=HTMLResponse)
+    async def youtube_upload(
+        request: Request,
+        client_secret: UploadFile,
+    ) -> RedirectResponse:
+        token = request.cookies.get(cookie_name())
+        state = get(token)
+        if state is None or not state.storage_path:
+            return RedirectResponse(url="/setup/welcome", status_code=303)
+        # Validate it's a JSON file with the expected shape before
+        # writing — otherwise a typo file would leave the wizard stuck
+        # at "OAuth fails with cryptic error".
+        try:
+            raw = await client_secret.read()
+            data = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded file is not valid JSON: {exc}",
+            )
+        # Google's Desktop OAuth client_secret.json wraps everything
+        # under a top-level "installed" key with client_id/client_secret.
+        installed = data.get("installed") or data.get("web") or {}
+        if not installed.get("client_id") or not installed.get("client_secret"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "client_secret.json missing client_id/client_secret. "
+                    "Make sure you downloaded it from a Google Cloud "
+                    "OAuth 2.0 Client (Desktop app type)."
+                ),
+            )
+        yt_dir = Path(state.storage_path) / "youtube"
+        yt_dir.mkdir(parents=True, exist_ok=True)
+        (yt_dir / "client_secret.json").write_bytes(raw)
+        return _redirect_with_cookie("/setup/youtube", token)
+
+    @router.post("/youtube/skip")
+    def youtube_skip(request: Request) -> RedirectResponse:
+        token = request.cookies.get(cookie_name())
+        if get(token) is None:
+            return RedirectResponse(url="/setup/welcome", status_code=303)
         return _redirect_with_cookie("/setup/summary", token)
 
     @router.get("/summary", response_class=HTMLResponse)
@@ -684,18 +868,30 @@ def build_router(config_path: Path) -> APIRouter:
         state = get(token)
         if state is None or not state.is_complete:
             return RedirectResponse(url="/setup/welcome", status_code=303)
+        # Reflect filesystem state for YouTube — token.json is the
+        # source of truth for "did OAuth succeed". The /finish handler
+        # uses the same check to decide whether to set
+        # [YOUTUBE].enabled = true in config.ini.
+        yt_token = Path(state.storage_path) / "youtube" / "token.json"
+        yt_line = (
+            "<dt>YouTube</dt><dd><code class='ok'>Authorized</code></dd>"
+            if yt_token.exists()
+            else "<dt>YouTube</dt><dd><span class='muted'>Skipped &mdash; "
+            "set up later from the dashboard</span></dd>"
+        )
         body = (
             '<div class="summary"><dl>'
             f"<dt>Storage path</dt><dd><code>{html.escape(state.storage_path)}</code></dd>"
             f"<dt>Camera</dt><dd>{html.escape(state.camera_type)} <code>{html.escape(state.camera_name)}</code> "
             f"@ <code>{html.escape(state.camera_ip)}</code> (user <code>{html.escape(state.camera_username)}</code>)</dd>"
+            f"{yt_line}"
             "</dl></div>"
             f'<form method="post" action="/setup/finish">'
             f'<p class="muted">Saving will write <code>{html.escape(str(config_path))}</code> '
             "with these values plus safe defaults for everything else. After save, "
-            'visit <a href="/config">/config</a> to enable YouTube, NTFY, etc.</p>'
+            'visit <a href="/config">/config</a> for NTFY, PlayMetrics, TeamSnap.</p>'
             '<div class="row">'
-            '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
+            '<a class="btn-ghost btn" href="/setup/youtube">Back</a>'
             '<button class="btn" type="submit">Save configuration</button>'
             "</div></form>"
         )
@@ -732,6 +928,11 @@ def build_router(config_path: Path) -> APIRouter:
 
 def _build_config(state) -> Config:
     """Materialize wizard state into a complete Config with safe defaults."""
+    # YOUTUBE.enabled tracks whether the user completed the OAuth flow
+    # (token.json exists). Skipping the YouTube wizard step leaves it
+    # disabled; the user can enable it later from the dashboard.
+    yt_token = Path(state.storage_path) / "youtube" / "token.json"
+    youtube_cfg = YouTubeConfig(enabled=yt_token.exists())
     return Config.model_validate(
         {
             "cameras": [
@@ -751,7 +952,7 @@ def _build_config(state) -> Config:
             "TEAMSNAP": TeamSnapConfig().model_dump(),
             "PLAYMETRICS": PlayMetricsConfig().model_dump(),
             "NTFY": NtfyConfig().model_dump(),
-            "YOUTUBE": YouTubeConfig().model_dump(),
+            "YOUTUBE": youtube_cfg.model_dump(),
             "AUTOCAM": AutocamConfig().model_dump(),
             "CLOUD_SYNC": CloudSyncConfig().model_dump(),
             "TTT": TTTConfig().model_dump(),

@@ -69,6 +69,13 @@ def test_full_flow_persists_config(client, config_path):
         follow_redirects=False,
     )
     assert resp.status_code == 303
+    assert resp.headers["location"] == "/setup/youtube"
+
+    # YouTube step — skip without configuring (this fast path is the
+    # one users will hit if they don't have GCP credentials handy yet;
+    # they can always come back via the dashboard's YouTube section).
+    resp = client.post("/setup/youtube/skip", follow_redirects=False)
+    assert resp.status_code == 303
     assert resp.headers["location"] == "/setup/summary"
 
     # Summary renders the entered values
