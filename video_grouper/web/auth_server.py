@@ -493,38 +493,28 @@ the GCP Console clicks.</p>
 def _render_tray_section(storage: Path) -> str:
     """Render a "Tray" status section on the dashboard.
 
-    The tray runs in the interactive user's session and writes its log
-    to ``%LOCALAPPDATA%\\VideoGrouper\\logs\\video_grouper_tray.log``
-    (per-user-writable to avoid LocalSystem ACL conflicts). The tray
-    drops a marker at ``<storage>/.tray_log_path`` on startup so the
-    service-side dashboard can locate the log without baking in
-    user-profile assumptions.
+    The tray (after load_config) writes to
+    ``<storage>/logs/video_grouper_tray.log`` — same convention the
+    service uses for its own log. We just read it from there. No
+    marker-file lookup, no per-user-profile guesswork.
+
+    If the file isn't present the tray either hasn't started since the
+    storage path was created OR couldn't write to it (older builds, or
+    a permission issue that pushed it back to its bootstrap
+    LOCALAPPDATA path).
     """
-    marker = storage / ".tray_log_path"
-    if not marker.exists():
-        return (
-            '<p><span class="status-dot off"></span>Tray not detected.</p>'
-            '<p class="muted">Marker file <code>.tray_log_path</code> not '
-            "found in the storage directory. The tray writes this on "
-            "startup once it knows the storage path. If the tray isn't "
-            "expected to run on this install (Linux/Docker, or "
-            "<code>[BALL_TRACKING].provider != autocam_gui</code>), "
-            "this is normal.</p>"
-        )
-    try:
-        log_path_str = marker.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        return (
-            '<p class="warn"><span class="status-dot bad"></span>Could not '
-            f"read tray marker: {html.escape(str(exc))}</p>"
-        )
-    log_path = Path(log_path_str)
+    log_path = storage / "logs" / "video_grouper_tray.log"
     if not log_path.exists():
         return (
-            '<p class="warn"><span class="status-dot bad"></span>Tray marker '
-            f"points at <code>{html.escape(log_path_str)}</code> but the file "
-            "is missing. The tray may have been uninstalled or hasn't run "
-            "yet since boot.</p>"
+            '<p><span class="status-dot off"></span>Tray log not found at '
+            f"<code>{html.escape(str(log_path))}</code>.</p>"
+            '<p class="muted">The tray writes its log here once it loads '
+            "the configured storage path. If the tray isn't expected to "
+            "run on this install (Linux/Docker, or "
+            "<code>[BALL_TRACKING].provider != autocam_gui</code>), this "
+            "is normal. If the tray IS running on this box but the log "
+            "isn't here, check <code>%LOCALAPPDATA%\\VideoGrouper\\logs\\"
+            "</code> for the bootstrap fallback.</p>"
         )
     try:
         # Last 20 lines is enough to spot recent activity / errors

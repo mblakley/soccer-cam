@@ -33,21 +33,24 @@ from video_grouper.task_processors.register_tasks import register_tray_tasks
 import webbrowser
 from typing import Optional
 
-from video_grouper.utils.logger import setup_logging, get_logger
+from video_grouper.utils.logger import (
+    setup_logging,
+    setup_logging_from_config,
+    get_logger,
+)
 
 
 def _bootstrap_log_dir() -> Path:
-    """Per-user-writable log dir for tray logging.
+    """Per-user-writable log dir for tray BOOTSTRAP logging only.
 
-    The service writes to ``%PROGRAMDATA%\\VideoGrouper\\logs`` as
-    LocalSystem; pointing the tray at the same directory makes the tray
-    fail to rotate the file (LocalSystem-owned with restrictive ACLs).
-    Use ``%LOCALAPPDATA%\\VideoGrouper\\logs`` so tray logs always land
-    in a path the running user owns. The tray STAYS on this path for
-    the life of the process — see the design comment in ``main()``
-    where the post-config relog was deliberately omitted. The dashboard
-    locates this file via the ``<storage>/.tray_log_path`` marker the
-    tray drops on startup.
+    The first ~30 log lines (before ``load_config`` returns the user's
+    storage path) need somewhere writable; this function returns a
+    user-owned path that always exists. After config loads,
+    :class:`SystemTrayIcon` calls :func:`setup_logging_from_config`
+    which moves the file handler to
+    ``<storage>/logs/video_grouper_tray.log`` so the tray and service
+    co-locate their logs at a path the dashboard can find without
+    per-user-profile guesswork.
     """
     base = os.environ.get("LOCALAPPDATA")
     if base:
@@ -55,24 +58,6 @@ def _bootstrap_log_dir() -> Path:
     # Non-Windows fallback (tray is Windows-only in practice, but keep
     # the path logic working for dev runs on macOS/Linux).
     return Path.home() / ".videogrouper" / "logs"
-
-
-def _write_tray_log_marker(storage_path: Path, log_file: Path) -> None:
-    """Drop ``<storage>/.tray_log_path`` so the dashboard can find this log.
-
-    The tray writes its log to a per-user path the service can't easily
-    discover (depends on which user is logged in, which Windows session,
-    etc). Writing a marker file in the shared storage path lets the
-    service-side dashboard read it and surface tray activity without
-    embedding user-profile assumptions.
-    """
-    try:
-        storage_path.mkdir(parents=True, exist_ok=True)
-        (storage_path / ".tray_log_path").write_text(str(log_file), encoding="utf-8")
-    except OSError as exc:
-        # Best-effort: a missing marker just means the dashboard can't
-        # auto-locate the tray log. Log it locally and move on.
-        logger.warning("Could not write tray log marker: %s", exc)
 
 
 setup_logging(
@@ -264,6 +249,33 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.config: Optional[Config] = None
         if self.config_path.exists():
             self.config = load_config(self.config_path)
+            # Switch logging from the bootstrap LOCALAPPDATA path to
+            # the configured storage path (<storage>/logs/...) so the
+            # tray's log lands alongside the service's, where the
+            # dashboard expects it. ``setup_logging`` calls
+            # ``removeHandler()`` on the old handlers first, so a
+            # mid-call failure can leave us without any file handler;
+            # we re-establish the bootstrap path in that case so the
+            # tray never silently goes log-less.
+            if self.config:
+                try:
+                    setup_logging_from_config(self.config)
+                    logger.info(
+                        "Tray logging re-routed to storage path: %s",
+                        getattr(self.config.storage, "path", "<unknown>"),
+                    )
+                except (PermissionError, OSError) as exc:
+                    logger.warning(
+                        "Could not switch tray log to storage path "
+                        "(%s); falling back to %s",
+                        exc,
+                        _bootstrap_log_dir(),
+                    )
+                    setup_logging(
+                        level="DEBUG",
+                        log_dir=_bootstrap_log_dir(),
+                        app_name="video_grouper_tray",
+                    )
 
         # Get GitHub repo from config for update checks
         self.github_repo = (
@@ -560,22 +572,14 @@ async def main():
             except Exception as e:
                 logger.error(f"Could not launch browser for setup: {e}")
 
-        # Initialize the tray application
+        # Initialize the tray application. SystemTrayIcon's __init__
+        # re-routes the log file from %LOCALAPPDATA%\VideoGrouper\logs
+        # (the bootstrap path) to <storage>/logs/video_grouper_tray.log
+        # once load_config has returned the user's configured storage
+        # path, so the dashboard can find the tray log at a stable
+        # well-known location without needing per-user-session
+        # discovery.
         tray_app = SystemTrayIcon(config_path)
-        # Note: tray logs stay in %LOCALAPPDATA%\VideoGrouper\logs for
-        # the lifetime of the process. The service writes to a separate
-        # ProgramData/storage-path directory as LocalSystem, and merging
-        # the two is asking for ACL conflicts on rotation. If a user
-        # wants centralized log collection, a Filebeat-style sidecar is
-        # the right answer, not shared file paths.
-        # We DO drop a marker file at <storage>/.tray_log_path so the
-        # dashboard can locate the tray log without baking in
-        # per-user-session assumptions.
-        if tray_app.config and getattr(tray_app.config.storage, "path", None):
-            _write_tray_log_marker(
-                Path(tray_app.config.storage.path),
-                _bootstrap_log_dir() / "video_grouper_tray.log",
-            )
         await tray_app.initialize()
         tray_app.show()
 
