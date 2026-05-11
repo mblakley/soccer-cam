@@ -98,6 +98,42 @@ class TestProcessItem:
         upload.add_work.assert_awaited_once()
 
 
+class TestProcessItemPrecheck:
+    """process_item must skip tasks for groups already past
+    ball_tracking_complete — common when a tray crash leaves an
+    in_progress task on disk and a fresh tray restores it after the
+    state has already advanced (most often because the upload pipeline
+    completed it via the recovery path while the tray was down)."""
+
+    @pytest.mark.asyncio
+    async def test_skips_ball_tracking_complete_groups(self, processor, group_dir):
+        (group_dir / "state.json").write_text(
+            json.dumps({"status": "ball_tracking_complete"})
+        )
+        task = _make_task(group_dir)
+        task.execute = AsyncMock(return_value=True)
+        await processor.process_item(task)
+        # Crucially — execute is NOT called.
+        task.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_complete_groups(self, processor, group_dir):
+        (group_dir / "state.json").write_text(json.dumps({"status": "complete"}))
+        task = _make_task(group_dir)
+        task.execute = AsyncMock(return_value=True)
+        await processor.process_item(task)
+        task.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_runs_for_trimmed_groups(self, processor, group_dir):
+        # Sanity — the pre-check must not over-fire on the normal case.
+        # (group_dir fixture sets state.json to {"status": "trimmed"}.)
+        task = _make_task(group_dir)
+        task.execute = AsyncMock(return_value=True)
+        await processor.process_item(task)
+        task.execute.assert_awaited_once()
+
+
 class TestGetItemKey:
     def test_keys_differ_per_provider(self, processor, group_dir):
         a = _make_task(group_dir)

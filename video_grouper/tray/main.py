@@ -33,11 +33,7 @@ from video_grouper.task_processors.register_tasks import register_tray_tasks
 import webbrowser
 from typing import Optional
 
-from video_grouper.utils.logger import (
-    setup_logging,
-    setup_logging_from_config,
-    get_logger,
-)
+from video_grouper.utils.logger import setup_logging, get_logger
 
 
 def _bootstrap_log_dir() -> Path:
@@ -252,29 +248,37 @@ class SystemTrayIcon(QSystemTrayIcon):
             # Switch logging from the bootstrap LOCALAPPDATA path to
             # the configured storage path (<storage>/logs/...) so the
             # tray's log lands alongside the service's, where the
-            # dashboard expects it. ``setup_logging`` calls
-            # ``removeHandler()`` on the old handlers first, so a
-            # mid-call failure can leave us without any file handler;
-            # we re-establish the bootstrap path in that case so the
-            # tray never silently goes log-less.
-            if self.config:
+            # dashboard expects it. We call ``setup_logging`` directly
+            # (not ``setup_logging_from_config``) so we can pin
+            # ``app_name="video_grouper_tray"`` — otherwise we'd
+            # collide with the service's open handle on
+            # ``video_grouper.log`` and Windows would fail us with
+            # PermissionError. ``setup_logging`` removes existing
+            # handlers FIRST, so on failure we re-establish the
+            # bootstrap path so the tray never silently goes log-less.
+            storage_path = self.config and getattr(self.config.storage, "path", None)
+            if storage_path:
                 try:
-                    setup_logging_from_config(self.config)
+                    setup_logging(
+                        level="DEBUG",
+                        log_dir=Path(storage_path) / "logs",
+                        app_name="video_grouper_tray",
+                    )
                     logger.info(
-                        "Tray logging re-routed to storage path: %s",
-                        getattr(self.config.storage, "path", "<unknown>"),
+                        "Tray logging re-routed to %s",
+                        Path(storage_path) / "logs" / "video_grouper_tray.log",
                     )
                 except (PermissionError, OSError) as exc:
+                    setup_logging(
+                        level="DEBUG",
+                        log_dir=_bootstrap_log_dir(),
+                        app_name="video_grouper_tray",
+                    )
                     logger.warning(
                         "Could not switch tray log to storage path "
                         "(%s); falling back to %s",
                         exc,
                         _bootstrap_log_dir(),
-                    )
-                    setup_logging(
-                        level="DEBUG",
-                        log_dir=_bootstrap_log_dir(),
-                        app_name="video_grouper_tray",
                     )
 
         # Get GitHub repo from config for update checks

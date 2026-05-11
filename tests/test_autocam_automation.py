@@ -9,6 +9,7 @@ from video_grouper.tray.autocam_automation import (
     run_autocam_on_file,
     _validate_autocam_inputs,
     _wait_for_completion_and_cleanup,
+    _execute_autocam_gui_automation,
 )
 
 
@@ -394,3 +395,61 @@ class TestWaitForCompletionExitDetection:
                     tracked_pids=[12345],
                 )
         assert result is True
+
+
+class TestExecuteAutocamGuiAutomationOutputPrecheck:
+    """The fresh-launch path of _execute_autocam_gui_automation must
+    short-circuit when the output file already exists at non-trivial
+    size — otherwise restoring an in_progress task from disk after a
+    tray crash would re-process a video we already have."""
+
+    def test_skips_when_output_already_exists(self, tmp_path, mock_file_system):
+        """Output file present + large enough → return True immediately
+        without launching subprocess.Popen / Desktop / pywinauto."""
+        mock_file_system["getsize"].return_value = 50 * 1024 * 1024  # > 10 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop") as mock_desktop,
+        ):
+            result = _execute_autocam_gui_automation(
+                "C:/fake/GUI.exe", str(input_path), str(output_path)
+            )
+        assert result is True
+        # Crucially — no fresh AutoCam launch.
+        mock_popen.assert_not_called()
+        mock_desktop.assert_not_called()
+
+    def test_does_not_skip_when_output_too_small(self, tmp_path, mock_file_system):
+        """Output exists but is below the 10 MB threshold → don't
+        short-circuit (proceed with the normal launch path; pywinauto
+        will then fail because we mocked Desktop, but we just need to
+        confirm Popen WAS called, proving we got past the pre-check)."""
+        mock_file_system["getsize"].return_value = 1024  # 1 KB << 10 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass  # downstream pywinauto interactions will fail; that's ok
+        mock_popen.assert_called()

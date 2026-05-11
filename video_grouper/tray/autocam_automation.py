@@ -462,6 +462,28 @@ def _execute_autocam_gui_automation(
     logger.info(f"Output path will be {abs_output_path}")
 
     state = DirectoryState(group_dir) if group_dir else None
+
+    # Already-done short-circuit: if the output mp4 exists at non-trivial
+    # size, AutoCam already produced it. Re-running would waste 1-2 hours
+    # of GPU work on output we already have. Most common trigger: the
+    # tray crashed after AutoCam finished but before the success was
+    # recorded; the in_progress task was restored from disk on the next
+    # tray boot and would otherwise relaunch GUI.exe from scratch.
+    if os.path.isfile(abs_output_path):
+        try:
+            existing_size = os.path.getsize(abs_output_path)
+        except OSError:
+            existing_size = 0
+        if existing_size >= 10 * 1024 * 1024:
+            logger.info(
+                "AutoCam output already exists at %s (%.1f MB); skipping re-run.",
+                abs_output_path,
+                existing_size / 1024 / 1024,
+            )
+            if state is not None:
+                state.clear_autocam_run()
+            return True
+
     desktop = Desktop(backend="uia")
 
     # ------------------------------------------------------------------

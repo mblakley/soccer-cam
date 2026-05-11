@@ -37,6 +37,35 @@ class BallTrackingProcessor(QueueProcessor):
 
     async def process_item(self, item: BallTrackingTaskBase) -> None:
         try:
+            # Pre-flight: skip if the group is already past
+            # ball_tracking. The most common cause of a stale task is a
+            # tray crash during AutoCam — the in_progress task gets
+            # restored from disk on next boot. Without this guard we'd
+            # re-launch AutoCam on output we already have, costing 1-2
+            # hours of GPU time per game.
+            state_file = item.group_dir / "state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, "r") as f:
+                        current_status = json.load(f).get("status")
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.warning(
+                        "BALL_TRACKING: could not read state.json for %s "
+                        "(continuing with task): %s",
+                        item.group_dir.name,
+                        e,
+                    )
+                    current_status = None
+                if current_status in ("ball_tracking_complete", "complete"):
+                    logger.info(
+                        "BALL_TRACKING: skipping %s — group already at "
+                        "status '%s' (likely a stale task restored from "
+                        "disk after a tray crash).",
+                        item.group_dir.name,
+                        current_status,
+                    )
+                    return
+
             logger.info("BALL_TRACKING: processing task: %s", item)
             success = await item.execute()
             if success:
