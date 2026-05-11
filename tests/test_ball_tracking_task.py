@@ -133,7 +133,14 @@ class TestExecute:
 
         assert result is True
         assert mock_invoke.call_count == 1
-        executable, in_path, out_path = mock_invoke.call_args.args
+        # AutocamGuiProvider.run passes group_dir as a 4th positional arg
+        # (autocam_gui.py:60) so the resume path can write its
+        # autocam_run marker. This test predates that addition; confirm
+        # all four args land where expected.
+        args = mock_invoke.call_args.args
+        assert len(args) == 4
+        executable, in_path, out_path, group_dir_arg = args
         assert executable == "fake.exe"
         assert in_path == str(input_path)
         assert out_path == "/tmp/out.mp4"
+        assert group_dir_arg == str(sample_group_dir)
