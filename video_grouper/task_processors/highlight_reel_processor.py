@@ -112,6 +112,13 @@ class HighlightReelProcessor(PollingProcessor):
             logger.error("HIGHLIGHT_REEL: failed to poll TTT for highlights: %s", e)
             return
 
+        # Prune the skip-suppression set: keep only ids still pending. Reels
+        # cancelled or completed server-side disappear from the response, and
+        # we want their entries garbage-collected so the set doesn't grow
+        # unboundedly across the lifetime of the process.
+        pending_ids = {r.get("id") for r in reels if r.get("id")}
+        self._already_skipped &= pending_ids
+
         for reel in reels:
             reel_id = reel.get("id")
             if not reel_id or reel_id in self._processing:
