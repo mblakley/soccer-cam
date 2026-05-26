@@ -294,6 +294,52 @@ def _resolve_url(override: str, fallback: str) -> str:
     return override.strip() if override and override.strip() else fallback
 
 
+def auto_claim_camera_manager(client: TTTApiClient) -> None:
+    """After a successful TTT sign-in, auto-claim camera-manager for the user's teams.
+
+    Calls ``GET /api/device-link/me`` first; if the user already has any
+    assignments we skip the register POST (idempotent on the server, but
+    the GET is cheaper than re-walking the user's team_members rows).
+    When ``GET`` returns empty, POSTs ``/api/device-link/register-camera-manager``
+    so every team the signed-in user is approved on gets a camera_managers row.
+
+    All failures are swallowed and logged at WARNING — this is a
+    best-effort bookkeeping step that must never block sign-in. The
+    network call sits inline with sign-in (no polling loop, per the
+    inline-pipeline-push convention).
+    """
+    if not client.is_authenticated():
+        logger.debug("Skipping camera-manager auto-claim: client not authenticated")
+        return
+    try:
+        existing = client.get_team_assignments()
+    except TTTApiError as exc:
+        logger.warning(
+            "Camera-manager auto-claim skipped: get_team_assignments failed: %s", exc
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 — best-effort, must not block sign-in
+        logger.warning(
+            "Camera-manager auto-claim skipped: get_team_assignments raised: %s", exc
+        )
+        return
+    if existing:
+        logger.debug(
+            "Camera-manager auto-claim skipped: user already has %d assignment(s)",
+            len(existing),
+        )
+        return
+    try:
+        rows = client.register_as_camera_manager()
+    except TTTApiError as exc:
+        logger.warning("Camera-manager auto-claim failed: %s", exc)
+        return
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("Camera-manager auto-claim raised: %s", exc)
+        return
+    logger.info("Camera-manager auto-claim returned %d row(s)", len(rows))
+
+
 # In-memory OAuth state store for the YouTube flow. Maps an
 # unguessable random ``state`` token to the wizard's chosen
 # ``storage_path`` (so the callback writes ``token.json`` to the
@@ -900,6 +946,7 @@ def create_app(
                 status_code=401,
             )
         logger.info("Password sign-in complete for %s", email)
+        auto_claim_camera_manager(client)
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/login/magic")
@@ -945,6 +992,7 @@ def create_app(
                 status_code=400,
             )
         logger.info("OAuth sign-in complete; tokens persisted")
+        auto_claim_camera_manager(client)
         return HTMLResponse(_SUCCESS_PAGE)
 
     @app.post("/auth/youtube/upload-credentials", response_class=HTMLResponse)

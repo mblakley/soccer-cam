@@ -366,6 +366,24 @@ class TTTApiClient:
         logger.debug("Fetching team assignments from %s", url)
         return self._request("GET", url)
 
+    def register_as_camera_manager(self) -> list[dict[str, Any]]:
+        """Auto-claim camera-manager status for every team the user belongs to.
+
+        POST {api_base_url}/api/device-link/register-camera-manager
+
+        Idempotent: the server iterates approved team_members rows for the
+        caller, creates the missing camera_managers rows, and returns the
+        union of existing + newly-created rows. Each entry has
+        ``id``, ``team_id``, ``user_id``, ``email``, ``name``, ``created_at``.
+
+        Returns ``[]`` when the user has zero approved team memberships.
+        """
+        url = f"{self.api_base_url}/api/device-link/register-camera-manager"
+        logger.debug("Registering as camera manager via %s", url)
+        result = self._request("POST", url)
+        # 204 maps to None upstream; coerce so callers always get a list.
+        return result if isinstance(result, list) else []
+
     def get_pending_clip_requests(self) -> Any:
         """Get pending clip requests for linked teams.
 

@@ -87,6 +87,22 @@ class MockTTTApiClient:
         self._acknowledged_commands: list[str] = []
         self._completed_commands: list[dict[str, Any]] = []
 
+        # Tracks calls to register_as_camera_manager so tests can assert
+        # the post-sign-in claim fired exactly once. ``register_response``
+        # is what subsequent calls return; defaults to the same single-team
+        # shape used by get_team_assignments() but tests can override.
+        self.register_camera_manager_call_count: int = 0
+        self.register_camera_manager_response: list[dict[str, Any]] = [
+            {
+                "id": str(uuid.uuid4()),
+                "team_id": MOCK_TEAM_ID,
+                "user_id": MOCK_USER_ID,
+                "email": "coach@example.com",
+                "name": "Coach Smith",
+                "created_at": self._base_time.isoformat(),
+            }
+        ]
+
         logger.info("MockTTTApiClient initialized with base_time=%s", self._base_time)
 
     # ------------------------------------------------------------------
@@ -115,6 +131,16 @@ class MockTTTApiClient:
                 "team_name": "Hawks",
             }
         ]
+
+    def register_as_camera_manager(self) -> list[dict[str, Any]]:
+        """Mock auto-claim — returns the configured response and counts calls."""
+        self.register_camera_manager_call_count += 1
+        logger.debug(
+            "Mock register_as_camera_manager call #%d",
+            self.register_camera_manager_call_count,
+        )
+        # Return a shallow copy so callers can't mutate the canned response.
+        return list(self.register_camera_manager_response)
 
     def get_pending_clip_requests(self) -> list[dict[str, Any]]:
         return [r for r in self._clip_requests if r["status"] == "pending"]

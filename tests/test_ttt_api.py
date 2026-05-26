@@ -69,6 +69,98 @@ class TestTTTApiClient(unittest.TestCase):
             call_args[0], ("GET", "https://api.test.com/api/device-link/me")
         )
 
+    def test_register_as_camera_manager_returns_rows(self):
+        data = [
+            {
+                "id": "cm-1",
+                "team_id": "team-1",
+                "user_id": "u-1",
+                "email": "coach@example.com",
+                "name": "Coach Smith",
+                "created_at": "2026-05-26T00:00:00Z",
+            },
+            {
+                "id": "cm-2",
+                "team_id": "team-2",
+                "user_id": "u-1",
+                "email": "coach@example.com",
+                "name": "Coach Smith",
+                "created_at": "2026-05-26T00:00:00Z",
+            },
+        ]
+        self.client._http.request = Mock(return_value=_mock_response(200, data))
+        result = self.client.register_as_camera_manager()
+        self.assertEqual(result, data)
+        call_args = self.client._http.request.call_args
+        self.assertEqual(
+            call_args[0],
+            ("POST", "https://api.test.com/api/device-link/register-camera-manager"),
+        )
+        # Bearer auth header should be attached (standard POST pattern).
+        headers = call_args[1]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer test-jwt-token")
+
+    def test_register_as_camera_manager_zero_teams_returns_empty(self):
+        self.client._http.request = Mock(return_value=_mock_response(200, []))
+        result = self.client.register_as_camera_manager()
+        self.assertEqual(result, [])
+
+    def test_register_as_camera_manager_raises_on_network_error(self):
+        import httpx
+
+        self.client._http.request = Mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+        with self.assertRaises(httpx.ConnectError):
+            self.client.register_as_camera_manager()
+
+    def test_register_as_camera_manager_raises_on_5xx(self):
+        self.client._http.request = Mock(
+            return_value=_mock_response(503, text="Service Unavailable")
+        )
+        with self.assertRaises(TTTApiError) as ctx:
+            self.client.register_as_camera_manager()
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_register_as_camera_manager_coerces_204_to_empty_list(self):
+        """If the server ever returns 204 No Content, callers still get a list."""
+        self.client._http.request = Mock(return_value=_mock_response(204))
+        result = self.client.register_as_camera_manager()
+        self.assertEqual(result, [])
+
+    def test_register_as_camera_manager_refreshes_expired_token(self):
+        """_ensure_auth() must refresh stale tokens before the POST fires."""
+        # Force the access token to look expired.
+        self.client._expires_at = time.time() - 60
+        # Refresh succeeds.
+        refresh_data = {
+            "access_token": "new-jwt",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600,
+        }
+        # Patch _store_auth_response so we don't have to forge a real JWT.
+        original_store = self.client._store_auth_response
+
+        def _store(data):
+            self.client._access_token = data["access_token"]
+            self.client._refresh_token_value = data["refresh_token"]
+            self.client._expires_at = time.time() + 3600
+
+        self.client._store_auth_response = _store
+        try:
+            self.client._http.post = Mock(
+                return_value=_mock_response(200, refresh_data)
+            )
+            self.client._http.request = Mock(return_value=_mock_response(200, []))
+            self.client.register_as_camera_manager()
+            # Refresh was attempted before the register request.
+            self.client._http.post.assert_called_once()
+            # The register request used the refreshed bearer token.
+            headers = self.client._http.request.call_args[1]["headers"]
+            self.assertEqual(headers["Authorization"], "Bearer new-jwt")
+        finally:
+            self.client._store_auth_response = original_store
+
     def test_get_pending_clip_requests(self):
         data = [{"id": "cr1", "status": "pending"}]
         self.client._http.request = Mock(return_value=_mock_response(200, data))
