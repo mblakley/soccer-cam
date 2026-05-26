@@ -66,9 +66,19 @@ def _make_clip(idx: int, group_dir: str, start: int = 10, end: int = 20):
 
 @pytest.fixture
 def stub_combine_videos():
-    """Stub combine_videos to write a fake output and return True."""
+    """Stub combine_videos to write a fake output and return True.
 
-    async def _fake_combine(file_list_path: str, output_path: str) -> bool:
+    Asserts the first arg is a list — guards against regressions to the
+    pre-5328233 bug where the task passed a concat-file-list path string.
+    """
+
+    async def _fake_combine(file_paths, output_path: str) -> bool:
+        assert isinstance(file_paths, list), (
+            f"combine_videos expects list[str], got {type(file_paths).__name__}"
+        )
+        assert all(isinstance(p, str) for p in file_paths), (
+            "combine_videos list items must be paths"
+        )
         with open(output_path, "wb") as fh:
             fh.write(b"\x00" * 32)
         return True
@@ -406,3 +416,120 @@ async def test_camera_id_passed_to_pending_query(tmp_path):
     await processor.discover_work()
 
     ttt_client.get_pending_highlights.assert_called_once_with("cam-xyz")
+
+
+@pytest.mark.asyncio
+async def test_upload_returns_none_marks_reel_failed(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """`upload_video` returns None when the YT API errors internally (HttpError,
+    auth refresh failure, etc.). The processor must NOT mark the reel ready
+    with a null youtube_video_id — it must fail through fail_highlight.
+    """
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-yt-none", "title": "Upload returns None", "status": "pending"}
+    game_clips = [_make_clip(0, "game-A")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    yt = MagicMock()
+    yt.upload_video = MagicMock(return_value=None)
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_called_once()
+    ttt_client.complete_highlight.assert_not_called()
+    ttt_client.fail_highlight.assert_called_once()
+    assert "no video id" in ttt_client.fail_highlight.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_upload_on_progress_throttle_emits_at_5_percent_steps(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """The upload on_progress callback throttles to 5% increments and always
+    fires at 100%. Verifies the run_coroutine_threadsafe -> update_highlight_progress
+    pipeline plumbing without simulating real chunks.
+    """
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-throttle", "title": "Throttle test", "status": "pending"}
+    game_clips = [_make_clip(0, "game-A")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+    ttt_client.update_highlight_progress = MagicMock()
+
+    # Synthetic chunked upload — fire on_progress at 1, 4 (suppressed), 5,
+    # 10, 12 (suppressed), 50, 100. Expected uploading-stage emits:
+    # (0 from pre-call) + (5, 10, 50, 100) = throttle keeps 5%-step increments
+    # plus the guaranteed 100% final.
+    captured = []
+
+    def fake_upload(
+        video_path, title, description, tags, privacy, playlist, on_progress
+    ):
+        # The processor's pre-upload PATCH already lands the initial 0%; here
+        # the uploader emits subsequent chunks.
+        for pct in (1, 4, 5, 10, 12, 50, 100):
+            on_progress(pct)
+        return "YT_THROTTLE_OK"
+
+    yt = MagicMock()
+    yt.upload_video = MagicMock(side_effect=fake_upload)
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.05)
+    # Let the scheduled run_coroutine_threadsafe coroutines complete.
+    for _ in range(20):
+        await asyncio.sleep(0.05)
+
+    captured = [
+        (kwargs["stage"], kwargs["percent"])
+        for _, kwargs in ttt_client.update_highlight_progress.call_args_list
+    ]
+    uploading_emits = [pct for stage, pct in captured if stage == "uploading"]
+    # Contract: the throttle suppresses sub-5%-step increments AND always
+    # emits the final 100%. From a starting baseline of -1:
+    #   1   -> suppressed (1 - (-1) = 2)
+    #   4   -> emitted    (4 - (-1) = 5)
+    #   5   -> suppressed (5 - 4 = 1)
+    #   10  -> emitted    (10 - 4 = 6)
+    #   12  -> suppressed (12 - 10 = 2)
+    #   50  -> emitted    (50 - 10 = 40)
+    #   100 -> emitted    (pct == 100 special-case)
+    # Plus the pre-upload 0 emit from the processor itself.
+    assert 0 in uploading_emits, uploading_emits
+    assert 100 in uploading_emits, uploading_emits
+    # At least one mid-pipeline percent landed (the exact value depends on the
+    # throttle's baseline; we don't pin a specific number to keep the test
+    # robust to small impl tweaks).
+    mid_emits = [p for p in uploading_emits if 0 < p < 100]
+    assert len(mid_emits) >= 2, (
+        f"throttle should emit >=2 mid-pipeline values, got {uploading_emits}"
+    )
+    # Suppressed values must NOT appear.
+    assert 1 not in uploading_emits
+    assert 12 not in uploading_emits
+
+    ttt_client.complete_highlight.assert_called_once()
+    ttt_client.fail_highlight.assert_not_called()

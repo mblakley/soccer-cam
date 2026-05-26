@@ -58,6 +58,19 @@ class HighlightReelProcessor(PollingProcessor):
         self.ttt_client = ttt_client
         self.youtube_uploader = youtube_uploader
         self._processing: set[str] = set()
+        # Track per-reel render tasks so stop() can cancel them cleanly.
+        self._render_tasks: set[asyncio.Task] = set()
+        # Suppress repeat "skipped — source not local" logs across polling
+        # cycles. Cleared when a reel is no longer pending or moves on.
+        self._already_skipped: set[str] = set()
+
+    async def stop(self) -> None:
+        """Cancel in-flight render tasks then defer to the polling-loop stop."""
+        for t in list(self._render_tasks):
+            t.cancel()
+        if self._render_tasks:
+            await asyncio.gather(*self._render_tasks, return_exceptions=True)
+        await super().stop()
 
     async def _report_progress(self, reel_id: str, stage: str, percent: int) -> None:
         """Fire-and-forget progress report to TTT. Failures are logged, not raised."""
@@ -105,7 +118,9 @@ class HighlightReelProcessor(PollingProcessor):
                 continue
 
             self._processing.add(reel_id)
-            asyncio.create_task(self._process_reel(reel))
+            task = asyncio.create_task(self._process_reel(reel))
+            self._render_tasks.add(task)
+            task.add_done_callback(self._render_tasks.discard)
 
     async def _process_reel(self, reel: dict) -> None:
         """Process a single highlight reel end-to-end."""
@@ -132,6 +147,17 @@ class HighlightReelProcessor(PollingProcessor):
                 )
                 return
 
+            # Defensive dedup: TTT should return each clip once, but if the
+            # backend ever leaks duplicates we don't want to render them.
+            seen: set = set()
+            deduped: list[dict] = []
+            for clip in game_clips:
+                cid = clip.get("id")
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    deduped.append(clip)
+            game_clips = deduped
+
             # Resolve every clip's source BEFORE claiming. If any are missing on
             # this install, another camera-manager may have them — bare return,
             # no claim, no fail.
@@ -142,24 +168,32 @@ class HighlightReelProcessor(PollingProcessor):
                     self.storage_path, recording_group_dir
                 )
                 if not resolved_dir:
-                    logger.info(
-                        "HIGHLIGHT_REEL: reel %s skipped — clip %d source not local "
-                        "(recording_group_dir=%r)",
-                        reel_id,
-                        idx,
-                        recording_group_dir,
-                    )
+                    if reel_id not in self._already_skipped:
+                        logger.info(
+                            "HIGHLIGHT_REEL: reel %s skipped — clip %d source not local "
+                            "(recording_group_dir=%r)",
+                            reel_id,
+                            idx,
+                            recording_group_dir,
+                        )
+                        self._already_skipped.add(reel_id)
                     return
                 combined = find_combined_video(resolved_dir)
                 if not combined:
-                    logger.info(
-                        "HIGHLIGHT_REEL: reel %s skipped — clip %d combined.mp4 missing in %s",
-                        reel_id,
-                        idx,
-                        resolved_dir,
-                    )
+                    if reel_id not in self._already_skipped:
+                        logger.info(
+                            "HIGHLIGHT_REEL: reel %s skipped — clip %d combined.mp4 missing in %s",
+                            reel_id,
+                            idx,
+                            resolved_dir,
+                        )
+                        self._already_skipped.add(reel_id)
                     return
                 resolved_sources.append((clip, combined))
+
+            # We resolved this reel — clear any prior skip suppression so a
+            # future state change re-logs.
+            self._already_skipped.discard(reel_id)
 
             # Claim the reel.
             await asyncio.to_thread(self.ttt_client.claim_highlight, reel_id)
@@ -173,20 +207,22 @@ class HighlightReelProcessor(PollingProcessor):
             total_clips = len(resolved_sources)
             await self._report_progress(reel_id, "trimming", 0)
 
-            # Trim each clip into a tmpdir.
+            # Trim each clip into a tmpdir. Use float for start/end to preserve
+            # sub-second precision — moment-tag offsets may legitimately carry
+            # fractional seconds that int() would otherwise truncate.
             tmpdir = tempfile.mkdtemp(prefix=f"reel-{reel_id}-")
             trimmed_paths: list[str] = []
             for idx, (clip, source) in enumerate(resolved_sources):
-                start = int(clip["start_time"])
-                end = int(clip["end_time"])
-                duration = max(end - start, 0)
+                start = float(clip["start_time"])
+                end = float(clip["end_time"])
+                duration = end - start
                 if duration <= 0:
                     raise ValueError(
                         f"Clip {idx} has non-positive duration: start={start} end={end}"
                     )
                 out_path = os.path.join(tmpdir, f"clip-{idx:03d}.mp4")
                 ok = await trim_video(
-                    source, out_path, f"{start:.2f}", f"{duration:.2f}"
+                    source, out_path, f"{start:.3f}", f"{duration:.3f}"
                 )
                 if not ok:
                     raise RuntimeError(
@@ -222,17 +258,22 @@ class HighlightReelProcessor(PollingProcessor):
 
             def _on_upload_progress(pct: int) -> None:
                 # Throttle so we don't PATCH on every chunk — only on 5% steps
-                # AND a final 100% report from the uploader.
+                # AND a final 100% report from the uploader. Guard against the
+                # loop being closed (e.g. shutdown mid-upload) so this never
+                # raises RuntimeError into the uploader thread.
+                if loop.is_closed():
+                    return
                 if pct == 100 or pct - last_reported[0] >= 5:
                     last_reported[0] = pct
                     asyncio.run_coroutine_threadsafe(
                         self._report_progress(reel_id, "uploading", pct), loop
                     )
 
+            player_name = reel.get("player_name")
             description = (
-                f"Highlight reel for {reel['player_name']}"
-                if reel.get("player_name")
-                else ""
+                f"Highlight reel for {player_name}"
+                if player_name
+                else f"Highlight reel: {reel.get('title') or reel_id}"
             )
             youtube_video_id = await asyncio.to_thread(
                 self.youtube_uploader.upload_video,
@@ -244,6 +285,15 @@ class HighlightReelProcessor(PollingProcessor):
                 None,  # playlist_id
                 _on_upload_progress,
             )
+
+            # `upload_video` returns None on internal exceptions (HttpError /
+            # auth refresh failures) instead of raising. Treat that as a
+            # failure so the reel routes through fail_highlight rather than
+            # being marked ready with no video.
+            if youtube_video_id is None:
+                raise RuntimeError(
+                    "YouTube upload returned no video id (see soccer-cam logs)"
+                )
 
             # Report back.
             await asyncio.to_thread(
