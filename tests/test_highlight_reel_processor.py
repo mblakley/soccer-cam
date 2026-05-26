@@ -314,6 +314,88 @@ async def test_discover_skips_when_youtube_uploader_missing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_progress_emitted_per_stage(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """Happy path should emit update_highlight_progress at each stage transition,
+    once per trimmed clip, and on upload start."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-prog",
+        "title": "Progress",
+        "player_name": "P",
+        "status": "pending",
+    }
+    game_clips = [
+        _make_clip(0, "game-A"),
+        _make_clip(1, "game-A"),
+        _make_clip(2, "game-A"),
+    ]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock(return_value=reel)
+    ttt_client.fail_highlight = MagicMock()
+    ttt_client.update_highlight_progress = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    # Expected progress sequence (uploading 0% only, since mocked upload_video
+    # doesn't invoke the on_progress callback):
+    #   ('trimming', 0), then per-clip ('trimming', N/3*100) → 33, 66, 100
+    #   then ('concatenating', 0), ('concatenating', 100)
+    #   then ('uploading', 0)
+    emitted = [
+        (kwargs["stage"], kwargs["percent"])
+        for _, kwargs in ttt_client.update_highlight_progress.call_args_list
+    ]
+    assert ("trimming", 0) in emitted
+    assert ("trimming", 100) in emitted
+    assert ("concatenating", 0) in emitted
+    assert ("concatenating", 100) in emitted
+    assert ("uploading", 0) in emitted
+    # Final transition is from update to complete, no further progress emits required.
+    ttt_client.complete_highlight.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_progress_not_emitted_when_source_missing(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """When a clip's source isn't local, no progress updates are emitted
+    (the reel is skipped before claiming)."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-skip-prog", "title": "Skipped", "status": "pending"}
+    game_clips = [_make_clip(0, "game-A"), _make_clip(1, "game-Z")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.update_highlight_progress = MagicMock()
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_not_called()
+    ttt_client.update_highlight_progress.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_camera_id_passed_to_pending_query(tmp_path):
     """The configured camera_id is forwarded to get_pending_highlights."""
     ttt_client = MagicMock()

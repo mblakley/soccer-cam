@@ -401,6 +401,7 @@ class YouTubeUploader:
         tags: Optional[List[str]] = None,
         privacy_status: str = "unlisted",
         playlist_id: Optional[str] = None,
+        on_progress: Optional[callable] = None,
     ) -> Optional[str]:
         """Upload a video to YouTube.
 
@@ -411,6 +412,9 @@ class YouTubeUploader:
             tags: List of tags for the video
             privacy_status: Privacy status (private, unlisted, public)
             playlist_id: ID of playlist to add video to (optional)
+            on_progress: Optional callable(percent_int 0-100) invoked after each
+                chunk upload completes. Exceptions raised by the callback are
+                caught and logged; they never abort the upload.
 
         Returns:
             str: Video ID if upload was successful, None otherwise
@@ -476,7 +480,19 @@ class YouTubeUploader:
                             else 0
                         )
                         logger.info(f"Upload {pct}% ({speed:.1f} MB/s)")
+                        if on_progress is not None:
+                            try:
+                                on_progress(pct)
+                            except Exception as cb_exc:
+                                logger.warning(
+                                    "on_progress callback raised: %s", cb_exc
+                                )
                 logger.info("Upload completed successfully")
+                if on_progress is not None:
+                    try:
+                        on_progress(100)
+                    except Exception as cb_exc:
+                        logger.warning("on_progress final callback raised: %s", cb_exc)
             except HttpError as e:
                 reason = ""
                 if e.resp and e.resp.status in (400, 403):

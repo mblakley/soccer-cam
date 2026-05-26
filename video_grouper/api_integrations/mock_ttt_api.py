@@ -157,6 +157,21 @@ class MockTTTApiClient:
                 return r
         return {"id": reel_id, "status": "generating"}
 
+    def update_highlight_progress(
+        self,
+        reel_id: str,
+        *,
+        stage: str,
+        percent: int,
+    ) -> dict[str, Any]:
+        clamped = int(max(0, min(100, percent)))
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                r["progress_stage"] = stage
+                r["progress_percent"] = clamped
+                return r
+        return {"id": reel_id, "progress_stage": stage, "progress_percent": clamped}
+
     def complete_highlight(
         self,
         reel_id: str,

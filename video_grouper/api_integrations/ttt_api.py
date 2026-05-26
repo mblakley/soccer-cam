@@ -441,6 +441,31 @@ class TTTApiClient:
         logger.debug("Claiming highlight reel %s", reel_id)
         return self._request("PATCH", url, json={"status": "generating"})
 
+    def update_highlight_progress(
+        self,
+        reel_id: str,
+        *,
+        stage: str,
+        percent: int,
+    ) -> dict[str, Any]:
+        """Report per-stage render progress while the reel is generating.
+
+        Stage is one of: 'trimming', 'concatenating', 'uploading'.
+        Percent is clamped to 0-100 by the API.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        body = {
+            "progress_stage": stage,
+            "progress_percent": int(max(0, min(100, percent))),
+        }
+        logger.debug(
+            "Highlight reel %s progress: %s %d%%",
+            reel_id,
+            stage,
+            body["progress_percent"],
+        )
+        return self._request("PATCH", url, json=body)
+
     def complete_highlight(
         self,
         reel_id: str,

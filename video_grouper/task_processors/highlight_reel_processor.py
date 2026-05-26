@@ -59,6 +59,24 @@ class HighlightReelProcessor(PollingProcessor):
         self.youtube_uploader = youtube_uploader
         self._processing: set[str] = set()
 
+    async def _report_progress(self, reel_id: str, stage: str, percent: int) -> None:
+        """Fire-and-forget progress report to TTT. Failures are logged, not raised."""
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_highlight_progress,
+                reel_id,
+                stage=stage,
+                percent=percent,
+            )
+        except Exception as exc:
+            logger.warning(
+                "HIGHLIGHT_REEL: failed to report %s %s=%d%% : %s",
+                reel_id,
+                stage,
+                percent,
+                exc,
+            )
+
     async def discover_work(self) -> None:
         """Poll TTT for pending highlight reels and process them."""
         if not self.ttt_client.is_authenticated():
@@ -152,6 +170,9 @@ class HighlightReelProcessor(PollingProcessor):
                 len(resolved_sources),
             )
 
+            total_clips = len(resolved_sources)
+            await self._report_progress(reel_id, "trimming", 0)
+
             # Trim each clip into a tmpdir.
             tmpdir = tempfile.mkdtemp(prefix=f"reel-{reel_id}-")
             trimmed_paths: list[str] = []
@@ -172,8 +193,12 @@ class HighlightReelProcessor(PollingProcessor):
                         f"trim_video failed for clip {idx} ({source} {start}-{end})"
                     )
                 trimmed_paths.append(out_path)
+                await self._report_progress(
+                    reel_id, "trimming", int((idx + 1) * 100 / total_clips)
+                )
 
             # Concatenate via the existing HighlightCompilationTask.
+            await self._report_progress(reel_id, "concatenating", 0)
             output_dir = str(Path(self.storage_path) / "highlights")
             task = HighlightCompilationTask(
                 highlight_id=reel_id,
@@ -185,10 +210,25 @@ class HighlightReelProcessor(PollingProcessor):
             ok = await task.execute()
             if not ok:
                 raise RuntimeError("combine_videos failed during reel concatenation")
+            await self._report_progress(reel_id, "concatenating", 100)
 
             final_output_path = task.output_path
 
-            # Upload to YouTube.
+            # Upload to YouTube. on_progress is called on the uploader's thread
+            # so it cannot await — schedule the PATCH back on this loop instead.
+            await self._report_progress(reel_id, "uploading", 0)
+            loop = asyncio.get_running_loop()
+            last_reported = [-1]
+
+            def _on_upload_progress(pct: int) -> None:
+                # Throttle so we don't PATCH on every chunk — only on 5% steps
+                # AND a final 100% report from the uploader.
+                if pct == 100 or pct - last_reported[0] >= 5:
+                    last_reported[0] = pct
+                    asyncio.run_coroutine_threadsafe(
+                        self._report_progress(reel_id, "uploading", pct), loop
+                    )
+
             description = (
                 f"Highlight reel for {reel['player_name']}"
                 if reel.get("player_name")
@@ -201,6 +241,8 @@ class HighlightReelProcessor(PollingProcessor):
                 description,
                 None,  # tags
                 "unlisted",  # privacy_status
+                None,  # playlist_id
+                _on_upload_progress,
             )
 
             # Report back.
