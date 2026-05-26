@@ -279,8 +279,9 @@ class VideoGrouperApp:
             for poller in self.camera_pollers.values():
                 poller.ntfy_service = ntfy_service
 
-        # TTT Clip Request Processor (optional)
+        # TTT Clip Request Processor + Highlight Reel Processor (optional)
         self.clip_request_processor = None
+        self.highlight_reel_processor = None
         if self.config.ttt.enabled:
             try:
                 from video_grouper.task_processors.clip_request_processor import (
@@ -366,6 +367,24 @@ class VideoGrouperApp:
                     poll_interval=self.config.ttt.clip_request_poll_interval,
                 )
                 logger.info("TTT ClipRequestProcessor initialized")
+
+                # Highlight reel render+upload (Phase 2 — pairs with TTT's
+                # in-app preview). Same ttt_client + youtube_uploader; only
+                # initialized when the YouTube uploader is configured since
+                # the reel ships back as an uploaded video.
+                if youtube_uploader is not None:
+                    from video_grouper.task_processors.highlight_reel_processor import (
+                        HighlightReelProcessor,
+                    )
+
+                    self.highlight_reel_processor = HighlightReelProcessor(
+                        storage_path=self.storage_path,
+                        config=self.config,
+                        ttt_client=ttt_client,
+                        youtube_uploader=youtube_uploader,
+                        poll_interval=self.config.ttt.clip_request_poll_interval,
+                    )
+                    logger.info("TTT HighlightReelProcessor initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize TTT ClipRequestProcessor: {e}")
 
@@ -516,6 +535,8 @@ class VideoGrouperApp:
             self.processors.append(self.ntfy_processor)
         if self.clip_request_processor:
             self.processors.append(self.clip_request_processor)
+        if self.highlight_reel_processor:
+            self.processors.append(self.highlight_reel_processor)
         if self.clip_processor:
             self.processors.append(self.clip_processor)
         if self.clip_discovery_processor:
