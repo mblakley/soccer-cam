@@ -435,11 +435,63 @@ class TTTApiClient:
         logger.debug("Fetching game clips for highlight reel %s", reel_id)
         return self._request("GET", url)
 
-    def claim_highlight(self, reel_id: str) -> dict[str, Any]:
-        """Mark a highlight reel as in-progress (status='generating')."""
+    def get_highlight(self, reel_id: str) -> dict[str, Any]:
+        """Fetch the current state of a single highlight reel.
+
+        GET {api_base_url}/api/highlights/{reel_id}
+
+        Used for the idempotent-upload check: if a previous run uploaded to
+        YouTube but failed to PATCH complete, the reel may already carry a
+        ``youtube_video_id`` that we can reuse rather than uploading again.
+        """
         url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        logger.debug("Fetching highlight reel %s", reel_id)
+        return self._request("GET", url)
+
+    def claim_highlight(self, reel_id: str, camera_id: str) -> Optional[dict[str, Any]]:
+        """Atomically transition a highlight reel from pending → generating.
+
+        POST {api_base_url}/api/highlights/{reel_id}/claim
+        body: {"camera_id": <camera_id>}
+
+        Returns the updated reel dict on 200.
+        Returns None on 409 (reel already claimed by another camera-manager or
+        no longer pending) — callers should check for None and skip rendering.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}/claim"
+        body = {"camera_id": camera_id}
         logger.debug("Claiming highlight reel %s", reel_id)
-        return self._request("PATCH", url, json={"status": "generating"})
+        try:
+            return self._request("POST", url, json=body)
+        except TTTApiError as exc:
+            if exc.status_code == 409:
+                logger.info(
+                    "reel %s already claimed by another camera-manager (409)", reel_id
+                )
+                return None
+            raise
+
+    def report_blocker(
+        self, reel_id: str, camera_id: str, reason: str
+    ) -> Optional[dict[str, Any]]:
+        """Report that this install cannot render the reel (e.g. missing source video).
+
+        POST {api_base_url}/api/highlights/{reel_id}/report-blocker
+        body: {"camera_id": <camera_id>, "reason": <text up to 500 chars>}
+
+        Returns the response dict on success. On non-2xx, logs at WARNING and
+        returns None — a failed blocker report must not kill the render loop.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}/report-blocker"
+        body = {"camera_id": camera_id, "reason": reason[:500]}
+        logger.debug("Reporting blocker for reel %s: %s", reel_id, reason)
+        try:
+            return self._request("POST", url, json=body)
+        except Exception as exc:
+            logger.warning(
+                "HIGHLIGHT_REEL: failed to report blocker for reel %s: %s", reel_id, exc
+            )
+            return None
 
     def update_highlight_progress(
         self,
