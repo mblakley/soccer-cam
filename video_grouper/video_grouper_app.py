@@ -305,6 +305,14 @@ class VideoGrouperApp:
                         logger.info("TTT API client authenticated")
                     except Exception as e:
                         logger.error(f"TTT login failed: {e}")
+                    else:
+                        # Auto-claim camera-manager rows for every team the
+                        # signed-in user is on. Best-effort; never blocks startup.
+                        from video_grouper.web.auth_server import (
+                            auto_claim_camera_manager,
+                        )
+
+                        auto_claim_camera_manager(ttt_client)
 
                 # Initialize plugin manager
                 try:
@@ -456,6 +464,12 @@ class VideoGrouperApp:
                             )
                         except Exception as e:
                             logger.error(f"TTT login failed for job processor: {e}")
+                        else:
+                            from video_grouper.web.auth_server import (
+                                auto_claim_camera_manager,
+                            )
+
+                            auto_claim_camera_manager(ttt_client)
 
                 from video_grouper.task_processors.ttt_job_processor import (
                     TTTJobProcessor,

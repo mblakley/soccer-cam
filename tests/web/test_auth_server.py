@@ -346,11 +346,19 @@ def test_receive_token_persists_tokens_and_returns_success(storage, client):
     exp = int(time.time()) + 3600
     jwt = _make_jwt(sub="user-abc", exp=exp)
 
-    resp = client.post(
-        "/receive-token",
-        json={"access_token": jwt},
-        headers=_SAME_ORIGIN,
-    )
+    # Stub get_team_assignments so auto-claim doesn't try real network I/O.
+    # Returning a non-empty list also skips the register POST.
+    with patch.object(
+        TTTApiClient,
+        "get_team_assignments",
+        autospec=True,
+        return_value=[{"camera_manager_id": "cm-1", "team_id": "t-1"}],
+    ):
+        resp = client.post(
+            "/receive-token",
+            json={"access_token": jwt},
+            headers=_SAME_ORIGIN,
+        )
     assert resp.status_code == 200
     assert "Signed in" in resp.text
 
@@ -410,11 +418,18 @@ def test_receive_token_post_accepts_same_origin_referer(storage, client):
     same-origin navigations and we accept either signal."""
     exp = int(time.time()) + 3600
     jwt = _make_jwt(sub="user-ref", exp=exp)
-    resp = client.post(
-        "/receive-token",
-        json={"access_token": jwt},
-        headers={"referer": "http://localhost:8765/callback"},
-    )
+    # Stub auto-claim's GET so it doesn't try real network.
+    with patch.object(
+        TTTApiClient,
+        "get_team_assignments",
+        autospec=True,
+        return_value=[{"camera_manager_id": "cm-1"}],
+    ):
+        resp = client.post(
+            "/receive-token",
+            json={"access_token": jwt},
+            headers={"referer": "http://localhost:8765/callback"},
+        )
     assert resp.status_code == 200
     assert (storage / "ttt" / "tokens.json").exists()
 
@@ -558,7 +573,19 @@ def test_login_password_success_persists_tokens_and_redirects(storage, client):
         self._expires_at = float(exp)
         self._save_tokens()
 
-    with patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login):
+    # Auto-claim runs after sign-in succeeds and would otherwise hit the
+    # network for /api/device-link/me. Stub it to return a pre-existing
+    # assignment so register_as_camera_manager is skipped entirely; this
+    # test only cares about token persistence.
+    with (
+        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
+        patch.object(
+            TTTApiClient,
+            "get_team_assignments",
+            autospec=True,
+            return_value=[{"camera_manager_id": "cm-1", "team_id": "t-1"}],
+        ),
+    ):
         resp = client.post(
             "/login/password",
             data={"email": "pw@example.com", "password": "hunter2"},
@@ -738,3 +765,317 @@ def test_supabase_internal_url_blank_falls_back_to_external(storage):
         create_app(cfg, str(storage))
 
     assert captured["supabase_url"] == "http://prod.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Audit 2.2: auto-claim camera-manager on sign-in
+# ---------------------------------------------------------------------------
+
+
+def test_auto_claim_skipped_when_not_authenticated(storage):
+    """Helper is a no-op if the client somehow has no valid token yet."""
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    fake = type(
+        "FakeClient",
+        (),
+        {
+            "is_authenticated": lambda self: False,
+            "get_team_assignments": lambda self: pytest.fail(
+                "get_team_assignments must not be called when not authenticated"
+            ),
+            "register_as_camera_manager": lambda self: pytest.fail(
+                "register_as_camera_manager must not be called when not authenticated"
+            ),
+        },
+    )()
+    auto_claim_camera_manager(fake)
+
+
+def test_auto_claim_calls_register_when_assignments_empty(storage):
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    calls: dict[str, int] = {"get": 0, "register": 0}
+
+    class Fake:
+        def is_authenticated(self):
+            return True
+
+        def get_team_assignments(self):
+            calls["get"] += 1
+            return []
+
+        def register_as_camera_manager(self):
+            calls["register"] += 1
+            return [{"id": "cm-1", "team_id": "team-1"}]
+
+    auto_claim_camera_manager(Fake())
+    assert calls == {"get": 1, "register": 1}
+
+
+def test_auto_claim_skips_register_when_assignments_present(storage):
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    calls: dict[str, int] = {"get": 0, "register": 0}
+
+    class Fake:
+        def is_authenticated(self):
+            return True
+
+        def get_team_assignments(self):
+            calls["get"] += 1
+            return [{"camera_manager_id": "cm-1", "team_id": "team-1"}]
+
+        def register_as_camera_manager(self):
+            calls["register"] += 1
+            return []
+
+    auto_claim_camera_manager(Fake())
+    assert calls == {"get": 1, "register": 0}
+
+
+def test_auto_claim_swallows_get_failure(storage):
+    """Network error on get_team_assignments must not raise — sign-in
+    completes regardless. Register is not attempted in this case."""
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    calls = {"register": 0}
+
+    class Fake:
+        def is_authenticated(self):
+            return True
+
+        def get_team_assignments(self):
+            raise TTTApiError("network down", status_code=None)
+
+        def register_as_camera_manager(self):
+            calls["register"] += 1
+            return []
+
+    # Must not raise.
+    auto_claim_camera_manager(Fake())
+    assert calls["register"] == 0
+
+
+def test_auto_claim_swallows_register_failure(storage):
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    class Fake:
+        def is_authenticated(self):
+            return True
+
+        def get_team_assignments(self):
+            return []
+
+        def register_as_camera_manager(self):
+            raise TTTApiError("server down", status_code=500)
+
+    # Must not raise.
+    auto_claim_camera_manager(Fake())
+
+
+def test_auto_claim_swallows_arbitrary_exceptions(storage):
+    """Defense-in-depth: even a bug in the API client (e.g. AttributeError)
+    must not break sign-in."""
+    from video_grouper.web.auth_server import auto_claim_camera_manager
+
+    class Fake:
+        def is_authenticated(self):
+            return True
+
+        def get_team_assignments(self):
+            raise RuntimeError("unexpected client bug")
+
+        def register_as_camera_manager(self):
+            raise AssertionError("should not be called")
+
+    auto_claim_camera_manager(Fake())
+
+
+def test_login_password_triggers_auto_claim_when_no_assignments(storage, client):
+    """End-to-end: POST /login/password runs auth, then auto_claim fires:
+    GET /api/device-link/me returns [] → POST register-camera-manager fires once."""
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-pw", exp=exp, email="pw@example.com")
+
+    def fake_login(self, email, password):
+        self._access_token = jwt
+        self._refresh_token_value = "r"
+        self._expires_at = float(exp)
+        self._save_tokens()
+
+    calls = {"get": 0, "register": 0}
+
+    def fake_get(self):
+        calls["get"] += 1
+        return []
+
+    def fake_register(self):
+        calls["register"] += 1
+        return [{"id": "cm-1", "team_id": "team-1"}]
+
+    with (
+        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
+        patch.object(
+            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
+        ),
+        patch.object(
+            TTTApiClient,
+            "register_as_camera_manager",
+            autospec=True,
+            side_effect=fake_register,
+        ),
+    ):
+        resp = client.post(
+            "/login/password",
+            data={"email": "pw@example.com", "password": "hunter2"},
+            headers=_SAME_ORIGIN,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert calls == {"get": 1, "register": 1}
+
+
+def test_login_password_skips_auto_claim_when_assignments_present(storage, client):
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-pw", exp=exp)
+
+    def fake_login(self, email, password):
+        self._access_token = jwt
+        self._refresh_token_value = "r"
+        self._expires_at = float(exp)
+        self._save_tokens()
+
+    calls = {"get": 0, "register": 0}
+
+    def fake_get(self):
+        calls["get"] += 1
+        return [{"camera_manager_id": "cm-1", "team_id": "team-1"}]
+
+    def fake_register(self):
+        calls["register"] += 1
+        return []
+
+    with (
+        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
+        patch.object(
+            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
+        ),
+        patch.object(
+            TTTApiClient,
+            "register_as_camera_manager",
+            autospec=True,
+            side_effect=fake_register,
+        ),
+    ):
+        resp = client.post(
+            "/login/password",
+            data={"email": "pw@example.com", "password": "hunter2"},
+            headers=_SAME_ORIGIN,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert calls == {"get": 1, "register": 0}
+
+
+def test_login_password_completes_when_auto_claim_raises(storage, client):
+    """Sign-in must succeed even if both auto_claim probes blow up."""
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-pw", exp=exp)
+
+    def fake_login(self, email, password):
+        self._access_token = jwt
+        self._refresh_token_value = "r"
+        self._expires_at = float(exp)
+        self._save_tokens()
+
+    with (
+        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
+        patch.object(
+            TTTApiClient,
+            "get_team_assignments",
+            autospec=True,
+            side_effect=TTTApiError("boom"),
+        ),
+        patch.object(
+            TTTApiClient,
+            "register_as_camera_manager",
+            autospec=True,
+            side_effect=TTTApiError("also boom"),
+        ),
+    ):
+        resp = client.post(
+            "/login/password",
+            data={"email": "pw@example.com", "password": "hunter2"},
+            headers=_SAME_ORIGIN,
+            follow_redirects=False,
+        )
+
+    # 303 = sign-in succeeded; auto_claim failure didn't propagate.
+    assert resp.status_code == 303
+    # Tokens still persisted.
+    saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
+    assert saved["access_token"] == jwt
+
+
+def test_receive_token_triggers_auto_claim_when_no_assignments(storage, client):
+    """OAuth flow (/receive-token) also auto-claims camera-manager."""
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-oauth", exp=exp)
+
+    calls = {"get": 0, "register": 0}
+
+    def fake_get(self):
+        calls["get"] += 1
+        return []
+
+    def fake_register(self):
+        calls["register"] += 1
+        return [{"id": "cm-1", "team_id": "team-oauth"}]
+
+    with (
+        patch.object(
+            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
+        ),
+        patch.object(
+            TTTApiClient,
+            "register_as_camera_manager",
+            autospec=True,
+            side_effect=fake_register,
+        ),
+    ):
+        resp = client.post(
+            "/receive-token",
+            json={"access_token": jwt},
+            headers=_SAME_ORIGIN,
+        )
+
+    assert resp.status_code == 200
+    assert "Signed in" in resp.text
+    assert calls == {"get": 1, "register": 1}
+
+
+def test_receive_token_completes_when_auto_claim_raises(storage, client):
+    """OAuth sign-in must not fail because of an auto-claim error."""
+    exp = int(time.time()) + 3600
+    jwt = _make_jwt(sub="user-oauth", exp=exp)
+
+    with patch.object(
+        TTTApiClient,
+        "get_team_assignments",
+        autospec=True,
+        side_effect=TTTApiError("network reset"),
+    ):
+        resp = client.post(
+            "/receive-token",
+            json={"access_token": jwt},
+            headers=_SAME_ORIGIN,
+        )
+
+    assert resp.status_code == 200
+    assert "Signed in" in resp.text
+    # Token still persisted.
+    saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
+    assert saved["access_token"] == jwt
