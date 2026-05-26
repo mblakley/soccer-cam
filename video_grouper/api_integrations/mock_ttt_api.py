@@ -78,6 +78,8 @@ class MockTTTApiClient:
         self._moment_tags: dict[str, dict[str, Any]] = {}
         self._moment_clips: dict[str, dict[str, Any]] = {}
         self._clip_requests: list[dict[str, Any]] = []
+        self._highlights: list[dict[str, Any]] = []
+        self._highlight_game_clips: dict[str, list[dict[str, Any]]] = {}
         self._recordings: dict[str, dict[str, Any]] = {}
         self._recording_statuses: list[dict[str, Any]] = []
         self._pending_commands: list[dict[str, Any]] = []
@@ -134,6 +136,54 @@ class MockTTTApiClient:
                 r["fulfilled_notes"] = notes
                 return r
         return {"id": request_id, "status": "fulfilled", "fulfilled_url": url}
+
+    # ------------------------------------------------------------------
+    # Highlight reels
+    # ------------------------------------------------------------------
+
+    def get_pending_highlights(
+        self, camera_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        # camera_id is accepted but ignored (mirrors v1 TTT behavior).
+        return [r for r in self._highlights if r.get("status") == "pending"]
+
+    def get_highlight_game_clips(self, reel_id: str) -> list[dict[str, Any]]:
+        return list(self._highlight_game_clips.get(reel_id, []))
+
+    def claim_highlight(self, reel_id: str) -> dict[str, Any]:
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                r["status"] = "generating"
+                return r
+        return {"id": reel_id, "status": "generating"}
+
+    def complete_highlight(
+        self,
+        reel_id: str,
+        *,
+        file_path: str,
+        youtube_video_id: Optional[str],
+    ) -> dict[str, Any]:
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                r["status"] = "ready"
+                r["file_path"] = file_path
+                r["youtube_video_id"] = youtube_video_id
+                return r
+        return {
+            "id": reel_id,
+            "status": "ready",
+            "file_path": file_path,
+            "youtube_video_id": youtube_video_id,
+        }
+
+    def fail_highlight(self, reel_id: str, error_message: str) -> dict[str, Any]:
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                r["status"] = "failed"
+                r["error_message"] = error_message
+                return r
+        return {"id": reel_id, "status": "failed", "error_message": error_message}
 
     # ------------------------------------------------------------------
     # Schedule & game management
