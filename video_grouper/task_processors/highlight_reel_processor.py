@@ -176,6 +176,13 @@ class HighlightReelProcessor(PollingProcessor):
                 )
                 if not resolved_dir:
                     if reel_id not in self._already_skipped:
+                        reason = (
+                            f"Clip {idx} source unavailable: "
+                            f"recording_group_dir is None"
+                            if recording_group_dir is None
+                            else f"Clip {idx} source dir not found on this camera-manager: "
+                            f"{recording_group_dir}"
+                        )
                         logger.info(
                             "HIGHLIGHT_REEL: reel %s skipped — clip %d source not local "
                             "(recording_group_dir=%r)",
@@ -184,10 +191,17 @@ class HighlightReelProcessor(PollingProcessor):
                             recording_group_dir,
                         )
                         self._already_skipped.add(reel_id)
+                        await asyncio.to_thread(
+                            self.ttt_client.report_blocker,
+                            reel_id,
+                            self.config.ttt.camera_id,
+                            reason,
+                        )
                     return
                 combined = find_combined_video(resolved_dir)
                 if not combined:
                     if reel_id not in self._already_skipped:
+                        reason = f"Clip {idx} combined.mp4 not found in {resolved_dir}"
                         logger.info(
                             "HIGHLIGHT_REEL: reel %s skipped — clip %d combined.mp4 missing in %s",
                             reel_id,
@@ -195,6 +209,12 @@ class HighlightReelProcessor(PollingProcessor):
                             resolved_dir,
                         )
                         self._already_skipped.add(reel_id)
+                        await asyncio.to_thread(
+                            self.ttt_client.report_blocker,
+                            reel_id,
+                            self.config.ttt.camera_id,
+                            reason,
+                        )
                     return
                 resolved_sources.append((clip, combined))
 
@@ -202,8 +222,19 @@ class HighlightReelProcessor(PollingProcessor):
             # future state change re-logs.
             self._already_skipped.discard(reel_id)
 
-            # Claim the reel.
-            await asyncio.to_thread(self.ttt_client.claim_highlight, reel_id)
+            # Claim the reel atomically. Returns None when another camera-manager
+            # already claimed it (409) — skip without rendering in that case.
+            camera_id = getattr(self.config.ttt, "camera_id", None) or ""
+            claim_result = await asyncio.to_thread(
+                self.ttt_client.claim_highlight, reel_id, camera_id
+            )
+            if claim_result is None:
+                logger.info(
+                    "HIGHLIGHT_REEL: reel %s already claimed by another camera-manager"
+                    " — skipping",
+                    reel_id,
+                )
+                return
             claimed = True
             logger.info(
                 "HIGHLIGHT_REEL: claimed reel %s (%d clips)",
@@ -256,6 +287,43 @@ class HighlightReelProcessor(PollingProcessor):
             await self._report_progress(reel_id, "concatenating", 100)
 
             final_output_path = task.output_path
+
+            # Idempotent-upload guard: if a prior run uploaded to YouTube but
+            # failed to PATCH complete (transient TTT outage), the reel already
+            # carries a youtube_video_id. Reuse it instead of creating an orphan.
+            try:
+                latest_reel = await asyncio.to_thread(
+                    self.ttt_client.get_highlight, reel_id
+                )
+                existing_yt_id = (latest_reel or {}).get("youtube_video_id")
+            except Exception as exc:
+                logger.warning(
+                    "HIGHLIGHT_REEL: could not refetch reel %s for idempotent check,"
+                    " proceeding with upload: %s",
+                    reel_id,
+                    exc,
+                )
+                existing_yt_id = None
+
+            if existing_yt_id:
+                logger.warning(
+                    "HIGHLIGHT_REEL: reel %s already has youtube_video_id=%s"
+                    " — skipping re-upload, marking ready",
+                    reel_id,
+                    existing_yt_id,
+                )
+                await asyncio.to_thread(
+                    self.ttt_client.complete_highlight,
+                    reel_id,
+                    file_path=final_output_path,
+                    youtube_video_id=existing_yt_id,
+                )
+                logger.info(
+                    "HIGHLIGHT_REEL: reel %s ready (youtube_video_id=%s, idempotent)",
+                    reel_id,
+                    existing_yt_id,
+                )
+                return
 
             # Upload to YouTube. on_progress is called on the uploader's thread
             # so it cannot await — schedule the PATCH back on this loop instead.

@@ -129,6 +129,7 @@ async def test_happy_path_renders_uploads_and_reports(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock(return_value=reel)
     ttt_client.fail_highlight = MagicMock()
 
@@ -140,7 +141,7 @@ async def test_happy_path_renders_uploads_and_reports(
     while processor._processing:
         await asyncio.sleep(0.01)
 
-    ttt_client.claim_highlight.assert_called_once_with("reel-1")
+    ttt_client.claim_highlight.assert_called_once_with("reel-1", "cam-xyz")
     ttt_client.complete_highlight.assert_called_once()
     kwargs = ttt_client.complete_highlight.call_args.kwargs
     assert kwargs["youtube_video_id"] == "YT_REEL_123"
@@ -236,6 +237,7 @@ async def test_upload_failure_marks_reel_failed(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock()
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock()
     ttt_client.fail_highlight = MagicMock()
 
@@ -277,6 +279,7 @@ async def test_idempotency_within_single_poll(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock(return_value=reel)
     ttt_client.fail_highlight = MagicMock()
 
@@ -348,6 +351,7 @@ async def test_progress_emitted_per_stage(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock(return_value=reel)
     ttt_client.fail_highlight = MagicMock()
     ttt_client.update_highlight_progress = MagicMock()
@@ -436,6 +440,7 @@ async def test_upload_returns_none_marks_reel_failed(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock()
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock()
     ttt_client.fail_highlight = MagicMock()
 
@@ -472,6 +477,7 @@ async def test_upload_on_progress_throttle_emits_at_5_percent_steps(
     ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
     ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
     ttt_client.claim_highlight = MagicMock()
+    ttt_client.get_highlight = MagicMock(return_value=reel)
     ttt_client.complete_highlight = MagicMock()
     ttt_client.fail_highlight = MagicMock()
     ttt_client.update_highlight_progress = MagicMock()
@@ -532,4 +538,125 @@ async def test_upload_on_progress_throttle_emits_at_5_percent_steps(
     assert 12 not in uploading_emits
 
     ttt_client.complete_highlight.assert_called_once()
+    ttt_client.fail_highlight.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_skip_reports_blocker_once_per_session(tmp_path):
+    """When a clip's source is missing, report_blocker is called exactly once per
+    session even if discover_work fires multiple times for the same reel."""
+    # game-A is present; game-B is NOT staged → reel skips on clip 1.
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-blocker", "title": "Missing source", "status": "pending"}
+    game_clips = [_make_clip(0, "game-A"), _make_clip(1, "game-B")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.report_blocker = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+
+    # First poll — reel-blocker is new, should report blocker once.
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    # Second poll — same reel still pending, already in _already_skipped.
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_not_called()
+    ttt_client.report_blocker.assert_called_once()
+    call_args = ttt_client.report_blocker.call_args
+    assert call_args[0][0] == "reel-blocker"
+    assert call_args[0][1] == "cam-xyz"
+    assert "game-B" in call_args[0][2]
+
+
+@pytest.mark.asyncio
+async def test_claim_409_skips_rendering(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """When claim_highlight returns None (409 from TTT), the processor must not
+    render, upload, or call complete_highlight / fail_highlight."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-409", "title": "Already claimed", "status": "pending"}
+    game_clips = [_make_clip(0, "game-A")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    # Simulate 409 — another camera-manager already claimed the reel.
+    ttt_client.claim_highlight = MagicMock(return_value=None)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    yt = MagicMock()
+    yt.upload_video = MagicMock(return_value="YT_SHOULD_NOT_BE_CALLED")
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_called_once_with("reel-409", "cam-xyz")
+    yt.upload_video.assert_not_called()
+    ttt_client.complete_highlight.assert_not_called()
+    ttt_client.fail_highlight.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_idempotent_upload_when_youtube_video_id_present(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """When get_highlight returns a reel that already has youtube_video_id set
+    (a prior run uploaded but complete_highlight PATCH failed), the processor
+    must NOT upload again but MUST call complete_highlight with the existing id."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {"id": "reel-idem", "title": "Already uploaded", "status": "generating"}
+    game_clips = [_make_clip(0, "game-A")]
+
+    # The pending reel (from get_pending_highlights) has no youtube_video_id.
+    # But get_highlight (called just before upload) reveals it was already uploaded.
+    reel_with_yt = dict(reel, youtube_video_id="YT_EXISTING_456")
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    # get_highlight reveals the previously uploaded video id.
+    ttt_client.get_highlight = MagicMock(return_value=reel_with_yt)
+    ttt_client.complete_highlight = MagicMock(return_value=reel_with_yt)
+    ttt_client.fail_highlight = MagicMock()
+
+    yt = MagicMock()
+    yt.upload_video = MagicMock(return_value="YT_NEW_SHOULD_NOT_BE_CALLED")
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    # Upload must be skipped.
+    yt.upload_video.assert_not_called()
+    # complete_highlight must be called with the EXISTING youtube_video_id.
+    ttt_client.complete_highlight.assert_called_once()
+    kwargs = ttt_client.complete_highlight.call_args.kwargs
+    assert kwargs["youtube_video_id"] == "YT_EXISTING_456"
+    assert kwargs["file_path"].endswith(".mp4")
     ttt_client.fail_highlight.assert_not_called()

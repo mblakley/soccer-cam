@@ -150,12 +150,35 @@ class MockTTTApiClient:
     def get_highlight_game_clips(self, reel_id: str) -> list[dict[str, Any]]:
         return list(self._highlight_game_clips.get(reel_id, []))
 
-    def claim_highlight(self, reel_id: str) -> dict[str, Any]:
+    def get_highlight(self, reel_id: str) -> dict[str, Any]:
         for r in self._highlights:
             if r["id"] == reel_id:
+                return dict(r)
+        return {"id": reel_id, "status": "pending"}
+
+    def claim_highlight(self, reel_id: str, camera_id: str) -> Optional[dict[str, Any]]:
+        """Return updated reel on success; return None if already claimed (409)."""
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                if r.get("status") != "pending":
+                    return None
                 r["status"] = "generating"
-                return r
-        return {"id": reel_id, "status": "generating"}
+                r["claimed_by_camera_id"] = camera_id
+                return dict(r)
+        return {
+            "id": reel_id,
+            "status": "generating",
+            "claimed_by_camera_id": camera_id,
+        }
+
+    def report_blocker(
+        self, reel_id: str, camera_id: str, reason: str
+    ) -> Optional[dict[str, Any]]:
+        for r in self._highlights:
+            if r["id"] == reel_id:
+                r["unrenderable_reason"] = reason[:500]
+                return dict(r)
+        return {"id": reel_id, "unrenderable_reason": reason[:500]}
 
     def update_highlight_progress(
         self,
