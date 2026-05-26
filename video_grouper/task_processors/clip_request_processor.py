@@ -7,6 +7,7 @@ import tempfile
 from typing import Optional
 
 from .base_polling_processor import PollingProcessor
+from .recording_locator import find_combined_video, resolve_recording_dir
 from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -342,33 +343,14 @@ class ClipRequestProcessor(PollingProcessor):
             logger.warning(f"Clip request {req['id']} has no recording_group_dir")
             return None
 
-        # Try as absolute path first, then relative to storage
-        if os.path.isabs(recording_dir) and os.path.isdir(recording_dir):
-            return recording_dir
-
-        abs_path = os.path.join(self.storage_path, recording_dir)
-        if os.path.isdir(abs_path):
-            return abs_path
-
-        logger.warning(f"Recording dir not found: {recording_dir}")
-        return None
+        resolved = resolve_recording_dir(self.storage_path, recording_dir)
+        if resolved is None:
+            logger.warning(f"Recording dir not found: {recording_dir}")
+        return resolved
 
     def _find_source_video(self, recording_dir: str) -> Optional[str]:
         """Find combined.mp4 in the recording directory tree."""
-        # Direct check
-        combined = os.path.join(recording_dir, "combined.mp4")
-        if os.path.isfile(combined):
-            return combined
-
-        # Check subdirectories
-        for entry in os.listdir(recording_dir):
-            subdir = os.path.join(recording_dir, entry)
-            if os.path.isdir(subdir):
-                combined = os.path.join(subdir, "combined.mp4")
-                if os.path.isfile(combined):
-                    return combined
-
-        return None
+        return find_combined_video(recording_dir)
 
     def _notify_missing_footage(self, req: dict, recording_dir: str) -> None:
         """Send notification about missing footage."""

@@ -402,6 +402,99 @@ class TTTApiClient:
         return self._request("PATCH", endpoint, json=body)
 
     # ------------------------------------------------------------------
+    # Highlight reels (Phase 2 — soccer-cam renders + uploads + reports back)
+    # ------------------------------------------------------------------
+
+    def get_pending_highlights(
+        self, camera_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """List the current user's highlight reels with status=pending.
+
+        GET {api_base_url}/api/highlights?status=pending[&camera_id=<id>]
+
+        ``camera_id`` is this install's identity from ``config.ttt.camera_id``.
+        Sent as a query param so TTT can scope the response to reels this
+        install is positioned to fulfill. v1 TTT accepts-and-ignores it.
+        """
+        url = f"{self.api_base_url}/api/highlights"
+        params: dict[str, str] = {"status": "pending"}
+        if camera_id:
+            params["camera_id"] = camera_id
+        logger.debug("Fetching pending highlight reels (camera_id=%s)", camera_id)
+        return self._request("GET", url, params=params)
+
+    def get_highlight_game_clips(self, reel_id: str) -> list[dict[str, Any]]:
+        """Get the game clips linked to a highlight reel, ordered by sequence.
+
+        GET {api_base_url}/api/highlights/{reel_id}/game-clips
+
+        Response items include ``recording_group_dir`` + ``camera_id`` so this
+        install can resolve the source ``combined.mp4`` locally.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}/game-clips"
+        logger.debug("Fetching game clips for highlight reel %s", reel_id)
+        return self._request("GET", url)
+
+    def claim_highlight(self, reel_id: str) -> dict[str, Any]:
+        """Mark a highlight reel as in-progress (status='generating')."""
+        url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        logger.debug("Claiming highlight reel %s", reel_id)
+        return self._request("PATCH", url, json={"status": "generating"})
+
+    def update_highlight_progress(
+        self,
+        reel_id: str,
+        *,
+        stage: str,
+        percent: int,
+    ) -> dict[str, Any]:
+        """Report per-stage render progress while the reel is generating.
+
+        Stage is one of: 'trimming', 'concatenating', 'uploading'.
+        Percent is clamped to 0-100 by the API.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        body = {
+            "progress_stage": stage,
+            "progress_percent": int(max(0, min(100, percent))),
+        }
+        logger.debug(
+            "Highlight reel %s progress: %s %d%%",
+            reel_id,
+            stage,
+            body["progress_percent"],
+        )
+        return self._request("PATCH", url, json=body)
+
+    def complete_highlight(
+        self,
+        reel_id: str,
+        *,
+        file_path: str,
+        youtube_video_id: Optional[str],
+    ) -> dict[str, Any]:
+        """Mark a highlight reel as rendered + uploaded (status='ready')."""
+        url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        body: dict[str, Any] = {
+            "status": "ready",
+            "file_path": file_path,
+            "youtube_video_id": youtube_video_id,
+        }
+        logger.debug(
+            "Completing highlight reel %s (youtube_video_id=%s)",
+            reel_id,
+            youtube_video_id,
+        )
+        return self._request("PATCH", url, json=body)
+
+    def fail_highlight(self, reel_id: str, error_message: str) -> dict[str, Any]:
+        """Mark a highlight reel as failed with a human-readable error message."""
+        url = f"{self.api_base_url}/api/highlights/{reel_id}"
+        body = {"status": "failed", "error_message": error_message}
+        logger.debug("Failing highlight reel %s: %s", reel_id, error_message)
+        return self._request("PATCH", url, json=body)
+
+    # ------------------------------------------------------------------
     # Schedule & game management
     # ------------------------------------------------------------------
 

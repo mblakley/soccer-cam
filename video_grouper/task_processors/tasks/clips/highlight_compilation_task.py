@@ -43,16 +43,8 @@ class HighlightCompilationTask(BaseTask):
         return os.path.join(self.output_dir, f"{safe_title}.mp4")
 
     async def execute(self) -> bool:
-        """Concatenate clips using FFmpeg concat demuxer."""
+        """Concatenate clip files into the final highlight reel via PyAV."""
         os.makedirs(self.output_dir, exist_ok=True)
-
-        # Create the file list for concat demuxer
-        file_list_path = os.path.join(
-            self.output_dir, f"highlight_{self.highlight_id}_list.txt"
-        )
-        with open(file_list_path, "w") as f:
-            for clip_path in self.clip_local_paths:
-                f.write(f"file '{clip_path}'\n")
 
         logger.info(
             "HIGHLIGHT: Compiling %d clips into %s",
@@ -60,13 +52,7 @@ class HighlightCompilationTask(BaseTask):
             os.path.basename(self.output_path),
         )
 
-        success = await combine_videos(file_list_path, self.output_path)
-
-        # Clean up file list
-        try:
-            os.remove(file_list_path)
-        except OSError:
-            pass
+        success = await combine_videos(list(self.clip_local_paths), self.output_path)
 
         if success:
             logger.info("HIGHLIGHT: Compiled %s", os.path.basename(self.output_path))
