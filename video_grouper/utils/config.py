@@ -324,6 +324,10 @@ class YouTubeConfig(BaseModel):
     enabled: bool = False
     privacy_status: str = "private"
     use_mock: bool = False
+    # Smoke-test escape hatch: short-circuit upload_video to return a fake
+    # video id without calling the Google API. Must NOT be enabled in
+    # production — reels will reference non-existent YouTube videos.
+    skip_upload: bool = False
     processed_playlist: Optional[YouTubePlaylistConfig] = None
     raw_playlist: Optional[YouTubePlaylistConfig] = None
     playlist_map: Optional[YouTubePlaylistMapConfig] = None

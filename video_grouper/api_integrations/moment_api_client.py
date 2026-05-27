@@ -1,7 +1,11 @@
 """
 API client for the team-tech-tools moment tagging endpoints.
 
-Communicates with the backend using Supabase service role key auth.
+Authenticates with a TTT user JWT (the camera manager who owns this
+soccer-cam install). The TTT side enforces authorization by verifying the
+caller is a camera_manager for the team that owns each tag's game_session.
+Worker PATCH lives under /api/internal/moment-tags/{id} (no feature-flag
+gate, per the api-namespaces convention in TTT).
 """
 
 import logging
@@ -18,11 +22,19 @@ REQUEST_TIMEOUT = 30.0
 class MomentApiClient:
     """HTTP client for the team-tech-tools moment tagging API."""
 
-    def __init__(self, api_base_url: str, service_role_key: str):
+    def __init__(self, api_base_url: str, bearer_token: str):
+        """
+        Args:
+            api_base_url: TTT API root (e.g., https://app.example.com)
+            bearer_token: TTT user JWT for the camera-manager account that
+                owns this soccer-cam install. The TTT route authorizes via
+                the camera_managers table (caller must be on the team that
+                owns each tag's game_session).
+        """
         self._base_url = api_base_url.rstrip("/")
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            headers={"Authorization": f"Bearer {service_role_key}"},
+            headers={"Authorization": f"Bearer {bearer_token}"},
             timeout=REQUEST_TIMEOUT,
         )
 
@@ -77,12 +89,18 @@ class MomentApiClient:
         video_offset: float,
         trimmed_offset: Optional[float] = None,
     ) -> Optional[dict[str, Any]]:
-        """Update a moment tag's computed offsets."""
+        """Update a moment tag's computed offsets.
+
+        PATCH /api/internal/moment-tags/{tag_id} — see TTT
+        backend/.claude/rules/api-namespaces.md.
+        """
         payload: dict[str, Any] = {"video_offset_seconds": video_offset}
         if trimmed_offset is not None:
             payload["trimmed_offset_seconds"] = trimmed_offset
         try:
-            resp = await self._client.patch(f"/api/moment-tags/{tag_id}", json=payload)
+            resp = await self._client.patch(
+                f"/api/internal/moment-tags/{tag_id}", json=payload
+            )
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError as exc:

@@ -47,8 +47,14 @@ class DirectoryState:
 
         self._load_state()
 
-    def _load_state(self):
-        """Load the state from the JSON file."""
+    def _load_state(self) -> dict:
+        """Load the state from the JSON file.
+
+        Returns the parsed JSON dict (empty dict if no state file exists).
+        Callers like ClipDiscoveryProcessor read the raw dict to drive
+        decisions on .status / .files without mutating self.
+        """
+        state_data: dict = {}
         try:
             with FileLock(self.state_file_path):
                 if os.path.exists(self.state_file_path):
@@ -82,6 +88,7 @@ class DirectoryState:
             logger.error(f"Timeout loading state for {self.directory_path}: {e}")
         except Exception as e:
             logger.error(f"Could not load state for {self.directory_path}: {e}")
+        return state_data
 
     def _save_state_nolock(self):
         """Saves the current state to the JSON file without acquiring the lock.
