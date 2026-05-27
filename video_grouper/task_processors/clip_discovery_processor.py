@@ -38,6 +38,12 @@ class ClipDiscoveryProcessor(PollingProcessor):
         super().__init__(storage_path, config, poll_interval)
         self.api_client = api_client
         self.clip_processor = clip_processor
+        # In-memory set of tag ids currently being processed. Discovery polls
+        # can overlap (cycle 2 starts before cycle 1 finishes PATCHing all
+        # offsets), so without this guard the same tag is processed twice and
+        # we get duplicate moment_clips rows. Same pattern as
+        # ClipRequestProcessor._processing.
+        self._processing: set[str] = set()
 
     async def discover_work(self) -> None:
         """Scan local group dirs for trimmed videos and discover pending tags."""
@@ -123,6 +129,37 @@ class ClipDiscoveryProcessor(PollingProcessor):
         trimmed_path: str,
     ) -> None:
         """Compute offsets for a single tag, create a clip record, and queue extraction."""
+        tag_id = tag["id"]
+        if tag_id in self._processing:
+            logger.debug(
+                "CLIP_DISCOVERY: tag %s already in-flight, skipping duplicate cycle",
+                tag_id,
+            )
+            return
+        self._processing.add(tag_id)
+        try:
+            await self._process_tag_inner(
+                tag,
+                gs_id,
+                group_dir,
+                recording_files,
+                camera_tz,
+                start_time_offset,
+                trimmed_path,
+            )
+        finally:
+            self._processing.discard(tag_id)
+
+    async def _process_tag_inner(
+        self,
+        tag: dict,
+        gs_id: str,
+        group_dir: str,
+        recording_files,
+        camera_tz: str,
+        start_time_offset: str,
+        trimmed_path: str,
+    ) -> None:
         tag_id = tag["id"]
         tagged_at_str = tag["tagged_at"]
 
