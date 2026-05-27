@@ -64,6 +64,27 @@ def _make_clip(idx: int, group_dir: str, start: int = 10, end: int = 20):
     }
 
 
+def _make_moment_clip(
+    idx: int, group_dir: str | None, start: float = 110.5, end: float = 140.5
+):
+    """A minimal moment-clip dict shaped like get_highlight_moment_clips returns.
+
+    Moment clips use float clip_start_offset/clip_end_offset (absolute
+    offsets into the source combined.mp4) instead of int start_time/end_time.
+    """
+    return {
+        "id": f"mclip-{idx}",
+        "moment_tag_id": f"tag-{idx}",
+        "game_session_id": "gs-1",
+        "clip_start_offset": start,
+        "clip_end_offset": end,
+        "clip_duration": end - start,
+        "status": "ready",
+        "recording_group_dir": group_dir,
+        "sequence_order": idx,
+    }
+
+
 @pytest.fixture
 def stub_combine_videos():
     """Stub combine_videos to write a fake output and return True.
@@ -659,4 +680,318 @@ async def test_idempotent_upload_when_youtube_video_id_present(
     kwargs = ttt_client.complete_highlight.call_args.kwargs
     assert kwargs["youtube_video_id"] == "YT_EXISTING_456"
     assert kwargs["file_path"].endswith(".mp4")
+    ttt_client.fail_highlight.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Moment-tagger reel path (source='moment_tagger')
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_happy_path_renders_uploads_and_reports(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """A moment-tagger reel routes through get_highlight_moment_clips, trims
+    using clip_start_offset/clip_end_offset, then claims → concat → upload →
+    complete. The game-clip endpoint must NOT be called for this reel."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-m1",
+        "title": "Bob's moments",
+        "player_name": "Bob",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+    moment_clips = [
+        _make_moment_clip(0, "game-A", start=110.5, end=140.5),
+        _make_moment_clip(1, "game-A", start=200.0, end=220.0),
+    ]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=moment_clips)
+    ttt_client.get_highlight_game_clips = MagicMock(
+        side_effect=AssertionError("game-clips endpoint must not be called")
+    )
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.get_highlight = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock(return_value=reel)
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.get_highlight_moment_clips.assert_called_once_with("reel-m1")
+    ttt_client.get_highlight_game_clips.assert_not_called()
+    ttt_client.claim_highlight.assert_called_once_with("reel-m1", "cam-xyz")
+    ttt_client.complete_highlight.assert_called_once()
+    kwargs = ttt_client.complete_highlight.call_args.kwargs
+    assert kwargs["youtube_video_id"] == "YT_REEL_123"
+    assert kwargs["file_path"].endswith(".mp4")
+    ttt_client.fail_highlight.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_uses_clip_offsets_for_trim(tmp_path, stub_combine_videos):
+    """Verify trim_video is called with float clip_start_offset/clip_end_offset
+    (not start_time/end_time) — and that sub-second precision survives."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-m-trim",
+        "title": "Trim args",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+    # Pick offsets with sub-second precision to make sure formatting preserves them.
+    moment_clips = [_make_moment_clip(0, "game-A", start=110.123, end=140.456)]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=moment_clips)
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.get_highlight = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    captured: list[tuple[str, str, str, str]] = []
+
+    async def _capture_trim(src: str, dst: str, start: str, duration: str) -> bool:
+        captured.append((src, dst, start, duration))
+        with open(dst, "wb") as fh:
+            fh.write(b"\x00" * 16)
+        return True
+
+    with patch(
+        "video_grouper.task_processors.highlight_reel_processor.trim_video",
+        side_effect=_capture_trim,
+    ):
+        processor = _make_processor(tmp_path, ttt_client=ttt_client)
+        await processor.discover_work()
+        await asyncio.sleep(0)
+        while processor._processing:
+            await asyncio.sleep(0.01)
+
+    assert len(captured) == 1
+    _src, _dst, start_str, duration_str = captured[0]
+    # 110.123 formatted to 3 decimals.
+    assert start_str == "110.123"
+    # duration = 140.456 - 110.123 = 30.333
+    assert duration_str == "30.333"
+    ttt_client.fail_highlight.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_source_missing_locally_does_not_claim(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """When a moment_clip's recording_group_dir doesn't resolve, the reel
+    stays pending — no claim, no fail, but report_blocker fires once."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-m-skip",
+        "title": "Missing source",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+    moment_clips = [
+        _make_moment_clip(0, "game-A"),
+        _make_moment_clip(1, "game-Z"),  # not staged
+    ]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=moment_clips)
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.report_blocker = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_not_called()
+    ttt_client.complete_highlight.assert_not_called()
+    ttt_client.fail_highlight.assert_not_called()
+    ttt_client.report_blocker.assert_called_once()
+    assert "game-Z" in ttt_client.report_blocker.call_args[0][2]
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_recording_group_dir_none_does_not_claim(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """When a moment_clip has recording_group_dir=None (game_session has no
+    recording_group_dir), the reel skips without claim/fail and reports
+    a blocker explaining the None value."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-m-none",
+        "title": "Null rgd",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+    moment_clips = [_make_moment_clip(0, None)]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=moment_clips)
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.report_blocker = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_not_called()
+    ttt_client.fail_highlight.assert_not_called()
+    ttt_client.report_blocker.assert_called_once()
+    # The "None" branch produces a distinct reason string.
+    assert "is None" in ttt_client.report_blocker.call_args[0][2]
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_render_failure_marks_reel_failed(tmp_path, stub_trim_video):
+    """When combine_videos returns False for a moment reel, the reel is
+    failed with an error message — same as the game-clip path."""
+    _stage_recording(tmp_path, "game-A")
+
+    reel = {
+        "id": "reel-m-flop",
+        "title": "Concat flop",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+    moment_clips = [_make_moment_clip(0, "game-A")]
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=moment_clips)
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    async def _bad_combine(file_list_path: str, output_path: str) -> bool:
+        return False
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+
+    with patch(
+        "video_grouper.task_processors.tasks.clips.highlight_compilation_task.combine_videos",
+        side_effect=_bad_combine,
+    ):
+        await processor.discover_work()
+        await asyncio.sleep(0)
+        while processor._processing:
+            await asyncio.sleep(0.01)
+
+    ttt_client.claim_highlight.assert_called_once()
+    ttt_client.complete_highlight.assert_not_called()
+    ttt_client.fail_highlight.assert_called_once()
+    err = ttt_client.fail_highlight.call_args[0][1]
+    assert "combine_videos failed" in err
+
+
+@pytest.mark.asyncio
+async def test_routing_mixed_sources_in_single_poll(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    """A poll cycle with both a 'manual' reel AND a 'moment_tagger' reel
+    routes each to the correct endpoint."""
+    _stage_recording(tmp_path, "game-A")
+
+    manual_reel = {
+        "id": "reel-manual",
+        "title": "Manual",
+        "status": "pending",
+        # Omitting source defaults to manual.
+    }
+    moment_reel = {
+        "id": "reel-moment",
+        "title": "Auto",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(
+        return_value=[manual_reel, moment_reel]
+    )
+    ttt_client.get_highlight_game_clips = MagicMock(
+        return_value=[_make_clip(0, "game-A")]
+    )
+    ttt_client.get_highlight_moment_clips = MagicMock(
+        return_value=[_make_moment_clip(0, "game-A")]
+    )
+    ttt_client.claim_highlight = MagicMock(side_effect=lambda rid, cid: {"id": rid})
+    ttt_client.get_highlight = MagicMock(side_effect=lambda rid: {"id": rid})
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    # Manual reel hit the game-clips endpoint exactly once.
+    ttt_client.get_highlight_game_clips.assert_called_once_with("reel-manual")
+    # Moment reel hit the moment-clips endpoint exactly once.
+    ttt_client.get_highlight_moment_clips.assert_called_once_with("reel-moment")
+    # Both reels were claimed and completed (no fails).
+    assert ttt_client.claim_highlight.call_count == 2
+    assert ttt_client.complete_highlight.call_count == 2
+    ttt_client.fail_highlight.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_moment_reel_empty_clips_skips_without_claim(tmp_path):
+    """A moment-tagger reel with zero linked clips logs + returns without
+    claiming or failing — same shape as the empty game-clip path."""
+    reel = {
+        "id": "reel-m-empty",
+        "title": "Empty",
+        "status": "pending",
+        "source": "moment_tagger",
+    }
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_moment_clips = MagicMock(return_value=[])
+    ttt_client.claim_highlight = MagicMock()
+    ttt_client.complete_highlight = MagicMock()
+    ttt_client.fail_highlight = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+    await processor.discover_work()
+    await asyncio.sleep(0)
+    while processor._processing:
+        await asyncio.sleep(0.01)
+
+    ttt_client.get_highlight_moment_clips.assert_called_once()
+    ttt_client.claim_highlight.assert_not_called()
     ttt_client.fail_highlight.assert_not_called()
