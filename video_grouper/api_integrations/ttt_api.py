@@ -453,6 +453,21 @@ class TTTApiClient:
         logger.debug("Fetching game clips for highlight reel %s", reel_id)
         return self._request("GET", url)
 
+    def get_highlight_moment_clips(self, reel_id: str) -> list[dict[str, Any]]:
+        """Get the moment clips linked to a moment-tagger highlight reel.
+
+        GET {api_base_url}/api/highlights/{reel_id}/moment-clips
+
+        Used when the polled reel has ``source='moment_tagger'``. Each item
+        carries ``clip_start_offset`` / ``clip_end_offset`` (absolute offsets
+        into the source ``combined.mp4``) plus ``recording_group_dir`` so this
+        install can locate the source file. Ordered by the junction
+        ``sequence_order``.
+        """
+        url = f"{self.api_base_url}/api/highlights/{reel_id}/moment-clips"
+        logger.debug("Fetching moment clips for highlight reel %s", reel_id)
+        return self._request("GET", url)
+
     def get_highlight(self, reel_id: str) -> dict[str, Any]:
         """Fetch the current state of a single highlight reel.
 

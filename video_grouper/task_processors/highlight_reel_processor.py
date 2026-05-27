@@ -130,46 +130,104 @@ class HighlightReelProcessor(PollingProcessor):
             task.add_done_callback(self._render_tasks.discard)
 
     async def _process_reel(self, reel: dict) -> None:
-        """Process a single highlight reel end-to-end."""
+        """Dispatch + run the correct render path based on the reel's source.
+
+        - ``source='manual'`` (default) — user-curated game-clip reel, fetched
+          from ``GET /api/highlights/{id}/game-clips``. Each clip carries
+          int ``start_time``/``end_time`` seconds + ``recording_group_dir``.
+        - ``source='moment_tagger'`` — auto-created from tagged moments,
+          fetched from ``GET /api/highlights/{id}/moment-clips``. Each clip
+          carries float ``clip_start_offset``/``clip_end_offset`` seconds +
+          ``recording_group_dir`` (joined from the parent game_session).
+
+        Everything from claim → trim → concat → upload → PATCH ready is
+        identical between the two paths and lives in
+        ``_process_reel_from_clips``; only the fetch + per-clip offset
+        extraction differ.
+
+        ``_processing.discard(reel_id)`` runs in our ``finally`` here so the
+        processor never leaks the reel_id even if the helpers raise.
+        """
+        reel_id = reel["id"]
+        try:
+            source = reel.get("source", "manual")
+            if source == "moment_tagger":
+                clips_fn = self.ttt_client.get_highlight_moment_clips
+                fetch_label = "MOMENT_REEL"
+
+                def extract_offsets(clip: dict) -> tuple[float, float]:
+                    start = clip.get("clip_start_offset")
+                    end = clip.get("clip_end_offset")
+                    if start is None or end is None:
+                        raise ValueError(
+                            f"moment_clip {clip.get('id')} missing clip_start_offset"
+                            f" / clip_end_offset (got start={start!r}, end={end!r})"
+                        )
+                    return float(start), float(end)
+            else:
+                clips_fn = self.ttt_client.get_highlight_game_clips
+                fetch_label = "HIGHLIGHT_REEL"
+
+                def extract_offsets(clip: dict) -> tuple[float, float]:
+                    return float(clip["start_time"]), float(clip["end_time"])
+
+            try:
+                clips = await asyncio.to_thread(clips_fn, reel_id)
+            except Exception as e:
+                logger.error(
+                    "%s: failed to fetch clips for %s: %s", fetch_label, reel_id, e
+                )
+                return
+
+            if not clips:
+                logger.warning(
+                    "%s: reel %s has no clips, skipping", fetch_label, reel_id
+                )
+                return
+
+            await self._process_reel_from_clips(reel, clips, extract_offsets)
+        finally:
+            self._processing.discard(reel_id)
+
+    async def _process_reel_from_clips(
+        self,
+        reel: dict,
+        clips: list[dict],
+        extract_offsets,
+    ) -> None:
+        """Shared render pipeline: resolve sources → claim → trim → concat →
+        upload → PATCH ready (or report blocker / fail).
+
+        ``extract_offsets(clip) -> (start_seconds, end_seconds)`` adapts the
+        per-clip shape (game_clips use int start_time/end_time; moment_clips
+        use float clip_start_offset/clip_end_offset). Everything else is
+        identical between the two reel sources.
+
+        Caller (``_process_reel``) owns the ``_processing.discard(reel_id)``
+        cleanup so we don't double-discard.
+        """
         reel_id = reel["id"]
         tmpdir: Optional[str] = None
         final_output_path: Optional[str] = None
         claimed = False
 
         try:
-            # Fetch the ordered game-clips for this reel.
-            try:
-                game_clips = await asyncio.to_thread(
-                    self.ttt_client.get_highlight_game_clips, reel_id
-                )
-            except Exception as e:
-                logger.error(
-                    "HIGHLIGHT_REEL: failed to fetch game clips for %s: %s", reel_id, e
-                )
-                return
-
-            if not game_clips:
-                logger.warning(
-                    "HIGHLIGHT_REEL: reel %s has no game clips, skipping", reel_id
-                )
-                return
-
             # Defensive dedup: TTT should return each clip once, but if the
             # backend ever leaks duplicates we don't want to render them.
             seen: set = set()
             deduped: list[dict] = []
-            for clip in game_clips:
+            for clip in clips:
                 cid = clip.get("id")
                 if cid and cid not in seen:
                     seen.add(cid)
                     deduped.append(clip)
-            game_clips = deduped
+            clips = deduped
 
             # Resolve every clip's source BEFORE claiming. If any are missing on
             # this install, another camera-manager may have them — bare return,
             # no claim, no fail.
             resolved_sources = []
-            for idx, clip in enumerate(game_clips):
+            for idx, clip in enumerate(clips):
                 recording_group_dir = clip.get("recording_group_dir")
                 resolved_dir = resolve_recording_dir(
                     self.storage_path, recording_group_dir
@@ -251,8 +309,7 @@ class HighlightReelProcessor(PollingProcessor):
             tmpdir = tempfile.mkdtemp(prefix=f"reel-{reel_id}-")
             trimmed_paths: list[str] = []
             for idx, (clip, source) in enumerate(resolved_sources):
-                start = float(clip["start_time"])
-                end = float(clip["end_time"])
+                start, end = extract_offsets(clip)
                 duration = end - start
                 if duration <= 0:
                     raise ValueError(
@@ -401,4 +458,3 @@ class HighlightReelProcessor(PollingProcessor):
         finally:
             if tmpdir:
                 shutil.rmtree(tmpdir, ignore_errors=True)
-            self._processing.discard(reel_id)

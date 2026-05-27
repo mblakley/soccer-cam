@@ -80,6 +80,7 @@ class MockTTTApiClient:
         self._clip_requests: list[dict[str, Any]] = []
         self._highlights: list[dict[str, Any]] = []
         self._highlight_game_clips: dict[str, list[dict[str, Any]]] = {}
+        self._highlight_moment_clips: dict[str, list[dict[str, Any]]] = {}
         self._recordings: dict[str, dict[str, Any]] = {}
         self._recording_statuses: list[dict[str, Any]] = []
         self._pending_commands: list[dict[str, Any]] = []
@@ -175,6 +176,9 @@ class MockTTTApiClient:
 
     def get_highlight_game_clips(self, reel_id: str) -> list[dict[str, Any]]:
         return list(self._highlight_game_clips.get(reel_id, []))
+
+    def get_highlight_moment_clips(self, reel_id: str) -> list[dict[str, Any]]:
+        return list(self._highlight_moment_clips.get(reel_id, []))
 
     def get_highlight(self, reel_id: str) -> dict[str, Any]:
         for r in self._highlights:
