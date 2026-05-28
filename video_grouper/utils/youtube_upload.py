@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import time
+import uuid
 from datetime import datetime
 from typing import Optional, List, Tuple
 import google.oauth2.credentials
@@ -364,15 +365,26 @@ def authenticate_youtube_embedded(token_file: str) -> Tuple[bool, str]:
 class YouTubeUploader:
     """Class to handle YouTube uploads."""
 
-    def __init__(self, credentials_file: str, token_file: str):
+    def __init__(
+        self,
+        credentials_file: str,
+        token_file: str,
+        skip_upload: bool = False,
+    ):
         """Initialize the YouTube uploader.
 
         Args:
             credentials_file: Path to the client_secret.json file
             token_file: Path to store the token.json file
+            skip_upload: Smoke-test escape hatch. When True, upload_video()
+                returns a fake ``smoke-<uuid>`` video id without calling
+                the Google API and without touching credentials. MUST NOT be
+                set in production — downstream consumers will end up with
+                reels referencing video ids that don't exist on YouTube.
         """
         self.credentials_file = credentials_file
         self.token_file = token_file
+        self.skip_upload = skip_upload
         self.youtube = None
 
     def authenticate(self) -> bool:
@@ -419,6 +431,23 @@ class YouTubeUploader:
         Returns:
             str: Video ID if upload was successful, None otherwise
         """
+        if self.skip_upload:
+            if not os.path.exists(video_path):
+                logger.error(f"Video file not found: {video_path}")
+                return None
+            fake_id = f"smoke-{uuid.uuid4().hex[:11]}"
+            logger.warning(
+                "YOUTUBE_SKIP_UPLOAD: returning fake video id %s for %s (smoke-test mode)",
+                fake_id,
+                video_path,
+            )
+            if on_progress is not None:
+                try:
+                    on_progress(100)
+                except Exception as cb_exc:
+                    logger.warning("on_progress callback raised: %s", cb_exc)
+            return fake_id
+
         if not self.youtube:
             if not self.authenticate():
                 logger.error("Failed to authenticate with YouTube API")

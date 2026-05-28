@@ -731,10 +731,13 @@ class TTTApiClient:
     def update_moment_tag(self, tag_id: str, **fields: Any) -> dict[str, Any]:
         """Update moment tag offsets.
 
-        PATCH {api_base_url}/api/moment-tags/{tag_id}
-        Fields: video_offset_seconds, trimmed_offset_seconds
+        PATCH {api_base_url}/api/internal/moment-tags/{tag_id}
+
+        Worker endpoint under the /api/internal namespace (no feature-flag
+        gate). Auth: user JWT — TTT verifies the camera-manager is on the
+        game's team. Fields: video_offset_seconds, trimmed_offset_seconds.
         """
-        url = f"{self.api_base_url}/api/moment-tags/{tag_id}"
+        url = f"{self.api_base_url}/api/internal/moment-tags/{tag_id}"
         logger.debug("Updating moment tag %s", tag_id)
         return self._request("PATCH", url, json=fields)
 

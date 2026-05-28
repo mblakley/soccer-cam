@@ -345,7 +345,14 @@ class VideoGrouperApp:
                     )
 
                     credentials_file, token_file = get_youtube_paths(self.storage_path)
-                    if os.path.exists(token_file):
+                    if self.config.youtube.skip_upload:
+                        youtube_uploader = YouTubeUploader(
+                            credentials_file, token_file, skip_upload=True
+                        )
+                        logger.warning(
+                            "YOUTUBE_SKIP_UPLOAD: [youtube] skip_upload=true — uploads will return fake video ids (smoke-test mode)"
+                        )
+                    elif os.path.exists(token_file):
                         youtube_uploader = YouTubeUploader(credentials_file, token_file)
                         logger.info(
                             "TTT clip requests: YouTube uploader initialized (camera manager's channel)"
@@ -407,7 +414,7 @@ class VideoGrouperApp:
             logger.info("Moment tagging enabled -- initializing clip processors")
             self._moment_api_client = MomentApiClient(
                 api_base_url=self.config.moment_tagging.api_base_url,
-                service_role_key=self.config.moment_tagging.service_role_key,
+                bearer_token=self.config.moment_tagging.service_role_key,
             )
 
             # Reuse existing YouTube uploader if available
@@ -420,7 +427,11 @@ class VideoGrouperApp:
                     )
 
                     creds_file, token_file = get_youtube_paths(self.storage_path)
-                    youtube_uploader = YouTubeUploader(creds_file, token_file)
+                    youtube_uploader = YouTubeUploader(
+                        creds_file,
+                        token_file,
+                        skip_upload=self.config.youtube.skip_upload,
+                    )
                 except Exception as e:
                     logger.warning(
                         "Could not initialize YouTube uploader for clips: %s", e
