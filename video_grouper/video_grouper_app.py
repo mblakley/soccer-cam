@@ -552,12 +552,14 @@ class VideoGrouperApp:
         # so headless installs still update. The quiescence callable
         # below joins queue depths + in-flight downloads into one
         # gate; the processor refuses to apply updates while busy.
-        # Phase 1: detection only, no install. See processor docstring.
+        # On a successful installer spawn the shutdown_callback fires
+        # and the service exits cleanly so NSIS can take over.
         self.update_check_processor = UpdateCheckProcessor(
             storage_path=self.storage_path,
             config=self.config,
             current_version=get_version(),
             quiescence_check=self._update_quiescence_check,
+            shutdown_callback=self._shutdown_for_upgrade,
         )
 
         # Queue processors must start (and load_state) BEFORE StateAuditor
@@ -830,7 +832,17 @@ class VideoGrouperApp:
             for dp in self.download_processors.values()
         )
 
-    async def _update_quiescence_check(self) -> tuple[bool, Optional[str]]:
+    def _shutdown_for_upgrade(self) -> None:
+        """Called by the update-check processor after a successful
+        installer spawn. Signals a clean shutdown so the FastAPI
+        loop, processors, and TTT reporter all wind down before NSIS
+        SCM-stops us. Same pattern as the config-watch restart at
+        ``_schedule_restart`` -- but here SCM will start the new
+        version, not the same one."""
+        logger.info("Upgrade spawned; shutting down service to hand off to installer.")
+        self._shutdown_event.set()
+
+    async def _update_quiescence_check(self) -> tuple[bool, str | None]:
         """Tell the auto-upgrade poller whether it's safe to apply.
 
         Returns ``(is_idle, busy_reason)``. Idle means: no pipeline

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,7 +23,7 @@ def _make_config() -> MagicMock:
     return cfg
 
 
-async def _always_idle() -> tuple[bool, Optional[str]]:
+async def _always_idle() -> tuple[bool, str | None]:
     return True, None
 
 
@@ -100,15 +99,49 @@ def test_check_now_triggers_immediate_event(client, processor):
     assert processor._immediate_check.is_set()
 
 
-def test_apply_returns_503_in_phase_1(client, processor):
-    """Phase 1 boundary: /apply has no working install path. The
-    endpoint exists so the tray can be built/tested against the real
-    route shape, but it must signal 'unavailable' rather than 202 so
-    callers don't think the apply succeeded."""
+def test_apply_without_pending_returns_409(client, processor):
+    """No staged update -> 409. The endpoint refuses rather than
+    silently no-op so a misbehaving tray surfaces the error."""
+    assert processor._pending_version is None
+    resp = client.post("/api/update/apply")
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["status"] == "rejected"
+    assert "no update pending" in body["reason"].lower()
+
+
+def test_apply_when_pipeline_busy_returns_503(client, processor):
+    """Staged but busy -> 503 (retryable). User can wait for the
+    queue to drain and click again, or rely on the polling loop's
+    next quiescent tick."""
     processor._pending_version = "0.3.7"
+    processor._pending_installer_path = "C:/fake/setup.exe"
+    processor._pending_manager = MagicMock()
+
+    async def busy():
+        return False, "video_processor=1"
+
+    processor.quiescence_check = busy
+
     resp = client.post("/api/update/apply")
     assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "unavailable"
+    assert body["status"] == "rejected"
+    assert "video_processor" in body["reason"]
+
+
+def test_apply_happy_path_spawns_and_returns_202(client, processor):
+    """Pending + idle + apply -> processor spawns installer and
+    returns 202. The fake UpdateManager records the spawn call."""
+    fake_manager = MagicMock()
+    fake_manager.spawn_installer.return_value = 1234
+    processor._pending_version = "0.3.7"
+    processor._pending_installer_path = "C:/fake/setup.exe"
+    processor._pending_manager = fake_manager
+
+    resp = client.post("/api/update/apply")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "spawned"
     assert body["pending_version"] == "0.3.7"
-    assert "Phase 2" in body["reason"]
+    fake_manager.spawn_installer.assert_called_once_with("C:/fake/setup.exe")

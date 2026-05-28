@@ -770,7 +770,7 @@ def create_app(
     providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
     config_path: Path | None = None,
     node_role: str = "standalone",
-    update_processor: Optional[Any] = None,
+    update_processor: Any | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 

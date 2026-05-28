@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -12,19 +13,19 @@ from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 ships with the old exe-swap install path still requiring two
-# binaries. Phase 2 collapses this to just VideoGrouperSetup.exe (the
-# full NSIS installer) and the install path Popen()s it with /S. The
-# constant is kept here so the asset list is testable in isolation; the
-# tray's tests pin to this tuple.
-REQUIRED_ASSETS = ("VideoGrouperService.exe", "VideoGrouperTray.exe")
+# The auto-upgrade path downloads the full NSIS installer and spawns
+# it with /S; the installer in turn replaces service.exe + tray.exe
+# + the shared _internal/ tree + writes the registry, all
+# atomically. The legacy two-exe asset list was a Phase 1 transient.
+# CI (`.github/workflows/build-windows-service.yml`) publishes only
+# this single artifact to GitHub Releases.
+REQUIRED_ASSETS = ("VideoGrouperSetup.exe",)
+INSTALLER_ASSET = "VideoGrouperSetup.exe"
 
 UPDATE_API_URL_ENV = "SOCCER_CAM_UPDATE_API_URL"
 
 
-def resolve_api_url(
-    github_repo: str, override: Optional[str] = None
-) -> Tuple[str, str]:
+def resolve_api_url(github_repo: str, override: str | None = None) -> tuple[str, str]:
     """Pick the GitHub Releases endpoint. Returns (url, source).
 
     Precedence (highest first):
@@ -93,7 +94,7 @@ class UpdateManager:
         current_version: str,
         github_repo: str,
         service_name: str = "VideoGrouperService",
-        api_url_override: Optional[str] = None,
+        api_url_override: str | None = None,
     ):
         self.current_version = current_version
         self.github_repo = github_repo
@@ -250,85 +251,92 @@ class UpdateManager:
             logger.error(f"Error downloading update: {e}")
             return False
 
-    def install_update(self) -> bool:
-        """Install the downloaded update with error handling and rollback."""
-        import win32serviceutil
+    def installer_path(self) -> str:
+        """Disk path to the downloaded setup.exe."""
+        return os.path.join(self.temp_dir, INSTALLER_ASSET)
 
-        backup_files = []
-        try:
-            # Get installation directory
-            install_dir = os.path.dirname(sys.executable)
+    @staticmethod
+    def compute_sha256(file_path: str) -> str:
+        """Return ``sha256:<hex>`` for a downloaded asset, matching the
+        format GitHub Releases uses in the asset ``digest`` field."""
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return f"sha256:{h.hexdigest()}"
 
-            # Stop the service
-            try:
-                win32serviceutil.StopService(self.service_name)
-            except Exception as e:
-                logger.error(f"Error stopping service: {e}")
-                raise UpdateInstallError(f"Failed to stop service: {e}") from e
-
-            # Kill the tray process so its exe can be overwritten
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "VideoGrouperTray.exe"],
-                    capture_output=True,
-                )
-            except Exception as e:
-                logger.warning(f"Could not kill tray process: {e}")
-
-            # Prepare file paths
-            service_src = os.path.join(self.temp_dir, "VideoGrouperService.exe")
-            service_dst = os.path.join(install_dir, "VideoGrouperService.exe")
-
-            tray_src = os.path.join(self.temp_dir, "VideoGrouperTray.exe")
-            tray_dst = os.path.join(install_dir, "VideoGrouperTray.exe")
-
-            # Backup existing files
-            for src, dst in [
-                (service_dst, f"{service_dst}.bak"),
-                (tray_dst, f"{tray_dst}.bak"),
-            ]:
-                if os.path.exists(src):
-                    shutil.copy2(src, dst)
-                    backup_files.append((src, dst))
-
-            # Copy new files
-            shutil.copy2(service_src, service_dst)
-            shutil.copy2(tray_src, tray_dst)
-
-            # Start the service
-            try:
-                win32serviceutil.StartService(self.service_name)
-            except Exception as e:
-                logger.error(f"Error starting service: {e}")
-                self._restore_backups(backup_files)
-                raise UpdateInstallError(f"Failed to start service: {e}") from e
-
-            # Clean up
-            self._cleanup_backups(backup_files)
+    def verify_digest(self, file_path: str, expected: str | None) -> bool:
+        """Compare a downloaded artifact against the expected
+        ``sha256:...`` digest. Treats a missing ``expected`` as a
+        pass with a loud warning -- not all GitHub releases populate
+        the digest field yet, and refusing to upgrade in that case
+        would brick the rollout for older releases. The local server
+        in ``scripts/serve_test_release.py`` always sets it, so the
+        E2E test still exercises the verify branch."""
+        if not expected:
+            logger.warning(
+                "No expected digest for %s -- proceeding without verification. "
+                "Newer GitHub releases include this; older ones may not.",
+                os.path.basename(file_path),
+            )
             return True
-
-        except Exception as e:
-            logger.error(f"Error installing update: {e}")
-            self._restore_backups(backup_files)
+        actual = self.compute_sha256(file_path)
+        if actual.lower() != expected.lower():
+            logger.error(
+                "Digest mismatch for %s: expected=%s actual=%s",
+                os.path.basename(file_path),
+                expected,
+                actual,
+            )
             return False
+        logger.info(
+            "Digest OK for %s: %s",
+            os.path.basename(file_path),
+            actual,
+        )
+        return True
 
-    def _restore_backups(self, backup_files: list) -> None:
-        """Restore backup files."""
-        for src, backup in backup_files:
-            try:
-                if os.path.exists(backup):
-                    shutil.copy2(backup, src)
-            except Exception as e:
-                logger.error(f"Error restoring backup {backup}: {e}")
+    def spawn_installer(self, installer_path: str | None = None) -> int:
+        """Launch ``VideoGrouperSetup.exe /S`` detached from the
+        service process and return its PID.
 
-    def _cleanup_backups(self, backup_files: list) -> None:
-        """Clean up backup files."""
-        for _, backup in backup_files:
-            try:
-                if os.path.exists(backup):
-                    os.remove(backup)
-            except Exception as e:
-                logger.error(f"Error cleaning up backup {backup}: {e}")
+        The installer is the single source of deployment truth -- it
+        stops the service, kills the tray, swaps service.exe +
+        tray.exe + _internal/ in one ``File /r`` (atomic), writes
+        the registry, restarts the service, and (Phase 4) launches
+        the tray via the scheduled task. Re-using it guarantees an
+        auto-upgrade install is bit-identical to a fresh install.
+
+        The detached flags matter: NSIS calls ``sc stop
+        VideoGrouperService`` early in its install, which would
+        SIGTERM our process if we were the parent. By the time NSIS
+        runs the service has already exited cleanly (see
+        ``VideoGrouperApp._shutdown_event``), and the helper survives
+        as an orphaned process group.
+        """
+        path = installer_path or self.installer_path()
+        if not os.path.exists(path):
+            raise UpdateInstallError(f"Installer not found at {path}")
+
+        if sys.platform == "win32":
+            DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            CREATE_NEW_PROCESS_GROUP = getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+            )
+            creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        else:
+            # Local-test convenience on non-Windows: just spawn it.
+            # Real installer only runs on Windows; tests stub Popen.
+            creationflags = 0
+
+        logger.info("Spawning installer: %s /S", path)
+        proc = subprocess.Popen(
+            [path, "/S"],
+            creationflags=creationflags,
+            close_fds=True,
+        )
+        logger.info("Installer spawned with pid=%d", proc.pid)
+        return proc.pid
 
     def cleanup(self) -> None:
         """Clean up temporary files."""

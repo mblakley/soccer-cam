@@ -2,8 +2,7 @@
 
 import os
 import os.path
-import sys
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -19,26 +18,19 @@ from video_grouper.update.update_manager import (
 _real_exists = os.path.exists
 _real_getsize = os.path.getsize
 
-# Sample GitHub API release response
+# Sample GitHub API release response. Only VideoGrouperSetup.exe is
+# required -- the installer ships service + tray + _internal/ as one
+# atomic payload. CI publishes only this single artifact.
 SAMPLE_RELEASE = {
     "tag_name": "v0.2.0",
     "published_at": "2026-03-22T12:00:00Z",
     "body": "Release notes here",
     "assets": [
         {
-            "name": "VideoGrouperService.exe",
-            "browser_download_url": "https://github.com/mblakley/soccer-cam/releases/download/v0.2.0/VideoGrouperService.exe",
-            "size": 50000000,
-        },
-        {
-            "name": "VideoGrouperTray.exe",
-            "browser_download_url": "https://github.com/mblakley/soccer-cam/releases/download/v0.2.0/VideoGrouperTray.exe",
-            "size": 40000000,
-        },
-        {
             "name": "VideoGrouperSetup.exe",
             "browser_download_url": "https://github.com/mblakley/soccer-cam/releases/download/v0.2.0/VideoGrouperSetup.exe",
-            "size": 60000000,
+            "size": 90000000,
+            "digest": "sha256:abcdef0123456789",
         },
     ],
 }
@@ -98,7 +90,8 @@ class TestCheckForUpdates:
         assert has_update is True
         assert info["version"] == "0.2.0"
         assert info["tag_name"] == "v0.2.0"
-        assert len(info["assets"]) == 3
+        assert len(info["assets"]) == 1
+        assert info["assets"][0]["name"] == "VideoGrouperSetup.exe"
 
     @pytest.mark.asyncio
     async def test_same_version_no_update(self, update_manager):
@@ -179,15 +172,20 @@ class TestCheckForUpdates:
         assert info is None
 
     @pytest.mark.asyncio
-    async def test_missing_required_assets_skips_update(self, update_manager):
-        """Release exists but only has the setup exe, not the service/tray."""
+    async def test_missing_setup_exe_skips_update(self, update_manager):
+        """Release exists but doesn't have VideoGrouperSetup.exe yet.
+
+        Happens during a release-in-progress: tag landed, CI hasn't
+        finished publishing the installer artifact. We don't want to
+        try upgrading to a release that has no installer.
+        """
         release = {
             **SAMPLE_RELEASE,
             "assets": [
                 {
-                    "name": "VideoGrouperSetup.exe",
-                    "browser_download_url": "https://example.com/setup.exe",
-                    "size": 60000000,
+                    "name": "VideoGrouperService.exe",
+                    "browser_download_url": "https://example.com/service.exe",
+                    "size": 50000000,
                 }
             ],
         }
@@ -235,8 +233,8 @@ class TestCheckForUpdates:
 
 class TestDownloadUpdate:
     @pytest.mark.asyncio
-    async def test_download_both_exes(self, update_manager, tmp_path, real_filesystem):
-        """Successfully download both required executables."""
+    async def test_download_setup_exe(self, update_manager, tmp_path, real_filesystem):
+        """Successfully download VideoGrouperSetup.exe."""
         version_info = {
             "version": "0.2.0",
             "tag_name": "v0.2.0",
@@ -252,17 +250,14 @@ class TestDownloadUpdate:
         result = await update_manager.download_update(version_info)
 
         assert result is True
-        assert update_manager.download_file.call_count == 2
+        assert update_manager.download_file.call_count == 1
 
-        # Verify files exist and are named correctly
-        service_path = os.path.join(update_manager.temp_dir, "VideoGrouperService.exe")
-        tray_path = os.path.join(update_manager.temp_dir, "VideoGrouperTray.exe")
-        assert os.path.exists(service_path)
-        assert os.path.exists(tray_path)
+        installer_path = os.path.join(update_manager.temp_dir, "VideoGrouperSetup.exe")
+        assert os.path.exists(installer_path)
 
     @pytest.mark.asyncio
-    async def test_download_fails_if_asset_missing(self, update_manager):
-        """Fail if a required asset is not in the release."""
+    async def test_download_fails_if_setup_missing(self, update_manager):
+        """Fail when the release doesn't include VideoGrouperSetup.exe."""
         version_info = {
             "version": "0.2.0",
             "tag_name": "v0.2.0",
@@ -301,95 +296,84 @@ class TestDownloadUpdate:
         assert result is False
 
 
-# --- Install Tests ---
+# --- Digest Verification Tests ---
 
 
-class TestInstallUpdate:
-    @pytest.fixture
-    def mock_win32svc(self):
-        """Provide a mock win32serviceutil module."""
-        mock_svc = MagicMock()
-        return mock_svc
+class TestVerifyDigest:
+    def test_matching_digest_passes(self, update_manager, tmp_path):
+        f = tmp_path / "setup.exe"
+        f.write_bytes(b"hello world")
+        expected = update_manager.compute_sha256(str(f))
+        assert update_manager.verify_digest(str(f), expected) is True
 
-    def test_install_happy_path(
-        self, update_manager, tmp_path, real_filesystem, mock_win32svc
-    ):
-        """Stop service, copy files, start service."""
-        # Create fake downloaded files
-        for name in ("VideoGrouperService.exe", "VideoGrouperTray.exe"):
-            with open(os.path.join(update_manager.temp_dir, name), "wb") as f:
-                f.write(b"MZ" + b"\x00" * 100)
+    def test_mismatched_digest_fails(self, update_manager, tmp_path):
+        f = tmp_path / "setup.exe"
+        f.write_bytes(b"hello world")
+        assert update_manager.verify_digest(str(f), "sha256:wrong") is False
 
-        # Use separate install dir so src != dst
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
+    def test_missing_expected_passes_with_warning(self, update_manager, tmp_path):
+        """Older GitHub releases don't include the digest field. We
+        accept the download in that case rather than refusing every
+        legacy release."""
+        f = tmp_path / "setup.exe"
+        f.write_bytes(b"hello world")
+        assert update_manager.verify_digest(str(f), None) is True
+        assert update_manager.verify_digest(str(f), "") is True
 
-        with (
-            patch.dict(sys.modules, {"win32serviceutil": mock_win32svc}),
-            patch("video_grouper.update.update_manager.subprocess.run") as mock_run,
-            patch("video_grouper.update.update_manager.sys") as mock_sys,
-        ):
-            mock_sys.executable = str(install_dir / "VideoGrouperService.exe")
-            result = update_manager.install_update()
-
-        assert result is True
-        mock_win32svc.StopService.assert_called_once_with("VideoGrouperService")
-        mock_win32svc.StartService.assert_called_once_with("VideoGrouperService")
-        mock_run.assert_called_once()  # taskkill for tray
-
-    def test_install_rollback_on_start_failure(
-        self, update_manager, tmp_path, real_filesystem, mock_win32svc
-    ):
-        """Restore backups if service fails to start."""
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-
-        # Create existing files to be backed up
-        for name in ("VideoGrouperService.exe", "VideoGrouperTray.exe"):
-            (install_dir / name).write_bytes(b"OLD")
-
-        # Create new files to install
-        for name in ("VideoGrouperService.exe", "VideoGrouperTray.exe"):
-            with open(os.path.join(update_manager.temp_dir, name), "wb") as f:
-                f.write(b"NEW")
-
-        with (
-            patch.dict(sys.modules, {"win32serviceutil": mock_win32svc}),
-            patch("video_grouper.update.update_manager.subprocess.run"),
-            patch("video_grouper.update.update_manager.sys") as mock_sys,
-        ):
-            mock_sys.executable = str(install_dir / "VideoGrouperService.exe")
-            mock_win32svc.StartService.side_effect = Exception("Service start failed")
-            result = update_manager.install_update()
-
-        assert result is False
-        # Backups should have been restored
-        assert (install_dir / "VideoGrouperService.exe").read_bytes() == b"OLD"
-        assert (install_dir / "VideoGrouperTray.exe").read_bytes() == b"OLD"
-
-    def test_install_kills_tray_process(
-        self, update_manager, tmp_path, real_filesystem, mock_win32svc
-    ):
-        """Verify taskkill is called for the tray exe."""
-        for name in ("VideoGrouperService.exe", "VideoGrouperTray.exe"):
-            with open(os.path.join(update_manager.temp_dir, name), "wb") as f:
-                f.write(b"MZ" + b"\x00" * 100)
-
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-
-        with (
-            patch.dict(sys.modules, {"win32serviceutil": mock_win32svc}),
-            patch("video_grouper.update.update_manager.subprocess.run") as mock_run,
-            patch("video_grouper.update.update_manager.sys") as mock_sys,
-        ):
-            mock_sys.executable = str(install_dir / "VideoGrouperService.exe")
-            update_manager.install_update()
-
-        mock_run.assert_called_once_with(
-            ["taskkill", "/F", "/IM", "VideoGrouperTray.exe"],
-            capture_output=True,
+    def test_compute_sha256_returns_prefixed_hex(self, update_manager, tmp_path):
+        f = tmp_path / "setup.exe"
+        f.write_bytes(b"hello")
+        digest = update_manager.compute_sha256(str(f))
+        assert digest.startswith("sha256:")
+        assert (
+            digest
+            == "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         )
+
+
+# --- Spawn Installer Tests ---
+
+
+class TestSpawnInstaller:
+    def test_spawn_invokes_setup_with_silent_flag(self, update_manager, tmp_path):
+        installer = tmp_path / "VideoGrouperSetup.exe"
+        installer.write_bytes(b"fake installer")
+        update_manager.temp_dir = str(tmp_path)
+
+        with patch(
+            "video_grouper.update.update_manager.subprocess.Popen"
+        ) as mock_popen:
+            mock_popen.return_value.pid = 4321
+            pid = update_manager.spawn_installer()
+
+        assert pid == 4321
+        args, kwargs = mock_popen.call_args
+        cmd = args[0]
+        assert cmd[0] == str(installer)
+        assert "/S" in cmd
+
+    def test_spawn_missing_installer_raises(self, update_manager, tmp_path):
+        update_manager.temp_dir = str(tmp_path / "nonexistent")
+        with pytest.raises(Exception):  # noqa: B017
+            update_manager.spawn_installer()
+
+    def test_spawn_uses_detached_flags_on_windows(self, update_manager, tmp_path):
+        installer = tmp_path / "VideoGrouperSetup.exe"
+        installer.write_bytes(b"x")
+        update_manager.temp_dir = str(tmp_path)
+
+        with (
+            patch("video_grouper.update.update_manager.subprocess.Popen") as mock_popen,
+            patch("video_grouper.update.update_manager.sys") as mock_sys,
+        ):
+            mock_sys.platform = "win32"
+            mock_popen.return_value.pid = 1
+            update_manager.spawn_installer()
+
+        _, kwargs = mock_popen.call_args
+        # 0x208 = DETACHED_PROCESS (0x08) | CREATE_NEW_PROCESS_GROUP (0x200)
+        assert kwargs["creationflags"] == 0x208
+        assert kwargs["close_fds"] is True
 
 
 # --- URL Resolution Tests ---

@@ -101,7 +101,7 @@ class UpdateStatusPoller(threading.Thread):
         self.on_cleared = on_cleared
         self.daemon = True
         self._stop = threading.Event()
-        self._last_pending: Optional[str] = None
+        self._last_pending: str | None = None
 
     def stop(self) -> None:
         self._stop.set()

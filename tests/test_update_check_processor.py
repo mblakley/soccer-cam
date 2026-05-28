@@ -7,7 +7,6 @@ re-introduces auto-install gets caught.
 
 from __future__ import annotations
 
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,7 +16,6 @@ from video_grouper.task_processors.update_check_processor import (
     UpdateStatus,
 )
 from video_grouper.update.update_manager import NetworkError
-
 
 SAMPLE_VERSION_INFO = {
     "version": "0.3.7",
@@ -50,7 +48,7 @@ SAMPLE_VERSION_INFO = {
 def _make_config(
     *,
     github_repo: str = "mblakley/soccer-cam",
-    update_api_url: Optional[str] = None,
+    update_api_url: str | None = None,
     auto_update: bool = True,
 ) -> MagicMock:
     cfg = MagicMock()
@@ -60,11 +58,11 @@ def _make_config(
     return cfg
 
 
-async def _always_idle() -> tuple[bool, Optional[str]]:
+async def _always_idle() -> tuple[bool, str | None]:
     return True, None
 
 
-async def _always_busy() -> tuple[bool, Optional[str]]:
+async def _always_busy() -> tuple[bool, str | None]:
     return False, "download_queue=2"
 
 
@@ -78,26 +76,91 @@ def processor(tmp_path):
     )
 
 
+def _make_manager_mock(tmp_path, *, version_info=SAMPLE_VERSION_INFO, download_ok=True):
+    """Patch ``UpdateManager`` so the processor can run end-to-end
+    without touching the filesystem or spawning a real installer."""
+    instance = MagicMock()
+    instance.check_for_updates = AsyncMock(return_value=(True, version_info))
+    instance.download_update = AsyncMock(return_value=download_ok)
+    instance.temp_dir = str(tmp_path / "tmp-update")
+    instance.installer_path.return_value = str(
+        tmp_path / "tmp-update" / "VideoGrouperSetup.exe"
+    )
+    instance.compute_sha256.return_value = "sha256:cccc"  # matches setup.exe digest
+    instance.verify_digest.return_value = True
+    instance.spawn_installer.return_value = 12345
+    instance.cleanup = MagicMock()
+    return instance
+
+
 class TestRunOneCheck:
     @pytest.mark.asyncio
-    async def test_happy_path_stages_pending(self, processor, tmp_path):
+    async def test_happy_path_spawns_when_auto_update(self, processor, tmp_path):
         with patch(
             "video_grouper.task_processors.update_check_processor.UpdateManager"
         ) as MockMgr:
-            instance = MockMgr.return_value
-            instance.check_for_updates = AsyncMock(
-                return_value=(True, SAMPLE_VERSION_INFO)
-            )
-            instance.download_update = AsyncMock(return_value=True)
-            instance.temp_dir = str(tmp_path / "tmp-update")
+            instance = _make_manager_mock(tmp_path)
+            MockMgr.return_value = instance
 
             await processor._run_one_check()
 
         assert processor._pending_version == "0.3.7"
-        assert processor._pending_digest == "sha256:cccc"  # prefers setup.exe digest
+        assert processor._pending_digest == "sha256:cccc"
         assert processor._last_check_outcome == "spawned"
-        # Phase 1 boundary: install_update is NOT called.
-        instance.install_update.assert_not_called()
+        instance.spawn_installer.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_callback_fires_after_spawn(self, tmp_path):
+        shutdown = MagicMock()
+        proc = UpdateCheckProcessor(
+            storage_path=str(tmp_path),
+            config=_make_config(),
+            current_version="0.3.6",
+            quiescence_check=_always_idle,
+            shutdown_callback=shutdown,
+        )
+        with patch(
+            "video_grouper.task_processors.update_check_processor.UpdateManager"
+        ) as MockMgr:
+            MockMgr.return_value = _make_manager_mock(tmp_path)
+            await proc._run_one_check()
+
+        shutdown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_digest_mismatch_blocks_spawn(self, processor, tmp_path):
+        with patch(
+            "video_grouper.task_processors.update_check_processor.UpdateManager"
+        ) as MockMgr:
+            instance = _make_manager_mock(tmp_path)
+            instance.verify_digest.return_value = False
+            MockMgr.return_value = instance
+
+            await processor._run_one_check()
+
+        assert processor._last_check_outcome == "failed"
+        assert processor._last_check_error == "digest_mismatch"
+        instance.spawn_installer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_update_false_stops_at_verify(self, tmp_path):
+        proc = UpdateCheckProcessor(
+            storage_path=str(tmp_path),
+            config=_make_config(auto_update=False),
+            current_version="0.3.6",
+            quiescence_check=_always_idle,
+        )
+        with patch(
+            "video_grouper.task_processors.update_check_processor.UpdateManager"
+        ) as MockMgr:
+            instance = _make_manager_mock(tmp_path)
+            MockMgr.return_value = instance
+
+            await proc._run_one_check()
+
+        assert proc._pending_version == "0.3.7"
+        assert proc._last_check_outcome == "pending_user_approval"
+        instance.spawn_installer.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_update_clears_outcome(self, processor):
@@ -173,11 +236,7 @@ class TestRunOneCheck:
         with patch(
             "video_grouper.task_processors.update_check_processor.UpdateManager"
         ) as MockMgr:
-            instance = MockMgr.return_value
-            instance.check_for_updates = AsyncMock(
-                return_value=(True, SAMPLE_VERSION_INFO)
-            )
-            instance.download_update = AsyncMock(return_value=True)
+            MockMgr.return_value = _make_manager_mock(tmp_path)
 
             await processor._run_one_check()
 
@@ -198,15 +257,11 @@ class TestBuildStatus:
         assert status.last_check_at is None
 
     @pytest.mark.asyncio
-    async def test_status_reflects_completed_check(self, processor):
+    async def test_status_reflects_completed_check(self, processor, tmp_path):
         with patch(
             "video_grouper.task_processors.update_check_processor.UpdateManager"
         ) as MockMgr:
-            instance = MockMgr.return_value
-            instance.check_for_updates = AsyncMock(
-                return_value=(True, SAMPLE_VERSION_INFO)
-            )
-            instance.download_update = AsyncMock(return_value=True)
+            MockMgr.return_value = _make_manager_mock(tmp_path)
 
             await processor._run_one_check()
 

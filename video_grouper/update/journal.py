@@ -25,7 +25,7 @@ import secrets
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -63,19 +63,19 @@ class UpdateJournalEntry:
     from_version: str
     source_url: str
     auto_update: bool
-    ended_at: Optional[float] = None
-    to_version: Optional[str] = None
+    ended_at: float | None = None
+    to_version: str | None = None
     stages_completed: list[str] = field(default_factory=list)
     outcome: str = "in_progress"
-    duration_ms: Optional[int] = None
-    download_bytes: Optional[int] = None
-    digest_expected: Optional[str] = None
-    digest_actual: Optional[str] = None
-    deferred_reason: Optional[str] = None
-    error: Optional[str] = None
-    user_action: Optional[str] = None
-    nsis_phase: Optional[str] = None
-    nsis_tail: Optional[str] = None
+    duration_ms: int | None = None
+    download_bytes: int | None = None
+    digest_expected: str | None = None
+    digest_actual: str | None = None
+    deferred_reason: str | None = None
+    error: str | None = None
+    user_action: str | None = None
+    nsis_phase: str | None = None
+    nsis_tail: str | None = None
 
     def finalize(self, outcome: str, **kwargs: Any) -> None:
         """Stamp the entry as complete. Sets ``ended_at`` and

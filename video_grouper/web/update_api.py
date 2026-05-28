@@ -52,21 +52,33 @@ def build_router(processor: UpdateCheckProcessor) -> APIRouter:
         return {"status": "scheduled"}
 
     @router.post("/apply", status_code=status.HTTP_202_ACCEPTED)
-    def post_apply() -> JSONResponse:
-        # Phase 1 boundary: there is no safe install path yet. The
-        # tray and any other caller can wire this endpoint into their
-        # UI today; the response 503 signals "feature staged but not
-        # yet operational" so callers don't silently no-op.
+    async def post_apply() -> JSONResponse:
+        """Drive the staged installer. Returns 202 on a successful
+        spawn (the service will shut down moments later as NSIS takes
+        over), 409 when nothing is staged, 503 when the pipeline is
+        currently busy. Idempotent only in the sense that a second
+        click while the first install is in flight is harmless --
+        the service may already be exiting."""
+        ok, message = await processor.apply_pending()
+        if ok:
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "status": "spawned",
+                    "pending_version": processor._pending_version,
+                },
+            )
+        # Pick a status code from the message shape. Pipeline-busy
+        # is retryable (503); missing pending is not (409).
+        if message.lower().startswith("pipeline busy"):
+            code = status.HTTP_503_SERVICE_UNAVAILABLE
+        else:
+            code = status.HTTP_409_CONFLICT
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=code,
             content={
-                "status": "unavailable",
-                "reason": (
-                    "Auto-install path is being rewritten in Phase 2 "
-                    "(re-run NSIS installer). Pending updates are "
-                    "visible at GET /api/update/status but cannot be "
-                    "applied automatically yet."
-                ),
+                "status": "rejected",
+                "reason": message,
                 "pending_version": processor._pending_version,
             },
         )
