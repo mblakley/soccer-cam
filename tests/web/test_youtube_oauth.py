@@ -16,7 +16,6 @@ from video_grouper.web.auth_server import (
     create_app,
 )
 
-
 _DESKTOP_CLIENT_SECRET = {
     "installed": {
         "client_id": "fake-client.apps.googleusercontent.com",

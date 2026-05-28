@@ -59,7 +59,7 @@ def _render_video(
     """Sync helper: pan-crop the source around the EMA-smoothed ball."""
     import av
 
-    with open(trajectory_path, "r", encoding="utf-8") as f:
+    with open(trajectory_path, encoding="utf-8") as f:
         raw = json.load(f)
     smoothed = _smooth_trajectory(raw, ema)
 

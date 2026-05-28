@@ -30,7 +30,7 @@ def _run_tracking(
     max_missing: int,
 ) -> int:
     """Sync helper: load detections, run tracker, write trajectory JSON."""
-    with open(detections_path, "r", encoding="utf-8") as f:
+    with open(detections_path, encoding="utf-8") as f:
         per_frame: list[dict] = json.load(f)
 
     tracker = BallTracker(gate_distance=gate_distance, max_missing=max_missing)

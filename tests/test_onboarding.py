@@ -6,12 +6,11 @@ from unittest.mock import MagicMock, patch
 from video_grouper.utils.config import (
     Config,
     PlayMetricsTeamConfig,
-    create_default_config,
     config_needs_onboarding,
+    create_default_config,
     load_config,
     save_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # create_default_config

@@ -2,14 +2,15 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from video_grouper.tray.autocam_automation import (
-    run_autocam_on_file,
+    _execute_autocam_gui_automation,
     _validate_autocam_inputs,
     _wait_for_completion_and_cleanup,
-    _execute_autocam_gui_automation,
+    run_autocam_on_file,
 )
 
 

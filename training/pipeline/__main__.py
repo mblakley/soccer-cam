@@ -257,8 +257,8 @@ def cmd_unskip(args):
 
 def cmd_enqueue(args):
     from training.pipeline.config import load_config
-    from training.pipeline.registry import GameRegistry
     from training.pipeline.queue import WorkQueue
+    from training.pipeline.registry import GameRegistry
 
     cfg = load_config()
     q = WorkQueue(cfg.paths.work_queue_db)
@@ -397,8 +397,9 @@ def main():
 
     # File logging for long-running commands (serve, run)
     if args.command in ("serve", "run"):
-        from pathlib import Path
         from logging.handlers import RotatingFileHandler
+        from pathlib import Path
+
         from training.pipeline.config import load_config
 
         cfg = load_config()

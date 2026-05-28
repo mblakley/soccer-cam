@@ -7,7 +7,7 @@ controlled inputs to simulate user interaction during E2E testing.
 
 import asyncio
 import logging
-from typing import Optional, Dict
+
 from video_grouper.api_integrations.mock_ntfy_communication import mock_ntfy_comm
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class NtfyResponseService:
         self.response_url = f"{server_url}/{topic}"
 
         # Per-type message counters for controlled responses
-        self.message_counts: Dict[str, int] = {
+        self.message_counts: dict[str, int] = {
             "game_start": 0,
             "game_end": 0,
             "team_info": 0,
@@ -128,8 +128,9 @@ class NtfyResponseService:
 
     async def _subscribe_to_real_ntfy(self):
         """Subscribe to real NTFY topic and respond to messages."""
-        import httpx
         import json
+
+        import httpx
 
         subscription_url = f"{self.server_url}/{self.topic}/json"
         response_url = f"{self.server_url}/{self.topic}"
@@ -260,7 +261,7 @@ class NtfyResponseService:
 
         return False
 
-    def _get_response_for_message(self, title: str, message: str) -> Optional[str]:
+    def _get_response_for_message(self, title: str, message: str) -> str | None:
         """Get the appropriate response for the message based on per-type counters."""
         title_lower = title.lower()
         message_lower = message.lower()

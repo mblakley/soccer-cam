@@ -1,10 +1,11 @@
 import logging
-from typing import Any, Optional
+from typing import Any
+
+from video_grouper.utils.config import Config
 
 from .base_queue_processor import QueueProcessor
-from .tasks.upload import BaseUploadTask
 from .queue_type import QueueType
-from video_grouper.utils.config import Config
+from .tasks.upload import BaseUploadTask
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class UploadProcessor(QueueProcessor):
         self,
         storage_path: str,
         config: Config,
-        ntfy_service: Optional[Any] = None,
+        ntfy_service: Any | None = None,
     ):
         """Initialize the upload processor.
 
@@ -77,8 +78,8 @@ class UploadProcessor(QueueProcessor):
 
             # Validate YouTube token (non-interactive, no browser)
             from video_grouper.utils.youtube_upload import (
-                get_youtube_paths,
                 ensure_valid_token,
+                get_youtube_paths,
             )
 
             credentials_file, token_file = get_youtube_paths(self.storage_path)

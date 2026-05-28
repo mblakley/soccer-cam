@@ -1,12 +1,14 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from video_grouper.utils.ffmpeg_utils import (
     async_convert_file,
     combine_videos,
+    create_screenshot,
     get_video_duration,
     trim_video,
     verify_ffmpeg_install,
-    create_screenshot,
 )
 
 

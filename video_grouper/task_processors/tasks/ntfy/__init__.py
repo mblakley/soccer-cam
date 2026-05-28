@@ -6,10 +6,10 @@ types of NTFY tasks like game start time questions, team info requests, etc.
 """
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
-from .game_start_task import GameStartTask
 from .game_end_task import GameEndTask
-from .team_info_task import TeamInfoTask
+from .game_start_task import GameStartTask
 from .task_factory import NtfyTaskFactory
+from .team_info_task import TeamInfoTask
 
 __all__ = [
     "BaseNtfyTask",

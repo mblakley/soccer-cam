@@ -7,7 +7,6 @@ import sys
 import time
 from datetime import datetime
 
-
 CAMERA_IP = "192.168.86.200"
 USERNAME = "admin"
 PASSWORD = "mblakley82"

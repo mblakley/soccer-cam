@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import configparser
 from pathlib import Path
-from typing import Dict, Optional, List
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
 from video_grouper.ball_tracking.config import BallTrackingConfig
-
 
 # Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
 if not hasattr(configparser.ConfigParser, "__getattr__"):
@@ -23,7 +21,7 @@ if not hasattr(configparser.ConfigParser, "__getattr__"):
     def _section_setattr(self, name, value):
         # Allow setting attributes on sections directly
         section = name.upper()
-        if not isinstance(value, (str, int, float, bool)):
+        if not isinstance(value, str | int | float | bool):
             # Fallback to normal behaviour for internal attributes
             return object.__setattr__(self, name, value)
         if not self.has_section(section) and section != "DEFAULT":
@@ -77,7 +75,7 @@ class ProcessingConfig(BaseModel):
     trim_end_enabled: bool = False
     ffmpeg_timeout_seconds: int = 1800
     seam_realign_enabled: bool = False
-    seam_realign_profile_path: Optional[str] = None
+    seam_realign_profile_path: str | None = None
 
 
 class LoggingConfig(BaseModel):
@@ -91,30 +89,30 @@ class AppConfig(BaseModel):
     check_interval_seconds: int = 60
     timezone: str = "America/New_York"
     github_repo: str = "mblakley/soccer-cam"
-    storage_path: Optional[str] = None
+    storage_path: str | None = None
     max_lookback_hours: int = 48
     max_files_per_poll: int = 50
-    recording_end_date: Optional[str] = None
+    recording_end_date: str | None = None
 
 
 class TeamSnapTeamConfig(BaseModel):
     enabled: bool = False
-    team_id: Optional[str] = None
+    team_id: str | None = None
     team_name: str
 
 
 class TeamSnapConfig(BaseModel):
     enabled: bool = False
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    access_token: Optional[str] = None
-    refresh_token: Optional[str] = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    access_token: str | None = None
+    refresh_token: str | None = None
     teams: list[TeamSnapTeamConfig] = Field(default_factory=list)
 
     # Legacy single-team fields (kept optional for backward compatibility)
-    team_id: Optional[str] = None
-    team_name: Optional[str] = None
-    my_team_name: Optional[str] = None
+    team_id: str | None = None
+    team_name: str | None = None
+    my_team_name: str | None = None
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -131,8 +129,8 @@ class TeamSnapConfig(BaseModel):
 
 
 class PlayMetricsTeamConfig(BaseModel):
-    team_id: Optional[str] = None
-    team_name: Optional[str] = None
+    team_id: str | None = None
+    team_name: str | None = None
     enabled: bool = True
 
 
@@ -148,14 +146,14 @@ class PlayMetricsConfig(BaseModel):
     """
 
     enabled: bool = False
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
 
     # Legacy single-team fields (kept optional for backward compatibility)
-    team_id: Optional[str] = None
-    team_name: Optional[str] = None
+    team_id: str | None = None
+    team_name: str | None = None
 
-    teams: List[PlayMetricsTeamConfig] = Field(default_factory=list)
+    teams: list[PlayMetricsTeamConfig] = Field(default_factory=list)
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -173,7 +171,7 @@ class PlayMetricsConfig(BaseModel):
 class NtfyConfig(BaseModel):
     enabled: bool = False
     server_url: str = "https://ntfy.sh"
-    topic: Optional[str] = None
+    topic: str | None = None
     response_service: bool = False
     auto_respond: bool = False
     unplug_notification: bool = True
@@ -181,12 +179,12 @@ class NtfyConfig(BaseModel):
 
 class AutocamConfig(BaseModel):
     enabled: bool = True
-    executable: Optional[str] = None
+    executable: str | None = None
 
 
 class CloudSyncConfig(BaseModel):
     enabled: bool = False
-    provider: Optional[str] = None
+    provider: str | None = None
 
 
 class NodeConfig(BaseModel):
@@ -305,8 +303,8 @@ class YouTubePlaylistConfig(BaseModel):
     privacy_status: str
 
 
-class YouTubePlaylistMapConfig(RootModel[Dict[str, str]]):
-    def get(self, team_name: str) -> Optional[str]:
+class YouTubePlaylistMapConfig(RootModel[dict[str, str]]):
+    def get(self, team_name: str) -> str | None:
         # First try exact match
         if team_name in self.root:
             return self.root[team_name]
@@ -328,14 +326,14 @@ class YouTubeConfig(BaseModel):
     # video id without calling the Google API. Must NOT be enabled in
     # production — reels will reference non-existent YouTube videos.
     skip_upload: bool = False
-    processed_playlist: Optional[YouTubePlaylistConfig] = None
-    raw_playlist: Optional[YouTubePlaylistConfig] = None
-    playlist_map: Optional[YouTubePlaylistMapConfig] = None
+    processed_playlist: YouTubePlaylistConfig | None = None
+    raw_playlist: YouTubePlaylistConfig | None = None
+    playlist_map: YouTubePlaylistMapConfig | None = None
 
     model_config = {"validate_by_name": True}
 
     @property
-    def playlist_map_dict(self) -> Dict[str, str]:
+    def playlist_map_dict(self) -> dict[str, str]:
         return self.playlist_map.root if self.playlist_map else {}
 
 

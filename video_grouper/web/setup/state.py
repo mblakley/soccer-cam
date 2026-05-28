@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class WizardState:
 _states: dict[str, WizardState] = {}
 
 
-def get_or_create(token: Optional[str]) -> tuple[str, WizardState]:
+def get_or_create(token: str | None) -> tuple[str, WizardState]:
     """Return ``(token, state)``. Mints a new token when none is supplied."""
     if token and token in _states:
         return token, _states[token]
@@ -44,13 +43,13 @@ def get_or_create(token: Optional[str]) -> tuple[str, WizardState]:
     return new_token, _states[new_token]
 
 
-def get(token: Optional[str]) -> Optional[WizardState]:
+def get(token: str | None) -> WizardState | None:
     if not token:
         return None
     return _states.get(token)
 
 
-def discard(token: Optional[str]) -> None:
+def discard(token: str | None) -> None:
     if token and token in _states:
         del _states[token]
 

@@ -4,13 +4,14 @@ Game start time NTFY task.
 This task handles asking users about when a game starts in a video.
 """
 
-import os
 import logging
-from typing import Dict, Any
+import os
+from typing import Any
+
+from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.utils.config import Config
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
-from video_grouper.utils.config import Config
-from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class GameStartTask(BaseNtfyTask):
 
         return NtfyInputType.GAME_START_TIME.value
 
-    async def create_question(self) -> Dict[str, Any]:
+    async def create_question(self) -> dict[str, Any]:
         """
         Create the question data for asking about game start time.
 
@@ -242,7 +243,7 @@ class GameStartTask(BaseNtfyTask):
             )
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "GameStartTask":
+    def deserialize(cls, data: dict[str, object]) -> "GameStartTask":
         """
         Deserialize a GameStartTask from its serialized data.
 
@@ -260,8 +261,8 @@ class GameStartTask(BaseNtfyTask):
 
         # Create a minimal config and ntfy_service for deserialization
         # These will be properly initialized when the task is executed
-        from video_grouper.utils.config import Config
         from video_grouper.task_processors.services.ntfy_service import NtfyService
+        from video_grouper.utils.config import Config
 
         # Create minimal config with required fields
         config = Config()

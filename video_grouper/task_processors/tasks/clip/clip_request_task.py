@@ -2,10 +2,10 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Any
 
-from ..base_task import BaseTask
 from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class ClipRequestTask(BaseTask):
     def get_item_path(self) -> str:
         return self.recording_group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         return {
             "task_type": self.task_type,
             "clip_request_id": self.clip_request_id,
@@ -47,7 +47,7 @@ class ClipRequestTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "ClipRequestTask":
+    def deserialize(cls, data: dict[str, object]) -> "ClipRequestTask":
         return cls(
             clip_request_id=data["clip_request_id"],
             game_session_id=data["game_session_id"],

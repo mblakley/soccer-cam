@@ -79,9 +79,18 @@ path = "video_grouper/version.py"
 target-version = "py313"
 
 [tool.ruff.lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
-select = ["E4", "E7", "E9", "F"]
-ignore = []
+# Enable a curated set of rules — matches TTT backend config style.
+# - E4/E7/E9: pycodestyle errors (imports, statement, syntax)
+# - F:       Pyflakes (undefined names, unused imports/vars)
+# - B:       flake8-bugbear (likely-buggy patterns)
+# - I:       isort (import sorting)
+# - C4:      flake8-comprehensions (clearer comprehensions)
+# - UP:      pyupgrade (modern Python idioms; py313 target)
+select = ["E4", "E7", "E9", "F", "B", "I", "C4", "UP"]
+ignore = [
+    # B008: function-call-as-default — FastAPI/Pydantic Depends(), Field() rely on this idiom.
+    "B008",
+]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
@@ -104,7 +113,205 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/test_service.py" = ["E402"] 
+"tests/test_service.py" = ["E402"]
+# Tests/e2e inspect_* are interactive window-dumper scripts; their EnumWindows
+# callbacks are invoked synchronously so the closure-over-loop-var pattern is
+# safe, but ruff's B023 can't see that.
+"tests/e2e/inspect_*.py" = ["B023"]
+# Training is research/experiment code (per memory [Scope experiments tight]).
+# B007 unused loop var, B023 lambda-over-loop-var, UP031 percent format are
+# fine for short-lived experimental scripts; not worth churning.
+"training/**/*.py" = ["B007", "B023", "UP031"]
+# Firmware reverse-engineering scripts: short-lived debug tools, percent
+# format is fine.
+"reolink-firmware-patching/**/*.py" = ["UP031"]
+
+[tool.mypy]
+# Type-check video_grouper/ as the production target. tools/ is one-off
+# scripts and training/ is research code -- not in scope for this baseline.
+python_version = "3.13"
+# Production runs on Windows (tray, service, AutoCam parenting). Pinning
+# the platform here means mypy sees winreg + pywin32-shaped stdlib stubs
+# even on Linux CI, matching what the code will actually execute against.
+# The pyproject [tool.uv] environments list includes linux too, but the
+# linux variant is for Docker / dev only and shares the same type surface.
+platform = "win32"
+strict_optional = true
+warn_unused_ignores = true
+# Don't require type annotations on every def yet -- that's a separate
+# follow-up. The goal here is establishing the gate, not boiling the ocean.
+disallow_untyped_defs = false
+no_implicit_optional = false
+# Stay quiet about ML/CV vendor libs whose stubs are incomplete; the rest
+# of the modules below are listed by name so we don't accidentally silence
+# typos in our own imports.
+exclude = [
+    "tools/",
+    "training/",
+    "reolink-firmware-patching/",
+    "scripts/",
+]
+
+# --- Third-party modules without stubs ---
+# Listed explicitly per memory feedback: name the modules so a typo in our
+# own import doesn't get silently swallowed by a blanket ignore.
+
+# Computer-vision and ML stack
+[[tool.mypy.overrides]]
+module = [
+    "cv2",
+    "cv2.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "torch",
+    "torch.*",
+    "torchvision",
+    "torchvision.*",
+    "ultralytics",
+    "ultralytics.*",
+    "supervision",
+    "supervision.*",
+    "av",
+    "av.*",
+    "lapx",
+    "lapx.*",
+    "filterpy",
+    "filterpy.*",
+    "scipy",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+# Windows-only / pywin32 modules (Linux CI can't see them, and pywin32
+# ships no PEP 561 marker so they appear untyped on Windows too).
+# Includes the winreg stdlib module which only exists on Windows.
+[[tool.mypy.overrides]]
+module = [
+    "winreg",
+    "win32event",
+    "win32service",
+    "win32serviceutil",
+    "win32timezone",
+    "win32gui",
+    "win32con",
+    "win32api",
+    "win32process",
+    "servicemanager",
+    "pywintypes",
+    "pythoncom",
+    "pywinauto",
+    "pywinauto.*",
+]
+ignore_missing_imports = true
+
+# PyQt6 -- optional tray dep, not installed in the CI lint container
+[[tool.mypy.overrides]]
+module = [
+    "PyQt6",
+    "PyQt6.*",
+]
+ignore_missing_imports = true
+
+# Google APIs (no stubs published)
+[[tool.mypy.overrides]]
+module = [
+    "google",
+    "google.*",
+    "googleapiclient",
+    "googleapiclient.*",
+    "google_auth_oauthlib",
+    "google_auth_oauthlib.*",
+]
+ignore_missing_imports = true
+
+# Misc third-party deps without stubs
+[[tool.mypy.overrides]]
+module = [
+    "aiofiles",
+    "aiofiles.*",
+    "dateutil",
+    "dateutil.*",
+    "psutil",
+    "pytz",
+    "requests",
+    "requests.*",
+    "selenium",
+    "selenium.*",
+    "webdriver_manager",
+    "webdriver_manager.*",
+    "icalendar",
+    "icalendar.*",
+    "Crypto",
+    "Crypto.*",
+    "tenacity",
+    "tenacity.*",
+]
+ignore_missing_imports = true
+
+# --- Deferred per-module type-fix work ---
+# These modules have pre-existing type errors (mostly Optional/None
+# threaded through constructor signatures, missing collection annotations,
+# and TypedDict drift). The plan is to reclaim them module-by-module
+# under a separate "type-cleanup" track so new code in CLEAN modules
+# stays gated, but we don't block the infrastructure rollout on a
+# 283-error backlog. Each module here is a follow-up task.
+[[tool.mypy.overrides]]
+module = [
+    "video_grouper.api_integrations.cloud_sync",
+    "video_grouper.api_integrations.command_executor",
+    "video_grouper.api_integrations.mock_ntfy_api",
+    "video_grouper.api_integrations.mock_ntfy_communication",
+    "video_grouper.api_integrations.mock_playmetrics",
+    "video_grouper.api_integrations.mock_ttt_api",
+    "video_grouper.api_integrations.ntfy",
+    "video_grouper.api_integrations.teamsnap",
+    "video_grouper.ball_tracking.providers.homegrown.stages.render",
+    "video_grouper.ball_tracking.secure_loader",
+    "video_grouper.cameras.base",
+    "video_grouper.cameras.dahua",
+    "video_grouper.cameras.reolink",
+    "video_grouper.cameras.reolink_download",
+    "video_grouper.models.directory_state",
+    "video_grouper.models.recording_file",
+    "video_grouper.task_processors.ball_tracking_processor",
+    "video_grouper.task_processors.base_polling_processor",
+    "video_grouper.task_processors.base_queue_processor",
+    "video_grouper.task_processors.camera_poller",
+    "video_grouper.task_processors.clip_request_processor",
+    "video_grouper.task_processors.download_processor",
+    "video_grouper.task_processors.ntfy_processor",
+    "video_grouper.task_processors.register_tasks",
+    "video_grouper.task_processors.services.match_info_service",
+    "video_grouper.task_processors.services.ntfy_service",
+    "video_grouper.task_processors.services.teamsnap_service",
+    "video_grouper.task_processors.services.ttt_question_service",
+    "video_grouper.task_processors.state_auditor",
+    "video_grouper.task_processors.task_registry",
+    "video_grouper.task_processors.tasks.ball_tracking.base",
+    "video_grouper.task_processors.tasks.clip.clip_request_task",
+    "video_grouper.task_processors.tasks.download.dahua_download_task",
+    "video_grouper.task_processors.tasks.ntfy.base_ntfy_task",
+    "video_grouper.task_processors.tasks.ntfy.game_end_task",
+    "video_grouper.task_processors.tasks.ntfy.game_start_task",
+    "video_grouper.task_processors.tasks.ntfy.task_factory",
+    "video_grouper.task_processors.tasks.ntfy.team_info_task",
+    "video_grouper.task_processors.tasks.ntfy.was_there_a_match_task",
+    "video_grouper.task_processors.tasks.upload.youtube_upload_task",
+    "video_grouper.task_processors.tasks.video.combine_task",
+    "video_grouper.task_processors.tasks.video.trim_task",
+    "video_grouper.task_processors.upload_processor",
+    "video_grouper.task_processors.video_processor",
+    "video_grouper.tray.autocam_automation",
+    "video_grouper.tray.main",
+    "video_grouper.update.update_manager",
+    "video_grouper.utils.config",
+    "video_grouper.utils.youtube_upload",
+    "video_grouper.video_grouper_app",
+    "video_grouper.web.auth_server",
+    "video_grouper.web.config_editor",
+    "video_grouper.web.setup.router",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -139,6 +346,7 @@ torchvision = { index = "pytorch-cu126" }
 [dependency-groups]
 dev = [
     "aiohttp>=3.13.3",
+    "mypy>=2.1.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
 ]

@@ -2,15 +2,16 @@
 Trim task for trimming combined videos based on match information.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
 from dataclasses import dataclass, field
+from typing import Any
 
-from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
 from video_grouper.utils.ffmpeg_utils import trim_video
 from video_grouper.utils.paths import get_combined_video_path, get_trimmed_video_path
+
+from .base_ffmpeg_task import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,7 @@ class TrimTask(BaseFfmpegTask):
 
     group_dir: str
     start_time: str  # Format: "HH:MM:SS"
-    end_time: Optional[str] = field(
-        default=None
-    )  # Format: "HH:MM:SS", None = no end trim
+    end_time: str | None = field(default=None)  # Format: "HH:MM:SS", None = no end trim
 
     @property
     def task_type(self) -> str:
@@ -88,7 +87,7 @@ class TrimTask(BaseFfmpegTask):
         """Return the group directory path."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -122,7 +121,7 @@ class TrimTask(BaseFfmpegTask):
         return f"TrimTask({os.path.basename(self.group_dir)}, {self.start_time}-{end})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TrimTask":
+    def from_dict(cls, data: dict[str, Any]) -> "TrimTask":
         """
         Create a TrimTask from serialized data.
 
@@ -141,7 +140,7 @@ class TrimTask(BaseFfmpegTask):
         )
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "TrimTask":
+    def deserialize(cls, data: dict[str, object]) -> "TrimTask":
         """
         Deserialize a TrimTask from its serialized data.
 

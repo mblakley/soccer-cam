@@ -18,8 +18,8 @@ import pytest
 
 from video_grouper.models.directory_state import DirectoryState
 from video_grouper.tray.autocam_automation import (
-    _live_autocam_pids,
     _execute_autocam_gui_automation,
+    _live_autocam_pids,
 )
 
 

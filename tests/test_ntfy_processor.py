@@ -3,14 +3,15 @@ Tests for NTFY Queue Processor.
 """
 
 import asyncio
-import pytest
 import tempfile
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from video_grouper.task_processors.base_queue_processor import QueueProcessor
 from video_grouper.task_processors.ntfy_processor import NtfyProcessor
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import Config
-from video_grouper.task_processors.base_queue_processor import QueueProcessor
 
 
 @pytest.fixture

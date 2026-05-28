@@ -1,14 +1,15 @@
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_combined_video_path, get_match_info_path
+
 from .base_queue_processor import QueueProcessor
-from .tasks.video import BaseFfmpegTask
 from .queue_type import QueueType
+from .tasks.video import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,8 @@ class VideoProcessor(QueueProcessor):
         storage_path: str,
         config: Config,
         upload_processor: UploadProcessor,
-        match_info_service: Optional[Any] = None,
-        ntfy_processor: Optional[Any] = None,
+        match_info_service: Any | None = None,
+        ntfy_processor: Any | None = None,
     ):
         super().__init__(storage_path, config)
         self.upload_processor = upload_processor

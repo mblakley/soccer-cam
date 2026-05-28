@@ -1,29 +1,9 @@
-import sys
-import os
-import time
-import atexit
 import asyncio
+import atexit
+import os
+import sys
 import threading
-from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PyQt6.QtCore import (
-    QRunnable,
-    QThreadPool,
-    QObject,
-    pyqtSignal as Signal,
-    pyqtSlot as Slot,
-)
-from PyQt6.QtGui import QIcon, QAction
-import win32serviceutil
-
-from video_grouper.tray.autocam_automation import run_autocam_on_file
-from video_grouper.update.update_manager import check_and_update
-from video_grouper.version import get_version, get_full_version
-from video_grouper.utils.youtube_upload import authenticate_youtube
-from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.utils.config import load_config, Config
-from video_grouper.task_processors import BallTrackingProcessor
-from video_grouper.task_processors.register_tasks import register_tray_tasks
+import time
 
 # NOTE: ``register_providers`` is imported lazily inside the autocam_gui
 # branch of __init__. Importing it eagerly here would pull in the
@@ -31,9 +11,32 @@ from video_grouper.task_processors.register_tasks import register_tray_tasks
 # never needs — it only runs autocam_gui ball-tracking. Doing it lazy
 # keeps the tray bootable on machines without GPU drivers.
 import webbrowser
-from typing import Optional
+from pathlib import Path
 
-from video_grouper.utils.logger import setup_logging, get_logger
+import win32serviceutil
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    QThreadPool,
+)
+from PyQt6.QtCore import (
+    pyqtSignal as Signal,
+)
+from PyQt6.QtCore import (
+    pyqtSlot as Slot,
+)
+from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+from video_grouper.task_processors import BallTrackingProcessor
+from video_grouper.task_processors.register_tasks import register_tray_tasks
+from video_grouper.tray.autocam_automation import run_autocam_on_file
+from video_grouper.update.update_manager import check_and_update
+from video_grouper.utils.config import Config, load_config
+from video_grouper.utils.logger import get_logger, setup_logging
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.utils.youtube_upload import authenticate_youtube
+from video_grouper.version import get_full_version, get_version
 
 
 def _bootstrap_log_dir() -> Path:
@@ -242,7 +245,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         else:
             self.config_path = get_shared_data_path() / "config.ini"
 
-        self.config: Optional[Config] = None
+        self.config: Config | None = None
         if self.config_path.exists():
             self.config = load_config(self.config_path)
             # Switch logging from the bootstrap LOCALAPPDATA path to
@@ -471,8 +474,9 @@ class SystemTrayIcon(QSystemTrayIcon):
     def toggle_recording(self):
         """Toggle camera recording on/off via the Reolink API."""
         import asyncio
-        from video_grouper.utils.config import load_config
+
         from video_grouper.cameras.reolink import ReolinkCamera
+        from video_grouper.utils.config import load_config
 
         try:
             config = load_config(self.config_path)

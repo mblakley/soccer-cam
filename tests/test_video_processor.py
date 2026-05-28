@@ -2,11 +2,12 @@
 
 import asyncio
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 
-from video_grouper.task_processors.video_processor import VideoProcessor
 from video_grouper.task_processors.tasks import CombineTask, TrimTask
+from video_grouper.task_processors.video_processor import VideoProcessor
 
 
 @pytest.fixture

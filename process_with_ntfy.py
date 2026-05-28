@@ -3,15 +3,16 @@
 Script to manually trigger NTFY processing for a specific directory.
 """
 
-import asyncio
 import argparse
+import asyncio
 import sys
 from pathlib import Path
-from video_grouper.video_grouper_app import VideoGrouperApp
-from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.utils.locking import FileLock
+
 from video_grouper.utils.config import load_config
-from video_grouper.utils.logger import setup_logging, get_logger
+from video_grouper.utils.locking import FileLock
+from video_grouper.utils.logger import get_logger, setup_logging
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.video_grouper_app import VideoGrouperApp
 
 # Configure logging
 setup_logging(level="INFO", app_name="video_grouper_ntfy")

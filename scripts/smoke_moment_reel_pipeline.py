@@ -23,8 +23,8 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import psycopg2
 import psycopg2.extras
@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from video_grouper.task_processors.highlight_reel_processor import (  # noqa: E402
     HighlightReelProcessor,
 )
-
 
 # ------------------------------------------------------------------- constants
 TTT_BASE = "http://localhost:8000"
@@ -263,7 +262,7 @@ async def main() -> int:
     # ----- 4. simulate soccer-cam's per-clip render: create moment_clips rows
     banner("4. Simulate soccer-cam moment_clips (3 rows with start/end offsets)")
     clip_ids = []
-    for i, (tag_id, m) in enumerate(zip(tag_ids, MOMENTS)):
+    for i, (tag_id, m) in enumerate(zip(tag_ids, MOMENTS, strict=False)):
         clip_id = str(uuid.uuid4())
         db_exec(
             """

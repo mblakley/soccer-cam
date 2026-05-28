@@ -2,14 +2,15 @@
 Dahua download task for downloading files from Dahua cameras.
 """
 
-import os
 import logging
-from typing import Dict, Any
+import os
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
+
+from video_grouper.utils.config import CameraConfig
 
 from .base_download_task import BaseDownloadTask
-from video_grouper.utils.config import CameraConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class DahuaDownloadTask(BaseDownloadTask):
     start_time: datetime
     end_time: datetime
     file_size: int = 0
-    metadata: Dict[str, Any] = None
+    metadata: dict[str, Any] = None
 
     def __post_init__(self):
         """Initialize metadata if not provided."""
@@ -48,11 +49,11 @@ class DahuaDownloadTask(BaseDownloadTask):
         """Return the remote file path."""
         return self.remote_file_path
 
-    def get_camera_config(self) -> Dict[str, Any]:
+    def get_camera_config(self) -> dict[str, Any]:
         """Return the camera configuration."""
         return self.config.dict()
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -118,7 +119,7 @@ class DahuaDownloadTask(BaseDownloadTask):
         return f"DahuaDownloadTask({os.path.basename(self.local_file_path)})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "DahuaDownloadTask":
+    def from_dict(cls, data: dict[str, Any]) -> "DahuaDownloadTask":
         """
         Create a DahuaDownloadTask from serialized data.
 
@@ -139,7 +140,7 @@ class DahuaDownloadTask(BaseDownloadTask):
         )
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "DahuaDownloadTask":
+    def deserialize(cls, data: dict[str, object]) -> "DahuaDownloadTask":
         """
         Deserialize a DahuaDownloadTask from its serialized data.
 

@@ -443,7 +443,7 @@ class GameManifest:
         col_names = [
             c[1] for c in self.conn.execute("PRAGMA table_info(ball_events)").fetchall()
         ]
-        return [dict(zip(col_names, row)) for row in rows]
+        return [dict(zip(col_names, row, strict=False)) for row in rows]
 
     # ------------------------------------------------------------------
     # Game phases (pre_game, first_half, halftime, second_half, post_game)
@@ -614,9 +614,10 @@ def remap_legacy_labels(conn, video_dir, frame_interval: int = 4):
     Returns:
         dict with remap stats
     """
-    import cv2
     import re
     from pathlib import Path
+
+    import cv2
 
     video_dir = Path(video_dir)
     tile_re = re.compile(r"^(.+)_frame_(\d{6})_r(\d+)_c(\d+)$")

@@ -2,9 +2,8 @@
 Cleanup service for managing file cleanup operations.
 """
 
-import os
 import logging
-from typing import List, Optional
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class CleanupService:
         self.storage_path = storage_path
 
     def cleanup_temporary_files(
-        self, group_dir: str, extensions: Optional[List[str]] = None
+        self, group_dir: str, extensions: list[str] | None = None
     ) -> bool:
         """
         Clean up temporary files in a group directory.

@@ -8,7 +8,7 @@ Section D: Auth edge cases (need live TTT backend)
 
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -159,23 +159,23 @@ class TestRecordingPipelineWorkflow:
 
     def test_01_register_recordings(self, ttt_client):
         """Register new recording files, get recording IDs back."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         files = [
             {
                 "file_name": f"integ_test_{ts}_001.mp4",
                 "file_group": f"integ-test-{ts}",
                 "file_size_bytes": 1073741824,
                 "duration_seconds": 1800.0,
-                "recording_start": datetime.now(timezone.utc).isoformat(),
-                "recording_end": datetime.now(timezone.utc).isoformat(),
+                "recording_start": datetime.now(UTC).isoformat(),
+                "recording_end": datetime.now(UTC).isoformat(),
             },
             {
                 "file_name": f"integ_test_{ts}_002.mp4",
                 "file_group": f"integ-test-{ts}",
                 "file_size_bytes": 1073741824,
                 "duration_seconds": 1800.0,
-                "recording_start": datetime.now(timezone.utc).isoformat(),
-                "recording_end": datetime.now(timezone.utc).isoformat(),
+                "recording_start": datetime.now(UTC).isoformat(),
+                "recording_end": datetime.now(UTC).isoformat(),
             },
         ]
         result = ttt_client.register_recordings(CAMERA_ID, TEAM_ID, files)
@@ -248,14 +248,14 @@ class TestRecordingPipelineWorkflow:
 
     def test_11_recording_pipeline_failure(self, ttt_client):
         """Register a recording and report download failure with error message."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         files = [
             {
                 "file_name": f"integ_fail_{ts}.mp4",
                 "file_group": f"integ-fail-{ts}",
                 "file_size_bytes": 500000000,
-                "recording_start": datetime.now(timezone.utc).isoformat(),
-                "recording_end": datetime.now(timezone.utc).isoformat(),
+                "recording_start": datetime.now(UTC).isoformat(),
+                "recording_end": datetime.now(UTC).isoformat(),
             }
         ]
         registered = ttt_client.register_recordings(CAMERA_ID, TEAM_ID, files)
@@ -487,14 +487,14 @@ class TestErrorDisplayWorkflows:
     def test_01_recording_failure_creates_alert(self, ttt_client):
         """Pipeline failure triggers a recording_failed alert in TTT."""
         # Register a recording and fail it
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         files = [
             {
                 "file_name": f"alert_test_{ts}.mp4",
                 "file_group": f"alert-test-{ts}",
                 "file_size_bytes": 100000,
-                "recording_start": datetime.now(timezone.utc).isoformat(),
-                "recording_end": datetime.now(timezone.utc).isoformat(),
+                "recording_start": datetime.now(UTC).isoformat(),
+                "recording_end": datetime.now(UTC).isoformat(),
             }
         ]
         registered = ttt_client.register_recordings(CAMERA_ID, TEAM_ID, files)
@@ -729,7 +729,7 @@ class TestGameSessionManagement:
 
     def test_01_create_game_session(self, ttt_client):
         """Create a game session with unique recording_group_dir."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         result = ttt_client.create_game_session(
             TEAM_ID,
             f"/recordings/integ-test-{ts}",
@@ -1131,7 +1131,7 @@ class TestCapabilities:
     def test_get_capabilities(self, ttt_client):
         """Get feature flags for the current user."""
         result = ttt_client.get_capabilities()
-        assert isinstance(result, (dict, list))
+        assert isinstance(result, dict | list)
 
     def test_get_available_plugins(self, ttt_client):
         """Get list of available plugins."""

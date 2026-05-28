@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 
 from video_grouper.utils.config import load_config
-from video_grouper.utils.logger import setup_logging_from_config, get_logger
+from video_grouper.utils.logger import get_logger, setup_logging_from_config
 from video_grouper.utils.paths import get_shared_data_path
 
 logger = get_logger(__name__)
@@ -101,7 +101,7 @@ async def _heartbeat_loop(
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
             return  # stop_event was set
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 await client.post(f"{master_url}/api/work/{task_id}/heartbeat")
             except httpx.HTTPError as exc:

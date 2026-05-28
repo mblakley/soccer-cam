@@ -147,7 +147,7 @@ def sweep_thresholds(
 
         # Per-region breakdown
         region_stats = {}
-        for region_name, row_filter in [
+        for region_name, _row_filter in [
             ("r0_far", lambda m: m["row"] == 0),
             ("r1_mid", lambda m: m["row"] == 1),
             ("r2_near", lambda m: m["row"] == 2),

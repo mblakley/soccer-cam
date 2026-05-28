@@ -17,10 +17,10 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
-from ..base_task import BaseTask
 from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 
 class BallTrackingTaskBase(BaseTask):
@@ -37,10 +37,10 @@ class BallTrackingTaskBase(BaseTask):
         input_path: str,
         output_path: str,
         provider_name: str,
-        provider_config: Dict[str, Any],
+        provider_config: dict[str, Any],
         team_name: str | None = None,
         storage_path: str | None = None,
-        ttt_config: Dict[str, Any] | None = None,
+        ttt_config: dict[str, Any] | None = None,
     ):
         self.group_dir = group_dir
         self.input_path = input_path
@@ -58,7 +58,7 @@ class BallTrackingTaskBase(BaseTask):
     def get_item_path(self) -> str:
         return str(self.group_dir)
 
-    def serialize(self) -> Dict[str, object]:
+    def serialize(self) -> dict[str, object]:
         return {
             "task_type": self.task_type,
             "group_dir": str(self.group_dir),
@@ -72,7 +72,7 @@ class BallTrackingTaskBase(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "BallTrackingTaskBase":
+    def deserialize(cls, data: dict[str, object]) -> BallTrackingTaskBase:
         ttt_cfg = data.get("ttt_config")
         return cls(
             group_dir=Path(data["group_dir"]),
@@ -126,5 +126,5 @@ class BallTrackingTaskBase(BaseTask):
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> "BallTrackingTaskBase":
+    def from_dict(cls, data: dict[str, object]) -> BallTrackingTaskBase:
         return cls.deserialize(data)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.utils.config import (
     AppConfig,
     AutocamConfig,
@@ -21,6 +20,7 @@ from video_grouper.utils.config import (
     TeamSnapConfig,
     YouTubeConfig,
 )
+from video_grouper.video_grouper_app import VideoGrouperApp
 
 
 def _config(temp_storage, role: str = "standalone") -> Config:

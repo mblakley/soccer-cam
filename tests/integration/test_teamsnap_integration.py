@@ -4,7 +4,8 @@ Test script for the TeamSnap API integration.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 from video_grouper.api_integrations.teamsnap import TeamSnapAPI
 from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
@@ -31,7 +32,7 @@ class TestTeamSnapIntegration(unittest.TestCase):
         self.sample_game = {
             "id": "12345",
             "team_id": "test_team_id",
-            "start_date": (datetime.now(timezone.utc) + timedelta(days=1))
+            "start_date": (datetime.now(UTC) + timedelta(days=1))
             .isoformat()
             .replace("+00:00", "Z"),
             "opponent_name": "Opponent Team",
@@ -66,8 +67,8 @@ class TestTeamSnapIntegration(unittest.TestCase):
         self.assertEqual(len(games), 1)
 
         # Verify games are a subset of events
-        game_ids = set(game.get("id") for game in games if game.get("id"))
-        event_ids = set(event.get("id") for event in events if event.get("id"))
+        game_ids = {game.get("id") for game in games if game.get("id")}
+        event_ids = {event.get("id") for event in events if event.get("id")}
         self.assertTrue(game_ids.issubset(event_ids))
 
     def test_find_game_for_recording(self):

@@ -1,9 +1,9 @@
-import pytest
 import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from video_grouper.cameras.reolink import ReolinkCamera
 from video_grouper.utils.config import CameraConfig

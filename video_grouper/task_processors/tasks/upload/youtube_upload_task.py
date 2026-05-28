@@ -2,16 +2,16 @@
 YouTube upload task for uploading videos to YouTube.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
 from dataclasses import dataclass
+from typing import Any
 
+from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.utils.config import YouTubeConfig
 from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
-from video_grouper.models import MatchInfo, DirectoryState
-from video_grouper.utils.config import YouTubeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class YoutubeUploadTask(BaseUploadTask):
         """Return the group directory path."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -251,7 +251,7 @@ class YoutubeUploadTask(BaseUploadTask):
         config: YouTubeConfig,
         ntfy_service,
         storage_path: str,
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Get playlist names for processed and raw videos.
 
@@ -348,7 +348,7 @@ class YoutubeUploadTask(BaseUploadTask):
         return f"YoutubeUploadTask({os.path.basename(self.group_dir)})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "YoutubeUploadTask":
+    def from_dict(cls, data: dict[str, Any]) -> "YoutubeUploadTask":
         """
         Create a YoutubeUploadTask from serialized data.
 
@@ -363,7 +363,7 @@ class YoutubeUploadTask(BaseUploadTask):
         return cls(group_dir=group_dir)
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "YoutubeUploadTask":
+    def deserialize(cls, data: dict[str, object]) -> "YoutubeUploadTask":
         """
         Deserialize a YoutubeUploadTask from its serialized data.
 

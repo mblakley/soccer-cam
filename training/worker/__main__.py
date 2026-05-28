@@ -38,7 +38,7 @@ def cmd_run(args):
 
             # Find this machine in config
             caps = []
-            for name, machine in cfg.machines.items():
+            for _name, machine in cfg.machines.items():
                 if machine.hostname == hostname:
                     caps = machine.capabilities
                     break

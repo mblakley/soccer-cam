@@ -12,8 +12,8 @@ Two pre-generated games are created at init, timed to align with the simulator's
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ class MockTTTApiClient:
     Provides the same public interface as TTTApiClient for E2E testing.
     """
 
-    def __init__(self, base_time: Optional[datetime] = None, **kwargs: Any) -> None:
-        self._base_time = base_time or datetime.now(timezone.utc)
+    def __init__(self, base_time: datetime | None = None, **kwargs: Any) -> None:
+        self._base_time = base_time or datetime.now(UTC)
         self._authenticated = True
 
         # Pre-generate two games aligned with simulator groups
@@ -154,7 +154,7 @@ class MockTTTApiClient:
         return {"id": request_id, "status": "in_progress"}
 
     def fulfill_clip_request(
-        self, request_id: str, url: str, notes: Optional[str] = None
+        self, request_id: str, url: str, notes: str | None = None
     ) -> dict[str, Any]:
         for r in self._clip_requests:
             if r["id"] == request_id:
@@ -169,7 +169,7 @@ class MockTTTApiClient:
     # ------------------------------------------------------------------
 
     def get_pending_highlights(
-        self, camera_id: Optional[str] = None
+        self, camera_id: str | None = None
     ) -> list[dict[str, Any]]:
         # camera_id is accepted but ignored (mirrors v1 TTT behavior).
         return [r for r in self._highlights if r.get("status") == "pending"]
@@ -186,7 +186,7 @@ class MockTTTApiClient:
                 return dict(r)
         return {"id": reel_id, "status": "pending"}
 
-    def claim_highlight(self, reel_id: str, camera_id: str) -> Optional[dict[str, Any]]:
+    def claim_highlight(self, reel_id: str, camera_id: str) -> dict[str, Any] | None:
         """Return updated reel on success; return None if already claimed (409)."""
         for r in self._highlights:
             if r["id"] == reel_id:
@@ -203,7 +203,7 @@ class MockTTTApiClient:
 
     def report_blocker(
         self, reel_id: str, camera_id: str, reason: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         for r in self._highlights:
             if r["id"] == reel_id:
                 r["unrenderable_reason"] = reason[:500]
@@ -230,7 +230,7 @@ class MockTTTApiClient:
         reel_id: str,
         *,
         file_path: str,
-        youtube_video_id: Optional[str],
+        youtube_video_id: str | None,
     ) -> dict[str, Any]:
         for r in self._highlights:
             if r["id"] == reel_id:
@@ -260,8 +260,8 @@ class MockTTTApiClient:
     def get_schedule(
         self,
         team_id: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[dict[str, Any]]:
         logger.debug("Mock get_schedule for team %s", team_id)
         return list(self._games)
@@ -295,7 +295,7 @@ class MockTTTApiClient:
     def get_game_sessions(
         self,
         team_id: str,
-        recording_group_dir: Optional[str] = None,
+        recording_group_dir: str | None = None,
     ) -> list[dict[str, Any]]:
         sessions = list(self._game_sessions.values())
         if recording_group_dir:
@@ -312,7 +312,7 @@ class MockTTTApiClient:
         recording_group_dir: str,
         game_date: str,
         opponent_name: str,
-        video_youtube_id: Optional[str] = None,
+        video_youtube_id: str | None = None,
         status: str = "recording_complete",
     ) -> dict[str, Any]:
         session_id = str(uuid.uuid4())
@@ -438,9 +438,9 @@ class MockTTTApiClient:
         recording_id: str,
         stage: str,
         status: str,
-        error_message: Optional[str] = None,
-        youtube_url: Optional[str] = None,
-        youtube_video_id: Optional[str] = None,
+        error_message: str | None = None,
+        youtube_url: str | None = None,
+        youtube_video_id: str | None = None,
     ) -> dict[str, Any]:
         logger.debug(
             "Mock update_recording_status %s: %s=%s", recording_id, stage, status
@@ -458,7 +458,7 @@ class MockTTTApiClient:
             self._recordings[recording_id][f"{stage}_status"] = status
         return entry
 
-    def get_high_water_mark(self, camera_id: str) -> Optional[str]:
+    def get_high_water_mark(self, camera_id: str) -> str | None:
         logger.debug("Mock get_high_water_mark for camera %s", camera_id)
         # Return the latest recording_end among all recordings for this camera
         latest = None
@@ -479,7 +479,7 @@ class MockTTTApiClient:
     # Command polling & auto-record rules
     # ------------------------------------------------------------------
 
-    def get_auto_record_rules(self, camera_id: str) -> Optional[dict[str, Any]]:
+    def get_auto_record_rules(self, camera_id: str) -> dict[str, Any] | None:
         logger.debug("Mock get_auto_record_rules for camera %s", camera_id)
         return self._auto_record_rules or None
 

@@ -6,7 +6,7 @@ without Chrome. The point of these tests is to lock in the contract
 turns a successful page into a TeamSnapCredentials object).
 """
 
-from typing import Callable
+from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +17,6 @@ from video_grouper.api_integrations.teamsnap_dev_portal_automation import (
     TeamSnapAutomationError,
     obtain_teamsnap_credentials,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tiny fake driver — strongly typed enough to exercise the SUT

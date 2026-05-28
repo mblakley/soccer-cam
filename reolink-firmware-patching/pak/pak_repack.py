@@ -31,7 +31,9 @@ Examples:
 
 import struct
 import sys
-from reolink_crc import compute as compute_reolink_crc, CRC_FIELD_OFFSET
+
+from reolink_crc import CRC_FIELD_OFFSET
+from reolink_crc import compute as compute_reolink_crc
 
 HEADER_SIZE = 0x18
 ENTRY_SIZE = 0x48

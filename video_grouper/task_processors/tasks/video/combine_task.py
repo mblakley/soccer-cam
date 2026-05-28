@@ -2,18 +2,19 @@
 Combine task for combining multiple DAV files into a single MP4 video.
 """
 
-import os
 import logging
-from typing import List, Dict, Any
+import os
 from dataclasses import dataclass
+from typing import Any
 
-from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
 from video_grouper.utils.ffmpeg_utils import combine_videos
 from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
 )
+
+from .base_ffmpeg_task import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class CombineTask(BaseFfmpegTask):
         """Return the group directory path."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -60,7 +61,7 @@ class CombineTask(BaseFfmpegTask):
     # Files produced by the pipeline itself that should not be combined
     EXCLUDE_PREFIXES = ("combined",)
 
-    def get_dav_files(self) -> List[str]:
+    def get_dav_files(self) -> list[str]:
         """
         Get the list of video files to combine from the group directory.
 
@@ -156,7 +157,7 @@ class CombineTask(BaseFfmpegTask):
         return f"CombineTask({os.path.basename(self.group_dir)})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CombineTask":
+    def from_dict(cls, data: dict[str, Any]) -> "CombineTask":
         """
         Create a CombineTask from serialized data.
 
@@ -169,7 +170,7 @@ class CombineTask(BaseFfmpegTask):
         return cls(group_dir=data["group_dir"])
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "CombineTask":
+    def deserialize(cls, data: dict[str, object]) -> "CombineTask":
         """
         Deserialize a CombineTask from its serialized data.
 

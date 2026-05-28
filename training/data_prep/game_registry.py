@@ -130,9 +130,7 @@ def _detect_video_format(gdir: Path) -> tuple[str, list[Path]]:
         return "gopro", gopro
 
     # Processed combined video
-    processed = [f for f in gdir.glob("*raw*.mp4")] + [
-        f for f in gdir.glob("combined*.mp4")
-    ]
+    processed = list(gdir.glob("*raw*.mp4")) + list(gdir.glob("combined*.mp4"))
     if processed:
         return "processed", processed
 

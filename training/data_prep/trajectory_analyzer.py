@@ -549,7 +549,7 @@ def analyze_game(
             seg_trajs[t.segment].append(t)
 
         dominant_set: set[int] = set()
-        for seg, seg_ts in seg_trajs.items():
+        for _seg, seg_ts in seg_trajs.items():
             ranked = sorted(
                 seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True
             )
@@ -591,7 +591,7 @@ def analyze_game(
                 seg_trajs_e[t.segment].append(t)
 
             combined_set: set[int] = set()
-            for seg, seg_ts in seg_trajs_e.items():
+            for _seg, seg_ts in seg_trajs_e.items():
                 ranked = sorted(seg_ts, key=lambda x: x.score_combined, reverse=True)
                 for t in ranked[:top_k]:
                     combined_set.add(id(t))
@@ -632,7 +632,7 @@ def analyze_game(
                 seg_trajs_f[t.segment].append(t)
 
             stitch_set: set[int] = set()
-            for seg, seg_ts in seg_trajs_f.items():
+            for _seg, seg_ts in seg_trajs_f.items():
                 ranked = sorted(
                     seg_ts, key=lambda x: x.length * x.max_displacement, reverse=True
                 )
