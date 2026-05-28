@@ -336,39 +336,3 @@ class UpdateManager:
             shutil.rmtree(self.temp_dir)
         except Exception as e:
             logger.error(f"Error cleaning up: {e}")
-
-
-async def check_and_update(
-    current_version: str,
-    github_repo: str,
-    service_name: str = "VideoGrouperService",
-) -> bool:
-    """
-    Convenience function to check for and install updates.
-    Returns True if an update was successfully installed, False otherwise.
-    """
-    update_manager = UpdateManager(current_version, github_repo, service_name)
-    try:
-        try:
-            has_update, version_info = await update_manager.check_for_updates()
-        except NetworkError as e:
-            logger.warning(f"Network error checking for updates: {e}")
-            return False
-        except UpdateCheckError as e:
-            logger.error(f"Error checking for updates: {e}")
-            return False
-
-        if has_update:
-            logger.info(f"New version {version_info['version']} available")
-            try:
-                if await update_manager.download_update(version_info):
-                    if update_manager.install_update():
-                        logger.info("Update installed successfully")
-                        return True
-            except NetworkError as e:
-                logger.warning(f"Network error during update: {e}")
-            except (UpdateDownloadError, UpdateInstallError) as e:
-                logger.error(f"Error during update: {e}")
-        return False
-    finally:
-        update_manager.cleanup()

@@ -11,7 +11,6 @@ import pytest
 from video_grouper.update.update_manager import (
     NetworkError,
     UpdateManager,
-    check_and_update,
     resolve_api_url,
 )
 
@@ -391,54 +390,6 @@ class TestInstallUpdate:
             ["taskkill", "/F", "/IM", "VideoGrouperTray.exe"],
             capture_output=True,
         )
-
-
-# --- Convenience Function Tests ---
-
-
-class TestCheckAndUpdate:
-    @pytest.mark.asyncio
-    async def test_no_update_returns_false(self):
-        with patch("video_grouper.update.update_manager.UpdateManager") as MockManager:
-            instance = MockManager.return_value
-            instance.check_for_updates = AsyncMock(return_value=(False, None))
-            instance.cleanup = MagicMock()
-
-            result = await check_and_update("0.2.0", "mblakley/soccer-cam")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_full_update_flow(self):
-        version_info = {
-            "version": "0.3.0",
-            "tag_name": "v0.3.0",
-            "assets": SAMPLE_RELEASE["assets"],
-        }
-
-        with patch("video_grouper.update.update_manager.UpdateManager") as MockManager:
-            instance = MockManager.return_value
-            instance.check_for_updates = AsyncMock(return_value=(True, version_info))
-            instance.download_update = AsyncMock(return_value=True)
-            instance.install_update = MagicMock(return_value=True)
-            instance.cleanup = MagicMock()
-
-            result = await check_and_update("0.1.0", "mblakley/soccer-cam")
-
-        assert result is True
-        instance.download_update.assert_awaited_once_with(version_info)
-        instance.install_update.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_network_error_returns_false(self):
-        with patch("video_grouper.update.update_manager.UpdateManager") as MockManager:
-            instance = MockManager.return_value
-            instance.check_for_updates = AsyncMock(side_effect=NetworkError("offline"))
-            instance.cleanup = MagicMock()
-
-            result = await check_and_update("0.1.0", "mblakley/soccer-cam")
-
-        assert result is False
 
 
 # --- URL Resolution Tests ---
