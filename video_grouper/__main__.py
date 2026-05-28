@@ -1,14 +1,15 @@
 #!/usr/bin/env python
+import argparse
+import asyncio
 import os
 import sys
-import asyncio
-import argparse
 from pathlib import Path
-from video_grouper.video_grouper_app import VideoGrouperApp
-from video_grouper.utils.paths import get_shared_data_path
+
+from video_grouper.utils.config import create_default_config, load_config
 from video_grouper.utils.locking import FileLock
-from video_grouper.utils.config import load_config, create_default_config
-from video_grouper.utils.logger import setup_logging, get_logger
+from video_grouper.utils.logger import get_logger, setup_logging
+from video_grouper.utils.paths import get_shared_data_path
+from video_grouper.video_grouper_app import VideoGrouperApp
 
 # Configure basic logging first, will be updated with config later
 setup_logging(level="INFO", app_name="video_grouper")

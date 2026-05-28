@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 def resolve_recording_dir(
-    storage_path: str, recording_group_dir: Optional[str]
-) -> Optional[str]:
+    storage_path: str, recording_group_dir: str | None
+) -> str | None:
     """Resolve a TTT-supplied recording_group_dir to a local absolute path.
 
     Returns the absolute directory path if it exists locally, else ``None``.
@@ -43,7 +42,7 @@ def resolve_recording_dir(
     return None
 
 
-def find_combined_video(recording_dir: str) -> Optional[str]:
+def find_combined_video(recording_dir: str) -> str | None:
     """Find ``combined.mp4`` in a recording directory tree.
 
     Looks for ``combined.mp4`` directly inside ``recording_dir``, then one

@@ -269,7 +269,7 @@ def main():
         logger.info("Saved %d detections to %s", len(detections), args.output)
     else:
         # Print summary
-        frames_with_dets = len(set(d["frame_idx"] for d in detections))
+        frames_with_dets = len({d["frame_idx"] for d in detections})
         logger.info(
             "Summary: %d detections across %d frames", len(detections), frames_with_dets
         )

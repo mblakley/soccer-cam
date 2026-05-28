@@ -1,14 +1,14 @@
-import os
-import sys
-import subprocess
 import json
-import httpx
 import logging
-import tempfile
+import os
 import shutil
-from typing import Tuple, Optional, TypedDict
+import subprocess
+import sys
+import tempfile
+from typing import TypedDict
 
-from packaging.version import Version, InvalidVersion
+import httpx
+from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class UpdateManager:
             300.0, connect=10.0
         )  # 300s read timeout, 10s connect
 
-    async def check_for_updates(self) -> Tuple[bool, Optional[VersionInfo]]:
+    async def check_for_updates(self) -> tuple[bool, VersionInfo | None]:
         """
         Check GitHub Releases for a newer version.
         Returns a tuple of (has_update, version_info).
@@ -95,7 +95,7 @@ class UpdateManager:
                     return False, None
                 except httpx.RequestError as e:
                     logger.error(f"Network error checking for updates: {e}")
-                    raise NetworkError(f"Failed to connect to GitHub API: {e}")
+                    raise NetworkError(f"Failed to connect to GitHub API: {e}") from e
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON from GitHub API: {e}")
                     return False, None
@@ -103,7 +103,7 @@ class UpdateManager:
         except Exception as e:
             if not isinstance(e, UpdateError):
                 logger.error(f"Unexpected error checking for updates: {e}")
-                raise UpdateCheckError(f"Failed to check for updates: {e}")
+                raise UpdateCheckError(f"Failed to check for updates: {e}") from e
             raise
 
         # Parse version from tag
@@ -174,14 +174,14 @@ class UpdateManager:
                     return False
                 except httpx.RequestError as e:
                     logger.error(f"Network error downloading file: {e}")
-                    raise NetworkError(f"Failed to download file: {e}")
+                    raise NetworkError(f"Failed to download file: {e}") from e
 
             return True
 
         except Exception as e:
             if not isinstance(e, UpdateError):
                 logger.error(f"Unexpected error downloading file: {e}")
-                raise UpdateDownloadError(f"Failed to download file: {e}")
+                raise UpdateDownloadError(f"Failed to download file: {e}") from e
             raise
 
     async def download_update(self, version_info: VersionInfo) -> bool:
@@ -229,7 +229,7 @@ class UpdateManager:
                 win32serviceutil.StopService(self.service_name)
             except Exception as e:
                 logger.error(f"Error stopping service: {e}")
-                raise UpdateInstallError(f"Failed to stop service: {e}")
+                raise UpdateInstallError(f"Failed to stop service: {e}") from e
 
             # Kill the tray process so its exe can be overwritten
             try:
@@ -266,7 +266,7 @@ class UpdateManager:
             except Exception as e:
                 logger.error(f"Error starting service: {e}")
                 self._restore_backups(backup_files)
-                raise UpdateInstallError(f"Failed to start service: {e}")
+                raise UpdateInstallError(f"Failed to start service: {e}") from e
 
             # Clean up
             self._cleanup_backups(backup_files)

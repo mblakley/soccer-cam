@@ -10,18 +10,19 @@ This processor acts as the central coordinator for NTFY interactions:
 """
 
 import asyncio
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
+from typing import Any
 
+from video_grouper.models import MatchInfo
+from video_grouper.task_processors.services.match_info_service import MatchInfoService
+from video_grouper.utils.config import Config
+from video_grouper.utils.paths import get_combined_video_path
+
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
 from .services.ntfy_service import NtfyService
 from .tasks.ntfy import BaseNtfyTask, NtfyTaskFactory
-from video_grouper.models import MatchInfo
-from .base_queue_processor import QueueProcessor
-from video_grouper.utils.config import Config
-from .queue_type import QueueType
-from video_grouper.task_processors.services.match_info_service import MatchInfoService
-from video_grouper.utils.paths import get_combined_video_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class NtfyProcessor(QueueProcessor):
         ntfy_service: NtfyService,
         match_info_service: MatchInfoService,
         poll_interval: int = 30,
-        video_processor: Optional[Any] = None,
+        video_processor: Any | None = None,
     ):
         """
         Initialize the NTFY queue processor.
@@ -63,7 +64,7 @@ class NtfyProcessor(QueueProcessor):
         self.poll_interval = poll_interval
         self.video_processor = video_processor
         self._stopping = False
-        self._response_events: Dict[str, asyncio.Event] = {}
+        self._response_events: dict[str, asyncio.Event] = {}
 
     @property
     def queue_type(self) -> QueueType:
@@ -123,7 +124,7 @@ class NtfyProcessor(QueueProcessor):
                         return
                     try:
                         await asyncio.wait_for(event.wait(), timeout=30.0)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.debug(f"NTFY: Still waiting for response to {item}")
                         continue
             finally:
@@ -177,7 +178,7 @@ class NtfyProcessor(QueueProcessor):
                 self.ntfy_service.clear_pending_task(group_dir)
 
     async def _recreate_queued_task(
-        self, group_dir: str, task_type: str, metadata: Dict[str, Any]
+        self, group_dir: str, task_type: str, metadata: dict[str, Any]
     ) -> None:
         """Recreate a task that was queued but not sent."""
         logger.info(f"Recreating queued task for {group_dir}: {task_type}")

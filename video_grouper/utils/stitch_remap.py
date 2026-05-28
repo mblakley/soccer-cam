@@ -20,7 +20,6 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -42,7 +41,7 @@ class StitchProfile:
     dx_anchors: list[tuple[int, int]]
 
     @classmethod
-    def from_dict(cls, d: dict) -> "StitchProfile":
+    def from_dict(cls, d: dict) -> StitchProfile:
         anchors = [(int(a[0]), int(a[1])) for a in d["dx_anchors"]]
         return cls(
             source_width=int(d["source_width"]),
@@ -60,7 +59,7 @@ class StitchProfile:
         }
 
 
-def load_profile(path: str | Path) -> Optional[StitchProfile]:
+def load_profile(path: str | Path) -> StitchProfile | None:
     """Return the parsed profile, or None if the file doesn't exist or is invalid."""
     p = Path(path)
     if not p.exists():

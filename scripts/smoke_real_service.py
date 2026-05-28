@@ -48,7 +48,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -491,7 +491,7 @@ def build_storage_tree(
                 "skip": False,
                 "screenshot_path": None,
                 "group_dir": str(group_dir),
-                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
                 "error_message": None,
             }
         },
@@ -792,7 +792,7 @@ def main() -> int:
     # Recording start: ~10 minutes ago. Tags taken now will fall at offsets
     # roughly 9-10 minutes in (we don't depend on this exactly since
     # video_offset_seconds is computed by the service from wall-clock).
-    recording_start = datetime.now(timezone.utc) - timedelta(minutes=10)
+    recording_start = datetime.now(UTC) - timedelta(minutes=10)
     recording_dir_name = SMOKE_MARKER + recording_start.astimezone().strftime(
         "%Y.%m.%d-%H.%M.%S"
     )

@@ -6,13 +6,14 @@ non-player objects (hopefully the ball).
 Uses person detection on r0 region to build masks.
 """
 
-import cv2
 import json
 import logging
-import numpy as np
 import time
 from collections import defaultdict
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)

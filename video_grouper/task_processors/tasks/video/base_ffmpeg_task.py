@@ -4,10 +4,9 @@ Base class for FFmpeg tasks.
 
 import logging
 from abc import abstractmethod
-from typing import Dict
 
-from ..base_task import BaseTask
 from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class BaseFfmpegTask(BaseTask):
         """Execute the FFmpeg task."""
         pass
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """
         Convert task to dictionary format (alias for serialize for backward compatibility).
 

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from datetime import datetime
+from typing import Any, TypedDict
 
 
 class CameraUnreachableError(Exception):
@@ -72,7 +72,7 @@ class Camera(ABC):
     @abstractmethod
     async def get_file_list(
         self, start_time: datetime = None, end_time: datetime = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get list of recording files from the camera."""
         pass
 
@@ -110,7 +110,7 @@ class Camera(ABC):
         """Whether this camera supports programmatic file deletion."""
         return False
 
-    async def delete_files(self, file_paths: List[str]) -> int:
+    async def delete_files(self, file_paths: list[str]) -> int:
         """Delete recording files from the camera's storage.
 
         Not all cameras support this. Check supports_file_deletion first.
@@ -129,7 +129,7 @@ class Camera(ABC):
         pass
 
     @abstractmethod
-    def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
+    def get_connected_timeframes(self) -> list[tuple[datetime, datetime | None]]:
         """Returns a list of timeframes when the camera was connected.
 
         Each timeframe is a tuple of (start_time, end_time), where end_time is None
@@ -142,7 +142,7 @@ class Camera(ABC):
 
     @property
     @abstractmethod
-    def connection_events(self) -> List[Tuple[datetime, str]]:
+    def connection_events(self) -> list[tuple[datetime, str]]:
         """Get list of connection events."""
         pass
 
@@ -154,7 +154,7 @@ class Camera(ABC):
 
     # ── Configuration push (optional) ─────────────────────────────────
 
-    async def get_current_settings(self) -> List["ConfigResult"]:
+    async def get_current_settings(self) -> list["ConfigResult"]:
         """Read current camera configuration for display.
 
         Returns a list of ConfigResult dicts describing the current state
@@ -162,7 +162,7 @@ class Camera(ABC):
         """
         return []
 
-    async def apply_optimal_settings(self, timezone: str = "") -> List["ConfigResult"]:
+    async def apply_optimal_settings(self, timezone: str = "") -> list["ConfigResult"]:
         """Push optimal settings for 24/7 soccer recording.
 
         Args:

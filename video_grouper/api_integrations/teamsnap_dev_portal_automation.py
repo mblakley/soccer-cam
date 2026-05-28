@@ -41,7 +41,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -230,7 +229,7 @@ def obtain_teamsnap_credentials(
             pass
 
 
-def _find_existing_app(driver, app_name: str) -> Optional[str]:
+def _find_existing_app(driver, app_name: str) -> str | None:
     """Return the existing application id if one named ``app_name`` exists.
 
     Walks the listing table and matches on the first cell text. Returns

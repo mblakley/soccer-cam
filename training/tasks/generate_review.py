@@ -74,8 +74,8 @@ def run_generate_review(
         review_dir.mkdir(parents=True, exist_ok=True)
 
         # Build filmstrip of the dominant track (evenly spaced samples)
-        from training.tasks.sonnet_qa import _get_trajectory_sample_frames
         from training.data_prep.trajectory_gaps import build_gap_filmstrip
+        from training.tasks.sonnet_qa import _get_trajectory_sample_frames
 
         traj_tuples = [(p["fi"], p["seg"], p["px"], p["py"]) for p in track_points]
         sample_frames = _get_trajectory_sample_frames(

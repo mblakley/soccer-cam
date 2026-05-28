@@ -79,9 +79,18 @@ path = "video_grouper/version.py"
 target-version = "py313"
 
 [tool.ruff.lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
-select = ["E4", "E7", "E9", "F"]
-ignore = []
+# Enable a curated set of rules — matches TTT backend config style.
+# - E4/E7/E9: pycodestyle errors (imports, statement, syntax)
+# - F:       Pyflakes (undefined names, unused imports/vars)
+# - B:       flake8-bugbear (likely-buggy patterns)
+# - I:       isort (import sorting)
+# - C4:      flake8-comprehensions (clearer comprehensions)
+# - UP:      pyupgrade (modern Python idioms; py313 target)
+select = ["E4", "E7", "E9", "F", "B", "I", "C4", "UP"]
+ignore = [
+    # B008: function-call-as-default — FastAPI/Pydantic Depends(), Field() rely on this idiom.
+    "B008",
+]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
@@ -104,7 +113,18 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/test_service.py" = ["E402"] 
+"tests/test_service.py" = ["E402"]
+# Tests/e2e inspect_* are interactive window-dumper scripts; their EnumWindows
+# callbacks are invoked synchronously so the closure-over-loop-var pattern is
+# safe, but ruff's B023 can't see that.
+"tests/e2e/inspect_*.py" = ["B023"]
+# Training is research/experiment code (per memory [Scope experiments tight]).
+# B007 unused loop var, B023 lambda-over-loop-var, UP031 percent format are
+# fine for short-lived experimental scripts; not worth churning.
+"training/**/*.py" = ["B007", "B023", "UP031"]
+# Firmware reverse-engineering scripts: short-lived debug tools, percent
+# format is fine.
+"reolink-firmware-patching/**/*.py" = ["UP031"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

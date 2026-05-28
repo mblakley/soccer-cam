@@ -7,7 +7,6 @@ realistic test data for comprehensive end-to-end testing scenarios.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ class MockPlayMetricsAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict[str, Union[str, datetime]]]:
+    ) -> dict[str, str | datetime] | None:
         """Find a game for the recording timeframe."""
         if not self.logged_in:
             logger.warning("Mock PlayMetrics: Not logged in, cannot find games")
@@ -88,13 +87,13 @@ class MockPlayMetricsAPI:
 
     def get_team_schedule(
         self, team_id: str, start_date: datetime, end_date: datetime
-    ) -> List[Dict[str, Union[str, datetime]]]:
+    ) -> list[dict[str, str | datetime]]:
         """Get team schedule within a date range."""
         # For testing, just return our mock game if it's within the range
         mock_game = self.find_game_for_recording(start_date, end_date)
         return [mock_game] if mock_game else []
 
-    def get_teams(self) -> List[Dict[str, Union[str, int]]]:
+    def get_teams(self) -> list[dict[str, str | int]]:
         """Get list of teams for the authenticated user."""
         return [
             {
@@ -105,7 +104,7 @@ class MockPlayMetricsAPI:
             }
         ]
 
-    def get_team_info(self, team_id: str) -> Dict[str, Union[str, int]]:
+    def get_team_info(self, team_id: str) -> dict[str, str | int]:
         """Get information about a specific team."""
         return {
             "id": team_id,
@@ -145,7 +144,7 @@ class MockPlayMetricsService:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict[str, Union[str, datetime]]]:
+    ) -> dict[str, str | datetime] | None:
         """Find a game for the recording timeframe."""
         if not self.enabled or not self.api:
             return None
@@ -161,7 +160,7 @@ class MockPlayMetricsService:
         """Get the configured team name."""
         return getattr(self.config, "team_name", "Lightning")
 
-    def get_team_names(self) -> List[str]:
+    def get_team_names(self) -> list[str]:
         """Get list of team names."""
         teams = getattr(self.config, "teams", [])
         if teams:

@@ -2,33 +2,32 @@
 
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 import pytz
 
-from pathlib import Path
-
+from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.camera_poller import (
     CameraPoller,
     find_group_directory,
 )
-from video_grouper.models import RecordingFile
-from video_grouper.models import DirectoryState
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 
 
@@ -614,7 +613,7 @@ class TestHomeRecordingDeletion:
 
         await poller._handle_deletion_response("yes, delete home recordings")
 
-        with open(poller._cleanup_state_path, "r") as f:
+        with open(poller._cleanup_state_path) as f:
             state = json.load(f)
         assert state["approved"] is True
 

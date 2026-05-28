@@ -5,14 +5,14 @@ Match information service that coordinates between different data sources.
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
+from typing import Any
 
-from .teamsnap_service import TeamSnapService
-from .playmetrics_service import PlayMetricsService
+from video_grouper.models import DirectoryState, MatchInfo
+
 from .ntfy_service import NtfyService
-from video_grouper.models import DirectoryState
-from video_grouper.models import MatchInfo
+from .playmetrics_service import PlayMetricsService
+from .teamsnap_service import TeamSnapService
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class MatchInfoService:
 
     def _get_recording_timespan(
         self, group_dir: str
-    ) -> Optional[Tuple[datetime, datetime]]:
+    ) -> tuple[datetime, datetime] | None:
         """
         Get the recording timespan for a group directory.
 
@@ -103,7 +103,7 @@ class MatchInfoService:
 
     def _parse_timespan_from_filenames(
         self, group_dir: str
-    ) -> Optional[Tuple[datetime, datetime]]:
+    ) -> tuple[datetime, datetime] | None:
         """Scan ``group_dir`` for Reolink clip filenames and extract timespan.
 
         Reolink cameras produce files like
@@ -150,7 +150,7 @@ class MatchInfoService:
 
     def _collect_games_from_apis(
         self, recording_start: datetime, recording_end: datetime
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Collect games from all available APIs.
 
@@ -208,9 +208,7 @@ class MatchInfoService:
 
         return games
 
-    def _select_best_game(
-        self, games: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+    def _select_best_game(self, games: list[dict[str, Any]]) -> dict[str, Any] | None:
         """
         Select the best game from multiple options.
 
@@ -239,7 +237,7 @@ class MatchInfoService:
         logger.info(f"Selected first game from {len(games)} options")
         return games[0]
 
-    def _convert_game_to_match_info(self, game: Dict[str, Any]) -> Dict[str, str]:
+    def _convert_game_to_match_info(self, game: dict[str, Any]) -> dict[str, str]:
         """
         Convert a game dictionary to match info format.
 
@@ -452,7 +450,7 @@ class MatchInfoService:
         """
         return self.ntfy_service.is_waiting_for_input(group_dir)
 
-    def get_pending_tasks(self) -> Dict[str, Dict[str, Any]]:
+    def get_pending_tasks(self) -> dict[str, dict[str, Any]]:
         """Get all pending tasks."""
         return self.ntfy_service.get_pending_tasks()
 

@@ -1,19 +1,18 @@
 """Tests for camera auto-discovery and Reolink configuration."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from video_grouper.cameras.discovery import (
     DiscoveredCamera,
     _extract_ips_from_probe_match,
+    change_password,
+    configure_always_record,
     discover_onvif_devices,
     probe_reolink,
-    configure_always_record,
-    change_password,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────
 

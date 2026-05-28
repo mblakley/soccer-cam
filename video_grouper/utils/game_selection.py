@@ -16,22 +16,22 @@ game for a given recording timespan. The algorithm:
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Type alias: each candidate is (game_object, game_start_utc, game_end_utc)
-GameCandidate = Tuple[Any, datetime, datetime]
+GameCandidate = tuple[Any, datetime, datetime]
 
 MAX_PROXIMITY = timedelta(hours=2)
 
 
 def select_best_game(
-    candidates: List[GameCandidate],
+    candidates: list[GameCandidate],
     recording_start: datetime,
     recording_end: datetime,
     game_label_fn=None,
-) -> Optional[Any]:
+) -> Any | None:
     """
     Select the best game for a recording from a list of candidates.
 
@@ -113,7 +113,7 @@ def select_best_game(
     best_distance = float("inf")
 
     # First pass: games whose midpoint is within the recording window
-    for game, g_start, g_end, g_mid in nearby:
+    for game, _g_start, _g_end, g_mid in nearby:
         if recording_start <= g_mid <= recording_end:
             dist = abs((g_mid - recording_mid).total_seconds())
             if dist < best_distance:
@@ -122,7 +122,7 @@ def select_best_game(
 
     # Fallback: closest midpoint overall
     if best_game is None:
-        for game, g_start, g_end, g_mid in nearby:
+        for game, _g_start, _g_end, g_mid in nearby:
             dist = abs((g_mid - recording_mid).total_seconds())
             if dist < best_distance:
                 best_distance = dist

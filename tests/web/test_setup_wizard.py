@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from video_grouper.utils.config import TTTConfig, load_config
 from video_grouper.web.auth_server import create_app
 
-
 # Same-origin Origin header so auth_server's middleware accepts the
 # wizard's POSTs (host_and_origin_check rejects state-changing requests
 # with no Origin/Referer).

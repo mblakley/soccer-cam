@@ -246,14 +246,14 @@ def do_tile(game_id: str, video_path: Path, frame_interval: int = 4):
 
     try:
         from training.distributed.label_job import (
-            TILE_SIZE,
             NUM_COLS,
             NUM_ROWS,
             STEP_X,
             STEP_Y,
+            TILE_SIZE,
         )
     except ImportError:
-        from label_job import TILE_SIZE, NUM_COLS, NUM_ROWS, STEP_X, STEP_Y
+        from label_job import NUM_COLS, NUM_ROWS, STEP_X, STEP_Y, TILE_SIZE
 
     seg_id = video_path.stem
     tiles_dir = Path(TILES_DIR) / game_id

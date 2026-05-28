@@ -6,9 +6,10 @@ and NTFY response service to simulate the complete user interaction flow.
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,13 @@ class MockNtfyMessage:
     topic: str
     message: str
     title: str
-    tags: List[str]
+    tags: list[str]
     priority: int
-    image_path: Optional[str]
-    actions: List[Dict[str, Any]]
+    image_path: str | None
+    actions: list[dict[str, Any]]
     sent_at: str
-    response: Optional[str] = None
-    responded_at: Optional[str] = None
+    response: str | None = None
+    responded_at: str | None = None
 
 
 class MockNtfyCommunication:
@@ -51,8 +52,8 @@ class MockNtfyCommunication:
         if self._initialized:
             return
 
-        self._messages: Dict[str, MockNtfyMessage] = {}
-        self._response_callbacks: List[Callable[[MockNtfyMessage], None]] = []
+        self._messages: dict[str, MockNtfyMessage] = {}
+        self._response_callbacks: list[Callable[[MockNtfyMessage], None]] = []
         self._message_counter = 0
         self._initialized = True
         logger.info("Mock NTFY communication system initialized")
@@ -62,10 +63,10 @@ class MockNtfyCommunication:
         topic: str,
         message: str,
         title: str,
-        tags: List[str],
+        tags: list[str],
         priority: int,
-        image_path: Optional[str],
-        actions: List[Dict[str, Any]],
+        image_path: str | None,
+        actions: list[dict[str, Any]],
     ) -> str:
         """
         Send a mock NTFY message.
@@ -112,7 +113,7 @@ class MockNtfyCommunication:
 
         return message_id
 
-    def get_pending_messages(self, topic: str) -> List[MockNtfyMessage]:
+    def get_pending_messages(self, topic: str) -> list[MockNtfyMessage]:
         """
         Get pending messages for a topic.
 
@@ -150,9 +151,7 @@ class MockNtfyCommunication:
         logger.info(f"Mock NTFY: Response received for {message_id}: {response}")
         return True
 
-    def wait_for_response(
-        self, message_id: str, timeout: float = 60.0
-    ) -> Optional[str]:
+    def wait_for_response(self, message_id: str, timeout: float = 60.0) -> str | None:
         """
         Wait for a response to a message.
 
@@ -191,7 +190,7 @@ class MockNtfyCommunication:
         self._response_callbacks.append(callback)
         logger.info("Mock NTFY: Response callback registered")
 
-    def get_message(self, message_id: str) -> Optional[MockNtfyMessage]:
+    def get_message(self, message_id: str) -> MockNtfyMessage | None:
         """
         Get a specific message by ID.
 

@@ -1,8 +1,7 @@
-import os
 import asyncio
 import logging
+import os
 import shutil
-from typing import Optional
 
 
 # ``av`` is loaded lazily via the proxy below. The tray PyInstaller
@@ -45,14 +44,14 @@ _EXT_TO_AV_FORMAT = {
 }
 
 
-def _av_format_for(path: str) -> Optional[str]:
+def _av_format_for(path: str) -> str | None:
     return _EXT_TO_AV_FORMAT.get(os.path.splitext(path)[1].lower())
 
 
 def av_open_read(
     path: str,
     *,
-    format: Optional[str] = None,
+    format: str | None = None,
     timeout: float = AV_IO_TIMEOUT,
     **kwargs,
 ):
@@ -131,7 +130,7 @@ async def verify_ffmpeg_install() -> bool:
         return False
 
 
-def _get_video_duration_sync(file_path: str) -> Optional[float]:
+def _get_video_duration_sync(file_path: str) -> float | None:
     """Synchronous implementation: get video duration via av.open metadata."""
     with av_open_read(file_path) as container:
         if container.duration is not None:
@@ -143,7 +142,7 @@ def _get_video_duration_sync(file_path: str) -> Optional[float]:
     return None
 
 
-async def get_video_duration(file_path: str) -> Optional[float]:
+async def get_video_duration(file_path: str) -> float | None:
     """Get the duration of a video file using PyAV."""
     try:
         return await asyncio.to_thread(_get_video_duration_sync, file_path)
@@ -245,7 +244,7 @@ def _remux_dav_to_mp4_sync(file_path: str, output_path: str) -> str:
     return output_path
 
 
-async def async_convert_file(file_path: str) -> Optional[str]:
+async def async_convert_file(file_path: str) -> str | None:
     """Converts a video file to MP4 format using PyAV.
 
     Video stream is copied (no re-encoding), audio is re-encoded to AAC 192k.
@@ -269,7 +268,7 @@ async def async_convert_file(file_path: str) -> Optional[str]:
             f"Successfully converted {os.path.basename(file_path)} to {os.path.basename(output_path)}"
         )
         return output_path
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(
             f"Conversion timed out for {os.path.basename(file_path)} after {FFMPEG_TIMEOUT}s"
         )
@@ -303,7 +302,7 @@ def _create_screenshot_sync(
     video_path: str,
     output_path: str,
     time_offset: str,
-    max_dim: Optional[int] = None,
+    max_dim: int | None = None,
     quality: int = 95,
 ) -> bool:
     """Synchronous implementation: extract a single frame as JPEG.
@@ -378,7 +377,7 @@ async def create_screenshot(
     video_path: str,
     output_path: str,
     time_offset: str = "00:00:01",
-    max_dim: Optional[int] = None,
+    max_dim: int | None = None,
     quality: int = 95,
 ) -> bool:
     """Creates a screenshot from a video file.
@@ -411,7 +410,7 @@ async def create_screenshot(
 
 
 def _trim_video_sync(
-    input_path: str, output_path: str, start_offset: str, duration: Optional[str]
+    input_path: str, output_path: str, start_offset: str, duration: str | None
 ) -> bool:
     """Synchronous implementation: trim video with stream copy."""
     # Parse start offset
@@ -503,7 +502,7 @@ def _trim_video_sync(
 
 
 async def trim_video(
-    input_path: str, output_path: str, start_offset: str, duration: Optional[str] = None
+    input_path: str, output_path: str, start_offset: str, duration: str | None = None
 ) -> bool:
     """Trims a video file using stream copy via PyAV.
 
@@ -526,7 +525,7 @@ async def trim_video(
         else:
             _cleanup_temp(temp_output)
         return result
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(f"Trim timed out after {FFMPEG_TIMEOUT}s")
         _cleanup_temp(temp_output)
         return False
@@ -693,7 +692,7 @@ async def combine_videos(
         else:
             _cleanup_temp(temp_output)
         return result
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(f"Combine timed out after {timeout}s")
         _cleanup_temp(temp_output)
         return False

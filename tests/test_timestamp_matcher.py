@@ -1,6 +1,6 @@
 """Unit tests for the timestamp matcher — pure offset computation functions."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -35,7 +35,7 @@ class TestComputeCombinedOffset:
             _make_recording("2026-01-15 10:30:00", "2026-01-15 11:00:00"),
         ]
         # Tag at 10:10 UTC (= 10:10 local since we use same tz)
-        tag = datetime(2026, 1, 15, 10, 10, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 10, 0, tzinfo=UTC)
         offset = compute_combined_offset(tag, files, camera_timezone="UTC")
         assert offset == pytest.approx(600.0)  # 10 minutes
 
@@ -44,19 +44,19 @@ class TestComputeCombinedOffset:
             _make_recording("2026-01-15 10:00:00", "2026-01-15 10:30:00"),
             _make_recording("2026-01-15 10:30:00", "2026-01-15 11:00:00"),
         ]
-        tag = datetime(2026, 1, 15, 10, 45, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 45, 0, tzinfo=UTC)
         offset = compute_combined_offset(tag, files, camera_timezone="UTC")
         # 30 min (first file) + 15 min into second file = 45 min = 2700s
         assert offset == pytest.approx(2700.0)
 
     def test_tag_before_all_files_returns_none(self):
         files = [_make_recording("2026-01-15 10:00:00", "2026-01-15 10:30:00")]
-        tag = datetime(2026, 1, 15, 9, 50, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 9, 50, 0, tzinfo=UTC)
         assert compute_combined_offset(tag, files, camera_timezone="UTC") is None
 
     def test_tag_after_all_files_returns_none(self):
         files = [_make_recording("2026-01-15 10:00:00", "2026-01-15 10:30:00")]
-        tag = datetime(2026, 1, 15, 11, 0, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 11, 0, 0, tzinfo=UTC)
         assert compute_combined_offset(tag, files, camera_timezone="UTC") is None
 
     def test_tag_in_gap_within_tolerance_snaps(self):
@@ -65,7 +65,7 @@ class TestComputeCombinedOffset:
             _make_recording("2026-01-15 10:30:03", "2026-01-15 11:00:00"),
         ]
         # Tag falls in the 3-second gap
-        tag = datetime(2026, 1, 15, 10, 30, 1, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 30, 1, tzinfo=UTC)
         offset = compute_combined_offset(tag, files, camera_timezone="UTC")
         # Should snap to end of first file = 1800s
         assert offset == pytest.approx(1800.0)
@@ -77,15 +77,13 @@ class TestComputeCombinedOffset:
             _make_recording("2026-01-15 10:20:00", "2026-01-15 10:30:00"),
         ]
         # Tag at 10:25 — skipped file excluded, so combined = 10min (file1) + 5min into file3
-        tag = datetime(2026, 1, 15, 10, 25, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 25, 0, tzinfo=UTC)
         offset = compute_combined_offset(tag, files, camera_timezone="UTC")
         assert offset == pytest.approx(900.0)  # 600 + 300
 
     def test_empty_files_returns_none(self):
         assert (
-            compute_combined_offset(
-                datetime.now(timezone.utc), [], camera_timezone="UTC"
-            )
+            compute_combined_offset(datetime.now(UTC), [], camera_timezone="UTC")
             is None
         )
 
@@ -94,7 +92,7 @@ class TestComputeCombinedOffset:
             _make_recording("2026-01-15 10:00:00", "2026-01-15 10:30:00"),
             _make_recording("2026-01-15 10:30:00", "2026-01-15 11:00:00"),
         ]
-        tag = datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 30, 0, tzinfo=UTC)
         offset = compute_combined_offset(tag, files, camera_timezone="UTC")
         # Exactly at boundary — falls in both files, first match wins (end of file 1)
         assert offset is not None
@@ -102,7 +100,7 @@ class TestComputeCombinedOffset:
 
     def test_tag_just_after_last_file_within_tolerance(self):
         files = [_make_recording("2026-01-15 10:00:00", "2026-01-15 10:30:00")]
-        tag = datetime(2026, 1, 15, 10, 30, 2, tzinfo=timezone.utc)
+        tag = datetime(2026, 1, 15, 10, 30, 2, tzinfo=UTC)
         offset = compute_combined_offset(
             tag, files, camera_timezone="UTC", gap_tolerance_seconds=5.0
         )

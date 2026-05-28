@@ -1,5 +1,7 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock
+
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.utils.config import NtfyConfig
 

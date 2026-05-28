@@ -1,15 +1,17 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Add the project root to the Python path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PyQt6.QtWidgets import QApplication
-from video_grouper.tray.main import SystemTrayIcon
-from video_grouper.utils.config import Config, AppConfig, StorageConfig
+
 from video_grouper.ball_tracking.config import BallTrackingConfig
+from video_grouper.tray.main import SystemTrayIcon
+from video_grouper.utils.config import AppConfig, Config, StorageConfig
 
 
 # We need a QApplication instance to test PyQt components

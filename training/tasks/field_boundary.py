@@ -299,9 +299,9 @@ def _detect_with_onnx(pano: np.ndarray, manifest: GameManifest) -> dict | None:
     """
     try:
         from video_grouper.inference.field_detector import (
+            build_field_polygon,
             create_field_session,
             detect_field_keypoints,
-            build_field_polygon,
         )
     except ImportError as e:
         logger.warning("ONNX field detector not available: %s", e)

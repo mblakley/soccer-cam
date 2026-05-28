@@ -1,26 +1,25 @@
-import os
 import asyncio
+import os
 import platform
 from pathlib import Path
-from typing import Optional
 
+from video_grouper.api_integrations.command_executor import CommandExecutor
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
-from video_grouper.api_integrations.command_executor import CommandExecutor
-from video_grouper.utils.config import Config
-from video_grouper.utils.error_tracker import ErrorTracker
-from video_grouper.utils.logger import setup_logging_from_config, get_logger
 from video_grouper.task_processors import (
-    StateAuditor,
     CameraPoller,
-    DownloadProcessor,
-    VideoProcessor,
-    UploadProcessor,
-    NtfyProcessor,
-    ClipProcessor,
     ClipDiscoveryProcessor,
+    ClipProcessor,
+    DownloadProcessor,
+    NtfyProcessor,
+    StateAuditor,
+    UploadProcessor,
+    VideoProcessor,
 )
 from video_grouper.task_processors.register_tasks import register_service_tasks
+from video_grouper.utils.config import Config
+from video_grouper.utils.error_tracker import ErrorTracker
+from video_grouper.utils.logger import get_logger, setup_logging_from_config
 
 # Configure logging will be done after config is loaded
 logger = get_logger(__name__)
@@ -32,7 +31,7 @@ class VideoGrouperApp:
     Each task processor is self-contained and manages its own queue and state.
     """
 
-    def __init__(self, config: Config, camera=None, config_path: Optional[Path] = None):
+    def __init__(self, config: Config, camera=None, config_path: Path | None = None):
         """
         Initialize the VideoGrouperApp with task processors.
 
@@ -69,7 +68,7 @@ class VideoGrouperApp:
         setup_logging_from_config(config)
 
         # Stash for the auth server's config editor (Phase 1).
-        self.config_path: Optional[Path] = config_path
+        self.config_path: Path | None = config_path
 
         # Initialize mock services if environment variables are set
         try:
@@ -115,11 +114,11 @@ class VideoGrouperApp:
         if bt.enabled and bt.provider == "homegrown":
             # Side-effect import: registers the BallTrackingProvider implementations.
             import video_grouper.ball_tracking.register_providers  # noqa: F401
-            from video_grouper.task_processors.ball_tracking_processor import (
-                BallTrackingProcessor,
-            )
             from video_grouper.task_processors.ball_tracking_discovery_processor import (
                 BallTrackingDiscoveryProcessor,
+            )
+            from video_grouper.task_processors.ball_tracking_processor import (
+                BallTrackingProcessor,
             )
 
             self.ball_tracking_processor = BallTrackingProcessor(
@@ -217,14 +216,14 @@ class VideoGrouperApp:
 
         self.ntfy_processor = None
         if self.config.ntfy.enabled:
-            from video_grouper.task_processors.services.ntfy_service import NtfyService
             from video_grouper.task_processors.services.match_info_service import (
                 MatchInfoService,
             )
             from video_grouper.task_processors.services.mock_services import (
-                create_teamsnap_service,
                 create_playmetrics_service,
+                create_teamsnap_service,
             )
+            from video_grouper.task_processors.services.ntfy_service import NtfyService
 
             # Create services first
             teamsnap_service = create_teamsnap_service(self.config.teamsnap)
@@ -284,10 +283,10 @@ class VideoGrouperApp:
         self.highlight_reel_processor = None
         if self.config.ttt.enabled:
             try:
+                from video_grouper.api_integrations.ttt_api import TTTApiClient
                 from video_grouper.task_processors.clip_request_processor import (
                     ClipRequestProcessor,
                 )
-                from video_grouper.api_integrations.ttt_api import TTTApiClient
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
                 ttt_client = TTTApiClient(
@@ -637,7 +636,6 @@ class VideoGrouperApp:
         # Ensure built-in camera modules are imported (triggers registration)
         import video_grouper.cameras.dahua  # noqa: F401
         import video_grouper.cameras.reolink  # noqa: F401
-
         from video_grouper.cameras import create_camera
 
         logger.info(
@@ -706,8 +704,9 @@ class VideoGrouperApp:
         auth_task = None
         if self.config.ttt.auth_server_enabled:
             try:
-                from video_grouper.web.auth_server import create_app
                 import uvicorn
+
+                from video_grouper.web.auth_server import create_app
 
                 def _auth_status_provider() -> dict:
                     # get_queue_sizes() reports -1 for processors that aren't
@@ -883,7 +882,7 @@ class VideoGrouperApp:
             self._shutdown_event.set()
             return
 
-    async def _wait_for_config_stable(self, last_mtime: float) -> Optional[float]:
+    async def _wait_for_config_stable(self, last_mtime: float) -> float | None:
         """Sleep until the config has been stable for the coalesce window.
 
         Returns the new last_mtime, or None if cancelled. If more
@@ -908,7 +907,7 @@ class VideoGrouperApp:
                 continue
             return last_mtime
 
-    async def _wait_for_download_idle(self, last_mtime: float) -> Optional[float]:
+    async def _wait_for_download_idle(self, last_mtime: float) -> float | None:
         """Defer restart while any download is in-flight.
 
         Returns the (possibly updated) last_mtime, or None if

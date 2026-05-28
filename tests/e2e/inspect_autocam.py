@@ -3,9 +3,10 @@ Standalone script to inspect the Autocam GUI and find correct control identifier
 Run this directly: uv run python tests/e2e/inspect_autocam.py
 """
 
-import time
 import subprocess
 import sys
+import time
+
 from pywinauto import Desktop
 from pywinauto.application import Application
 

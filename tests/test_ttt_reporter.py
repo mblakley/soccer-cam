@@ -1,8 +1,9 @@
 """Tests for the TTT reporter module."""
 
 import asyncio
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.utils.error_tracker import ErrorTracker

@@ -30,8 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, TypedDict
+from datetime import UTC, datetime, timedelta
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 import pytz
@@ -64,7 +64,7 @@ _DEFAULT_TZ = "America/New_York"
 class TeamInfo(TypedDict, total=False):
     id: str
     name: str
-    calendar_url: Optional[str]
+    calendar_url: str | None
     role_id: str
 
 
@@ -77,12 +77,12 @@ class GameInfo(TypedDict, total=False):
     end_time: datetime
     is_game: bool
     is_home: bool
-    opponent: Optional[str]
+    opponent: str | None
     my_team_name: str
     time: str
 
 
-def _get_firebase_api_key() -> Optional[str]:
+def _get_firebase_api_key() -> str | None:
     """Read the Firebase Web API key, checking build-time secrets first.
 
     Returns None (instead of raising) so the integration can degrade
@@ -144,22 +144,22 @@ class PlayMetricsAPI:
             self.team_name = getattr(config, "team_name", "Test Team")
 
         # Optional pre-supplied refresh_token + role_id (skips signInWithPassword)
-        self.refresh_token: Optional[str] = getattr(config, "refresh_token", None)
-        self.current_role_id: Optional[str] = getattr(config, "current_role_id", None)
+        self.refresh_token: str | None = getattr(config, "refresh_token", None)
+        self.current_role_id: str | None = getattr(config, "current_role_id", None)
 
         # Cached short-lived auth state
-        self._id_token: Optional[str] = None
-        self._id_token_expires_at: Optional[datetime] = None
-        self._access_key: Optional[str] = None
-        self._roles: Optional[List[dict]] = None
+        self._id_token: str | None = None
+        self._id_token_expires_at: datetime | None = None
+        self._access_key: str | None = None
+        self._roles: list[dict] | None = None
 
         # Public flag — preserved from the legacy class so callers that
         # check `api.logged_in` keep working.
         self.logged_in = False
 
         # Cache for events to avoid redundant fetches within a single run
-        self.events_cache: List[GameInfo] = []
-        self.last_cache_update: Optional[datetime] = None
+        self.events_cache: list[GameInfo] = []
+        self.last_cache_update: datetime | None = None
         self.cache_duration = timedelta(hours=1)
 
     # ------------------------------------------------------------------
@@ -254,7 +254,7 @@ class PlayMetricsAPI:
         return bool(
             self._id_token
             and self._id_token_expires_at
-            and datetime.now(timezone.utc) < self._id_token_expires_at
+            and datetime.now(UTC) < self._id_token_expires_at
         )
 
     def _sign_in_with_password(self) -> None:
@@ -274,7 +274,7 @@ class PlayMetricsAPI:
         self._id_token = data["idToken"]
         self.refresh_token = data["refreshToken"]
         expires_in = int(data.get("expiresIn", 3600))
-        self._id_token_expires_at = datetime.now(timezone.utc) + timedelta(
+        self._id_token_expires_at = datetime.now(UTC) + timedelta(
             seconds=expires_in - 60
         )
         self._access_key = None  # Bound to id_token, invalidate cached key
@@ -298,12 +298,12 @@ class PlayMetricsAPI:
         if new_refresh:
             self.refresh_token = new_refresh
         expires_in = int(data.get("expires_in", 3600))
-        self._id_token_expires_at = datetime.now(timezone.utc) + timedelta(
+        self._id_token_expires_at = datetime.now(UTC) + timedelta(
             seconds=expires_in - 60
         )
         self._access_key = None
 
-    def _fetch_roles(self) -> List[dict]:
+    def _fetch_roles(self) -> list[dict]:
         """Discover the roles available to the current user.
 
         ``POST /firebase/user/login`` with an empty body returns a
@@ -323,7 +323,7 @@ class PlayMetricsAPI:
         payload = response.json()
         return payload.get("roles") or []
 
-    def _pick_role_for_team(self, roles: List[dict]) -> str:
+    def _pick_role_for_team(self, roles: list[dict]) -> str:
         """Pick the role whose club_name is a prefix of the configured team_name.
 
         PlayMetrics roles are scoped by club, not by team. The configured team
@@ -382,7 +382,7 @@ class PlayMetricsAPI:
     # Calendar fetch
     # ------------------------------------------------------------------
 
-    def _fetch_calendars(self, start_date: datetime, end_date: datetime) -> List[dict]:
+    def _fetch_calendars(self, start_date: datetime, end_date: datetime) -> list[dict]:
         """Fetch raw calendar JSON for the given window.
 
         Retries once on 401 by refreshing both id_token and access_key.
@@ -446,7 +446,7 @@ class PlayMetricsAPI:
     # Public API: teams + events
     # ------------------------------------------------------------------
 
-    def get_available_teams(self) -> List[TeamInfo]:
+    def get_available_teams(self) -> list[TeamInfo]:
         """Return every team visible to the user, across all roles.
 
         Used by the tray onboarding wizard to populate the team picker.
@@ -461,7 +461,7 @@ class PlayMetricsAPI:
             return []
 
         seen: set = set()
-        teams: List[TeamInfo] = []
+        teams: list[TeamInfo] = []
 
         # Iterate every role (not just the current one) so the picker
         # shows everything the user has access to.
@@ -526,7 +526,7 @@ class PlayMetricsAPI:
 
         return teams
 
-    def get_events(self) -> List[GameInfo]:
+    def get_events(self) -> list[GameInfo]:
         """Return all events (games + practices) for the configured team."""
         if not self.enabled:
             logger.warning("PlayMetrics integration not enabled")
@@ -573,7 +573,7 @@ class PlayMetricsAPI:
         self.last_cache_update = datetime.now()
         return events
 
-    def get_games(self) -> List[GameInfo]:
+    def get_games(self) -> list[GameInfo]:
         """Return only the game events from the configured team's calendar."""
         events = self.get_events()
         games = [e for e in events if e.get("is_game")]
@@ -582,7 +582,7 @@ class PlayMetricsAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[GameInfo]:
+    ) -> GameInfo | None:
         """Return the calendar game that best matches a recording timespan."""
         if not self.enabled:
             return None
@@ -596,8 +596,8 @@ class PlayMetricsAPI:
             recording_start = local_tz.localize(recording_start)
         if recording_end.tzinfo is None:
             recording_end = local_tz.localize(recording_end)
-        recording_start = recording_start.astimezone(timezone.utc)
-        recording_end = recording_end.astimezone(timezone.utc)
+        recording_start = recording_start.astimezone(UTC)
+        recording_end = recording_end.astimezone(UTC)
 
         candidates = []
         for game in games:
@@ -606,14 +606,14 @@ class PlayMetricsAPI:
             if not game_start:
                 continue
             if game_start.tzinfo is None:
-                game_start = game_start.replace(tzinfo=timezone.utc)
+                game_start = game_start.replace(tzinfo=UTC)
             else:
-                game_start = game_start.astimezone(timezone.utc)
+                game_start = game_start.astimezone(UTC)
             if game_end:
                 if game_end.tzinfo is None:
-                    game_end = game_end.replace(tzinfo=timezone.utc)
+                    game_end = game_end.replace(tzinfo=UTC)
                 else:
-                    game_end = game_end.astimezone(timezone.utc)
+                    game_end = game_end.astimezone(UTC)
             else:
                 game_end = game_start + timedelta(hours=2)
             candidates.append((game, game_start, game_end))
@@ -651,14 +651,14 @@ class PlayMetricsAPI:
     # Response parser — ported verbatim from the legacy implementation
     # ------------------------------------------------------------------
 
-    def _parse_api_calendars(self, data: Any) -> List[GameInfo]:
+    def _parse_api_calendars(self, data: Any) -> list[GameInfo]:
         """Parse PlayMetrics calendar JSON into GameInfo dicts.
 
         Filters games to the configured team_id when one is set so the
         caller only sees its own games. Practices are returned alongside
         games (as ``is_game=False``) for parity with the legacy parser.
         """
-        events: List[GameInfo] = []
+        events: list[GameInfo] = []
         local_tz = self._get_configured_timezone()
 
         if not isinstance(data, list):
@@ -714,7 +714,7 @@ class PlayMetricsAPI:
 
     def _parse_game_dict(
         self, game: dict, team_name_in_response: str, local_tz
-    ) -> Optional[GameInfo]:
+    ) -> GameInfo | None:
         start_str = (
             game.get("start_datetime") or game.get("start_date") or game.get("date")
         )
@@ -774,7 +774,7 @@ class PlayMetricsAPI:
 
     def _parse_practice_dict(
         self, practice: dict, team_name_in_response: str, local_tz
-    ) -> Optional[GameInfo]:
+    ) -> GameInfo | None:
         start_str = (
             practice.get("start_datetime")
             or practice.get("start_date")

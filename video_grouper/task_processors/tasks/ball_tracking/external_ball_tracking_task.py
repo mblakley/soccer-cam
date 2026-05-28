@@ -61,9 +61,9 @@ class ExternalBallTrackingTask(BallTrackingTaskBase):
                 return False
 
             from video_grouper.ball_tracking import (  # noqa: F401
+                create_provider,
                 register_providers,
             )
-            from video_grouper.ball_tracking import create_provider
             from video_grouper.ball_tracking.base import ProviderContext
 
             provider = create_provider(self.provider_name, self.provider_config)

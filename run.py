@@ -3,9 +3,9 @@
 Simple wrapper script to run the video_grouper application.
 """
 
+import asyncio
 import os
 import sys
-import asyncio
 
 # Add the current directory to the Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

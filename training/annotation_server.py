@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -205,7 +205,7 @@ async def submit_results(game_id: str, packet_results: PacketResults):
             "ball_position": result.ball_position,
             "duration_ms": result.duration_ms,
             "reviewer": "phone",
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "submitted_at": datetime.now(UTC).isoformat(),
         }
         if result.auto_skipped:
             entry["auto_skipped"] = True
@@ -788,7 +788,7 @@ async def submit_ball_verify_result(result: dict):
             "frame_idx": result["frame_idx"],
             "verdict": result["verdict"],
             "notes": result.get("notes", ""),
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "submitted_at": datetime.now(UTC).isoformat(),
         }
     )
     results.sort(key=lambda r: r["frame_idx"])
@@ -1030,7 +1030,7 @@ def submit_gap_result(packet_id: str, result: dict):
             "tile_stem": tile_stem,
             "action": result.get("action", ""),
             "ball_position": result.get("ball_position"),
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "submitted_at": datetime.now(UTC).isoformat(),
         }
     )
 
@@ -1423,6 +1423,7 @@ def _ensure_sample_packs(gm, game_dir: Path, samples: list[dict]):
 async def get_phase_frame(game_id: str, segment: str, frame_idx: int):
     """Serve a full panoramic frame stitched from tiles, downscaled for the browser."""
     import cv2
+
     from training.data_prep.game_manifest import GameManifest
     from training.tasks.field_boundary import reconstruct_panoramic
 

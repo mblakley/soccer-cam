@@ -15,10 +15,11 @@ import logging
 import os
 from pathlib import Path
 
+from video_grouper.utils.config import Config
+
 from .base_polling_processor import PollingProcessor
 from .tasks.ball_tracking import BallTrackingTaskBase
 from .tasks.ball_tracking.utils import get_ball_tracking_io_paths
-from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
                 continue
 
             try:
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     state_data = json.load(f)
                 status = state_data.get("status")
             except (json.JSONDecodeError, OSError) as e:

@@ -3,8 +3,8 @@ PlayMetrics service for match information lookup.
 """
 
 import logging
-from typing import Dict, Optional, Any
 from datetime import datetime
+from typing import Any
 
 from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 
@@ -105,7 +105,7 @@ class PlayMetricsService:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Find a game that matches the recording timespan.
 

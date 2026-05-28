@@ -5,26 +5,28 @@ This module provides functionality to send notifications with screenshots to use
 and receive responses to identify when a game starts and ends.
 """
 
-import os
-import logging
-import json
 import asyncio
-import httpx
-import uuid
-import time
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Any
-from pathlib import Path
-from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
-from video_grouper.utils.config import NtfyConfig
+import json
+import logging
+import os
 import re
+import time
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from video_grouper.utils.config import NtfyConfig
+from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
 
 logger = logging.getLogger(__name__)
 
 
 async def compress_image(
     input_path: str,
-    output_path: Optional[str] = None,
+    output_path: str | None = None,
     quality: int = 60,
     max_width: int = 800,
 ) -> str:
@@ -269,7 +271,7 @@ class NtfyAPI:
                 )
                 await asyncio.sleep(10)  # Wait before retrying
 
-    async def _process_response(self, response_data: Dict[str, Any]):
+    async def _process_response(self, response_data: dict[str, Any]):
         """Process a response from the NTFY topic."""
         try:
             # Log all responses for debugging
@@ -547,7 +549,7 @@ class NtfyAPI:
 
     async def ask_game_start_time(
         self, combined_video_path: str, group_dir: str, time_offset_minutes: int = 5
-    ) -> Optional[str]:
+    ) -> str | None:
         """Send notification about the need to set game start time."""
         if not self.enabled:
             logger.warning(
@@ -585,7 +587,7 @@ class NtfyAPI:
         group_dir: str,
         start_time_offset: str,
         time_offset_minutes: int = 5,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Send notification about the need to set game end time."""
         if not self.enabled:
             logger.warning(
@@ -621,10 +623,10 @@ class NtfyAPI:
         self,
         message: str,
         title: str = None,
-        tags: List[str] = None,
+        tags: list[str] = None,
         priority: int = None,
         image_path: str = None,
-        actions: List[Dict[str, Any]] = None,
+        actions: list[dict[str, Any]] = None,
     ) -> bool:
         """
         Send a notification to the NTFY topic.
@@ -734,7 +736,7 @@ class NtfyAPI:
 
     async def wait_for_response(
         self, message_id: str, timeout: float = 60.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Wait for a response to a specific message.
 
@@ -751,7 +753,7 @@ class NtfyAPI:
                     self.pending_messages[message_id], timeout=timeout
                 )
                 return response
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     f"Timed out waiting for response to message {message_id}"
                 )
@@ -765,8 +767,8 @@ class NtfyAPI:
         self,
         group_dir: str,
         combined_video_path: str,
-        existing_info: Dict[str, str] = None,
-    ) -> Dict[str, str]:
+        existing_info: dict[str, str] = None,
+    ) -> dict[str, str]:
         """
         Send notifications about missing team information fields.
 
@@ -848,8 +850,8 @@ class NtfyAPI:
         self,
         combined_video_path: str,
         group_dir: str,
-        game_options: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        game_options: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         """
         Send notification asking the user to resolve a conflict between games from different sources.
 
@@ -882,7 +884,7 @@ class NtfyAPI:
         if combined_video_path and os.path.exists(combined_video_path):
             try:
                 duration = await get_video_duration(combined_video_path)
-                if duration and isinstance(duration, (int, float)) and duration > 0:
+                if duration and isinstance(duration, int | float) and duration > 0:
                     mid_point = int(duration) // 2
                     time_offset = str(timedelta(seconds=mid_point)).split(".")[0]
             except Exception as e:
@@ -1029,7 +1031,7 @@ class NtfyAPI:
                 )
                 return None
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Timed out waiting for game conflict resolution")
             self._cleanup_pending_message(message_id)
             return None

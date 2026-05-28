@@ -6,7 +6,6 @@ import logging
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -49,7 +48,7 @@ def verify_plugin_bundle(
     zip_path: Path,
     public_keys: list[str],
     current_user_id: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> bool:
     """Verify a downloaded plugin zip before extraction.
 
@@ -134,7 +133,7 @@ def verify_extracted_plugin(
     plugin_root: Path,
     public_keys: list[str],
     current_user_id: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> bool:
     """Re-verify a plugin that has already been extracted to disk.
 
@@ -197,7 +196,7 @@ def verify_extracted_plugin(
         return False
 
 
-def read_manifest_expires_at(manifest_path: Path) -> Optional[datetime]:
+def read_manifest_expires_at(manifest_path: Path) -> datetime | None:
     """Read the expires_at timestamp from an on-disk manifest. None on failure."""
     try:
         data = json.loads(manifest_path.read_bytes())

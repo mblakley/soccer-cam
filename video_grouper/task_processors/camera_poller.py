@@ -1,17 +1,17 @@
 import json
-import os
 import logging
+import os
 from datetime import datetime, timedelta
-from typing import Optional, List
+
 import pytz
 
 from video_grouper.cameras.base import Camera
+from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_camera_state_path, get_home_cleanup_state_path
+
 from .base_polling_processor import PollingProcessor
-from video_grouper.models import DirectoryState
-from video_grouper.models import RecordingFile
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def create_directory(path):
 
 
 def find_group_directory(
-    file_start_time: datetime, storage_path: str, existing_dirs: List[str]
+    file_start_time: datetime, storage_path: str, existing_dirs: list[str]
 ) -> str:
     """
     Finds or creates a group directory for a video file based on its start time.
@@ -330,13 +330,13 @@ class CameraPoller(PollingProcessor):
                 f"CAMERA_POLLER: File sync complete. New high-water mark set to: {latest_end_time}"
             )
 
-    async def _get_latest_processed_time(self) -> Optional[datetime]:
+    async def _get_latest_processed_time(self) -> datetime | None:
         """Get the timestamp of the last processed video file for this camera."""
         state_path = get_camera_state_path(self.storage_path)
         if not os.path.exists(state_path):
             return None
         try:
-            with open(state_path, "r") as f:
+            with open(state_path) as f:
                 all_state = json.load(f)
             cam_state = all_state.get(self.camera.name, {})
             timestamp_str = cam_state.get("latest_video_time")
@@ -392,7 +392,7 @@ class CameraPoller(PollingProcessor):
 
     def _write_cleanup_state(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         file_infos: list,
         deletion_supported: bool = True,
     ) -> None:
@@ -525,7 +525,7 @@ class CameraPoller(PollingProcessor):
             state_path = get_camera_state_path(self.storage_path)
             all_state = {}
             if os.path.exists(state_path):
-                with open(state_path, "r") as f:
+                with open(state_path) as f:
                     all_state = json.load(f)
             cam_state = all_state.setdefault(self.camera.name, {})
             cam_state["latest_video_time"] = timestamp.strftime(default_date_format)

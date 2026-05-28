@@ -1,15 +1,15 @@
-import time
+import datetime
 import logging
 import os
 import subprocess
-import win32gui
-import psutil
-from pywinauto import Desktop
-import datetime
-from typing import Optional
+import time
 
-from video_grouper.utils.config import AutocamConfig
+import psutil
+import win32gui
+from pywinauto import Desktop
+
 from video_grouper.models.directory_state import DirectoryState
+from video_grouper.utils.config import AutocamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAME = "GUI.exe"
 
 
-def _find_autocam_hwnd() -> Optional[int]:
+def _find_autocam_hwnd() -> int | None:
     """Return the hwnd of an Once Sport Autocam window, or None.
 
     Uses win32gui.EnumWindows (fast, non-blocking) instead of
@@ -40,7 +40,7 @@ def _find_autocam_hwnd() -> Optional[int]:
 
 
 def _find_autocam_gui_pids(
-    since_epoch: Optional[float] = None,
+    since_epoch: float | None = None,
 ) -> list[int]:
     """Return PIDs of running GUI.exe processes (case-insensitive).
 
@@ -290,9 +290,9 @@ def _set_file_via_browse_dialog(
 
 def _wait_for_completion_and_cleanup(
     main_window,
-    state: Optional[DirectoryState],
-    output_path: Optional[str] = None,
-    tracked_pids: Optional[list[int]] = None,
+    state: DirectoryState | None,
+    output_path: str | None = None,
+    tracked_pids: list[int] | None = None,
 ) -> bool:
     """Poll AutoCam's Notification text until processing finishes, then clean up.
 
@@ -425,7 +425,7 @@ def _execute_autocam_gui_automation(
     executable_path: str,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Execute the autocam GUI automation process for Once Sport Autocam 3.x.
@@ -773,7 +773,7 @@ def run_autocam_on_file(
     autocam_config: AutocamConfig,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Automates the Once Autocam GUI to process a video file.

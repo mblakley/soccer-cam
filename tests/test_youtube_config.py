@@ -2,27 +2,28 @@
 Tests for YouTube configuration functionality, specifically playlist mapping.
 """
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from video_grouper.utils.config import (
-    load_config,
-    save_config,
+    AppConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
+    LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
     YouTubeConfig,
     YouTubePlaylistMapConfig,
-    Config,
-    CameraConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
-    LoggingConfig,
-    AppConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    AutocamConfig,
-    CloudSyncConfig,
+    load_config,
+    save_config,
 )
 
 

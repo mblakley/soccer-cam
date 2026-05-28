@@ -1,15 +1,15 @@
-import os
 import logging
+import os
 
 from video_grouper.cameras.base import Camera, CameraUnreachableError
+from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.video_processor import VideoProcessor
-from .base_queue_processor import QueueProcessor
-from video_grouper.models import DirectoryState
-from video_grouper.models import RecordingFile
-from .tasks.video import CombineTask
 from video_grouper.utils.config import Config
 from video_grouper.utils.disk_space import check_disk_space
+
+from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
+from .tasks.video import CombineTask
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +211,8 @@ class DownloadProcessor(QueueProcessor):
 
                         # Support both synchronous and asynchronous `add_work` implementations.
                         add_work_result = self.video_processor.add_work(combine_task)
-                        import inspect
                         import asyncio
+                        import inspect
 
                         if inspect.isawaitable(add_work_result):
                             await add_work_result

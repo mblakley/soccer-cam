@@ -1,10 +1,11 @@
-import os
-import pytest
 import logging
+import os
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
-from unittest.mock import patch
+import pytest
+
 from video_grouper.cameras.dahua import DahuaCamera
 from video_grouper.utils.config import CameraConfig
 

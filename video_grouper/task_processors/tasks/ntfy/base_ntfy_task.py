@@ -4,18 +4,18 @@ Base class for NTFY tasks.
 This provides the common interface and functionality for all NTFY tasks.
 """
 
-import os
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, TypedDict, Union
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, TypedDict
 
 from video_grouper.models import MatchInfo
-from video_grouper.utils.config import Config
-from video_grouper.task_processors.tasks.base_task import BaseTask
 from video_grouper.task_processors.queue_type import QueueType
 from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.task_processors.tasks.base_task import BaseTask
+from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class TaskMetadata(TypedDict, total=False):
     last_response: str
 
     # Custom metadata fields
-    custom_fields: dict[str, Union[str, int, float, bool]]
+    custom_fields: dict[str, str | int | float | bool]
 
 
 @dataclass
@@ -64,7 +64,7 @@ class BaseNtfyTask(BaseTask, ABC):
         group_dir: str,
         config: Config,
         ntfy_service: NtfyService,
-        metadata: Optional[TaskMetadata] = None,
+        metadata: TaskMetadata | None = None,
     ):
         """
         Initialize the base NTFY task.
@@ -95,7 +95,7 @@ class BaseNtfyTask(BaseTask, ABC):
         """Return the path of the item being processed."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, object]:
+    def serialize(self) -> dict[str, object]:
         """Serialize the task for state persistence."""
         return {
             "task_type": self.get_task_type(),
@@ -157,7 +157,7 @@ class BaseNtfyTask(BaseTask, ABC):
             return False
 
     @abstractmethod
-    async def create_question(self) -> Dict[str, Any]:
+    async def create_question(self) -> dict[str, Any]:
         """
         Create the question data for this task.
 
@@ -191,7 +191,7 @@ class BaseNtfyTask(BaseTask, ABC):
 
     async def generate_screenshot(
         self, video_path: str, time_seconds: int
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Generate a screenshot at the specified time.
 
@@ -203,8 +203,9 @@ class BaseNtfyTask(BaseTask, ABC):
             Path to the generated screenshot, or None if failed
         """
         try:
-            from video_grouper.utils.ffmpeg_utils import create_screenshot
             from datetime import timedelta
+
+            from video_grouper.utils.ffmpeg_utils import create_screenshot
 
             # Convert seconds to time string
             time_str = str(timedelta(seconds=time_seconds)).split(".")[0]
@@ -256,7 +257,7 @@ class BaseNtfyTask(BaseTask, ABC):
     async def _compress_image(
         self,
         input_path: str,
-        output_path: Optional[str] = None,
+        output_path: str | None = None,
         quality: int = 60,
         max_width: int = 800,
     ) -> str:
@@ -311,7 +312,7 @@ class BaseNtfyTask(BaseTask, ABC):
             logger.error(f"Error during image compression: {e}")
             return input_path
 
-    async def get_video_duration(self, video_path: str) -> Optional[int]:
+    async def get_video_duration(self, video_path: str) -> int | None:
         """
         Get video duration in seconds.
 

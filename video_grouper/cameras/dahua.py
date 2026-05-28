@@ -1,18 +1,20 @@
 import json
-import os
-import httpx
 import logging
+import os
 import time
+from datetime import UTC, datetime
+from typing import Any
+
 import aiofiles
-from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+import httpx
 import pytz
 
-from .base import Camera, ConfigResult, DeviceInfo
-from . import register_camera
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
+
+from . import register_camera
+from .base import Camera, ConfigResult, DeviceInfo
 
 # Default timeout for camera HTTP requests (30 seconds connect, 60 seconds read)
 CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
@@ -31,7 +33,7 @@ class DahuaCamera(Camera):
         self.username = config.username
         self.password = config.password
         self._state_file = get_camera_state_path(storage_path)
-        self._connection_events: List[ConnectionEvent] = []
+        self._connection_events: list[ConnectionEvent] = []
         self._is_connected = False
         self._log_dir = os.path.join(self.storage_path, "camera_http_logs")
         os.makedirs(self._log_dir, exist_ok=True)
@@ -86,10 +88,10 @@ class DahuaCamera(Camera):
         """Load this camera's state from the shared state file."""
         try:
             if os.path.exists(self._state_file):
-                with open(self._state_file, "r") as f:
+                with open(self._state_file) as f:
                     all_state = json.load(f)
                     state = all_state.get(self.config.name, {})
-                    self._connection_events: List[ConnectionEvent] = state.get(
+                    self._connection_events: list[ConnectionEvent] = state.get(
                         "connection_events", []
                     )
                     self._is_connected = state.get("is_connected", False)
@@ -102,7 +104,7 @@ class DahuaCamera(Camera):
             # Load existing state for other cameras
             all_state = {}
             if os.path.exists(self._state_file):
-                with open(self._state_file, "r") as f:
+                with open(self._state_file) as f:
                     all_state = json.load(f)
             all_state[self.config.name] = {
                 "connection_events": self._connection_events,
@@ -138,7 +140,7 @@ class DahuaCamera(Camera):
         self._connection_events.append(event)
         self._save_state()
 
-    def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
+    def get_connected_timeframes(self) -> list[tuple[datetime, datetime | None]]:
         """Returns a list of timeframes when the camera was connected."""
         timeframes = []
         start_time = None
@@ -231,7 +233,7 @@ class DahuaCamera(Camera):
 
     async def get_file_list(
         self, start_time: datetime, end_time: datetime
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get list of recording files from the camera."""
         try:
             auth = httpx.DigestAuth(self.username, self.password)
@@ -493,7 +495,7 @@ class DahuaCamera(Camera):
             logger.error(f"Error stopping recording: {e}")
             return False
 
-    async def delete_files(self, file_paths: List[str]) -> int:
+    async def delete_files(self, file_paths: list[str]) -> int:
         """Delete recording files from the camera. Not yet implemented for Dahua."""
         logger.warning("delete_files not implemented for Dahua cameras")
         return 0
@@ -582,7 +584,7 @@ class DahuaCamera(Camera):
             )
 
     @property
-    def connection_events(self) -> List[Tuple[datetime, str]]:
+    def connection_events(self) -> list[tuple[datetime, str]]:
         """Get list of connection events."""
         # This property might need to be updated or removed if it's used elsewhere,
         # as the internal format has changed. For now, returning an empty list
@@ -639,9 +641,7 @@ class DahuaCamera(Camera):
 
         # Fall back to auto-detect from system clock UTC offset
         try:
-            from datetime import timezone as dt_tz
-
-            offset = datetime.now(dt_tz.utc).astimezone().utcoffset()
+            offset = datetime.now(UTC).astimezone().utcoffset()
             if offset is not None:
                 offset_hours = int(offset.total_seconds() / 3600)
                 return cls._UTC_OFFSET_TO_DAHUA_TZ.get(offset_hours)

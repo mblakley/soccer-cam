@@ -4,18 +4,17 @@ Tests for YouTube playlist functionality with full mocking.
 These tests focus on the core playlist logic without complex file system dependencies.
 """
 
-import os
-import pytest
 import configparser
-from unittest.mock import patch, AsyncMock, MagicMock, mock_open
+import os
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
+import pytest
+
+from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.task_processors.tasks.upload.youtube_upload_task import (
     YoutubeUploadTask,
 )
-from video_grouper.task_processors.services.ntfy_service import NtfyService
-from video_grouper.models import MatchInfo
-from video_grouper.models import DirectoryState
-
 
 # Correct patch targets for dependencies used within YoutubeUploadTask
 YT_UPLOAD_TASK_PATH = "video_grouper.task_processors.tasks.upload.youtube_upload_task"
@@ -72,8 +71,8 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
     # Create a valid config object
     from video_grouper.utils.config import (
         Config,
-        YouTubeConfig,
         NtfyConfig,
+        YouTubeConfig,
         YouTubePlaylistMapConfig,
     )
 
@@ -168,8 +167,8 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     # Create config with playlist mapping
     from video_grouper.utils.config import (
         Config,
-        YouTubeConfig,
         NtfyConfig,
+        YouTubeConfig,
         YouTubePlaylistMapConfig,
     )
 
@@ -256,8 +255,8 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
     # Mock config to have no playlist mapping
     from video_grouper.utils.config import (
         Config,
-        YouTubeConfig,
         NtfyConfig,
+        YouTubeConfig,
         YouTubePlaylistMapConfig,
     )
 
@@ -327,8 +326,8 @@ async def test_youtube_upload_task_skips_request_if_already_waiting(
     # Mock config to have no playlist mapping
     from video_grouper.utils.config import (
         Config,
-        YouTubeConfig,
         NtfyConfig,
+        YouTubeConfig,
         YouTubePlaylistMapConfig,
     )
 

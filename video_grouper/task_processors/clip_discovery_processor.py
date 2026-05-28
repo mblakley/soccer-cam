@@ -7,6 +7,10 @@ import logging
 import os
 from datetime import datetime
 
+from video_grouper.api_integrations.moment_api_client import MomentApiClient
+from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.utils.config import Config
+from video_grouper.utils.paths import get_trimmed_video_path
 
 from .base_polling_processor import PollingProcessor
 from .services.timestamp_matcher import (
@@ -16,10 +20,6 @@ from .services.timestamp_matcher import (
 )
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
-from video_grouper.api_integrations.moment_api_client import MomentApiClient
-from video_grouper.models import DirectoryState, MatchInfo
-from video_grouper.utils.config import Config
-from video_grouper.utils.paths import get_trimmed_video_path
 
 logger = logging.getLogger(__name__)
 

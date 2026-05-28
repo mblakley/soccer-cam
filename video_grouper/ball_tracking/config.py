@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 class AutocamGuiProviderConfig(BaseModel):
     """Config for the ``autocam_gui`` provider (drives Once AutoCam GUI)."""
 
-    executable: Optional[str] = None
+    executable: str | None = None
 
 
 class HomegrownProviderConfig(BaseModel):
@@ -25,23 +25,23 @@ class HomegrownProviderConfig(BaseModel):
     options grow.
     """
 
-    enabled_stages: List[str] = Field(
+    enabled_stages: list[str] = Field(
         default_factory=lambda: ["stitch_correct", "detect", "track", "render"],
         alias="stages",
     )
 
     # stitch_correct
-    stitch_profile_path: Optional[str] = None
+    stitch_profile_path: str | None = None
 
     # detect — pick exactly one source:
     #   model_key: ask TTT for a license + encrypted artifact (production)
     #   model_path: load a plaintext .onnx from disk (dev / local testing)
-    model_key: Optional[str] = None
-    model_path: Optional[str] = None
-    detect_channel: Optional[str] = (
+    model_key: str | None = None
+    model_path: str | None = None
+    detect_channel: str | None = (
         None  # canary / beta / stable; defaults to stable on TTT
     )
-    detect_pipeline_version: Optional[str] = None
+    detect_pipeline_version: str | None = None
     device: str = "cuda:0"
     detect_confidence: float = 0.45
     detect_frame_interval: int = 4

@@ -5,11 +5,12 @@ Task for extracting a single clip from a trimmed video using FFmpeg.
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
-from ..base_task import BaseTask
-from ...queue_type import QueueType
 from video_grouper.utils.ffmpeg_utils import trim_video
+
+from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class ClipExtractionTask(BaseTask):
 
         return success
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         return {
             "task_type": self.task_type,
             "tag_id": self.tag_id,
@@ -84,7 +85,7 @@ class ClipExtractionTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, Any]) -> "ClipExtractionTask":
+    def deserialize(cls, data: dict[str, Any]) -> "ClipExtractionTask":
         return cls(
             tag_id=data["tag_id"],
             clip_id=data["clip_id"],

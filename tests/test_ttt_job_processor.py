@@ -2,26 +2,26 @@
 
 import asyncio
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
     TTTConfig,
+    YouTubeConfig,
 )
 
 

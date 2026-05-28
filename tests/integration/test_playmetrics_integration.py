@@ -1,6 +1,8 @@
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
+
+import pytest
+
 from video_grouper.api_integrations.playmetrics import PlayMetricsAPI
 from video_grouper.utils.config import PlayMetricsConfig
 
@@ -56,7 +58,7 @@ async def test_get_team_events(mock_config):
     api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock event data
-    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=UTC)
     mock_events = [
         {
             "id": "1",
@@ -93,7 +95,7 @@ async def test_find_game_for_recording(mock_config):
     api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock event data
-    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=UTC)
     mock_events = [
         {
             "id": "1",
@@ -150,7 +152,7 @@ async def test_populate_match_info(mock_config):
     api = PlayMetricsAPI(mock_config, app_config)
 
     # Create mock game data
-    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=timezone.utc)
+    game_time = datetime(2025, 6, 22, 14, 0, 0, tzinfo=UTC)
     mock_game = {
         "id": "1",
         "title": "Game vs Test Opponent",

@@ -8,6 +8,7 @@ as a subprocess and monitors its progress through log files.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -17,8 +18,6 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
-import json
 
 import pytest
 
@@ -78,9 +77,9 @@ class E2ETestRunner:
         setup_logging_from_config(self.config)
 
         # Process management
-        self.video_grouper_process: Optional[subprocess.Popen] = None
-        self.tray_process: Optional[subprocess.Popen] = None
-        self.processes_to_cleanup: List[subprocess.Popen] = []
+        self.video_grouper_process: subprocess.Popen | None = None
+        self.tray_process: subprocess.Popen | None = None
+        self.processes_to_cleanup: list[subprocess.Popen] = []
 
         # PID tracking file for persistent process management
         self.pid_file = self.project_root / "tests/e2e/test_pids.json"
@@ -117,19 +116,19 @@ class E2ETestRunner:
         }
 
         # Stage timestamps for timeout tracking
-        self.stage_timestamps: Dict[str, datetime] = {}
+        self.stage_timestamps: dict[str, datetime] = {}
 
         # Multi-group completion tracking: counts how many times key events occur.
         # With 2 groups, each count must reach 2 for the pipeline to be complete.
         self.expected_group_count = 2
-        self.multi_group_counts: Dict[str, int] = {
+        self.multi_group_counts: dict[str, int] = {
             "groups_created": 0,
             "combines_completed": 0,
             "trims_completed": 0,
             "autocams_completed": 0,
             "uploads_completed": 0,
         }
-        self.multi_group_patterns: Dict[str, List[str]] = {
+        self.multi_group_patterns: dict[str, list[str]] = {
             "groups_created": ["Created new group directory"],
             "combines_completed": [
                 "VIDEO: Successfully completed task: CombineTask",
@@ -274,7 +273,7 @@ class E2ETestRunner:
             # Load existing PIDs
             pids = {}
             if self.pid_file.exists():
-                with open(self.pid_file, "r") as f:
+                with open(self.pid_file) as f:
                     pids = json.load(f)
 
             # Add new process
@@ -292,7 +291,7 @@ class E2ETestRunner:
         """Kill any processes whose PIDs are stored in the PID file."""
         try:
             if self.pid_file.exists():
-                with open(self.pid_file, "r") as f:
+                with open(self.pid_file) as f:
                     pids = json.load(f)
             else:
                 logger.info("No PID file found")
@@ -558,7 +557,7 @@ class E2ETestRunner:
                         # Read the files before deletion
                         for key, file_path in youtube_credentials_backup.items():
                             if file_path.exists():
-                                with open(file_path, "r") as f:
+                                with open(file_path) as f:
                                     youtube_credentials_backup[key] = f.read()
 
                     shutil.rmtree(self.test_data_path)
@@ -1021,7 +1020,7 @@ class E2ETestRunner:
         """Read the contents of a log file."""
         try:
             if log_path.exists():
-                with open(log_path, "r", encoding="utf-8") as f:
+                with open(log_path, encoding="utf-8") as f:
                     return f.read()
             return ""
         except Exception as e:
@@ -1044,7 +1043,7 @@ class E2ETestRunner:
                 return False
 
             # Read the NTFY service state
-            with open(ntfy_state_file, "r", encoding="utf-8") as f:
+            with open(ntfy_state_file, encoding="utf-8") as f:
                 state = json.load(f)
 
             # Check for pending tasks with "waiting_for_input" status
@@ -1065,7 +1064,7 @@ class E2ETestRunner:
             logger.error(f"Error checking NTFY service state: {e}")
             return False
 
-    def _check_match_info_completion(self, group_dir: str) -> Dict[str, bool]:
+    def _check_match_info_completion(self, group_dir: str) -> dict[str, bool]:
         """
         Check if match_info.ini is properly populated with team info and timing info.
 
@@ -1126,7 +1125,7 @@ class E2ETestRunner:
 
         return False
 
-    def _update_pipeline_progress(self, log_content: str) -> Dict[str, bool]:
+    def _update_pipeline_progress(self, log_content: str) -> dict[str, bool]:
         """Update pipeline progress based on log content."""
         # Also check tray agent logs for autocam processing
         tray_log_path = self.test_logs_path / "tray_subprocess.log"
@@ -1261,7 +1260,7 @@ class E2ETestRunner:
         all_valid = True
 
         for i, (group_dir, expected_opponent) in enumerate(
-            zip(group_dirs, expected_opponents)
+            zip(group_dirs, expected_opponents, strict=False)
         ):
             config = configparser.ConfigParser()
             config.read(group_dir / "match_info.ini", encoding="utf-8")

@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from video_grouper.utils.config import TTTConfig, load_config
 from video_grouper.web.auth_server import create_app
 
-
 # Same-origin header so auth_server's middleware accepts the editor's
 # POSTs (rejected without Origin/Referer after the OAuth-state CSRF fix).
 _SAME_ORIGIN = {"origin": "http://localhost:8765"}

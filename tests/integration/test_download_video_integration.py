@@ -10,32 +10,33 @@ This test verifies:
 6. Video processing tasks are created and executed
 """
 
+import asyncio
+import json
 import os
 import tempfile
-import json
-import asyncio
-from unittest.mock import Mock, AsyncMock
 from datetime import datetime
-import pytest
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+from video_grouper.models import RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.task_processors.video_processor import VideoProcessor
-from video_grouper.models import RecordingFile
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 
 
@@ -196,7 +197,7 @@ class TestDownloadVideoIntegration:
             # Note: Video state file may not exist if no tasks were queued due to missing files
 
             # Check state file contents
-            with open(download_state_file, "r") as f:
+            with open(download_state_file) as f:
                 download_state = json.load(f)
                 assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
@@ -356,7 +357,7 @@ class TestDownloadVideoIntegration:
                 setup_storage_environment, "download_queue_state.json"
             )
 
-            with open(download_state_file, "r") as f:
+            with open(download_state_file) as f:
                 download_state = json.load(f)
                 assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
@@ -473,7 +474,7 @@ class TestDownloadVideoIntegration:
             )
             # Note: Video state file may not exist if no tasks were queued
 
-            with open(download_state_file, "r") as f:
+            with open(download_state_file) as f:
                 download_state = json.load(f)
 
                 # State should contain the queued item
@@ -488,7 +489,7 @@ class TestDownloadVideoIntegration:
             await asyncio.sleep(2)
 
             # Verify state is empty after processing
-            with open(download_state_file, "r") as f:
+            with open(download_state_file) as f:
                 final_download_state = json.load(f)
                 assert len(final_download_state["queue"]) == 0, (
                     "Download state should be empty after processing"
@@ -574,7 +575,7 @@ class TestDownloadVideoIntegration:
                 setup_storage_environment, "download_queue_state.json"
             )
 
-            with open(download_state_file, "r") as f:
+            with open(download_state_file) as f:
                 download_state = json.load(f)
                 assert len(download_state["queue"]) == 0, (
                     "Download state should be empty after all processing"

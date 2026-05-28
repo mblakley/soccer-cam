@@ -1,18 +1,20 @@
-import os
-import logging
+import configparser
 import json
+import logging
+import os
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Optional, List, Tuple
+
 import google.oauth2.credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
+
 from video_grouper.models import MatchInfo
-import configparser
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,7 @@ def make_youtube_flow(credentials_file: str, redirect_uri: str) -> InstalledAppF
     return flow
 
 
-def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
+def get_youtube_paths(storage_path: str) -> tuple[str, str]:
     """Get the paths for YouTube credentials and token files.
 
     Args:
@@ -108,7 +110,7 @@ def get_youtube_paths(storage_path: str) -> Tuple[str, str]:
     return credentials_file, token_file
 
 
-def ensure_valid_token(credentials_file: str, token_file: str) -> Tuple[bool, str]:
+def ensure_valid_token(credentials_file: str, token_file: str) -> tuple[bool, str]:
     """Check if YouTube token is valid, refreshing if needed. No interactive auth.
 
     This is used by the main pipeline (service) which runs headless.
@@ -132,7 +134,7 @@ def ensure_valid_token(credentials_file: str, token_file: str) -> Tuple[bool, st
         )
 
     try:
-        with open(token_file, "r") as f:
+        with open(token_file) as f:
             creds_data = json.load(f)
             creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
                 creds_data, SCOPES
@@ -163,7 +165,7 @@ def ensure_valid_token(credentials_file: str, token_file: str) -> Tuple[bool, st
     )
 
 
-def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, str]:
+def authenticate_youtube(credentials_file: str, token_file: str) -> tuple[bool, str]:
     """Authenticate with YouTube API.
 
     Args:
@@ -183,7 +185,7 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
         # Check if token file exists
         if os.path.exists(token_file):
             try:
-                with open(token_file, "r") as token:
+                with open(token_file) as token:
                     creds_data = json.load(token)
                     creds = (
                         google.oauth2.credentials.Credentials.from_authorized_user_info(
@@ -295,7 +297,7 @@ def authenticate_youtube(credentials_file: str, token_file: str) -> Tuple[bool, 
         return False, f"Authentication error: {str(e)}"
 
 
-def authenticate_youtube_embedded(token_file: str) -> Tuple[bool, str]:
+def authenticate_youtube_embedded(token_file: str) -> tuple[bool, str]:
     """Authenticate with YouTube using the embedded OAuth client.
 
     No client_secret.json file is needed -- the OAuth client config is
@@ -313,7 +315,7 @@ def authenticate_youtube_embedded(token_file: str) -> Tuple[bool, str]:
         # Check if token file exists and is valid
         if os.path.exists(token_file):
             try:
-                with open(token_file, "r") as f:
+                with open(token_file) as f:
                     creds_data = json.load(f)
                     creds = (
                         google.oauth2.credentials.Credentials.from_authorized_user_info(
@@ -396,7 +398,7 @@ class YouTubeUploader:
         success, _ = authenticate_youtube(self.credentials_file, self.token_file)
         if success:
             creds = None
-            with open(self.token_file, "r") as token:
+            with open(self.token_file) as token:
                 creds_data = json.load(token)
                 creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
                     creds_data, SCOPES
@@ -410,11 +412,11 @@ class YouTubeUploader:
         video_path: str,
         title: str,
         description: str,
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
         privacy_status: str = "unlisted",
-        playlist_id: Optional[str] = None,
-        on_progress: Optional[callable] = None,
-    ) -> Optional[str]:
+        playlist_id: str | None = None,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> str | None:
         """Upload a video to YouTube.
 
         Args:
@@ -570,7 +572,7 @@ class YouTubeUploader:
             logger.error(f"Error uploading video {video_path}: {e}")
             return None
 
-    def find_playlist_by_name(self, name: str) -> Optional[str]:
+    def find_playlist_by_name(self, name: str) -> str | None:
         """Find a playlist by name.
 
         Args:
@@ -611,7 +613,7 @@ class YouTubeUploader:
 
     def create_playlist(
         self, name: str, description: str = "", privacy_status: str = "unlisted"
-    ) -> Optional[str]:
+    ) -> str | None:
         """Create a new playlist.
 
         Args:
@@ -647,7 +649,7 @@ class YouTubeUploader:
 
     def get_or_create_playlist(
         self, name: str, description: str = "", privacy_status: str = "unlisted"
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get an existing playlist by name or create a new one.
 
         Args:
@@ -735,7 +737,7 @@ def format_video_title(match_info, file_path: str, group_dir: str) -> str:
 
 def get_playlist_name_from_mapping(
     team_name: str, config: configparser.ConfigParser
-) -> Optional[str]:
+) -> str | None:
     """
     Get the base playlist name for a team from the config mapping.
 
@@ -757,8 +759,8 @@ def upload_group_videos(
     group_dir: str,
     credentials_file: str,
     token_file: str,
-    processed_playlist_name: Optional[str] = None,
-    raw_playlist_name: Optional[str] = None,
+    processed_playlist_name: str | None = None,
+    raw_playlist_name: str | None = None,
     privacy_status: str = "private",
 ) -> bool:
     """

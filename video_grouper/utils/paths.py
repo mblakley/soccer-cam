@@ -1,7 +1,7 @@
-from pathlib import Path
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 
 def _is_pyinstaller() -> bool:

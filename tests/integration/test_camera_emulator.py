@@ -6,11 +6,11 @@ DahuaCamera/ReolinkCamera clients against it. No Docker required.
 
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from aiohttp import web
-from datetime import datetime, timedelta, timezone
 
 # Add simulator to path so its modules can import each other.
 # The simulator was extracted to github.com/mblakley/camera-simulator.
@@ -75,8 +75,8 @@ async def dahua_server(clips_dir, tmp_path):
     """Start an in-process Dahua simulator server."""
     import collections
 
-    from storage import StorageManager
     from dahua.http_api import setup_routes
+    from storage import StorageManager
 
     storage = StorageManager(
         recordings_dir=str(tmp_path / "recordings"),
@@ -103,8 +103,8 @@ async def reolink_server(clips_dir, tmp_path):
     """Start an in-process Reolink simulator server."""
     import collections
 
-    from storage import StorageManager
     from reolink.http_api import setup_routes
+    from storage import StorageManager
 
     storage = StorageManager(
         recordings_dir=str(tmp_path / "recordings"),
@@ -168,8 +168,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.now(timezone.utc) - timedelta(hours=24)
-        end = datetime.now(timezone.utc)
+        start = datetime.now(UTC) - timedelta(hours=24)
+        end = datetime.now(UTC)
         files = await camera.get_file_list(start, end)
         assert len(files) == 6
         for f in files:
@@ -187,8 +187,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.now(timezone.utc) - timedelta(hours=24)
-        end = datetime.now(timezone.utc)
+        start = datetime.now(UTC) - timedelta(hours=24)
+        end = datetime.now(UTC)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 
@@ -205,8 +205,8 @@ class TestDahuaEmulator:
             password="testpass",
         )
         camera = DahuaCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.now(timezone.utc) - timedelta(hours=24)
-        end = datetime.now(timezone.utc)
+        start = datetime.now(UTC) - timedelta(hours=24)
+        end = datetime.now(UTC)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 
@@ -276,8 +276,8 @@ class TestReolinkEmulator:
             channel=0,
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.now(timezone.utc) - timedelta(hours=24)
-        end = datetime.now(timezone.utc)
+        start = datetime.now(UTC) - timedelta(hours=24)
+        end = datetime.now(UTC)
         files = await camera.get_file_list(start, end)
         assert len(files) == 6
         for f in files:
@@ -296,8 +296,8 @@ class TestReolinkEmulator:
             channel=0,
         )
         camera = ReolinkCamera(config=config, storage_path=str(tmp_path))
-        start = datetime.now(timezone.utc) - timedelta(hours=24)
-        end = datetime.now(timezone.utc)
+        start = datetime.now(UTC) - timedelta(hours=24)
+        end = datetime.now(UTC)
         files = await camera.get_file_list(start, end)
         assert len(files) > 0
 

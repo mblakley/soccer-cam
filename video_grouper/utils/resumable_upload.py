@@ -11,7 +11,6 @@ transient 5xx.
 import asyncio
 import logging
 import os
-from typing import Optional
 
 import httpx
 
@@ -32,7 +31,7 @@ async def upload_to_resumable_url(
     mime_type: str,
     *,
     chunk_size: int = CHUNK_SIZE,
-) -> Optional[str]:
+) -> str | None:
     """Upload a file to an existing resumable session URL.
 
     Returns the final destination URL (Drive webViewLink / YouTube URL) from

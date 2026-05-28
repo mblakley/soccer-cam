@@ -4,11 +4,10 @@ import asyncio
 import logging
 import os
 import tempfile
-from typing import Optional
 
+from ..utils.config import Config
 from .base_polling_processor import PollingProcessor
 from .recording_locator import find_combined_video, resolve_recording_dir
-from ..utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +146,7 @@ class ClipRequestProcessor(PollingProcessor):
 
     async def _upload_via_drive(
         self, req: dict, clip_paths: list[str]
-    ) -> Optional[tuple[str, list[str]]]:
+    ) -> tuple[str, list[str]] | None:
         """Upload clips to Google Drive. Returns (fulfilled_url, upload_paths) or None on failure.
 
         Path A (preferred, flag on): TTT minted a per-requester resumable upload
@@ -212,7 +211,7 @@ class ClipRequestProcessor(PollingProcessor):
 
     async def _upload_via_resumable_url(
         self, req: dict, clip_paths: list[str], upload_block: dict
-    ) -> Optional[tuple[str, list[str]]]:
+    ) -> tuple[str, list[str]] | None:
         """PUT the final clip to a TTT-minted resumable upload URL.
 
         The URL is single-shot so multi-segment requests always compile first.
@@ -256,7 +255,7 @@ class ClipRequestProcessor(PollingProcessor):
 
     async def _upload_via_youtube(
         self, req: dict, clip_paths: list[str]
-    ) -> Optional[tuple[str, list[str]]]:
+    ) -> tuple[str, list[str]] | None:
         """Upload a single video to YouTube. Always produces one video (compiles if multi-segment).
 
         Returns (fulfilled_url, upload_paths) or None on failure.
@@ -335,7 +334,7 @@ class ClipRequestProcessor(PollingProcessor):
                 except OSError:
                     pass
 
-    def _resolve_recording_dir(self, req: dict) -> Optional[str]:
+    def _resolve_recording_dir(self, req: dict) -> str | None:
         """Resolve the recording group directory to an absolute path."""
         game_session = req.get("game_session") or {}
         recording_dir = game_session.get("recording_group_dir")
@@ -348,7 +347,7 @@ class ClipRequestProcessor(PollingProcessor):
             logger.warning(f"Recording dir not found: {recording_dir}")
         return resolved
 
-    def _find_source_video(self, recording_dir: str) -> Optional[str]:
+    def _find_source_video(self, recording_dir: str) -> str | None:
         """Find combined.mp4 in the recording directory tree."""
         return find_combined_video(recording_dir)
 

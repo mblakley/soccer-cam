@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -23,8 +23,8 @@ class TTTApiError(Exception):
     def __init__(
         self,
         message: str,
-        status_code: Optional[int] = None,
-        response_body: Optional[str] = None,
+        status_code: int | None = None,
+        response_body: str | None = None,
     ):
         self.status_code = status_code
         self.response_body = response_body
@@ -70,9 +70,9 @@ class TTTApiClient:
         self._token_dir = self.storage_path / "ttt"
         self._token_file = self._token_dir / "tokens.json"
 
-        self._access_token: Optional[str] = None
-        self._refresh_token_value: Optional[str] = None
-        self._expires_at: Optional[float] = None
+        self._access_token: str | None = None
+        self._refresh_token_value: str | None = None
+        self._expires_at: float | None = None
 
         self._http = httpx.Client(timeout=30.0)
 
@@ -224,7 +224,7 @@ class TTTApiClient:
             return False
         return time.time() < self._expires_at
 
-    def current_user_id(self) -> Optional[str]:
+    def current_user_id(self) -> str | None:
         """Return the authenticated user's id (JWT `sub` claim), or None."""
         if not self._access_token:
             return None
@@ -289,8 +289,8 @@ class TTTApiClient:
     def list_model_versions(
         self,
         model_key: str,
-        channel: Optional[str] = None,
-        pipeline_version: Optional[str] = None,
+        channel: str | None = None,
+        pipeline_version: str | None = None,
     ) -> list[dict[str, Any]]:
         """List model versions the current user is entitled to.
 
@@ -308,8 +308,8 @@ class TTTApiClient:
     def acquire_model_license(
         self,
         model_key: str,
-        channel: Optional[str] = None,
-        pipeline_version: Optional[str] = None,
+        channel: str | None = None,
+        pipeline_version: str | None = None,
     ) -> dict[str, Any]:
         """Request a license for the named model.
 
@@ -406,7 +406,7 @@ class TTTApiClient:
         self,
         request_id: str,
         url: str,
-        notes: Optional[str] = None,
+        notes: str | None = None,
     ) -> Any:
         """Mark a clip request as fulfilled with the result URL.
 
@@ -424,7 +424,7 @@ class TTTApiClient:
     # ------------------------------------------------------------------
 
     def get_pending_highlights(
-        self, camera_id: Optional[str] = None
+        self, camera_id: str | None = None
     ) -> list[dict[str, Any]]:
         """List the current user's highlight reels with status=pending.
 
@@ -481,7 +481,7 @@ class TTTApiClient:
         logger.debug("Fetching highlight reel %s", reel_id)
         return self._request("GET", url)
 
-    def claim_highlight(self, reel_id: str, camera_id: str) -> Optional[dict[str, Any]]:
+    def claim_highlight(self, reel_id: str, camera_id: str) -> dict[str, Any] | None:
         """Atomically transition a highlight reel from pending → generating.
 
         POST {api_base_url}/api/highlights/{reel_id}/claim
@@ -506,7 +506,7 @@ class TTTApiClient:
 
     def report_blocker(
         self, reel_id: str, camera_id: str, reason: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Report that this install cannot render the reel (e.g. missing source video).
 
         POST {api_base_url}/api/highlights/{reel_id}/report-blocker
@@ -556,7 +556,7 @@ class TTTApiClient:
         reel_id: str,
         *,
         file_path: str,
-        youtube_video_id: Optional[str],
+        youtube_video_id: str | None,
     ) -> dict[str, Any]:
         """Mark a highlight reel as rendered + uploaded (status='ready')."""
         url = f"{self.api_base_url}/api/highlights/{reel_id}"
@@ -586,8 +586,8 @@ class TTTApiClient:
     def get_schedule(
         self,
         team_id: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get team schedule within a date range.
 
@@ -631,7 +631,7 @@ class TTTApiClient:
     def get_game_sessions(
         self,
         team_id: str,
-        recording_group_dir: Optional[str] = None,
+        recording_group_dir: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get game sessions, optionally filtered by recording group dir.
 
@@ -650,7 +650,7 @@ class TTTApiClient:
         recording_group_dir: str,
         game_date: str,
         opponent_name: str,
-        video_youtube_id: Optional[str] = None,
+        video_youtube_id: str | None = None,
         status: str = "processing",
     ) -> dict[str, Any]:
         """Create a new game session.
@@ -804,9 +804,9 @@ class TTTApiClient:
         self,
         camera_id: str,
         status: str,
-        firmware_version: Optional[str] = None,
-        error_message: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        firmware_version: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any] | None:
         """Report camera status to TTT.
 
         PATCH {api_base_url}/api/device-link/camera-status
@@ -820,7 +820,7 @@ class TTTApiClient:
         logger.debug("Updating camera status for %s: %s", camera_id, status)
         return self._request("PATCH", url, json=data)
 
-    def get_camera_config(self, camera_id: str) -> Optional[dict[str, Any]]:
+    def get_camera_config(self, camera_id: str) -> dict[str, Any] | None:
         """Fetch camera config from TTT.
 
         GET {api_base_url}/api/device-link/camera-config
@@ -831,7 +831,7 @@ class TTTApiClient:
 
     def push_camera_config(
         self, camera_id: str, config: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Push local config to TTT for backup/transfer.
 
         PUT {api_base_url}/api/cameras/{camera_id}
@@ -865,10 +865,10 @@ class TTTApiClient:
         recording_id: str,
         stage: str,
         status: str,
-        error_message: Optional[str] = None,
-        youtube_url: Optional[str] = None,
-        youtube_video_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        error_message: str | None = None,
+        youtube_url: str | None = None,
+        youtube_video_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Update pipeline stage status for a recording.
 
         PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
@@ -886,7 +886,7 @@ class TTTApiClient:
 
     def enhanced_heartbeat(
         self, service_id: str, metrics: dict
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Send enhanced heartbeat with system metrics.
 
         PATCH {api_base_url}/api/device-link/heartbeat-enhanced
@@ -896,7 +896,7 @@ class TTTApiClient:
         logger.debug("Sending enhanced heartbeat for service %s", service_id)
         return self._request("PATCH", url, json=data)
 
-    def get_auto_record_rules(self, camera_id: str) -> Optional[dict[str, Any]]:
+    def get_auto_record_rules(self, camera_id: str) -> dict[str, Any] | None:
         """Get auto-record rules for a camera.
 
         GET {api_base_url}/api/device-link/auto-record-rules?camera_id=
@@ -905,7 +905,7 @@ class TTTApiClient:
         logger.debug("Fetching auto-record rules for camera %s", camera_id)
         return self._request("GET", url, params={"camera_id": camera_id})
 
-    def get_pending_commands(self, camera_id: str) -> Optional[list[dict[str, Any]]]:
+    def get_pending_commands(self, camera_id: str) -> list[dict[str, Any]] | None:
         """Get pending commands for a camera.
 
         GET {api_base_url}/api/device-link/pending-commands?camera_id=
@@ -914,7 +914,7 @@ class TTTApiClient:
         logger.debug("Fetching pending commands for camera %s", camera_id)
         return self._request("GET", url, params={"camera_id": camera_id})
 
-    def acknowledge_command(self, command_id: str) -> Optional[dict[str, Any]]:
+    def acknowledge_command(self, command_id: str) -> dict[str, Any] | None:
         """Acknowledge receipt of a command.
 
         PATCH {api_base_url}/api/device-link/commands/{command_id}/acknowledge
@@ -923,9 +923,7 @@ class TTTApiClient:
         logger.debug("Acknowledging command %s", command_id)
         return self._request("PATCH", url)
 
-    def complete_command(
-        self, command_id: str, result: dict
-    ) -> Optional[dict[str, Any]]:
+    def complete_command(self, command_id: str, result: dict) -> dict[str, Any] | None:
         """Report command completion.
 
         PATCH {api_base_url}/api/device-link/commands/{command_id}/complete
@@ -934,7 +932,7 @@ class TTTApiClient:
         logger.debug("Completing command %s", command_id)
         return self._request("PATCH", url, json=result)
 
-    def get_high_water_mark(self, camera_id: str) -> Optional[str]:
+    def get_high_water_mark(self, camera_id: str) -> str | None:
         """Get the latest recording timestamp TTT knows about for this camera.
 
         GET {api_base_url}/api/device-link/high-water-mark?camera_id={camera_id}
@@ -1052,7 +1050,7 @@ class TTTApiClient:
     # Device configuration (onboarding)
     # ------------------------------------------------------------------
 
-    def get_device_config(self) -> Optional[dict[str, Any]]:
+    def get_device_config(self) -> dict[str, Any] | None:
         """Retrieve stored device config for this camera manager.
 
         GET {api_base_url}/api/device-link/config

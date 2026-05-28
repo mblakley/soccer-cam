@@ -155,7 +155,7 @@ def kill_pids_from_file():
 
     try:
         if pid_file.exists():
-            with open(pid_file, "r") as f:
+            with open(pid_file) as f:
                 pids = json.load(f)
         else:
             logger.info("No PID file found")

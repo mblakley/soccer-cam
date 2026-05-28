@@ -2,11 +2,12 @@
 
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 
-from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
+from video_grouper.task_processors.upload_processor import UploadProcessor
 
 
 @pytest.fixture

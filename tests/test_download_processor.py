@@ -1,28 +1,29 @@
 """Tests for the DownloadProcessor."""
 
-import tempfile
-from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime
-import pytest
 import os
+import tempfile
+from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
 
-from video_grouper.task_processors.download_processor import DownloadProcessor
+import pytest
+
 from video_grouper.models import RecordingFile
+from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 
 

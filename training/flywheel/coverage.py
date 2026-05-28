@@ -66,7 +66,7 @@ def measure_game_coverage(
 
     # Auto-detect frame interval
     if frame_interval is None:
-        all_fi = sorted(set(fi for _, fi in frame_dets))
+        all_fi = sorted({fi for _, fi in frame_dets})
         if len(all_fi) >= 2:
             deltas = [
                 all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))
@@ -278,7 +278,7 @@ def _count_out_of_play_frames(conn: sqlite3.Connection) -> int:
 
     total = 0
     out_start = None
-    for segment, frame_idx, event_type in events:
+    for _segment, frame_idx, event_type in events:
         if event_type == "out_of_play":
             out_start = frame_idx
         elif event_type == "back_in_play" and out_start is not None:

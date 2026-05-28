@@ -9,8 +9,6 @@ Given a tag's UTC timestamp and the recording file list, computes:
 
 import logging
 from datetime import datetime
-from typing import Optional
-
 from zoneinfo import ZoneInfo
 
 from video_grouper.models import RecordingFile
@@ -23,7 +21,7 @@ def compute_combined_offset(
     recording_files: list[RecordingFile],
     camera_timezone: str = "America/New_York",
     gap_tolerance_seconds: float = 5.0,
-) -> Optional[float]:
+) -> float | None:
     """Compute the offset (in seconds) into combined.mp4 for a given tag timestamp.
 
     The combined video is a concatenation of all recording files in order.
@@ -97,7 +95,7 @@ def compute_combined_offset(
 def compute_trimmed_offset(
     combined_offset: float,
     start_time_offset: str,
-) -> Optional[float]:
+) -> float | None:
     """Compute the offset into trimmed.mp4 given a combined.mp4 offset.
 
     Args:
@@ -124,7 +122,7 @@ def compute_trimmed_offset(
 def compute_clip_boundaries(
     trimmed_offset: float,
     buffer_seconds: float = 15.0,
-    video_duration: Optional[float] = None,
+    video_duration: float | None = None,
 ) -> tuple[float, float]:
     """Compute clip start/end times around a moment in the trimmed video.
 

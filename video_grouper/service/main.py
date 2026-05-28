@@ -1,14 +1,14 @@
 """Windows Service wrapper for VideoGrouper."""
 
-import os
-import sys
 import asyncio
 import logging
+import os
+import sys
 
-import win32serviceutil
-import win32service
-import win32event
 import servicemanager
+import win32event
+import win32service
+import win32serviceutil
 import win32timezone  # noqa: F401 - required for pyinstaller
 
 
@@ -46,10 +46,11 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
 
     def main(self):
         from pathlib import Path
-        from video_grouper.video_grouper_app import VideoGrouperApp
+
         from video_grouper.utils.config import load_config
-        from video_grouper.utils.logger import setup_logging
         from video_grouper.utils.locking import FileLock
+        from video_grouper.utils.logger import setup_logging
+        from video_grouper.video_grouper_app import VideoGrouperApp
 
         setup_logging(level="INFO", app_name="video_grouper")
         logger = logging.getLogger(__name__)
