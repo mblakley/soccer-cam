@@ -753,8 +753,36 @@ class VideoGrouperApp:
                     node_role=self.config.node.role,
                     update_processor=self.update_check_processor,
                 )
+
+                # Pre-create the listening socket with SO_REUSEADDR so
+                # SCM Stop->Start cycles (config-watch restart,
+                # auto-upgrade handoff, manual Restart-Service) don't
+                # block on Windows TIME_WAIT. Windows defaults to
+                # SO_EXCLUSIVEADDRUSE-ish behavior: until every prior
+                # connection on the port has cleared TIME_WAIT
+                # (~30-240s), bind(8765) returns WSAEADDRINUSE and
+                # uvicorn's loop.create_server raises -> SystemExit(1).
+                # We set SO_REUSEADDR and hand the bound socket to
+                # uvicorn via Server.serve(sockets=[...]). See
+                # uvicorn/server.py:130-146 for the supported branch.
+                import socket as _socket
+
+                _listen_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                _listen_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+                _listen_sock.bind(
+                    (
+                        self.config.ttt.auth_server_bind,
+                        self.config.ttt.auth_server_port,
+                    )
+                )
+                _listen_sock.listen(2048)
+                _listen_sock.setblocking(False)
+
                 uv_config = uvicorn.Config(
                     auth_app,
+                    # host/port still set for uvicorn's own logging,
+                    # but `sockets=` below overrides where it actually
+                    # listens.
                     host=self.config.ttt.auth_server_bind,
                     port=self.config.ttt.auth_server_port,
                     log_level="info",
@@ -767,7 +795,13 @@ class VideoGrouperApp:
                     log_config=None,
                 )
                 auth_server = uvicorn.Server(uv_config)
-                auth_task = asyncio.create_task(auth_server.serve())
+                # Keep a reference on self so the socket isn't
+                # garbage-collected (and closed) while uvicorn is
+                # still using its fd.
+                self._auth_listen_sock = _listen_sock
+                auth_task = asyncio.create_task(
+                    auth_server.serve(sockets=[_listen_sock])
+                )
                 logger.info(
                     "Headless TTT auth server listening on http://%s:%d",
                     self.config.ttt.auth_server_bind,
