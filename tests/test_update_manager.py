@@ -12,6 +12,7 @@ from video_grouper.update.update_manager import (
     NetworkError,
     UpdateManager,
     check_and_update,
+    resolve_api_url,
 )
 
 # Save real functions BEFORE conftest's autouse mock_file_system patches them.
@@ -438,3 +439,30 @@ class TestCheckAndUpdate:
             result = await check_and_update("0.1.0", "mblakley/soccer-cam")
 
         assert result is False
+
+
+# --- URL Resolution Tests ---
+
+
+class TestResolveApiUrl:
+    def test_default_url(self, monkeypatch):
+        monkeypatch.delenv("SOCCER_CAM_UPDATE_API_URL", raising=False)
+        url, source = resolve_api_url("mblakley/soccer-cam")
+        assert url == "https://api.github.com/repos/mblakley/soccer-cam/releases/latest"
+        assert source == "default"
+
+    def test_config_override(self, monkeypatch):
+        monkeypatch.delenv("SOCCER_CAM_UPDATE_API_URL", raising=False)
+        url, source = resolve_api_url(
+            "mblakley/soccer-cam", override="https://example.com/api/releases/latest"
+        )
+        assert url == "https://example.com/api/releases/latest"
+        assert source == "config"
+
+    def test_env_wins_over_config(self, monkeypatch):
+        monkeypatch.setenv("SOCCER_CAM_UPDATE_API_URL", "http://127.0.0.1:9876/r/l")
+        url, source = resolve_api_url(
+            "mblakley/soccer-cam", override="https://example.com/should-be-ignored"
+        )
+        assert url == "http://127.0.0.1:9876/r/l"
+        assert source == "env"

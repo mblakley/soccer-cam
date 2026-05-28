@@ -12,7 +12,39 @@ from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
+# Phase 1 ships with the old exe-swap install path still requiring two
+# binaries. Phase 2 collapses this to just VideoGrouperSetup.exe (the
+# full NSIS installer) and the install path Popen()s it with /S. The
+# constant is kept here so the asset list is testable in isolation; the
+# tray's tests pin to this tuple.
 REQUIRED_ASSETS = ("VideoGrouperService.exe", "VideoGrouperTray.exe")
+
+UPDATE_API_URL_ENV = "SOCCER_CAM_UPDATE_API_URL"
+
+
+def resolve_api_url(
+    github_repo: str, override: Optional[str] = None
+) -> Tuple[str, str]:
+    """Pick the GitHub Releases endpoint. Returns (url, source).
+
+    Precedence (highest first):
+
+    1. ``SOCCER_CAM_UPDATE_API_URL`` env var — flipped for E2E testing
+       (the test server at ``scripts/serve_test_release.py`` listens
+       on 127.0.0.1 and serves a GitHub-shaped JSON response).
+    2. ``override`` argument — pass ``config.app.update_api_url`` from
+       the caller. Lets a sysadmin point a fleet at an internal mirror.
+    3. The standard ``https://api.github.com/repos/{repo}/releases/latest``.
+
+    ``source`` is one of ``"env"``, ``"config"``, ``"default"`` — for
+    logging only.
+    """
+    env_url = os.environ.get(UPDATE_API_URL_ENV)
+    if env_url:
+        return env_url, "env"
+    if override:
+        return override, "config"
+    return f"https://api.github.com/repos/{github_repo}/releases/latest", "default"
 
 
 class VersionInfo(TypedDict, total=False):
@@ -61,10 +93,12 @@ class UpdateManager:
         current_version: str,
         github_repo: str,
         service_name: str = "VideoGrouperService",
+        api_url_override: Optional[str] = None,
     ):
         self.current_version = current_version
         self.github_repo = github_repo
         self.service_name = service_name
+        self.api_url_override = api_url_override
         self.temp_dir = tempfile.mkdtemp()
         self.timeout = httpx.Timeout(
             300.0, connect=10.0
@@ -72,10 +106,11 @@ class UpdateManager:
 
     async def check_for_updates(self) -> tuple[bool, VersionInfo | None]:
         """
-        Check GitHub Releases for a newer version.
+        Check the configured Releases endpoint for a newer version.
         Returns a tuple of (has_update, version_info).
         """
-        api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
+        api_url, source = resolve_api_url(self.github_repo, self.api_url_override)
+        logger.info("Update source: %s (%s)", api_url, source)
         headers = {"Accept": "application/vnd.github+json"}
 
         try:

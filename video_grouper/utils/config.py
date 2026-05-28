@@ -93,6 +93,13 @@ class AppConfig(BaseModel):
     max_lookback_hours: int = 48
     max_files_per_poll: int = 50
     recording_end_date: str | None = None
+    # Auto-upgrade settings. auto_update=true (Chrome-style) silently installs
+    # detected updates once the pipeline is quiescent; =false stops after
+    # download+verify and waits for the tray's POST /api/update/apply.
+    # update_api_url overrides the GitHub Releases endpoint for E2E testing;
+    # the SOCCER_CAM_UPDATE_API_URL env var wins over both.
+    auto_update: bool = True
+    update_api_url: str | None = None
 
 
 class TeamSnapTeamConfig(BaseModel):
