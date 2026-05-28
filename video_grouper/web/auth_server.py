@@ -770,6 +770,7 @@ def create_app(
     providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
     config_path: Path | None = None,
     node_role: str = "standalone",
+    update_processor: Optional[Any] = None,
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 
@@ -823,6 +824,14 @@ def create_app(
         from video_grouper.web.worker_api import build_router as _build_worker
 
         app.include_router(_build_worker(storage_path))
+
+    # Auto-upgrade API. Only mounted when the orchestrator passes a
+    # processor reference -- tests and standalone runs (no
+    # VideoGrouperApp) skip it.
+    if update_processor is not None:
+        from video_grouper.web.update_api import build_router as _build_update
+
+        app.include_router(_build_update(update_processor))
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #

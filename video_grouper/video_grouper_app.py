@@ -17,9 +17,11 @@ from video_grouper.task_processors import (
     VideoProcessor,
 )
 from video_grouper.task_processors.register_tasks import register_service_tasks
+from video_grouper.task_processors.update_check_processor import UpdateCheckProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.error_tracker import ErrorTracker
 from video_grouper.utils.logger import get_logger, setup_logging_from_config
+from video_grouper.version import get_version
 
 # Configure logging will be done after config is loaded
 logger = get_logger(__name__)
@@ -546,6 +548,18 @@ class VideoGrouperApp:
             ntfy_processor=self.ntfy_processor,
         )
 
+        # Auto-upgrade poller. Lives in the service (always running)
+        # so headless installs still update. The quiescence callable
+        # below joins queue depths + in-flight downloads into one
+        # gate; the processor refuses to apply updates while busy.
+        # Phase 1: detection only, no install. See processor docstring.
+        self.update_check_processor = UpdateCheckProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            current_version=get_version(),
+            quiescence_check=self._update_quiescence_check,
+        )
+
         # Queue processors must start (and load_state) BEFORE StateAuditor
         # runs discover_work(), otherwise duplicate items get queued.
         self.processors = list(self.download_processors.values())
@@ -579,6 +593,7 @@ class VideoGrouperApp:
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
         self.processors.append(self.state_auditor)
+        self.processors.append(self.update_check_processor)
 
         self._shutdown_event = asyncio.Event()
 
@@ -734,6 +749,7 @@ class VideoGrouperApp:
                     status_provider=_auth_status_provider,
                     config_path=self.config_path,
                     node_role=self.config.node.role,
+                    update_processor=self.update_check_processor,
                 )
                 uv_config = uvicorn.Config(
                     auth_app,
@@ -813,6 +829,29 @@ class VideoGrouperApp:
             getattr(dp, "_in_progress_item", None) is not None
             for dp in self.download_processors.values()
         )
+
+    async def _update_quiescence_check(self) -> tuple[bool, Optional[str]]:
+        """Tell the auto-upgrade poller whether it's safe to apply.
+
+        Returns ``(is_idle, busy_reason)``. Idle means: no pipeline
+        processor has queued work AND no download is mid-flight. Busy
+        means: at least one processor would be interrupted by a
+        StopService -- name the loudest one so the dashboard can
+        explain the deferral.
+
+        The same callable the processor uses for its `deferred`
+        journal entries -- keep the reason string short and
+        log-friendly.
+        """
+        if self._has_active_download():
+            return False, "download in progress"
+        # `get_queue_sizes()` reports -1 for processors that are
+        # disabled in this config; treat that as 0, not busy.
+        sizes = {k: v for k, v in self.get_queue_sizes().items() if v > 0}
+        if sizes:
+            top = ", ".join(f"{k}={v}" for k, v in sizes.items())
+            return False, top
+        return True, None
 
     async def _watch_config_for_restart(self) -> None:
         """Trigger a clean restart when ``self.config_path`` is rewritten.
