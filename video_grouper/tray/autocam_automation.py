@@ -752,7 +752,10 @@ def _execute_autocam_gui_automation(
         # processes, and the post-launch list captured up at line 498+
         # reflects that final set. The exit-detection fallback in
         # _wait_for_completion_and_cleanup needs the right PIDs to know
-        # when AutoCam is "done" via process exit.
+        # when AutoCam is "done" via process exit. The helper supersedes
+        # this branch's earlier text-stale-detection — PID exit + output
+        # file watching is a more reliable terminal signal than polling
+        # for the "finished processing" notification text never to change.
         final_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
         return _wait_for_completion_and_cleanup(
             main_window,

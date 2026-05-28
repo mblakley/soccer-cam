@@ -485,6 +485,16 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.install_update_action.setVisible(False)
         menu.addAction(self.install_update_action)
 
+        # Retry uploads action
+        retry_uploads_action = QAction("Retry Uploads", self)
+        retry_uploads_action.triggered.connect(self.retry_uploads)
+        menu.addAction(retry_uploads_action)
+
+        # Configuration action
+        config_action = QAction("Configuration", self)
+        config_action.triggered.connect(self.open_dashboard)
+        menu.addAction(config_action)
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.exit_app)
         menu.addAction(exit_action)
@@ -516,6 +526,56 @@ class SystemTrayIcon(QSystemTrayIcon):
         if self.config is not None:
             port = getattr(self.config.ttt, "auth_server_port", 8765) or 8765
         return f"http://localhost:{port}{path}"
+
+    def retry_uploads(self):
+        """Scan for ball_tracking_complete groups and re-queue YouTube uploads."""
+        if not self.upload_processor:
+            self.showMessage(
+                "Retry Uploads",
+                "Upload processor is not available.",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+            return
+
+        import json
+        from pathlib import Path
+        from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
+
+        storage = Path(self.config.storage.path)
+        queued = 0
+        for group_dir in storage.iterdir():
+            if not group_dir.is_dir():
+                continue
+            state_file = group_dir / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                with open(state_file, "r") as f:
+                    status = json.load(f).get("status")
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if status == "ball_tracking_complete":
+                relative = str(group_dir.relative_to(storage))
+                task = YoutubeUploadTask(group_dir=relative)
+                import asyncio
+
+                asyncio.ensure_future(self.upload_processor.add_work(task))
+                queued += 1
+                logger.info("RETRY_UPLOADS: queued upload for %s", group_dir.name)
+
+        if queued:
+            self.showMessage(
+                "Retry Uploads",
+                f"Queued {queued} upload(s) for retry.",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+        else:
+            self.showMessage(
+                "Retry Uploads",
+                "No pending uploads found.",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
 
     def open_dashboard(self):
         """Open the dashboard / status page in the default browser."""
