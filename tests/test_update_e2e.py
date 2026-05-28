@@ -22,9 +22,9 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from collections.abc import Generator
 from contextlib import closing
 from pathlib import Path
-from typing import Generator, Optional
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -65,7 +65,7 @@ def _free_port() -> int:
 
 def _wait_healthy(port: int, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
-    last_err: Optional[Exception] = None
+    last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
             r = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=0.5)
@@ -85,7 +85,7 @@ def _make_config() -> MagicMock:
     return cfg
 
 
-async def _always_idle() -> tuple[bool, Optional[str]]:
+async def _always_idle() -> tuple[bool, str | None]:
     return True, None
 
 
@@ -99,7 +99,7 @@ def fake_installer(tmp_path) -> Path:
 
 
 @pytest.fixture
-def release_server(fake_installer) -> Generator[tuple[str, int], None, None]:
+def release_server(fake_installer) -> Generator[tuple[str, int]]:
     """Spin up the GitHub-API mock server on an ephemeral port.
     Yields (base_url, port). The server's actual /repos/... route
     uses these to expose the .exe."""
@@ -120,7 +120,7 @@ def release_server(fake_installer) -> Generator[tuple[str, int], None, None]:
 
 
 @pytest.fixture
-def tamper_server(fake_installer) -> Generator[tuple[str, int], None, None]:
+def tamper_server(fake_installer) -> Generator[tuple[str, int]]:
     """Same as ``release_server`` but with ``--tamper`` semantics:
     served bytes don't match the JSON-advertised digest."""
     port = _free_port()

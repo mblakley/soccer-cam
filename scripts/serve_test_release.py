@@ -35,9 +35,8 @@ import argparse
 import hashlib
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -92,7 +91,7 @@ def build_app(
             content={
                 "tag_name": f"v{version}",
                 "name": f"VideoGrouper {version}",
-                "published_at": datetime.now(timezone.utc).isoformat(),
+                "published_at": datetime.now(UTC).isoformat(),
                 "body": f"Local test release v{version}. Served by serve_test_release.py.",
                 "draft": False,
                 "prerelease": False,
@@ -150,7 +149,7 @@ def build_app(
     return app
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--exe", required=True, type=Path, help="Path to VideoGrouperSetup.exe"

@@ -87,6 +87,27 @@ Section "Install" SecInstall
 
     !insertmacro WritePhase "started"
 
+    ; Tear down any prior install BEFORE replacing files. The
+    ; auto-upgrade flow exits the service cleanly before spawning us,
+    ; but the tray is launched via a separate scheduled task and stays
+    ; running across the upgrade window. Without an explicit kill,
+    ; the new tray.exe lands on disk but the still-running old tray
+    ; process holds the singleton lock file -- schtasks /Run below
+    ; would fire, the new tray would fail to acquire the lock, and
+    ; the user would be left running yesterday's binary against the
+    ; new service. Confirmed empirically during Phase 6 v0.3.7 ->
+    ; v0.3.8 upgrade testing (LastTaskResult 0x80071420 on the
+    ; post-upgrade /Run because of the lock conflict).
+    ;
+    ; sc.exe stop is best-effort: a clean upgrade has the service
+    ; already gone, and a fresh install has nothing to stop. The
+    ; 0 exit code means stopped; non-zero is benign here.
+    nsExec::ExecToLog 'sc.exe stop VideoGrouperService'
+    nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
+    ; Brief delay so Windows actually releases handles on the
+    ; killed binaries before File /r tries to overwrite them.
+    Sleep 1500
+
     ; Copy the merged onedir output (service + tray + shared _internal/).
     ; The multi-target spec at video_grouper/installer/VideoGrouper.spec
     ; builds both exes against one dependency tree, so service and tray
