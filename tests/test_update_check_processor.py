@@ -289,3 +289,60 @@ class TestImmediateCheckSignal:
         processor.request_immediate_check()
         # No raise, no state corruption. Event is set once.
         assert processor._immediate_check.is_set()
+
+
+class TestNsisMarkerConsumption:
+    def test_complete_marker_journaled_as_installed(
+        self, processor, tmp_path, monkeypatch
+    ):
+        marker = tmp_path / "nsis-phase.txt"
+        marker.write_text("complete", encoding="utf-8")
+        monkeypatch.setenv("SOCCER_CAM_NSIS_MARKER_PATH", str(marker))
+
+        processor._consume_nsis_marker()
+
+        assert processor._nsis_phase_from_last_install == "complete"
+        assert not marker.exists()
+
+        journal_file = tmp_path / "logs" / "update_history.jsonl"
+        assert journal_file.exists()
+        lines = [line for line in journal_file.read_text().splitlines() if line.strip()]
+        assert len(lines) == 1
+        import json
+
+        entry = json.loads(lines[0])
+        assert entry["outcome"] == "installed"
+        assert entry["nsis_phase"] == "complete"
+
+    def test_partial_marker_journaled_as_failed(self, processor, tmp_path, monkeypatch):
+        marker = tmp_path / "nsis-phase.txt"
+        marker.write_text("files-copied", encoding="utf-8")
+        monkeypatch.setenv("SOCCER_CAM_NSIS_MARKER_PATH", str(marker))
+
+        processor._consume_nsis_marker()
+
+        import json
+
+        journal_file = tmp_path / "logs" / "update_history.jsonl"
+        entry = json.loads(journal_file.read_text().splitlines()[0])
+        assert entry["outcome"] == "failed"
+        assert entry["nsis_phase"] == "files-copied"
+        assert "files-copied" in entry["error"]
+
+    def test_missing_marker_does_nothing(self, processor, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "SOCCER_CAM_NSIS_MARKER_PATH", str(tmp_path / "nonexistent.txt")
+        )
+        processor._consume_nsis_marker()
+        assert processor._nsis_phase_from_last_install is None
+        journal_file = tmp_path / "logs" / "update_history.jsonl"
+        assert not journal_file.exists()
+
+    def test_status_surfaces_nsis_phase(self, processor, tmp_path, monkeypatch):
+        marker = tmp_path / "nsis-phase.txt"
+        marker.write_text("complete", encoding="utf-8")
+        monkeypatch.setenv("SOCCER_CAM_NSIS_MARKER_PATH", str(marker))
+
+        processor._consume_nsis_marker()
+        status = processor.build_status()
+        assert status.nsis_phase_from_last_install == "complete"

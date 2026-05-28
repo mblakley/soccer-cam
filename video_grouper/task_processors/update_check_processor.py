@@ -41,6 +41,7 @@ from video_grouper.update.journal import (
     append_entry,
     new_update_id,
 )
+from video_grouper.update.nsis_marker import read_and_clear_marker
 from video_grouper.update.update_manager import (
     NetworkError,
     UpdateCheckError,
@@ -77,6 +78,7 @@ class UpdateStatus:
     pending_version: str | None = None
     pending_digest: str | None = None
     pending_download_path: str | None = None
+    nsis_phase_from_last_install: str | None = None
     history: list[dict] = field(default_factory=list)
 
 
@@ -118,6 +120,45 @@ class UpdateCheckProcessor(PollingProcessor):
         # we're holding a staged artifact for the user.
         self._pending_manager = None
         self._currently_checking = False
+        # NSIS leaves a phase marker at each install boundary. On
+        # startup we read the marker, journal it as the previous
+        # attempt's terminal state, then clear it. ``complete`` means
+        # a clean upgrade -- anything else is the furthest point an
+        # interrupted install reached.
+        self._nsis_phase_from_last_install: str | None = None
+
+    async def start(self) -> None:
+        await super().start()
+        self._consume_nsis_marker()
+
+    def _consume_nsis_marker(self) -> None:
+        phase = read_and_clear_marker()
+        if not phase:
+            return
+        self._nsis_phase_from_last_install = phase
+        entry = UpdateJournalEntry(
+            id=new_update_id(),
+            started_at=time.time(),
+            from_version="(unknown)",
+            source_url="(nsis)",
+            auto_update=self.config.app.auto_update,
+            nsis_phase=phase,
+            user_action="post_install_marker",
+        )
+        if phase == "complete":
+            entry.finalize("installed")
+            logger.info("Previous upgrade completed cleanly (NSIS phase=%s)", phase)
+        else:
+            entry.finalize(
+                "failed",
+                error=f"NSIS install reached phase '{phase}' but did not complete",
+            )
+            logger.warning(
+                "Previous upgrade did not complete (NSIS phase=%s) -- "
+                "the install may need to be re-run manually",
+                phase,
+            )
+        append_entry(self.storage_path, entry)
 
     async def discover_work(self) -> None:
         """One check cycle. Called by the polling loop."""
@@ -392,6 +433,7 @@ class UpdateCheckProcessor(PollingProcessor):
             pending_version=self._pending_version,
             pending_digest=self._pending_digest,
             pending_download_path=self._pending_download_path,
+            nsis_phase_from_last_install=self._nsis_phase_from_last_install,
         )
 
     def get_queue_size(self) -> int:
