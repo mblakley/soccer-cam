@@ -126,7 +126,21 @@ Section "Install" SecInstall
     ; need admin. We can additionally drive an on-demand launch via
     ; ``schtasks /Run /TN VideoGrouperTrayLaunch`` from anywhere
     ; (installer below, service-side helper post-upgrade).
-    nsExec::ExecToLog 'schtasks /Create /F /TN "${TRAY_TASK_NAME}" /TR "$INSTDIR\VideoGrouperTray.exe" /SC ONLOGON /RU INTERACTIVE /RL LIMITED'
+    ; schtasks /Create /TR "<path with spaces>" silently mangles the
+    ; action -- the OS task store ends up with Execute="C:\Program"
+    ; and Arguments="Files\...\VideoGrouperTray.exe", so the logon
+    ; trigger fires but Windows fails the spawn with 0x80070002
+    ; (file not found). Confirmed empirically on Win11 in Phase 6
+    ; verification. PowerShell's Register-ScheduledTask has a real
+    ; Execute/Arguments split, so we go through it instead.
+    FileOpen $0 "$TEMP\vg-register-tray-task.ps1" w
+    FileWrite $0 "$$action = New-ScheduledTaskAction -Execute '$INSTDIR\VideoGrouperTray.exe'$\r$\n"
+    FileWrite $0 "$$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
+    FileWrite $0 "$$principal = New-ScheduledTaskPrincipal -GroupId 'INTERACTIVE' -RunLevel Limited$\r$\n"
+    FileWrite $0 "Register-ScheduledTask -TaskName '${TRAY_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Force | Out-Null$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$TEMP\vg-register-tray-task.ps1"'
+    Delete "$TEMP\vg-register-tray-task.ps1"
 
     ; Desktop shortcut so the user can manually launch the tray /
     ; open the dashboard. We DON'T create $SMSTARTUP -- the
