@@ -126,7 +126,7 @@ Section "Install" SecInstall
     ; need admin. We can additionally drive an on-demand launch via
     ; ``schtasks /Run /TN VideoGrouperTrayLaunch`` from anywhere
     ; (installer below, service-side helper post-upgrade).
-    nsExec::ExecToLog 'schtasks /Create /F /TN "${TRAY_TASK_NAME}" /TR "$\"$INSTDIR\VideoGrouperTray.exe$\"" /SC ONLOGON /RU "INTERACTIVE" /RL LIMITED'
+    nsExec::ExecToLog 'schtasks /Create /F /TN "${TRAY_TASK_NAME}" /TR "$INSTDIR\VideoGrouperTray.exe" /SC ONLOGON /RU INTERACTIVE /RL LIMITED'
 
     ; Desktop shortcut so the user can manually launch the tray /
     ; open the dashboard. We DON'T create $SMSTARTUP -- the
