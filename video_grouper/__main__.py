@@ -20,7 +20,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
 
 # Global variable to track tasks
-tasks = []
+tasks: list[asyncio.Task[None]] = []
 
 
 def parse_arguments():
