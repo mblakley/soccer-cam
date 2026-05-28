@@ -130,6 +130,12 @@ line-ending = "auto"
 # Type-check video_grouper/ as the production target. tools/ is one-off
 # scripts and training/ is research code -- not in scope for this baseline.
 python_version = "3.13"
+# Production runs on Windows (tray, service, AutoCam parenting). Pinning
+# the platform here means mypy sees winreg + pywin32-shaped stdlib stubs
+# even on Linux CI, matching what the code will actually execute against.
+# The pyproject [tool.uv] environments list includes linux too, but the
+# linux variant is for Docker / dev only and shares the same type surface.
+platform = "win32"
 strict_optional = true
 warn_unused_ignores = true
 # Don't require type annotations on every def yet -- that's a separate
@@ -177,9 +183,11 @@ module = [
 ignore_missing_imports = true
 
 # Windows-only / pywin32 modules (Linux CI can't see them, and pywin32
-# ships no PEP 561 marker so they appear untyped on Windows too)
+# ships no PEP 561 marker so they appear untyped on Windows too).
+# Includes the winreg stdlib module which only exists on Windows.
 [[tool.mypy.overrides]]
 module = [
+    "winreg",
     "win32event",
     "win32service",
     "win32serviceutil",
