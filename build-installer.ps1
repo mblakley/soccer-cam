@@ -86,13 +86,15 @@ if (-not (Test-Path $NSIS_PATH)) {
     exit 1
 }
 
-# Build service executable from spec file (source of truth for PyInstaller config)
-Write-Host "Building service executable..."
-uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR VideoGrouperService.spec
-
-# Build tray agent executable from spec file
-Write-Host "Building tray agent executable..."
-uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR VideoGrouperTray.spec
+# Build service + tray from the merged spec. installer.nsi pulls in
+# `dist/VideoGrouper/*` (one directory with both exes + a single shared
+# `_internal/`) -- the per-target specs would write to
+# dist/VideoGrouperService/ and dist/VideoGrouperTray/ separately, leaving
+# the installer's `File /r` unable to find anything. CI uses the same
+# combined spec; keep this build in lockstep.
+$MERGED_SPEC = Join-Path $SCRIPT_DIR "video_grouper\installer\VideoGrouper.spec"
+Write-Host "Building service + tray executables (merged spec)..."
+uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR $MERGED_SPEC
 
 # Build installer
 Write-Host "Building installer..."

@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from video_grouper.task_processors import BallTrackingProcessor
 from video_grouper.task_processors.register_tasks import register_tray_tasks
 from video_grouper.tray.autocam_automation import run_autocam_on_file
-from video_grouper.update.update_manager import check_and_update
 from video_grouper.utils.config import Config, load_config
 from video_grouper.utils.logger import get_logger, setup_logging
 from video_grouper.utils.paths import get_shared_data_path
@@ -65,36 +64,84 @@ setup_logging(
 logger = get_logger(__name__)
 
 
-class UpdateChecker(threading.Thread):
-    def __init__(self, version, github_repo, signal):
+class UpdateStatusPoller(threading.Thread):
+    """Polls the service's ``GET /api/update/status`` endpoint and
+    bridges state changes onto the tray's Qt signals.
+
+    Replaces the legacy ``UpdateChecker`` which drove the buggy
+    in-tray check + exe-swap install path. The actual GitHub poll
+    and (in Phase 2) the installer spawn both live in the service
+    now; the tray is just the UI surface that surfaces what the
+    service has staged. See
+    ``~/.claude/plans/investigate-the-auto-upgrade-process-jiggly-gem.md``.
+
+    Two transitions matter:
+
+    - ``pending_version`` appears (or changes value): emit
+      ``update_pending`` so the tray surfaces a notification. The
+      service will install automatically when ``auto_update=true``;
+      otherwise the user clicks Install Update.
+    - ``pending_version`` clears (install completed): emit
+      ``update_cleared`` so the tray can hide the menu item / clear
+      the persistent banner.
+    """
+
+    POLL_INTERVAL_SECONDS = 60
+    REQUEST_TIMEOUT_SECONDS = 10
+
+    def __init__(
+        self,
+        status_url: str,
+        on_pending,
+        on_cleared,
+    ):
         super().__init__()
-        self.version = version
-        self.github_repo = github_repo
-        self.signal = signal
+        self.status_url = status_url
+        self.on_pending = on_pending
+        self.on_cleared = on_cleared
         self.daemon = True
+        self._stop = threading.Event()
+        self._last_pending: str | None = None
 
-    def run(self):
-        while True:
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        # httpx is heavier than we need for a single localhost poll;
+        # stdlib urllib is fine and keeps the tray's import budget
+        # lean (every dep pulled in here ships in _internal/).
+        import json
+        import urllib.error
+        import urllib.request
+
+        while not self._stop.is_set():
             try:
-                # Create event loop for this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                with urllib.request.urlopen(
+                    self.status_url, timeout=self.REQUEST_TIMEOUT_SECONDS
+                ) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                self._handle_status(body)
+            except urllib.error.URLError as exc:
+                # Service may be restarting; quiet logging at debug
+                logger.debug("update status poll failed: %s", exc)
+            except Exception as exc:
+                logger.warning("update status poll unexpected error: %s", exc)
+            self._stop.wait(self.POLL_INTERVAL_SECONDS)
 
-                # Check for updates
-                has_update = loop.run_until_complete(
-                    check_and_update(self.version, self.github_repo)
-                )
-
-                if has_update:
-                    self.signal.emit("Update available! Click to install.")
-
-                loop.close()
-
-            except Exception as e:
-                logger.error(f"Error checking for updates: {e}")
-
-            # Sleep for an hour
-            threading.Event().wait(3600)
+    def _handle_status(self, body: dict) -> None:
+        pending = body.get("pending_version")
+        if pending and pending != self._last_pending:
+            self._last_pending = pending
+            try:
+                self.on_pending(pending, bool(body.get("auto_update", True)))
+            except Exception as exc:
+                logger.warning("on_pending callback raised: %s", exc)
+        elif not pending and self._last_pending:
+            self._last_pending = None
+            try:
+                self.on_cleared()
+            except Exception as exc:
+                logger.warning("on_cleared callback raised: %s", exc)
 
 
 class RunnerSignals(QObject):
@@ -230,7 +277,12 @@ class TrayAgentLock:
 
 
 class SystemTrayIcon(QSystemTrayIcon):
-    update_available = Signal(str)
+    # Two parameter signal: (version, auto_update_enabled). Qt strict
+    # typing means we pass the auto_update flag through rather than
+    # re-reading config from the slot (the slot runs on the GUI
+    # thread; config reads do disk I/O).
+    update_pending_signal = Signal(str, bool)
+    update_cleared_signal = Signal()
 
     def __init__(self, config_path=None):
         super().__init__()
@@ -284,10 +336,8 @@ class SystemTrayIcon(QSystemTrayIcon):
                         _bootstrap_log_dir(),
                     )
 
-        # Get GitHub repo from config for update checks
-        self.github_repo = (
-            self.config.app.github_repo if self.config else "mblakley/soccer-cam"
-        )
+        # No more in-tray GitHub poll -- the service owns that loop.
+        # See ``UpdateStatusPoller`` below for the new client surface.
 
         # Ensure storage path is configured in the config model
         # Use the typed StorageConfig from the Pydantic model
@@ -425,6 +475,16 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
+        # Install Update -- hidden by default. Surfaced when the
+        # service reports a pending_version AND auto_update=false.
+        # In auto_update=true mode the service installs on its own
+        # once the pipeline quiesces; the tray shows a notification
+        # but no clickable menu item.
+        self.install_update_action = QAction("Install Update", self)
+        self.install_update_action.triggered.connect(self.apply_pending_update)
+        self.install_update_action.setVisible(False)
+        menu.addAction(self.install_update_action)
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.exit_app)
         menu.addAction(exit_action)
@@ -433,14 +493,18 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         # Connect signals
         self.activated.connect(self.icon_activated)
-        self.update_available.connect(self.show_update_notification)
+        self.update_pending_signal.connect(self.on_update_pending)
+        self.update_cleared_signal.connect(self.on_update_cleared)
 
     def start_update_checker(self):
-        """Start the background update checker thread."""
-        self.update_checker = UpdateChecker(
-            self.version, self.github_repo, self.update_available
+        """Start the background poller that mirrors the service's
+        update state into the tray UI."""
+        self.update_poller = UpdateStatusPoller(
+            status_url=self._web_url("/api/update/status"),
+            on_pending=lambda v, auto: self.update_pending_signal.emit(v, auto),
+            on_cleared=lambda: self.update_cleared_signal.emit(),
         )
-        self.update_checker.start()
+        self.update_poller.start()
 
     def icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -528,9 +592,80 @@ class SystemTrayIcon(QSystemTrayIcon):
                 QSystemTrayIcon.MessageIcon.Critical.value,
             )
 
-    def show_update_notification(self, message):
-        """Show update notification when available."""
-        self.showMessage("Updates", message)
+    def on_update_pending(self, version: str, auto_update: bool) -> None:
+        """Surface a notification when the service stages a new version.
+
+        Two flavours per the plan's Chrome-style UX:
+
+        - ``auto_update=true``: brief informational toast. The service
+          will install on its own once the pipeline goes idle. No menu
+          item to click.
+        - ``auto_update=false``: persistent notification + reveal the
+          ``Install Update`` menu item so the user can drive the apply.
+        """
+        if auto_update:
+            self.showMessage(
+                "VideoGrouper",
+                f"Update v{version} ready. Will install automatically when idle.",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+            self.install_update_action.setVisible(False)
+        else:
+            self.showMessage(
+                "VideoGrouper",
+                f"Update v{version} ready -- choose Install Update from the tray menu.",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+            self.install_update_action.setText(f"Install Update v{version}")
+            self.install_update_action.setVisible(True)
+
+    def on_update_cleared(self) -> None:
+        """Hide the Install Update menu item once the service confirms
+        the staged update is no longer pending (installed or aborted)."""
+        self.install_update_action.setVisible(False)
+        self.install_update_action.setText("Install Update")
+
+    def apply_pending_update(self) -> None:
+        """POST /api/update/apply when the user clicks Install Update.
+
+        Phase 1 boundary: the service returns 503 with a "Phase 2"
+        explanation. We surface that string verbatim so the user
+        understands why nothing happens; once Phase 2 lands the same
+        click drives the real installer spawn with no client-side
+        change needed.
+        """
+        import json
+        import urllib.error
+        import urllib.request
+
+        url = self._web_url("/api/update/apply")
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            self.showMessage(
+                "Update",
+                f"Update scheduled: {body.get('status', '?')}",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+        except urllib.error.HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+                reason = body.get("reason") or body.get("status") or str(exc)
+            except Exception:
+                reason = str(exc)
+            self.showMessage(
+                "Update",
+                reason,
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
+        except Exception as exc:
+            logger.error("Could not POST /api/update/apply: %s", exc, exc_info=True)
+            self.showMessage(
+                "Update",
+                f"Could not request install: {exc}",
+                QSystemTrayIcon.MessageIcon.Critical,
+            )
 
     def exit_app(self):
         """Exit the application."""

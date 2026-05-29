@@ -17,9 +17,11 @@ from video_grouper.task_processors import (
     VideoProcessor,
 )
 from video_grouper.task_processors.register_tasks import register_service_tasks
+from video_grouper.task_processors.update_check_processor import UpdateCheckProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.error_tracker import ErrorTracker
 from video_grouper.utils.logger import get_logger, setup_logging_from_config
+from video_grouper.version import get_version
 
 # Configure logging will be done after config is loaded
 logger = get_logger(__name__)
@@ -546,6 +548,20 @@ class VideoGrouperApp:
             ntfy_processor=self.ntfy_processor,
         )
 
+        # Auto-upgrade poller. Lives in the service (always running)
+        # so headless installs still update. The quiescence callable
+        # below joins queue depths + in-flight downloads into one
+        # gate; the processor refuses to apply updates while busy.
+        # On a successful installer spawn the shutdown_callback fires
+        # and the service exits cleanly so NSIS can take over.
+        self.update_check_processor = UpdateCheckProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            current_version=get_version(),
+            quiescence_check=self._update_quiescence_check,
+            shutdown_callback=self._shutdown_for_upgrade,
+        )
+
         # Queue processors must start (and load_state) BEFORE StateAuditor
         # runs discover_work(), otherwise duplicate items get queued.
         self.processors = list(self.download_processors.values())
@@ -579,6 +595,7 @@ class VideoGrouperApp:
         # already-loaded queues to avoid duplicate enqueues.
         self.processors.extend(self.camera_pollers.values())
         self.processors.append(self.state_auditor)
+        self.processors.append(self.update_check_processor)
 
         self._shutdown_event = asyncio.Event()
 
@@ -734,9 +751,38 @@ class VideoGrouperApp:
                     status_provider=_auth_status_provider,
                     config_path=self.config_path,
                     node_role=self.config.node.role,
+                    update_processor=self.update_check_processor,
                 )
+
+                # Pre-create the listening socket with SO_REUSEADDR so
+                # SCM Stop->Start cycles (config-watch restart,
+                # auto-upgrade handoff, manual Restart-Service) don't
+                # block on Windows TIME_WAIT. Windows defaults to
+                # SO_EXCLUSIVEADDRUSE-ish behavior: until every prior
+                # connection on the port has cleared TIME_WAIT
+                # (~30-240s), bind(8765) returns WSAEADDRINUSE and
+                # uvicorn's loop.create_server raises -> SystemExit(1).
+                # We set SO_REUSEADDR and hand the bound socket to
+                # uvicorn via Server.serve(sockets=[...]). See
+                # uvicorn/server.py:130-146 for the supported branch.
+                import socket as _socket
+
+                _listen_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                _listen_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+                _listen_sock.bind(
+                    (
+                        self.config.ttt.auth_server_bind,
+                        self.config.ttt.auth_server_port,
+                    )
+                )
+                _listen_sock.listen(2048)
+                _listen_sock.setblocking(False)
+
                 uv_config = uvicorn.Config(
                     auth_app,
+                    # host/port still set for uvicorn's own logging,
+                    # but `sockets=` below overrides where it actually
+                    # listens.
                     host=self.config.ttt.auth_server_bind,
                     port=self.config.ttt.auth_server_port,
                     log_level="info",
@@ -749,7 +795,13 @@ class VideoGrouperApp:
                     log_config=None,
                 )
                 auth_server = uvicorn.Server(uv_config)
-                auth_task = asyncio.create_task(auth_server.serve())
+                # Keep a reference on self so the socket isn't
+                # garbage-collected (and closed) while uvicorn is
+                # still using its fd.
+                self._auth_listen_sock = _listen_sock
+                auth_task = asyncio.create_task(
+                    auth_server.serve(sockets=[_listen_sock])
+                )
                 logger.info(
                     "Headless TTT auth server listening on http://%s:%d",
                     self.config.ttt.auth_server_bind,
@@ -813,6 +865,39 @@ class VideoGrouperApp:
             getattr(dp, "_in_progress_item", None) is not None
             for dp in self.download_processors.values()
         )
+
+    def _shutdown_for_upgrade(self) -> None:
+        """Called by the update-check processor after a successful
+        installer spawn. Signals a clean shutdown so the FastAPI
+        loop, processors, and TTT reporter all wind down before NSIS
+        SCM-stops us. Same pattern as the config-watch restart at
+        ``_schedule_restart`` -- but here SCM will start the new
+        version, not the same one."""
+        logger.info("Upgrade spawned; shutting down service to hand off to installer.")
+        self._shutdown_event.set()
+
+    async def _update_quiescence_check(self) -> tuple[bool, str | None]:
+        """Tell the auto-upgrade poller whether it's safe to apply.
+
+        Returns ``(is_idle, busy_reason)``. Idle means: no pipeline
+        processor has queued work AND no download is mid-flight. Busy
+        means: at least one processor would be interrupted by a
+        StopService -- name the loudest one so the dashboard can
+        explain the deferral.
+
+        The same callable the processor uses for its `deferred`
+        journal entries -- keep the reason string short and
+        log-friendly.
+        """
+        if self._has_active_download():
+            return False, "download in progress"
+        # `get_queue_sizes()` reports -1 for processors that are
+        # disabled in this config; treat that as 0, not busy.
+        sizes = {k: v for k, v in self.get_queue_sizes().items() if v > 0}
+        if sizes:
+            top = ", ".join(f"{k}={v}" for k, v in sizes.items())
+            return False, top
+        return True, None
 
     async def _watch_config_for_restart(self) -> None:
         """Trigger a clean restart when ``self.config_path`` is rewritten.

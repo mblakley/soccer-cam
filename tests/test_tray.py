@@ -86,7 +86,12 @@ def test_system_tray_icon_initialization(
     assert tray_icon.config_path == config_file
     mock_load_config.assert_called_once_with(config_file)
     assert tray_icon.config == mock_config
-    assert tray_icon.github_repo == "test-owner/test-repo"
+    # github_repo is no longer a tray attribute: the GitHub poll lives
+    # in the service now. The tray polls /api/update/status instead.
+    # Probe __dict__ directly rather than hasattr -- hasattr triggers
+    # Qt's __getattr__ which raises here because the super-class init
+    # is mocked out.
+    assert "github_repo" not in tray_icon.__dict__
     mock_init_ui.assert_called_once()
     mock_start_update_checker.assert_called_once()
 
