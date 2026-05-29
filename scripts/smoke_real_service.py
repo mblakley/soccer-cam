@@ -266,9 +266,12 @@ def teardown_prior_smoke_rows() -> None:
         smoke_game_ids = [
             r["game_id"]
             for r in db_exec(
+                # Post-unify-videos: youtube_video_id moved off game_videos
+                # to media.videos (via the new junction). Join through it.
                 "SELECT DISTINCT cr.game_session_id, g.id AS game_id "
                 "FROM coaching_sessions.camera_recordings cr "
-                "JOIN game_analysis.game_videos gv ON gv.youtube_video_id = cr.youtube_video_id "
+                "JOIN media.videos mv ON mv.source_url LIKE '%%' || cr.youtube_video_id || '%%' "
+                "JOIN game_analysis.game_videos gv ON gv.video_id = mv.id "
                 "JOIN game_analysis.games g ON g.id = gv.game_id "
                 "WHERE cr.game_session_id = ANY(%s::uuid[])",
                 (smoke_session_ids,),
@@ -389,7 +392,10 @@ def seed_db(recording_dir_name: str, recording_start: datetime) -> dict[str, str
     gs_id = str(uuid.uuid4())
     cam_id = SEED_CAMERA_ID
     cam_rec_id = str(uuid.uuid4())
-    yt_id = f"realsmoke-{uuid.uuid4().hex[:7]}"
+    # Real YouTube IDs are exactly 11 chars [a-zA-Z0-9_-] — TTT's
+    # camera-recording auto-link regex requires exactly that shape.
+    # Length: 6 ("smoke-") + 5 hex = 11. Prefix lets teardown find this row.
+    yt_id = f"smoke-{uuid.uuid4().hex[:5]}"
 
     db_exec(
         "INSERT INTO game_analysis.games "
@@ -892,9 +898,11 @@ def main() -> int:
         )
 
         banner("POST /api/games/{id}/videos — auto-create-reel hook (the fix)")
+        # Post-unify-videos contract: source_url + video_type only.
+        # youtube_video_id is no longer a payload field; the backend extracts
+        # it from source_url for the camera-recording auto-link lookup.
         post_body = {
-            "youtube_url": f"https://youtu.be/{state['youtube_video_id']}",
-            "youtube_video_id": state["youtube_video_id"],
+            "source_url": f"https://youtu.be/{state['youtube_video_id']}",
             "video_type": "full",
         }
         post_resp = http_post(
