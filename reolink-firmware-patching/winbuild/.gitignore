@@ -1,0 +1,7 @@
+# Staged third-party squashfs binaries (GPL; fetched at build time, never committed)
+bin/
+# PyInstaller output
+build/
+dist/
+__pycache__/
+*.pyc

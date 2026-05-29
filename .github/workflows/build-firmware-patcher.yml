@@ -1,0 +1,116 @@
+name: Build Firmware Patcher
+
+# Builds the Windows-native Reolink firmware patcher as a single
+# patch_firmware.exe (PyInstaller onefile), bundling mksquashfs/unsquashfs
+# so camera managers need neither WSL nor a separate squashfs install.
+#
+# Separate from the main app build: it only runs for firmware-tooling changes
+# and is tagged independently (firmware-patcher-v*).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    tags: [ 'firmware-patcher-v[0-9]*' ]
+    paths:
+      - 'reolink-firmware-patching/**'
+      - '.github/workflows/build-firmware-patcher.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'reolink-firmware-patching/**'
+      - '.github/workflows/build-firmware-patcher.yml'
+
+jobs:
+  build:
+    name: Build patch_firmware.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      # The patcher shells out to mksquashfs/unsquashfs. Install the Windows
+      # build via scoop (the same squashfs-tools used for local dev) so the
+      # output format matches the proven Linux recipe. This is the one external
+      # fetch; if scoop is ever flaky on the runner, swap for a pinned download.
+      - name: Install squashfs-tools (scoop)
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+          irm get.scoop.sh -outfile install_scoop.ps1
+          .\install_scoop.ps1 -RunAsAdmin
+          $shims = "$env:USERPROFILE\scoop\shims"
+          & "$shims\scoop" bucket add extras
+          & "$shims\scoop" install squashfs-tools
+
+      - name: Stage squashfs binaries into winbuild/bin
+        shell: pwsh
+        run: |
+          $src = "$env:USERPROFILE\scoop\apps\squashfs-tools\current"
+          $dst = "reolink-firmware-patching\winbuild\bin"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Get-ChildItem -Path $src -Recurse -File -Include *.exe,*.dll |
+            ForEach-Object { Copy-Item $_.FullName -Destination $dst -Force }
+          Get-ChildItem $dst | Format-Table Name,Length
+          foreach ($t in 'mksquashfs.exe','unsquashfs.exe') {
+            if (-not (Test-Path (Join-Path $dst $t))) { throw "$t was not staged" }
+          }
+
+      - name: Build patch_firmware.exe
+        run: |
+          pyinstaller --noconfirm --distpath dist --workpath build `
+            reolink-firmware-patching/winbuild/patch_firmware.spec
+
+      - name: Smoke test (exe runs + finds bundled tools)
+        shell: pwsh
+        run: |
+          .\dist\patch_firmware.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "patch_firmware.exe --help failed" }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch_firmware-exe
+          path: dist/patch_firmware.exe
+
+  release:
+    name: Attach to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/firmware-patcher-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: patch_firmware-exe
+          path: artifacts
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          body: |
+            # Reolink firmware patcher (Windows)
+
+            Single-file `patch_firmware.exe` — no WSL or separate squashfs
+            install needed. Supply your own stock Reolink `.pak`:
+
+            ```
+            patch_firmware.exe stock.pak patched.pak --home-mac aa:bb:cc:dd:ee:ff
+            ```
+
+            UNVERIFIED on hardware — bench-test per
+            `reolink-firmware-patching/docs/RECORD_GATE_DESIGN.md` before flashing.
+          files: |
+            artifacts/patch_firmware.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
