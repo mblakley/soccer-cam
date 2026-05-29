@@ -80,7 +80,11 @@ HTTP_DST = (
 BITRATE_OFFSET = 0x6351C
 BITRATE_SRC = bytes.fromhex("0b008652")  # mov w11, #0x3000
 
-MKSQUASHFS_ARGS = [
+# Base flags supported by every squashfs-tools 4.x. The reproducibility flags
+# (-mkfs-time / -all-time) were only added in 4.4, so they're appended at runtime
+# only when the local mksquashfs advertises them (the scoop Windows build is 4.3,
+# which doesn't — and they're cosmetic timestamp-zeroing anyway).
+MKSQUASHFS_BASE_ARGS = [
     "-comp",
     "xz",
     "-b",
@@ -89,11 +93,18 @@ MKSQUASHFS_ARGS = [
     "-no-progress",
     "-no-exports",
     "-all-root",
-    "-mkfs-time",
-    "0",
-    "-all-time",
-    "0",
 ]
+
+
+def mksquashfs_args(mksquashfs: str) -> list[str]:
+    args = list(MKSQUASHFS_BASE_ARGS)
+    try:
+        help_txt = subprocess.run([mksquashfs], capture_output=True, text=True).stderr
+    except Exception:
+        help_txt = ""
+    if "-mkfs-time" in (help_txt or ""):
+        args += ["-mkfs-time", "0", "-all-time", "0"]
+    return args
 
 
 def die(msg: str) -> None:
@@ -237,6 +248,7 @@ def main() -> None:
 
     unsquashfs = find_tool("unsquashfs")
     mksquashfs = find_tool("mksquashfs")
+    mks_args = mksquashfs_args(mksquashfs)
     if not args.no_gate and not gate_template_path().exists():
         die(f"gate template not found: {gate_template_path()}")
 
@@ -282,13 +294,8 @@ def main() -> None:
             insert_gate(work / "rootfs", home_macs)
 
         print("==> mksquashfs app + rootfs")
-        run(
-            [mksquashfs, str(work / "app"), str(work / "app_new.bin")] + MKSQUASHFS_ARGS
-        )
-        run(
-            [mksquashfs, str(work / "rootfs"), str(work / "rootfs_new.bin")]
-            + MKSQUASHFS_ARGS
-        )
+        run([mksquashfs, str(work / "app"), str(work / "app_new.bin")] + mks_args)
+        run([mksquashfs, str(work / "rootfs"), str(work / "rootfs_new.bin")] + mks_args)
 
         print("==> repack pak + CRC")
         swaps = {
