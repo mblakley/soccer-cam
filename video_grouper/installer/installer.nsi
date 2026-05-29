@@ -60,6 +60,50 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${COMPANYNAME}"
 ; Language
 !insertmacro MUI_LANGUAGE "English"
 
+; Detect a prior install and let the user choose upgrade-in-place vs
+; clean reinstall. The auto-upgrade flow runs us silently and always
+; takes the upgrade path. Interactive runs over an existing install
+; (e.g. legacy v0.3.5 user double-clicking VideoGrouperSetup.exe to
+; manually upgrade) get a prompt:
+;   Yes -> upgrade in place: config + storage preserved
+;   No  -> uninstall first, wipe ProgramData, then install fresh
+;   Cancel -> abort
+;
+; Either way the install proceeds against the *new* binaries; the only
+; difference is whether prior config/storage survives.
+Function .onInit
+    SetRegView 64
+    SetShellVarContext all
+    ReadRegStr $0 HKLM "Software\${APPNAME}" "Install_Dir"
+    ${If} $0 == ""
+        ; No prior install detected.
+        Return
+    ${EndIf}
+    ${If} ${Silent}
+        ; Auto-upgrade (service spawned us with /S). Always upgrade in
+        ; place; never prompt, never wipe user data.
+        Return
+    ${EndIf}
+    ; NSIS MessageBox supports at most 2 return-check pairs; the third
+    ; choice (Cancel) is handled by falling through to Abort.
+    MessageBox MB_YESNOCANCEL|MB_ICONQUESTION \
+        "An existing VideoGrouper install was found at $0.$\r$\n$\r$\nYes: Upgrade in place (preserves config + storage)$\r$\nNo:  Clean reinstall (wipes ${STORAGE_PATH})$\r$\nCancel: Abort" \
+        /SD IDYES \
+        IDYES _proceed IDNO _cleanFirst
+    ; Fallthrough = Cancel.
+    Abort
+    _cleanFirst:
+    ; Run the existing uninstaller silently so the service deregisters
+    ; itself and Add/Remove Programs entries clear.
+    ${If} ${FileExists} "$0\uninstall.exe"
+        ExecWait '"$0\uninstall.exe" /S _?=$0'
+    ${EndIf}
+    ; Drop per-machine state too -- config.ini, queue state, journal,
+    ; the lot. The user explicitly chose "clean reinstall".
+    RMDir /r "${STORAGE_PATH}"
+    _proceed:
+FunctionEnd
+
 ; Write the current install phase to disk so a failed/interrupted
 ; install leaves a breadcrumb. The post-upgrade service reads this
 ; file on startup and appends it to update_history.jsonl as the
@@ -118,14 +162,28 @@ Section "Install" SecInstall
 
     !insertmacro WritePhase "files-copied"
 
-    ; Register the Windows service with delayed-auto-start so it survives
-    ; reboots without slowing boot. pywin32's HandleCommandLine accepts
-    ; --startup before the verb. Valid values: auto, delayed, manual,
-    ; disabled. "delayed" maps to SERVICE_AUTO_START + DelayedAutoStart=1.
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" --startup delayed install'
+    ; Register the Windows service with delayed-auto-start so it
+    ; survives reboots without slowing boot. pywin32's
+    ; HandleCommandLine "install" verb FAILS when the service already
+    ; exists -- so on upgrade-in-place we skip it (the existing
+    ; registration already points binPath at this very exe, which
+    ; File /r above just replaced). `sc query` returns 0 when the
+    ; service is registered, non-zero (typically 1060) when it isn't.
+    nsExec::ExecToLog 'sc.exe query VideoGrouperService'
+    Pop $0
+    ${If} $0 != "0"
+        ; Fresh install: register the service.
+        nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" --startup delayed install'
+    ${Else}
+        ; Upgrade in place: leave registration alone, but force the
+        ; start type to delayed-auto-start in case the prior version
+        ; was registered with a different setting.
+        nsExec::ExecToLog 'sc.exe config VideoGrouperService start= delayed-auto'
+    ${EndIf}
 
-    ; Configure service recovery: restart 3 times on failure, then leave
-    ; alone. Reset failure count after 24h of clean operation.
+    ; Always (re-)apply recovery actions. Idempotent and quick, and
+    ; it lets us tighten the retry policy in later releases without
+    ; needing a clean reinstall.
     nsExec::ExecToLog 'sc.exe failure VideoGrouperService reset= 86400 actions= restart/5000/restart/30000/restart/60000'
 
     !insertmacro WritePhase "service-installed"
