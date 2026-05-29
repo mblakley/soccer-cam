@@ -695,11 +695,14 @@ def _execute_autocam_gui_automation(
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
         # Persist PIDs to state.json so a tray crash mid-pass can reattach
-        # on restart. Use the launcher PID directly — no wmic/tasklist
-        # enumeration here to avoid interfering with AutoCam's GPU init.
-        # The polling loop's _live_autocam_pids call will validate later.
+        # on restart. Get the window-owning PID via win32process (instant,
+        # no subprocess spawn) — this is the child GUI.exe that actually
+        # owns the AutoCam window, not just the launcher which may exit.
+        import win32process
+
+        _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
         if state is not None:
-            gui_pids = [launcher.pid]
+            gui_pids = list({launcher.pid, window_pid})
             state.set_autocam_run(
                 {
                     "launcher_pid": launcher.pid,
@@ -876,15 +879,14 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        # Use the launcher PID for exit detection. Avoid running
-        # tasklist/wmic here — AutoCam is initializing its GPU/DirectML
-        # context right after Start Processing, and subprocess spawns
-        # during this window can cause it to fall back to CPU inference.
+        # Track both the launcher and the window-owning PID for exit
+        # detection. No subprocess spawning — window_pid was already
+        # captured via win32process above.
         return _wait_for_completion_and_cleanup(
             main_window,
             state,
             output_path=abs_output_path,
-            tracked_pids=[launcher.pid],
+            tracked_pids=list({launcher.pid, window_pid}),
         )
 
     except Exception as e:
