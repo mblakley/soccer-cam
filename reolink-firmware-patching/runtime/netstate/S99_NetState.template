@@ -22,7 +22,13 @@ OVERRIDE_FILE=$CONFIG_DIR/override
 LOG=$CONFIG_DIR/log
 
 POLL_INTERVAL=30
-INIT_GRACE=45
+# Head-start delay before the first home/away check. Kept short: wait_for_api
+# below already polls until the API is reachable, so a long pre-sleep only
+# delays the home-disable and lets the camera record a longer stub at home.
+# Fail-enabled is preserved regardless — the camera boots recording (24/7
+# TIMING + persisted Rec.enable) and we only ever DISABLE on a confirmed home
+# MAC; any failure/ambiguity leaves recording on (see main_loop).
+INIT_GRACE=5
 LOG_MAX_BYTES=262144
 
 # 168 chars: 7 days * 24 hours, 1 char per hour. Daemon always pushes the

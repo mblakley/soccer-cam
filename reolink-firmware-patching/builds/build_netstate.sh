@@ -164,9 +164,9 @@ echo "      home MACs (idle):  $HOME_MACS_LC"
 echo "      api creds:         $USER / <hidden>"
 echo
 echo " First boot after flash:"
-echo "  - Daemon waits ${INIT_GRACE:-45}s for the API, then begins polling."
-echo "  - If on a 'home' MAC, it disables the TIMING recording schedule."
-echo "  - On any other LAN, it enables continuous TIMING recording."
+echo "  - Daemon waits for the camera API (short grace), then checks the gateway MAC ASAP."
+echo "  - If on a 'home' MAC, it disables recording (master Rec.enable=0)."
+echo "  - On any other LAN (or no/ambiguous network), it keeps continuous recording — fail-enabled."
 echo
 echo " Runtime overrides (edit on SD card, no re-flash):"
 echo "  /mnt/sda/netstate/home_macs.txt  - one MAC per line, overrides baked list"
