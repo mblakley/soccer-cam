@@ -539,6 +539,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         import json
         from pathlib import Path
+
         from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
 
         storage = Path(self.config.storage.path)
@@ -550,7 +551,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             if not state_file.exists():
                 continue
             try:
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     status = json.load(f).get("status")
             except (json.JSONDecodeError, OSError):
                 continue
