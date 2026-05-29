@@ -23,6 +23,7 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import MutableMapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -158,5 +159,8 @@ class UpdateLoggerAdapter(logging.LoggerAdapter):
     journal entry uses the same id, so logs + journal join cleanly.
     """
 
-    def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        return f"[update:{self.extra['update_id']}] {msg}", kwargs
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> tuple[Any, MutableMapping[str, Any]]:
+        extra = self.extra or {}
+        return f"[update:{extra.get('update_id', '?')}] {msg}", kwargs

@@ -118,7 +118,7 @@ class UpdateCheckProcessor(PollingProcessor):
         # The UpdateManager that owns the temp dir between download
         # and apply -- kept alive across loop iterations only when
         # we're holding a staged artifact for the user.
-        self._pending_manager = None
+        self._pending_manager: UpdateManager | None = None
         self._currently_checking = False
         # NSIS leaves a phase marker at each install boundary. On
         # startup we read the marker, journal it as the previous
