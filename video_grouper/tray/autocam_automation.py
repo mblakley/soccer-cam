@@ -204,28 +204,25 @@ def _find_autocam_gui_pids(
 def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
     """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
 
-    A bare existence check would accept a PID that's been recycled by
-    an unrelated process; the name guard prevents that. Each candidate
-    becomes a single `tasklist` call with both filters applied -- a
-    non-empty result row means alive-and-correctly-named.
+    Uses a single ``tasklist`` call to get all GUI.exe PIDs, then
+    intersects with ``candidate_pids``. This avoids spawning one
+    subprocess per PID on every 30-second poll.
     """
-    live: list[int] = []
-    for pid in candidate_pids:
-        out = _run_console(
-            [
-                "tasklist",
-                "/FI",
-                f"PID eq {pid}",
-                "/FI",
-                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
-                "/FO",
-                "CSV",
-                "/NH",
-            ]
+    all_gui = set(
+        _parse_tasklist_csv_pids(
+            _run_console(
+                [
+                    "tasklist",
+                    "/FI",
+                    f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ]
+            )
         )
-        if _parse_tasklist_csv_pids(out):
-            live.append(pid)
-    return live
+    )
+    return [pid for pid in candidate_pids if pid in all_gui]
 
 
 def _validate_autocam_inputs(
@@ -672,11 +669,6 @@ def _execute_autocam_gui_automation(
         subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
         time.sleep(1)
 
-        # Capture the wall-clock so PID discovery only picks up GUI.exe
-        # processes that postdate our launch (avoids grabbing an unrelated
-        # AutoCam if the user happened to start one manually).
-        launch_epoch = time.time()
-
         # Use Popen so we don't block on the launcher process.
         # The new Autocam (GUI.exe) spawns a child process for the actual window,
         # so app.window() cannot track it — we search the desktop instead.
@@ -703,10 +695,11 @@ def _execute_autocam_gui_automation(
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
         # Persist PIDs to state.json so a tray crash mid-pass can reattach
-        # on restart. We capture every GUI.exe whose create_time is after
-        # launch_epoch — typically the launcher + the spawned UI process.
+        # on restart. Use the launcher PID directly — no wmic/tasklist
+        # enumeration here to avoid interfering with AutoCam's GPU init.
+        # The polling loop's _live_autocam_pids call will validate later.
         if state is not None:
-            gui_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+            gui_pids = [launcher.pid]
             state.set_autocam_run(
                 {
                     "launcher_pid": launcher.pid,
@@ -883,21 +876,15 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        # Re-snapshot the GUI.exe PIDs now that processing has started.
-        # The processing pass usually re-spawns or stabilizes the worker
-        # processes, and the post-launch list captured up at line 498+
-        # reflects that final set. The exit-detection fallback in
-        # _wait_for_completion_and_cleanup needs the right PIDs to know
-        # when AutoCam is "done" via process exit. The helper supersedes
-        # this branch's earlier text-stale-detection — PID exit + output
-        # file watching is a more reliable terminal signal than polling
-        # for the "finished processing" notification text never to change.
-        final_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+        # Use the launcher PID for exit detection. Avoid running
+        # tasklist/wmic here — AutoCam is initializing its GPU/DirectML
+        # context right after Start Processing, and subprocess spawns
+        # during this window can cause it to fall back to CPU inference.
         return _wait_for_completion_and_cleanup(
             main_window,
             state,
             output_path=abs_output_path,
-            tracked_pids=final_pids,
+            tracked_pids=[launcher.pid],
         )
 
     except Exception as e:
