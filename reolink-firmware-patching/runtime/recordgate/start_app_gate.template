@@ -1,0 +1,45 @@
+# ===== record-at-home gate (baked at build; see docs/RECORD_GATE_DESIGN.md) =====
+# This block REPLACES start_app's "./recorder &". It is backgrounded so it
+# never blocks the rest of the launch sequence (router/device/cgiserver and
+# the watchdog feeder are already started above it).
+#
+# FAIL-ENABLED: the recorder is started UNLESS we positively confirm the home
+# gateway MAC within the timeout. No network, a non-home (field) network, an
+# unresolved gateway MAC, any error, or a timeout all fall through to starting
+# the recorder (records). ONLY a confirmed home gateway MAC suppresses it, so a
+# game is never missed. The home MAC list is baked in at build time.
+(
+    RG_HOME_MACS="%%HOME_MACS%%"
+    RG_TIMEOUT=15
+    rg_gw_ip() {
+        HEX=$(awk '$2=="00000000"{print $3; exit}' /proc/net/route)
+        [ -z "$HEX" ] && return 1
+        printf '%d.%d.%d.%d\n' 0x${HEX:6:2} 0x${HEX:4:2} 0x${HEX:2:2} 0x${HEX:0:2}
+    }
+    rg_is_home() {
+        C=$(echo "$1" | tr 'A-Z' 'a-z')
+        for M in $(echo "$RG_HOME_MACS" | tr 'A-Z' 'a-z'); do
+            [ "$M" = "$C" ] && return 0
+        done
+        return 1
+    }
+    RG_HOME=0
+    RG_END=$(( $(cut -d. -f1 /proc/uptime) + RG_TIMEOUT ))
+    while [ "$(cut -d. -f1 /proc/uptime)" -lt "$RG_END" ]; do
+        GW=$(rg_gw_ip) || { sleep 1; continue; }
+        ping -c 1 -W 1 "$GW" >/dev/null 2>&1
+        MAC=$(awk -v ip="$GW" '$1==ip && $4!="00:00:00:00:00:00"{print $4; exit}' /proc/net/arp)
+        if [ -n "$MAC" ]; then
+            rg_is_home "$MAC" && RG_HOME=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$RG_HOME" = 1 ]; then
+        echo "record-gate: home gateway $MAC matched -> recorder suppressed"
+    else
+        echo "record-gate: not home (gw=${GW:-none} mac=${MAC:-none}) -> recording"
+        ./recorder &
+    fi
+) &
+# ===== end record-at-home gate =====
