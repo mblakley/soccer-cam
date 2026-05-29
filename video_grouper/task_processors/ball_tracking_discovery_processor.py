@@ -34,7 +34,6 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
     ):
         super().__init__(storage_path, config, poll_interval)
         self.ball_tracking_processor = ball_tracking_processor
-        self._recovered_uploads: set[str] = set()
 
     async def discover_work(self) -> None:
         logger.info("BALL_TRACKING_DISCOVERY: scanning for trimmed groups")
@@ -164,26 +163,38 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
         return None
 
     async def _recover_upload(self, group_dir: Path) -> None:
-        """Queue YouTube upload for completed groups missing an upload.
+        """Queue YouTube upload for completed groups that haven't been uploaded.
 
-        Tracks recovered dirs across cycles to avoid duplicate uploads.
+        Checks whether the group already reached ``complete`` status (i.e.
+        upload succeeded) before re-queuing. This allows recovery after
+        transient failures (expired token, network error) without duplicate
+        uploads for groups that already finished.
         """
-        group_key = str(group_dir)
-        if group_key in self._recovered_uploads:
-            return
         if not self.config.youtube.enabled:
             return
+
+        # If the group already reached "complete", no upload needed
+        state_file = group_dir / "state.json"
+        try:
+            with open(state_file, "r") as f:
+                state_data = json.load(f)
+            if state_data.get("status") == "complete":
+                return
+        except (json.JSONDecodeError, OSError):
+            return
+
         upload_processor = getattr(
             self.ball_tracking_processor, "upload_processor", None
         )
         if not upload_processor:
             return
+
+        # Don't re-queue if the upload processor already has this group
         from .tasks.upload import YoutubeUploadTask
 
         relative_group_dir = os.path.relpath(str(group_dir), self.storage_path)
         youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
         await upload_processor.add_work(youtube_task)
-        self._recovered_uploads.add(group_key)
         logger.info(
             "BALL_TRACKING_DISCOVERY: recovered YouTube upload for %s",
             group_dir.name,
