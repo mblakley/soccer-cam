@@ -12,6 +12,7 @@ from pathlib import Path
 from video_grouper.task_processors.camera_poller import (
     CameraPoller,
     find_group_directory,
+    _identify_runt_recordings,
 )
 from video_grouper.models import RecordingFile
 from video_grouper.models import DirectoryState
@@ -838,3 +839,81 @@ class TestUnplugNotification:
         # _last_poll_found_files is now False (no files found)
         await poller.discover_work()
         assert poller.ntfy_service.send_notification.call_count == 2
+
+
+# ── Isolated-runt detection ──────────────────────────────────────────
+
+_RUNT_DAY = "2026-05-28"
+
+
+def _rec(path, start_hms, end_hms):
+    """Build a camera file-list entry on a fixed day from HH:MM:SS strings."""
+    return {
+        "path": path,
+        "startTime": f"{_RUNT_DAY} {start_hms}",
+        "endTime": f"{_RUNT_DAY} {end_hms}",
+    }
+
+
+class TestRuntDetection:
+    """_identify_runt_recordings: drop only *isolated* short/aborted files."""
+
+    def test_normal_long_file_kept(self):
+        files = [_rec("/mnt/sda/a.mp4", "10:00:00", "10:05:00")]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_isolated_short_file_skipped(self):
+        files = [_rec("/mnt/sda/runt.mp4", "09:33:28", "09:33:32")]  # 4s, alone
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+
+    def test_isolated_aborted_zero_end_skipped(self):
+        # 000000 end time parses to midnight (< start) -> aborted. (prod case)
+        files = [_rec("/mnt/sda/runt.mp4", "09:33:28", "00:00:00")]
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+
+    def test_isolated_unparseable_end_skipped(self):
+        files = [
+            {
+                "path": "/mnt/sda/runt.mp4",
+                "startTime": f"{_RUNT_DAY} 09:33:28",
+                "endTime": "0000-00-00 00:00:00",  # strptime can't parse
+            }
+        ]
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+
+    def test_short_tail_after_long_segment_kept(self):
+        """A short power-off tail contiguous with a real game is preserved."""
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),  # long game seg
+            _rec("/mnt/sda/tail.mp4", "10:05:02", "10:05:06"),  # 4s, 2s later
+        ]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_short_aborted_tail_kept(self):
+        """Power cut mid-segment: tail is aborted but contiguous -> kept."""
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),
+            _rec("/mnt/sda/tail.mp4", "10:05:01", "00:00:00"),  # aborted, 1s later
+        ]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_stub_far_from_game_in_same_batch_skipped(self):
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),  # long game seg
+            _rec("/mnt/sda/stub.mp4", "14:00:00", "14:00:04"),  # 4s, hours later
+        ]
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/stub.mp4"}
+
+    def test_full_length_isolated_first_segment_kept(self):
+        # A long first segment is not short, so it's never a runt candidate.
+        files = [_rec("/mnt/sda/first.mp4", "10:00:00", "10:10:00")]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_short_file_adjacent_to_persisted_group_kept(self):
+        """No in-batch neighbor, but adjacent to a group grouped in a prior poll."""
+        files = [_rec("/mnt/sda/tail.mp4", "10:05:03", "00:00:00")]  # aborted, lone
+        with patch(
+            "video_grouper.task_processors.camera_poller.find_existing_group_for",
+            return_value="/storage/2026.05.28-10.00.00",
+        ):
+            assert _identify_runt_recordings(files, ["/storage/x"]) == set()

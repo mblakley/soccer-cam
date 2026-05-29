@@ -18,10 +18,54 @@ logger = logging.getLogger(__name__)
 # Constants
 default_date_format = "%Y-%m-%d %H:%M:%S"
 
+# Max gap between the end of one recording and the start of the next for
+# them to be treated as the same continuous group. The camera segments a
+# continuous recording into back-to-back files with sub-second gaps, so
+# anything beyond this is a separate recording session.
+GROUP_GAP_SECONDS = 5
+# A recording shorter than this is only meaningful as a runt when it also
+# has no neighbors — see _identify_runt_recordings.
+MIN_SEGMENT_SECONDS = 5
+
 
 def create_directory(path):
     """Create a directory if it doesn't exist."""
     os.makedirs(path, exist_ok=True)
+
+
+def find_existing_group_for(
+    file_start_time: datetime, existing_dirs: List[str]
+) -> Optional[str]:
+    """Return the existing group directory a file belongs to, or None.
+
+    A file joins a group if its start time is within GROUP_GAP_SECONDS
+    after the group's last file end time, or falls within the group's
+    existing [first.start, last.end] range (re-discovery on later polls).
+    Pure lookup — never creates a directory.
+    """
+    for group_dir_path in sorted(existing_dirs, reverse=True):
+        state_file_path = os.path.join(group_dir_path, "state.json")
+        if not os.path.exists(state_file_path):
+            continue
+        try:
+            dir_state = DirectoryState(group_dir_path)
+            first_file = dir_state.get_first_file()
+            last_file = dir_state.get_last_file()
+            if last_file and last_file.end_time:
+                # File appends to the end of the group (within the gap).
+                time_after_end = (file_start_time - last_file.end_time).total_seconds()
+                if 0 <= time_after_end <= GROUP_GAP_SECONDS:
+                    return group_dir_path
+                # File falls within the group's existing time range.
+                if (
+                    first_file
+                    and first_file.start_time
+                    and first_file.start_time <= file_start_time <= last_file.end_time
+                ):
+                    return group_dir_path
+        except Exception as e:
+            logger.error(f"Error reading state for {group_dir_path}: {e}")
+    return None
 
 
 def find_group_directory(
@@ -31,40 +75,13 @@ def find_group_directory(
     Finds or creates a group directory for a video file based on its start time.
     A new group is created if the file's start time is more than 5 seconds after the previous file's end time.
     """
-    # Check existing directories to find a match
-    for group_dir_path in sorted(existing_dirs, reverse=True):
-        state_file_path = os.path.join(group_dir_path, "state.json")
-        if os.path.exists(state_file_path):
-            try:
-                dir_state = DirectoryState(group_dir_path)
-                first_file = dir_state.get_first_file()
-                last_file = dir_state.get_last_file()
-                if last_file and last_file.end_time:
-                    # Check if file appends to end of group (within 5s gap)
-                    time_after_end = (
-                        file_start_time - last_file.end_time
-                    ).total_seconds()
-                    if 0 <= time_after_end <= 5:
-                        logger.info(
-                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}, with time matching file end time {last_file.end_time}"
-                        )
-                        return group_dir_path
-
-                    # Check if file falls within the group's existing time range
-                    # (handles re-discovery on subsequent polls)
-                    if (
-                        first_file
-                        and first_file.start_time
-                        and first_file.start_time
-                        <= file_start_time
-                        <= last_file.end_time
-                    ):
-                        logger.info(
-                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time} (within group range {first_file.start_time} - {last_file.end_time})"
-                        )
-                        return group_dir_path
-            except Exception as e:
-                logger.error(f"Error reading state for {group_dir_path}: {e}")
+    existing = find_existing_group_for(file_start_time, existing_dirs)
+    if existing is not None:
+        logger.info(
+            f"Found matching group directory {os.path.basename(existing)} "
+            f"for file starting at {file_start_time}"
+        )
+        return existing
 
     # No matching directory found, create a new one
     new_dir_name = file_start_time.strftime("%Y.%m.%d-%H.%M.%S")
@@ -74,6 +91,90 @@ def find_group_directory(
         f"Created new group directory {new_dir_path} for file starting at {file_start_time}"
     )
     return new_dir_path
+
+
+def _parse_recording_times(file_info: dict):
+    """Parse a file's start/end strings into datetimes.
+
+    Returns (start, end). ``end`` is None when the camera left it blank or
+    malformed (e.g. a ``..._000000_...`` aborted recording whose end time
+    is all zeros), which strptime can't parse. ``start`` is None only if
+    even the start time is unusable, in which case the caller leaves the
+    file for the normal processing loop to handle.
+    """
+    try:
+        start = datetime.strptime(file_info["startTime"], default_date_format)
+    except (ValueError, KeyError, TypeError):
+        return None, None
+    try:
+        end = datetime.strptime(file_info["endTime"], default_date_format)
+    except (ValueError, KeyError, TypeError):
+        end = None
+    return start, end
+
+
+def _identify_runt_recordings(files: List[dict], existing_dirs: List[str]) -> set:
+    """Return the set of file paths that are *isolated* runt recordings.
+
+    A recording is a runt to skip only when it is BOTH:
+      - short/aborted: end time missing/unparseable, end <= start, or
+        duration < MIN_SEGMENT_SECONDS; and
+      - isolated: no other recording in this batch is contiguous with it
+        (within GROUP_GAP_SECONDS, mirroring the grouping rule), and it is
+        not adjacent to an already-persisted group.
+
+    This drops a lone startup stub (e.g. the camera powered on at home,
+    recorded a few seconds, then idled) while preserving a short power-off
+    tail that belongs to a real game — that tail sits within the gap of
+    the game's other segments, so it is not isolated.
+    """
+    parsed = []  # (path, start, effective_end)
+    for fi in files:
+        start, end = _parse_recording_times(fi)
+        if start is None:
+            continue  # unusable start — leave it for the main loop
+        # Use start as the effective end when the end time is invalid, so a
+        # zero/aborted end doesn't blow up the proximity math.
+        eff_end = end if (end is not None and end > start) else start
+        aborted = end is None or end <= start
+        short = (
+            (end - start).total_seconds() < MIN_SEGMENT_SECONDS if not aborted else True
+        )
+        parsed.append((fi.get("path", ""), start, eff_end, aborted or short))
+
+    parsed.sort(key=lambda t: t[1])
+    runts: set = set()
+
+    for i, (path, start, eff_end, is_short_or_aborted) in enumerate(parsed):
+        if not is_short_or_aborted:
+            continue
+
+        adjacent = False
+        for j, (_, ostart, o_eff_end, _) in enumerate(parsed):
+            if j == i:
+                continue
+            # Contiguous if a neighbor ends within the gap before this one
+            # starts, starts within the gap after this one ends, or overlaps.
+            if (
+                0 <= (start - o_eff_end).total_seconds() <= GROUP_GAP_SECONDS
+                or 0 <= (ostart - eff_end).total_seconds() <= GROUP_GAP_SECONDS
+                or (ostart <= eff_end and o_eff_end >= start)
+            ):
+                adjacent = True
+                break
+
+        if not adjacent and find_existing_group_for(start, existing_dirs) is not None:
+            adjacent = True
+
+        if not adjacent:
+            dur = (eff_end - start).total_seconds()
+            logger.info(
+                f"CAMERA_POLLER: Skipping isolated runt recording "
+                f"{os.path.basename(path)}: dur={dur:.0f}s, no adjacent recordings"
+            )
+            runts.add(path)
+
+    return runts
 
 
 class CameraPoller(PollingProcessor):
@@ -188,6 +289,12 @@ class CameraPoller(PollingProcessor):
             if os.path.isdir(os.path.join(self.storage_path, d))
         ]
 
+        # Drop isolated runt recordings (e.g. a few-second startup stub the
+        # camera writes before idling at home) before they reach the queue.
+        # A short tail that belongs to a real game is contiguous with its
+        # other segments, so it is not flagged here.
+        runt_paths = _identify_runt_recordings(files, existing_dirs)
+
         latest_end_time = None
 
         # Get connected timeframes for filtering
@@ -212,6 +319,12 @@ class CameraPoller(PollingProcessor):
         for file_info in files:
             try:
                 filename = os.path.basename(file_info["path"])
+
+                # Isolated runt (handled before parsing end time, which may
+                # be unparseable for an aborted recording).
+                if file_info["path"] in runt_paths:
+                    continue
+
                 file_start_time = datetime.strptime(
                     file_info["startTime"], default_date_format
                 )
