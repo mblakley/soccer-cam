@@ -156,8 +156,12 @@ After flashing:
 - Override the daemon temporarily by creating an empty
   `/mnt/sda/netstate/override` file — daemon yields, you control via UI/API.
 - Update the home-MAC list without re-flashing by writing to
-  `/mnt/sda/netstate/home_macs.txt` (one MAC per line). Both files can
-  be created/edited via the camera's SD-card management web UI.
+  `/mnt/sda/netstate/home_macs.txt` (one MAC per line). There is **no
+  arbitrary-file web UI** on these cameras — write these files over
+  `telnet` (the patched firmware leaves `telnetd` running, started in
+  `S25_Net`) or by pulling the microSD card and editing it on a PC. For a
+  hands-off setup, prefer baking the home MAC in at build time (see
+  `docs/RECORD_GATE_DESIGN.md`) rather than relying on a runtime file.
 
 ## Quickstart — motion-blur reduction (no flash, any firmware)
 
