@@ -111,7 +111,7 @@ PY
 
 echo "==> 6) Insert the record-at-home gate into start_app (baked home MACs)"
 python3 - <<PY
-gate = open("$GATE_TEMPLATE").read().replace("%%HOME_MACS%%", "$HOME_MACS_LC")
+gate = open("$GATE_TEMPLATE").read().replace("\r\n", "\n").replace("\r", "\n").replace("%%HOME_MACS%%", "$HOME_MACS_LC")
 sa = "rootfs_unpacked/etc/init.d/start_app"
 text = open(sa).read()
 needle = "./recorder &"
