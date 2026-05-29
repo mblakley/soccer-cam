@@ -4,7 +4,6 @@ import os
 import subprocess
 import time
 
-import psutil
 import win32gui
 from pywinauto import Desktop
 
@@ -18,6 +17,10 @@ logger = logging.getLogger(__name__)
 # this as a module constant lets the resume + fresh-launch paths agree.
 _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAME = "GUI.exe"
+
+# Suppress the console flash on every tasklist/wmic poll -- the tray is
+# a GUI app and these run on a 30s discovery loop.
+_NO_WINDOW = 0x08000000
 
 
 def _find_autocam_hwnd() -> int | None:
@@ -39,6 +42,121 @@ def _find_autocam_hwnd() -> int | None:
     return found[0] if found else None
 
 
+def _run_console(cmd: list[str], timeout: float = 10.0) -> str:
+    """Run a Windows console helper (tasklist/wmic), return stdout, or ''
+    on timeout / OSError. Swallow-and-log matches the posture of the
+    callers, which treat absent data as 'no match' rather than fatal.
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("console helper %s failed: %s", cmd[0], e)
+        return ""
+    return result.stdout or ""
+
+
+def _parse_tasklist_csv_pids(stdout: str) -> list[int]:
+    """Parse `tasklist /FO CSV /NH` output and return PIDs (column 2).
+
+    Returns an empty list if tasklist's "no tasks running" banner is
+    present (some Windows versions route that to stdout instead of
+    stderr) or any other unparseable content appears.
+    """
+    pids: list[int] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) < 2:
+            continue
+        try:
+            pids.append(int(parts[1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _parse_wmi_datetime(s: str) -> float | None:
+    """Parse a WMI CIM_DATETIME field to Unix epoch seconds.
+
+    Format: ``yyyymmddHHMMSS.ffffff±UUU`` (UUU = minutes east of UTC).
+    Example: ``20260529182708.123456-300`` is 2026-05-29 18:27:08.123456
+    in UTC-5h. Returns None on any parse failure.
+    """
+    s = s.strip()
+    if len(s) < 25:
+        return None
+    try:
+        year = int(s[0:4])
+        month = int(s[4:6])
+        day = int(s[6:8])
+        hour = int(s[8:10])
+        minute = int(s[10:12])
+        second = int(s[12:14])
+        micro = int(s[15:21])
+        sign = s[21]
+        tz_minutes = int(s[22:25])
+        if sign == "-":
+            tz_minutes = -tz_minutes
+        dt = datetime.datetime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            micro,
+            tzinfo=datetime.timezone(datetime.timedelta(minutes=tz_minutes)),
+        )
+        return dt.timestamp()
+    except (ValueError, IndexError):
+        return None
+
+
+def _wmi_creation_time(pid: int) -> float | None:
+    """Return Unix-epoch creation time for ``pid`` via wmic, or None.
+
+    `wmic` is deprecated on newer Windows but still ships on Win10/11.
+    None means we couldn't determine it; callers treat that as
+    'no filter' (fail-open) -- a false positive is harmless because
+    every downstream consumer revalidates via _live_autocam_pids.
+    """
+    out = _run_console(
+        [
+            "wmic",
+            "process",
+            "where",
+            f"ProcessId={pid}",
+            "get",
+            "CreationDate",
+            "/FORMAT:CSV",
+        ]
+    )
+    for line in out.splitlines():
+        line = line.strip()
+        if (
+            not line
+            or line.lower().startswith("node")
+            or "creationdate" in line.lower()
+        ):
+            continue
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        epoch = _parse_wmi_datetime(parts[-1])
+        if epoch is not None:
+            return epoch
+    return None
+
+
 def _find_autocam_gui_pids(
     since_epoch: float | None = None,
 ) -> list[int]:
@@ -49,46 +167,64 @@ def _find_autocam_gui_pids(
     Both PIDs go into the resume marker; reattach validates that at
     least one is still alive.
 
+    Uses `tasklist` (+ `wmic` for the optional since_epoch filter)
+    rather than psutil: psutil's PyInstaller bundle is unreliable in
+    this tray's onedir build (v0.4.x bundles raised AttributeError on
+    psutil.process_iter even with the metrics extra synced). Subprocess
+    over stdlib is what every other process-enum site in the repo uses.
+
     Args:
-        since_epoch: If provided, only return processes whose create_time
-            is at-or-after this Unix timestamp (seconds). Used by the
-            launch path to avoid grabbing PIDs of unrelated GUI.exe
+        since_epoch: If provided, only return processes whose creation
+            time is at-or-after this Unix timestamp (seconds). Used by
+            the launch path to avoid grabbing PIDs of unrelated GUI.exe
             instances that were already running.
     """
-    pids: list[int] = []
-    for proc in psutil.process_iter(["pid", "name", "create_time"]):
-        try:
-            name = (proc.info.get("name") or "").lower()
-            if name != _AUTOCAM_PROCESS_NAME.lower():
-                continue
-            if (
-                since_epoch is not None
-                and proc.info.get("create_time", 0) < since_epoch
-            ):
-                continue
-            pids.append(proc.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return pids
+    pids = _parse_tasklist_csv_pids(
+        _run_console(
+            [
+                "tasklist",
+                "/FI",
+                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ]
+        )
+    )
+    if since_epoch is None:
+        return pids
+    filtered: list[int] = []
+    for pid in pids:
+        created = _wmi_creation_time(pid)
+        if created is None or created >= since_epoch:
+            filtered.append(pid)
+    return filtered
 
 
 def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
     """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
 
-    A bare ``pid_exists`` check would accept a PID that's been recycled
-    by an unrelated process; the name guard prevents that.
+    A bare existence check would accept a PID that's been recycled by
+    an unrelated process; the name guard prevents that. Each candidate
+    becomes a single `tasklist` call with both filters applied -- a
+    non-empty result row means alive-and-correctly-named.
     """
     live: list[int] = []
     for pid in candidate_pids:
-        try:
-            proc = psutil.Process(pid)
-            if (
-                proc.is_running()
-                and proc.name().lower() == _AUTOCAM_PROCESS_NAME.lower()
-            ):
-                live.append(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+        out = _run_console(
+            [
+                "tasklist",
+                "/FI",
+                f"PID eq {pid}",
+                "/FI",
+                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ]
+        )
+        if _parse_tasklist_csv_pids(out):
+            live.append(pid)
     return live
 
 

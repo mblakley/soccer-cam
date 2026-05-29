@@ -176,7 +176,7 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
         # If the group already reached "complete", no upload needed
         state_file = group_dir / "state.json"
         try:
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
             if state_data.get("status") == "complete":
                 return
