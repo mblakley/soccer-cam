@@ -205,6 +205,53 @@ class TestCameraPoller:
         assert queued_file.file_path.endswith("test1.dav")
 
     @pytest.mark.asyncio
+    async def test_sync_excludes_isolated_runt(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """An isolated short recording is dropped before reaching the queue."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/stub.dav",
+                "startTime": "2026-05-28 09:33:28",
+                "endTime": "2026-05-28 09:33:32",  # 4s, alone -> runt
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        await poller._sync_files_from_camera()
+
+        mock_download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_queues_file_with_unparseable_end(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A file with an unparseable end time is kept (M1) and queued without
+        crashing the main loop (M2) — not dropped as a runt."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/seg.dav",
+                "startTime": "2026-05-28 10:00:00",
+                "endTime": "0000-00-00 00:00:00",  # strptime can't parse
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        await poller._sync_files_from_camera()  # must not raise
+
+        mock_download_processor.add_work.assert_called_once()
+        queued = mock_download_processor.add_work.call_args[0][0]
+        assert queued.file_path.endswith("seg.dav")
+
+    @pytest.mark.asyncio
     async def test_connected_timeframe_filtering(
         self, temp_storage, mock_config, mock_camera
     ):
@@ -871,15 +918,19 @@ class TestRuntDetection:
         files = [_rec("/mnt/sda/runt.mp4", "09:33:28", "00:00:00")]
         assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
 
-    def test_isolated_unparseable_end_skipped(self):
+    def test_isolated_unparseable_end_kept(self):
+        # Unparseable end -> unknown duration -> NOT treated as short, so it is
+        # kept even when isolated (fail toward keeping; could be a still-open
+        # game segment). The common aborted stub has a *parseable* zero end
+        # (test_isolated_aborted_zero_end_skipped) and is still dropped.
         files = [
             {
-                "path": "/mnt/sda/runt.mp4",
+                "path": "/mnt/sda/maybe_long.mp4",
                 "startTime": f"{_RUNT_DAY} 09:33:28",
                 "endTime": "0000-00-00 00:00:00",  # strptime can't parse
             }
         ]
-        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+        assert _identify_runt_recordings(files, []) == set()
 
     def test_short_tail_after_long_segment_kept(self):
         """A short power-off tail contiguous with a real game is preserved."""

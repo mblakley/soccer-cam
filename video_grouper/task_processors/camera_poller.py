@@ -117,8 +117,11 @@ def _identify_runt_recordings(files: List[dict], existing_dirs: List[str]) -> se
     """Return the set of file paths that are *isolated* runt recordings.
 
     A recording is a runt to skip only when it is BOTH:
-      - short/aborted: end time missing/unparseable, end <= start, or
-        duration < MIN_SEGMENT_SECONDS; and
+      - positively short: a parseable duration < MIN_SEGMENT_SECONDS (a
+        parseable end <= start, the common aborted-stub case, counts via its
+        negative duration). An *unparseable* end means the length is unknown,
+        so it is NOT treated as short — better to keep a file of unknown
+        length than drop a real (possibly still-recording) segment; and
       - isolated: no other recording in this batch is contiguous with it
         (within GROUP_GAP_SECONDS, mirroring the grouping rule), and it is
         not adjacent to an already-persisted group.
@@ -136,17 +139,20 @@ def _identify_runt_recordings(files: List[dict], existing_dirs: List[str]) -> se
         # Use start as the effective end when the end time is invalid, so a
         # zero/aborted end doesn't blow up the proximity math.
         eff_end = end if (end is not None and end > start) else start
-        aborted = end is None or end <= start
-        short = (
-            (end - start).total_seconds() < MIN_SEGMENT_SECONDS if not aborted else True
+        # Positively-short evidence only: a parseable end < MIN_SEGMENT_SECONDS
+        # after start (a parseable end <= start gives a negative duration and
+        # still counts). An UNPARSEABLE end -> unknown length -> not short
+        # (keep), so an isolated still-recording segment isn't dropped.
+        is_short = (
+            end is not None and (end - start).total_seconds() < MIN_SEGMENT_SECONDS
         )
-        parsed.append((fi.get("path", ""), start, eff_end, aborted or short))
+        parsed.append((fi.get("path", ""), start, eff_end, is_short))
 
     parsed.sort(key=lambda t: t[1])
     runts: set = set()
 
-    for i, (path, start, eff_end, is_short_or_aborted) in enumerate(parsed):
-        if not is_short_or_aborted:
+    for i, (path, start, eff_end, is_short) in enumerate(parsed):
+        if not is_short:
             continue
 
         adjacent = False
@@ -325,12 +331,17 @@ class CameraPoller(PollingProcessor):
                 if file_info["path"] in runt_paths:
                     continue
 
-                file_start_time = datetime.strptime(
-                    file_info["startTime"], default_date_format
-                )
-                file_end_time = datetime.strptime(
-                    file_info["endTime"], default_date_format
-                )
+                file_start_time, file_end_time = _parse_recording_times(file_info)
+                if file_start_time is None:
+                    logger.warning(
+                        f"CAMERA_POLLER: unparseable start time for {filename}; skipping"
+                    )
+                    continue
+                if file_end_time is None or file_end_time <= file_start_time:
+                    # Aborted/unparseable end on a KEPT (contiguous) file — fall
+                    # back to a zero-length entry so it still queues and groups
+                    # sanely, instead of crashing strptime or being dropped.
+                    file_end_time = file_start_time
 
                 # Check if the file overlaps with any connected timeframe
                 should_skip = False
