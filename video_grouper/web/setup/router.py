@@ -8,7 +8,6 @@ import logging
 import os
 import string
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -523,7 +522,7 @@ def build_router(config_path: Path) -> APIRouter:
         return resp
 
     @router.get("/storage/browse", response_class=HTMLResponse)
-    def storage_browse(at: Optional[str] = Query(None)) -> HTMLResponse:
+    def storage_browse(at: str | None = Query(None)) -> HTMLResponse:
         """Render a directory listing fragment for the in-page browse modal.
 
         ``at`` is the directory to list. Empty/missing → top level
@@ -837,7 +836,7 @@ def build_router(config_path: Path) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=f"Uploaded file is not valid JSON: {exc}",
-            )
+            ) from exc
         # Google's Desktop OAuth client_secret.json wraps everything
         # under a top-level "installed" key with client_id/client_secret.
         installed = data.get("installed") or data.get("web") or {}
@@ -915,7 +914,7 @@ def build_router(config_path: Path) -> APIRouter:
             raise HTTPException(
                 status_code=500,
                 detail=f"Could not write {config_path}: {exc}",
-            )
+            ) from exc
 
         discard(token)
         # Land on /config so the user can immediately tweak integrations.
@@ -966,5 +965,5 @@ def _build_config(state) -> Config:
 # Optional helper used by the dashboard to detect "no config yet" and
 # redirect to the wizard. Kept here so the auth_server doesn't grow a
 # new responsibility.
-def needs_setup(config_path: Optional[Path]) -> bool:
+def needs_setup(config_path: Path | None) -> bool:
     return config_path is None or not config_path.exists()

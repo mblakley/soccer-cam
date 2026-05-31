@@ -1,8 +1,8 @@
 """Map network share using Windows WNet API (works in any session context)."""
 
 import ctypes
-from ctypes import wintypes
 import os
+from ctypes import wintypes
 
 mpr = ctypes.WinDLL("mpr")
 

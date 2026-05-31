@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from cryptography.exceptions import InvalidSignature, InvalidTag
@@ -100,7 +100,7 @@ def _verify_license(
     license_response: dict,
     public_keys: list[str],
     expected_user_id: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict:
     """Validate the license response shape and signature; return the parsed manifest."""
     if _NATIVE_AVAILABLE:
@@ -235,7 +235,7 @@ def _select_providers() -> list[str]:
     return chosen
 
 
-def _download_artifact(url: str, http_client: Optional[httpx.Client] = None) -> bytes:
+def _download_artifact(url: str, http_client: httpx.Client | None = None) -> bytes:
     """Fetch the encrypted artifact bytes from `url`."""
     client = http_client or httpx.Client(timeout=60.0, follow_redirects=True)
     try:
@@ -261,8 +261,8 @@ class SecureLoader:
         self,
         ttt_client,
         public_keys: list[str],
-        http_client: Optional[httpx.Client] = None,
-        state_storage_path: Optional[str] = None,
+        http_client: httpx.Client | None = None,
+        state_storage_path: str | None = None,
     ):
         self._ttt = ttt_client
         self._public_keys = list(public_keys)
@@ -273,8 +273,8 @@ class SecureLoader:
     def acquire(
         self,
         model_key: str,
-        channel: Optional[str] = None,
-        pipeline_version: Optional[str] = None,
+        channel: str | None = None,
+        pipeline_version: str | None = None,
     ) -> LoadedModel:
         if not self._ttt.is_authenticated():
             raise SecureLoaderError("TTT client is not authenticated")

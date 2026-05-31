@@ -13,33 +13,34 @@ This test verifies:
 9. Queue handoffs and error handling
 """
 
+import asyncio
+import json
 import os
 import tempfile
-import json
-import asyncio
-from unittest.mock import Mock, AsyncMock
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 import pytz
-from pathlib import Path
 
+from video_grouper.models import RecordingFile
 from video_grouper.task_processors.camera_poller import CameraPoller
 from video_grouper.task_processors.download_processor import DownloadProcessor
-from video_grouper.models import RecordingFile
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 
 
@@ -214,7 +215,7 @@ class TestCameraPollerIntegration:
             )
 
             # Check state file content
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
                 # State should be empty after processing is complete
                 assert len(state_data["queue"]) == 0, (
@@ -501,7 +502,7 @@ class TestCameraPollerIntegration:
             )
             assert os.path.exists(state_file), "State file should exist"
 
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
 
                 # State should contain the queued item
@@ -516,7 +517,7 @@ class TestCameraPollerIntegration:
             await asyncio.sleep(2)
 
             # Verify state is empty after processing
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 final_state = json.load(f)
                 assert len(final_state["queue"]) == 0, (
                     "State should be empty after processing"
@@ -830,7 +831,7 @@ class TestCameraPollerIntegration:
             )
             assert os.path.exists(state_file), "State file should exist"
 
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
                 assert len(state_data["queue"]) == 0, (
                     "State should be empty after all processing"

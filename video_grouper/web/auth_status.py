@@ -21,9 +21,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ def write_auth_needed(storage_path: str | Path, provider: str, last_error: str) 
     """Mark that ``provider`` needs interactive re-auth."""
     payload = {
         "provider": provider,
-        "since": datetime.now(timezone.utc).isoformat(),
+        "since": datetime.now(UTC).isoformat(),
         "last_error": last_error,
     }
     path = _flag_path(storage_path, provider)
@@ -48,7 +47,7 @@ def write_auth_needed(storage_path: str | Path, provider: str, last_error: str) 
         logger.warning("AUTH_STATUS: failed to write %s auth flag: %s", provider, exc)
 
 
-def read_auth_needed(storage_path: str | Path, provider: str) -> Optional[dict]:
+def read_auth_needed(storage_path: str | Path, provider: str) -> dict | None:
     """Return the flag payload if present, else None."""
     path = _flag_path(storage_path, provider)
     if not path.exists():

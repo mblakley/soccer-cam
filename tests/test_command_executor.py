@@ -1,11 +1,12 @@
 """Tests for the CommandExecutor module."""
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
 from video_grouper.api_integrations.command_executor import (
-    CommandExecutor,
     SUPPORTED_COMMANDS,
+    CommandExecutor,
 )
 
 

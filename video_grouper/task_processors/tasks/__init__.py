@@ -1,8 +1,8 @@
 """Task implementations for the video processing system."""
 
 # Base classes
-from .base_task import BaseTask
 from ..queue_type import QueueType
+from .base_task import BaseTask
 
 # Download tasks
 from .download import (

@@ -1,8 +1,9 @@
 """Experiments for detecting small balls in the far field."""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
-from pathlib import Path
 
 video_dir = Path("F:/Heat_2012s/05.31.2024 - vs Fairport (home)")
 seg = next(f for f in video_dir.iterdir() if f.suffix == ".mp4" and "[F]" in f.name)
@@ -137,7 +138,7 @@ for fi in sorted(frame_groups.keys()):
             continue
         best_idx = -1
         best_dist = 60.0
-        for j, (bx, by, ba) in enumerate(blobs):
+        for j, (bx, by, _ba) in enumerate(blobs):
             if used[j]:
                 continue
             dist = ((bx - last_x) ** 2 + (by - last_y) ** 2) ** 0.5
@@ -152,7 +153,7 @@ for fi in sorted(frame_groups.keys()):
         else:
             if len(traj) >= 3:
                 trajectories.append(traj)
-    for j, (bx, by, ba) in enumerate(blobs):
+    for j, (bx, by, _ba) in enumerate(blobs):
         if not used[j]:
             new_active.append([(fi, bx, by)])
     active = new_active

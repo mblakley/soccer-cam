@@ -6,7 +6,7 @@ Tests for the TeamSnap API integration.
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 # Add the parent directory to the path so we can import the video_grouper package
@@ -170,7 +170,7 @@ class TestTeamSnapAPI(unittest.TestCase):
         mock_get_games.return_value = self.games
 
         # Create a recording timespan that overlaps with the first game
-        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
+        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=UTC)
         recording_end = recording_start + timedelta(minutes=60)
 
         # Call the method
@@ -182,7 +182,7 @@ class TestTeamSnapAPI(unittest.TestCase):
         self.assertEqual(game["opponent_name"], "Opponent 1")
 
         # Test case 2: No game found
-        recording_start = datetime(2025, 3, 10, 17, 15, 0, tzinfo=timezone.utc)
+        recording_start = datetime(2025, 3, 10, 17, 15, 0, tzinfo=UTC)
         recording_end = recording_start + timedelta(minutes=60)
 
         game = self.api.find_game_for_recording(recording_start, recording_end)
@@ -205,7 +205,7 @@ class TestTeamSnapAPI(unittest.TestCase):
         }
 
         # Create a recording timespan
-        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
+        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=UTC)
         recording_end = recording_start + timedelta(minutes=60)
 
         # Create an empty match info dictionary

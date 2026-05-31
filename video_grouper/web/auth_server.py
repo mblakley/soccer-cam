@@ -30,9 +30,10 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import Body, FastAPI, Form, HTTPException, Request, Response, UploadFile
@@ -64,9 +65,9 @@ _TTT_DEFAULT_API_BASE_URL = "https://team-tech-tools.vercel.app"
 
 try:
     from video_grouper.utils._ttt_config import (
-        TTT_SUPABASE_URL,
         TTT_ANON_KEY,
         TTT_API_BASE_URL,
+        TTT_SUPABASE_URL,
     )
 except ImportError:
     TTT_SUPABASE_URL = _TTT_DEFAULT_SUPABASE_URL
@@ -378,13 +379,13 @@ def _read_youtube_status(token_file: Path) -> dict:
     if not data.get("refresh_token"):
         return empty
     expiry_iso = data.get("expiry")
-    expires_at: Optional[int] = None
+    expires_at: int | None = None
     if expiry_iso:
         try:
             # google-auth writes naive ISO timestamps in UTC.
             expires_at = int(
                 datetime.fromisoformat(expiry_iso.replace("Z", "+00:00"))
-                .replace(tzinfo=timezone.utc if expiry_iso.endswith("Z") else None)
+                .replace(tzinfo=UTC if expiry_iso.endswith("Z") else None)
                 .timestamp()
             )
         except (ValueError, TypeError):
@@ -426,8 +427,8 @@ def _read_status(token_file: Path) -> dict:
     if not access_token or not expires_at:
         return empty
 
-    user_id: Optional[str] = None
-    email: Optional[str] = None
+    user_id: str | None = None
+    email: str | None = None
     try:
         payload = _decode_jwt_payload(access_token)
         user_id = payload.get("sub")
@@ -472,12 +473,10 @@ def _scan_games(storage_path: Path) -> list[dict]:
     return games
 
 
-def _fmt_ts(ts: Optional[int]) -> str:
+def _fmt_ts(ts: int | None) -> str:
     if not ts:
         return "—"
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
+    return datetime.fromtimestamp(int(ts), tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _render_auth_flags_banner(storage: Path) -> str:
@@ -583,8 +582,8 @@ def _render_tray_section(storage: Path) -> str:
             '<p class="warn"><span class="status-dot bad"></span>Could not '
             f"read tray log: {html.escape(str(exc))}</p>"
         )
-    mtime = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
-    age_seconds = (datetime.now(tz=timezone.utc) - mtime).total_seconds()
+    mtime = datetime.fromtimestamp(log_path.stat().st_mtime, tz=UTC)
+    age_seconds = (datetime.now(tz=UTC) - mtime).total_seconds()
     if age_seconds < 120:
         dot = "on"
         age_label = f"active &mdash; last entry {int(age_seconds)}s ago"
@@ -703,7 +702,7 @@ def _render_auth_section(token_file: Path, providers: tuple[str, ...]) -> str:
     return prefix + oauth_block + password_form + magic_form
 
 
-def _render_queues_section(status: Optional[dict]) -> str:
+def _render_queues_section(status: dict | None) -> str:
     queue_sizes = (status or {}).get("queue_sizes")
     if not queue_sizes:
         return '<p class="muted">No live pipeline status available.</p>'
@@ -714,7 +713,7 @@ def _render_queues_section(status: Optional[dict]) -> str:
     return "<table><tr><th>Processor</th><th>Queue size</th></tr>" + rows + "</table>"
 
 
-def _render_cameras_section(status: Optional[dict]) -> str:
+def _render_cameras_section(status: dict | None) -> str:
     cameras = (status or {}).get("cameras") or []
     if not cameras:
         return '<p class="muted">No cameras configured.</p>'
@@ -767,10 +766,11 @@ def _render_games_section(games: list[dict]) -> str:
 def create_app(
     ttt_config: TTTConfig,
     storage_path: str,
-    status_provider: Optional[Callable[[], dict[str, Any]]] = None,
+    status_provider: Callable[[], dict[str, Any]] | None = None,
     providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
-    config_path: Optional[Path] = None,
+    config_path: Path | None = None,
     node_role: str = "standalone",
+    update_processor: Any | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 
@@ -824,6 +824,14 @@ def create_app(
         from video_grouper.web.worker_api import build_router as _build_worker
 
         app.include_router(_build_worker(storage_path))
+
+    # Auto-upgrade API. Only mounted when the orchestrator passes a
+    # processor reference -- tests and standalone runs (no
+    # VideoGrouperApp) skip it.
+    if update_processor is not None:
+        from video_grouper.web.update_api import build_router as _build_update
+
+        app.include_router(_build_update(update_processor))
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #
@@ -1108,9 +1116,9 @@ def create_app(
 
     @app.get("/auth/youtube/callback", response_class=HTMLResponse)
     def youtube_callback(
-        code: Optional[str] = None,
-        state: Optional[str] = None,
-        error: Optional[str] = None,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
     ) -> Response:
         """Receive Google's OAuth redirect, persist the user's token."""
         if error:
@@ -1176,7 +1184,9 @@ def create_app(
                 token_file.unlink()
             except OSError as exc:
                 logger.warning("Failed to delete tokens.json: %s", exc)
-                raise HTTPException(status_code=500, detail="Could not delete tokens")
+                raise HTTPException(
+                    status_code=500, detail="Could not delete tokens"
+                ) from exc
         client._access_token = None
         client._refresh_token_value = None
         client._expires_at = None

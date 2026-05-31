@@ -1,6 +1,6 @@
 """Tests for system metrics collection."""
 
-from video_grouper.utils.system_metrics import get_system_metrics, get_disk_free_gb
+from video_grouper.utils.system_metrics import get_disk_free_gb, get_system_metrics
 
 
 def test_get_system_metrics_returns_dict():

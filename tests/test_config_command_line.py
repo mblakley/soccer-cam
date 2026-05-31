@@ -1,8 +1,10 @@
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
-from video_grouper.__main__ import parse_arguments, load_application_config
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from video_grouper.__main__ import load_application_config, parse_arguments
 from video_grouper.utils.config import Config
 
 

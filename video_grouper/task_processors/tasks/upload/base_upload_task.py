@@ -2,14 +2,13 @@
 Base class for upload tasks.
 """
 
-import os
 import logging
+import os
 from abc import abstractmethod
-from typing import Dict
 from dataclasses import dataclass
 
-from ..base_task import BaseTask
 from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class BaseUploadTask(BaseTask):
         pass
 
     @abstractmethod
-    def serialize(self) -> Dict[str, object]:
+    def serialize(self) -> dict[str, object]:
         """
         Serialize the task to a dictionary for state persistence.
 
@@ -67,7 +66,7 @@ class BaseUploadTask(BaseTask):
         """
         pass
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """
         Convert task to dictionary format (alias for serialize for backward compatibility).
 

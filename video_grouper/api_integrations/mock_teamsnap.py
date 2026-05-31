@@ -12,8 +12,8 @@ recording group is assigned the correct game:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, TypedDict, Union
+from datetime import UTC, datetime, timedelta
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class MockTeamSnapEvent(TypedDict, total=False):
     team_name: str
 
     # Custom fields
-    custom_fields: dict[str, Union[str, int, float, bool]]
+    custom_fields: dict[str, str | int | float | bool]
 
 
 class MockTeamSnapAPI:
@@ -131,7 +131,7 @@ class MockTeamSnapAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[MockTeamSnapEvent]:
+    ) -> MockTeamSnapEvent | None:
         """Find the best game for the recording using shared selection logic."""
         logger.info(
             f"Mock TeamSnap: Looking for games between {recording_start} and {recording_end}"
@@ -139,9 +139,9 @@ class MockTeamSnapAPI:
 
         # Ensure recording times are timezone-aware (UTC)
         if recording_start.tzinfo is None:
-            recording_start = recording_start.replace(tzinfo=timezone.utc)
+            recording_start = recording_start.replace(tzinfo=UTC)
         if recording_end.tzinfo is None:
-            recording_end = recording_end.replace(tzinfo=timezone.utc)
+            recording_end = recording_end.replace(tzinfo=UTC)
 
         # Parse pre-generated games into (game, start_utc, end_utc) tuples
         candidates = []
@@ -150,9 +150,9 @@ class MockTeamSnapAPI:
             game_end = datetime.fromisoformat(game["end_date"])
 
             if game_start.tzinfo is None:
-                game_start = game_start.replace(tzinfo=timezone.utc)
+                game_start = game_start.replace(tzinfo=UTC)
             if game_end.tzinfo is None:
-                game_end = game_end.replace(tzinfo=timezone.utc)
+                game_end = game_end.replace(tzinfo=UTC)
 
             candidates.append((game, game_start, game_end))
 
@@ -165,7 +165,7 @@ class MockTeamSnapAPI:
             game_label_fn=lambda g: g.get("name", "Unknown"),
         )
 
-    def get_teams(self) -> List[Dict[str, Union[str, int]]]:
+    def get_teams(self) -> list[dict[str, str | int]]:
         """Get list of teams for the authenticated user."""
         return [
             {
@@ -179,11 +179,11 @@ class MockTeamSnapAPI:
 
     def get_events_for_team(
         self, team_id: str, start_date: datetime, end_date: datetime
-    ) -> List[MockTeamSnapEvent]:
+    ) -> list[MockTeamSnapEvent]:
         """Get events for a specific team within a date range."""
         return list(self._games)
 
-    def get_team_info(self, team_id: str) -> Dict[str, Union[str, int]]:
+    def get_team_info(self, team_id: str) -> dict[str, str | int]:
         """Get information about a specific team."""
         return {
             "id": team_id,
@@ -234,7 +234,7 @@ class MockTeamSnapService:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[Dict[str, Union[str, int, bool]]]:
+    ) -> dict[str, str | int | bool] | None:
         """Find a game for the recording timeframe."""
         if not self.enabled or not self.api:
             return None

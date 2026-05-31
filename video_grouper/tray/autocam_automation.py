@@ -1,15 +1,14 @@
-import time
+import datetime
 import logging
 import os
 import subprocess
-import win32gui
-import psutil
-from pywinauto import Desktop
-import datetime
-from typing import Optional
+import time
 
-from video_grouper.utils.config import AutocamConfig
+import win32gui
+from pywinauto import Desktop
+
 from video_grouper.models.directory_state import DirectoryState
+from video_grouper.utils.config import AutocamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +18,12 @@ logger = logging.getLogger(__name__)
 _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAME = "GUI.exe"
 
+# Suppress the console flash on every tasklist/wmic poll -- the tray is
+# a GUI app and these run on a 30s discovery loop.
+_NO_WINDOW = 0x08000000
 
-def _find_autocam_hwnd() -> Optional[int]:
+
+def _find_autocam_hwnd() -> int | None:
     """Return the hwnd of an Once Sport Autocam window, or None.
 
     Uses win32gui.EnumWindows (fast, non-blocking) instead of
@@ -39,8 +42,123 @@ def _find_autocam_hwnd() -> Optional[int]:
     return found[0] if found else None
 
 
+def _run_console(cmd: list[str], timeout: float = 10.0) -> str:
+    """Run a Windows console helper (tasklist/wmic), return stdout, or ''
+    on timeout / OSError. Swallow-and-log matches the posture of the
+    callers, which treat absent data as 'no match' rather than fatal.
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("console helper %s failed: %s", cmd[0], e)
+        return ""
+    return result.stdout or ""
+
+
+def _parse_tasklist_csv_pids(stdout: str) -> list[int]:
+    """Parse `tasklist /FO CSV /NH` output and return PIDs (column 2).
+
+    Returns an empty list if tasklist's "no tasks running" banner is
+    present (some Windows versions route that to stdout instead of
+    stderr) or any other unparseable content appears.
+    """
+    pids: list[int] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) < 2:
+            continue
+        try:
+            pids.append(int(parts[1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _parse_wmi_datetime(s: str) -> float | None:
+    """Parse a WMI CIM_DATETIME field to Unix epoch seconds.
+
+    Format: ``yyyymmddHHMMSS.ffffff±UUU`` (UUU = minutes east of UTC).
+    Example: ``20260529182708.123456-300`` is 2026-05-29 18:27:08.123456
+    in UTC-5h. Returns None on any parse failure.
+    """
+    s = s.strip()
+    if len(s) < 25:
+        return None
+    try:
+        year = int(s[0:4])
+        month = int(s[4:6])
+        day = int(s[6:8])
+        hour = int(s[8:10])
+        minute = int(s[10:12])
+        second = int(s[12:14])
+        micro = int(s[15:21])
+        sign = s[21]
+        tz_minutes = int(s[22:25])
+        if sign == "-":
+            tz_minutes = -tz_minutes
+        dt = datetime.datetime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            micro,
+            tzinfo=datetime.timezone(datetime.timedelta(minutes=tz_minutes)),
+        )
+        return dt.timestamp()
+    except (ValueError, IndexError):
+        return None
+
+
+def _wmi_creation_time(pid: int) -> float | None:
+    """Return Unix-epoch creation time for ``pid`` via wmic, or None.
+
+    `wmic` is deprecated on newer Windows but still ships on Win10/11.
+    None means we couldn't determine it; callers treat that as
+    'no filter' (fail-open) -- a false positive is harmless because
+    every downstream consumer revalidates via _live_autocam_pids.
+    """
+    out = _run_console(
+        [
+            "wmic",
+            "process",
+            "where",
+            f"ProcessId={pid}",
+            "get",
+            "CreationDate",
+            "/FORMAT:CSV",
+        ]
+    )
+    for line in out.splitlines():
+        line = line.strip()
+        if (
+            not line
+            or line.lower().startswith("node")
+            or "creationdate" in line.lower()
+        ):
+            continue
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        epoch = _parse_wmi_datetime(parts[-1])
+        if epoch is not None:
+            return epoch
+    return None
+
+
 def _find_autocam_gui_pids(
-    since_epoch: Optional[float] = None,
+    since_epoch: float | None = None,
 ) -> list[int]:
     """Return PIDs of running GUI.exe processes (case-insensitive).
 
@@ -49,47 +167,62 @@ def _find_autocam_gui_pids(
     Both PIDs go into the resume marker; reattach validates that at
     least one is still alive.
 
+    Uses `tasklist` (+ `wmic` for the optional since_epoch filter)
+    rather than psutil: psutil's PyInstaller bundle is unreliable in
+    this tray's onedir build (v0.4.x bundles raised AttributeError on
+    psutil.process_iter even with the metrics extra synced). Subprocess
+    over stdlib is what every other process-enum site in the repo uses.
+
     Args:
-        since_epoch: If provided, only return processes whose create_time
-            is at-or-after this Unix timestamp (seconds). Used by the
-            launch path to avoid grabbing PIDs of unrelated GUI.exe
+        since_epoch: If provided, only return processes whose creation
+            time is at-or-after this Unix timestamp (seconds). Used by
+            the launch path to avoid grabbing PIDs of unrelated GUI.exe
             instances that were already running.
     """
-    pids: list[int] = []
-    for proc in psutil.process_iter(["pid", "name", "create_time"]):
-        try:
-            name = (proc.info.get("name") or "").lower()
-            if name != _AUTOCAM_PROCESS_NAME.lower():
-                continue
-            if (
-                since_epoch is not None
-                and proc.info.get("create_time", 0) < since_epoch
-            ):
-                continue
-            pids.append(proc.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return pids
+    pids = _parse_tasklist_csv_pids(
+        _run_console(
+            [
+                "tasklist",
+                "/FI",
+                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ]
+        )
+    )
+    if since_epoch is None:
+        return pids
+    filtered: list[int] = []
+    for pid in pids:
+        created = _wmi_creation_time(pid)
+        if created is None or created >= since_epoch:
+            filtered.append(pid)
+    return filtered
 
 
 def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
     """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
 
-    A bare ``pid_exists`` check would accept a PID that's been recycled
-    by an unrelated process; the name guard prevents that.
+    Uses a single ``tasklist`` call to get all GUI.exe PIDs, then
+    intersects with ``candidate_pids``. This avoids spawning one
+    subprocess per PID on every 30-second poll.
     """
-    live: list[int] = []
-    for pid in candidate_pids:
-        try:
-            proc = psutil.Process(pid)
-            if (
-                proc.is_running()
-                and proc.name().lower() == _AUTOCAM_PROCESS_NAME.lower()
-            ):
-                live.append(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return live
+    all_gui = set(
+        _parse_tasklist_csv_pids(
+            _run_console(
+                [
+                    "tasklist",
+                    "/FI",
+                    f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ]
+            )
+        )
+    )
+    return [pid for pid in candidate_pids if pid in all_gui]
 
 
 def _validate_autocam_inputs(
@@ -290,9 +423,9 @@ def _set_file_via_browse_dialog(
 
 def _wait_for_completion_and_cleanup(
     main_window,
-    state: Optional[DirectoryState],
-    output_path: Optional[str] = None,
-    tracked_pids: Optional[list[int]] = None,
+    state: DirectoryState | None,
+    output_path: str | None = None,
+    tracked_pids: list[int] | None = None,
 ) -> bool:
     """Poll AutoCam's Notification text until processing finishes, then clean up.
 
@@ -425,7 +558,7 @@ def _execute_autocam_gui_automation(
     executable_path: str,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Execute the autocam GUI automation process for Once Sport Autocam 3.x.
@@ -536,11 +669,6 @@ def _execute_autocam_gui_automation(
         subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
         time.sleep(1)
 
-        # Capture the wall-clock so PID discovery only picks up GUI.exe
-        # processes that postdate our launch (avoids grabbing an unrelated
-        # AutoCam if the user happened to start one manually).
-        launch_epoch = time.time()
-
         # Use Popen so we don't block on the launcher process.
         # The new Autocam (GUI.exe) spawns a child process for the actual window,
         # so app.window() cannot track it — we search the desktop instead.
@@ -567,10 +695,14 @@ def _execute_autocam_gui_automation(
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
         # Persist PIDs to state.json so a tray crash mid-pass can reattach
-        # on restart. We capture every GUI.exe whose create_time is after
-        # launch_epoch — typically the launcher + the spawned UI process.
+        # on restart. Get the window-owning PID via win32process (instant,
+        # no subprocess spawn) — this is the child GUI.exe that actually
+        # owns the AutoCam window, not just the launcher which may exit.
+        import win32process
+
+        _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
         if state is not None:
-            gui_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+            gui_pids = list({launcher.pid, window_pid})
             state.set_autocam_run(
                 {
                     "launcher_pid": launcher.pid,
@@ -747,18 +879,14 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        # Re-snapshot the GUI.exe PIDs now that processing has started.
-        # The processing pass usually re-spawns or stabilizes the worker
-        # processes, and the post-launch list captured up at line 498+
-        # reflects that final set. The exit-detection fallback in
-        # _wait_for_completion_and_cleanup needs the right PIDs to know
-        # when AutoCam is "done" via process exit.
-        final_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+        # Track both the launcher and the window-owning PID for exit
+        # detection. No subprocess spawning — window_pid was already
+        # captured via win32process above.
         return _wait_for_completion_and_cleanup(
             main_window,
             state,
             output_path=abs_output_path,
-            tracked_pids=final_pids,
+            tracked_pids=list({launcher.pid, window_pid}),
         )
 
     except Exception as e:
@@ -773,7 +901,7 @@ def run_autocam_on_file(
     autocam_config: AutocamConfig,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Automates the Once Autocam GUI to process a video file.

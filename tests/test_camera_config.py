@@ -1,10 +1,9 @@
 """Tests for camera configuration push methods (get/apply settings, password change)."""
 
-import pytest
 import httpx
+import pytest
 
 from video_grouper.utils.config import CameraConfig
-
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -522,6 +521,7 @@ class TestProbeDahua:
     @pytest.mark.asyncio
     async def test_success(self, monkeypatch):
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from video_grouper.cameras import discovery
 
         response_text = (
@@ -555,6 +555,7 @@ class TestProbeDahua:
     @pytest.mark.asyncio
     async def test_connection_refused(self, monkeypatch):
         from unittest.mock import AsyncMock, patch
+
         from video_grouper.cameras import discovery
 
         mock_client = AsyncMock()
@@ -575,6 +576,7 @@ class TestProbeDahua:
     @pytest.mark.asyncio
     async def test_bad_credentials(self, monkeypatch):
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from video_grouper.cameras import discovery
 
         mock_response = MagicMock()

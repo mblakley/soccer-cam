@@ -1,10 +1,11 @@
 """Tests for the AutoCam resume-on-restart path.
 
 The full ``_execute_autocam_gui_automation`` runs pywinauto + win32gui +
-psutil against a live desktop, so we exercise it indirectly: directly
-test the tiny helpers (``_live_autocam_pids``, the resume-marker
-read/write on DirectoryState), and assert the documented behavior of
-the wider function via patches on its dependencies.
+subprocess (tasklist/wmic) against a live desktop, so we exercise it
+indirectly: directly test the tiny helpers (``_live_autocam_pids``,
+``_find_autocam_gui_pids``, the resume-marker read/write on
+DirectoryState), and assert the documented behavior of the wider
+function via patches on its dependencies.
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ import pytest
 
 from video_grouper.models.directory_state import DirectoryState
 from video_grouper.tray.autocam_automation import (
-    _live_autocam_pids,
     _execute_autocam_gui_automation,
+    _find_autocam_gui_pids,
+    _live_autocam_pids,
+    _parse_wmi_datetime,
 )
 
 
@@ -83,34 +86,121 @@ class TestSetClearAutocamRun:
         assert DirectoryState(group_dir).get_youtube_playlist_name() == "Heat 2012s"
 
 
+def _pid_filter_from_cmd(cmd: list[str]) -> int | None:
+    """Pull the integer PID out of a `tasklist /FI 'PID eq N' ...` cmd."""
+    for i, arg in enumerate(cmd):
+        if arg == "/FI" and i + 1 < len(cmd) and cmd[i + 1].startswith("PID eq "):
+            try:
+                return int(cmd[i + 1].split()[-1])
+            except ValueError:
+                return None
+    return None
+
+
 class TestLiveAutocamPids:
     def test_returns_only_alive_gui_exe(self):
-        # Build two psutil.Process mocks: one alive GUI.exe, one alive Notepad.exe,
-        # and one dead PID (NoSuchProcess).
-        alive_gui = MagicMock()
-        alive_gui.is_running.return_value = True
-        alive_gui.name.return_value = "GUI.exe"
-        alive_other = MagicMock()
-        alive_other.is_running.return_value = True
-        alive_other.name.return_value = "notepad.exe"
-
-        import psutil as real_psutil
-
-        def fake_process(pid):
+        # PID 1 -> alive GUI.exe, PID 2 -> alive notepad.exe (filter excludes),
+        # PID 99 -> not running. tasklist applies both PID and IMAGENAME filters
+        # in a single call: a non-empty body means the row matched both.
+        def fake_run_console(cmd, timeout=10.0):
+            pid = _pid_filter_from_cmd(cmd)
             if pid == 1:
-                return alive_gui
-            if pid == 2:
-                return alive_other
-            raise real_psutil.NoSuchProcess(pid)
+                return '"GUI.exe","1","Console","1","12,345 K"\n'
+            # PID 2's IMAGENAME doesn't match -> tasklist returns its
+            # "no tasks running" banner on stdout in some Win versions;
+            # either way _parse_tasklist_csv_pids returns []. PID 99
+            # doesn't exist: same outcome.
+            return ""
 
         with patch(
-            "video_grouper.tray.autocam_automation.psutil.Process",
-            side_effect=fake_process,
+            "video_grouper.tray.autocam_automation._run_console",
+            side_effect=fake_run_console,
         ):
             assert _live_autocam_pids([1, 2, 99]) == [1]
 
     def test_empty_input_returns_empty(self):
         assert _live_autocam_pids([]) == []
+
+
+class TestFindAutocamGuiPids:
+    def test_no_filter_returns_tasklist_pids(self):
+        tasklist_out = (
+            '"GUI.exe","1234","Console","1","12,345 K"\n'
+            '"GUI.exe","5678","Console","1","11,000 K"\n'
+        )
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value=tasklist_out,
+        ):
+            assert sorted(_find_autocam_gui_pids()) == [1234, 5678]
+
+    def test_since_epoch_filters_out_old_pids(self):
+        # tasklist reports both PIDs; wmic dates them on opposite sides
+        # of the cutoff. The filter drops the older one.
+        import datetime as _dt
+
+        cutoff = _dt.datetime(2026, 3, 1, tzinfo=_dt.UTC).timestamp()
+        tasklist_out = (
+            '"GUI.exe","1234","Console","1","12,345 K"\n'
+            '"GUI.exe","5678","Console","1","11,000 K"\n'
+        )
+
+        def fake_run_console(cmd, timeout=10.0):
+            if cmd[0] == "tasklist":
+                return tasklist_out
+            assert cmd[0] == "wmic"
+            pid = -1
+            for arg in cmd:
+                if arg.startswith("ProcessId="):
+                    pid = int(arg.split("=", 1)[1])
+                    break
+            if pid == 1234:  # 2026-01-01 -- before cutoff
+                return "Node,CreationDate\nDESKTOP,20260101000000.000000+000\n"
+            if pid == 5678:  # 2026-06-01 -- after cutoff
+                return "Node,CreationDate\nDESKTOP,20260601000000.000000+000\n"
+            return ""
+
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            side_effect=fake_run_console,
+        ):
+            assert _find_autocam_gui_pids(since_epoch=cutoff) == [5678]
+
+    def test_wmic_unavailable_falls_open(self):
+        # wmic returning '' (timeout/missing) should keep the PID
+        # rather than drop it -- a false positive is recoverable;
+        # a false negative would skip the resume reattach.
+        tasklist_out = '"GUI.exe","1234","Console","1","12,345 K"\n'
+
+        def fake_run_console(cmd, timeout=10.0):
+            if cmd[0] == "tasklist":
+                return tasklist_out
+            return ""  # wmic unavailable
+
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            side_effect=fake_run_console,
+        ):
+            assert _find_autocam_gui_pids(since_epoch=1.0) == [1234]
+
+
+class TestParseWmiDatetime:
+    def test_round_trips_utc_offset(self):
+        # 2026-05-29 18:27:08.123456 UTC-5h
+        epoch = _parse_wmi_datetime("20260529182708.123456-300")
+        assert epoch is not None
+        # 18:27:08 in UTC-5 == 23:27:08 UTC
+        import datetime as _dt
+
+        expected = _dt.datetime(
+            2026, 5, 29, 23, 27, 8, 123456, tzinfo=_dt.UTC
+        ).timestamp()
+        assert epoch == pytest.approx(expected, abs=1e-3)
+
+    def test_malformed_returns_none(self):
+        assert _parse_wmi_datetime("") is None
+        assert _parse_wmi_datetime("garbage") is None
+        assert _parse_wmi_datetime("20260529182708.xxxxxx-300") is None
 
 
 class TestResumeBranch:

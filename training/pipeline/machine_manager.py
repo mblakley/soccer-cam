@@ -170,7 +170,11 @@ Invoke-Command -ComputerName {hostname} -Credential $cred -ScriptBlock {{
 
     def pull_file(self, hostname: str, remote_path: str, local_path: str) -> bool:
         """Copy a file from a remote machine to the server."""
-        src = f"\\\\{hostname}\\D$\\{remote_path.lstrip('D:/').lstrip('D:\\\\')}"
+        # Strip the "D:/" or "D:\" drive prefix before re-rooting onto the
+        # admin share. removeprefix removes the literal string (not the
+        # character set lstrip would have stripped).
+        cleaned = remote_path.removeprefix("D:/").removeprefix("D:\\")
+        src = f"\\\\{hostname}\\D$\\{cleaned}"
         script = f"""
 Copy-Item -LiteralPath "{src}" -Destination "{local_path}" -Force
 if (Test-Path "{local_path}") {{
@@ -184,7 +188,8 @@ if (Test-Path "{local_path}") {{
 
     def push_directory(self, hostname: str, local_dir: str, remote_dir: str) -> bool:
         """Copy a directory to a remote machine using robocopy."""
-        dest = f"\\\\{hostname}\\D$\\{remote_dir.lstrip('D:/').lstrip('D:\\\\')}"
+        cleaned = remote_dir.removeprefix("D:/").removeprefix("D:\\")
+        dest = f"\\\\{hostname}\\D$\\{cleaned}"
         script = f"""
 robocopy "{local_dir}" "{dest}" /E /Z /J /R:3 /W:5 /NP /NFL /NDL
 if ($LASTEXITCODE -le 7) {{ Write-Output "OK" }} else {{ Write-Output "FAILED" }}

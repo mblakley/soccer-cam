@@ -1,15 +1,16 @@
-import pytest
-from unittest.mock import patch, MagicMock, mock_open
-from pathlib import Path
+import base64
 import configparser
 import json
-import base64
+from pathlib import Path
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from video_grouper.api_integrations.cloud_sync import CloudSync, GoogleAuthProvider
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@
 Base types for API integrations.
 """
 
-from typing import TypedDict, Union
+from typing import TypedDict
 
 
 class ApiResponse(TypedDict, total=False):
@@ -12,7 +12,7 @@ class ApiResponse(TypedDict, total=False):
     success: bool
     status_code: int
     message: str
-    data: Union[dict, list, str, int, float, bool, None]
+    data: dict | list | str | int | float | bool | None
 
     # Error fields
     error: str
@@ -31,4 +31,4 @@ class ApiResponse(TypedDict, total=False):
     rate_limit_reset: str
 
     # Custom response fields
-    custom_fields: dict[str, Union[str, int, float, bool, list, dict]]
+    custom_fields: dict[str, str | int | float | bool | list | dict]

@@ -39,19 +39,18 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import psycopg2
 import psycopg2.extras
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from video_grouper.api_integrations.ttt_api import TTTApiClient  # noqa: E402
 from video_grouper.task_processors.highlight_reel_processor import (  # noqa: E402
     HighlightReelProcessor,
 )
-from video_grouper.api_integrations.ttt_api import TTTApiClient  # noqa: E402
-
 
 TTT_BASE = "http://localhost:8000"
 FRONTEND_BASE = "http://localhost:3000"
@@ -336,7 +335,7 @@ def main() -> int:
     offsets = [(30.0, 15.0, 45.0), (60.0, 45.0, 75.0), (120.0, 105.0, 135.0)]
     tag_ids = [r["id"] for r in rows[:3]]
     clip_ids = []
-    for tag_id, (off, start, end) in zip(tag_ids, offsets):
+    for tag_id, (off, start, end) in zip(tag_ids, offsets, strict=False):
         db_exec(
             "UPDATE coaching_sessions.moment_tags SET video_offset_seconds = %s WHERE id = %s",
             (off, tag_id),

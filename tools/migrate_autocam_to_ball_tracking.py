@@ -44,7 +44,7 @@ def migrate_state_files(storage_path: Path) -> tuple[int, int]:
     for state_file in storage_path.rglob("state.json"):
         scanned += 1
         try:
-            with open(state_file, "r", encoding="utf-8") as f:
+            with open(state_file, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             logger.warning("Skipping unreadable state.json at %s: %s", state_file, e)

@@ -1,9 +1,10 @@
 """Unit tests for MomentApiClient with mocked httpx."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
 import pytest
 import pytest_asyncio
-import httpx
-from unittest.mock import AsyncMock, MagicMock
 
 from video_grouper.api_integrations.moment_api_client import MomentApiClient
 

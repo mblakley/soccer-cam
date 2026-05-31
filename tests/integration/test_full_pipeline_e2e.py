@@ -12,36 +12,37 @@ recording groups, verifying:
 - Two groups process sequentially through video queue
 """
 
-import os
-import json
 import asyncio
+import json
+import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 
+from video_grouper.models import RecordingFile
 from video_grouper.task_processors.camera_poller import CameraPoller
 from video_grouper.task_processors.download_processor import DownloadProcessor
-from video_grouper.task_processors.video_processor import VideoProcessor
-from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.task_processors.ntfy_processor import NtfyProcessor
-from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
-from video_grouper.models import RecordingFile
+from video_grouper.task_processors.tasks.video import CombineTask
+from video_grouper.task_processors.upload_processor import UploadProcessor
+from video_grouper.task_processors.video_processor import VideoProcessor
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 from video_grouper.utils.logger import close_loggers
 
@@ -74,8 +75,8 @@ def mock_httpx():
 @pytest.fixture
 def temp_storage():
     """Create a temporary storage directory."""
-    import time
     import shutil
+    import time
 
     with tempfile.TemporaryDirectory() as temp_dir:
         yield temp_dir

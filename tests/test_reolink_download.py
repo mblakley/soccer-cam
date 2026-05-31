@@ -8,6 +8,8 @@ import httpx
 import pytest
 
 from video_grouper.cameras.reolink_download import (
+    _HTTP_PATH_SUPPORTED,
+    _HTTP_PROBE_RETRIES,
     ANNEX_B_START_CODE,
     HEADER_MAGIC,
     HOST_CH_ID,
@@ -24,9 +26,6 @@ from video_grouper.cameras.reolink_download import (
     PAD_SIZE,
     BaichuanStreamClient,
     BcMediaDemuxer,
-    _HTTP_PATH_SUPPORTED,
-    _HTTP_PROBE_RETRIES,
-    _ProbeResult,
     _aes_decrypt,
     _aes_encrypt,
     _decrypt_baichuan,
@@ -37,9 +36,9 @@ from video_grouper.cameras.reolink_download import (
     _length_prefixed_to_annex_b,
     _md5_str_modern,
     _probe_http_path,
+    _ProbeResult,
     _to_annex_b,
 )
-
 
 # ── Helper: build synthetic BcMedia packets ──────────────────────────
 

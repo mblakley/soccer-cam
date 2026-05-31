@@ -5,7 +5,7 @@ Recording file model for camera file tracking.
 import logging
 import os
 from datetime import datetime
-from typing import Optional, TypedDict, Union
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class Metadata(TypedDict, total=False):
     resolution: str
 
     # Custom metadata fields
-    custom_fields: dict[str, Union[str, int, float, bool]]
+    custom_fields: dict[str, str | int | float | bool]
 
 
 class RecordingFile:
@@ -34,7 +34,7 @@ class RecordingFile:
         end_time: datetime,
         file_path: str,
         status: str = "pending",
-        metadata: Optional[Metadata] = None,
+        metadata: Metadata | None = None,
         skip: bool = False,
     ):
         """Initialize a recording file.
@@ -56,7 +56,7 @@ class RecordingFile:
         self.skip = skip
         self.group_dir = None
         self.last_updated = datetime.now()
-        self.error_message: Optional[str] = None
+        self.error_message: str | None = None
 
     def __str__(self) -> str:
         """Return a human-readable string representation."""
@@ -78,7 +78,7 @@ class RecordingFile:
             return self.file_path
         return base + ".mp4" if ext.lower() == ".dav" else self.file_path + ".mp4"
 
-    def to_dict(self) -> dict[str, Union[str, int, bool, Metadata, None]]:
+    def to_dict(self) -> dict[str, str | int | bool | Metadata | None]:
         """Convert the recording file to a dictionary for serialization."""
         return {
             "task_type": "recording_file",
@@ -96,7 +96,7 @@ class RecordingFile:
 
     @classmethod
     def from_dict(
-        cls, data: dict[str, Union[str, int, bool, Metadata, None]]
+        cls, data: dict[str, str | int | bool | Metadata | None]
     ) -> "RecordingFile":
         """Create a RecordingFile from a dictionary."""
         start_time = (

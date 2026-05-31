@@ -28,7 +28,6 @@ import socket
 import struct
 import time
 from hashlib import md5
-from typing import Optional
 
 import httpx
 from Crypto.Cipher import AES
@@ -188,7 +187,7 @@ class BcMediaDemuxer:
 
     def __init__(self):
         self._buffer = bytearray()
-        self.video_codec: Optional[str] = None
+        self.video_codec: str | None = None
         self.width: int = 0
         self.height: int = 0
         self.fps: int = 0
@@ -329,11 +328,11 @@ class BaichuanStreamClient:
         self._port = port
         self._username = username
         self._password = password
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._aes_key: Optional[bytes] = None
-        self._nonce: Optional[str] = None
-        self._uid: Optional[str] = None
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._aes_key: bytes | None = None
+        self._nonce: str | None = None
+        self._uid: str | None = None
         self._mess_id = 0
         self._session_id = (
             20  # Session counter for replay channelId (camera rejects low values)
@@ -793,7 +792,7 @@ class BaichuanStreamClient:
                     hdr, xml_body, payload = await asyncio.wait_for(
                         self._read_message(), timeout=idle_timeout
                     )
-                except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                except (TimeoutError, asyncio.IncompleteReadError):
                     if stats["bytes_written"] > 0:
                         logger.info("Download stream ended (idle timeout)")
                     else:
@@ -1152,7 +1151,7 @@ async def _download_via_http_async(
     file_path: str,
     output_mp4: str,
     on_progress=None,
-) -> Optional[bool]:
+) -> bool | None:
     """Try the patched-firmware HTTP fast path for one file.
 
     Returns:

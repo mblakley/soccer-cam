@@ -1,6 +1,7 @@
+import configparser
 import os
 import tempfile
-import configparser
+
 from video_grouper.models import MatchInfo
 
 
@@ -48,13 +49,13 @@ class TestMatchInfo:
             ("opponent_team_name", {"opponent_team_name": "Unknown"}),
             ("location", {"location": "Unknown"}),
         ]:
-            defaults = dict(
-                my_team_name="Team A",
-                opponent_team_name="Team B",
-                location="Home",
-                start_time_offset="00:10:00",
-                total_duration="01:30:00",
-            )
+            defaults = {
+                "my_team_name": "Team A",
+                "opponent_team_name": "Team B",
+                "location": "Home",
+                "start_time_offset": "00:10:00",
+                "total_duration": "01:30:00",
+            }
             defaults.update(kwargs)
             mi = MatchInfo(**defaults)
             assert mi.is_populated() is False, (

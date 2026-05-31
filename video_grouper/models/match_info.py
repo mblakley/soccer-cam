@@ -2,17 +2,17 @@
 Match information model for soccer game metadata.
 """
 
+import configparser
+import logging
 import os
 import re
-import logging
-import configparser
-from datetime import datetime
-from typing import Optional, Tuple
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
 
 from video_grouper.utils.paths import (
-    get_match_info_path,
     get_match_info_dist_path,
+    get_match_info_path,
     resolve_path,
 )
 
@@ -28,7 +28,7 @@ class MatchInfo:
     location: str
     start_time_offset: str = ""
     total_duration: str = ""
-    date: Optional[datetime] = None
+    date: datetime | None = None
 
     def __hash__(self):
         """Make MatchInfo hashable so it can be used in sets and as dictionary keys."""
@@ -111,8 +111,8 @@ class MatchInfo:
     def get_or_create(
         cls,
         group_dir: str,
-        storage_path: Optional[str] = None,
-    ) -> Tuple[Optional["MatchInfo"], configparser.ConfigParser]:
+        storage_path: str | None = None,
+    ) -> tuple[Optional["MatchInfo"], configparser.ConfigParser]:
         """Get an existing MatchInfo object or create a new one with default values.
 
         Args:
@@ -138,7 +138,7 @@ class MatchInfo:
             if os.path.exists(source_dist_path):
                 try:
                     with (
-                        open(source_dist_path, "r") as src,
+                        open(source_dist_path) as src,
                         open(match_info_path, "w") as dest,
                     ):
                         dest.write(src.read())
@@ -164,7 +164,7 @@ class MatchInfo:
 
     @classmethod
     def update_team_info(
-        cls, group_dir: str, team_info: dict, storage_path: Optional[str] = None
+        cls, group_dir: str, team_info: dict, storage_path: str | None = None
     ) -> Optional["MatchInfo"]:
         """Update team information in the match_info.ini file.
 
@@ -220,9 +220,9 @@ class MatchInfo:
     def update_game_times(
         cls,
         group_dir: str,
-        start_time_offset: Optional[str] = None,
-        total_duration: Optional[str] = None,
-        storage_path: Optional[str] = None,
+        start_time_offset: str | None = None,
+        total_duration: str | None = None,
+        storage_path: str | None = None,
     ) -> Optional["MatchInfo"]:
         """Update game timing information in the match_info.ini file.
 
@@ -328,7 +328,7 @@ class MatchInfo:
         else:
             return ""
 
-    def get_sanitized_names(self) -> Tuple[str, str, str]:
+    def get_sanitized_names(self) -> tuple[str, str, str]:
         """Get sanitized team names and location for use in file names.
 
         Returns:

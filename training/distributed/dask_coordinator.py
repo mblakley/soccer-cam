@@ -108,7 +108,7 @@ def tile_segment(video_path, game_id, tiles_base, frame_interval):
     tiles_dir = Path(tiles_base) / game_id
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
-    from label_job import TILE_SIZE, NUM_COLS, NUM_ROWS, STEP_X, STEP_Y
+    from label_job import NUM_COLS, NUM_ROWS, STEP_X, STEP_Y, TILE_SIZE
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():

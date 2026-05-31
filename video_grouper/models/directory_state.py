@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import asyncio
-from typing import Optional
-import logging
 import json
+import logging
 import os
 from datetime import datetime
+
 from ..utils.locking import FileLock
 from ..utils.paths import get_state_file_path
 from .recording_file import RecordingFile
@@ -34,8 +35,8 @@ class DirectoryState:
         self.files: dict[str, RecordingFile] = {}
         self._lock = asyncio.Lock()
         self.status: str = "pending"
-        self.error_message: Optional[str] = None
-        self.ttt_recording_id: Optional[str] = None
+        self.error_message: str | None = None
+        self.ttt_recording_id: str | None = None
 
         # Validate directory name format before proceeding
         dir_name = os.path.basename(directory_path)
@@ -59,7 +60,7 @@ class DirectoryState:
             with FileLock(self.state_file_path):
                 if os.path.exists(self.state_file_path):
                     logger.debug(f"Loading directory state from {self.state_file_path}")
-                    with open(self.state_file_path, "r") as f:
+                    with open(self.state_file_path) as f:
                         state_data = json.load(f)
                         self.status = state_data.get("status", "pending")
                         self.error_message = state_data.get("error_message")
@@ -104,7 +105,7 @@ class DirectoryState:
         state_data: dict = {}
         if os.path.exists(self.state_file_path):
             try:
-                with open(self.state_file_path, "r") as f:
+                with open(self.state_file_path) as f:
                     state_data = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError):
                 state_data = {}
@@ -163,17 +164,17 @@ class DirectoryState:
             self._save_state_nolock()
             logger.debug(f"Updated state for {os.path.basename(file_path)}")
 
-    def get_file_by_path(self, file_path: str) -> Optional[RecordingFile]:
+    def get_file_by_path(self, file_path: str) -> RecordingFile | None:
         """Get a file by its full path."""
         return self.files.get(file_path)
 
-    def get_last_file(self) -> Optional[RecordingFile]:
+    def get_last_file(self) -> RecordingFile | None:
         """Returns the last file in the group based on end time."""
         if not self.files:
             return None
         return max(self.files.values(), key=lambda f: f.end_time)
 
-    def get_first_file(self) -> Optional[RecordingFile]:
+    def get_first_file(self) -> RecordingFile | None:
         """Returns the first file in the group based on start time."""
         if not self.files:
             return None
@@ -226,9 +227,7 @@ class DirectoryState:
                 self.files[file_path].skip = True
                 self._save_state_nolock()
 
-    async def update_group_status(
-        self, status: str, error_message: Optional[str] = None
-    ):
+    async def update_group_status(self, status: str, error_message: str | None = None):
         """Update the status of all files in the group."""
         async with self._lock:
             self.status = status
@@ -243,7 +242,7 @@ class DirectoryState:
                 state_data = {"files": {}, "status": "pending", "error_message": None}
                 if os.path.exists(self.state_file_path):
                     try:
-                        with open(self.state_file_path, "r") as f:
+                        with open(self.state_file_path) as f:
                             state_data = json.load(f)
                     except (json.JSONDecodeError, FileNotFoundError):
                         pass
@@ -275,12 +274,12 @@ class DirectoryState:
             "Set ttt_recording_id to '%s' in %s", recording_id, self.state_file_path
         )
 
-    def get_youtube_playlist_name(self) -> Optional[str]:
+    def get_youtube_playlist_name(self) -> str | None:
         """Get the YouTube playlist name from the state."""
         try:
             with FileLock(self.state_file_path):
                 if os.path.exists(self.state_file_path):
-                    with open(self.state_file_path, "r") as f:
+                    with open(self.state_file_path) as f:
                         state_data = json.load(f)
                     return state_data.get("youtube_playlist_name")
         except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
@@ -315,12 +314,12 @@ class DirectoryState:
         """Remove the autocam_run marker (run finished successfully or failed)."""
         self._update_state_field("autocam_run", None)
 
-    def get_autocam_run(self) -> Optional[dict]:
+    def get_autocam_run(self) -> dict | None:
         """Read the autocam_run marker, or None if no run is recorded."""
         try:
             with FileLock(self.state_file_path):
                 if os.path.exists(self.state_file_path):
-                    with open(self.state_file_path, "r") as f:
+                    with open(self.state_file_path) as f:
                         state_data = json.load(f)
                     return state_data.get("autocam_run")
         except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
@@ -338,7 +337,7 @@ class DirectoryState:
                 state_data = {"files": {}, "status": "pending", "error_message": None}
                 if os.path.exists(self.state_file_path):
                     try:
-                        with open(self.state_file_path, "r") as f:
+                        with open(self.state_file_path) as f:
                             state_data = json.load(f)
                     except (json.JSONDecodeError, FileNotFoundError):
                         pass

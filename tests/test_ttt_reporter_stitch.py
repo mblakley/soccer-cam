@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
 
-
 SAMPLE_PROFILE = {
     "source_width": 7680,
     "source_height": 2160,

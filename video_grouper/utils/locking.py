@@ -1,6 +1,6 @@
+import logging
 import os
 import time
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class FileLock:
                     logger.error(f"Timeout acquiring lock on {self.lock_file_path}")
                     raise TimeoutError(
                         f"Could not acquire lock on {self.lock_file_path}"
-                    )
+                    ) from None
                 time.sleep(self.delay)
             except Exception as e:
                 logger.error(

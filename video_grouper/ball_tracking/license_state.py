@@ -18,7 +18,6 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class LicenseState:
     expires_at: str  # ISO 8601, what the license manifest claimed
     acquired_at: str  # ISO 8601, when we successfully decrypted
 
-    def days_until_expiry(self, now: Optional[datetime] = None) -> float:
+    def days_until_expiry(self, now: datetime | None = None) -> float:
         check_time = now or datetime.now(UTC)
         try:
             expires = _parse_iso(self.expires_at)
@@ -42,7 +41,7 @@ class LicenseState:
             return -1.0
         return (expires - check_time).total_seconds() / 86400.0
 
-    def status_label(self, now: Optional[datetime] = None) -> str:
+    def status_label(self, now: datetime | None = None) -> str:
         days = self.days_until_expiry(now)
         if days < 0:
             return f"EXPIRED {abs(days):.0f}d ago — re-acquire required"
@@ -77,7 +76,7 @@ def record(
     version: str,
     tier: str,
     expires_at: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> LicenseState:
     """Persist the most-recent successful license. Overwrites prior state."""
     acquired = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -101,7 +100,7 @@ def record(
     return state
 
 
-def load(storage_path: Path | str) -> Optional[LicenseState]:
+def load(storage_path: Path | str) -> LicenseState | None:
     """Return the persisted state, or None if no license has been acquired."""
     path = _state_path(Path(storage_path))
     if not path.exists():

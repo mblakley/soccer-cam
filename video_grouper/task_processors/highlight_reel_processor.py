@@ -32,13 +32,12 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
 
+from ..utils.config import Config
+from ..utils.ffmpeg_utils import trim_video
 from .base_polling_processor import PollingProcessor
 from .recording_locator import find_combined_video, resolve_recording_dir
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
-from ..utils.config import Config
-from ..utils.ffmpeg_utils import trim_video
 
 logger = logging.getLogger(__name__)
 
@@ -207,8 +206,8 @@ class HighlightReelProcessor(PollingProcessor):
         cleanup so we don't double-discard.
         """
         reel_id = reel["id"]
-        tmpdir: Optional[str] = None
-        final_output_path: Optional[str] = None
+        tmpdir: str | None = None
+        final_output_path: str | None = None
         claimed = False
 
         try:

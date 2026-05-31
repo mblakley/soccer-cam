@@ -7,7 +7,6 @@ import pytest
 
 from video_grouper.task_processors.clip_request_processor import ClipRequestProcessor
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

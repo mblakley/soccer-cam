@@ -17,9 +17,8 @@ import json
 import logging
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 class RegisterRequest(BaseModel):
     node_id: str  # client-chosen stable id (e.g. hostname)
     capabilities: list[str] = []
-    version: Optional[str] = None
+    version: str | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -129,7 +128,7 @@ def build_router(storage_path: str | Path) -> APIRouter:
             "token": token,
             "capabilities": req.capabilities,
             "version": req.version,
-            "registered_at": datetime.now(timezone.utc).isoformat(),
+            "registered_at": datetime.now(UTC).isoformat(),
             "last_heartbeat": time.time(),
         }
         _save_registry(storage_path, registry)

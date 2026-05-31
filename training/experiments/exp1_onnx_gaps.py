@@ -68,7 +68,7 @@ def find_gaps_in_game(game_id: str) -> list[dict]:
         seg_frames[seg] = sorted(set(seg_frames[seg]))
 
     # Auto-detect frame interval
-    all_fi = sorted(set(fi for _, fi in frame_dets))
+    all_fi = sorted({fi for _, fi in frame_dets})
     if len(all_fi) >= 2:
         gaps = [all_fi[i + 1] - all_fi[i] for i in range(min(100, len(all_fi) - 1))]
         gaps = [g for g in gaps if g > 0]

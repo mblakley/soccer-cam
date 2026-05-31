@@ -117,7 +117,7 @@ def verify_from_manifest(
         seg_reports[seg_id] = sr
 
     # Check incomplete frames from manifest
-    for seg_id, frame_idx, tile_count in manifest.get_incomplete_frames(conn, game_id):
+    for seg_id, frame_idx, _tile_count in manifest.get_incomplete_frames(conn, game_id):
         if seg_id in seg_reports:
             seg_reports[seg_id].incomplete_frames.append(frame_idx)
             # Get specific missing tiles
@@ -443,7 +443,7 @@ def print_gap_summary(all_reports: list[GameReport], registry: dict):
     logger.info(
         "\n=== GAP SUMMARY: %d issues across %d games ===",
         len(gaps),
-        len(set(g["game_id"] for g in gaps)),
+        len({g["game_id"] for g in gaps}),
     )
     logger.info("")
 

@@ -7,3 +7,16 @@ repos:
         args: [ --fix ]
       # Run the formatter.
       - id: ruff-format
+
+  # Mypy runs via uv so it sees the project's dependency env (third-party
+  # type stubs, our pyproject.toml [tool.mypy] overrides).
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy video_grouper/
+        language: system
+        pass_filenames: false
+        # Limit to video_grouper/ source so a tools/ or training/ edit
+        # doesn't trigger a full project check.
+        files: ^video_grouper/.*\.py$

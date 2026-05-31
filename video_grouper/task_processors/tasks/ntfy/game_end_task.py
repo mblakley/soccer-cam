@@ -4,13 +4,14 @@ Game end time NTFY task.
 This task handles asking users about when a game ends in a video.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
+from typing import Any
+
+from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.utils.config import Config
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
-from video_grouper.utils.config import Config
-from video_grouper.task_processors.services.ntfy_service import NtfyService
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,8 @@ class GameEndTask(BaseNtfyTask):
         ntfy_service: NtfyService,
         combined_video_path: str,
         start_time_offset: str,
-        time_offset: Optional[str] = None,
-        time_seconds: Optional[int] = None,
+        time_offset: str | None = None,
+        time_seconds: int | None = None,
     ):
         """
         Initialize the game end task.
@@ -77,7 +78,7 @@ class GameEndTask(BaseNtfyTask):
 
         return NtfyInputType.GAME_END_TIME.value
 
-    async def create_question(self) -> Dict[str, Any]:
+    async def create_question(self) -> dict[str, Any]:
         """
         Create the question data for asking about game end time.
 

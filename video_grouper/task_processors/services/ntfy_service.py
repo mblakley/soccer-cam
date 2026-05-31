@@ -2,15 +2,16 @@
 NTFY service for interactive user notifications and input.
 """
 
+import asyncio
 import json
 import logging
 import os
-from typing import Dict, Optional, Any, Set, List
 from datetime import datetime
-import asyncio
+from typing import Any
 
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.utils.config import NtfyConfig
+
 from ...utils.paths import get_ntfy_service_state_path
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,8 @@ class NtfyService:
         self.completion_callback = completion_callback
 
         # State tracking for pending tasks
-        self._pending_tasks: Dict[str, Dict[str, Any]] = {}
-        self._processed_dirs: Set[str] = set()
+        self._pending_tasks: dict[str, dict[str, Any]] = {}
+        self._processed_dirs: set[str] = set()
         self._state_file = get_ntfy_service_state_path(storage_path)
 
         # Buffer for responses that arrived before any task was registered
@@ -60,17 +61,17 @@ class NtfyService:
         # than the listener replay window typically needs.
 
         # For handling direct responses to prompts
-        self._response_events: Dict[str, asyncio.Event] = {}
-        self._response_data: Dict[str, Optional[str]] = {}
+        self._response_events: dict[str, asyncio.Event] = {}
+        self._response_data: dict[str, str | None] = {}
 
         # Generic response handlers for non-task components (e.g. camera poller)
-        self._response_handlers: Dict[str, Any] = {}
+        self._response_handlers: dict[str, Any] = {}
 
         # Track the most recently sent notification's group_dir
         # so responses get routed to the correct group
-        self._last_notified_group_dir: Optional[str] = None
+        self._last_notified_group_dir: str | None = None
 
-        self._state: Dict[str, Any] = {}
+        self._state: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -127,7 +128,7 @@ class NtfyService:
         if not os.path.exists(self._state_file):
             return
         try:
-            with open(self._state_file, "r") as f:
+            with open(self._state_file) as f:
                 state = json.load(f)
             self._pending_tasks = state.get("pending_tasks", {})
             self._processed_dirs = set(state.get("processed_dirs", []))
@@ -178,7 +179,7 @@ class NtfyService:
         self._save_state()
 
     def mark_waiting_for_input(
-        self, group_dir: str, task_type: str, metadata: Optional[Dict[str, Any]] = None
+        self, group_dir: str, task_type: str, metadata: dict[str, Any] | None = None
     ) -> None:
         """Mark a directory as waiting for user input."""
         # Convert old metadata structure to new unified structure
@@ -218,7 +219,7 @@ class NtfyService:
                 pass
 
     def mark_failed_to_send(
-        self, group_dir: str, task_type: str, metadata: Optional[Dict[str, Any]] = None
+        self, group_dir: str, task_type: str, metadata: dict[str, Any] | None = None
     ) -> None:
         """Mark a directory as failed to send notification."""
         # Convert old metadata structure to new unified structure
@@ -245,15 +246,15 @@ class NtfyService:
             del self._pending_tasks[group_dir]
             self._save_state()
 
-    def get_pending_tasks(self) -> Dict[str, Dict[str, Any]]:
+    def get_pending_tasks(self) -> dict[str, dict[str, Any]]:
         """Get all pending tasks."""
         return self._pending_tasks.copy()
 
     # For backward compatibility
-    def get_pending_inputs(self) -> Dict[str, Dict[str, Any]]:
+    def get_pending_inputs(self) -> dict[str, dict[str, Any]]:
         return self.get_pending_tasks()
 
-    def get_processed_directories(self) -> Set[str]:
+    def get_processed_directories(self) -> set[str]:
         """Get all processed directories."""
         return self._processed_dirs.copy()
 
@@ -265,10 +266,10 @@ class NtfyService:
         self,
         message: str,
         title: str = None,
-        tags: List[str] = None,
+        tags: list[str] = None,
         priority: int = None,
         image_path: str = None,
-        actions: List[Dict[str, Any]] = None,
+        actions: list[dict[str, Any]] = None,
     ) -> bool:
         """
         Send a notification via NTFY, ensuring the API is initialized first.
@@ -613,7 +614,7 @@ class NtfyService:
         return False
 
     def _response_matches_task(
-        self, group_dir: str, input_type: str, metadata: Dict[str, Any], response: str
+        self, group_dir: str, input_type: str, metadata: dict[str, Any], response: str
     ) -> bool:
         """
         Check if a response matches a specific task.
@@ -693,7 +694,7 @@ class NtfyService:
             return False
 
     async def _process_task_response(
-        self, group_dir: str, input_type: str, metadata: Dict[str, Any], response: str
+        self, group_dir: str, input_type: str, metadata: dict[str, Any], response: str
     ) -> None:
         """
         Process a response for a specific task.

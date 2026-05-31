@@ -76,7 +76,7 @@ def sample_positives(
 
     # Proportional sampling per segment
     sampled = []
-    for seg, seg_rows in by_segment.items():
+    for _seg, seg_rows in by_segment.items():
         seg_target = max(1, int(total_target * len(seg_rows) / len(rows)))
         seg_sample = random.sample(seg_rows, min(seg_target, len(seg_rows)))
         sampled.extend(seg_sample)
@@ -305,7 +305,7 @@ def create_phase_frames(
     phase_dir.mkdir(parents=True, exist_ok=True)
     created = 0
 
-    for seg_name, ts_start, ts_end in selected:
+    for seg_name, ts_start, _ts_end in selected:
         # Find a frame_idx in the middle of this segment
         frame_rows = conn.execute(
             """SELECT DISTINCT frame_idx FROM labels

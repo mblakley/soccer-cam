@@ -271,10 +271,11 @@ def _tile_segment_to_pack(
       2. Encoder pool: JPEG-encodes tiles across multiple cores
       3. Writer (main thread): writes encoded tiles to pack in order
     """
-    import cv2
     import queue
     import threading
     from concurrent.futures import ThreadPoolExecutor
+
+    import cv2
 
     cap = cv2.VideoCapture(str(video_path), cv2.CAP_FFMPEG)
     if not cap.isOpened():
@@ -382,7 +383,7 @@ def _tile_segment_to_pack(
 
             # Write results in frame order (maintains sequential pack offsets)
             for frame_idx, tiles_info, futures in frame_jobs:
-                for (row, col), future in zip(tiles_info, futures):
+                for (row, col), future in zip(tiles_info, futures, strict=False):
                     jpeg_bytes = future.result()
                     if jpeg_bytes is None:
                         continue

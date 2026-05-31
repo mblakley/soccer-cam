@@ -5,13 +5,14 @@ This module provides a mock implementation of the NTFY API that simulates
 successful notification sends without actually contacting the external server.
 """
 
-import os
-import logging
 import asyncio
+import logging
+import os
 from datetime import datetime
-from typing import Dict, List, Any
-from video_grouper.utils.config import NtfyConfig
+from typing import Any
+
 from video_grouper.api_integrations.mock_ntfy_communication import mock_ntfy_comm
+from video_grouper.utils.config import NtfyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +62,10 @@ class MockNtfyAPI:
         self,
         message: str,
         title: str = None,
-        tags: List[str] = None,
+        tags: list[str] = None,
         priority: int = None,
         image_path: str = None,
-        actions: List[Dict[str, Any]] = None,
+        actions: list[dict[str, Any]] = None,
     ) -> bool:
         """
         Simulate sending a notification successfully.
@@ -153,7 +154,7 @@ class MockNtfyAPI:
 
     async def wait_for_response(
         self, message_id: str, timeout: float = 60.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Simulate waiting for a response.
 
@@ -189,8 +190,8 @@ class MockNtfyAPI:
         self,
         group_dir: str,
         combined_video_path: str,
-        existing_info: Dict[str, str] = None,
-    ) -> Dict[str, str]:
+        existing_info: dict[str, str] = None,
+    ) -> dict[str, str]:
         """
         Send notifications about missing team information fields.
 
@@ -254,7 +255,7 @@ class MockNtfyAPI:
         logger.info("Mock NTFY API shutdown")
         self._initialized = False
 
-    def get_sent_notifications(self) -> List[Dict[str, Any]]:
+    def get_sent_notifications(self) -> list[dict[str, Any]]:
         """Get list of sent notifications for testing/debugging."""
         return self._sent_notifications.copy()
 

@@ -16,7 +16,6 @@ from video_grouper.utils.stitch_remap import (
     write_profile,
 )
 
-
 SAMPLE_PROFILE = StitchProfile(
     source_width=7680,
     source_height=2160,

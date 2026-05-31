@@ -4,16 +4,17 @@ Was there a match NTFY task.
 This task asks users if there was actually a match during the recording period.
 """
 
+import json
 import logging
 import os
-import json
-from typing import Dict, Any, Optional
 from datetime import datetime
+from typing import Any
+
+from video_grouper.models import DirectoryState
+from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.utils.config import Config
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
-from video_grouper.utils.config import Config
-from video_grouper.task_processors.services.ntfy_service import NtfyService
-from video_grouper.models import DirectoryState
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class WasThereAMatchTask(BaseNtfyTask):
 
         return NtfyInputType.WAS_THERE_A_MATCH.value
 
-    def _get_recording_timespan(self) -> Optional[tuple[datetime, datetime]]:
+    def _get_recording_timespan(self) -> tuple[datetime, datetime] | None:
         """
         Get the recording timespan from directory state.
 
@@ -101,7 +102,7 @@ class WasThereAMatchTask(BaseNtfyTask):
             logger.error(f"Error getting recording timespan for {self.group_dir}: {e}")
             return None
 
-    async def create_question(self) -> Dict[str, Any]:
+    async def create_question(self) -> dict[str, Any]:
         """
         Create the question data for asking if there was a match.
 
@@ -230,7 +231,7 @@ class WasThereAMatchTask(BaseNtfyTask):
             state_file = os.path.join(self.group_dir, "state.json")
 
             if os.path.exists(state_file):
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     state_data = json.load(f)
 
                 state_data["status"] = "not_a_game"
@@ -249,7 +250,7 @@ class WasThereAMatchTask(BaseNtfyTask):
             logger.error(f"Error marking {self.group_dir} as not_a_game: {e}")
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "WasThereAMatchTask":
+    def deserialize(cls, data: dict[str, object]) -> "WasThereAMatchTask":
         """
         Deserialize a WasThereAMatchTask from its serialized data.
 

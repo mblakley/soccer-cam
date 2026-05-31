@@ -5,7 +5,7 @@ been replaced with HTTP-mocked equivalents that exercise the same public
 contract (login → fetch calendars → parse → match recordings).
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -280,7 +280,7 @@ class TestPlayMetricsParser:
 class TestPlayMetricsFindGame:
     def test_find_game_for_recording_match(self):
         api = _make_api()
-        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=UTC)
         events = [
             {
                 "id": "1",
@@ -308,7 +308,7 @@ class TestPlayMetricsFindGame:
 
     def test_find_game_for_recording_no_match(self):
         api = _make_api()
-        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=UTC)
         api.get_games = MagicMock(
             return_value=[
                 {
@@ -327,7 +327,7 @@ class TestPlayMetricsFindGame:
 
     def test_populate_match_info_writes_fields(self):
         api = _make_api()
-        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=timezone.utc)
+        game_time = datetime(2026, 6, 15, 14, 0, 0, tzinfo=UTC)
         api.find_game_for_recording = MagicMock(
             return_value={
                 "id": "1",

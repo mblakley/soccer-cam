@@ -4,17 +4,16 @@ Test script to verify unified NTFY state management.
 """
 
 import asyncio
-import sys
-import os
 import json
+import os
+import sys
 
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import NtfyConfig
-
-from video_grouper.utils.logger import setup_logging, get_logger
+from video_grouper.utils.logger import get_logger, setup_logging
 
 # Set up logging
 setup_logging(level="DEBUG", app_name="test_ntfy")
@@ -72,7 +71,7 @@ async def test_unified_state():
     print(f"✓ Unified state file: {state_file_path}")
 
     if os.path.exists(state_file_path):
-        with open(state_file_path, "r") as f:
+        with open(state_file_path) as f:
             state = json.load(f)
         print(f"✓ State file contains: {list(state.keys())}")
         assert "pending_tasks" in state

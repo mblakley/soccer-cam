@@ -2,26 +2,26 @@
 Tests for the new service classes in task_processors/services.
 """
 
-import pytest
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from video_grouper.task_processors.services import (
-    TeamSnapService,
-    PlayMetricsService,
-    NtfyService,
-    MatchInfoService,
     CleanupService,
+    MatchInfoService,
+    NtfyService,
+    PlayMetricsService,
+    TeamSnapService,
 )
 from video_grouper.utils.config import (
+    NtfyConfig,
+    PlayMetricsConfig,
     TeamSnapConfig,
     TeamSnapTeamConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
 )
-
 
 # Configure pytest for async tests
 pytest_plugins = ("pytest_asyncio",)

@@ -1,12 +1,12 @@
-import struct
 import os
+import struct
 
 PAK = "IPC_NT15NA416MP.4867_2505072124.Reolink-Duo-3-PoE.16MP.REOLINK.pak"
 OUT = "sections"
 os.makedirs(OUT, exist_ok=True)
 
 data = open(PAK, "rb").read()
-print("file size: 0x%x" % len(data))
+print(f"file size: 0x{len(data):x}")
 print("header magic:", data[:4].hex())
 print(
     "hdr field@0x04 (8B):",
