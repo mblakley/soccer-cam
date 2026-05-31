@@ -298,7 +298,8 @@ class TestWaitForCompletionExitDetection:
     def test_exit_with_real_output_returns_success(
         self, mock_main_window, mock_file_system
     ):
-        """GUI.exe PIDs exit + output file is large enough → True.
+        """GUI.exe PIDs exit + output file is large enough + completion
+        sentinel present → True.
 
         The autouse ``mock_file_system`` conftest fixture pins
         ``os.path.getsize`` to 1 MB; we override it here so the size
@@ -308,6 +309,10 @@ class TestWaitForCompletionExitDetection:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             output.touch()
+            # Sentinel signals AutoCam actually finished cleanly. Without
+            # it, the exit-detection branch treats the output as a
+            # crashed partial.
+            (Path(tmp) / "out.mp4.completed").touch()
             with (
                 patch(
                     "video_grouper.tray.autocam_automation._live_autocam_pids",
@@ -325,6 +330,34 @@ class TestWaitForCompletionExitDetection:
                     tracked_pids=[12345],
                 )
         assert result is True
+
+    def test_exit_with_output_but_no_sentinel_treats_as_crash_partial(
+        self, mock_main_window, mock_file_system
+    ):
+        """GUI.exe PIDs exit + large output + NO sentinel = crashed
+        mid-pass partial. Must delete output + return False so the next
+        attempt re-runs from scratch. This is the Spencerport gold 2
+        regression that v0.4.8 fixes."""
+        mock_file_system["getsize"].return_value = 657 * 1024 * 1024  # 657 MB partial
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            output.write_bytes(b"\x00" * 1024)  # real file so os.remove succeeds
+            with (
+                patch(
+                    "video_grouper.tray.autocam_automation._live_autocam_pids",
+                    return_value=[],
+                ),
+                patch("video_grouper.tray.autocam_automation.time.sleep"),
+                patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            ):
+                result = _wait_for_completion_and_cleanup(
+                    mock_main_window,
+                    state=None,
+                    output_path=str(output),
+                    tracked_pids=[12345],
+                )
+            assert result is False
+            assert not output.exists(), "crash partial must be deleted"
 
     def test_exit_with_partial_output_returns_failure(self, mock_main_window):
         """GUI.exe exits + output file is too small → False (treated as crash)."""
@@ -379,6 +412,8 @@ class TestWaitForCompletionExitDetection:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             output.touch()
+            # Sentinel needed for the success branch on the second poll.
+            (Path(tmp) / "out.mp4.completed").touch()
             # First poll: PID still alive (branch must NOT trigger).
             # Second poll: PID gone (branch fires + output present → success).
             live_results = iter([[12345], []])
@@ -405,14 +440,18 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
     size — otherwise restoring an in_progress task from disk after a
     tray crash would re-process a video we already have."""
 
-    def test_skips_when_output_already_exists(self, tmp_path, mock_file_system):
-        """Output file present + large enough → return True immediately
-        without launching subprocess.Popen / Desktop / pywinauto."""
+    def test_skips_when_output_already_exists_with_sentinel(
+        self, tmp_path, mock_file_system
+    ):
+        """Output file present + large enough + completion sentinel
+        present → return True immediately without launching
+        subprocess.Popen / Desktop / pywinauto."""
         mock_file_system["getsize"].return_value = 50 * 1024 * 1024  # > 10 MB
         input_path = tmp_path / "input.mp4"
         input_path.touch()
         output_path = tmp_path / "output.mp4"
         output_path.touch()
+        (tmp_path / "output.mp4.completed").touch()
         with (
             patch(
                 "video_grouper.tray.autocam_automation.subprocess.Popen"
@@ -426,6 +465,45 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
         # Crucially — no fresh AutoCam launch.
         mock_popen.assert_not_called()
         mock_desktop.assert_not_called()
+
+    def test_large_output_without_sentinel_is_deleted_and_relaunches(
+        self, tmp_path, mock_file_system
+    ):
+        """A 657MB partial without sentinel is the Spencerport gold 2
+        regression: AutoCam crashed at 22.7%, left a real-looking
+        partial. Without sentinel we must NOT short-circuit -- delete
+        the partial and run AutoCam fresh."""
+        mock_file_system["getsize"].return_value = 657 * 1024 * 1024
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        # No .completed sentinel.
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.os.remove") as mock_remove,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass
+        # The 657 MB partial was deleted (NOT short-circuited as
+        # success) and Popen was called (AutoCam relaunched).
+        mock_remove.assert_called()
+        assert any(
+            call.args[0].endswith("output.mp4") for call in mock_remove.call_args_list
+        ), f"partial mp4 should be deleted, got: {mock_remove.call_args_list}"
+        mock_popen.assert_called()
 
     def test_does_not_skip_when_output_too_small(self, tmp_path, mock_file_system):
         """Output exists but is below the 10 MB threshold → don't
@@ -488,8 +566,10 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             except Exception:
                 pass  # downstream pywinauto will fail; we only care that
                 # the precheck ran the remove + reached Popen
-        mock_remove.assert_called_once()
-        assert mock_remove.call_args.args[0].endswith("output.mp4")
+        # mp4 deleted; sentinel cleanup also called (defense against
+        # stale-sentinel-without-mp4 state). Both touch os.remove.
+        removed = [c.args[0] for c in mock_remove.call_args_list]
+        assert any(p.endswith("output.mp4") for p in removed), removed
         # And we still launched AutoCam afterwards.
         mock_popen.assert_called()
 
@@ -525,7 +605,9 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
                 )
             except Exception:
                 pass
-        mock_remove.assert_called_once()
+        # remove was attempted (and swallowed the PermissionError),
+        # and we continued to launch AutoCam.
+        mock_remove.assert_called()
         mock_popen.assert_called()
 
 
@@ -756,9 +838,11 @@ class TestWaitForCompletionStaleNotification:
             output_size=2 * 1024 * 1024,  # 2 MB << 10 MB
         )
         assert result is False
-        # Under the wedge-cleanup path the output gets deleted; that's
-        # fine here since 2 MB is junk.
-        assert removes == ["C:/fake/out.mp4", "C:/fake/out.mp4.jsonl"]
+        # Under the wedge-cleanup path the output gets deleted (and so
+        # does the JSONL + any sentinel) -- that's fine here since 2 MB
+        # is junk.
+        assert "C:/fake/out.mp4" in removes
+        assert "C:/fake/out.mp4.jsonl" in removes
 
     def test_wedge_with_partial_output_deletes_to_prevent_false_short_circuit(self):
         """The Fairport/Spencerport regression: AutoCam wedged at
@@ -807,3 +891,80 @@ class TestTaskkillAutocamTree:
         # operationally but the test pins it for clarity.
         image_names = [c.args[0][3] for c in mock_run.call_args_list]
         assert image_names == ["GUI.exe", "autocam.exe"]
+
+
+class TestCompletionSentinel:
+    """Tests for the completion sentinel helpers themselves."""
+
+    def test_mark_then_has_then_remove(self, tmp_path):
+        from video_grouper.tray.autocam_automation import (
+            _has_completion_sentinel,
+            _mark_output_completed,
+            _remove_completion_sentinel,
+        )
+
+        output = str(tmp_path / "out.mp4")
+        Path(output).touch()
+        assert not _has_completion_sentinel(output)
+        _mark_output_completed(output)
+        assert _has_completion_sentinel(output)
+        assert (tmp_path / "out.mp4.completed").exists()
+        # idempotent
+        _mark_output_completed(output)
+        assert _has_completion_sentinel(output)
+        _remove_completion_sentinel(output)
+        assert not _has_completion_sentinel(output)
+        # tolerant of missing
+        _remove_completion_sentinel(output)
+        assert not _has_completion_sentinel(output)
+
+    def test_mark_swallows_oserror(self, tmp_path):
+        """Sentinel write failing must NOT raise -- worst case the next
+        attempt will re-run AutoCam, which is the safe direction."""
+        from video_grouper.tray.autocam_automation import _mark_output_completed
+
+        # Path inside a nonexistent parent dir → OSError on open.
+        nonexistent = str(tmp_path / "nope" / "out.mp4")
+        # Should not raise
+        _mark_output_completed(nonexistent)
+
+
+class TestSuccessNotificationWritesSentinel:
+    """When AutoCam's 'finished processing' notification fires, we
+    must write the completion sentinel before returning so future
+    re-discoveries short-circuit correctly."""
+
+    def test_finished_processing_writes_sentinel(self):
+        import video_grouper.tray.autocam_automation as mod
+
+        notification = MagicMock()
+        notification.window_text.return_value = "finished processing"
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        mark_calls = []
+
+        def fake_mark(p):
+            mark_calls.append(p)
+
+        with (
+            patch.object(mod, "_mark_output_completed", side_effect=fake_mark),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation._live_autocam_pids",
+                return_value=[12345],
+            ),
+        ):
+            from video_grouper.tray.autocam_automation import (
+                _wait_for_completion_and_cleanup,
+            )
+
+            result = _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path="C:/fake/out.mp4",
+                tracked_pids=[12345],
+            )
+        assert result is True
+        assert mark_calls == ["C:/fake/out.mp4"]
