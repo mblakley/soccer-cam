@@ -22,6 +22,13 @@ _AUTOCAM_PROCESS_NAME = "GUI.exe"
 # a GUI app and these run on a 30s discovery loop.
 _NO_WINDOW = 0x08000000
 
+# Seconds the AutoCam notification text may stay byte-identical before
+# we declare the run wedged and bail. Under healthy processing the
+# notification fluctuates every 30s poll ("* average time per frame: NN
+# [ms]"); once wedged it sits unchanged for hours. 10 min gives plenty
+# of margin if AutoCam ever briefly stabilizes on the same integer.
+STALE_NOTIFICATION_SECONDS = 600
+
 
 def _find_autocam_hwnd() -> int | None:
     """Return the hwnd of an Once Sport Autocam window, or None.
@@ -459,6 +466,11 @@ def _wait_for_completion_and_cleanup(
     output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
+    # Track when the notification text last changed for stale-hang
+    # detection. Under healthy processing the text fluctuates every
+    # poll; once wedged it sits identical for hours.
+    last_notification_text: str | None = None
+    last_notification_changed_at = start_time
 
     try:
         while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
@@ -466,34 +478,28 @@ def _wait_for_completion_and_cleanup(
                 notification = main_window.child_window(
                     auto_id="Notification", control_type="Text"
                 )
-                notification_text = notification.window_text().lower()
+                raw_notification = notification.window_text()
+                notification_text = raw_notification.lower()
+                logger.info("Autocam status: %r", raw_notification)
+
+                if notification_text != last_notification_text:
+                    last_notification_text = notification_text
+                    last_notification_changed_at = datetime.datetime.now()
 
                 if "finished processing" in notification_text:
                     found = True
-                    logger.info(
-                        f"Detected success message: '{notification.window_text()}'"
-                    )
+                    logger.info("Detected success message: %r", raw_notification)
                     break
                 elif "error" in notification_text:
-                    logger.error(
-                        f"Autocam reported an error: '{notification.window_text()}'"
-                    )
+                    logger.error("Autocam reported an error: %r", raw_notification)
                     break
                 elif (
                     "processing" in notification_text
                     or "processed" in notification_text
                 ):
-                    # Autocam reports "% of video processed" during active processing.
-                    # Both "processing" and "processed" indicate the job is underway.
                     if not processing_started:
                         processing_started = True
-                        logger.info(
-                            f"Processing started: '{notification.window_text()}'"
-                        )
-                    else:
-                        logger.debug(f"Autocam status: '{notification.window_text()}'")
-                else:
-                    logger.debug(f"Autocam status: '{notification.window_text()}'")
+                        logger.info("Processing started: %r", raw_notification)
             except Exception as e:
                 logger.warning(f"Error while checking for success message: {e}")
 
@@ -502,7 +508,8 @@ def _wait_for_completion_and_cleanup(
             # rather than waiting for a notification string that may
             # never come (some AutoCam builds end with a C-level
             # cleanup message instead of a user-facing success).
-            if tracked_pids and not _live_autocam_pids(tracked_pids):
+            live_pids = _live_autocam_pids(tracked_pids) if tracked_pids else None
+            if tracked_pids and not live_pids:
                 if output_path and os.path.isfile(output_path):
                     try:
                         size = os.path.getsize(output_path)
@@ -526,6 +533,28 @@ def _wait_for_completion_and_cleanup(
                     f"output at {output_path}; treating as failure."
                 )
                 break
+
+            # Stale-notification hang detect: AutoCam can wedge mid-pass
+            # with the GUI process alive but no frames advancing. The
+            # notification text stays byte-identical for hours while
+            # processing has effectively stopped. Bail so the queue
+            # retry can move on.
+            if (
+                processing_started
+                and last_notification_text is not None
+                and (tracked_pids is None or live_pids)
+            ):
+                stale_seconds = (
+                    datetime.datetime.now() - last_notification_changed_at
+                ).total_seconds()
+                if stale_seconds > STALE_NOTIFICATION_SECONDS:
+                    logger.error(
+                        "AutoCam notification unchanged for %.1f minutes "
+                        "(last text: %r); treating as hung.",
+                        stale_seconds / 60,
+                        last_notification_text,
+                    )
+                    break
 
             # If processing hasn't started within 5 minutes, bail out.
             # (Skip this guard on the resume path: an in-flight pass has
@@ -616,6 +645,25 @@ def _execute_autocam_gui_automation(
             if state is not None:
                 state.clear_autocam_run()
             return True
+        # Pre-delete partial output below the success threshold. Leaving
+        # a sub-threshold file in place triggers the Windows Save
+        # dialog's "Confirm Save As" overwrite-confirm overlay, which
+        # our automation can't drive -- AutoCam then reports "Output
+        # error: No output file selected" the instant Start Processing
+        # fires.
+        try:
+            os.remove(abs_output_path)
+            logger.info(
+                "Removed partial AutoCam output at %s (%.1f MB) before relaunch",
+                abs_output_path,
+                existing_size / 1024 / 1024,
+            )
+        except OSError as e:
+            logger.warning(
+                "Could not remove partial output %s: %s; continuing anyway",
+                abs_output_path,
+                e,
+            )
 
     desktop = Desktop(backend="uia")
 

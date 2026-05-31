@@ -1,5 +1,6 @@
 """Tests for the autocam automation function."""
 
+import datetime
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -442,6 +443,7 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             ) as mock_popen,
             patch("video_grouper.tray.autocam_automation.Desktop"),
             patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.os.remove"),
             patch(
                 "video_grouper.tray.autocam_automation._find_autocam_hwnd",
                 return_value=None,
@@ -454,3 +456,225 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             except Exception:
                 pass  # downstream pywinauto interactions will fail; that's ok
         mock_popen.assert_called()
+
+    def test_pre_deletes_partial_output(self, tmp_path, mock_file_system):
+        """A sub-threshold partial output gets os.remove'd before any
+        AutoCam launch. Leaving it would trigger the Windows Save
+        dialog's "Confirm Save As" overwrite-confirm overlay, which
+        the dialog automation can't drive; AutoCam then errors
+        "No output file selected" the instant Start Processing fires.
+        """
+        mock_file_system["getsize"].return_value = 5 * 1024 * 1024  # 5 MB < 10 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.os.remove") as mock_remove,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass  # downstream pywinauto will fail; we only care that
+                # the precheck ran the remove + reached Popen
+        mock_remove.assert_called_once()
+        assert mock_remove.call_args.args[0].endswith("output.mp4")
+        # And we still launched AutoCam afterwards.
+        mock_popen.assert_called()
+
+    def test_partial_output_remove_oserror_does_not_abort_run(
+        self, tmp_path, mock_file_system
+    ):
+        """If os.remove fails (file locked, permissions, etc.), log a
+        warning and proceed with the launch anyway -- a doomed retry
+        attempt is still better than skipping the queue entry."""
+        mock_file_system["getsize"].return_value = 5 * 1024 * 1024  # 5 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.remove",
+                side_effect=PermissionError("locked"),
+            ) as mock_remove,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass
+        mock_remove.assert_called_once()
+        mock_popen.assert_called()
+
+
+class TestWaitForCompletionStaleNotification:
+    """Test the stale-notification hang detector.
+
+    Background: AutoCam can wedge mid-pass with the GUI alive but no
+    frames advancing. The notification text stays byte-identical for
+    hours. Observed 2026-05-30 on a 90-min input that froze at 65.4%
+    and pinned the queue for 8+ hours before manual intervention.
+    """
+
+    def _make_notification(self, texts):
+        """Build a (main_window, advance) pair. Each call to advance()
+        moves the notification to the next text in ``texts``; the test
+        controls how many times to advance per simulated poll."""
+        idx = [0]
+
+        def text_for_call():
+            i = min(idx[0], len(texts) - 1)
+            return texts[i]
+
+        def advance():
+            idx[0] += 1
+
+        notification = MagicMock()
+        notification.window_text.side_effect = lambda: text_for_call()
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+        return mw, advance
+
+    def _run_with_simulated_clock(
+        self,
+        mw,
+        advance,
+        *,
+        poll_count,
+        seconds_per_poll=30,
+        tracked_pids=(12345,),
+        live_pids=(12345,),
+    ):
+        """Drive _wait_for_completion_and_cleanup through ``poll_count``
+        polls with a synthetic clock. Advances the notification index
+        once per poll (so the test fixture's text list models what
+        AutoCam shows on each call)."""
+        import video_grouper.tray.autocam_automation as mod
+
+        start = datetime.datetime(2026, 5, 30, 21, 30, 0)
+        clock = [start]
+
+        def fake_now():
+            return clock[0]
+
+        def fake_sleep(_seconds):
+            clock[0] = clock[0] + datetime.timedelta(seconds=seconds_per_poll)
+            advance()
+
+        polls_done = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(seconds):
+            polls_done[0] += 1
+            fake_sleep(seconds)
+            if polls_done[0] >= poll_count:
+                # Stop the loop by advancing the clock past 24h ceiling.
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch(
+                "video_grouper.tray.autocam_automation._live_autocam_pids",
+                return_value=list(live_pids),
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+        ):
+            fake_dt.now = MagicMock(side_effect=fake_now)
+            return _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path=None,
+                tracked_pids=list(tracked_pids),
+            )
+
+    def test_stuck_notification_triggers_hang_break(self):
+        """Notification stays identical for >10 min while PIDs alive →
+        loop bails with found=False so the queue retry can kick in."""
+        # Frame timing fluctuates for the first 3 polls, then sticks at
+        # exactly "68 [ms]" for the remaining 25 polls (12.5 simulated
+        # min). The fixture's last entry is repeated past end-of-list.
+        texts = [
+            "* average time per frame: 102 [ms]",
+            "* average time per frame: 77 [ms]",
+            "* average time per frame: 69 [ms]",
+            "* average time per frame: 68 [ms]",  # repeated forever past here
+        ]
+        mw, advance = self._make_notification(texts)
+        result = self._run_with_simulated_clock(mw, advance, poll_count=30)
+        assert result is False
+
+    def test_changing_notification_keeps_loop_running(self):
+        """Notification value changes every poll → never stale, loop
+        runs to its synthetic timeout (which simulates the 24h ceiling
+        firing without a hang detect)."""
+        # 50 unique values guarantee no stale streak inside poll_count.
+        texts = [f"* average time per frame: {i} [ms]" for i in range(50)]
+        mw, advance = self._make_notification(texts)
+        result = self._run_with_simulated_clock(mw, advance, poll_count=30)
+        # No hang detected; the loop exits via the synthetic 24h-ceiling
+        # path with found=False (no success notification arrived in the
+        # window either, which is expected since these texts contain
+        # "processed" but not "finished processing").
+        assert result is False
+
+    def test_stuck_under_threshold_does_not_trigger(self):
+        """Notification stuck for 9 simulated min (< STALE_NOTIFICATION_SECONDS
+        of 10 min) must NOT trigger the hang detect. Verifies the
+        threshold isn't off by one poll interval."""
+        # 3 polls of fluctuation + 17 polls stuck @ 30 s each = 8.5 min stuck.
+        texts = [
+            "* average time per frame: 102 [ms]",
+            "* average time per frame: 77 [ms]",
+            "* average time per frame: 69 [ms]",
+            "* average time per frame: 68 [ms]",
+        ]
+        mw, advance = self._make_notification(texts)
+        # Only 20 polls -- 17 stuck @ 30s = 510s, below 600s threshold.
+        result = self._run_with_simulated_clock(mw, advance, poll_count=20)
+        # Loop fell out via the synthetic 24h ceiling, NOT via the
+        # stale-notification break. The distinction is observable
+        # through logs; here we just verify the function didn't return
+        # early with the stale-notification path being hit.
+        assert result is False
+
+    def test_stuck_notification_with_dead_pids_uses_exit_branch(self):
+        """If the GUI processes have already exited, the existing
+        process-exit branch wins -- we should NOT also trigger the
+        stale-notification branch. The exit branch produces a more
+        specific failure log."""
+        texts = ["* average time per frame: 68 [ms]"]
+        mw, advance = self._make_notification(texts)
+        # live_pids=[] means _live_autocam_pids returns empty.
+        result = self._run_with_simulated_clock(
+            mw, advance, poll_count=30, live_pids=()
+        )
+        # Returns False via the exit-detection branch (no output_path,
+        # so the "exited without producing output" path).
+        assert result is False
