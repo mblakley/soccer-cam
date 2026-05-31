@@ -566,11 +566,16 @@ class TestWaitForCompletionStaleNotification:
         seconds_per_poll=30,
         tracked_pids=(12345,),
         live_pids=(12345,),
+        output_path=None,
+        output_size=None,
     ):
         """Drive _wait_for_completion_and_cleanup through ``poll_count``
         polls with a synthetic clock. Advances the notification index
         once per poll (so the test fixture's text list models what
-        AutoCam shows on each call)."""
+        AutoCam shows on each call). When output_path + output_size are
+        supplied, os.path.isfile/getsize are stubbed to report that
+        size for the output path (so the shutdown-marker/wedge branches
+        can be exercised)."""
         import video_grouper.tray.autocam_automation as mod
 
         start = datetime.datetime(2026, 5, 30, 21, 30, 0)
@@ -594,6 +599,23 @@ class TestWaitForCompletionStaleNotification:
                 clock[0] = start + datetime.timedelta(days=2)
             real_sleep(0)
 
+        os_remove_calls = []
+
+        def fake_isfile(p):
+            if output_path is None:
+                return False
+            # Model both the output mp4 and its tracks sidecar as
+            # existing -- AutoCam writes both during processing.
+            return p in (output_path, output_path + ".jsonl")
+
+        def fake_getsize(p):
+            if output_path is not None and p == output_path:
+                return output_size if output_size is not None else 0
+            raise OSError("no")
+
+        def fake_remove(p):
+            os_remove_calls.append(p)
+
         with (
             patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
             patch(
@@ -605,14 +627,27 @@ class TestWaitForCompletionStaleNotification:
                 side_effect=counted_sleep,
             ),
             patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=fake_isfile,
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                side_effect=fake_getsize,
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.remove",
+                side_effect=fake_remove,
+            ),
         ):
             fake_dt.now = MagicMock(side_effect=fake_now)
-            return _wait_for_completion_and_cleanup(
+            result = _wait_for_completion_and_cleanup(
                 mw,
                 state=None,
-                output_path=None,
+                output_path=output_path,
                 tracked_pids=list(tracked_pids),
             )
+        return result, os_remove_calls
 
     def test_stuck_notification_triggers_hang_break(self):
         """Notification stays identical for >10 min while PIDs alive →
@@ -627,7 +662,7 @@ class TestWaitForCompletionStaleNotification:
             "* average time per frame: 68 [ms]",  # repeated forever past here
         ]
         mw, advance = self._make_notification(texts)
-        result = self._run_with_simulated_clock(mw, advance, poll_count=30)
+        result, _ = self._run_with_simulated_clock(mw, advance, poll_count=30)
         assert result is False
 
     def test_changing_notification_keeps_loop_running(self):
@@ -637,7 +672,7 @@ class TestWaitForCompletionStaleNotification:
         # 50 unique values guarantee no stale streak inside poll_count.
         texts = [f"* average time per frame: {i} [ms]" for i in range(50)]
         mw, advance = self._make_notification(texts)
-        result = self._run_with_simulated_clock(mw, advance, poll_count=30)
+        result, _ = self._run_with_simulated_clock(mw, advance, poll_count=30)
         # No hang detected; the loop exits via the synthetic 24h-ceiling
         # path with found=False (no success notification arrived in the
         # window either, which is expected since these texts contain
@@ -657,7 +692,7 @@ class TestWaitForCompletionStaleNotification:
         ]
         mw, advance = self._make_notification(texts)
         # Only 20 polls -- 17 stuck @ 30s = 510s, below 600s threshold.
-        result = self._run_with_simulated_clock(mw, advance, poll_count=20)
+        result, _ = self._run_with_simulated_clock(mw, advance, poll_count=20)
         # Loop fell out via the synthetic 24h ceiling, NOT via the
         # stale-notification break. The distinction is observable
         # through logs; here we just verify the function didn't return
@@ -672,9 +707,103 @@ class TestWaitForCompletionStaleNotification:
         texts = ["* average time per frame: 68 [ms]"]
         mw, advance = self._make_notification(texts)
         # live_pids=[] means _live_autocam_pids returns empty.
-        result = self._run_with_simulated_clock(
+        result, _ = self._run_with_simulated_clock(
             mw, advance, poll_count=30, live_pids=()
         )
         # Returns False via the exit-detection branch (no output_path,
         # so the "exited without producing output" path).
         assert result is False
+
+    def test_shutdown_marker_with_real_output_returns_success(self):
+        """Notification stuck on 'FrameReader_close' for 10+ min AND
+        output file >= 10 MB → success, not hang. AutoCam was finished
+        and just slow to release the file handle (observed 2026-05-31:
+        WNY Flash run wrote a complete 4.4 GB output, then notification
+        sat on the C-level shutdown message for the next 10 min)."""
+        texts = [
+            "* average time per frame: 70 [ms]\r\n* 99.5% of video processed\r\n* ETA: 10sec",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        mw, advance = self._make_notification(texts)
+        result, removes = self._run_with_simulated_clock(
+            mw,
+            advance,
+            poll_count=30,
+            output_path="C:/fake/out.mp4",
+            output_size=4_400_000_000,  # 4.4 GB
+        )
+        assert result is True, "shutdown marker + big output should be success"
+        # Crucially, the output was NOT deleted: this is a real video.
+        assert removes == [], (
+            f"output should not be deleted on shutdown marker, got {removes}"
+        )
+
+    def test_shutdown_marker_with_tiny_output_still_treated_as_hang(self):
+        """Notification stuck on FrameReader_close BUT the output file
+        is below the 10 MB threshold → still bail. A shutdown marker
+        without a real video means AutoCam crashed/aborted before
+        finishing output, not a normal cleanup."""
+        texts = [
+            "* average time per frame: 70 [ms]\r\n* 10% of video processed",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        mw, advance = self._make_notification(texts)
+        result, removes = self._run_with_simulated_clock(
+            mw,
+            advance,
+            poll_count=30,
+            output_path="C:/fake/out.mp4",
+            output_size=2 * 1024 * 1024,  # 2 MB << 10 MB
+        )
+        assert result is False
+        # Under the wedge-cleanup path the output gets deleted; that's
+        # fine here since 2 MB is junk.
+        assert removes == ["C:/fake/out.mp4", "C:/fake/out.mp4.jsonl"]
+
+    def test_wedge_with_partial_output_deletes_to_prevent_false_short_circuit(self):
+        """The Fairport/Spencerport regression: AutoCam wedged at
+        65.4% of video processed with the notification frozen on
+        progress text. The output mp4 already had ~1 GB on disk (real
+        partial). Without the delete, the next attempt's >= 10 MB
+        short-circuit would treat it as complete and queue it for
+        YouTube upload as the real game.
+
+        Expected behavior: bail with found=False AND delete the
+        partial output (and the JSONL sidecar) before returning.
+        """
+        # Notification stuck on a 'X.X% of video processed' string.
+        texts = [
+            "* average time per frame: 68 [ms]\r\n* 50% of video processed\r\n* eta: 30min",
+            "* average time per frame: 67 [ms]\r\n* 65.4% of video processed\r\n* eta: 14min",
+        ]
+        mw, advance = self._make_notification(texts)
+        result, removes = self._run_with_simulated_clock(
+            mw,
+            advance,
+            poll_count=30,
+            output_path="C:/fake/fairport_out.mp4",
+            output_size=1_100_000_000,  # 1.1 GB partial
+        )
+        assert result is False
+        # Both the mp4 AND its tracks jsonl get removed.
+        assert "C:/fake/fairport_out.mp4" in removes
+        assert "C:/fake/fairport_out.mp4.jsonl" in removes
+
+
+class TestTaskkillAutocamTree:
+    """The taskkill in the cleanup paths must kill both GUI.exe and
+    autocam.exe (the actual processing child). Killing only GUI.exe
+    leaves autocam.exe orphaned, eating CPU and holding the partial
+    output file handle so the next pass can't delete it (observed
+    2026-05-31: two orphaned autocam.exe processes from two consecutive
+    Fix C wedges)."""
+
+    def test_taskkill_kills_both_images(self):
+        from video_grouper.tray.autocam_automation import _taskkill_autocam_tree
+
+        with patch("video_grouper.tray.autocam_automation.subprocess.run") as mock_run:
+            _taskkill_autocam_tree()
+        # Two calls, one for each image name. taskkill order doesn't matter
+        # operationally but the test pins it for clarity.
+        image_names = [c.args[0][3] for c in mock_run.call_args_list]
+        assert image_names == ["GUI.exe", "autocam.exe"]
