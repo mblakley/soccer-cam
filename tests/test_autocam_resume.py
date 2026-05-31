@@ -86,35 +86,17 @@ class TestSetClearAutocamRun:
         assert DirectoryState(group_dir).get_youtube_playlist_name() == "Heat 2012s"
 
 
-def _pid_filter_from_cmd(cmd: list[str]) -> int | None:
-    """Pull the integer PID out of a `tasklist /FI 'PID eq N' ...` cmd."""
-    for i, arg in enumerate(cmd):
-        if arg == "/FI" and i + 1 < len(cmd) and cmd[i + 1].startswith("PID eq "):
-            try:
-                return int(cmd[i + 1].split()[-1])
-            except ValueError:
-                return None
-    return None
-
-
 class TestLiveAutocamPids:
     def test_returns_only_alive_gui_exe(self):
-        # PID 1 -> alive GUI.exe, PID 2 -> alive notepad.exe (filter excludes),
-        # PID 99 -> not running. tasklist applies both PID and IMAGENAME filters
-        # in a single call: a non-empty body means the row matched both.
-        def fake_run_console(cmd, timeout=10.0):
-            pid = _pid_filter_from_cmd(cmd)
-            if pid == 1:
-                return '"GUI.exe","1","Console","1","12,345 K"\n'
-            # PID 2's IMAGENAME doesn't match -> tasklist returns its
-            # "no tasks running" banner on stdout in some Win versions;
-            # either way _parse_tasklist_csv_pids returns []. PID 99
-            # doesn't exist: same outcome.
-            return ""
-
+        # _live_autocam_pids makes a single tasklist call filtered on
+        # IMAGENAME=GUI.exe (no PID filter), then intersects the result
+        # against candidate_pids. PID 1 is in the tasklist output;
+        # PIDs 2 and 99 are not (either wrong image name or not
+        # running) so they get filtered out.
+        tasklist_out = '"GUI.exe","1","Console","1","12,345 K"\n'
         with patch(
             "video_grouper.tray.autocam_automation._run_console",
-            side_effect=fake_run_console,
+            return_value=tasklist_out,
         ):
             assert _live_autocam_pids([1, 2, 99]) == [1]
 
