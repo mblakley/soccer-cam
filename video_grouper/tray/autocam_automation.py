@@ -29,6 +29,30 @@ _NO_WINDOW = 0x08000000
 # of margin if AutoCam ever briefly stabilizes on the same integer.
 STALE_NOTIFICATION_SECONDS = 600
 
+# Substrings (case-insensitive) that mark AutoCam's C-level shutdown
+# phase. When the notification gets stuck on one of these, AutoCam has
+# finished writing the output and is just slow to release the
+# FrameReader / close the GUI process. Treating that case as a hang
+# would wrongly delete a complete output; treating it as success when
+# the output file is non-trivial size is the right move.
+_SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
+
+
+def _taskkill_autocam_tree() -> None:
+    """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
+    as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
+    orphaned, eating CPU + holding the output file handle so the next
+    pass can't delete the partial. Observed 2026-05-31: two orphaned
+    autocam.exe processes after Fix C bails on a wedge, blocking
+    cleanup until manual taskkill.
+    """
+    for image in ("GUI.exe", "autocam.exe"):
+        subprocess.run(
+            ["taskkill", "/F", "/IM", image],
+            capture_output=True,
+            creationflags=_NO_WINDOW,
+        )
+
 
 def _find_autocam_hwnd() -> int | None:
     """Return the hwnd of an Once Sport Autocam window, or None.
@@ -539,6 +563,17 @@ def _wait_for_completion_and_cleanup(
             # notification text stays byte-identical for hours while
             # processing has effectively stopped. Bail so the queue
             # retry can move on.
+            #
+            # Distinguish two stuck-notification cases:
+            #   (a) Shutdown phase -- text contains a known shutdown
+            #       marker (FrameReader_close, finished processing).
+            #       AutoCam has written the output and is just slow to
+            #       release. Output is real -- treat as success.
+            #   (b) Mid-pass wedge -- text claims active progress
+            #       ("XX.X% of video processed") but is frozen. Output
+            #       is partial -- delete it before breaking so the next
+            #       attempt doesn't false-positive on the
+            #       "already-done" >= 10 MB short-circuit.
             if (
                 processing_started
                 and last_notification_text is not None
@@ -548,12 +583,64 @@ def _wait_for_completion_and_cleanup(
                     datetime.datetime.now() - last_notification_changed_at
                 ).total_seconds()
                 if stale_seconds > STALE_NOTIFICATION_SECONDS:
+                    is_shutdown_marker = any(
+                        m in last_notification_text for m in _SHUTDOWN_MARKERS
+                    )
+                    out_size = 0
+                    if output_path and os.path.isfile(output_path):
+                        try:
+                            out_size = os.path.getsize(output_path)
+                        except OSError:
+                            out_size = 0
+                    if is_shutdown_marker and out_size >= output_min_bytes:
+                        found = True
+                        logger.info(
+                            "AutoCam notification stuck on shutdown marker "
+                            "for %.1f min (text=%r) and output is "
+                            "%.1f MB; treating as success.",
+                            stale_seconds / 60,
+                            last_notification_text,
+                            out_size / 1024 / 1024,
+                        )
+                        break
                     logger.error(
                         "AutoCam notification unchanged for %.1f minutes "
                         "(last text: %r); treating as hung.",
                         stale_seconds / 60,
                         last_notification_text,
                     )
+                    # Delete partial output on real wedge -- AutoCam was
+                    # claiming progress, so any output on disk is
+                    # incomplete. Leaving it would trip the next
+                    # attempt's >= 10 MB short-circuit into reporting
+                    # the truncated video as a successful run, which
+                    # gets it queued for YouTube upload as if it were
+                    # the real game.
+                    if output_path and os.path.isfile(output_path):
+                        try:
+                            removed_size = out_size
+                            os.remove(output_path)
+                            logger.warning(
+                                "Removed partial output %s (%.1f MB) "
+                                "after wedge to prevent false "
+                                "short-circuit on retry.",
+                                output_path,
+                                removed_size / 1024 / 1024,
+                            )
+                        except OSError as e:
+                            logger.warning(
+                                "Could not remove partial output %s after wedge: %s",
+                                output_path,
+                                e,
+                            )
+                    # Also remove the JSONL tracks sidecar so retries
+                    # don't fuse with stale tracks.
+                    jsonl_path = output_path + ".jsonl" if output_path else None
+                    if jsonl_path and os.path.isfile(jsonl_path):
+                        try:
+                            os.remove(jsonl_path)
+                        except OSError:
+                            pass
                     break
 
             # If processing hasn't started within 5 minutes, bail out.
@@ -578,7 +665,7 @@ def _wait_for_completion_and_cleanup(
         return found
     finally:
         logger.info("Automation script finished, closing application.")
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         if state is not None:
             state.clear_autocam_run()
 
@@ -714,7 +801,7 @@ def _execute_autocam_gui_automation(
 
     try:
         # Kill any existing Autocam instance before launching a new one
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         time.sleep(1)
 
         # Use Popen so we don't block on the launcher process.
@@ -939,7 +1026,7 @@ def _execute_autocam_gui_automation(
 
     except Exception as e:
         logger.error(f"An error occurred during Once Autocam automation: {e}")
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         if state is not None:
             state.clear_autocam_run()
         return False
