@@ -10,6 +10,7 @@ import pytest
 from video_grouper.cameras.reolink_download import (
     _HTTP_PATH_SUPPORTED,
     _HTTP_PROBE_RETRIES,
+    _HTTP_STICKY_MAX_RETRIES,
     ANNEX_B_START_CODE,
     HEADER_MAGIC,
     HOST_CH_ID,
@@ -29,6 +30,7 @@ from video_grouper.cameras.reolink_download import (
     _aes_decrypt,
     _aes_encrypt,
     _decrypt_baichuan,
+    _download_and_mux_async,
     _download_via_http_async,
     _encrypt_baichuan,
     _has_start_codes,
@@ -961,3 +963,157 @@ class TestDownloadViaHttp:
             r = await _download_via_http_async(HOST, 80, SDA_FILE, str(out))
         assert r is False
         assert not out.exists()  # never published on size mismatch
+
+
+class TestStickyHttpRetry:
+    """Sticky-HTTP: once any file has downloaded via HTTP this session,
+    transient failures must retry HTTP rather than fall back to Baichuan.
+    Baichuan is reserved for cameras where HTTP has never worked."""
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_retries_http_on_transient_failure(self, tmp_path):
+        """Confirmed host + 1st HTTP attempt False + 2nd attempt True → succeed via HTTP, never touch Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return True if len(calls) >= 2 else False
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        assert result is True
+        assert len(calls) == 2  # initial + 1 sticky retry
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_exhausts_retries_never_uses_baichuan(self, tmp_path):
+        """Confirmed host + all HTTP attempts fail → return False, never Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return False
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        assert result is False
+        assert len(calls) == 1 + _HTTP_STICKY_MAX_RETRIES
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_host_still_falls_to_baichuan(self, tmp_path):
+        """First file ever / unconfirmed host + HTTP fails → original Baichuan fallback (no sticky retry)."""
+        # _HTTP_PATH_SUPPORTED clear via autouse fixture
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # unconfirmed probe miss
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        # HTTP tried once (no sticky retries), then fell to Baichuan
+        # which we mocked to fail -> overall False, but Baichuan WAS
+        # attempted (the point of this test).
+        assert result is False
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_but_ineligible_path_uses_baichuan(self, tmp_path):
+        """Confirmed host + file outside /mnt/sda/ → HTTP not applicable, Baichuan still used."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        # File path not under CAMERA_RECORD_PREFIX
+        non_sda_path = "/some/other/path/x.mp4"
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # http_async itself returns None for non-prefix paths
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=non_sda_path,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        # Sticky logic skipped because path is ineligible; falls to Baichuan.
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()
+        assert result is False  # because mocked Baichuan also fails

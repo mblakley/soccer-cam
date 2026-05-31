@@ -1072,6 +1072,16 @@ _HTTP_PATH_SUPPORTED: dict[str, bool] = {}
 _HTTP_PROBE_RETRIES = 5
 _HTTP_PROBE_BACKOFF = (0.5, 1.5, 4.0, 10.0, 15.0)
 
+# Sticky-HTTP retry tuning. Once ANY file has downloaded successfully
+# via HTTP this session, transient failures on later files must retry
+# HTTP rather than fall to Baichuan -- Baichuan is reserved for cameras
+# where HTTP has never worked. 5 retries x cumulative ~105s of backoff
+# is generous enough to ride through any short blip the camera throws
+# at us; beyond that we surface failure to the queue layer which will
+# retry the whole download task later.
+_HTTP_STICKY_MAX_RETRIES = 5
+_HTTP_STICKY_BACKOFF = (1.0, 4.0, 10.0, 30.0, 60.0)
+
 
 class _ProbeResult(enum.Enum):
     """Outcome of probing the HTTP fast path for a single file."""
@@ -1248,6 +1258,12 @@ async def _download_via_http_async(
                 os.replace(tmp, output_mp4)
                 elapsed = time.monotonic() - t0
                 mbps = (written * 8) / elapsed / 1e6 if elapsed > 0 else 0
+                # Streaming success is the strongest possible signal that
+                # HTTP works for this host — set the session sticky flag
+                # here too, not just on probe OK, so the sticky-retry
+                # policy below kicks in for the next file even on a
+                # camera where the first file skipped the probe path.
+                _HTTP_PATH_SUPPORTED[host] = True
                 logger.info(
                     f"HTTP download complete: {written / 1024 / 1024:.1f}MB "
                     f"in {elapsed:.1f}s ({mbps:.1f} Mbps)"
@@ -1298,6 +1314,39 @@ async def _download_and_mux_async(
     )
     if http_result is True:
         return True
+
+    # Sticky-HTTP: once ANY file on this host has downloaded via HTTP this
+    # session, transient failures must retry HTTP rather than fall to
+    # Baichuan. Baichuan is reserved for cameras where HTTP has never
+    # worked. Falling to Baichuan post-confirmation would have us
+    # downloading at ~1.8 MB/s when ~10 MB/s is available, just because
+    # one probe blip nudged us off the fast path.
+    #
+    # Only applies to files under CAMERA_RECORD_PREFIX: HTTP fast path
+    # is only valid for /mnt/sda/ paths; non-record paths must use
+    # Baichuan regardless.
+    if _HTTP_PATH_SUPPORTED.get(host) is True and file_path.startswith(
+        CAMERA_RECORD_PREFIX
+    ):
+        for attempt in range(_HTTP_STICKY_MAX_RETRIES):
+            await asyncio.sleep(_HTTP_STICKY_BACKOFF[attempt])
+            logger.info(
+                f"{host}: HTTP confirmed for session; sticky retry "
+                f"{attempt + 1}/{_HTTP_STICKY_MAX_RETRIES} "
+                f"({os.path.basename(file_path)}) -- not falling to Baichuan"
+            )
+            http_result = await _download_via_http_async(
+                host, http_port, file_path, output_mp4, on_progress
+            )
+            if http_result is True:
+                return True
+        logger.error(
+            f"{host}: HTTP confirmed for session but all "
+            f"{_HTTP_STICKY_MAX_RETRIES} sticky retries failed for "
+            f"{os.path.basename(file_path)}; surfacing failure to queue"
+        )
+        return False
+
     if http_result is False:
         logger.warning(
             "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
