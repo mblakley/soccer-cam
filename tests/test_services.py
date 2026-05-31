@@ -2,8 +2,10 @@
 Tests for the new service classes in task_processors/services.
 """
 
+import asyncio
 import os
 import tempfile
+import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -487,3 +489,143 @@ class TestCleanupService:
             assert mock_remove.call_count == 2
             mock_remove.assert_any_call(str(group_dir / "temp1.tmp"))
             mock_remove.assert_any_call(str(group_dir / "temp2.temp"))
+
+
+class TestNtfyBufferedResponseFreshness:
+    """Buffered NTFY responses must only replay against a freshly-registered
+    task when they plausibly answer THAT task (i.e. are fresh relative to its
+    registration time). A stale tap from a previous game — replayed by the
+    listener's ?since=24h reconnect on restart — must never auto-answer a new
+    game's question. See ntfy_service._try_buffered_responses_for.
+    """
+
+    @pytest.fixture
+    def ntfy_config(self):
+        return NtfyConfig(
+            enabled=True, server_url="http://localhost:8080", topic="test-topic"
+        )
+
+    @pytest.fixture
+    def storage_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    @staticmethod
+    def _make_service(ntfy_config, storage_path):
+        """Build an enabled NtfyService with a mocked API (no network)."""
+        with patch(
+            "video_grouper.task_processors.services.ntfy_service.NtfyAPI"
+        ) as mock_api_class:
+            mock_api = Mock()
+            mock_api.enabled = True
+            mock_api_class.return_value = mock_api
+            return NtfyService(ntfy_config, storage_path)
+
+    @pytest.mark.asyncio
+    async def test_stale_buffered_response_not_replayed(
+        self, ntfy_config, storage_path
+    ):
+        """The bug: a game_start_time response tapped hours ago must NOT replay
+        against a newly-registered game_start_time task for a different game."""
+        service = self._make_service(ntfy_config, storage_path)
+
+        with patch.object(
+            service, "_process_task_response", new_callable=AsyncMock
+        ) as mock_process:
+            # Matches the game_start_time TYPE, but tapped two hours ago — long
+            # before the task below registers.
+            stale_server_time = datetime.now().timestamp() - 7200
+            await service.process_response(
+                "Yes, game started at 05:00", server_time=stale_server_time
+            )
+            assert len(service._unmatched_responses) == 1
+
+            # Register a game_start_time task for a DIFFERENT game; this
+            # auto-schedules a replay attempt against the buffer.
+            service.mark_waiting_for_input(
+                "/storage/game_B", "game_start_time", {"time_offset": "00:00"}
+            )
+            await asyncio.sleep(0.05)  # let the scheduled attempt run
+
+            mock_process.assert_not_called()
+            # Entry stays buffered to age out via TTL, not consumed.
+            assert len(service._unmatched_responses) == 1
+            assert service.is_waiting_for_input("/storage/game_B")
+
+    @pytest.mark.asyncio
+    async def test_fresh_buffered_response_is_replayed(self, ntfy_config, storage_path):
+        """A response tapped around the time the task registers IS replayed —
+        the legitimate sub-second race the buffer exists to fix."""
+        service = self._make_service(ntfy_config, storage_path)
+
+        with patch.object(
+            service, "_process_task_response", new_callable=AsyncMock
+        ) as mock_process:
+            fresh_server_time = datetime.now().timestamp()
+            await service.process_response(
+                "Yes, game started at 00:00", server_time=fresh_server_time
+            )
+            assert len(service._unmatched_responses) == 1
+
+            service.mark_waiting_for_input(
+                "/storage/game_A", "game_start_time", {"time_offset": "00:00"}
+            )
+            await asyncio.sleep(0.05)
+
+            mock_process.assert_awaited_once()
+            args = mock_process.await_args.args
+            assert args[0] == "/storage/game_A"
+            assert args[1] == "game_start_time"
+            assert args[3] == "Yes, game started at 00:00"
+            # Consumed from the buffer.
+            assert len(service._unmatched_responses) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_server_time_old_entry_not_replayed(
+        self, ntfy_config, storage_path
+    ):
+        """Without a server timestamp, only an in-flight race (very recent
+        monotonic receive) may replay; an older entry must not."""
+        service = self._make_service(ntfy_config, storage_path)
+
+        with patch.object(
+            service, "_process_task_response", new_callable=AsyncMock
+        ) as mock_process:
+            # Register first (buffer empty → no auto-schedule), then inject an
+            # entry received 100s ago with no server time.
+            service.mark_waiting_for_input(
+                "/storage/game_A", "game_start_time", {"time_offset": "00:00"}
+            )
+            service._unmatched_responses.append(
+                (time.monotonic() - 100, None, "Yes, game started at 00:00")
+            )
+
+            result = await service._try_buffered_responses_for("/storage/game_A")
+
+            assert result is False
+            mock_process.assert_not_called()
+            assert len(service._unmatched_responses) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_server_time_inflight_race_is_replayed(
+        self, ntfy_config, storage_path
+    ):
+        """Without a server timestamp, a just-received entry (the genuine race)
+        still replays so the original buffer fix keeps working."""
+        service = self._make_service(ntfy_config, storage_path)
+
+        with patch.object(
+            service, "_process_task_response", new_callable=AsyncMock
+        ) as mock_process:
+            service.mark_waiting_for_input(
+                "/storage/game_A", "game_start_time", {"time_offset": "00:00"}
+            )
+            service._unmatched_responses.append(
+                (time.monotonic(), None, "Yes, game started at 00:00")
+            )
+
+            result = await service._try_buffered_responses_for("/storage/game_A")
+
+            assert result is True
+            mock_process.assert_awaited_once()
+            assert len(service._unmatched_responses) == 0
