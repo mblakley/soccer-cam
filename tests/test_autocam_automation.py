@@ -797,11 +797,14 @@ class TestWaitForCompletionStaleNotification:
         assert result is False
 
     def test_shutdown_marker_with_real_output_returns_success(self):
-        """Notification stuck on 'FrameReader_close' for 10+ min AND
-        output file >= 10 MB → success, not hang. AutoCam was finished
-        and just slow to release the file handle (observed 2026-05-31:
-        WNY Flash run wrote a complete 4.4 GB output, then notification
-        sat on the C-level shutdown message for the next 10 min)."""
+        """Notification with 'FrameReader_close' AND output file >=
+        10 MB → success on first observation, no need to wait for the
+        stale-notification timer. AutoCam wrote the output during the
+        progress phase; the shutdown marker means the render pipeline
+        is tearing down. We break+kill immediately so the queue can
+        move on (observed 2026-06-01: West Seneca's GUI.exe exited at
+        ~5 min into shutdown phase, before the old 10-min wait, and
+        manual taskkill was required)."""
         texts = [
             "* average time per frame: 70 [ms]\r\n* 99.5% of video processed\r\n* ETA: 10sec",
             "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
@@ -820,11 +823,13 @@ class TestWaitForCompletionStaleNotification:
             f"output should not be deleted on shutdown marker, got {removes}"
         )
 
-    def test_shutdown_marker_with_tiny_output_still_treated_as_hang(self):
-        """Notification stuck on FrameReader_close BUT the output file
-        is below the 10 MB threshold → still bail. A shutdown marker
-        without a real video means AutoCam crashed/aborted before
-        finishing output, not a normal cleanup."""
+    def test_shutdown_marker_with_tiny_output_does_not_short_circuit(self):
+        """Notification with FrameReader_close BUT the output file is
+        below the 10 MB threshold → do NOT treat as success. A shutdown
+        marker without a real video means AutoCam aborted before
+        writing meaningful output; let the loop continue to the
+        exit-detection / stale-notification paths instead of
+        false-positiving success on a 2 MB stub."""
         texts = [
             "* average time per frame: 70 [ms]\r\n* 10% of video processed",
             "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
@@ -838,9 +843,11 @@ class TestWaitForCompletionStaleNotification:
             output_size=2 * 1024 * 1024,  # 2 MB << 10 MB
         )
         assert result is False
-        # Under the wedge-cleanup path the output gets deleted (and so
-        # does the JSONL + any sentinel) -- that's fine here since 2 MB
-        # is junk.
+        # The output stays around -- the existing exit-detection /
+        # stale-notification branches will deal with it as a crash. No
+        # false-positive sentinel write.
+        # (poll_count=30 is past the 10-min stale threshold, so the
+        # wedge-cleanup path does delete it -- that's fine, it's junk.)
         assert "C:/fake/out.mp4" in removes
         assert "C:/fake/out.mp4.jsonl" in removes
 
@@ -968,3 +975,167 @@ class TestSuccessNotificationWritesSentinel:
             )
         assert result is True
         assert mark_calls == ["C:/fake/out.mp4"]
+
+
+class TestShutdownMarkerFastPath:
+    """The shutdown-marker fast path: the first poll whose notification
+    contains a shutdown marker (e.g. ``framereader_close``) and a
+    real-sized output (>= 10 MB) breaks out as success immediately,
+    writing the completion sentinel before the loop exits. Without
+    this, the loop waits for the 10-min stale-notification timer; if
+    GUI.exe exits before that timer fires (observed 2026-06-01 West
+    Seneca: ~5 min from shutdown-marker first appearing to GUI exit),
+    the exit-detection branch sees no sentinel and deletes the
+    legitimately complete output as a "crashed partial." Per Mark's
+    observation: "I killed Autocam because it was done -- why didn't
+    it get killed on a poll?"
+    """
+
+    def test_shutdown_marker_breaks_and_writes_sentinel(self):
+        """Notification goes processing → framereader_close. Loop must
+        break out via the fast path with the sentinel written, not
+        wait 10 min for the stale-notification timer."""
+        import video_grouper.tray.autocam_automation as mod
+
+        texts = [
+            "* average time per frame: 60 [ms]\r\n* 50% of video processed",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        mark_calls = []
+        notification = MagicMock()
+        idx = [0]
+        notification.window_text.side_effect = lambda: texts[
+            min(idx[0], len(texts) - 1)
+        ]
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 6, 1, 7, 50, 0)
+        clock = [start]
+        polls_done = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(_seconds):
+            polls_done[0] += 1
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            idx[0] += 1
+            # If the fast path doesn't fire, force loop exit after a
+            # few polls so we can fail the assertion below explicitly
+            # rather than spinning the 24h ceiling.
+            if polls_done[0] >= 8:
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(
+                mod,
+                "_mark_output_completed",
+                side_effect=lambda p: mark_calls.append(p),
+            ),
+            patch.object(mod, "_live_autocam_pids", return_value=[12345]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=lambda p: p == "C:/fake/out.mp4",
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                return_value=3_800_000_000,  # 3.8 GB
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            from video_grouper.tray.autocam_automation import (
+                _wait_for_completion_and_cleanup,
+            )
+
+            result = _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path="C:/fake/out.mp4",
+                tracked_pids=[12345],
+            )
+
+        # Fast path fired: sentinel written, loop returned success.
+        # polls_done <= 3 proves we didn't wait for the 10-min stale
+        # timer (which would need ~21 polls @ 30 s each).
+        assert result is True
+        assert mark_calls == ["C:/fake/out.mp4"]
+        assert polls_done[0] <= 3, (
+            f"loop should break on first shutdown-marker poll, got "
+            f"{polls_done[0]} polls"
+        )
+
+    def test_shutdown_marker_with_tiny_output_does_not_short_circuit(self):
+        """When the shutdown marker appears but the output is below
+        the 10 MB threshold, the fast path must NOT fire -- the run is
+        a real crash, not a normal cleanup."""
+        import video_grouper.tray.autocam_automation as mod
+
+        texts = [
+            "* average time per frame: 60 [ms]\r\n* 10% of video processed",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        mark_calls = []
+        notification = MagicMock()
+        idx = [0]
+        notification.window_text.side_effect = lambda: texts[
+            min(idx[0], len(texts) - 1)
+        ]
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 6, 1, 7, 50, 0)
+        clock = [start]
+        polls_done = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(_seconds):
+            polls_done[0] += 1
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            idx[0] += 1
+            if polls_done[0] >= 5:
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(
+                mod,
+                "_mark_output_completed",
+                side_effect=lambda p: mark_calls.append(p),
+            ),
+            patch.object(mod, "_live_autocam_pids", return_value=[12345]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=lambda p: p == "C:/fake/out.mp4",
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                return_value=2 * 1024 * 1024,  # 2 MB
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            from video_grouper.tray.autocam_automation import (
+                _wait_for_completion_and_cleanup,
+            )
+
+            _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path="C:/fake/out.mp4",
+                tracked_pids=[12345],
+            )
+
+        assert mark_calls == [], (
+            f"fast path must not fire on tiny output, got {mark_calls}"
+        )

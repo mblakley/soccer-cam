@@ -566,6 +566,45 @@ def _wait_for_completion_and_cleanup(
                     last_notification_text = notification_text
                     last_notification_changed_at = datetime.datetime.now()
 
+                # Shutdown-marker fast path: when AutoCam's notification
+                # contains a shutdown marker (e.g. "framereader_close"),
+                # the render pipeline has finished writing the output
+                # and is just tearing down the C-level framereader
+                # struct. The user-facing "finished processing" string
+                # is not always emitted in this build, so without this
+                # branch the loop would either wait for the
+                # 10-min stale-notification timer or for GUI.exe to
+                # exit. Observed 2026-06-01 (West Seneca): GUI.exe
+                # exited ~5 min into the shutdown phase (faster than
+                # Fairport's ~10 min) so the stale timer hadn't fired,
+                # the exit-detection branch saw no sentinel, and a
+                # legitimately-complete 3.8 GB output was deleted as
+                # "crashed partial." Treat the shutdown marker as
+                # authoritative: write the sentinel and break out so
+                # the finally: clause kills AutoCam immediately.
+                if (
+                    processing_started
+                    and output_path
+                    and any(m in notification_text for m in _SHUTDOWN_MARKERS)
+                ):
+                    out_size = 0
+                    if os.path.isfile(output_path):
+                        try:
+                            out_size = os.path.getsize(output_path)
+                        except OSError:
+                            out_size = 0
+                    if out_size >= output_min_bytes:
+                        found = True
+                        logger.info(
+                            "AutoCam shutdown marker observed "
+                            "(notification=%r, output=%.1f MB); "
+                            "treating as success and breaking out.",
+                            raw_notification,
+                            out_size / 1024 / 1024,
+                        )
+                        _mark_output_completed(output_path)
+                        break
+
                 if "finished processing" in notification_text:
                     found = True
                     logger.info("Detected success message: %r", raw_notification)
@@ -650,16 +689,14 @@ def _wait_for_completion_and_cleanup(
             # processing has effectively stopped. Bail so the queue
             # retry can move on.
             #
-            # Distinguish two stuck-notification cases:
-            #   (a) Shutdown phase -- text contains a known shutdown
-            #       marker (FrameReader_close, finished processing).
-            #       AutoCam has written the output and is just slow to
-            #       release. Output is real -- treat as success.
-            #   (b) Mid-pass wedge -- text claims active progress
-            #       ("XX.X% of video processed") but is frozen. Output
-            #       is partial -- delete it before breaking so the next
-            #       attempt doesn't false-positive on the
-            #       "already-done" >= 10 MB short-circuit.
+            # The shutdown-marker fast path above handles legitimate
+            # end-of-run cases on the first observation, so by the time
+            # we reach here a stuck notification means the GUI is
+            # actively claiming progress but no frames are advancing --
+            # i.e., a mid-pass wedge. Output on disk is partial; delete
+            # it before breaking so the next attempt doesn't
+            # false-positive on the "already-done" >= 10 MB
+            # short-circuit.
             if (
                 processing_started
                 and last_notification_text is not None
@@ -669,32 +706,12 @@ def _wait_for_completion_and_cleanup(
                     datetime.datetime.now() - last_notification_changed_at
                 ).total_seconds()
                 if stale_seconds > STALE_NOTIFICATION_SECONDS:
-                    is_shutdown_marker = any(
-                        m in last_notification_text for m in _SHUTDOWN_MARKERS
-                    )
                     out_size = 0
                     if output_path and os.path.isfile(output_path):
                         try:
                             out_size = os.path.getsize(output_path)
                         except OSError:
                             out_size = 0
-                    if is_shutdown_marker and out_size >= output_min_bytes:
-                        found = True
-                        logger.info(
-                            "AutoCam notification stuck on shutdown marker "
-                            "for %.1f min (text=%r) and output is "
-                            "%.1f MB; treating as success.",
-                            stale_seconds / 60,
-                            last_notification_text,
-                            out_size / 1024 / 1024,
-                        )
-                        # AutoCam emitted its shutdown signal, output is
-                        # complete -- write the sentinel so future
-                        # re-discoveries short-circuit cleanly instead
-                        # of re-running the whole AutoCam pass.
-                        if output_path:
-                            _mark_output_completed(output_path)
-                        break
                     logger.error(
                         "AutoCam notification unchanged for %.1f minutes "
                         "(last text: %r); treating as hung.",
