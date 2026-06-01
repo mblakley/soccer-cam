@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -107,11 +108,19 @@ def create_step(name: str, config: BaseModel | dict) -> PipelineStep:
 
 
 def _module_available(mod: str) -> bool:
-    """True if *mod* can be imported in this bundle. ``find_spec`` can raise
-    (e.g. a missing parent package), so any failure means unavailable."""
+    """True if *mod* can be imported in this bundle.
+
+    An already-imported module counts as available — and we must check
+    ``sys.modules`` first because ``find_spec`` raises ``ValueError`` for an
+    imported module whose ``__spec__`` is ``None`` (opencv's ``cv2`` does
+    exactly this). Any other failure (missing module, bad parent package) means
+    unavailable.
+    """
+    if mod in sys.modules:
+        return True
     try:
         return importlib.util.find_spec(mod) is not None
-    except (ImportError, ValueError):
+    except (ImportError, ValueError, AttributeError):
         return False
 
 
