@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
@@ -55,6 +56,14 @@ class CameraConfig(BaseModel):
     http_port: int = 80
     enabled: bool = True
     serial: str = ""
+    # Reolink download protocol selection. "auto" probes HTTP first and
+    # falls back to Baichuan; "http" requires patched-firmware HTTP and
+    # fails the download rather than falling back; "baichuan" skips the
+    # HTTP probe entirely. Mixed-protocol downloads in a single session
+    # have produced reproducible AutoCam wedges at the protocol-switch
+    # GOP boundary (observed 2026-05-30 Fairport), so locking to a
+    # single protocol per game is the safer default for tournament use.
+    download_protocol: Literal["auto", "http", "baichuan"] = "auto"
 
 
 class StorageConfig(BaseModel):
