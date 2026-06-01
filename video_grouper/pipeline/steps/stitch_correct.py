@@ -81,9 +81,11 @@ class StitchCorrectStep(PipelineStep):
     name = "stitch_correct"
     config_model = StitchCorrectStepConfig
     consumes = ("input_path",)
-    # Optional: when corrected, records the corrected file and rebinds input_path
-    # so downstream steps transparently consume it. Pass-through produces nothing.
-    produces = ("stitched_path", "input_path")
+    # Optional step: no declared output the runner must validate. When it
+    # corrects, it records stitched_path and rebinds input_path in the manifest
+    # artifact map (persisted across stages so downstream + resume see it);
+    # pass-through is a no-op.
+    produces = ()
     runtime = "service"
     requires = ("av",)
     resources = ("ram_heavy",)

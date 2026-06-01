@@ -99,6 +99,29 @@ class PipelineManifest:
     def output_path(self) -> str:
         return self.data["output_path"]
 
+    @property
+    def artifacts(self) -> dict[str, str]:
+        """The live working artifact map (key -> path)."""
+        return self.data["artifacts"]
+
+    def reset_working_artifacts(self) -> None:
+        """Reset the working artifact map to the immutable source input + output,
+        discarding any rebinds.
+
+        The runner replays each *skipped* step's recorded produced entries on top
+        of this, so a step that re-runs sees correct upstream state rather than
+        its own stale prior outputs (e.g. stitch_correct rebinding input_path to
+        a corrected file that no longer exists).
+        """
+        self.data["artifacts"] = {
+            "input_path": self.data["input_path"],
+            "output_path": self.data["output_path"],
+        }
+
+    def replay_step(self, step_id: str) -> None:
+        """Re-apply a completed step's recorded produced/rebound artifacts."""
+        self.data["artifacts"].update(self.produced_paths(step_id))
+
     # ------------------------------------------------------------------
     # Step records
     # ------------------------------------------------------------------
@@ -154,9 +177,12 @@ class PipelineManifest:
         self.save()
 
     def mark_complete(
-        self, step_id: str, produced: dict[str, str] | None = None
+        self,
+        step_id: str,
+        produced: dict[str, str] | None = None,
+        step_type: str | None = None,
     ) -> None:
-        rec = self._upsert(step_id, step_id)
+        rec = self._upsert(step_id, step_type or step_id)
         produced = produced or {}
         rec.update({"status": "complete", "finished_at": _now(), "produced": produced})
         self.data["artifacts"].update(produced)
@@ -167,13 +193,24 @@ class PipelineManifest:
         rec.update({"status": "skipped", "finished_at": _now()})
         self.save()
 
-    def mark_awaiting_tray(self, step_id: str, step_type: str) -> None:
-        """Record that a tray-only step is waiting for the interactive session."""
+    def mark_awaiting(self, step_id: str, step_type: str, runtime: str) -> None:
+        """Record that *step_id* is waiting for the *runtime* it must run in.
+
+        Status is ``awaiting_<runtime>`` (e.g. ``awaiting_tray``). This is the
+        cross-session handoff marker: the service stops at a tray step, the tray
+        runs it, and the service resumes — the manifest is the shared medium.
+        """
         rec = self._upsert(step_id, step_type)
-        rec["status"] = "awaiting_tray"
+        rec["status"] = f"awaiting_{runtime}"
         self.save()
 
-    def mark_failed(self, step_id: str, error: str) -> None:
-        rec = self._upsert(step_id, step_id)
+    def mark_awaiting_tray(self, step_id: str, step_type: str) -> None:
+        """Back-compat shorthand for ``mark_awaiting(..., "tray")``."""
+        self.mark_awaiting(step_id, step_type, "tray")
+
+    def mark_failed(
+        self, step_id: str, error: str, step_type: str | None = None
+    ) -> None:
+        rec = self._upsert(step_id, step_type or step_id)
         rec.update({"status": "failed", "finished_at": _now(), "error": error})
         self.save()

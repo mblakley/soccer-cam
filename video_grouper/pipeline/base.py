@@ -46,6 +46,22 @@ class StepContext:
     ttt_config: dict | None = None
 
 
+@dataclass(frozen=True)
+class StepSpec:
+    """A configured step in a pipeline.
+
+    ``step_id`` is the free-form instance id (the ``[PIPELINE.<step_id>]``
+    section name); ``type`` is the registered step name; ``config`` is the raw,
+    un-validated config dict (validated via the step's ``config_model`` at
+    :func:`video_grouper.pipeline.create_step` time). Kept a plain dataclass so
+    the runner doesn't depend on the config layer.
+    """
+
+    step_id: str
+    type: str
+    config: dict
+
+
 class PipelineStep(ABC):
     """One step in the processing pipeline.
 
