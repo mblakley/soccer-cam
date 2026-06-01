@@ -26,12 +26,19 @@ logger = logging.getLogger(__name__)
 
 class StateAuditor(PollingProcessor):
     """
-    Startup recovery scanner for the pipeline.
+    Recovery scanner for the pipeline.
 
-    On app start, scans the shared_data directory for state.json files and
-    re-queues any interrupted work (pending downloads, combined dirs awaiting
-    match info, etc.). Does NOT run as a continuous poller during normal
-    operation — event-driven transitions handle ongoing work.
+    Scans the shared_data directory for state.json files and re-queues
+    any work that needs to start or restart (pending downloads,
+    combined dirs awaiting match info, ball_tracking_complete dirs
+    awaiting upload, etc.). Originally a one-shot startup scan, but
+    that left a gap: when a user manually populates a match_info.ini
+    after startup (e.g. tournament-day fix), the auditor wouldn't see
+    it until the next service restart.
+
+    Now runs on a poll interval (default 60s). Safe to re-poll because
+    every downstream ``add_work`` call dedupes on the task's item_key,
+    so a still-in-progress task isn't re-enqueued.
     """
 
     def __init__(
@@ -69,16 +76,6 @@ class StateAuditor(PollingProcessor):
 
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
-
-    async def start(self) -> None:
-        """Run a one-time startup scan to recover interrupted work.
-
-        Unlike the base PollingProcessor.start(), this does NOT create a
-        persistent polling loop. It runs discover_work() once and returns.
-        """
-        logger.info("STATE_AUDITOR: Running startup recovery scan")
-        await self.discover_work()
-        logger.info("STATE_AUDITOR: Startup recovery scan complete")
 
     @property
     def download_processor(self):
@@ -420,5 +417,6 @@ class StateAuditor(PollingProcessor):
             logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
 
     async def stop(self) -> None:
-        """Clean up services. No polling loop to stop."""
+        """Cancel the polling loop and clean up services."""
+        await super().stop()
         await self.match_info_service.shutdown()

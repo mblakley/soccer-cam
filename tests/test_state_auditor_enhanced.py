@@ -2,6 +2,7 @@
 Tests for the enhanced StateAuditor with service integrations.
 """
 
+import asyncio
 import tempfile
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -613,48 +614,67 @@ class TestStateAuditorPipelineToggle:
         mock_upload_processor.add_work.assert_not_called()
 
 
-class TestStateAuditorStartupOnly:
-    """Tests that StateAuditor is startup-only (not continuous polling)."""
+class TestStateAuditorPolling:
+    """Tests that StateAuditor runs as a continuous polling loop so
+    that mid-session changes (e.g. manual edits to match_info.ini)
+    get picked up without a service restart."""
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
     @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
     @pytest.mark.asyncio
-    async def test_start_runs_discover_work_once(
+    async def test_start_creates_polling_loop(
         self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
     ):
-        """start() should call discover_work() once and return."""
+        """start() should create a background polling task that calls
+        discover_work() on the poll_interval."""
         mock_teamsnap.return_value.enabled = True
         mock_playmetrics.return_value.enabled = True
         mock_playmetrics.return_value.login.return_value = True
         mock_ntfy.return_value.enabled = True
 
         auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+        auditor.match_info_service.shutdown = AsyncMock()
 
         with patch.object(auditor, "discover_work", new_callable=AsyncMock) as mock_dw:
             await auditor.start()
-            mock_dw.assert_called_once()
+            # Give the task one tick to run discover_work() the first time.
+            await asyncio.sleep(0.05)
+            assert auditor._processor_task is not None
+            assert mock_dw.call_count >= 1
+            await auditor.stop()
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
     @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
     @pytest.mark.asyncio
-    async def test_start_does_not_create_polling_loop(
+    async def test_polling_loop_calls_discover_work_repeatedly(
         self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
     ):
-        """start() should NOT create a persistent _processor_task (no polling loop)."""
+        """Regression guard for the 2026-06-01 West Seneca incident:
+        a manually-edited match_info.ini needed a service restart
+        because the auditor ran only at startup. With polling, the
+        next loop iteration picks the change up automatically."""
         mock_teamsnap.return_value.enabled = True
         mock_playmetrics.return_value.enabled = True
         mock_playmetrics.return_value.login.return_value = True
         mock_ntfy.return_value.enabled = True
 
-        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+        # Short poll interval so the test doesn't have to wait.
+        auditor = StateAuditor(
+            str(tmp_path), mock_config, Mock(), Mock(), poll_interval=1
+        )
+        auditor.match_info_service.shutdown = AsyncMock()
 
-        with patch.object(auditor, "discover_work", new_callable=AsyncMock):
+        with patch.object(auditor, "discover_work", new_callable=AsyncMock) as mock_dw:
             await auditor.start()
-
-        # _processor_task should remain None (no background loop created)
-        assert auditor._processor_task is None
+            await asyncio.sleep(1.2)
+            await auditor.stop()
+            # At least 2 calls: initial + one polled iteration.
+            assert mock_dw.call_count >= 2, (
+                f"expected polling loop to call discover_work repeatedly, "
+                f"got {mock_dw.call_count} calls"
+            )
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
