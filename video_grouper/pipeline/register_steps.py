@@ -5,11 +5,14 @@ side (``VideoGrouperApp`` / the tray) imports this once at startup, mirroring
 the cameras-module convention.
 
 Each import is wrapped in try/except so a missing optional dependency for one
-step doesn't poison the others. The tray bundle ships without the ONNX/cv2/av
-stack, so ``detect`` / ``track`` / ``render`` will fail to import there and be
-omitted, leaving ``autocam`` (its only relevant step) registered. The imports
-are written as static ``from ... import`` so PyInstaller's static analyzer
-detects and bundles them — a dynamic ``__import__`` would skip bundling.
+step doesn't poison the others. In the tray bundle (which excludes the inference
+stack) only ``detect`` actually fails to import — it pulls in
+``onnxruntime``/``cv2`` at module top — and is omitted. ``stitch_correct`` and
+``render`` import ``av`` lazily (inside functions) and ``track`` is numpy-only,
+so all three still register in the tray; they're gated OUT at runtime instead,
+by their ``runtime="service"`` (the tray hands them off) and ``meta.available``.
+The imports are static ``from ... import`` so PyInstaller's analyzer detects and
+bundles them — a dynamic ``__import__`` would skip bundling.
 """
 
 from __future__ import annotations
