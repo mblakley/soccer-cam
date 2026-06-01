@@ -1030,6 +1030,7 @@ def _download_and_mux_sync(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
     """Run download + mux in a dedicated event loop (called from a thread).
 
@@ -1050,6 +1051,7 @@ def _download_and_mux_sync(
                 channel,
                 on_progress,
                 http_port=http_port,
+                download_protocol=download_protocol,
             )
         )
     finally:
@@ -1296,61 +1298,77 @@ async def _download_and_mux_async(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
-    """Download a recording. HTTP fast path first; Baichuan fallback.
+    """Download a recording per ``download_protocol``.
 
-    1. Try patched-firmware HTTP fast path (~80–90 Mbps, no remux).
-    2. If unavailable (404 / connection refused), fall back to Baichuan
-       on port 9000: stream BcMedia -> Annex-B -> remux to MP4 via ffmpeg.
-
-    Returns True on success.
+    "auto" (default): probe HTTP fast path, fall back to Baichuan on
+    unconfirmed/unsupported, sticky-retry HTTP once any file in the
+    session has succeeded.
+    "http": HTTP only. Never fall back to Baichuan; failures surface
+    to the queue. Use this when mixed-protocol downloads have
+    produced AutoCam wedges (observed 2026-05-30 Fairport) and one
+    fully-HTTP session is preferred to oscillating between protocols.
+    "baichuan": skip HTTP entirely and stream directly via Baichuan
+    on port 9000 (BcMedia -> Annex-B -> remux to MP4 via ffmpeg).
     """
-    # Try HTTP first. True = done over HTTP. None = HTTP not used for this
-    # file (unconfirmed-and-probe-missed / 404 / connection error) — fall
-    # back to Baichuan for this file; HTTP is re-probed on the next file.
-    # False = HTTP was serving but the transfer failed mid-stream.
-    http_result = await _download_via_http_async(
-        host, http_port, file_path, output_mp4, on_progress
-    )
-    if http_result is True:
-        return True
-
-    # Sticky-HTTP: once ANY file on this host has downloaded via HTTP this
-    # session, transient failures must retry HTTP rather than fall to
-    # Baichuan. Baichuan is reserved for cameras where HTTP has never
-    # worked. Falling to Baichuan post-confirmation would have us
-    # downloading at ~1.8 MB/s when ~10 MB/s is available, just because
-    # one probe blip nudged us off the fast path.
-    #
-    # Only applies to files under CAMERA_RECORD_PREFIX: HTTP fast path
-    # is only valid for /mnt/sda/ paths; non-record paths must use
-    # Baichuan regardless.
-    if _HTTP_PATH_SUPPORTED.get(host) is True and file_path.startswith(
-        CAMERA_RECORD_PREFIX
-    ):
-        for attempt in range(_HTTP_STICKY_MAX_RETRIES):
-            await asyncio.sleep(_HTTP_STICKY_BACKOFF[attempt])
-            logger.info(
-                f"{host}: HTTP confirmed for session; sticky retry "
-                f"{attempt + 1}/{_HTTP_STICKY_MAX_RETRIES} "
-                f"({os.path.basename(file_path)}) -- not falling to Baichuan"
-            )
-            http_result = await _download_via_http_async(
-                host, http_port, file_path, output_mp4, on_progress
-            )
-            if http_result is True:
-                return True
-        logger.error(
-            f"{host}: HTTP confirmed for session but all "
-            f"{_HTTP_STICKY_MAX_RETRIES} sticky retries failed for "
-            f"{os.path.basename(file_path)}; surfacing failure to queue"
+    if download_protocol == "baichuan":
+        logger.info(
+            "%s: download_protocol=baichuan; skipping HTTP fast path",
+            host,
         )
-        return False
-
-    if http_result is False:
-        logger.warning(
-            "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
+    else:
+        # Try HTTP first. True = done over HTTP. None = HTTP not used
+        # for this file (unconfirmed-and-probe-missed / 404 /
+        # connection error). False = HTTP was serving but the transfer
+        # failed mid-stream.
+        http_result = await _download_via_http_async(
+            host, http_port, file_path, output_mp4, on_progress
         )
+        if http_result is True:
+            return True
+
+        # Sticky-HTTP: once ANY file on this host has downloaded via
+        # HTTP this session, transient failures must retry HTTP rather
+        # than fall to Baichuan. Falling to Baichuan post-confirmation
+        # would drop us from ~10 MB/s to ~1.8 MB/s on a single blip.
+        # Only applies to files under CAMERA_RECORD_PREFIX.
+        if _HTTP_PATH_SUPPORTED.get(host) is True and file_path.startswith(
+            CAMERA_RECORD_PREFIX
+        ):
+            for attempt in range(_HTTP_STICKY_MAX_RETRIES):
+                await asyncio.sleep(_HTTP_STICKY_BACKOFF[attempt])
+                logger.info(
+                    f"{host}: HTTP confirmed for session; sticky retry "
+                    f"{attempt + 1}/{_HTTP_STICKY_MAX_RETRIES} "
+                    f"({os.path.basename(file_path)}) -- not falling to Baichuan"
+                )
+                http_result = await _download_via_http_async(
+                    host, http_port, file_path, output_mp4, on_progress
+                )
+                if http_result is True:
+                    return True
+            logger.error(
+                f"{host}: HTTP confirmed for session but all "
+                f"{_HTTP_STICKY_MAX_RETRIES} sticky retries failed for "
+                f"{os.path.basename(file_path)}; surfacing failure to queue"
+            )
+            return False
+
+        if download_protocol == "http":
+            logger.error(
+                "%s: download_protocol=http but HTTP unavailable for "
+                "%s (http_result=%r); not falling back to Baichuan",
+                host,
+                os.path.basename(file_path),
+                http_result,
+            )
+            return False
+
+        if http_result is False:
+            logger.warning(
+                "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
+            )
 
     # Baichuan delivers raw video + raw audio frames (no container);
     # we stage them as <name>.partial.video and <name>.partial.audio,
@@ -1427,11 +1445,13 @@ async def download_and_mux(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
-    """Download a recording. HTTP fast path → Baichuan fallback → MP4 on disk.
+    """Download a recording per ``download_protocol`` and write MP4 to disk.
 
-    Runs in a dedicated thread with its own event loop to avoid contention
-    with the main service loop.
+    See ``_download_and_mux_async`` for protocol semantics. Runs in a
+    dedicated thread with its own event loop to avoid contention with
+    the main service loop.
     """
     return await asyncio.to_thread(
         _download_and_mux_sync,
@@ -1444,4 +1464,5 @@ async def download_and_mux(
         channel,
         on_progress,
         http_port,
+        download_protocol,
     )

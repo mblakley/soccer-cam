@@ -537,6 +537,7 @@ class ReolinkCamera(Camera):
                 channel=self.channel,
                 on_progress=_progress,
                 http_port=self.config.http_port,
+                download_protocol=self.config.download_protocol,
             )
 
             if success:

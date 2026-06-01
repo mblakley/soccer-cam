@@ -1117,3 +1117,162 @@ class TestStickyHttpRetry:
         assert len(calls) == 1
         MockBaichuan.assert_called_once()
         assert result is False  # because mocked Baichuan also fails
+
+
+class TestDownloadProtocolToggle:
+    """The ``download_protocol`` config selects http/baichuan/auto per
+    camera. Locking to one protocol avoids mixed-protocol GOP boundary
+    wedges in AutoCam (observed 2026-05-30 Fairport at 65.4%)."""
+
+    @pytest.mark.asyncio
+    async def test_protocol_baichuan_skips_http_probe_entirely(self, tmp_path):
+        """``download_protocol="baichuan"`` must skip the HTTP probe
+        and go straight to Baichuan, even when the host is in the
+        confirmed-HTTP cache."""
+        _HTTP_PATH_SUPPORTED[HOST] = True  # would normally force HTTP
+        http_calls = []
+
+        async def fake_http(*args, **kwargs):
+            http_calls.append(args)
+            return True
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="baichuan",
+            )
+
+        assert http_calls == [], "HTTP probe must not be called when protocol=baichuan"
+        MockBaichuan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_protocol_http_does_not_fall_to_baichuan_on_unconfirmed(
+        self, tmp_path
+    ):
+        """``download_protocol="http"`` + first-file probe miss must
+        return False rather than fall to Baichuan (which is what
+        ``auto`` would do here)."""
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # unconfirmed-and-probe-missed
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="http",
+            )
+
+        assert result is False
+        assert len(calls) == 1
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_protocol_http_does_not_fall_to_baichuan_on_midstream_fail(
+        self, tmp_path
+    ):
+        """``download_protocol="http"`` + HTTP-confirmed + sticky
+        retries exhausted must return False rather than fall to
+        Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return False  # mid-stream failure every attempt
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="http",
+            )
+
+        assert result is False
+        assert len(calls) == 1 + _HTTP_STICKY_MAX_RETRIES
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_protocol_auto_preserves_existing_behavior(self, tmp_path):
+        """``download_protocol="auto"`` (default) + first-file probe
+        miss falls back to Baichuan as before — proves the new toggle
+        doesn't regress the original ``auto`` behavior."""
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="auto",
+            )
+
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()
