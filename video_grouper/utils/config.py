@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import configparser
+import logging
 from pathlib import Path
 from typing import Dict, Optional, List
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
 from video_grouper.ball_tracking.config import BallTrackingConfig
+from video_grouper.pipeline.config import PipelineConfig
+
+logger = logging.getLogger(__name__)
 
 
 # Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
@@ -368,6 +372,7 @@ class Config(BaseModel):
         alias="BALL_TRACKING", default_factory=BallTrackingConfig
     )
     node: NodeConfig = Field(alias="NODE", default_factory=NodeConfig)
+    pipeline: PipelineConfig = Field(alias="PIPELINE", default_factory=PipelineConfig)
 
     model_config = {"validate_by_name": True}
 
@@ -408,6 +413,34 @@ def load_config(config_path: Path) -> Config:
             sub_alias = section.split(".", 1)[1]  # e.g. "AUTOCAM_GUI" or "PER_TEAM"
             sub_value = config_dict.pop(section)
             config_dict.setdefault("BALL_TRACKING", {})[sub_alias] = sub_value
+
+    # Handle PIPELINE sub-sections: [PIPELINE.PER_TEAM] -> per-team overrides;
+    # every other [PIPELINE.<step_id>] -> one step spec (its `type` + raw config).
+    # PIPELINE.PER_TEAM is a RESERVED sub-section (per-team overrides) — a step
+    # may not be named PER_TEAM. Every other [PIPELINE.<step_id>] is a step spec.
+    # A step section without a `type` is malformed; skip it with a warning rather
+    # than failing the entire config load (these sections are hand-editable).
+    pipeline_step_specs: dict[str, dict] = {}
+    for section in list(config_dict.keys()):
+        if section.startswith("PIPELINE."):
+            sub = section.split(".", 1)[1]
+            sub_value = config_dict.pop(section)
+            if sub == "PER_TEAM":
+                config_dict.setdefault("PIPELINE", {})["PER_TEAM"] = sub_value
+                continue
+            step_type = sub_value.pop("type", None)
+            if step_type is None:
+                logger.warning(
+                    "[PIPELINE.%s] has no `type`; ignoring this step section", sub
+                )
+                continue
+            pipeline_step_specs[sub] = {
+                "step_id": sub,
+                "type": step_type,
+                "config": sub_value,
+            }
+    if pipeline_step_specs:
+        config_dict.setdefault("PIPELINE", {})["step_specs"] = pipeline_step_specs
 
     # Handle PlayMetrics teams
     playmetrics_teams = []
@@ -497,6 +530,30 @@ def save_config(config: Config, config_path: Path):
             parser["TEAMSNAP"] = {
                 k: str(v) for k, v in teamsnap_dict.items() if v is not None
             }
+            continue
+
+        if field_name == "pipeline":
+            # [PIPELINE] scalars + ordered step ids; one [PIPELINE.<id>] per step
+            # (type + that step's raw config); [PIPELINE.PER_TEAM] if present.
+            main = {
+                "enabled": str(value.enabled),
+                "community_plugins_enabled": str(value.community_plugins_enabled),
+                "gpu_concurrency": str(value.gpu_concurrency),
+                "ram_heavy_concurrency": str(value.ram_heavy_concurrency),
+            }
+            if value.steps:
+                main["steps"] = ", ".join(value.steps)
+            parser["PIPELINE"] = main
+            for step_id, spec in value.step_specs.items():
+                section_items = {"type": spec.type}
+                for k, v in spec.config.items():
+                    if v is not None:
+                        section_items[k] = str(v)
+                parser[f"PIPELINE.{step_id}"] = section_items
+            if value.per_team:
+                parser["PIPELINE.PER_TEAM"] = {
+                    k: str(v) for k, v in value.per_team.items()
+                }
             continue
 
         if isinstance(value, BaseModel):
