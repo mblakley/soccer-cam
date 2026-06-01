@@ -54,6 +54,26 @@ class VideoGrouperApp:
                 "Switch to provider = 'homegrown'."
             )
 
+        # Generalized pipeline analogue of the above: a tray-runtime step (e.g.
+        # autocam, which drives an interactive desktop app) can't run on
+        # Linux/Docker. Refuse to start when one is configured on a non-Windows
+        # host. Done BEFORE any side effects for the same logger-cleanup reason.
+        if config.pipeline.is_active() and platform.system() != "Windows":
+            from video_grouper.pipeline import get_step_meta
+            import video_grouper.pipeline.register_steps  # noqa: F401
+
+            for spec in config.pipeline.ordered_steps():
+                try:
+                    meta = get_step_meta(spec.type)
+                except ValueError:
+                    continue
+                if meta.runtime == "tray":
+                    raise RuntimeError(
+                        f"[PIPELINE] step {spec.type!r} requires the interactive "
+                        "desktop (runtime='tray') and is Windows-only. "
+                        "Remove it or run on Windows."
+                    )
+
         # Phase 4: a node configured as a worker MUST run via
         # `python -m video_grouper.worker` — the regular orchestrator
         # entry point doesn't know how to poll a master. Refuse to start
@@ -104,15 +124,44 @@ class VideoGrouperApp:
             upload_processor=self.upload_processor,
         )
 
-        # Ball-tracking placement is gated on the configured provider.
-        # - autocam_gui: drives the Once Sport GUI app (needs Session 1+); the
-        #   tray runs the BallTrackingProcessor for this provider, not us.
-        # - homegrown: pure ONNX/CUDA compute (Session 0 fine); we run it.
-        # See `~/.claude/plans/web-ui-consolidation.md` Phase 0a for the matrix.
+        # Config-driven pipeline takes PRECEDENCE over the legacy ball-tracking
+        # path. When [PIPELINE] is active we run the PipelineProcessor (service
+        # runtime — Session-0-safe steps; tray steps hand off to the tray) +
+        # PipelineDiscoveryProcessor, and DO NOT start the legacy ball-tracking
+        # processors. When the pipeline is not active we fall through to the
+        # existing legacy behaviour unchanged.
+        self.pipeline_processor = None
+        self.pipeline_discovery_processor = None
         self.ball_tracking_processor = None
         self.ball_tracking_discovery_processor = None
         bt = self.config.ball_tracking
-        if bt.enabled and bt.provider == "homegrown":
+        if self.config.pipeline.is_active():
+            # Side-effect import: registers the built-in pipeline steps.
+            import video_grouper.pipeline.register_steps  # noqa: F401
+            from video_grouper.task_processors.pipeline_processor import (
+                PipelineProcessor,
+            )
+            from video_grouper.task_processors.pipeline_discovery_processor import (
+                PipelineDiscoveryProcessor,
+            )
+
+            self.pipeline_processor = PipelineProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                upload_processor=self.upload_processor,
+                runtime="service",
+            )
+            self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
+                storage_path=self.storage_path,
+                config=self.config,
+                pipeline_processor=self.pipeline_processor,
+            )
+            logger.info(
+                "PIPELINE: config-driven pipeline active (%d steps); legacy "
+                "ball-tracking processors are NOT started.",
+                len(self.config.pipeline.ordered_steps()),
+            )
+        elif bt.enabled and bt.provider == "homegrown":
             # Side-effect import: registers the BallTrackingProvider implementations.
             import video_grouper.ball_tracking.register_providers  # noqa: F401
             from video_grouper.task_processors.ball_tracking_processor import (
@@ -568,6 +617,12 @@ class VideoGrouperApp:
             self.processors.append(self.clip_discovery_processor)
         if self.ttt_job_processor:
             self.processors.append(self.ttt_job_processor)
+        # Config-driven pipeline (takes precedence over legacy ball-tracking;
+        # only one of the two sets is constructed in __init__).
+        if self.pipeline_processor:
+            self.processors.append(self.pipeline_processor)
+        if self.pipeline_discovery_processor:
+            self.processors.append(self.pipeline_discovery_processor)
         # Ball-tracking placement (homegrown only, see __init__ above).
         # autocam_gui ball-tracking lives in the tray.
         if self.ball_tracking_processor:

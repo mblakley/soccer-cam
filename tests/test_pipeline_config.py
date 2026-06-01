@@ -271,3 +271,82 @@ def test_ball_tracking_and_pipeline_coexist(tmp_path):
         "track",
         "render",
     ]
+
+
+_BALL_TRACKING_HOMEGROWN_ONLY = """\
+[BALL_TRACKING]
+enabled = true
+provider = homegrown
+
+[BALL_TRACKING.HOMEGROWN]
+stages = stitch_correct, detect, track, render
+stitch_profile_path = /calib/flash.json
+detect_confidence = 0.45
+track_kalman_gate = 200
+render_output_width = 1920
+"""
+
+
+def test_load_migrates_ball_tracking_when_no_pipeline_section(tmp_path):
+    # A pre-pipeline install (only [BALL_TRACKING], no [PIPELINE]) must
+    # auto-adopt the config-driven pipeline at load time.
+    cfg = load_config(
+        _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_HOMEGROWN_ONLY)
+    )
+    pc = cfg.pipeline
+    assert pc.enabled is True
+    assert pc.is_active() is True
+    ordered = pc.ordered_steps()
+    assert [s.type for s in ordered] == [
+        "stitch_correct",
+        "detect",
+        "track",
+        "render",
+    ]
+    # per-step fields split correctly through migration.
+    by_id = {s.step_id: s for s in ordered}
+    assert by_id["stitch_correct"].config["stitch_profile_path"] == "/calib/flash.json"
+    assert by_id["detect"].config["detect_confidence"] == "0.45"
+    # Legacy BALL_TRACKING stays available (additive — not removed).
+    assert cfg.ball_tracking.provider == "homegrown"
+
+
+_BALL_TRACKING_AUTOCAM_ONLY = """\
+[BALL_TRACKING]
+enabled = true
+provider = autocam_gui
+
+[BALL_TRACKING.AUTOCAM_GUI]
+executable = C:/once/GUI.exe
+"""
+
+
+def test_load_migrates_autocam_gui_when_no_pipeline_section(tmp_path):
+    cfg = load_config(
+        _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_AUTOCAM_ONLY)
+    )
+    assert cfg.pipeline.is_active() is True
+    ordered = cfg.pipeline.ordered_steps()
+    assert [s.type for s in ordered] == ["autocam"]
+    assert ordered[0].config["executable"] == "C:/once/GUI.exe"
+
+
+def test_load_does_not_migrate_when_pipeline_section_present(tmp_path):
+    # An explicit [PIPELINE] section — even one with steps — must win and the
+    # BALL_TRACKING dict must NOT be migrated on top of it.
+    ini = _REQUIRED_SECTIONS + _BALL_TRACKING_HOMEGROWN_ONLY + _PIPELINE_INI
+    cfg = load_config(_write(tmp_path, ini))
+    # PIPELINE steps come from the explicit [PIPELINE.*] sections, in that order.
+    assert [s.step_id for s in cfg.pipeline.ordered_steps()] == [
+        "stitch",
+        "detect",
+        "track",
+        "render",
+    ]
+
+
+def test_load_no_ball_tracking_no_pipeline_stays_disabled(tmp_path):
+    # No [BALL_TRACKING] and no [PIPELINE] -> nothing to migrate.
+    cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS))
+    assert cfg.pipeline.is_active() is False
+    assert cfg.pipeline.ordered_steps() == []

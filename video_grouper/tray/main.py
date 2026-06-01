@@ -299,17 +299,52 @@ class SystemTrayIcon(QSystemTrayIcon):
             f"Using a thread pool with {self.threadpool.maxThreadCount()} threads."
         )
 
-        # The tray's only processor responsibility is autocam_gui ball-tracking
+        # The tray's only processor responsibility is interactive-desktop work
         # (Once Sport's commercial GUI app needs Session 1+, which the service
-        # can't provide). homegrown ball-tracking and the rest of the pipeline
-        # (upload, video, ntfy, etc.) live in the service. When ball-tracking
-        # finishes here, we set state.json -> ball_tracking_complete and the
-        # service's StateAuditor picks it up to queue the YouTube upload.
-        # See `~/.claude/plans/web-ui-consolidation.md` Phase 0a.
+        # can't provide). All Session-0-safe compute and the rest of the
+        # pipeline (upload, video, ntfy, etc.) live in the service. When the
+        # tray finishes its portion it flips state.json (ball_tracking_complete
+        # / pipeline_complete) and the service picks it up for the YouTube
+        # upload. See `~/.claude/plans/web-ui-consolidation.md` Phase 0a.
+        #
+        # PRECEDENCE: when [PIPELINE] is active AND it contains a tray-runtime
+        # step (e.g. autocam), the tray runs the PipelineProcessor(runtime=tray)
+        # + discovery. Otherwise it falls back to the legacy autocam_gui
+        # ball-tracking path. Import discipline: we never import the ONNX/cv2/av
+        # chain here — get_step_meta only reads cheap registry metadata, and the
+        # tray bundle's register_steps drops the heavy steps that fail to import.
+        self.pipeline_processor = None
+        self.pipeline_discovery_processor = None
         self.ball_tracking_processor = None
         self.ball_tracking_discovery_processor = None
 
-        if self.config and self.config.ball_tracking.enabled:
+        if self.config and self.config.pipeline.is_active():
+            if self._pipeline_has_tray_step():
+                from video_grouper.task_processors.pipeline_processor import (
+                    PipelineProcessor,
+                )
+                from video_grouper.task_processors.pipeline_discovery_processor import (
+                    PipelineDiscoveryProcessor,
+                )
+
+                self.pipeline_processor = PipelineProcessor(
+                    storage_path=self.config.storage.path,
+                    config=self.config,
+                    upload_processor=None,
+                    runtime="tray",
+                )
+                self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
+                    storage_path=self.config.storage.path,
+                    config=self.config,
+                    pipeline_processor=self.pipeline_processor,
+                    poll_interval=30,
+                )
+            else:
+                logger.info(
+                    "Tray: [PIPELINE] active but no tray-runtime step configured; "
+                    "nothing to run here (the service runs the compute steps)."
+                )
+        elif self.config and self.config.ball_tracking.enabled:
             if self.config.ball_tracking.provider == "autocam_gui":
                 # Register provider implementations lazily so the import
                 # chain (onnxruntime, cv2, CUDA DLLs) only runs when we
@@ -342,9 +377,36 @@ class SystemTrayIcon(QSystemTrayIcon):
         elif not self.config:
             logger.warning("No config loaded, skipping processor initialization")
 
+    def _pipeline_has_tray_step(self) -> bool:
+        """True if the configured pipeline contains a tray-runtime step.
+
+        Cheap metadata-only check via ``get_step_meta`` — registers the built-in
+        steps (the tray bundle's register_steps drops the heavy ONNX/cv2 ones
+        that fail to import, leaving e.g. autocam) and inspects each configured
+        step's runtime. Never imports the inference stack.
+        """
+        try:
+            from video_grouper.pipeline import get_step_meta
+            import video_grouper.pipeline.register_steps  # noqa: F401
+        except Exception:
+            logger.warning("Tray: could not load pipeline step registry", exc_info=True)
+            return False
+        for spec in self.config.pipeline.ordered_steps():
+            try:
+                meta = get_step_meta(spec.type)
+            except ValueError:
+                continue
+            if meta.runtime == "tray":
+                return True
+        return False
+
     async def initialize(self):
         """Initialize the tray app asynchronously."""
         logger.info("Initializing SystemTrayIcon...")
+        if self.pipeline_processor:
+            await self.pipeline_processor.start()
+        if self.pipeline_discovery_processor:
+            await self.pipeline_discovery_processor.start()
         if self.ball_tracking_processor:
             await self.ball_tracking_processor.start()
         if self.ball_tracking_discovery_processor:
@@ -354,6 +416,13 @@ class SystemTrayIcon(QSystemTrayIcon):
     async def shutdown(self):
         """Shutdown the tray app asynchronously."""
         logger.info("Shutting down SystemTrayIcon...")
+        if (
+            hasattr(self, "pipeline_discovery_processor")
+            and self.pipeline_discovery_processor
+        ):
+            await self.pipeline_discovery_processor.stop()
+        if hasattr(self, "pipeline_processor") and self.pipeline_processor:
+            await self.pipeline_processor.stop()
         if (
             hasattr(self, "ball_tracking_discovery_processor")
             and self.ball_tracking_discovery_processor

@@ -146,6 +146,26 @@ class StateAuditor(PollingProcessor):
         try:
             dir_state = DirectoryState(group_dir, self.storage_path)
 
+            # One-time on-scan migration: when the config-driven pipeline is
+            # active, rename a legacy ``ball_tracking_complete`` group to
+            # ``pipeline_complete`` so the on-disk status matches the new path.
+            # Upload recovery + pipeline discovery both still read BOTH values,
+            # so this is safe and idempotent. Gated on the pipeline being active
+            # so a legacy ball-tracking install never has its status rewritten
+            # out from under the legacy discovery's ball_tracking_complete read.
+            pipeline_cfg = getattr(self.config, "pipeline", None)
+            if (
+                pipeline_cfg is not None
+                and pipeline_cfg.is_active()
+                and dir_state.status == "ball_tracking_complete"
+            ):
+                logger.info(
+                    "STATE_AUDITOR: migrating %s status "
+                    "ball_tracking_complete -> pipeline_complete",
+                    group_dir,
+                )
+                await dir_state.update_group_status("pipeline_complete")
+
             # Audit individual files
             for file_obj in dir_state.files.values():
                 if file_obj.skip:
@@ -287,24 +307,30 @@ class StateAuditor(PollingProcessor):
                                 group_dir, combined_path
                             )
 
-            # Handle trimmed status - if ball-tracking is disabled, skip to upload
-            if dir_state.status == "trimmed" and not self.config.ball_tracking.enabled:
+            # Handle trimmed status - if no post-trim processing stage owns the
+            # group (neither the config-driven pipeline nor legacy ball-tracking),
+            # skip straight to upload. When either is active, leave the group at
+            # ``trimmed`` for that processor's discovery to pick up.
+            if (
+                dir_state.status == "trimmed"
+                and not self._post_trim_processing_active()
+            ):
                 logger.info(
-                    f"STATE_AUDITOR: Ball tracking disabled, transitioning {group_dir} to upload"
+                    f"STATE_AUDITOR: No post-trim processing active, transitioning {group_dir} to upload"
                 )
                 await dir_state.update_group_status("ball_tracking_complete")
                 await self._queue_upload(group_dir)
 
-            # Check for videos to upload (ball_tracking_complete status).
-            # Cross-app handoff: when ball-tracking runs in the tray (autocam_gui)
-            # the tray's BallTrackingProcessor sets this status but no longer
-            # carries an upload_processor reference. The service's StateAuditor
-            # picks up ball_tracking_complete here and queues the upload via
-            # the service's UploadProcessor. For homegrown, in-process
-            # BallTrackingProcessor still calls upload_processor.add_work
-            # directly, so this branch is a no-op (the work item already
-            # exists in the queue).
-            elif dir_state.status == "ball_tracking_complete":
+            # Check for videos to upload. Accept BOTH completion statuses:
+            # ``ball_tracking_complete`` (legacy) and ``pipeline_complete`` (the
+            # config-driven path). Cross-app handoff: when ball-tracking/pipeline
+            # runs in the tray (autocam) the tray's processor sets this status
+            # but carries no upload_processor reference; the service's
+            # StateAuditor picks it up here and queues the upload via the
+            # service's UploadProcessor. For in-process service runs the
+            # processor already queued the upload directly, so this branch is a
+            # harmless no-op (the upload queue dedupes).
+            elif dir_state.status in ("ball_tracking_complete", "pipeline_complete"):
                 await self._queue_upload(group_dir)
 
             # Check for not_a_game status (user confirmed there was no match)
@@ -318,6 +344,18 @@ class StateAuditor(PollingProcessor):
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
+
+    def _post_trim_processing_active(self) -> bool:
+        """True when a post-trim processing stage owns ``trimmed`` groups.
+
+        Either the config-driven pipeline (``[PIPELINE]``) or the legacy
+        ball-tracking path. When both are off, a trimmed group skips straight
+        to upload.
+        """
+        pipeline = getattr(self.config, "pipeline", None)
+        if pipeline is not None and pipeline.is_active():
+            return True
+        return bool(self.config.ball_tracking.enabled)
 
     async def _trigger_match_info_flow(
         self, group_dir: str, combined_path: str

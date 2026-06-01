@@ -28,10 +28,14 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from video_grouper.pipeline import create_step, get_step_meta
 from video_grouper.pipeline.base import StepContext, StepSpec
 from video_grouper.pipeline.manifest import PipelineManifest
+
+if TYPE_CHECKING:
+    from video_grouper.pipeline.resources import ResourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +76,15 @@ def fingerprint(spec: StepSpec) -> str:
 
 
 class PipelineRunner:
-    def __init__(self, specs: list[StepSpec], runtime: str = "service"):
+    def __init__(
+        self,
+        specs: list[StepSpec],
+        runtime: str = "service",
+        resource_manager: "ResourceManager | None" = None,
+    ):
         self.specs = list(specs)
         self.runtime = runtime
+        self.resource_manager = resource_manager
 
     async def run(
         self, input_path: str, output_path: str, ctx: StepContext
@@ -146,7 +156,7 @@ class PipelineRunner:
             before = dict(manifest.artifacts)
             manifest.mark_running(spec.step_id, spec.type, fp, self.runtime)
             try:
-                ok = await step.run(manifest, ctx)
+                ok = await self._run_step(step, manifest, ctx)
             except Exception as e:  # noqa: BLE001 — surface as a failed step
                 logger.exception("pipeline: step %s raised", spec.step_id)
                 return self._fail(manifest, spec.step_id, f"exception: {e}", spec.type)
@@ -194,6 +204,19 @@ class PipelineRunner:
         return PipelineResult("complete")
 
     # ------------------------------------------------------------------
+
+    async def _run_step(
+        self, step, manifest: PipelineManifest, ctx: StepContext
+    ) -> bool:
+        """Run *step*, serialized on its declared resources when a manager is set.
+
+        With no resource manager — or a step that declares no resources — this is
+        a transparent passthrough, so the pure-sequencing tests stay unaffected.
+        """
+        if self.resource_manager is not None and step.resources:
+            async with self.resource_manager.acquire(step.resources):
+                return await step.run(manifest, ctx)
+        return await step.run(manifest, ctx)
 
     def _recorded_outputs_valid(self, manifest: PipelineManifest, step_id: str) -> bool:
         return all(_nonempty_file(p) for p in manifest.produced_paths(step_id).values())

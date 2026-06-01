@@ -20,6 +20,10 @@ def temp_storage():
 def mock_config():
     """Create a mock config for testing."""
     config = Mock()
+    # Default: the config-driven pipeline is OFF (matches the real default
+    # PipelineConfig(enabled=False)), so the legacy ball_tracking gate decides
+    # whether a trimmed group skips straight to upload.
+    config.pipeline.is_active.return_value = False
     return config
 
 

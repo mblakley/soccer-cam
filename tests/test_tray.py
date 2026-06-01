@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication
 from video_grouper.tray.main import SystemTrayIcon
 from video_grouper.utils.config import Config, AppConfig, StorageConfig
 from video_grouper.ball_tracking.config import BallTrackingConfig
+from video_grouper.pipeline.config import PipelineConfig
 
 
 # We need a QApplication instance to test PyQt components
@@ -41,6 +42,10 @@ def mock_config(tmp_path):
     config.ball_tracking = MagicMock(spec=BallTrackingConfig)
     config.ball_tracking.enabled = True
     config.ball_tracking.provider = "autocam_gui"
+    # Config-driven pipeline OFF by default — this fixture exercises the legacy
+    # autocam_gui ball-tracking tray path.
+    config.pipeline = MagicMock(spec=PipelineConfig)
+    config.pipeline.is_active.return_value = False
     config.paths = MagicMock()
     config.paths.shared_data_path = str(tmp_path / "shared")
     return config

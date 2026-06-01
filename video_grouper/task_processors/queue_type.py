@@ -14,5 +14,6 @@ class QueueType(Enum):
     NTFY = "ntfy"
     YOUTUBE = "youtube"
     BALL_TRACKING = "ball_tracking"
+    PIPELINE = "pipeline"
     CLIP_REQUEST = "clip_request"
     CLIPS = "clips"

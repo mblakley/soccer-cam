@@ -53,6 +53,17 @@ class PipelineConfig(BaseModel):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
+    def is_active(self, team_name: str | None = None) -> bool:
+        """True when the pipeline is enabled and resolves to at least one step.
+
+        This is the single predicate the orchestrator / video processor / state
+        auditor key on to decide whether the config-driven pipeline owns a
+        ``trimmed`` group (vs. the legacy ball-tracking path or a straight
+        skip-to-upload). Keeping it here avoids every call site re-deriving
+        ``enabled and ordered_steps()``.
+        """
+        return bool(self.enabled and self.ordered_steps(team_name))
+
     def ordered_steps(self, team_name: str | None = None) -> list[StepSpec]:
         """Return the configured steps as runner-ready :class:`StepSpec`s, in order.
 

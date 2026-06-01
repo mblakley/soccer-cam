@@ -54,7 +54,8 @@ class TestQueueType:
 
     def test_enum_iteration(self):
         all_types = list(QueueType)
-        assert len(all_types) == 8
+        assert len(all_types) == 9
         assert QueueType.BALL_TRACKING in all_types
+        assert QueueType.PIPELINE in all_types
         assert QueueType.YOUTUBE in all_types
         assert QueueType.CLIPS in all_types

@@ -21,6 +21,7 @@ from .tasks.upload.youtube_upload_task import YoutubeUploadTask
 from .tasks.clip.clip_request_task import ClipRequestTask
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
+from .tasks.pipeline.pipeline_task import PipelineTask
 
 from video_grouper.task_processors.task_registry import task_registry
 
@@ -36,6 +37,10 @@ def _register_common_tasks() -> None:
     task_registry.register_task(ClipRequestTask)
     task_registry.register_task(ClipExtractionTask)
     task_registry.register_task(HighlightCompilationTask)
+    # PipelineTask is import-light (the manifest carries step state and the
+    # runner constructs steps lazily), so both the service and tray bundles
+    # register it — the tray runs tray-runtime steps (e.g. autocam) from it.
+    task_registry.register_task(PipelineTask)
 
 
 def register_service_tasks() -> None:

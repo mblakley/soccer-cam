@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext, StepSpec
 from video_grouper.pipeline.manifest import PipelineManifest
+from video_grouper.pipeline.resources import ResourceManager
 from video_grouper.pipeline.runner import PipelineRunner
 
 RUN_COUNTS: dict[str, int] = {}
@@ -140,8 +142,30 @@ class StepUnavail(PipelineStep):
         return True
 
 
+_GPU_STATE = {"active": 0, "max": 0}
+
+
+class StepGpu(PipelineStep):
+    """GPU-resource step that tracks peak concurrency (for ResourceManager tests)."""
+
+    name = "t_gpu"
+    config_model = _Cfg
+    produces = ("output_path",)
+    runtime = "service"
+    resources = ("gpu",)
+
+    async def run(self, manifest, ctx):
+        _GPU_STATE["active"] += 1
+        _GPU_STATE["max"] = max(_GPU_STATE["max"], _GPU_STATE["active"])
+        await asyncio.sleep(0.02)
+        _GPU_STATE["active"] -= 1
+        Path(manifest.get("output_path")).write_text("out")
+        return True
+
+
 for _s in (
     StepA,
+    StepGpu,
     StepB,
     StepTray,
     StepNeedsMissing,
@@ -315,3 +339,34 @@ async def test_failure_records_correct_step_type(tmp_path):
     rec = m._find("u")
     assert rec["status"] == "failed"
     assert rec["type"] == "t_unavail"  # not the step_id "u"
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_serializes_gpu_steps_across_runs(tmp_path):
+    # The headline of this phase: a `gpu` resource (cap 1) shared across
+    # concurrently-running pipelines must serialize the gpu steps.
+    _GPU_STATE["active"] = 0
+    _GPU_STATE["max"] = 0
+    rm = ResourceManager({"gpu": 1})
+
+    async def _run(i):
+        d = tmp_path / f"g{i}"
+        d.mkdir()
+        return await PipelineRunner([_spec("g", "t_gpu")], resource_manager=rm).run(
+            str(d / "in.mp4"), str(d / "out.mp4"), _ctx(d)
+        )
+
+    results = await asyncio.gather(_run(0), _run(1), _run(2))
+    assert all(r.ok for r in results)
+    assert _GPU_STATE["max"] == 1  # never two gpu steps at once
+
+
+@pytest.mark.asyncio
+async def test_runner_without_manager_runs_resource_step(tmp_path):
+    # No manager -> resource gating is a transparent passthrough.
+    _GPU_STATE["active"] = 0
+    _GPU_STATE["max"] = 0
+    r = await PipelineRunner([_spec("g", "t_gpu")]).run(
+        str(tmp_path / "in.mp4"), str(tmp_path / "out.mp4"), _ctx(tmp_path)
+    )
+    assert r.ok

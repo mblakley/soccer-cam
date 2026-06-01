@@ -477,6 +477,21 @@ def load_config(config_path: Path) -> Config:
     if "TEAMSNAP" in config_dict:
         config_dict["TEAMSNAP"]["teams"] = teamsnap_teams
 
+    # Legacy migration: a pre-pipeline install has a [BALL_TRACKING] section but
+    # NO [PIPELINE] section at all — auto-adopt the config-driven pipeline so it
+    # lights up the new path without hand-editing the INI. We key on the
+    # *absence of any [PIPELINE] section* (not merely absence of steps) so an
+    # explicit `[PIPELINE]\nenabled = false` — which save_config always emits —
+    # is respected as a deliberate "pipeline off" choice rather than silently
+    # re-migrated on every round-trip. The migrated dict is injected as
+    # config_dict["PIPELINE"] so model_validate builds it.
+    from video_grouper.pipeline.config import migrate_ball_tracking_to_pipeline
+
+    if "PIPELINE" not in config_dict and config_dict.get("BALL_TRACKING"):
+        migrated = migrate_ball_tracking_to_pipeline(config_dict["BALL_TRACKING"])
+        if migrated:
+            config_dict["PIPELINE"] = migrated
+
     return Config.model_validate(config_dict)
 
 
