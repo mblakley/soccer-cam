@@ -22,85 +22,20 @@ _AUTOCAM_PROCESS_NAME = "GUI.exe"
 # a GUI app and these run on a 30s discovery loop.
 _NO_WINDOW = 0x08000000
 
-# Seconds the AutoCam notification text may stay byte-identical before
-# we declare the run wedged and bail. Under healthy processing the
-# notification fluctuates every 30s poll ("* average time per frame: NN
-# [ms]"); once wedged it sits unchanged for hours. 10 min gives plenty
-# of margin if AutoCam ever briefly stabilizes on the same integer.
-STALE_NOTIFICATION_SECONDS = 600
-
 # Substrings (case-insensitive) that mark AutoCam's C-level shutdown
-# phase. When the notification gets stuck on one of these, AutoCam has
-# finished writing the output and is just slow to release the
-# FrameReader / close the GUI process. Treating that case as a hang
-# would wrongly delete a complete output; treating it as success when
-# the output file is non-trivial size is the right move.
+# phase. When the notification reaches one of these AND the output
+# file is at expected size, AutoCam has finished writing and is just
+# tearing down the FrameReader / GUI process. This build never emits
+# "finished processing" on its own, so framereader_close is the
+# authoritative end-of-run signal.
 _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
-
-# Sentinel file written next to the output mp4 when AutoCam actually
-# finished cleanly. File size alone is not a reliable "is this run
-# complete?" signal -- a crashed-mid-pass AutoCam leaves a partial
-# output that's plenty big (observed 2026-05-31: 657 MB partial at
-# 22.7% processed got marked complete via the exit-detection branch).
-# Three code paths consult this sentinel:
-#   1. The top-of-function short-circuit ("output already exists,
-#      skipping re-run")
-#   2. The exit-detection fallback in the poll loop ("PIDs dead +
-#      output exists = success")
-#   3. The Fix C shutdown-marker branch ("notification stuck on
-#      FrameReader_close + output exists = success")
-# Path 3 WRITES the sentinel on success. Path 1 and 2 require it
-# alongside the output. If the output exists without a sentinel, treat
-# it as a crash partial: delete + re-run.
-_COMPLETION_SENTINEL_SUFFIX = ".completed"
-
-
-def _completion_sentinel_path(output_path: str) -> str:
-    return output_path + _COMPLETION_SENTINEL_SUFFIX
-
-
-def _mark_output_completed(output_path: str) -> None:
-    """Write the completion sentinel next to a successful AutoCam output.
-
-    Idempotent. Logs a warning on OSError (e.g., disk full); the
-    failure mode is conservative -- a missing sentinel forces re-run
-    on the next discovery rather than uploading a possibly-truncated
-    video.
-    """
-    sentinel = _completion_sentinel_path(output_path)
-    try:
-        # Touch-style: open for append creates if missing, no truncation.
-        with open(sentinel, "a"):
-            pass
-    except OSError as e:
-        logger.warning(
-            "Could not write completion sentinel %s: %s "
-            "(output stays valid on disk; next attempt will re-run AutoCam)",
-            sentinel,
-            e,
-        )
-
-
-def _has_completion_sentinel(output_path: str) -> bool:
-    return os.path.isfile(_completion_sentinel_path(output_path))
-
-
-def _remove_completion_sentinel(output_path: str) -> None:
-    """Remove the sentinel; tolerated to fail (it just blocks the
-    short-circuit, which is the safe direction)."""
-    try:
-        os.remove(_completion_sentinel_path(output_path))
-    except OSError:
-        pass
 
 
 def _taskkill_autocam_tree() -> None:
     """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
     as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
-    orphaned, eating CPU + holding the output file handle so the next
-    pass can't delete the partial. Observed 2026-05-31: two orphaned
-    autocam.exe processes after Fix C bails on a wedge, blocking
-    cleanup until manual taskkill.
+    orphaned, eating CPU and holding the output file handle so the
+    next pass can't delete the partial.
     """
     for image in ("GUI.exe", "autocam.exe"):
         subprocess.run(
@@ -546,11 +481,6 @@ def _wait_for_completion_and_cleanup(
     output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
-    # Track when the notification text last changed for stale-hang
-    # detection. Under healthy processing the text fluctuates every
-    # poll; once wedged it sits identical for hours.
-    last_notification_text: str | None = None
-    last_notification_changed_at = start_time
 
     try:
         while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
@@ -562,18 +492,50 @@ def _wait_for_completion_and_cleanup(
                 notification_text = raw_notification.lower()
                 logger.info("Autocam status: %r", raw_notification)
 
-                if notification_text != last_notification_text:
-                    last_notification_text = notification_text
-                    last_notification_changed_at = datetime.datetime.now()
+                # Shutdown-marker fast path: when AutoCam's notification
+                # contains a shutdown marker (e.g. "framereader_close"),
+                # the render pipeline has finished writing the output
+                # and is just tearing down the C-level framereader
+                # struct. The user-facing "finished processing" string
+                # is not always emitted in this build, so without this
+                # branch the loop would have to wait for GUI.exe to
+                # exit on its own -- which can take an indeterminate
+                # amount of time after the shutdown marker first
+                # appears. Treating the marker as authoritative end-of-
+                # run lets us break+taskkill within one poll.
+                if (
+                    processing_started
+                    and output_path
+                    and any(m in notification_text for m in _SHUTDOWN_MARKERS)
+                ):
+                    out_size = 0
+                    if os.path.isfile(output_path):
+                        try:
+                            out_size = os.path.getsize(output_path)
+                        except OSError:
+                            out_size = 0
+                    if out_size >= output_min_bytes:
+                        found = True
+                        logger.info(
+                            "AutoCam shutdown marker observed "
+                            "(notification=%r, output=%.1f MB); "
+                            "treating as success and breaking out.",
+                            raw_notification,
+                            out_size / 1024 / 1024,
+                        )
+                        break
 
                 if "finished processing" in notification_text:
                     found = True
                     logger.info("Detected success message: %r", raw_notification)
-                    if output_path:
-                        _mark_output_completed(output_path)
                     break
                 elif "error" in notification_text:
                     logger.error("Autocam reported an error: %r", raw_notification)
+                    if output_path and os.path.isfile(output_path):
+                        try:
+                            os.remove(output_path)
+                        except OSError:
+                            pass
                     break
                 elif (
                     "processing" in notification_text
@@ -587,19 +549,14 @@ def _wait_for_completion_and_cleanup(
 
             # Exit-detection fallback: if AutoCam's GUI processes have
             # all exited, infer success/failure from the output file
-            # rather than waiting for a notification string that may
-            # never come (some AutoCam builds end with a C-level
-            # cleanup message instead of a user-facing success).
+            # size. >= 10 MB at GUI exit = real run; below = crashed
+            # partial, delete so next attempt re-runs from scratch.
             #
-            # CRITICAL: a non-trivial output file alone is NOT proof of
-            # completion. AutoCam writes the mp4 progressively, so a
-            # crash at e.g. 23% leaves a ~600 MB partial that looks
-            # like a real video by size alone (observed 2026-05-31:
-            # Spencerport gold 2 false-completed at 22.7% with 657 MB).
-            # We require the completion sentinel (written when AutoCam
-            # actually emits its "finished processing" notification).
-            # Output without sentinel = crashed partial. Delete it so
-            # the next attempt re-runs from scratch.
+            # Size-only is safe here because mid-pass wedges (which can
+            # leave a multi-hundred-MB partial that looks like a real
+            # video) are eliminated by locking download_protocol to a
+            # single transport per session -- mixed-protocol GOP
+            # boundaries were the only known wedge trigger.
             live_pids = _live_autocam_pids(tracked_pids) if tracked_pids else None
             if tracked_pids and not live_pids:
                 if output_path and os.path.isfile(output_path):
@@ -607,20 +564,19 @@ def _wait_for_completion_and_cleanup(
                         size = os.path.getsize(output_path)
                     except OSError:
                         size = 0
-                    if size >= output_min_bytes and _has_completion_sentinel(
-                        output_path
-                    ):
+                    if size >= output_min_bytes:
                         found = True
                         logger.info(
-                            "AutoCam GUI exited and output exists with "
-                            f"completion sentinel ({size / 1024 / 1024:.1f} MB "
-                            f"at {output_path}); treating as success."
+                            "AutoCam GUI exited with output at %.1f MB; "
+                            "treating as success.",
+                            size / 1024 / 1024,
                         )
                         break
                     logger.error(
-                        f"AutoCam GUI exited with output at {size} bytes "
-                        f"but no completion sentinel -- treating as crashed "
-                        f"partial. Deleting output so next attempt re-runs."
+                        "AutoCam GUI exited with sub-threshold output at "
+                        "%d bytes -- treating as crash. Deleting so next "
+                        "attempt re-runs.",
+                        size,
                     )
                     try:
                         os.remove(output_path)
@@ -636,106 +592,12 @@ def _wait_for_completion_and_cleanup(
                             os.remove(jsonl)
                         except OSError:
                             pass
-                    _remove_completion_sentinel(output_path)
                     break
                 logger.error(
                     "AutoCam GUI exited without producing the expected "
                     f"output at {output_path}; treating as failure."
                 )
                 break
-
-            # Stale-notification hang detect: AutoCam can wedge mid-pass
-            # with the GUI process alive but no frames advancing. The
-            # notification text stays byte-identical for hours while
-            # processing has effectively stopped. Bail so the queue
-            # retry can move on.
-            #
-            # Distinguish two stuck-notification cases:
-            #   (a) Shutdown phase -- text contains a known shutdown
-            #       marker (FrameReader_close, finished processing).
-            #       AutoCam has written the output and is just slow to
-            #       release. Output is real -- treat as success.
-            #   (b) Mid-pass wedge -- text claims active progress
-            #       ("XX.X% of video processed") but is frozen. Output
-            #       is partial -- delete it before breaking so the next
-            #       attempt doesn't false-positive on the
-            #       "already-done" >= 10 MB short-circuit.
-            if (
-                processing_started
-                and last_notification_text is not None
-                and (tracked_pids is None or live_pids)
-            ):
-                stale_seconds = (
-                    datetime.datetime.now() - last_notification_changed_at
-                ).total_seconds()
-                if stale_seconds > STALE_NOTIFICATION_SECONDS:
-                    is_shutdown_marker = any(
-                        m in last_notification_text for m in _SHUTDOWN_MARKERS
-                    )
-                    out_size = 0
-                    if output_path and os.path.isfile(output_path):
-                        try:
-                            out_size = os.path.getsize(output_path)
-                        except OSError:
-                            out_size = 0
-                    if is_shutdown_marker and out_size >= output_min_bytes:
-                        found = True
-                        logger.info(
-                            "AutoCam notification stuck on shutdown marker "
-                            "for %.1f min (text=%r) and output is "
-                            "%.1f MB; treating as success.",
-                            stale_seconds / 60,
-                            last_notification_text,
-                            out_size / 1024 / 1024,
-                        )
-                        # AutoCam emitted its shutdown signal, output is
-                        # complete -- write the sentinel so future
-                        # re-discoveries short-circuit cleanly instead
-                        # of re-running the whole AutoCam pass.
-                        if output_path:
-                            _mark_output_completed(output_path)
-                        break
-                    logger.error(
-                        "AutoCam notification unchanged for %.1f minutes "
-                        "(last text: %r); treating as hung.",
-                        stale_seconds / 60,
-                        last_notification_text,
-                    )
-                    # Delete partial output on real wedge -- AutoCam was
-                    # claiming progress, so any output on disk is
-                    # incomplete. Leaving it would trip the next
-                    # attempt's >= 10 MB short-circuit into reporting
-                    # the truncated video as a successful run, which
-                    # gets it queued for YouTube upload as if it were
-                    # the real game.
-                    if output_path and os.path.isfile(output_path):
-                        try:
-                            removed_size = out_size
-                            os.remove(output_path)
-                            logger.warning(
-                                "Removed partial output %s (%.1f MB) "
-                                "after wedge to prevent false "
-                                "short-circuit on retry.",
-                                output_path,
-                                removed_size / 1024 / 1024,
-                            )
-                        except OSError as e:
-                            logger.warning(
-                                "Could not remove partial output %s after wedge: %s",
-                                output_path,
-                                e,
-                            )
-                    # Also remove the JSONL tracks sidecar so retries
-                    # don't fuse with stale tracks.
-                    jsonl_path = output_path + ".jsonl" if output_path else None
-                    if jsonl_path and os.path.isfile(jsonl_path):
-                        try:
-                            os.remove(jsonl_path)
-                        except OSError:
-                            pass
-                    if output_path:
-                        _remove_completion_sentinel(output_path)
-                    break
 
             # If processing hasn't started within 5 minutes, bail out.
             # (Skip this guard on the resume path: an in-flight pass has
@@ -812,37 +674,33 @@ def _execute_autocam_gui_automation(
     # tray crashed after AutoCam finished but before the success was
     # recorded; the in_progress task was restored from disk on the next
     # tray boot and would otherwise relaunch GUI.exe from scratch.
+    #
+    # Size-only check is safe because every failure path inside the
+    # poll loop deletes its partial output before breaking, so a >= 10
+    # MB file on disk is always a real completed run.
     if os.path.isfile(abs_output_path):
         try:
             existing_size = os.path.getsize(abs_output_path)
         except OSError:
             existing_size = 0
-        if existing_size >= 10 * 1024 * 1024 and _has_completion_sentinel(
-            abs_output_path
-        ):
+        if existing_size >= 10 * 1024 * 1024:
             logger.info(
-                "AutoCam output already exists at %s (%.1f MB) with completion "
-                "sentinel; skipping re-run.",
+                "AutoCam output already exists at %s (%.1f MB); skipping re-run.",
                 abs_output_path,
                 existing_size / 1024 / 1024,
             )
             if state is not None:
                 state.clear_autocam_run()
             return True
-        # No sentinel means either:
-        #   - sub-10MB junk from a Save-dialog overwrite-confirm dance, or
-        #   - >=10MB partial from a crashed/wedged previous AutoCam run.
-        # Either way the output is unsafe and must be deleted before
-        # relaunching -- a >=10MB partial would otherwise get false-
-        # certified as success by the exit-detection branch in the
-        # poll loop, and a sub-10MB junk file would trigger the
-        # "Confirm Save As" overlay that the dialog automation can't
-        # drive.
+        # Sub-10MB output is junk from a previous failed Save-dialog
+        # interaction; delete it before relaunching so the overwrite-
+        # confirm overlay (which the dialog automation can't drive)
+        # never appears.
         try:
             os.remove(abs_output_path)
             logger.info(
-                "Removed pre-existing AutoCam output at %s (%.1f MB, no "
-                "completion sentinel) before relaunch",
+                "Removed sub-threshold pre-existing output at %s (%.1f MB) "
+                "before relaunch",
                 abs_output_path,
                 existing_size / 1024 / 1024,
             )
@@ -852,10 +710,6 @@ def _execute_autocam_gui_automation(
                 abs_output_path,
                 e,
             )
-        # Also drop any stale sentinel if the output is gone (defense
-        # against a partial-leftover state where someone deleted the
-        # mp4 by hand but left the sentinel).
-        _remove_completion_sentinel(abs_output_path)
 
     desktop = Desktop(backend="uia")
 
