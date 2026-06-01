@@ -308,12 +308,12 @@ class StateAuditor(PollingProcessor):
                             )
 
             # Handle trimmed status - if no post-trim processing stage owns the
-            # group (neither the config-driven pipeline nor legacy ball-tracking),
-            # skip straight to upload. When either is active, leave the group at
-            # ``trimmed`` for that processor's discovery to pick up.
+            # group (the config-driven pipeline), skip straight to upload. When
+            # the pipeline is active, leave the group at ``trimmed`` for the
+            # pipeline discovery to pick up.
             if (
                 dir_state.status == "trimmed"
-                and not self._post_trim_processing_active()
+                and not self.config.post_trim_processing_active()
             ):
                 logger.info(
                     f"STATE_AUDITOR: No post-trim processing active, transitioning {group_dir} to upload"
@@ -322,14 +322,14 @@ class StateAuditor(PollingProcessor):
                 await self._queue_upload(group_dir)
 
             # Check for videos to upload. Accept BOTH completion statuses:
-            # ``ball_tracking_complete`` (legacy) and ``pipeline_complete`` (the
-            # config-driven path). Cross-app handoff: when ball-tracking/pipeline
-            # runs in the tray (autocam) the tray's processor sets this status
-            # but carries no upload_processor reference; the service's
-            # StateAuditor picks it up here and queues the upload via the
-            # service's UploadProcessor. For in-process service runs the
-            # processor already queued the upload directly, so this branch is a
-            # harmless no-op (the upload queue dedupes).
+            # ``ball_tracking_complete`` (legacy in-flight) and
+            # ``pipeline_complete`` (the config-driven path). Cross-app handoff:
+            # when a tray-runtime pipeline step (autocam) runs in the tray, the
+            # tray's processor sets this status but carries no upload_processor
+            # reference; the service's StateAuditor picks it up here and queues
+            # the upload via the service's UploadProcessor. For in-process
+            # service runs the processor already queued the upload directly, so
+            # this branch is a harmless no-op (the upload queue dedupes).
             elif dir_state.status in ("ball_tracking_complete", "pipeline_complete"):
                 await self._queue_upload(group_dir)
 
@@ -344,18 +344,6 @@ class StateAuditor(PollingProcessor):
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
-
-    def _post_trim_processing_active(self) -> bool:
-        """True when a post-trim processing stage owns ``trimmed`` groups.
-
-        Either the config-driven pipeline (``[PIPELINE]``) or the legacy
-        ball-tracking path. When both are off, a trimmed group skips straight
-        to upload.
-        """
-        pipeline = getattr(self.config, "pipeline", None)
-        if pipeline is not None and pipeline.is_active():
-            return True
-        return bool(self.config.ball_tracking.enabled)
 
     async def _trigger_match_info_flow(
         self, group_dir: str, combined_path: str

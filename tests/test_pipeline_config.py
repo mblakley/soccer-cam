@@ -255,16 +255,19 @@ executable = once.exe
 """
 
 
-def test_ball_tracking_and_pipeline_coexist(tmp_path):
+def test_explicit_pipeline_wins_over_legacy_ball_tracking(tmp_path):
+    # When BOTH [BALL_TRACKING] and an explicit [PIPELINE] are present, the
+    # pipeline wins and the legacy [BALL_TRACKING] section is dropped (it is no
+    # longer a Config field). Migration only fires when [PIPELINE] is absent.
     ini = _REQUIRED_SECTIONS + _BALL_TRACKING_LEGACY + _PIPELINE_INI
     cfg = load_config(_write(tmp_path, ini))
-    assert cfg.ball_tracking.provider == "autocam_gui"
+    assert not hasattr(cfg, "ball_tracking")
     assert cfg.pipeline.enabled is True
 
     out_path = tmp_path / "saved.ini"
     save_config(cfg, out_path)
     reloaded = load_config(out_path)
-    assert reloaded.ball_tracking.provider == "autocam_gui"
+    assert not hasattr(reloaded, "ball_tracking")
     assert [s.type for s in reloaded.pipeline.ordered_steps()] == [
         "stitch_correct",
         "detect",
@@ -307,8 +310,9 @@ def test_load_migrates_ball_tracking_when_no_pipeline_section(tmp_path):
     by_id = {s.step_id: s for s in ordered}
     assert by_id["stitch_correct"].config["stitch_profile_path"] == "/calib/flash.json"
     assert by_id["detect"].config["detect_confidence"] == "0.45"
-    # Legacy BALL_TRACKING stays available (additive — not removed).
-    assert cfg.ball_tracking.provider == "homegrown"
+    # The legacy [BALL_TRACKING] section is no longer a Config field — it is
+    # consumed by migration and dropped before model_validate.
+    assert not hasattr(cfg, "ball_tracking")
 
 
 _BALL_TRACKING_AUTOCAM_ONLY = """\

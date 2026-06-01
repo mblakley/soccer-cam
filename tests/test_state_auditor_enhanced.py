@@ -21,7 +21,7 @@ from video_grouper.utils.config import (
     ProcessingConfig,
     LoggingConfig,
 )
-from video_grouper.ball_tracking.config import BallTrackingConfig
+from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
 
 
 @pytest.fixture
@@ -435,8 +435,13 @@ class TestStateAuditorEnhanced:
             assert auditor.match_info_service.ntfy_service == auditor.ntfy_service
 
 
-class TestStateAuditorAutocamToggle:
-    """Tests for autocam-disabled behavior in state auditor."""
+class TestStateAuditorPipelineToggle:
+    """Tests for post-trim-processing toggle behavior in state auditor.
+
+    The config-driven pipeline is the sole post-trim-processing path: when it
+    is inactive a trimmed group skips straight to upload; when active the group
+    is left at ``trimmed`` for the pipeline discovery to pick up.
+    """
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
@@ -444,7 +449,7 @@ class TestStateAuditorAutocamToggle:
     @patch("video_grouper.task_processors.state_auditor.DirectoryState")
     @patch("os.path.exists")
     @pytest.mark.asyncio
-    async def test_trimmed_skips_to_upload_when_autocam_disabled(
+    async def test_trimmed_skips_to_upload_when_pipeline_inactive(
         self,
         mock_exists,
         mock_dir_state,
@@ -453,7 +458,8 @@ class TestStateAuditorAutocamToggle:
         mock_teamsnap,
         tmp_path,
     ):
-        """When autocam is disabled, trimmed dirs transition to autocam_complete and queue upload."""
+        """When the pipeline is inactive, trimmed dirs transition to the
+        completion sentinel and queue upload."""
         config = Config(
             cameras=[
                 CameraConfig(
@@ -480,7 +486,6 @@ class TestStateAuditorAutocamToggle:
             ),
             youtube=YouTubeConfig(enabled=True),
             cloud_sync=CloudSyncConfig(enabled=True),
-            ball_tracking=BallTrackingConfig(enabled=False),
         )
 
         mock_teamsnap.return_value.enabled = True
@@ -525,7 +530,7 @@ class TestStateAuditorAutocamToggle:
     @patch("video_grouper.task_processors.state_auditor.DirectoryState")
     @patch("os.path.exists")
     @pytest.mark.asyncio
-    async def test_trimmed_not_skipped_when_autocam_enabled(
+    async def test_trimmed_not_skipped_when_pipeline_active(
         self,
         mock_exists,
         mock_dir_state,
@@ -534,7 +539,7 @@ class TestStateAuditorAutocamToggle:
         mock_teamsnap,
         tmp_path,
     ):
-        """When autocam is enabled, trimmed dirs are left for autocam discovery."""
+        """When the pipeline is active, trimmed dirs are left for pipeline discovery."""
         config = Config(
             cameras=[
                 CameraConfig(
@@ -561,6 +566,13 @@ class TestStateAuditorAutocamToggle:
             ),
             youtube=YouTubeConfig(enabled=True),
             cloud_sync=CloudSyncConfig(enabled=True),
+            pipeline=PipelineConfig(
+                enabled=True,
+                steps=["s1"],
+                step_specs={
+                    "s1": PipelineStepSpec(step_id="s1", type="track", config={})
+                },
+            ),
         )
 
         mock_teamsnap.return_value.enabled = True

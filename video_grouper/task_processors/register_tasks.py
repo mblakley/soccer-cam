@@ -1,10 +1,11 @@
 """Register task types with the task registry.
 
-The service and tray bundles need different ball-tracking task classes:
-the service runs the homegrown ML pipeline (PyAV / ONNX / CV2) while the
-tray spawns the external AutoCam GUI. Mixing both into one registration
-function would force the tray to import ``av``, which the tray bundle
-deliberately excludes — see VideoGrouper.spec ``TRAY_EXCLUDES``.
+All task types are import-light enough for both the service and the tray
+bundle: the config-driven pipeline's work item (:class:`PipelineTask`) carries
+only data (the per-group manifest owns step state, and the
+:class:`~video_grouper.pipeline.runner.PipelineRunner` constructs steps lazily),
+so no heavy ML dependency (``av`` / ``onnxruntime`` / ``cv2``) is imported at
+registration time.
 
 Entry points pick the right registration:
 
@@ -27,7 +28,7 @@ from video_grouper.task_processors.task_registry import task_registry
 
 
 def _register_common_tasks() -> None:
-    """Register tasks shared by every bundle (no heavy ML deps)."""
+    """Register every task type. None pull heavy ML deps at import time."""
     task_registry.register_task(CombineTask)
     task_registry.register_task(TrimTask)
     task_registry.register_task(GameStartTask)
@@ -44,40 +45,19 @@ def _register_common_tasks() -> None:
 
 
 def register_service_tasks() -> None:
-    """Service-side registration — includes both ball-tracking task types.
-
-    The homegrown task pulls in PyAV at module-import time; that's expected
-    in the service bundle. Externally-driven tasks are registered too
-    because a service-only deploy on Linux/Docker can still drive a remote
-    AutoCam-equivalent provider via the same task class.
-    """
+    """Service-side registration."""
     _register_common_tasks()
-    # Lazy-import inside the function so importing this module doesn't
-    # drag av into callers that only need register_tray_tasks.
-    from .tasks.ball_tracking.ball_tracking_task import BallTrackingTask
-    from .tasks.ball_tracking.external_ball_tracking_task import (
-        ExternalBallTrackingTask,
-    )
-
-    task_registry.register_task(BallTrackingTask)
-    task_registry.register_task(ExternalBallTrackingTask)
 
 
 def register_tray_tasks() -> None:
-    """Tray-side registration — external ball-tracking only.
+    """Tray-side registration.
 
     The tray bundle excludes onnxruntime / cv2 / av / googleapiclient
-    (see VideoGrouper.spec ``TRAY_EXCLUDES``), so the homegrown task
-    cannot be loaded here even on demand. The autocam_gui provider runs
-    the external AutoCam process via pywinauto and needs no inference
-    stack of its own.
+    (see VideoGrouper.spec ``TRAY_EXCLUDES``); every registered task here is
+    import-light, and the pipeline runner only constructs the heavy steps
+    lazily on the service side.
     """
     _register_common_tasks()
-    from .tasks.ball_tracking.external_ball_tracking_task import (
-        ExternalBallTrackingTask,
-    )
-
-    task_registry.register_task(ExternalBallTrackingTask)
 
 
 # Back-compat alias. Older call sites assume one global registration that

@@ -1,7 +1,6 @@
 """Discovery processor that scans for trimmed groups and queues the pipeline.
 
-The pipeline-era analogue of :class:`BallTrackingDiscoveryProcessor`. Each
-``trimmed`` group gets a :class:`PipelineTask`; the
+Each ``trimmed`` group gets a :class:`PipelineTask`; the
 :class:`PipelineProcessor` then resolves and runs the configured steps.
 
 Stuck-upload recovery accepts BOTH completion statuses — ``pipeline_complete``
@@ -19,7 +18,7 @@ from pathlib import Path
 
 from .base_polling_processor import PollingProcessor
 from .tasks.pipeline import PipelineTask
-from .tasks.ball_tracking.utils import get_ball_tracking_io_paths
+from .tasks.pipeline.utils import get_ball_tracking_io_paths
 from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)

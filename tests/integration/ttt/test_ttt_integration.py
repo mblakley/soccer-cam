@@ -893,7 +893,7 @@ class TestStandaloneOperation:
         config.ttt.job_polling_enabled = True
         config.ttt.machine_name = "test"
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
-        config.ball_tracking.enabled = False
+        config.pipeline.is_active.return_value = False
 
         processor = TTTJobProcessor(
             storage_path=tempfile.mkdtemp(),
@@ -1011,7 +1011,7 @@ class TestGracefulDegradation:
         config.ttt.job_polling_enabled = True
         config.ttt.machine_name = "test"
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
-        config.ball_tracking.enabled = False
+        config.pipeline.is_active.return_value = False
 
         processor = TTTJobProcessor(
             storage_path=tempfile.mkdtemp(),

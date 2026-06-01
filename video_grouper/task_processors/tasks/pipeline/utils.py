@@ -1,4 +1,4 @@
-"""Shared utilities for ball-tracking tasks/processors."""
+"""Shared utilities for the config-driven pipeline tasks/processors."""
 
 from __future__ import annotations
 

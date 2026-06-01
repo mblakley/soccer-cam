@@ -1,6 +1,6 @@
 """PipelineRunner — run an ordered list of steps against one game's manifest.
 
-Replaces ``HomegrownProvider.run``. Responsibilities:
+Responsibilities:
 
 - **Order + handoff:** run each step in order. A step whose ``runtime`` doesn't
   match this runner's runtime is a cross-session handoff point — mark it

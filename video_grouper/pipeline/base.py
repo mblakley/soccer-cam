@@ -28,8 +28,6 @@ if TYPE_CHECKING:
 class StepContext:
     """Runtime context passed to :meth:`PipelineStep.run`.
 
-    Promoted from the old ``ball_tracking.ProviderContext``.
-
     Attributes:
         group_dir: Absolute path to the game's video-group directory. The
             manifest and all per-step artifacts live here.

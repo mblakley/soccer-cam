@@ -95,12 +95,13 @@ class VideoProcessor(QueueProcessor):
                 if item.task_type == "combine":
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
                 elif (
-                    item.task_type == "trim" and not self._post_trim_processing_active()
+                    item.task_type == "trim"
+                    and not self.config.post_trim_processing_active()
                 ):
-                    # No processing stage (legacy ball-tracking OR the
-                    # config-driven pipeline) owns this group, so skip straight
-                    # to upload. When either is active, leave the group at
-                    # ``trimmed`` for that processor's discovery to pick up.
+                    # No processing stage (the config-driven pipeline) owns this
+                    # group, so skip straight to upload. When the pipeline is
+                    # active, leave the group at ``trimmed`` for the pipeline
+                    # discovery to pick up.
                     asyncio.create_task(self._on_trim_complete(item.get_item_path()))
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
@@ -182,27 +183,21 @@ class VideoProcessor(QueueProcessor):
                 f"VIDEO: Error in post-combine transition for {group_dir}: {e}"
             )
 
-    def _post_trim_processing_active(self) -> bool:
-        """True when a post-trim processing stage owns ``trimmed`` groups.
-
-        Either the config-driven pipeline (``[PIPELINE]``) or the legacy
-        ball-tracking path. When both are off, the trimmed group skips straight
-        to upload via :meth:`_on_trim_complete`.
-        """
-        pipeline = getattr(self.config, "pipeline", None)
-        if pipeline is not None and pipeline.is_active():
-            return True
-        return bool(self.config.ball_tracking.enabled)
-
     async def _on_trim_complete(self, group_dir: str) -> None:
-        """Skip ball-tracking and transition directly to upload when disabled."""
+        """Skip post-trim processing and transition directly to upload.
+
+        Called when no post-trim processing stage (the config-driven pipeline)
+        is active. Writes the existing ``ball_tracking_complete`` sentinel
+        (kept for on-disk back-compat with in-flight groups) and queues upload.
+        """
         try:
             from video_grouper.models import DirectoryState
 
             dir_state = DirectoryState(group_dir)
             await dir_state.update_group_status("ball_tracking_complete")
             logger.info(
-                f"VIDEO: Ball tracking disabled, set {group_dir} to ball_tracking_complete"
+                f"VIDEO: No post-trim processing active, set {group_dir} to "
+                "ball_tracking_complete"
             )
 
             if self.config.youtube.enabled and self.upload_processor:

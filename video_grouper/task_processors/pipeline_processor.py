@@ -5,8 +5,7 @@ Drains the PIPELINE queue, runs each game through its configured
 flips the group's ``state.json`` to ``pipeline_complete`` and (when YouTube is
 enabled) hands off to the upload processor.
 
-This is the pipeline-era analogue of :class:`BallTrackingProcessor`. It runs in
-one of two runtimes:
+It runs in one of two runtimes:
 
 * ``service`` — Session-0-safe compute steps (stitch_correct, detect, track,
   render). A tray-runtime step (e.g. autocam) encountered here returns
@@ -17,7 +16,7 @@ one of two runtimes:
 Cross-runtime handoff is mediated entirely by the per-group manifest, so the
 two runtimes resume each other without direct coordination.
 
-Concurrency: like the legacy processor, this drains one game at a time
+Concurrency: this drains one game at a time
 (``_semaphore`` capacity 1). Cross-game parallelism is future work; the shared
 :class:`~video_grouper.pipeline.resources.ResourceManager` is the seam for it —
 it already serializes GPU/UI-bound steps so several PipelineProcessors (or a
@@ -169,7 +168,7 @@ class PipelineProcessor(QueueProcessor):
     def _read_team_name(group_dir: Path) -> str | None:
         """Read team_name from match_info.ini if present, else None.
 
-        Mirrors BallTrackingDiscoveryProcessor._read_team_name so the processor
+        Mirrors PipelineDiscoveryProcessor._read_team_name so the processor
         can recover a team name when a task arrives without one.
         """
         match_info_path = group_dir / "match_info.ini"

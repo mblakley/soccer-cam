@@ -488,14 +488,32 @@ class TestVideoGrouperAppRefactored:
             shutdown_app(app)
 
 
-class TestBallTrackingPlacement:
-    """Phase 0a: ball-tracking processors are gated by [BALL_TRACKING].provider."""
+class TestPipelinePlacement:
+    """The config-driven pipeline is the sole post-trim-processing path.
 
-    def _config_with_ball_tracking(self, temp_storage, *, enabled, provider):
-        """Build a Config that toggles ball_tracking + provider."""
+    When [PIPELINE] is active the service constructs the PipelineProcessor +
+    PipelineDiscoveryProcessor and adds them to the orchestrator's processor
+    list; when it is inactive, neither is constructed.
+    """
+
+    def _config_with_pipeline(self, temp_storage, *, enabled, step_type="track"):
+        """Build a Config that toggles the [PIPELINE] section.
+
+        A single service-runtime step (``track``) keeps ``is_active()`` true
+        without pulling in a tray-runtime step (which is refused on non-Windows).
+        """
         from video_grouper.utils.config import Config
-        from video_grouper.ball_tracking.config import BallTrackingConfig
+        from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
 
+        pipeline = PipelineConfig(
+            enabled=enabled,
+            steps=["s1"] if enabled else [],
+            step_specs=(
+                {"s1": PipelineStepSpec(step_id="s1", type=step_type, config={})}
+                if enabled
+                else {}
+            ),
+        )
         return Config(
             cameras=[
                 CameraConfig(
@@ -521,67 +539,40 @@ class TestBallTrackingPlacement:
             youtube=YouTubeConfig(enabled=True),
             autocam=AutocamConfig(enabled=False),
             cloud_sync=CloudSyncConfig(enabled=False),
-            ball_tracking=BallTrackingConfig(enabled=enabled, provider=provider),
+            pipeline=pipeline,
         )
 
-    def test_disabled_does_not_instantiate_processors(self, temp_storage, mock_camera):
-        cfg = self._config_with_ball_tracking(
-            temp_storage, enabled=False, provider="homegrown"
-        )
+    def test_inactive_does_not_instantiate_processors(self, temp_storage, mock_camera):
+        cfg = self._config_with_pipeline(temp_storage, enabled=False)
         app = VideoGrouperApp(cfg, camera=mock_camera)
         try:
-            assert app.ball_tracking_processor is None
-            assert app.ball_tracking_discovery_processor is None
-            assert app.ball_tracking_processor not in app.processors
+            assert app.pipeline_processor is None
+            assert app.pipeline_discovery_processor is None
+            assert app.pipeline_processor not in app.processors
         finally:
             shutdown_app(app)
 
-    def test_homegrown_provider_runs_in_service(self, temp_storage, mock_camera):
-        cfg = self._config_with_ball_tracking(
-            temp_storage, enabled=True, provider="homegrown"
-        )
+    def test_active_pipeline_runs_in_service(self, temp_storage, mock_camera):
+        cfg = self._config_with_pipeline(temp_storage, enabled=True)
         app = VideoGrouperApp(cfg, camera=mock_camera)
         try:
-            assert app.ball_tracking_processor is not None
-            assert app.ball_tracking_discovery_processor is not None
+            assert app.pipeline_processor is not None
+            assert app.pipeline_discovery_processor is not None
             # Both join the orchestrator's processor list so they start
             # alongside the rest of the pipeline.
-            assert app.ball_tracking_processor in app.processors
-            assert app.ball_tracking_discovery_processor in app.processors
-            # When the service runs ball-tracking it has a direct upload
-            # chain (faster than waiting for the next StateAuditor pass).
-            assert app.ball_tracking_processor.upload_processor is app.upload_processor
+            assert app.pipeline_processor in app.processors
+            assert app.pipeline_discovery_processor in app.processors
+            # The service runs the pipeline with a direct upload chain.
+            assert app.pipeline_processor.upload_processor is app.upload_processor
         finally:
             shutdown_app(app)
 
-    def test_autocam_gui_provider_skipped_in_service(self, temp_storage, mock_camera):
-        """The service refuses to instantiate ball-tracking processors for
-        autocam_gui — that provider drives a Windows GUI app and only works
-        from the tray (Session 1+)."""
-        import platform
-
-        # On non-Windows, this raises at startup. Skip this test path there
-        # and let test_autocam_gui_refused_on_linux handle that case.
-        if platform.system() != "Windows":
-            pytest.skip("test_autocam_gui_refused_on_linux covers non-Windows")
-
-        cfg = self._config_with_ball_tracking(
-            temp_storage, enabled=True, provider="autocam_gui"
-        )
-        app = VideoGrouperApp(cfg, camera=mock_camera)
-        try:
-            assert app.ball_tracking_processor is None
-            assert app.ball_tracking_discovery_processor is None
-        finally:
-            shutdown_app(app)
-
-    def test_autocam_gui_refused_on_linux(self, temp_storage, mock_camera):
-        """Linux/Docker can't run AutoCam at all (Once Sport is Windows-only).
-        The service refuses to start with a clear error so the user
-        switches to provider=homegrown."""
-        cfg = self._config_with_ball_tracking(
-            temp_storage, enabled=True, provider="autocam_gui"
+    def test_tray_runtime_step_refused_on_linux(self, temp_storage, mock_camera):
+        """A tray-runtime step (autocam drives a Windows GUI app) can't run on
+        Linux/Docker. The service refuses to start with a clear error."""
+        cfg = self._config_with_pipeline(
+            temp_storage, enabled=True, step_type="autocam"
         )
         with patch("platform.system", return_value="Linux"):
-            with pytest.raises(RuntimeError, match="Windows-only"):
+            with pytest.raises(RuntimeError, match="runtime='tray'"):
                 VideoGrouperApp(cfg, camera=mock_camera)

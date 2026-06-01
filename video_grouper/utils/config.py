@@ -7,7 +7,6 @@ from typing import Dict, Optional, List
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
-from video_grouper.ball_tracking.config import BallTrackingConfig
 from video_grouper.pipeline.config import PipelineConfig
 
 logger = logging.getLogger(__name__)
@@ -213,7 +212,7 @@ class NodeConfig(BaseModel):
     worker_tokens: list[str] = Field(default_factory=list)
     # Worker-side: which capabilities this node advertises to the master.
     capabilities: list[str] = Field(
-        default_factory=lambda: ["combine", "trim", "ball_tracking"]
+        default_factory=lambda: ["combine", "trim", "pipeline"]
     )
 
     @field_validator("worker_tokens", "capabilities", mode="before")
@@ -368,9 +367,6 @@ class Config(BaseModel):
         default_factory=MomentTaggingConfig, alias="MOMENT_TAGGING"
     )
     setup: SetupConfig = Field(alias="SETUP", default_factory=SetupConfig)
-    ball_tracking: BallTrackingConfig = Field(
-        alias="BALL_TRACKING", default_factory=BallTrackingConfig
-    )
     node: NodeConfig = Field(alias="NODE", default_factory=NodeConfig)
     pipeline: PipelineConfig = Field(alias="PIPELINE", default_factory=PipelineConfig)
 
@@ -380,6 +376,16 @@ class Config(BaseModel):
     def camera(self) -> CameraConfig:
         """Convenience accessor for the first camera config."""
         return self.cameras[0]
+
+    def post_trim_processing_active(self) -> bool:
+        """True when a post-trim processing stage owns ``trimmed`` groups.
+
+        The config-driven pipeline (``[PIPELINE]``) is the sole post-trim
+        processing path. When it is inactive, a trimmed group skips straight to
+        upload.
+        """
+        pipeline = getattr(self, "pipeline", None)
+        return bool(pipeline is not None and pipeline.is_active())
 
 
 def load_config(config_path: Path) -> Config:
@@ -491,6 +497,12 @@ def load_config(config_path: Path) -> Config:
         migrated = migrate_ball_tracking_to_pipeline(config_dict["BALL_TRACKING"])
         if migrated:
             config_dict["PIPELINE"] = migrated
+
+    # The legacy [BALL_TRACKING] section (and its nested sub-sections) is no
+    # longer a Config field — drop it after migration so it isn't passed to
+    # model_validate. Migration above has already lifted anything worth keeping
+    # into [PIPELINE].
+    config_dict.pop("BALL_TRACKING", None)
 
     return Config.model_validate(config_dict)
 
@@ -621,7 +633,6 @@ def create_default_config(config_path: Path, storage_path: str) -> Config:
             "PLAYMETRICS": {},
             "NTFY": {},
             "YOUTUBE": {},
-            "BALL_TRACKING": {"enabled": False},
             "CLOUD_SYNC": {},
             "TTT": {},
             "SETUP": {"onboarding_completed": False},

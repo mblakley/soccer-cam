@@ -152,8 +152,7 @@ class TestServiceRegistration:
             "test-machine",
             {
                 "ffmpeg": True,
-                "ball_tracking": True,
-                "ball_tracking_provider": "autocam_gui",
+                "pipeline": False,
                 "camera_type": "dahua",
                 "camera_ip": "127.0.0.1",
             },
