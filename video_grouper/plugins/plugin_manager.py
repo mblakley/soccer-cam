@@ -4,6 +4,15 @@ Downloads per-user signed bundles from TTT, verifies the Ed25519 signature on
 the manifest, extracts into a per-plugin cache directory, and imports the
 plugin module via importlib. Re-verifies at load time so expired or tampered
 manifests are refused even after the original download passed.
+
+PLUGIN CONTRACT
+---------------
+A TTT premium plugin is a package whose ``plugin/__init__.py`` is expected to
+call :func:`video_grouper.pipeline.register_step` at import time, so importing
+it surfaces its steps by name in the pipeline config. Built-in, community
+(unsigned, local — see :mod:`video_grouper.plugins.community_loader`), and TTT
+premium plugins all feed the SAME registry; the load order is built-in ->
+community -> TTT (last writer wins on a name collision).
 """
 
 import importlib
@@ -142,9 +151,18 @@ class PluginManager:
     # ------------------------------------------------------------------
 
     def load_plugins(self) -> None:
-        """Load all cached plugin modules after re-verifying them on disk."""
+        """Load all cached plugin modules after re-verifying them on disk.
+
+        Each plugin's ``plugin/__init__.py`` is expected to call
+        :func:`video_grouper.pipeline.register_step` at import time so its steps
+        surface as pipeline steps. Loads run AFTER built-in + community
+        registration, so a premium plugin can intentionally shadow an
+        earlier-tier step of the same name.
+        """
         if not self.plugins_dir.exists():
             return
+
+        from video_grouper.pipeline import list_steps
 
         user_id = self.ttt_client.current_user_id()
         if not user_id:
@@ -174,9 +192,15 @@ class PluginManager:
                 str_path = str(plugin_module_dir.parent)
                 if str_path not in sys.path:
                     sys.path.insert(0, str_path)
+                steps_before = set(list_steps())
                 module = importlib.import_module("plugin")
                 self._loaded_plugins[plugin_dir.name] = module
-                logger.info("Loaded plugin: %s", plugin_dir.name)
+                added = sorted(set(list_steps()) - steps_before)
+                logger.info(
+                    "Loaded plugin: %s%s",
+                    plugin_dir.name,
+                    f" (added steps: {', '.join(added)})" if added else "",
+                )
 
                 if str_path in sys.path:
                     sys.path.remove(str_path)

@@ -134,10 +134,33 @@ class VideoGrouperApp:
         self.pipeline_discovery_processor = None
         self.ball_tracking_processor = None
         self.ball_tracking_discovery_processor = None
+        self.community_plugin_loader = None
         bt = self.config.ball_tracking
         if self.config.pipeline.is_active():
             # Side-effect import: registers the built-in pipeline steps.
             import video_grouper.pipeline.register_steps  # noqa: F401
+
+            # Community (unsigned, local, opt-in) plugins register next, before
+            # the TTT premium loader runs later in the TTT-enabled block. Load
+            # order: built-in -> community -> TTT (last writer wins on a name
+            # collision). Wrapped so a loader failure never crashes startup.
+            if self.config.pipeline.community_plugins_enabled:
+                try:
+                    from video_grouper.plugins.community_loader import (
+                        CommunityPluginLoader,
+                    )
+
+                    self.community_plugin_loader = CommunityPluginLoader(
+                        Path(self.storage_path) / "plugins" / "community"
+                    )
+                    self.community_plugin_loader.load_plugins()
+                    logger.info(
+                        "Community plugins enabled, %d loaded",
+                        len(self.community_plugin_loader.get_loaded()),
+                    )
+                except Exception:
+                    logger.warning("Failed to load community plugins", exc_info=True)
+
             from video_grouper.task_processors.pipeline_processor import (
                 PipelineProcessor,
             )

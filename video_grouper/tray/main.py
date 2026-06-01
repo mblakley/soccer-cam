@@ -317,8 +317,33 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.pipeline_discovery_processor = None
         self.ball_tracking_processor = None
         self.ball_tracking_discovery_processor = None
+        self.community_plugin_loader = None
 
         if self.config and self.config.pipeline.is_active():
+            # Register built-in steps, then community (unsigned, local, opt-in)
+            # plugins, so community steps are available in the tray runtime too
+            # (matching the service). Load order: built-in -> community -> TTT.
+            # community_loader is stdlib-only, so this stays import-light.
+            if self.config.pipeline.community_plugins_enabled:
+                try:
+                    import video_grouper.pipeline.register_steps  # noqa: F401
+                    from video_grouper.plugins.community_loader import (
+                        CommunityPluginLoader,
+                    )
+
+                    self.community_plugin_loader = CommunityPluginLoader(
+                        Path(self.config.storage.path) / "plugins" / "community"
+                    )
+                    self.community_plugin_loader.load_plugins()
+                    logger.info(
+                        "Tray: community plugins enabled, %d loaded",
+                        len(self.community_plugin_loader.get_loaded()),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Tray: failed to load community plugins", exc_info=True
+                    )
+
             if self._pipeline_has_tray_step():
                 from video_grouper.task_processors.pipeline_processor import (
                     PipelineProcessor,
