@@ -280,6 +280,11 @@ class NtfyAPI:
             # Extract event type and message
             event_type = response_data.get("event")
             message = response_data.get("message", "")
+            # NTFY stamps every message with the server-side receive time
+            # (epoch seconds). Thread it through so the service can tell a
+            # fresh user tap from a stale one replayed by ?since=24h on
+            # reconnect. Absent for synthetic/internal events → None.
+            server_time = response_data.get("time")
 
             # For message events (regular messages)
             if event_type == "message":
@@ -331,18 +336,18 @@ class NtfyAPI:
                     ]
                 ):
                     logger.info(f"Detected YES response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
                 elif any(
                     keyword in lower_message
                     for keyword in ["no", "not yet", "continue"]
                 ):
                     logger.info(f"Detected NO response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
                 elif message.strip():
                     # Route any non-empty text to the service callback
                     # (e.g. team name, opponent name, location replies)
                     logger.info(f"Routing free-text response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
 
             # For action events (button clicks)
             elif event_type in ["action", "click", "response"]:
@@ -375,7 +380,9 @@ class NtfyAPI:
                     if message_id:
                         self._handle_specific_response(message_id, input_text)
                     else:
-                        self._handle_response({"response": input_text})
+                        self._handle_response(
+                            {"response": input_text}, server_time=server_time
+                        )
                     return
 
                 # Check for game started/ended responses in any field
@@ -391,14 +398,14 @@ class NtfyAPI:
                     ]
                 ):
                     logger.info(f"Detected YES in action event: {response_data}")
-                    self._handle_response("Yes")
+                    self._handle_response("Yes", server_time=server_time)
                 elif any(
                     keyword in str(value).lower()
                     for value in response_data.values()
                     for keyword in ["no", "not yet", "continue"]
                 ):
                     logger.info(f"Detected NO in action event: {response_data}")
-                    self._handle_response("No")
+                    self._handle_response("No", server_time=server_time)
 
             elif event_type == "keepalive":
                 logger.debug(f"Received keepalive event: {response_data}")
@@ -422,13 +429,21 @@ class NtfyAPI:
                     logger.info(
                         f"Found potential response in unhandled event: {response_data}"
                     )
-                    self._handle_response(str(response_data))
+                    self._handle_response(str(response_data), server_time=server_time)
 
         except Exception as e:
             logger.error(f"Error processing NTFY response: {e}", exc_info=True)
 
-    def _handle_response(self, response: str):
-        """Handle a response to a message."""
+    def _handle_response(self, response: str, server_time: float | None = None):
+        """Handle a response to a message.
+
+        Args:
+            response: The user's response text (or a dict for structured input).
+            server_time: NTFY server receive time (epoch seconds) for this
+                message, when available. Forwarded to the service callback so
+                it can reject stale replays. None for synthetic/internal
+                responses or the legacy pending-future path.
+        """
         # First, try to handle as a pending message (for legacy compatibility)
         if self.pending_messages:
             # Find the most recent message
@@ -457,7 +472,11 @@ class NtfyAPI:
         if self.service_callback:
             logger.info(f"Routing response to service callback: {response}")
             # Use asyncio.create_task to avoid blocking
-            asyncio.create_task(self.service_callback.process_response(response))
+            asyncio.create_task(
+                self.service_callback.process_response(
+                    response, server_time=server_time
+                )
+            )
         else:
             logger.warning(
                 f"Received response but no pending messages and no service callback: {response}"

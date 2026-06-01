@@ -16,6 +16,25 @@ from ...utils.paths import get_ntfy_service_state_path
 
 logger = logging.getLogger(__name__)
 
+# A buffered response carries no group_dir of its own, so we use freshness
+# relative to task registration as an identity proxy: a response only replays
+# against a newly-registered task if it plausibly arrived AS an answer to that
+# task. This stops a stale tap from an earlier game (replayed by the listener's
+# ?since=24h reconnect) from auto-answering a different game's question.
+#
+# When we have the NTFY server timestamp (the normal phone-tap path), the tap
+# must have happened no earlier than this many seconds before the task was
+# registered. 60s comfortably covers the genuine sub-second race (the tap
+# arrives microseconds before mark_waiting_for_input finishes) while rejecting
+# taps that are minutes/hours old.
+BUFFER_FRESHNESS_WINDOW_SECONDS = 60
+
+# Fallback when a buffered response has no usable server timestamp
+# (synthetic/internal responses): only an in-flight race qualifies, so the
+# entry must have been received within this many seconds (monotonic) of the
+# task registering. We never replay an older entry on this weak signal.
+BUFFER_RACE_WINDOW_SECONDS = 10
+
 
 class NtfyService:
     """
@@ -51,9 +70,14 @@ class NtfyService:
         # finds no matching task and drops the response — and then the
         # task registers and the user's phone shows the SAME question
         # again, even though they already answered.
-        # Buffer entries are (received_at, response_text). When a new task
-        # registers we replay the buffer against it; entries older than
-        # the TTL get pruned on every check so the buffer doesn't grow.
+        # Buffer entries are (received_monotonic, server_time, response_text)
+        # where server_time is the NTFY server receive time (epoch seconds,
+        # or None if unavailable). When a new task registers we replay the
+        # buffer against it, but ONLY for entries that are fresh relative to
+        # the task's registration time (see _try_buffered_responses_for) — a
+        # stale tap from a previous game must never auto-answer a new one.
+        # Entries older than the TTL get pruned on every check so the buffer
+        # doesn't grow.
         from collections import deque
 
         self._unmatched_responses: deque = deque(maxlen=64)
@@ -495,7 +519,9 @@ class NtfyService:
         """Remove a previously registered response handler."""
         self._response_handlers.pop(key, None)
 
-    async def process_response(self, response: str) -> None:
+    async def process_response(
+        self, response: str, server_time: float | None = None
+    ) -> None:
         """
         Process a response from NTFY and route it to the appropriate pending task.
 
@@ -504,6 +530,10 @@ class NtfyService:
 
         Args:
             response: The user's response message
+            server_time: NTFY server receive time for this response (epoch
+                seconds), when available. Used to reject stale replays when the
+                response has to be buffered. None for synthetic/internal
+                responses (e.g. the mock API or registered response handlers).
         """
         logger.info(f"Processing NTFY response: {response}")
 
@@ -564,7 +594,7 @@ class NtfyService:
         import time
 
         self._prune_unmatched_buffer()
-        self._unmatched_responses.append((time.monotonic(), response))
+        self._unmatched_responses.append((time.monotonic(), server_time, response))
         logger.warning(
             f"No matching task found for response: {response} "
             f"(buffered {len(self._unmatched_responses)} unmatched responses, "
@@ -580,11 +610,48 @@ class NtfyService:
         while self._unmatched_responses and self._unmatched_responses[0][0] < cutoff:
             self._unmatched_responses.popleft()
 
+    @staticmethod
+    def _is_buffered_response_fresh(
+        server_time: float | None,
+        received_monotonic: float,
+        now_monotonic: float,
+        task_sent_at_epoch: float | None,
+    ) -> bool:
+        """Decide whether a buffered response is fresh enough to answer a task.
+
+        A response carries no group_dir, so we use freshness relative to the
+        task's registration time as an identity proxy. A response replays only
+        if it plausibly arrived AS an answer to the just-registered task:
+
+        - With an NTFY server timestamp (the normal phone-tap path), the tap
+          must have happened no earlier than BUFFER_FRESHNESS_WINDOW_SECONDS
+          before the task was registered. This rejects a tap replayed from a
+          previous game by ?since=24h on restart, while still accepting the
+          genuine sub-second race (the tap arrives microseconds before
+          mark_waiting_for_input finishes). If the task's sent_at can't be
+          parsed, fall back to the monotonic recency check below.
+        - Without a usable server timestamp (synthetic/internal responses),
+          only the genuine just-happened race qualifies: the entry must have
+          been received within BUFFER_RACE_WINDOW_SECONDS (monotonic). We never
+          replay an older entry on this weak signal.
+        """
+        if server_time is not None and task_sent_at_epoch is not None:
+            return server_time >= task_sent_at_epoch - BUFFER_FRESHNESS_WINDOW_SECONDS
+        return (now_monotonic - received_monotonic) <= BUFFER_RACE_WINDOW_SECONDS
+
     async def _try_buffered_responses_for(self, group_dir: str) -> bool:
         """Replay buffered unmatched responses against a freshly-registered task.
 
+        A buffered response is only replayed when it both matches the task type
+        AND is fresh relative to the task's registration time (see
+        _is_buffered_response_fresh). This prevents a stale answer from a
+        previous game — replayed by the listener's ?since=24h reconnect — from
+        auto-answering a newly-registered question for a different game.
+
         Returns True if a buffered response matched and was processed.
         """
+        import time
+
         self._prune_unmatched_buffer()
         if not self._unmatched_responses:
             return False
@@ -594,23 +661,47 @@ class NtfyService:
         task_type = task_data.get("task_type")
         metadata = task_data.get("task_metadata", {})
 
+        # Parse the task's registration time (epoch seconds) for the freshness
+        # check. Always written as ISO format by mark_waiting_for_input.
+        task_sent_at_epoch = None
+        sent_at_raw = task_data.get("sent_at")
+        if sent_at_raw:
+            try:
+                task_sent_at_epoch = datetime.fromisoformat(sent_at_raw).timestamp()
+            except (ValueError, TypeError):
+                task_sent_at_epoch = None
+
+        now_monotonic = time.monotonic()
+
         # Iterate a snapshot so we can mutate the deque safely.
         snapshot = list(self._unmatched_responses)
-        for received_at, response in snapshot:
-            if self._response_matches_task(group_dir, task_type, metadata, response):
+        for received_at, server_time, response in snapshot:
+            if not self._response_matches_task(
+                group_dir, task_type, metadata, response
+            ):
+                continue
+            if not self._is_buffered_response_fresh(
+                server_time, received_at, now_monotonic, task_sent_at_epoch
+            ):
                 logger.info(
-                    f"NTFY: Replaying buffered response '{response}' against "
-                    f"newly-registered task {task_type} for {group_dir}"
+                    f"NTFY: NOT replaying stale buffered response '{response}' "
+                    f"against task {task_type} for {group_dir} "
+                    f"(server_time={server_time}, task sent_at={sent_at_raw}) — "
+                    f"it predates this question, so it belongs to another game; "
+                    f"leaving it buffered to age out."
                 )
-                # Remove from buffer first so we don't loop on it.
-                try:
-                    self._unmatched_responses.remove((received_at, response))
-                except ValueError:
-                    pass
-                await self._process_task_response(
-                    group_dir, task_type, metadata, response
-                )
-                return True
+                continue
+            logger.info(
+                f"NTFY: Replaying buffered response '{response}' against "
+                f"newly-registered task {task_type} for {group_dir}"
+            )
+            # Remove from buffer first so we don't loop on it.
+            try:
+                self._unmatched_responses.remove((received_at, server_time, response))
+            except ValueError:
+                pass
+            await self._process_task_response(group_dir, task_type, metadata, response)
+            return True
         return False
 
     def _response_matches_task(
