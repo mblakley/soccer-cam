@@ -302,6 +302,19 @@ class CameraPoller(PollingProcessor):
         runt_paths = _identify_runt_recordings(files, existing_dirs)
 
         latest_end_time = None
+        latest_end_time_file = None
+        # Per-poll diagnostics so HWM stalls can be root-caused after the
+        # fact: classify every file the camera returned and emit a single
+        # summary line at end of poll. Without this, an HWM-stuck
+        # incident (5/30 runt stuck at 19:44:06 for 14+ hours, 2026-05-30
+        # tournament day) requires DEBUG logs to reconstruct.
+        counts = {
+            "new_added": 0,
+            "already_known": 0,
+            "runt": 0,
+            "home_connected": 0,
+            "unparseable": 0,
+        }
 
         # Get connected timeframes for filtering
         connected_timeframes = self.camera.get_connected_timeframes()
@@ -329,6 +342,7 @@ class CameraPoller(PollingProcessor):
                 # Isolated runt (handled before parsing end time, which may
                 # be unparseable for an aborted recording).
                 if file_info["path"] in runt_paths:
+                    counts["runt"] += 1
                     continue
 
                 file_start_time, file_end_time = _parse_recording_times(file_info)
@@ -336,6 +350,7 @@ class CameraPoller(PollingProcessor):
                     logger.warning(
                         f"CAMERA_POLLER: unparseable start time for {filename}; skipping"
                     )
+                    counts["unparseable"] += 1
                     continue
                 if file_end_time is None or file_end_time <= file_start_time:
                     # Aborted/unparseable end on a KEPT (contiguous) file — fall
@@ -371,12 +386,14 @@ class CameraPoller(PollingProcessor):
                             break
 
                 if should_skip:
+                    counts["home_connected"] += 1
                     files_to_delete.append(file_info["path"])
                     continue
 
                 # Track high-water mark from non-skipped files only
                 if latest_end_time is None or file_end_time > latest_end_time:
                     latest_end_time = file_end_time
+                    latest_end_time_file = filename
 
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs
@@ -388,10 +405,16 @@ class CameraPoller(PollingProcessor):
 
                 dir_state = DirectoryState(group_dir)
                 if dir_state.is_file_in_state(local_path):
-                    logger.debug(
-                        f"CAMERA_POLLER: File {filename} is already known. Skipping."
+                    counts["already_known"] += 1
+                    logger.info(
+                        "CAMERA_POLLER: File %s (end=%s) already known; "
+                        "HWM advanced past it, no re-download.",
+                        filename,
+                        file_end_time,
                     )
                     continue
+
+                counts["new_added"] += 1
 
                 # Store camera identity in metadata for downstream use
                 file_info["camera_name"] = self.camera.name
@@ -448,10 +471,39 @@ class CameraPoller(PollingProcessor):
                         f"CAMERA_POLLER: TTT registration failed for {os.path.basename(group_dir)}: {e}"
                     )
 
+        total_seen = sum(counts.values())
+        logger.info(
+            "CAMERA_POLLER: poll summary -- %d files seen "
+            "(new=%d already_known=%d runt=%d home_connected=%d unparseable=%d)",
+            total_seen,
+            counts["new_added"],
+            counts["already_known"],
+            counts["runt"],
+            counts["home_connected"],
+            counts["unparseable"],
+        )
+
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
             logger.info(
-                f"CAMERA_POLLER: File sync complete. New high-water mark set to: {latest_end_time}"
+                "CAMERA_POLLER: HWM advanced to %s (by file %s)",
+                latest_end_time,
+                latest_end_time_file,
+            )
+        elif total_seen > 0:
+            # Files were returned but none advanced the HWM -- all were
+            # runts, home-connected, or unparseable. The HWM stays where
+            # it is, so the next poll re-queries the same window. If
+            # this repeats for many consecutive polls, the camera has
+            # effectively stalled on a class of files the poller won't
+            # process; manual recovery (delete the offending dir + bump
+            # HWM) may be needed.
+            logger.warning(
+                "CAMERA_POLLER: %d files seen but HWM not advanced "
+                "(all filtered out by runt/home-connected/unparseable). "
+                "HWM remains at previous value; next poll will re-query "
+                "the same window.",
+                total_seen,
             )
 
     async def _get_latest_processed_time(self) -> datetime | None:

@@ -1,5 +1,6 @@
 """Tests for the CameraPoller processor."""
 
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -338,6 +339,79 @@ class TestCameraPoller:
 
         # File should not be queued again
         mock_download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_summary_logs_when_all_files_are_runts(
+        self, temp_storage, mock_config, mock_camera, caplog
+    ):
+        """When the camera returns only runts (isolated short recordings),
+        no file advances the HWM. The poll-summary log must report
+        all-files-filtered AND a warning must fire so future stalls are
+        debuggable. Regression guard for the 2026-05-30 tournament
+        incident where the HWM stuck at a runt's end_time."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/runt1.dav",
+                "startTime": "2026-05-28 09:33:28",
+                "endTime": "2026-05-28 09:33:32",  # 4s, alone -> runt
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        with caplog.at_level(
+            logging.INFO, logger="video_grouper.task_processors.camera_poller"
+        ):
+            await poller._sync_files_from_camera()
+
+        # Summary line must reflect the 1 runt + 0 of everything else.
+        assert any(
+            "poll summary -- 1 files seen" in r.message
+            and "runt=1" in r.message
+            and "new=0" in r.message
+            for r in caplog.records
+        ), f"missing or wrong poll summary, got: {[r.message for r in caplog.records]}"
+        # Warning must fire to flag the HWM-stall risk.
+        assert any(
+            "HWM not advanced" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        ), "expected HWM-not-advanced warning for all-runts case"
+
+    @pytest.mark.asyncio
+    async def test_poll_summary_logs_normal_new_file(
+        self, temp_storage, mock_config, mock_camera, caplog
+    ):
+        """A normal poll with one new file must emit a summary showing
+        new=1 and an HWM-advanced INFO line citing the file."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/normal.dav",
+                "startTime": "2026-05-28 14:00:00",
+                "endTime": "2026-05-28 14:30:00",
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        with caplog.at_level(
+            logging.INFO, logger="video_grouper.task_processors.camera_poller"
+        ):
+            await poller._sync_files_from_camera()
+
+        assert any(
+            "poll summary -- 1 files seen" in r.message and "new=1" in r.message
+            for r in caplog.records
+        )
+        assert any(
+            "HWM advanced to" in r.message and "normal.dav" in r.message
+            for r in caplog.records
+        ), "expected HWM-advanced INFO line citing the new file"
 
     def test_find_group_directory_new_group(self, temp_storage):
         """Test finding group directory when creating a new group."""
