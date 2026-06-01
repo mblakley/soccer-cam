@@ -498,12 +498,11 @@ def _wait_for_completion_and_cleanup(
                 # and is just tearing down the C-level framereader
                 # struct. The user-facing "finished processing" string
                 # is not always emitted in this build, so without this
-                # branch the loop would either wait for the
-                # 10-min stale-notification timer or for GUI.exe to
-                # exit. Observed 2026-06-01 (West Seneca): GUI.exe
-                # exited ~5 min into the shutdown phase (faster than
-                # Fairport's ~10 min) so the stale timer hadn't fired
-                # and manual taskkill was required.
+                # branch the loop would have to wait for GUI.exe to
+                # exit on its own -- which can take an indeterminate
+                # amount of time after the shutdown marker first
+                # appears. Treating the marker as authoritative end-of-
+                # run lets us break+taskkill within one poll.
                 if (
                     processing_started
                     and output_path
