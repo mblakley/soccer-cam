@@ -22,13 +22,6 @@ _AUTOCAM_PROCESS_NAME = "GUI.exe"
 # a GUI app and these run on a 30s discovery loop.
 _NO_WINDOW = 0x08000000
 
-# Seconds the AutoCam notification text may stay byte-identical before
-# we declare the run wedged and bail. Under healthy processing the
-# notification fluctuates every 30s poll ("* average time per frame: NN
-# [ms]"); once wedged it sits unchanged for hours. 10 min gives plenty
-# of margin if AutoCam ever briefly stabilizes on the same integer.
-STALE_NOTIFICATION_SECONDS = 600
-
 # Substrings (case-insensitive) that mark AutoCam's C-level shutdown
 # phase. When the notification reaches one of these AND the output
 # file is at expected size, AutoCam has finished writing and is just
@@ -41,10 +34,8 @@ _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
 def _taskkill_autocam_tree() -> None:
     """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
     as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
-    orphaned, eating CPU + holding the output file handle so the next
-    pass can't delete the partial. Observed 2026-05-31: two orphaned
-    autocam.exe processes after Fix C bails on a wedge, blocking
-    cleanup until manual taskkill.
+    orphaned, eating CPU and holding the output file handle so the
+    next pass can't delete the partial.
     """
     for image in ("GUI.exe", "autocam.exe"):
         subprocess.run(
@@ -490,11 +481,6 @@ def _wait_for_completion_and_cleanup(
     output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
-    # Track when the notification text last changed for stale-hang
-    # detection. Under healthy processing the text fluctuates every
-    # poll; once wedged it sits identical for hours.
-    last_notification_text: str | None = None
-    last_notification_changed_at = start_time
 
     try:
         while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
@@ -505,10 +491,6 @@ def _wait_for_completion_and_cleanup(
                 raw_notification = notification.window_text()
                 notification_text = raw_notification.lower()
                 logger.info("Autocam status: %r", raw_notification)
-
-                if notification_text != last_notification_text:
-                    last_notification_text = notification_text
-                    last_notification_changed_at = datetime.datetime.now()
 
                 # Shutdown-marker fast path: when AutoCam's notification
                 # contains a shutdown marker (e.g. "framereader_close"),
@@ -617,75 +599,6 @@ def _wait_for_completion_and_cleanup(
                     f"output at {output_path}; treating as failure."
                 )
                 break
-
-            # Stale-notification hang detect: AutoCam can wedge mid-pass
-            # with the GUI process alive but no frames advancing. The
-            # notification text stays byte-identical for hours while
-            # processing has effectively stopped. Bail so the queue
-            # retry can move on.
-            #
-            # The shutdown-marker fast path above handles legitimate
-            # end-of-run cases on the first observation, so by the time
-            # we reach here a stuck notification means the GUI is
-            # actively claiming progress but no frames are advancing --
-            # i.e., a mid-pass wedge. Output on disk is partial; delete
-            # it before breaking so the next attempt doesn't
-            # false-positive on the "already-done" >= 10 MB
-            # short-circuit.
-            if (
-                processing_started
-                and last_notification_text is not None
-                and (tracked_pids is None or live_pids)
-            ):
-                stale_seconds = (
-                    datetime.datetime.now() - last_notification_changed_at
-                ).total_seconds()
-                if stale_seconds > STALE_NOTIFICATION_SECONDS:
-                    out_size = 0
-                    if output_path and os.path.isfile(output_path):
-                        try:
-                            out_size = os.path.getsize(output_path)
-                        except OSError:
-                            out_size = 0
-                    logger.error(
-                        "AutoCam notification unchanged for %.1f minutes "
-                        "(last text: %r); treating as hung.",
-                        stale_seconds / 60,
-                        last_notification_text,
-                    )
-                    # Delete partial output on real wedge -- AutoCam was
-                    # claiming progress, so any output on disk is
-                    # incomplete. Leaving it would trip the next
-                    # attempt's >= 10 MB short-circuit into reporting
-                    # the truncated video as a successful run, which
-                    # gets it queued for YouTube upload as if it were
-                    # the real game.
-                    if output_path and os.path.isfile(output_path):
-                        try:
-                            removed_size = out_size
-                            os.remove(output_path)
-                            logger.warning(
-                                "Removed partial output %s (%.1f MB) "
-                                "after wedge to prevent false "
-                                "short-circuit on retry.",
-                                output_path,
-                                removed_size / 1024 / 1024,
-                            )
-                        except OSError as e:
-                            logger.warning(
-                                "Could not remove partial output %s after wedge: %s",
-                                output_path,
-                                e,
-                            )
-                    # Also remove the JSONL tracks sidecar so retries
-                    # don't fuse with stale tracks.
-                    jsonl_path = output_path + ".jsonl" if output_path else None
-                    if jsonl_path and os.path.isfile(jsonl_path):
-                        try:
-                            os.remove(jsonl_path)
-                        except OSError:
-                            pass
-                    break
 
             # If processing hasn't started within 5 minutes, bail out.
             # (Skip this guard on the resume path: an in-flight pass has
