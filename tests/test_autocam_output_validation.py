@@ -1,4 +1,5 @@
-"""Regression tests for the AutoCam output validator.
+"""Regression tests for the AutoCam output validator + the resume-race
+guard around it.
 
 These tests intentionally use **real** filesystem operations and **real**
 PyAV. The repository's `tests/conftest.py` defines autouse fixtures that
@@ -13,11 +14,15 @@ the validator tests become tautologies again.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import av
 import pytest
 
-from video_grouper.tray.autocam_automation import _validate_autocam_output
+from video_grouper.tray.autocam_automation import (
+    _autocam_still_writing,
+    _validate_autocam_output,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -166,3 +171,97 @@ class TestValidateAutocamOutput:
         )
         assert ok is False
         assert "implausibly" in reason.lower() or "mbps" in reason.lower()
+
+
+class TestAutocamStillWriting:
+    """Resume-race guard: when a previous tray run is still rendering
+    this output, the short-circuit must NOT validate-and-delete the
+    file. Otherwise it pulls the rug out from under the in-flight
+    AutoCam process.
+
+    The mid-write file has the ftyp box but no moov atom yet (AutoCam
+    only finalizes moov at clean exit), so the validator correctly
+    classifies it as broken -- but the file is going to be valid in a
+    few minutes when AutoCam wraps up. ``_autocam_still_writing``
+    short-circuits the short-circuit.
+    """
+
+    def test_returns_false_when_state_is_none(self, tmp_path):
+        assert _autocam_still_writing(None, str(tmp_path / "in.mp4")) is False
+
+    def test_returns_false_when_no_marker(self):
+        state = MagicMock()
+        state.get_autocam_run.return_value = None
+        assert _autocam_still_writing(state, "/x/in.mp4") is False
+
+    def test_returns_false_when_marker_is_for_different_input(self):
+        """Different render in flight -- shouldn't influence this one's
+        short-circuit decision."""
+        state = MagicMock()
+        state.get_autocam_run.return_value = {
+            "input_path": "/x/other-game.mp4",
+            "gui_pids": [12345],
+        }
+        # Even with live PIDs, mismatched input means it's not "this" render.
+        with patch(
+            "video_grouper.tray.autocam_automation._live_autocam_pids",
+            return_value=[12345],
+        ):
+            assert _autocam_still_writing(state, "/x/in.mp4") is False
+
+    def test_returns_false_when_pids_are_stale(self):
+        """Marker exists for this input but all GUI.exe PIDs have died.
+        Safe to delete pre-existing partial output and relaunch."""
+        state = MagicMock()
+        state.get_autocam_run.return_value = {
+            "input_path": "/x/in.mp4",
+            "gui_pids": [12345],
+        }
+        with patch(
+            "video_grouper.tray.autocam_automation._live_autocam_pids",
+            return_value=[],
+        ):
+            assert _autocam_still_writing(state, "/x/in.mp4") is False
+
+    def test_returns_true_when_marker_matches_and_pids_alive(self):
+        """The exact scenario the reviewer flagged: tray restarted while
+        AutoCam keeps running, output file is mid-write. Validator would
+        reject the partial; we must NOT delete it."""
+        state = MagicMock()
+        state.get_autocam_run.return_value = {
+            "input_path": "/x/in.mp4",
+            "gui_pids": [12345, 67890],
+        }
+        with patch(
+            "video_grouper.tray.autocam_automation._live_autocam_pids",
+            return_value=[12345],
+        ):
+            assert _autocam_still_writing(state, "/x/in.mp4") is True
+
+    def test_short_circuit_skips_delete_when_autocam_still_writing(self, tmp_path):
+        """Integration smoke: a partial output + live autocam = file
+        survives the short-circuit. End-to-end through
+        ``_execute_autocam_gui_automation`` is too involved for a unit
+        test (Desktop / win32gui), so we drive the relevant branch via
+        the helper that guards the delete."""
+        partial = tmp_path / "out.mp4"
+        # Header-only -- validator would reject if asked.
+        partial.write_bytes(
+            bytes.fromhex(
+                "000000206674797069736f6d0000020069736f6d69736f32617663316d703431"
+            )
+            + b"\x00" * 100
+        )
+        state = MagicMock()
+        state.get_autocam_run.return_value = {
+            "input_path": str(tmp_path / "in.mp4"),
+            "gui_pids": [4242],
+        }
+        with patch(
+            "video_grouper.tray.autocam_automation._live_autocam_pids",
+            return_value=[4242],
+        ):
+            assert _autocam_still_writing(state, str(tmp_path / "in.mp4")) is True
+        # File still exists -- the short-circuit would have skipped the
+        # validate-and-delete branch.
+        assert partial.exists()

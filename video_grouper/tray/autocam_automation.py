@@ -133,6 +133,35 @@ def _validate_autocam_output(
     return True, (f"OK: {size / 1024 / 1024:.1f} MB, {out_duration_s:.0f}s")
 
 
+def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> bool:
+    """True if a previous tray run is still actively rendering this output.
+
+    Reads ``state.get_autocam_run()`` and checks whether any recorded
+    GUI.exe PID for the same ``input_path`` is still alive. Guard for
+    the validate-and-delete short-circuit at function entry: a mid-write
+    output has the ftyp box but no moov atom yet, so the validator will
+    correctly reject it -- but deleting that file out from under a live
+    AutoCam would corrupt the in-flight render. When this returns True
+    the caller must skip validation and fall through to the resume
+    reattach path.
+
+    Returns False when:
+      - state is None (no group_dir tracking enabled)
+      - no autocam_run marker exists
+      - marker exists but input_path doesn't match (different render)
+      - marker exists for this input but no PIDs are alive (stale)
+    """
+    if state is None:
+        return False
+    existing = state.get_autocam_run()
+    if not existing:
+        return False
+    if existing.get("input_path") != input_path:
+        return False
+    live = _live_autocam_pids(existing.get("gui_pids", []))
+    return bool(live)
+
+
 def _taskkill_autocam_tree() -> None:
     """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
     as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
@@ -785,7 +814,15 @@ def _execute_autocam_gui_automation(
     # Validation here is identical to the poll-loop exit check so a
     # broken pre-existing output (e.g. a header-only MP4 left over from
     # a previous bug) is detected and deleted rather than skipped.
-    if os.path.isfile(abs_output_path):
+    #
+    # SAFETY: if a previous tray run is still writing this output
+    # (resume-marker has live AutoCam PIDs), DON'T validate-and-delete --
+    # the file is mid-write and has no moov atom yet, but deleting it
+    # would corrupt the in-flight render. Skip the short-circuit and
+    # let the resume-marker reattach path below take over.
+    if os.path.isfile(abs_output_path) and not _autocam_still_writing(
+        state, abs_input_path
+    ):
         ok, reason = _validate_autocam_output(
             abs_output_path, input_path=abs_input_path
         )
@@ -802,11 +839,12 @@ def _execute_autocam_gui_automation(
             if state is not None:
                 state.clear_autocam_run()
             return True
-        # Pre-existing file failed validation -- could be junk from a
-        # previous failed Save-dialog interaction, a header-only MP4
-        # from an aborted render, or any other partial. Delete before
-        # relaunching so the overwrite-confirm overlay (which the
-        # dialog automation can't drive) never appears.
+        # Pre-existing file failed validation AND no live AutoCam PIDs --
+        # safe to delete before relaunch. Could be junk from a previous
+        # failed Save-dialog interaction, a header-only MP4 from an
+        # aborted render, or any other partial. Removing it avoids the
+        # overwrite-confirm overlay (which the dialog automation can't
+        # drive).
         logger.info(
             "Pre-existing output failed validation (%s); deleting before relaunch.",
             reason,
