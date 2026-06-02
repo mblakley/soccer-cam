@@ -298,14 +298,12 @@ class TestWaitForCompletionExitDetection:
     def test_exit_with_real_output_returns_success(
         self, mock_main_window, mock_file_system
     ):
-        """GUI.exe PIDs exit + output file >= 10 MB → True. Size alone
-        is the success signal; every failure path inside the loop
-        deletes its partial before breaking, so a real-sized file at
-        exit time is always a completed run.
-
-        The autouse ``mock_file_system`` conftest fixture pins
-        ``os.path.getsize`` to 1 MB; we override it here so the size
-        check exercises the success branch.
+        """GUI.exe PIDs exit + output passes validation → True.
+        v0.4.12 validation = size floor + moov-atom presence. The test
+        fixture is an empty ``output.touch()`` file; we mock the moov
+        scan to True because this test's purpose is the exit-detection
+        branch behavior, not the validator internals (those have
+        dedicated tests in test_autocam_output_validation.py).
         """
         mock_file_system["getsize"].return_value = 11 * 1024 * 1024  # > 10 MB threshold
         with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +313,10 @@ class TestWaitForCompletionExitDetection:
                 patch(
                     "video_grouper.tray.autocam_automation._live_autocam_pids",
                     return_value=[],
+                ),
+                patch(
+                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    return_value=True,
                 ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
                 patch(
@@ -390,6 +392,10 @@ class TestWaitForCompletionExitDetection:
                     "video_grouper.tray.autocam_automation._live_autocam_pids",
                     side_effect=lambda pids: next(live_results),
                 ),
+                patch(
+                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    return_value=True,
+                ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
                 patch("video_grouper.tray.autocam_automation.subprocess.run"),
             ):
@@ -409,10 +415,11 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
     tray crash would re-process a video we already have."""
 
     def test_skips_when_output_already_exists(self, tmp_path, mock_file_system):
-        """Output file present + large enough → return True immediately
-        without launching subprocess.Popen / Desktop / pywinauto. Size
-        alone is sufficient because every in-loop failure path deletes
-        its partial before breaking."""
+        """Output file present + passes validation → return True
+        immediately without launching subprocess.Popen / Desktop /
+        pywinauto. v0.4.12: validation = size floor + moov-atom
+        presence; mocked True here because the test fixture is an
+        empty ``touch()``ed file."""
         mock_file_system["getsize"].return_value = 50 * 1024 * 1024  # > 10 MB
         input_path = tmp_path / "input.mp4"
         input_path.touch()
@@ -423,6 +430,10 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
                 "video_grouper.tray.autocam_automation.subprocess.Popen"
             ) as mock_popen,
             patch("video_grouper.tray.autocam_automation.Desktop") as mock_desktop,
+            patch(
+                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                return_value=True,
+            ),
         ):
             result = _execute_autocam_gui_automation(
                 "C:/fake/GUI.exe", str(input_path), str(output_path)
@@ -613,6 +624,13 @@ class TestShutdownMarkerFastPath:
             patch(
                 "video_grouper.tray.autocam_automation.os.path.getsize",
                 return_value=3_800_000_000,  # 3.8 GB
+            ),
+            # v0.4.12: validator also requires moov atom; mock True since
+            # this test's purpose is the fast-path timing, not the
+            # validator (covered in test_autocam_output_validation.py).
+            patch(
+                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                return_value=True,
             ),
         ):
             fake_dt.now = MagicMock(side_effect=lambda: clock[0])

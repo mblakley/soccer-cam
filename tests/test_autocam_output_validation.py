@@ -1,26 +1,35 @@
 """Regression tests for the AutoCam output validator + the resume-race
 guard around it.
 
-These tests intentionally use **real** filesystem operations and **real**
-PyAV. The repository's `tests/conftest.py` defines autouse fixtures that
-mock both (`mock_file_system` pins `os.path.getsize` to 1 MB; `mock_ffmpeg`
-intercepts `av.open`). Those mocks are the exact reason tonight's
-regression slipped through unit tests: every existing AutoCam test was
-asking a MagicMock whether the output was real, not the actual file.
+These tests use **real** filesystem operations. The repository's
+``tests/conftest.py`` defines autouse fixtures that mock the file
+system (``mock_file_system`` pins ``os.path.getsize`` to 1 MB) and
+``av.open`` (``mock_ffmpeg``). Those mocks are the exact reason
+tonight's regression slipped through unit tests: every existing
+AutoCam test was asking a MagicMock whether the output was real,
+not the actual file.
 
-We override both fixtures at module scope below so this file gets real
-filesystem and real PyAV. Don't drop the overrides -- if they go away
+We override both autouse fixtures at module scope below so this file
+gets real filesystem I/O. Don't drop the overrides -- if they go away
 the validator tests become tautologies again.
+
+v0.4.12: the validator is now pure-Python (no PyAV) because PyAV's
+``av.open`` is not reachable from the production tray binary -- the
+v0.4.11 release shipped with an ``AttributeError`` that the broad
+exception handler relabelled as "no moov atom", which accidentally did
+the right thing for the broken file but would have wrongly deleted a
+real output on completion. The new ``_mp4_has_moov_atom`` is a direct
+box-walk, no PyAV.
 """
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import av
 import pytest
 
 from video_grouper.tray.autocam_automation import (
     _autocam_still_writing,
+    _mp4_has_moov_atom,
     _validate_autocam_output,
 )
 
@@ -33,7 +42,8 @@ def mock_file_system():
 
 @pytest.fixture(autouse=True)
 def mock_ffmpeg():
-    """Override conftest autouse mock; validator needs real av.open."""
+    """Override conftest autouse mock; defensive even though validator
+    is now PyAV-free (tests-only PyAV usage in fixtures still wants real av)."""
     yield None
 
 
@@ -42,10 +52,12 @@ def _write_test_mp4(
 ) -> None:
     """Write a real H264 MP4 of ~`duration_s` seconds using PyAV.
 
-    Solid-color frames keep the file tiny (KB-scale) regardless of
-    duration, which lets the duration-based tests run a synthetic
-    "1 hour" video without producing a 1-hour-sized file on disk.
+    PyAV is a test-only dependency here (the production validator is
+    pure-Python). Solid-color frames keep the file tiny (KB-scale)
+    regardless of duration.
     """
+    import av
+
     fps = 10
     with av.open(str(path), mode="w") as container:
         stream = container.add_stream("h264", rate=fps)
@@ -67,9 +79,8 @@ def _write_header_only_mp4(path: Path, target_bytes: int = 15 * 1024 * 1024) -> 
     """Write the exact failure mode from the 2026-06-01 game: a valid
     ftyp box followed by zero-padded bytes, no moov atom, no streams.
 
-    PyAV fails to open this with "Invalid data found when processing input".
-    The header bytes are copied from the first 32 bytes of the corrupt
-    output that AutoCam left behind tonight.
+    The header bytes match the first 32 bytes of the corrupt output
+    AutoCam produced tonight (verified hex-identical).
     """
     header = bytes.fromhex(
         "00000020"  # box size = 32
@@ -91,9 +102,69 @@ def _write_header_only_mp4(path: Path, target_bytes: int = 15 * 1024 * 1024) -> 
             remaining -= n
 
 
+class TestMp4HasMoovAtom:
+    """The moov-presence scanner is pure-Python (no PyAV); we test it
+    standalone since it's the load-bearing reject in
+    ``_validate_autocam_output``."""
+
+    def test_missing_file_returns_false(self, tmp_path):
+        assert _mp4_has_moov_atom(str(tmp_path / "nope.mp4")) is False
+
+    def test_header_only_mp4_returns_false(self, tmp_path):
+        """The 2026-06-01 failure mode: ftyp present, no moov."""
+        out = tmp_path / "header_only.mp4"
+        _write_header_only_mp4(out, target_bytes=1024)
+        assert _mp4_has_moov_atom(str(out)) is False
+
+    def test_valid_mp4_returns_true(self, tmp_path):
+        out = tmp_path / "real.mp4"
+        _write_test_mp4(out, duration_s=2)
+        assert _mp4_has_moov_atom(str(out)) is True
+
+    def test_truncated_after_ftyp_returns_false(self, tmp_path):
+        """Box header says 100 MB but file ends after 8 bytes -- malformed
+        but should not crash; just return False."""
+        out = tmp_path / "trunc.mp4"
+        # ftyp header claiming the box is 100 MB, then EOF.
+        out.write_bytes(bytes.fromhex("06400000667479700000000000000000"))
+        assert _mp4_has_moov_atom(str(out)) is False
+
+    def test_zero_size_box_returns_false(self, tmp_path):
+        """A box with size=0 means 'extends to EOF' -- if it's not moov,
+        no further boxes can appear."""
+        out = tmp_path / "zero.mp4"
+        # ftyp box (32 bytes), then a box with size=0 of type 'mdat'.
+        ftyp = bytes.fromhex(
+            "000000206674797069736f6d0000020069736f6d69736f32617663316d703431"
+        )
+        mdat_eof = bytes.fromhex("000000006d646174") + b"\x00" * 1024
+        out.write_bytes(ftyp + mdat_eof)
+        assert _mp4_has_moov_atom(str(out)) is False
+
+    def test_large_size_box_with_moov_returns_true(self, tmp_path):
+        """size==1 means 'real size in next 8 bytes' (64-bit large box).
+        Construct a small fake one followed by a moov to verify the
+        large-size box is skipped correctly."""
+        out = tmp_path / "large.mp4"
+        # ftyp (32 bytes)
+        ftyp = bytes.fromhex(
+            "000000206674797069736f6d0000020069736f6d69736f32617663316d703431"
+        )
+        # Large box: size=1, type=skip, then 8 bytes of large_size = 24, then 8 bytes of payload.
+        # Total box length = 24 bytes (header 8 + ext-size 8 + payload 8).
+        large = (
+            bytes.fromhex("00000001")  # size flag
+            + b"skip"  # box type
+            + (24).to_bytes(8, "big")  # large size
+            + b"\x00" * 8  # payload
+        )
+        moov = bytes.fromhex("00000010") + b"moov" + b"\x00" * 8
+        out.write_bytes(ftyp + large + moov)
+        assert _mp4_has_moov_atom(str(out)) is True
+
+
 class TestValidateAutocamOutput:
-    """Each case below corresponds to a real-world failure mode the old
-    size-only check would have passed."""
+    """End-to-end validator tests against real files."""
 
     def test_missing_file_is_rejected(self, tmp_path):
         ok, reason = _validate_autocam_output(str(tmp_path / "nope.mp4"))
@@ -121,56 +192,47 @@ class TestValidateAutocamOutput:
         assert ok is False
         assert "moov" in reason.lower() or "pyav" in reason.lower()
 
-    def test_valid_mp4_without_input_is_accepted(self, tmp_path):
-        """No input_path supplied (resume path): pass on size + moov +
-        non-zero duration only."""
+    def test_valid_mp4_is_accepted(self, tmp_path):
         out = tmp_path / "real.mp4"
-        _write_test_mp4(out, duration_s=120)
+        _write_test_mp4(out, duration_s=2)
         # Solid-color H264 compresses to ~KB; bypass the 10 MB absolute floor.
         ok, reason = _validate_autocam_output(str(out), min_bytes=1024)
         assert ok is True, f"expected pass, got: {reason}"
 
-    def test_duration_parity_below_threshold_is_rejected(self, tmp_path):
-        """Output duration < 95% of input = AutoCam exited mid-pass."""
-        input_mp4 = tmp_path / "input.mp4"
-        output_mp4 = tmp_path / "output.mp4"
-        _write_test_mp4(input_mp4, duration_s=120)
-        _write_test_mp4(output_mp4, duration_s=60)  # 50% parity
+    def test_input_path_arg_is_accepted_but_unused(self, tmp_path):
+        """Forward-compat: callers (the 3 trust points in
+        _wait_for_completion_and_cleanup + the short-circuit) still pass
+        input_path. v0.4.12 ignores it because the PyAV-based duration
+        parity check is unreachable from the tray binary; the arg stays
+        in the signature so future v0.4.13 can re-add the check when
+        PyAV is properly bundled in the tray."""
+        out = tmp_path / "real.mp4"
+        inp = tmp_path / "input.mp4"
+        _write_test_mp4(out, duration_s=2)
+        _write_test_mp4(inp, duration_s=2)
         ok, reason = _validate_autocam_output(
-            str(output_mp4), input_path=str(input_mp4), min_bytes=1024
-        )
-        assert ok is False
-        assert "parity" in reason.lower() or "duration" in reason.lower()
-
-    def test_duration_parity_at_threshold_is_accepted(self, tmp_path):
-        """Verifies only the parity check; the bps floor is disabled here
-        because solid-color H264 compresses below 0.5 Mbps regardless of
-        duration. A real soccer game won't have this problem."""
-        input_mp4 = tmp_path / "input.mp4"
-        output_mp4 = tmp_path / "output.mp4"
-        _write_test_mp4(input_mp4, duration_s=10)
-        _write_test_mp4(output_mp4, duration_s=10)
-        ok, reason = _validate_autocam_output(
-            str(output_mp4),
-            input_path=str(input_mp4),
-            min_bytes=1024,
-            min_bps=0,  # disable bps floor; this case isolates the parity check
+            str(out), input_path=str(inp), min_bytes=1024
         )
         assert ok is True, f"expected pass, got: {reason}"
 
-    def test_implausibly_small_for_input_duration_is_rejected(self, tmp_path):
-        """1h input + 1h output that's only KB-large fails the 0.5 Mbps
-        floor. Catches a hypothetical regression where the output runs
-        full-duration but encodes nothing useful (e.g. constant black)."""
-        input_mp4 = tmp_path / "input.mp4"
-        output_mp4 = tmp_path / "output.mp4"
-        _write_test_mp4(output_mp4, duration_s=3600)
-        _write_test_mp4(input_mp4, duration_s=3600)
-        ok, reason = _validate_autocam_output(
-            str(output_mp4), input_path=str(input_mp4), min_bytes=1024
-        )
+    def test_validator_runs_without_pyav_in_path(self, tmp_path, monkeypatch):
+        """Regression for the v0.4.11 production failure: the tray
+        PyInstaller binary doesn't bundle PyAV, so any code path that
+        does ``import av; av.open(...)`` hits AttributeError at runtime.
+        v0.4.12 must work even if PyAV is wholly absent.
+
+        Simulate that by deleting the av module from sys.modules before
+        the validator runs. The validator should still produce the
+        correct verdict on the header-only file.
+        """
+        import sys
+
+        monkeypatch.setitem(sys.modules, "av", None)  # importing av raises now
+        broken = tmp_path / "header_only.mp4"
+        _write_header_only_mp4(broken, target_bytes=15 * 1024 * 1024)
+        ok, reason = _validate_autocam_output(str(broken))
         assert ok is False
-        assert "implausibly" in reason.lower() or "mbps" in reason.lower()
+        assert "moov" in reason.lower()
 
 
 class TestAutocamStillWriting:
