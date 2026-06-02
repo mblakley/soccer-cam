@@ -556,8 +556,8 @@ def _render_tray_section(storage: Path) -> str:
             f"<code>{html.escape(str(log_path))}</code>.</p>"
             '<p class="muted">The tray writes its log here once it loads '
             "the configured storage path. If the tray isn't expected to "
-            "run on this install (Linux/Docker, or "
-            "<code>[BALL_TRACKING].provider != autocam_gui</code>), this "
+            "run on this install (Linux/Docker, or the configured "
+            "<code>[PIPELINE]</code> has no tray step such as autocam), this "
             "is normal. If the tray IS running on this box but the log "
             "isn't here, check <code>%LOCALAPPDATA%\\VideoGrouper\\logs\\"
             "</code> for the bootstrap fallback.</p>"
