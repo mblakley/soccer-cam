@@ -2,6 +2,7 @@
 YouTube upload task for uploading videos to YouTube.
 """
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -154,6 +155,12 @@ class YoutubeUploadTask(BaseUploadTask):
                 )
                 return False
 
+            # googleapiclient is sync; without asyncio.to_thread the
+            # 60-90 minute resumable upload would block this event loop,
+            # which the auth server, tray status poller, and other queue
+            # processors share. Symptoms observed live tonight:
+            # "update status poll unexpected error: timed out" every
+            # 60s in the tray log throughout the upload window.
             # Upload processed (trimmed) video
             if processed_video_path and os.path.exists(processed_video_path):
                 logger.info(f"Uploading processed video: {processed_video_path}")
@@ -162,11 +169,14 @@ class YoutubeUploadTask(BaseUploadTask):
                 playlist_id = None
 
                 if processed_playlist_name:
-                    playlist_id = uploader.get_or_create_playlist(
-                        processed_playlist_name, description
+                    playlist_id = await asyncio.to_thread(
+                        uploader.get_or_create_playlist,
+                        processed_playlist_name,
+                        description,
                     )
 
-                video_id = uploader.upload_video(
+                video_id = await asyncio.to_thread(
+                    uploader.upload_video,
                     processed_video_path,
                     title,
                     description,
@@ -188,11 +198,14 @@ class YoutubeUploadTask(BaseUploadTask):
                 playlist_id = None
 
                 if raw_playlist_name:
-                    playlist_id = uploader.get_or_create_playlist(
-                        raw_playlist_name, description
+                    playlist_id = await asyncio.to_thread(
+                        uploader.get_or_create_playlist,
+                        raw_playlist_name,
+                        description,
                     )
 
-                video_id = uploader.upload_video(
+                video_id = await asyncio.to_thread(
+                    uploader.upload_video,
                     raw_video_path,
                     title,
                     description,
