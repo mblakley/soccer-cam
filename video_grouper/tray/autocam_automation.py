@@ -31,6 +31,108 @@ _NO_WINDOW = 0x08000000
 _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
 
 
+# Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output, so
+# a healthy completed render is roughly input_duration_seconds * 1 MB/s.
+# The size floor here is deliberately one order of magnitude looser than
+# that (0.5 Mbps average) so it only flags clear failures and never
+# blocks a legit run because of an unexpectedly low-bitrate output.
+_MIN_OUTPUT_BYTES_ABSOLUTE = 10 * 1024 * 1024  # 10 MB
+_MIN_OUTPUT_BPS = 500_000  # 0.5 Mbps, far below the 8 Mbps target
+# Output duration must reach this fraction of input duration; below
+# means AutoCam exited mid-pass.
+_MIN_DURATION_PARITY = 0.95
+
+
+def _validate_autocam_output(
+    output_path: str,
+    input_path: str | None = None,
+    min_bytes: int = _MIN_OUTPUT_BYTES_ABSOLUTE,
+    min_bps: int = _MIN_OUTPUT_BPS,
+    min_duration_parity: float = _MIN_DURATION_PARITY,
+) -> tuple[bool, str]:
+    """Validate an AutoCam output is a real processed video, not a partial.
+
+    Catches three failure modes the fixed-byte-floor check missed
+    (regression observed 2026-06-01: a 15.5 MB header-only MP4 passed
+    the 10 MB floor and was marked ball_tracking_complete):
+
+    1. Header-only MP4 -- ftyp written, moov atom never finalized. PyAV
+       fails to open these with "Invalid data found when processing input".
+    2. Truncated output -- output duration is materially shorter than
+       input. We require >= 95% parity when an input file is supplied.
+    3. Implausibly low bitrate -- output below 0.5 Mbps averaged across
+       the input's duration. Once Sport AutoCam targets ~8 Mbps, so
+       anything under 0.5 Mbps is a partial render.
+
+    Returns (ok, reason). On a False result the caller should treat the
+    file as a crashed partial and delete it before retry.
+    """
+    # Local import keeps PyAV out of the tray boot path; the validator
+    # is only ever called from inside the AutoCam poll loop.
+    import av
+
+    if not os.path.isfile(output_path):
+        return False, f"output file does not exist: {output_path}"
+    try:
+        size = os.path.getsize(output_path)
+    except OSError as e:
+        return False, f"could not stat output: {e}"
+    if size < min_bytes:
+        return (
+            False,
+            f"output {size / 1024 / 1024:.1f} MB below "
+            f"{min_bytes / 1024 / 1024:.0f} MB absolute floor",
+        )
+
+    # PyAV moov-atom probe: the most direct catch for the 2026-06-01
+    # failure mode. A header-only MP4 has the ftyp box but no moov, so
+    # av.open() raises (av.error.InvalidDataError on PyAV >= 11) before
+    # we can read any stream info. Catch broadly: any PyAV failure to
+    # open the file means the output isn't usable.
+    try:
+        with av.open(output_path) as out_container:
+            if not out_container.streams.video:
+                return False, "output has no video stream"
+            out_duration_us = out_container.duration or 0
+    except Exception as e:
+        return False, f"PyAV cannot decode output (likely no moov atom): {e}"
+
+    out_duration_s = out_duration_us / 1_000_000 if out_duration_us else 0
+    if out_duration_s <= 0:
+        return False, "output reports zero or unknown duration"
+
+    # Compare against input when we have it (the resume-existing short-
+    # circuit doesn't always; that path falls back to moov+size only).
+    if input_path and os.path.isfile(input_path):
+        try:
+            with av.open(input_path) as in_container:
+                in_duration_us = in_container.duration or 0
+        except Exception:
+            in_duration_us = 0
+        in_duration_s = in_duration_us / 1_000_000 if in_duration_us else 0
+        if in_duration_s > 0:
+            ratio = out_duration_s / in_duration_s
+            if ratio < min_duration_parity:
+                return (
+                    False,
+                    f"output duration {out_duration_s:.0f}s is only "
+                    f"{ratio * 100:.0f}% of input {in_duration_s:.0f}s "
+                    f"(min parity {min_duration_parity * 100:.0f}%)",
+                )
+            if min_bps > 0:
+                min_bytes_for_duration = int(in_duration_s * min_bps / 8)
+                if size < min_bytes_for_duration:
+                    return (
+                        False,
+                        f"output {size / 1024 / 1024:.1f} MB implausibly small "
+                        f"for {in_duration_s:.0f}s input "
+                        f"(minimum {min_bytes_for_duration / 1024 / 1024:.0f} MB "
+                        f"at {min_bps / 1_000_000:.1f} Mbps)",
+                    )
+
+    return True, (f"OK: {size / 1024 / 1024:.1f} MB, {out_duration_s:.0f}s")
+
+
 def _taskkill_autocam_tree() -> None:
     """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
     as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
@@ -448,6 +550,7 @@ def _wait_for_completion_and_cleanup(
     state: DirectoryState | None,
     output_path: str | None = None,
     tracked_pids: list[int] | None = None,
+    input_path: str | None = None,
 ) -> bool:
     """Poll AutoCam's Notification text until processing finishes, then clean up.
 
@@ -475,10 +578,6 @@ def _wait_for_completion_and_cleanup(
     timeout_seconds = 60 * 60 * 24  # 24 hours
     startup_timeout_seconds = 300  # 5 minutes to start processing
     poll_interval = 30  # 30 seconds
-    # Min size below which we treat the output file as a partial-write
-    # rather than a real success. Anything smaller than this means
-    # AutoCam exited before producing a usable processed video.
-    output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
 
@@ -508,22 +607,34 @@ def _wait_for_completion_and_cleanup(
                     and output_path
                     and any(m in notification_text for m in _SHUTDOWN_MARKERS)
                 ):
-                    out_size = 0
-                    if os.path.isfile(output_path):
-                        try:
-                            out_size = os.path.getsize(output_path)
-                        except OSError:
-                            out_size = 0
-                    if out_size >= output_min_bytes:
+                    ok, reason = _validate_autocam_output(
+                        output_path, input_path=input_path
+                    )
+                    if ok:
                         found = True
                         logger.info(
                             "AutoCam shutdown marker observed "
-                            "(notification=%r, output=%.1f MB); "
+                            "(notification=%r, validation=%s); "
                             "treating as success and breaking out.",
                             raw_notification,
-                            out_size / 1024 / 1024,
+                            reason,
                         )
                         break
+                    logger.error(
+                        "AutoCam shutdown marker observed but output "
+                        "failed validation (%s); treating as failure.",
+                        reason,
+                    )
+                    if os.path.isfile(output_path):
+                        try:
+                            os.remove(output_path)
+                        except OSError as rm_err:
+                            logger.warning(
+                                "Could not remove invalid output %s: %s",
+                                output_path,
+                                rm_err,
+                            )
+                    break
 
                 if "finished processing" in notification_text:
                     found = True
@@ -548,35 +659,30 @@ def _wait_for_completion_and_cleanup(
                 logger.warning(f"Error while checking for success message: {e}")
 
             # Exit-detection fallback: if AutoCam's GUI processes have
-            # all exited, infer success/failure from the output file
-            # size. >= 10 MB at GUI exit = real run; below = crashed
-            # partial, delete so next attempt re-runs from scratch.
-            #
-            # Size-only is safe here because mid-pass wedges (which can
-            # leave a multi-hundred-MB partial that looks like a real
-            # video) are eliminated by locking download_protocol to a
-            # single transport per session -- mixed-protocol GOP
-            # boundaries were the only known wedge trigger.
+            # all exited, decide success/failure from the output file's
+            # actual contents -- not just byte count. Size-only let a
+            # 15.5 MB header-only MP4 (no moov atom) pass through on
+            # 2026-06-01; full validation catches that, truncated
+            # outputs, and implausibly low bitrates.
             live_pids = _live_autocam_pids(tracked_pids) if tracked_pids else None
             if tracked_pids and not live_pids:
                 if output_path and os.path.isfile(output_path):
-                    try:
-                        size = os.path.getsize(output_path)
-                    except OSError:
-                        size = 0
-                    if size >= output_min_bytes:
+                    ok, reason = _validate_autocam_output(
+                        output_path, input_path=input_path
+                    )
+                    if ok:
                         found = True
                         logger.info(
-                            "AutoCam GUI exited with output at %.1f MB; "
+                            "AutoCam GUI exited with validated output (%s); "
                             "treating as success.",
-                            size / 1024 / 1024,
+                            reason,
                         )
                         break
                     logger.error(
-                        "AutoCam GUI exited with sub-threshold output at "
-                        "%d bytes -- treating as crash. Deleting so next "
+                        "AutoCam GUI exited but output failed validation "
+                        "(%s); treating as crash. Deleting so next "
                         "attempt re-runs.",
-                        size,
+                        reason,
                     )
                     try:
                         os.remove(output_path)
@@ -668,39 +774,47 @@ def _execute_autocam_gui_automation(
 
     state = DirectoryState(group_dir) if group_dir else None
 
-    # Already-done short-circuit: if the output mp4 exists at non-trivial
-    # size, AutoCam already produced it. Re-running would waste 1-2 hours
-    # of GPU work on output we already have. Most common trigger: the
-    # tray crashed after AutoCam finished but before the success was
-    # recorded; the in_progress task was restored from disk on the next
-    # tray boot and would otherwise relaunch GUI.exe from scratch.
+    # Already-done short-circuit: if the output mp4 already passes the
+    # same validator the poll loop uses, AutoCam previously produced a
+    # real result; re-running would waste 1-2 hours of GPU work on
+    # output we already have. Most common trigger: the tray crashed
+    # after AutoCam finished but before the success was recorded; the
+    # in_progress task was restored from disk on the next tray boot and
+    # would otherwise relaunch GUI.exe from scratch.
     #
-    # Size-only check is safe because every failure path inside the
-    # poll loop deletes its partial output before breaking, so a >= 10
-    # MB file on disk is always a real completed run.
+    # Validation here is identical to the poll-loop exit check so a
+    # broken pre-existing output (e.g. a header-only MP4 left over from
+    # a previous bug) is detected and deleted rather than skipped.
     if os.path.isfile(abs_output_path):
+        ok, reason = _validate_autocam_output(
+            abs_output_path, input_path=abs_input_path
+        )
         try:
             existing_size = os.path.getsize(abs_output_path)
         except OSError:
             existing_size = 0
-        if existing_size >= 10 * 1024 * 1024:
+        if ok:
             logger.info(
-                "AutoCam output already exists at %s (%.1f MB); skipping re-run.",
+                "AutoCam output already validated at %s (%s); skipping re-run.",
                 abs_output_path,
-                existing_size / 1024 / 1024,
+                reason,
             )
             if state is not None:
                 state.clear_autocam_run()
             return True
-        # Sub-10MB output is junk from a previous failed Save-dialog
-        # interaction; delete it before relaunching so the overwrite-
-        # confirm overlay (which the dialog automation can't drive)
-        # never appears.
+        # Pre-existing file failed validation -- could be junk from a
+        # previous failed Save-dialog interaction, a header-only MP4
+        # from an aborted render, or any other partial. Delete before
+        # relaunching so the overwrite-confirm overlay (which the
+        # dialog automation can't drive) never appears.
+        logger.info(
+            "Pre-existing output failed validation (%s); deleting before relaunch.",
+            reason,
+        )
         try:
             os.remove(abs_output_path)
             logger.info(
-                "Removed sub-threshold pre-existing output at %s (%.1f MB) "
-                "before relaunch",
+                "Removed invalid pre-existing output at %s (%.1f MB) before relaunch",
                 abs_output_path,
                 existing_size / 1024 / 1024,
             )
@@ -749,6 +863,7 @@ def _execute_autocam_gui_automation(
                         state,
                         output_path=existing.get("output_path", abs_output_path),
                         tracked_pids=live,
+                        input_path=existing.get("input_path", abs_input_path),
                     )
             else:
                 logger.info(
@@ -981,6 +1096,7 @@ def _execute_autocam_gui_automation(
             state,
             output_path=abs_output_path,
             tracked_pids=list({launcher.pid, window_pid}),
+            input_path=abs_input_path,
         )
 
     except Exception as e:
