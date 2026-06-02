@@ -59,6 +59,40 @@ def _error_response(cmd, code=1, detail="some error"):
     return resp
 
 
+def _file_dict(name, start_tuple, end_tuple, size):
+    """Build a Reolink SearchResult.File entry from (Y,M,D,h,m,s) tuples."""
+    sy, sm, sd, sh, smin, ss = start_tuple
+    ey, em, ed, eh, emin, es = end_tuple
+    return {
+        "name": name,
+        "StartTime": {
+            "year": sy,
+            "mon": sm,
+            "day": sd,
+            "hour": sh,
+            "min": smin,
+            "sec": ss,
+        },
+        "EndTime": {
+            "year": ey,
+            "mon": em,
+            "day": ed,
+            "hour": eh,
+            "min": emin,
+            "sec": es,
+        },
+        "size": size,
+    }
+
+
+def _month_bitmap(year, month, active_days):
+    """31-char bitmap (1 per day, day 1 at index 0) marking the given days."""
+    bits = ["0"] * 31
+    for d in active_days:
+        bits[d - 1] = "1"
+    return {"year": year, "mon": month, "table": "".join(bits)}
+
+
 # ── Initialization ────────────────────────────────────────────────────
 
 
@@ -314,6 +348,157 @@ class TestReolinkCameraFileOperations:
 
         files = await camera.get_file_list(datetime(2024, 1, 1), datetime(2024, 1, 2))
         assert files == []
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_list_cross_month_uses_per_day_search(self, mock_log):
+        """A cross-month range surfaces the camera's partial-File quirk:
+        Search returns a multi-month Status bitmap *and* a single 'teaser'
+        File from the start day, dropping every later day. The code must
+        detect the multi-day query + bitmap and re-issue per-day Searches.
+
+        Regression: HWM stuck at 2026-05-31 17:32:57 caused every poll on
+        2026-06-01 to receive just that one stale file, so the 20 game
+        segments recorded after the rollover were invisible to the poller.
+        """
+        teaser = _file_dict(
+            "/mnt/sda/Mp4Record/2026-05-31/teaser.mp4",
+            (2026, 5, 31, 17, 32, 22),
+            (2026, 5, 31, 17, 32, 57),
+            21023848,
+        )
+        cross_month_initial = {
+            "SearchResult": {
+                "channel": 0,
+                "Status": [
+                    _month_bitmap(2026, 5, [31]),
+                    _month_bitmap(2026, 6, [1]),
+                ],
+                "File": [teaser],
+            }
+        }
+        may_31_per_day = {"SearchResult": {"channel": 0, "File": [teaser]}}
+        jun_1_per_day = {
+            "SearchResult": {
+                "channel": 0,
+                "File": [
+                    _file_dict(
+                        "/mnt/sda/Mp4Record/2026-06-01/seg1.mp4",
+                        (2026, 6, 1, 18, 25, 38),
+                        (2026, 6, 1, 18, 30, 37),
+                        768916546,
+                    ),
+                    _file_dict(
+                        "/mnt/sda/Mp4Record/2026-06-01/seg2.mp4",
+                        (2026, 6, 1, 18, 30, 38),
+                        (2026, 6, 1, 18, 35, 38),
+                        771701914,
+                    ),
+                    _file_dict(
+                        "/mnt/sda/Mp4Record/2026-06-01/seg_last.mp4",
+                        (2026, 6, 1, 19, 55, 39),
+                        (2026, 6, 1, 20, 0, 39),
+                        776953087,
+                    ),
+                ],
+            }
+        }
+
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("Search", cross_month_initial),
+            _success_response("Search", may_31_per_day),
+            _success_response("Search", jun_1_per_day),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        files = await camera.get_file_list(
+            datetime(2026, 5, 31, 17, 31, 57),
+            datetime(2026, 6, 1, 21, 30, 0),
+        )
+
+        paths = [f["path"] for f in files]
+        assert len(files) == 4, (
+            "Expected 4 files (1 from May 31 + 3 from Jun 1) after per-day "
+            f"re-search, but got {len(files)}: {paths}"
+        )
+        assert any("seg1" in p for p in paths)
+        assert any("seg_last" in p for p in paths)
+        # Verify the per-day Searches were issued (login + 3 Searches)
+        assert mock_client.post.call_count == 4
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_get_file_list_cross_day_same_month_uses_per_day_search(
+        self, mock_log
+    ):
+        """Cross-day within a single month: camera returns one-month bitmap
+        and an empty File array. Must route to per-day search."""
+        bitmap_initial = {
+            "SearchResult": {
+                "channel": 0,
+                "Status": [_month_bitmap(2026, 5, [30, 31])],
+                "File": [],
+            }
+        }
+        may_30 = {
+            "SearchResult": {
+                "channel": 0,
+                "File": [
+                    _file_dict(
+                        "/mnt/sda/Mp4Record/2026-05-30/a.mp4",
+                        (2026, 5, 30, 12, 9, 22),
+                        (2026, 5, 30, 12, 14, 21),
+                        768596555,
+                    ),
+                ],
+            }
+        }
+        may_31 = {
+            "SearchResult": {
+                "channel": 0,
+                "File": [
+                    _file_dict(
+                        "/mnt/sda/Mp4Record/2026-05-31/b.mp4",
+                        (2026, 5, 31, 9, 42, 44),
+                        (2026, 5, 31, 9, 47, 43),
+                        768906876,
+                    ),
+                ],
+            }
+        }
+
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("Search", bitmap_initial),
+            _success_response("Search", may_30),
+            _success_response("Search", may_31),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        files = await camera.get_file_list(
+            datetime(2026, 5, 30, 0, 0, 0),
+            datetime(2026, 5, 31, 23, 59, 59),
+        )
+
+        assert len(files) == 2
+        paths = [f["path"] for f in files]
+        assert any("2026-05-30" in p for p in paths)
+        assert any("2026-05-31" in p for p in paths)
 
     @pytest.mark.asyncio
     @patch(
