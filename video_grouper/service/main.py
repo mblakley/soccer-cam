@@ -4,12 +4,32 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import servicemanager
 import win32event
 import win32service
 import win32serviceutil
 import win32timezone  # noqa: F401 - required for pyinstaller
+
+if TYPE_CHECKING:
+    from video_grouper.utils.config import Config
+
+
+def _resolve_storage_cwd(config: "Config") -> Path:
+    """Return the directory the service should chdir into.
+
+    Must be the configured ``[STORAGE] path`` rather than the
+    config-file's parent. The two are usually different: config.ini
+    lives under ``%ProgramData%\\VideoGrouper`` (for write-access
+    reasons), but the user's storage tree is typically on a separate
+    drive. If CWD points at the config dir, then DirectoryState's
+    bare-basename fallback and any ``.lock`` file written via a
+    relative path land under ``%ProgramData%`` instead of the storage
+    drive, producing ``FileNotFoundError`` on every lock acquire.
+    """
+    return Path(config.storage.path)
 
 
 class VideoGrouperService(win32serviceutil.ServiceFramework):
@@ -45,8 +65,6 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         self.main()
 
     def main(self):
-        from pathlib import Path
-
         from video_grouper.utils.config import load_config
         from video_grouper.utils.locking import FileLock
         from video_grouper.utils.logger import setup_logging
@@ -101,10 +119,14 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
             logger.error(f"Failed to load config: {e}")
             return
 
-        # Set CWD to storage path so relative paths resolve correctly.
-        # Windows services default to C:\WINDOWS\system32 which breaks
-        # state.json lock files, video paths, and everything else.
-        storage_dir = config_path.parent
+        # Set CWD to configured storage path so relative paths resolve
+        # correctly. Windows services default to C:\WINDOWS\system32 which
+        # breaks state.json lock files, video paths, and everything else.
+        # NOTE: must use config.storage.path, not config_path.parent --
+        # the config typically lives under %ProgramData%\VideoGrouper but
+        # the storage tree is usually on a separate drive.
+        storage_dir = _resolve_storage_cwd(config)
+        storage_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(storage_dir)
         logger.info(f"Set working directory to {storage_dir}")
 
