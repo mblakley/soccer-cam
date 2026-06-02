@@ -439,12 +439,23 @@ class ReolinkCamera(Camera):
                     return []
 
                 search_result = resp.get("value", {}).get("SearchResult", {})
-                status_only = search_result.get("Status")
-                if status_only is not None and not search_result.get("File"):
-                    # Wide time range: camera returns day-level status bitmap
-                    # instead of file list. Search day-by-day for active days.
+                status_bitmap = search_result.get("Status")
+                # Reolink's Search response shape varies with the query range:
+                #   - same-day:               Status: list(1)  +  File: full
+                #   - cross-day same-month:   Status: list(1)  +  File: []
+                #   - cross-MONTH:            Status: list(2+) +  File: 1 file (start day only)
+                # The cross-month variant silently drops every file outside
+                # the start day, so an HWM that lands on a month-end day
+                # never advances past the boundary. Route every multi-day
+                # query through the day-by-day helper, which iterates the
+                # bitmap and issues a per-day Search for each active day.
+                if (
+                    start_time.date() != end_time.date()
+                    and isinstance(status_bitmap, list)
+                    and status_bitmap
+                ):
                     return await self._search_by_active_days(
-                        client, status_only, start_time, end_time
+                        client, status_bitmap, start_time, end_time
                     )
 
                 return self._parse_file_list(search_result.get("File", []))
