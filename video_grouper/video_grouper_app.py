@@ -1072,9 +1072,17 @@ class VideoGrouperApp:
                 logger.error(f"Error in status report: {e}")
 
     def _log_queue_status(self):
-        """Log current queue status for all processors."""
-        status = self.get_queue_sizes()
-        logger.info(f"QUEUE_STATUS: {status}")
+        """Log current queue status for all processors.
+
+        Uses the richer summary (queued + in_progress task identity) so
+        that an empty pending queue + an in-progress task is no longer
+        indistinguishable from a truly idle processor. Without the
+        in-progress field, ``video=0`` in the log line on 2026-06-01
+        looked like a silent kill while the trim was actually still
+        running through a 14 GB stream copy.
+        """
+        summary = self.get_queue_status_summary()
+        logger.info(f"QUEUE_STATUS: {summary}")
 
     async def shutdown(self):
         """Shut down the application."""
@@ -1121,7 +1129,14 @@ class VideoGrouperApp:
         await self.upload_processor.add_work(youtube_task)
 
     def get_queue_sizes(self):
-        """Get the current queue sizes for monitoring."""
+        """Get the current pending queue sizes for monitoring.
+
+        Returns ints (count of queued items, -1 for disabled processors).
+        Callers that filter on `v >= 0` / `v > 0` rely on this shape.
+        Does NOT include the in-progress item; use
+        :meth:`get_queue_status_summary` for the full per-processor
+        ``{queued, in_progress}`` view.
+        """
         sizes = {
             "download": sum(
                 dl.get_queue_size() for dl in self.download_processors.values()
@@ -1139,6 +1154,70 @@ class VideoGrouperApp:
         if self.clip_processor:
             sizes["clips"] = self.clip_processor.get_queue_size()
         return sizes
+
+    def get_queue_status_summary(self):
+        """Per-processor ``{queued: int, in_progress: str | None}``.
+
+        Strictly richer than :meth:`get_queue_sizes` -- adds the identity
+        of the in-flight task (or ``None`` when idle) so the periodic
+        QUEUE_STATUS log line can distinguish ``queue=0 + busy`` from
+        ``truly idle``. Disabled processors are omitted from the dict.
+
+        For ``clip_request`` and ``ttt_jobs``, which use a set-of-active
+        model rather than a FIFO queue, ``queued`` is always 0 and the
+        active count is reported as an integer in ``in_progress``.
+        """
+
+        def _summary(proc):
+            if proc is None:
+                return None
+            return {
+                "queued": proc.get_queue_size(),
+                "in_progress": proc.get_in_progress_summary(),
+            }
+
+        # Download is per-camera aggregate; collect in-progress strings
+        # from every download processor with active work.
+        download_queued = sum(
+            dl.get_queue_size() for dl in self.download_processors.values()
+        )
+        download_in_progress = [
+            s
+            for dl in self.download_processors.values()
+            if (s := dl.get_in_progress_summary())
+        ] or None
+        summary: dict[str, dict] = {
+            "download": {
+                "queued": download_queued,
+                "in_progress": download_in_progress,
+            },
+        }
+        video_summary = _summary(self.video_processor)
+        if video_summary is not None:
+            summary["video"] = video_summary
+        youtube_summary = _summary(self.upload_processor)
+        if youtube_summary is not None:
+            summary["youtube"] = youtube_summary
+        ntfy_summary = _summary(self.ntfy_processor)
+        if ntfy_summary is not None:
+            summary["ntfy"] = ntfy_summary
+        if self.clip_request_processor:
+            active = len(self.clip_request_processor._processing)
+            summary["clip_request"] = {
+                "queued": 0,
+                "in_progress": active if active > 0 else None,
+            }
+        if self.ttt_job_processor:
+            active = len(self.ttt_job_processor._processing_jobs)
+            summary["ttt_jobs"] = {
+                "queued": 0,
+                "in_progress": active if active > 0 else None,
+            }
+        if self.clip_processor:
+            clips_summary = _summary(self.clip_processor)
+            if clips_summary is not None:
+                summary["clips"] = clips_summary
+        return summary
 
     @staticmethod
     def _processor_status(processor) -> str:

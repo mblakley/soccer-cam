@@ -453,16 +453,47 @@ class QueueProcessor(ABC):
             logger.error(f"{self.__class__.__name__}: Error loading state: {e}")
 
     def get_queue_size(self) -> int:
-        """Get the current queue size."""
+        """Get the current pending queue size.
+
+        Does NOT include the currently-processing item (tracked separately
+        via ``_in_progress_item`` and surfaced through
+        :meth:`get_in_progress_summary`). Together they describe what the
+        processor is actually doing -- ``queue=0`` alone is ambiguous
+        between "idle" and "mid-flight on a 15-min task".
+        """
         if self._queue is None:
             return 0
         return self._queue.qsize()
+
+    def get_in_progress_summary(self) -> str | None:
+        """Return a short identifier of the item currently being processed.
+
+        Format: ``<TaskClassName>(<get_item_path>)``, e.g.
+        ``TrimTask(2026.06.01-18.25.38)``. Returns ``None`` when the
+        processor is idle.
+
+        Surfaces the in-progress task to the periodic ``QUEUE_STATUS``
+        log line so a long silent stream copy (PyAV combine/trim, 15-min
+        wall time, no progress output) is distinguishable from a wedged
+        worker. Without this, ``video=0`` in the log was ambiguous on
+        2026-06-01 -- looked idle, was actually trimming.
+        """
+        item = self._in_progress_item
+        if item is None:
+            return None
+        cls = type(item).__name__
+        try:
+            path = item.get_item_path()
+        except Exception:
+            path = repr(item)
+        return f"{cls}({path})"
 
     def get_status(self) -> dict[str, object]:
         """Get processor status information."""
         return {
             "queue_size": self.get_queue_size(),
             "queued_items_count": len(self._queued_items),
+            "in_progress": self.get_in_progress_summary(),
             "running": self._processor_task is not None
             and not self._processor_task.done(),
         }
