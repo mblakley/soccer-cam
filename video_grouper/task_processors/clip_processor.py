@@ -5,6 +5,7 @@ Handles ClipExtractionTask (FFmpeg trim) and HighlightCompilationTask (FFmpeg co
 then uploads results to YouTube and updates the API.
 """
 
+import asyncio
 import logging
 import os
 
@@ -115,7 +116,11 @@ class ClipProcessor(QueueProcessor):
             return None
 
         try:
-            video_id = self.youtube_uploader.upload_video(
+            # googleapiclient is sync; without asyncio.to_thread the upload
+            # blocks the event loop shared by the auth server, tray status
+            # poller, and other queue processors.
+            video_id = await asyncio.to_thread(
+                self.youtube_uploader.upload_video,
                 video_path,
                 title=title,
                 description=description,
