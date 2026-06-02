@@ -31,45 +31,91 @@ _NO_WINDOW = 0x08000000
 _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
 
 
-# Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output, so
+# Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output;
 # a healthy completed render is roughly input_duration_seconds * 1 MB/s.
-# The size floor here is deliberately one order of magnitude looser than
-# that (0.5 Mbps average) so it only flags clear failures and never
-# blocks a legit run because of an unexpectedly low-bitrate output.
+# The 10 MB absolute floor is a backstop for empty/header-only output;
+# the moov-atom presence check (below) is the load-bearing reject for
+# the 2026-06-01 failure mode.
 _MIN_OUTPUT_BYTES_ABSOLUTE = 10 * 1024 * 1024  # 10 MB
-_MIN_OUTPUT_BPS = 500_000  # 0.5 Mbps, far below the 8 Mbps target
-# Output duration must reach this fraction of input duration; below
-# means AutoCam exited mid-pass.
-_MIN_DURATION_PARITY = 0.95
+
+
+def _mp4_has_moov_atom(path: str) -> bool:
+    """Walk top-level MP4 boxes looking for the 'moov' atom.
+
+    A clean AutoCam exit writes ftyp + ... + moov + mdat (or with
+    movflags=faststart, ftyp + moov + mdat). A mid-write or truncated
+    output has the ftyp box but no moov -- the same shape as the 15.5 MB
+    file produced 2026-06-01 that v0.4.10 wrongly marked
+    ball_tracking_complete.
+
+    Pure-Python so the tray binary doesn't need PyAV bundled (v0.4.11
+    shipped with PyAV in the validator but av.open isn't reachable from
+    the tray PyInstaller bundle -- AttributeError on av.open at runtime
+    fed the broad exception handler and produced the right verdict for
+    the wrong reason).
+
+    Returns False on any I/O error or malformed box header.
+    """
+    try:
+        with open(path, "rb") as f:
+            while True:
+                header = f.read(8)
+                if len(header) < 8:
+                    return False
+                size = int.from_bytes(header[:4], "big")
+                box_type = header[4:8]
+                if box_type == b"moov":
+                    return True
+                if size == 1:
+                    # 'largesize' extension box: real size is the next 8 bytes.
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    size = int.from_bytes(ext, "big")
+                    skip = size - 16
+                elif size == 0:
+                    # Box extends to EOF -- no further boxes, so no moov.
+                    return False
+                else:
+                    skip = size - 8
+                if skip < 0:
+                    return False
+                f.seek(skip, 1)
+    except OSError:
+        return False
 
 
 def _validate_autocam_output(
     output_path: str,
     input_path: str | None = None,
     min_bytes: int = _MIN_OUTPUT_BYTES_ABSOLUTE,
-    min_bps: int = _MIN_OUTPUT_BPS,
-    min_duration_parity: float = _MIN_DURATION_PARITY,
 ) -> tuple[bool, str]:
     """Validate an AutoCam output is a real processed video, not a partial.
 
-    Catches three failure modes the fixed-byte-floor check missed
-    (regression observed 2026-06-01: a 15.5 MB header-only MP4 passed
-    the 10 MB floor and was marked ball_tracking_complete):
+    Two checks, in order:
 
-    1. Header-only MP4 -- ftyp written, moov atom never finalized. PyAV
-       fails to open these with "Invalid data found when processing input".
-    2. Truncated output -- output duration is materially shorter than
-       input. We require >= 95% parity when an input file is supplied.
-    3. Implausibly low bitrate -- output below 0.5 Mbps averaged across
-       the input's duration. Once Sport AutoCam targets ~8 Mbps, so
-       anything under 0.5 Mbps is a partial render.
+    1. Absolute size floor (default 10 MB). Cheap reject for empty or
+       barely-started files; primarily a backstop in case the moov scan
+       returns spuriously True on a tiny well-formed test fixture.
+    2. moov-atom presence via :func:`_mp4_has_moov_atom`. AutoCam writes
+       the moov atom only at clean exit, so its absence means the file
+       is a partial -- the exact 2026-06-01 failure mode where a 15.5 MB
+       header-only MP4 passed the size-only check and got marked
+       ball_tracking_complete.
 
-    Returns (ok, reason). On a False result the caller should treat the
-    file as a crashed partial and delete it before retry.
+    Returns (ok, reason). On a False result the caller deletes the file
+    as a crashed partial before retry.
+
+    Note (v0.4.12): the PyAV-based duration parity / bitrate floor that
+    v0.4.11 attempted was unreachable in the production tray binary
+    (PyAV's av.open isn't exposed there). For v0.4.12 we rely on the
+    pure-Python moov scan, which catches the actual observed failure
+    mode. The duration-parity defense returns when the tray binary
+    properly bundles PyAV.
+
+    ``input_path`` is accepted for forward compatibility but unused.
     """
-    # Local import keeps PyAV out of the tray boot path; the validator
-    # is only ever called from inside the AutoCam poll loop.
-    import av
+    del input_path  # kept in signature for caller compatibility
 
     if not os.path.isfile(output_path):
         return False, f"output file does not exist: {output_path}"
@@ -84,53 +130,14 @@ def _validate_autocam_output(
             f"{min_bytes / 1024 / 1024:.0f} MB absolute floor",
         )
 
-    # PyAV moov-atom probe: the most direct catch for the 2026-06-01
-    # failure mode. A header-only MP4 has the ftyp box but no moov, so
-    # av.open() raises (av.error.InvalidDataError on PyAV >= 11) before
-    # we can read any stream info. Catch broadly: any PyAV failure to
-    # open the file means the output isn't usable.
-    try:
-        with av.open(output_path) as out_container:
-            if not out_container.streams.video:
-                return False, "output has no video stream"
-            out_duration_us = out_container.duration or 0
-    except Exception as e:
-        return False, f"PyAV cannot decode output (likely no moov atom): {e}"
+    if not _mp4_has_moov_atom(output_path):
+        return (
+            False,
+            f"output {size / 1024 / 1024:.1f} MB has no moov atom "
+            f"(AutoCam exited before finalizing the MP4 container)",
+        )
 
-    out_duration_s = out_duration_us / 1_000_000 if out_duration_us else 0
-    if out_duration_s <= 0:
-        return False, "output reports zero or unknown duration"
-
-    # Compare against input when we have it (the resume-existing short-
-    # circuit doesn't always; that path falls back to moov+size only).
-    if input_path and os.path.isfile(input_path):
-        try:
-            with av.open(input_path) as in_container:
-                in_duration_us = in_container.duration or 0
-        except Exception:
-            in_duration_us = 0
-        in_duration_s = in_duration_us / 1_000_000 if in_duration_us else 0
-        if in_duration_s > 0:
-            ratio = out_duration_s / in_duration_s
-            if ratio < min_duration_parity:
-                return (
-                    False,
-                    f"output duration {out_duration_s:.0f}s is only "
-                    f"{ratio * 100:.0f}% of input {in_duration_s:.0f}s "
-                    f"(min parity {min_duration_parity * 100:.0f}%)",
-                )
-            if min_bps > 0:
-                min_bytes_for_duration = int(in_duration_s * min_bps / 8)
-                if size < min_bytes_for_duration:
-                    return (
-                        False,
-                        f"output {size / 1024 / 1024:.1f} MB implausibly small "
-                        f"for {in_duration_s:.0f}s input "
-                        f"(minimum {min_bytes_for_duration / 1024 / 1024:.0f} MB "
-                        f"at {min_bps / 1_000_000:.1f} Mbps)",
-                    )
-
-    return True, (f"OK: {size / 1024 / 1024:.1f} MB, {out_duration_s:.0f}s")
+    return True, f"OK: {size / 1024 / 1024:.1f} MB, moov atom present"
 
 
 def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> bool:
