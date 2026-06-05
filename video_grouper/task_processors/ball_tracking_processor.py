@@ -10,6 +10,7 @@ Replaces the old ``AutocamProcessor``.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -73,12 +74,43 @@ class BallTrackingProcessor(QueueProcessor):
                 logger.info("BALL_TRACKING: task completed: %s", item)
                 await self._handle_successful_completion(item)
             else:
-                logger.error("BALL_TRACKING: task failed: %s", item)
+                self._record_failure(item)
+                raise RuntimeError(f"Ball tracking task returned False: {item}")
+        except RuntimeError:
+            raise  # Let base class retry logic handle it
         except Exception as e:
+            self._record_failure(item)
             logger.error("BALL_TRACKING: error processing task %s: %s", item, e)
+            raise
 
     def get_item_key(self, item: BallTrackingTaskBase) -> str:
-        return f"{item.task_type}:{item.get_item_path()}:{hash(item)}"
+        return f"{item.task_type}:{item.group_dir}"
+
+    def _record_failure(self, item: BallTrackingTaskBase) -> None:
+        """Increment ball_tracking_failures in state.json for durable failure tracking."""
+        state_file = item.group_dir / "state.json"
+        try:
+            with open(state_file) as f:
+                state_data = json.load(f)
+            state_data["ball_tracking_failures"] = (
+                state_data.get("ball_tracking_failures", 0) + 1
+            )
+            state_data["last_ball_tracking_failure"] = (
+                datetime.datetime.utcnow().isoformat() + "Z"
+            )
+            with open(state_file, "w") as f:
+                json.dump(state_data, f, indent=4)
+            logger.info(
+                "BALL_TRACKING: recorded failure #%d for %s",
+                state_data["ball_tracking_failures"],
+                item.group_dir.name,
+            )
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(
+                "BALL_TRACKING: could not record failure for %s: %s",
+                item.group_dir.name,
+                e,
+            )
 
     async def _handle_successful_completion(self, item: BallTrackingTaskBase) -> None:
         group_dir = item.group_dir

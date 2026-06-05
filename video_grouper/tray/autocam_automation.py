@@ -613,9 +613,12 @@ def _wait_for_completion_and_cleanup(
     start_time = datetime.datetime.now()
     timeout_seconds = 60 * 60 * 24  # 24 hours
     startup_timeout_seconds = 300  # 5 minutes to start processing
+    stale_progress_timeout = 600  # 10 minutes without progress change → hung
     poll_interval = 30  # 30 seconds
     found = False
     processing_started = False
+    last_notification_text = None
+    last_progress_change_time = datetime.datetime.now()
 
     try:
         while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
@@ -693,6 +696,34 @@ def _wait_for_completion_and_cleanup(
                         logger.info("Processing started: %r", raw_notification)
             except Exception as e:
                 logger.warning(f"Error while checking for success message: {e}")
+
+            # Stale progress detection: if the notification text hasn't
+            # changed for stale_progress_timeout seconds after processing
+            # started, AutoCam is hung. Kill it and treat as failure.
+            # Guard: notification_text may be unbound if the try block
+            # above raised before assigning it.
+            current_text = locals().get("notification_text")
+            if current_text is not None:
+                if processing_started and last_notification_text is not None:
+                    if current_text != last_notification_text:
+                        last_progress_change_time = datetime.datetime.now()
+                    stale_seconds = (
+                        datetime.datetime.now() - last_progress_change_time
+                    ).total_seconds()
+                    if stale_seconds > stale_progress_timeout:
+                        logger.error(
+                            "AutoCam progress stale for %.0f minutes "
+                            "(last status: %r); treating as hung.",
+                            stale_seconds / 60,
+                            current_text,
+                        )
+                        if output_path and os.path.isfile(output_path):
+                            try:
+                                os.remove(output_path)
+                            except OSError:
+                                pass
+                        break
+                last_notification_text = current_text
 
             # Exit-detection fallback: if AutoCam's GUI processes have
             # all exited, decide success/failure from the output file's

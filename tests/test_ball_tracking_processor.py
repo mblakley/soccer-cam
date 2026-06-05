@@ -70,14 +70,19 @@ class TestProcessItem:
         assert state["status"] == "ball_tracking_complete"
 
     @pytest.mark.asyncio
-    async def test_failure_does_not_update_state(self, processor, group_dir):
+    async def test_failure_raises_and_records_failure_count(
+        self, processor, group_dir
+    ):
         task = _make_task(group_dir)
         task.execute = AsyncMock(return_value=False)
 
-        await processor.process_item(task)
+        with pytest.raises(RuntimeError, match="Ball tracking task returned False"):
+            await processor.process_item(task)
 
         state = json.loads((group_dir / "state.json").read_text())
         assert state["status"] == "trimmed"  # unchanged
+        assert state["ball_tracking_failures"] == 1
+        assert "last_ball_tracking_failure" in state
 
     @pytest.mark.asyncio
     async def test_success_queues_youtube_upload_when_enabled(
@@ -135,7 +140,8 @@ class TestProcessItemPrecheck:
 
 
 class TestGetItemKey:
-    def test_keys_differ_per_provider(self, processor, group_dir):
+    def test_keys_same_for_same_group_different_provider(self, processor, group_dir):
+        """One group = one ball tracking task, regardless of provider."""
         a = _make_task(group_dir)
         b = BallTrackingTask(
             group_dir=group_dir,
@@ -144,7 +150,7 @@ class TestGetItemKey:
             provider_name="homegrown",
             provider_config={},
         )
-        assert processor.get_item_key(a) != processor.get_item_key(b)
+        assert processor.get_item_key(a) == processor.get_item_key(b)
 
     def test_keys_equal_for_identical_tasks(self, processor, group_dir):
         a = _make_task(group_dir)

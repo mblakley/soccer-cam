@@ -63,7 +63,17 @@ class BallTrackingDiscoveryProcessor(PollingProcessor):
                 continue
 
             if status == "trimmed":
-                await self._enqueue_for(group_dir)
+                failures = state_data.get("ball_tracking_failures", 0)
+                if failures >= 5:
+                    logger.debug(
+                        "BALL_TRACKING_DISCOVERY: skipping %s — %d failures "
+                        "recorded (max 5). Clear ball_tracking_failures in "
+                        "state.json to retry.",
+                        group_dir.name,
+                        failures,
+                    )
+                else:
+                    await self._enqueue_for(group_dir)
             elif status == "ball_tracking_complete":
                 await self._recover_upload(group_dir)
 
