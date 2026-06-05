@@ -101,12 +101,12 @@ _HOMEGROWN_STAGE_FIELDS: dict[str, list[str]] = {
         "detect_frame_interval",
     ],
     "track": ["track_kalman_gate", "track_max_missing"],
+    # Only the output resolution survives the migration; the legacy render
+    # tunables (ema / lead_room / fov_deg) have no analogue in the cylindrical
+    # broadcast render, which uses its own (defaulted) control params.
     "render": [
-        "render_ema",
-        "render_lead_room",
         "render_output_width",
         "render_output_height",
-        "render_fov_deg",
     ],
 }
 

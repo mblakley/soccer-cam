@@ -124,8 +124,18 @@ type = track
 
 [PIPELINE.render]
 type = render
+# Broadcast-style virtual camera: cylindrical de-fisheye + ball-following pan,
+# field-zone/speed zoom, lead room, dead-ball and missing-ball handling.
+# render_mode = broadcast          ; broadcast (tight, dramatic) | coach (wider, tactical)
 # render_output_width = 1920
 # render_output_height = 1080
+# Source horizontal FOV of the stitched panorama (Reolink/Dahua are ~180).
+# render_src_hfov_deg = 180
+# Vertical framing without a hard tilt:
+#   true  = gently follow the ball's height (natural broadcast feel)
+#   false = hold the field centre and zoom out to always keep the ball in frame
+# render_vertical_tracking = true
+# render_video_bitrate = 8M
 
 # Alternative: drive the Once Sport AutoCam GUI instead (Windows + tray only).
 # Replace the `steps` above with `steps = autocam` and configure:

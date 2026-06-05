@@ -78,11 +78,10 @@ PRESETS: dict[str, list[_PresetStep]] = {
             "render",
             "render",
             {
-                "render_ema": 0.975,
-                "render_lead_room": 0.15,
+                "render_mode": "broadcast",
                 "render_output_width": 1920,
                 "render_output_height": 1080,
-                "render_fov_deg": 50.0,
+                "render_vertical_tracking": True,
             },
         ),
     ],

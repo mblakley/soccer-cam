@@ -40,7 +40,9 @@ def test_step_metadata():
     assert autocam.requires == ()
 
     render = get_step_meta("render")
-    assert render.requires == ("av",)
+    # The cylindrical broadcast render uses cv2.remap (de-fisheye) in addition
+    # to av, so it requires both.
+    assert render.requires == ("av", "cv2")
     assert render.resources == ("ram_heavy",)
 
     track = get_step_meta("track")
