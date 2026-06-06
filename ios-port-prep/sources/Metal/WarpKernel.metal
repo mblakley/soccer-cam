@@ -31,6 +31,14 @@ struct WarpParams {
     int sh;
     int pw;
     int ph;
+    // crop_box (cx, cy, cw, ch) MUST be normalized to positive cw/ch before
+    // being passed to the kernel — see swift_projection_math.md cropBox()
+    // notes. The Python crop_box() helper returns Python-slice semantics
+    // where cw/ch can be negative ("from end"); the host must convert via
+    //   if cw < 0: cw = pw - cx + cw
+    //   if ch < 0: ch = ph - cy + ch
+    // Failure to do so produces all-black output (sampling at negative
+    // pano coords) — confirmed by parity-harness investigation 2026-06.
     int cx;
     int cy;
     int cw;

@@ -100,6 +100,22 @@ kernel void warp(
 
 ### Key parity rules
 
+- **crop_box must be normalized to positive (cw, ch) on the host before
+  being passed to the kernel.** Python's `crop_box()` helper returns
+  slice-style semantics (negative cw/ch mean "from end of pano"); the
+  cv2.remap-via-cv2.resize production path silently accepts this because
+  numpy slicing tolerates it. The kernel literally samples at the given
+  coords, so a negative ch produces an all-black output. Host wrapper
+  must apply:
+  ```
+  if cw < 0: cw = pw - cx + cw
+  if ch < 0: ch = ph - cy + ch
+  ```
+  before populating `WarpParams`. (Discovered 2026-06 via the W.6 NumPy
+  reference test against a real Reolink 7680×2160 + 20.8° mount-tilt
+  configuration that produces `ch = -185`. Soccer-cam's existing OpenCL
+  warp backend has the same bug; it just hasn't been exercised on this
+  camera config in production.)
 - **half-pixel offset** — `(x + 0.5) * cw / ow - 0.5` matches `cv2.resize` /
   `cv2.remap`. The OpenCL reference uses this; the Metal kernel must too,
   or the output drifts by half a pixel.
