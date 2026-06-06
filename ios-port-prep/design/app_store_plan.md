@@ -1,0 +1,202 @@
+# App Store submission plan
+
+soccer-cam-ios is OSS + free per [[feedback_client_apps_oss]] with optional
+premium TTT-subscription features. Apple has well-trodden precedent for
+this exact shape (VLC, many OSS clients) — this doc just nails the specific
+choices for our submission.
+
+## Bundle identity
+
+| Field | Value |
+|-------|-------|
+| Bundle ID | `com.soccercam.ios` |
+| Display name | "soccer-cam" |
+| Subtitle | "Ball-following soccer video" |
+| Primary category | Sports |
+| Secondary category | Photo & Video |
+| Age rating | 4+ (no objectionable content) |
+| Price | Free |
+
+## In-app purchases / subscriptions
+
+**MVP ships with NO in-app purchases.** Premium TTT models are gated by an
+existing TTT subscription, which the user buys on TTT.com. Per Apple's
+"reader app" rules (App Store Review Guideline 3.1.3 (a)), an app that
+provides previously-purchased digital content (subscriptions, magazines,
+etc.) does NOT need StoreKit for those entitlements — IF it doesn't promote
+or link to the external purchase flow inside the app.
+
+This means:
+
+- **Allowed:** Sign in with a TTT account; show "Premium models require a
+  TTT subscription. Sign in with an active subscription to use them."
+- **NOT allowed:** Link directly to a TTT.com sign-up or pricing page from
+  inside the app. Don't include a "Subscribe" button that opens a webview.
+- **Allowed (via external-link entitlement):** Apple's Communication
+  Subscription Apps allowance + the new "external purchase link" rules
+  permit a single, plain-text link to "Manage subscription on TTT.com" in
+  an off-screen "Account" panel. Use this conservatively.
+
+If StoreKit later becomes required (e.g. Apple changes its reader-app
+posture), add `Services/IAP/` with a `StoreKitGateway` that mirrors the
+TTT subscription state — TTT still drives entitlement, StoreKit is just an
+alternate fulfillment.
+
+## Privacy nutrition label
+
+```
+Data Used to Track You: None
+Data Linked to You:
+  - Email Address (Account, App Functionality)  [only if user signs in]
+  - User ID    (Account, App Functionality)     [only if user signs in]
+Data Not Linked to You: None
+```
+
+The app collects nothing about the user unless they sign in. The Reolink
+camera credentials live on-device only (Keychain). The rendered video stays
+on-device unless explicitly uploaded.
+
+App Privacy Manifest (`PrivacyInfo.xcprivacy`) declares:
+
+- API access reasons: `NSPrivacyAccessedAPICategoryFileTimestamp` (for
+  segment timestamps), `NSPrivacyAccessedAPICategoryUserDefaults` (for
+  app settings).
+- Third-party SDKs: none. Listed explicitly so Apple's automated review
+  isn't suspicious of missing entries.
+
+## Required usage descriptions (Info.plist)
+
+```xml
+<key>NSCameraUsageDescription</key>
+<string>The app does not access the camera.</string>
+                          <!-- intentionally states no use; required only if a framework triggers the entitlement -->
+
+<key>NSPhotoLibraryUsageDescription</key>
+<string>Import a panorama video file from your Photos to render with ball-following.</string>
+
+<key>NSLocalNetworkUsageDescription</key>
+<string>Connect to your Reolink camera on the same Wi-Fi network to download recorded video segments.</string>
+
+<key>NSBonjourServices</key>
+<array>
+  <!-- only listed if we add Bonjour discovery for Reolink in v1.1 -->
+</array>
+```
+
+## Background mode declarations
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+  <string>processing</string>      <!-- BGProcessingTask for long renders -->
+  <string>audio</string>           <!-- defensive keepalive while decoding -->
+</array>
+<key>BGTaskSchedulerPermittedIdentifiers</key>
+<array>
+  <string>com.soccercam.ios.render</string>
+</array>
+```
+
+Apple reviews `audio` background mode carefully — explain in submission
+notes that the source video has an audio track passed through to the
+rendered output, so the app is genuinely decoding+re-muxing audio during
+the render. This is honest, not a keepalive workaround.
+
+## On-device ML disclosure
+
+Apple's review notes increasingly ask about ML. Our submission notes:
+
+> The app uses on-device CoreML models to detect soccer balls in user-
+> provided panoramic video. No video data leaves the device for inference.
+> A bundled community model ships with the app; optional TTT-licensed models
+> are downloaded after the user signs in to their TTT subscription and
+> decrypted in memory only. Decryption uses Apple CryptoKit (AES-GCM); no
+> custom cryptography.
+
+## Encryption export compliance
+
+The app uses AES-GCM via CryptoKit, which falls under the "encryption
+limited to authentication / data integrity" exemption (15 CFR 740.17(b)(1)).
+Set `ITSAppUsesNonExemptEncryption=false` in Info.plist — no annual self-
+classification report required.
+
+## Asset deliverables
+
+Per [[feedback_custom_branding_from_start]] all of these exist BEFORE the
+first TestFlight build, not after:
+
+- App icon: 1024×1024 master + all required sizes (auto-generated by
+  Xcode from the master in Assets.xcassets)
+- Launch screen storyboard with the brand splash
+- App Store screenshots: at least 6.7" iPhone Pro Max + 12.9" iPad Pro
+  required by Apple. Strategy:
+  1. GamesListView with a live game in progress
+  2. GameDetailView mid-rendering with progress strip
+  3. GameDetailView with the rendered video preview
+  4. ImportFlowView wizard step
+  5. SignInView (with TTT branding visible)
+- App preview video (optional, 30s): screen-recording of the render
+  pipeline shown in time-lapse — actually compelling content for a video-
+  focused app, worth doing.
+
+## App Store Connect description (~3500 char limit)
+
+Draft:
+
+> soccer-cam turns a fixed-position panoramic recording of a soccer game
+> into a ball-following broadcast-style video, processed entirely on your
+> iPhone or iPad.
+>
+> Connect to a Reolink camera on your field's Wi-Fi, and the app pulls each
+> 5-minute segment as the camera records it, then runs ball detection and
+> renders a cropped broadcast view in the background. The output is ready
+> within a few minutes of the final whistle.
+>
+> Already have the recording on your phone? Import a panorama mp4 from
+> Files, AirDrop, or your Photos library, and the same pipeline runs against
+> it.
+>
+> Open source, no ads, no tracking. The ball detection runs entirely on your
+> device using a bundled CoreML model — your video never leaves the phone
+> for inference.
+>
+> Optional: sign in with a Team Tech Tools (TTT) subscription to access
+> better-trained premium models and to publish rendered videos directly to
+> your TTT game library.
+
+Keywords (100 char limit): `soccer,football,ball,tracker,broadcast,video,
+panorama,reolink,coach,team,playmetrics`
+
+## Testing strategy pre-submission
+
+1. TestFlight beta with Mark + 2–3 camera-managers (the user research
+   target per the iOS-port plan).
+2. Run the [[feedback_comprehensive_verification]] gates: lint, type, unit,
+   integration, E2E, manual workflow walkthrough, negative paths, security
+   gate (App Privacy Report check, no unexpected network from the app,
+   Keychain entries cleared on sign-out).
+3. Test on the oldest supported device (iPhone 13) AND newest (iPhone 15
+   Pro / iPad M2). Document the iPhone 13 thermal headroom in the
+   submission notes if Apple asks.
+
+## Update cadence
+
+Per [[feedback_pre_launch_no_backcompat]], the app is pre-1.0; ship
+breaking changes openly. Once 1.0 ships:
+
+- Patch releases (1.0.x): bug fixes, weekly cadence as needed.
+- Minor releases (1.x.0): new features, ~monthly.
+- Major releases (x.0.0): only for breaking schema changes or major UI
+  redesigns.
+
+App Store review typically clears in 24–48 hours for an app this small.
+TestFlight builds are essentially instant.
+
+## Cross-references
+
+- `app_ui.md` — what the screenshots show
+- `ttt_api_integration.md#video-upload` — the upload flow Apple notes
+  reference
+- `cryptokit_decryption.md` — the encryption surface declared in
+  submission notes
+- `data_model.md` — Keychain layout for the privacy assertion
