@@ -796,14 +796,24 @@ def _frame_view(
 # ---------------------------------------------------------------------------
 
 
+_DUMP_SAMPLE_INTERVAL = 30
+
+
 def _render_video(
     input_path: str,
     output_path: str,
     trajectory_path: str,
     field_polygon_path: str | None,
     cfg: RenderStepConfig,
+    dump_dir: Path | None = None,
 ) -> None:
-    """Sync helper: per-frame cylindrical render with the broadcast control logic."""
+    """Sync helper: per-frame cylindrical render with the broadcast control logic.
+
+    When ``dump_dir`` is set, also write the iOS-port parity baselines: the
+    constant world-up panorama as ``.npy`` + visualization PNG, per-frame
+    camera state as ``camera_states.json``, and sampled rendered frames as
+    ``render_frame_*.png`` every N frames.
+    """
     import av
 
     from video_grouper.inference.field_geometry import field_lateral_yaw_extent
@@ -818,12 +828,18 @@ def _render_video(
 
     polygon, homography = _load_field(field_polygon_path)
 
+    if dump_dir is not None:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+    camera_states: list[dict] = []
+
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
         src_w = in_video.width
         src_h = in_video.height
 
         geom = _resolve_geometry(src_w, src_h, cfg, polygon)
+        if dump_dir is not None:
+            _dump_world_up_pano(geom, dump_dir)
         yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, geom.src_hfov_deg)
         yaw_min -= cfg.render_yaw_padding_deg
         yaw_max += cfg.render_yaw_padding_deg
@@ -896,6 +912,16 @@ def _render_video(
                         )
                         rgb = frame.to_ndarray(format="rgb24")
                         rendered = _warp_frame(rgb, geom, cfg, params, view_yaw, warper)
+                        if dump_dir is not None:
+                            _dump_frame_state(
+                                dump_dir,
+                                camera_states,
+                                state,
+                                params,
+                                view_yaw,
+                                rendered,
+                                frame_idx,
+                            )
                         new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
                         new_frame.pts = frame.pts
                         for v_packet in out_stream.encode(new_frame):
@@ -917,6 +943,75 @@ def _render_video(
                     out_container.mux(a_packet)
         if warper is not None:
             warper.close()
+
+    if dump_dir is not None:
+        with open(dump_dir / "camera_states.json", "w", encoding="utf-8") as f:
+            json.dump(camera_states, f, sort_keys=True)
+        logger.info(
+            "render: dumped %d camera-state frames + %d sample PNGs to %s",
+            len(camera_states),
+            (len(camera_states) + _DUMP_SAMPLE_INTERVAL - 1) // _DUMP_SAMPLE_INTERVAL,
+            dump_dir,
+        )
+
+
+def _dump_world_up_pano(geom: "_ViewGeom", dump_dir: Path) -> None:
+    """Save the constant world-up leveling panorama as .npy + visualization PNGs.
+
+    Per cylindrical_view.build_leveled_pano, the leveled pano is built ONCE per
+    video and reused for every frame's crop. The iOS port's Swift equivalent
+    (Phase 5a) must produce numerically-identical map_x/map_y arrays — this is
+    the E0.B2 baseline.
+    """
+    if geom.leveled_pano is None:
+        return  # pinhole projection — no pre-built pano to dump
+    import cv2
+    import numpy as np
+
+    pano = geom.leveled_pano
+    np.save(dump_dir / "leveled_pano_map_x.npy", pano.map_x)
+    np.save(dump_dir / "leveled_pano_map_y.npy", pano.map_y)
+    for name, arr in (("map_x", pano.map_x), ("map_y", pano.map_y)):
+        vmin, vmax = float(arr.min()), float(arr.max())
+        scale = 255.0 / (vmax - vmin) if vmax > vmin else 0.0
+        vis = ((arr - vmin) * scale).astype("uint8")
+        cv2.imwrite(str(dump_dir / f"leveled_pano_{name}.png"), vis)
+
+
+def _dump_frame_state(
+    dump_dir: Path,
+    camera_states: list[dict],
+    state: "_CameraState",
+    params,
+    view_yaw: float,
+    rendered,
+    frame_idx: int,
+) -> None:
+    """Append per-frame camera state and sample a render frame every Nth frame.
+
+    Camera state is buffered in-memory; the caller flushes once at end of run.
+    Sampled PNGs are written immediately (one every _DUMP_SAMPLE_INTERVAL
+    frames — at 30fps that's once per second, giving the iOS render-fidelity
+    check dense-enough sampling without filling disk).
+    """
+    camera_states.append(
+        {
+            "frame_idx": frame_idx,
+            "view_yaw_deg": float(view_yaw),
+            "smoothed_yaw_deg": _opt_float(state.smoothed_yaw),
+            "smoothed_pitch_deg": _opt_float(state.smoothed_pitch),
+            "smoothed_zoom_frac": _opt_float(state.smoothed_zoom),
+            "view_hfov_deg": float(params.view_hfov_deg),
+            "view_pitch_deg": float(params.view_pitch_deg),
+            "stationary_frames": state.stationary_frames,
+            "missing_frames": state.missing_frames,
+        }
+    )
+    if frame_idx % _DUMP_SAMPLE_INTERVAL == 0:
+        import cv2
+
+        sample_path = dump_dir / f"render_frame_{frame_idx:06d}.png"
+        cv2.imwrite(str(sample_path), cv2.cvtColor(rendered, cv2.COLOR_RGB2BGR))
 
 
 # ---------------------------------------------------------------------------
@@ -980,6 +1075,16 @@ class RenderFrameConsumer(FrameConsumer):
             self._geom, cfg, source.width, source.height, self._ow, self._oh
         )
 
+        # Parity-harness dump setup. Per-variant subdirectory so a fan-out
+        # with broadcast + coach variants doesn't have its outputs collide.
+        self._dump_dir = None
+        self._camera_states: list[dict] = []
+        if ctx.dump_intermediates_dir is not None:
+            variant = Path(cfg.output_name).stem
+            self._dump_dir = ctx.dump_intermediates_dir / variant
+            self._dump_dir.mkdir(parents=True, exist_ok=True)
+            _dump_world_up_pano(self._geom, self._dump_dir)
+
     def consume(self, rgb, frame_pts: int, frame_idx: int) -> None:
         import av
 
@@ -1001,6 +1106,18 @@ class RenderFrameConsumer(FrameConsumer):
         rendered = _warp_frame(
             rgb, self._geom, self.config, params, view_yaw, self._warper
         )
+
+        if self._dump_dir is not None:
+            _dump_frame_state(
+                self._dump_dir,
+                self._camera_states,
+                self._state,
+                params,
+                view_yaw,
+                rendered,
+                frame_idx,
+            )
+
         new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
         new_frame.pts = frame_pts
         for v_packet in self._stream.encode(new_frame):
@@ -1013,6 +1130,24 @@ class RenderFrameConsumer(FrameConsumer):
         if getattr(self, "_warper", None) is not None:
             self._warper.close()
         manifest.put(self.config.output_key, str(self._out_path))
+
+        if self._dump_dir is not None:
+            with open(
+                self._dump_dir / "camera_states.json", "w", encoding="utf-8"
+            ) as f:
+                json.dump(self._camera_states, f, sort_keys=True)
+            logger.info(
+                "render: dumped %d camera-state frames + %d sample PNGs to %s",
+                len(self._camera_states),
+                (len(self._camera_states) + _DUMP_SAMPLE_INTERVAL - 1)
+                // _DUMP_SAMPLE_INTERVAL,
+                self._dump_dir,
+            )
+
+
+def _opt_float(v) -> float | None:
+    """JSON-friendly conversion: numpy float / None passthrough."""
+    return None if v is None else float(v)
 
 
 register_frame_consumer("render", RenderFrameConsumer, RenderConsumerConfig)
@@ -1042,6 +1177,7 @@ class RenderStep(PipelineStep):
             trajectory_path,
             field_polygon_path,
             self.config,
+            ctx.dump_intermediates_dir,
         )
         logger.info("render: wrote broadcast-style output to %s", out_path)
         return True

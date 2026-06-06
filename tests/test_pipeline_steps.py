@@ -105,9 +105,10 @@ async def test_stitch_passthrough_when_no_profile(tmp_path):
 async def test_detect_step_local_path(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_create_session(model_path, use_gpu=False):
+    def fake_create_session(model_path, use_gpu=False, deterministic=False):
         captured["model_path"] = str(model_path)
         captured["use_gpu"] = use_gpu
+        captured["deterministic"] = deterministic
         return object()
 
     def fake_detect_video(video_path, session, frame_interval=1, conf_threshold=0.0):

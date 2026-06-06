@@ -29,12 +29,34 @@ PANO_W = 4096
 PANO_H = 1800
 
 
-def create_session(model_path: Path, use_gpu: bool = True) -> ort.InferenceSession:
+def create_session(
+    model_path: Path,
+    use_gpu: bool = True,
+    deterministic: bool = False,
+) -> ort.InferenceSession:
     """Create an ONNX inference session.
 
     Provider order: ``[CUDAExecutionProvider, CPUExecutionProvider]`` when
     ``use_gpu`` is True (matches ``onnxruntime-gpu`` wheel), else CPU only.
+
+    ``deterministic=True`` overrides both: forces CPU-only with sequential
+    single-thread execution so two runs produce byte-identical outputs (the
+    iOS parity harness baseline; not the production path).
     """
+    if deterministic:
+        from video_grouper.inference.determinism import (
+            PARITY_PROVIDERS,
+            make_deterministic_sess_options,
+        )
+
+        sess = ort.InferenceSession(
+            str(model_path),
+            sess_options=make_deterministic_sess_options(),
+            providers=list(PARITY_PROVIDERS),
+        )
+        logger.info("ONNX session (deterministic parity): %s", sess.get_providers())
+        return sess
+
     providers: list[str] = []
     if use_gpu:
         providers.append("CUDAExecutionProvider")

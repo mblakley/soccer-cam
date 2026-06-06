@@ -57,7 +57,12 @@ def _run_detection_with_session(
     confidence: float,
     frame_interval: int,
 ) -> int:
-    """Sync helper: run detection against a pre-built session, write JSON."""
+    """Sync helper: run detection against a pre-built session, write JSON.
+
+    JSON is written with ``sort_keys=True`` so two parity-harness runs over
+    the same input produce byte-identical files (key ordering is the only
+    encoder-side source of nondeterminism after a deterministic session).
+    """
     detections = detect_video(
         Path(video_path),
         session,
@@ -65,7 +70,7 @@ def _run_detection_with_session(
         conf_threshold=confidence,
     )
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(detections, f)
+        json.dump(detections, f, sort_keys=True)
     return len(detections)
 
 
@@ -76,9 +81,12 @@ def _run_detection_from_path(
     confidence: float,
     frame_interval: int,
     use_gpu: bool,
+    deterministic: bool = False,
 ) -> int:
     """Community/BYO variant: load the model from disk, then run detection."""
-    sess = create_session(Path(model_path), use_gpu=use_gpu)
+    sess = create_session(
+        Path(model_path), use_gpu=use_gpu, deterministic=deterministic
+    )
     return _run_detection_with_session(
         video_path, output_json_path, sess, confidence, frame_interval
     )
@@ -140,6 +148,7 @@ class DetectStep(PipelineStep):
         cfg = self.config
         in_path = Path(manifest.get("input_path"))
         detections_path = in_path.with_name("detections.json")
+        deterministic = ctx.dump_intermediates_dir is not None
 
         if cfg.model_key:
             session = await asyncio.to_thread(
@@ -149,6 +158,12 @@ class DetectStep(PipelineStep):
                 cfg.detect_pipeline_version,
                 ctx,
             )
+            if deterministic:
+                logger.warning(
+                    "detect: dump-intermediates set but model came via TTT secure_loader; "
+                    "session may not be CPU-deterministic. For full parity baselines use "
+                    "model_path with a plaintext .onnx."
+                )
             count = await asyncio.to_thread(
                 _run_detection_with_session,
                 str(in_path),
@@ -158,7 +173,7 @@ class DetectStep(PipelineStep):
                 cfg.detect_frame_interval,
             )
         elif cfg.model_path:
-            use_gpu = cfg.device.startswith(("cuda", "gpu"))
+            use_gpu = cfg.device.startswith(("cuda", "gpu")) and not deterministic
             count = await asyncio.to_thread(
                 _run_detection_from_path,
                 str(in_path),
@@ -167,6 +182,7 @@ class DetectStep(PipelineStep):
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
                 use_gpu,
+                deterministic,
             )
         else:
             raise RuntimeError(
@@ -177,6 +193,17 @@ class DetectStep(PipelineStep):
 
         logger.info("detect: wrote %d detections to %s", count, detections_path)
         manifest.put("detections_path", str(detections_path))
+
+        if ctx.dump_intermediates_dir is not None:
+            import shutil
+
+            dump = ctx.dump_intermediates_dir
+            dump.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(detections_path, dump / "detections.json")
+            logger.info(
+                "detect: dumped parity baseline to %s", dump / "detections.json"
+            )
+
         return True
 
 

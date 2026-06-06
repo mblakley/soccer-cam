@@ -36,12 +36,21 @@ class StepContext:
         ttt_config: Dict-form ``TTTConfig`` (or ``None`` when TTT is disabled).
             Steps that acquire a TTT-licensed asset read credentials here. Kept
             a plain dict so this module stays free of upstream config imports.
+        dump_intermediates_dir: When set, steps write per-step parity artifacts
+            (detections.json, trajectory.json, world_up_pano.png, sampled
+            render_frame_*.png, per-frame camera_state_*.json, map_x/map_y .npy)
+            into this directory in addition to their normal outputs. Steps also
+            switch to deterministic inference settings (CPU execution provider,
+            sequential execution) so re-runs produce byte-identical artifacts.
+            The iOS port's parity harness consumes these files as the spec the
+            Swift port must match.
     """
 
     group_dir: Path
     team_name: str | None
     storage_path: Path
     ttt_config: dict | None = None
+    dump_intermediates_dir: Path | None = None
 
 
 @dataclass(frozen=True)

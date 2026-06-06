@@ -55,8 +55,16 @@ def _run_tracking(
     if not by_frame:
         logger.warning("track: no detections to track")
         with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump([], f)
+            json.dump([], f, sort_keys=True)
         return 0
+
+    # Deterministic per-frame detection ordering: ball_tracker.update() iterates
+    # the detections list in-order, and Kalman gating + association is order-
+    # dependent. The JSON ordering from detect is already deterministic with
+    # sort_keys, but we re-sort here to be defensive against any future input
+    # source that doesn't guarantee it.
+    for frame_idx in by_frame:
+        by_frame[frame_idx].sort(key=lambda d: (d.x, d.y, d.confidence))
 
     last_frame = max(by_frame)
     for frame_idx in range(last_frame + 1):
@@ -72,7 +80,7 @@ def _run_tracking(
                 trajectory[frame_idx] = [float(x), float(y)]
 
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(trajectory, f)
+        json.dump(trajectory, f, sort_keys=True)
 
     populated = sum(1 for p in trajectory if p is not None)
     return populated
@@ -105,6 +113,15 @@ class TrackStep(PipelineStep):
             trajectory_path,
         )
         manifest.put("trajectory_path", str(trajectory_path))
+
+        if ctx.dump_intermediates_dir is not None:
+            import shutil
+
+            dump = ctx.dump_intermediates_dir
+            dump.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(trajectory_path, dump / "trajectory.json")
+            logger.info("track: dumped parity baseline to %s", dump / "trajectory.json")
+
         return True
 
 
