@@ -5,6 +5,7 @@
     "artifacts": {
         "input_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\source.mp4",
         "output_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\output.mp4",
+        "field_polygon_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\field_polygon.json",
         "detections_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\detections.json",
         "trajectory_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\trajectory.json"
     },
@@ -38,12 +39,15 @@
         {
             "step_id": "render",
             "type": "render",
-            "status": "failed",
+            "status": "complete",
             "config_fingerprint": "sha256:c3b69c83163d41c6ef5ad2d988ceb65e384408f06677c8b931fdceb8ab656802",
             "ran_in": "service",
-            "started_at": "2026-06-06T15:12:04.625678+00:00",
-            "finished_at": "2026-06-06T15:12:13.470189+00:00",
-            "error": "exception: OpenCV(4.11.0) D:\\a\\opencv-python\\opencv-python\\opencv\\modules\\imgproc\\src\\imgwarp.cpp:1912: error: (-215:Assertion failed) ((map1.type() == CV_32FC2 || map1.type() == CV_16SC2) && map2.empty()) || (map1.type() == CV_32FC1 && map2.type() == CV_32FC1) in function 'cv::remap'\n"
+            "started_at": "2026-06-06T22:43:07.604607+00:00",
+            "finished_at": "2026-06-06T22:46:56.128306+00:00",
+            "error": null,
+            "produced": {
+                "output_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\output.mp4"
+            }
         }
     ]
 }

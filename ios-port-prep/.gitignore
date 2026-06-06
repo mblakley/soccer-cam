@@ -20,3 +20,7 @@ baselines/*/source.mp4
 # to the parity/ copies, no point doubling.
 baselines/*/detections.json
 baselines/*/trajectory.json
+
+# Leveled-pano .npy maps — 80+ MB each, deterministically regeneratable
+# from polygon + intrinsics. Visualization PNGs (small) are kept.
+baselines/*/parity/leveled_pano_map_*.npy

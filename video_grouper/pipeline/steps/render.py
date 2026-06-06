@@ -724,7 +724,7 @@ def _load_field(polygon_path: str | None):
     polygon = np.array(poly, dtype=np.float32) if poly is not None else None
     h = payload.get("homography")
     homography = np.array(h, dtype=np.float32) if h is not None else None
-    if homography is None and "keypoints" in payload:
+    if homography is None and payload.get("keypoints") is not None:
         from video_grouper.inference.field_geometry import field_homography
 
         homography = field_homography(payload["keypoints"])

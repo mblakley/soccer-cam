@@ -81,10 +81,22 @@ class PipelineRunner:
         specs: list[StepSpec],
         runtime: str = "service",
         resource_manager: "ResourceManager | None" = None,
+        seed_artifacts: dict[str, str] | None = None,
     ):
+        """Construct a runner.
+
+        ``seed_artifacts`` lets callers inject artifact paths that aren't
+        produced by any step in this pipeline but that steps need to read
+        (e.g. ``field_polygon_path`` for the broadcast renderer — produced
+        out-of-band, not by a pipeline step). They're applied after
+        ``reset_working_artifacts()`` on every run() so resume doesn't drop
+        them. The standard ``input_path`` / ``output_path`` are kept as the
+        runner's responsibility; seeds are everything else.
+        """
         self.specs = list(specs)
         self.runtime = runtime
         self.resource_manager = resource_manager
+        self.seed_artifacts = dict(seed_artifacts or {})
 
     async def run(
         self, input_path: str, output_path: str, ctx: StepContext
@@ -93,6 +105,10 @@ class PipelineRunner:
         # Rebuild the working artifact map from the immutable source; skipped
         # steps are replayed on top so a re-run never sees its own stale output.
         manifest.reset_working_artifacts()
+        # Re-apply caller-provided seed artifacts (e.g. field_polygon_path) so
+        # they survive the reset — they're inputs from outside the pipeline.
+        for key, value in self.seed_artifacts.items():
+            manifest.put(key, value)
         dirty = False
 
         for spec in self.specs:

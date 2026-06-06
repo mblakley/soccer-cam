@@ -133,19 +133,13 @@ async def _run_harness(args: argparse.Namespace) -> int:
     )
 
     # Seed the manifest with the field polygon path so render picks it up.
-    # PipelineRunner.run() loads/inits the manifest from input_path + output_path
-    # and then runs steps in order — we pre-write field_polygon_path by calling
-    # the load_or_init + put before calling run().
+    # Use PipelineRunner.seed_artifacts (survives reset_working_artifacts on
+    # every run() call) — pre-writing the manifest is wiped by the reset.
+    seed_artifacts: dict[str, str] = {}
     if field_polygon_path:
-        from video_grouper.pipeline.manifest import PipelineManifest
+        seed_artifacts["field_polygon_path"] = field_polygon_path
 
-        m = PipelineManifest.load_or_init(
-            output_dir, str(staged_input), str(output_mp4)
-        )
-        m.put("field_polygon_path", field_polygon_path)
-        m.save()
-
-    runner = PipelineRunner(specs, runtime="service")
+    runner = PipelineRunner(specs, runtime="service", seed_artifacts=seed_artifacts)
     result = await runner.run(str(staged_input), str(output_mp4), ctx)
 
     if result.ok:
