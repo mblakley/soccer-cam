@@ -1,0 +1,49 @@
+{
+    "version": 1,
+    "input_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\source.mp4",
+    "output_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\output.mp4",
+    "artifacts": {
+        "input_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\source.mp4",
+        "output_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\output.mp4",
+        "detections_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\detections.json",
+        "trajectory_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\trajectory.json"
+    },
+    "steps": [
+        {
+            "step_id": "detect",
+            "type": "detect",
+            "status": "complete",
+            "config_fingerprint": "sha256:2cb956e300c61220b6abb8a5aa4659b067e0fe1dc6d862e6b84052077105060e",
+            "ran_in": "service",
+            "started_at": "2026-06-06T10:53:25.380130+00:00",
+            "finished_at": "2026-06-06T15:12:04.564713+00:00",
+            "error": null,
+            "produced": {
+                "detections_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\detections.json"
+            }
+        },
+        {
+            "step_id": "track",
+            "type": "track",
+            "status": "complete",
+            "config_fingerprint": "sha256:d181e005074162bf56cf8151536a4ea03792bf22bd77ca871ec85c1650562e57",
+            "ran_in": "service",
+            "started_at": "2026-06-06T15:12:04.572066+00:00",
+            "finished_at": "2026-06-06T15:12:04.620590+00:00",
+            "error": null,
+            "produced": {
+                "trajectory_path": "C:\\Users\\markb\\projects\\soccer-cam\\.claude\\worktrees\\ios-port-parity\\ios-port-prep\\baselines\\segment1_first30s\\trajectory.json"
+            }
+        },
+        {
+            "step_id": "render",
+            "type": "render",
+            "status": "failed",
+            "config_fingerprint": "sha256:c3b69c83163d41c6ef5ad2d988ceb65e384408f06677c8b931fdceb8ab656802",
+            "ran_in": "service",
+            "started_at": "2026-06-06T15:12:04.625678+00:00",
+            "finished_at": "2026-06-06T15:12:13.470189+00:00",
+            "error": "exception: OpenCV(4.11.0) D:\\a\\opencv-python\\opencv-python\\opencv\\modules\\imgproc\\src\\imgwarp.cpp:1912: error: (-215:Assertion failed) ((map1.type() == CV_32FC2 || map1.type() == CV_16SC2) && map2.empty()) || (map1.type() == CV_32FC1 && map2.type() == CV_32FC1) in function 'cv::remap'\n"
+        }
+    ]
+}

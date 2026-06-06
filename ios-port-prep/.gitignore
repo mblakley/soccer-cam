@@ -15,3 +15,8 @@ models/exported/
 # and the JSON state files (the actual parity baselines) ARE tracked.
 baselines/*/output.mp4
 baselines/*/source.mp4
+
+# Per-input duplicate of detections.json / trajectory.json — byte-identical
+# to the parity/ copies, no point doubling.
+baselines/*/detections.json
+baselines/*/trajectory.json
