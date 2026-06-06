@@ -1,0 +1,17 @@
+# Large binary artifacts — staged via README pointers, never committed.
+
+# Source recordings
+golden/short_clips/*.mp4
+golden/full_segment/*.mp4
+golden/segment_pair_10min/*.mp4
+golden/hard_cases/*.png
+golden/hard_cases/*.jpg
+
+# Model artifacts (source + CoreML export both gitignored)
+models/source/
+models/exported/
+
+# Phase 0 baseline mp4s — render output is large; the per-frame .png samples
+# and the JSON state files (the actual parity baselines) ARE tracked.
+baselines/*/output.mp4
+baselines/*/source.mp4
