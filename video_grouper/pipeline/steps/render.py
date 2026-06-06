@@ -31,7 +31,7 @@ import asyncio
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -67,6 +67,10 @@ logger = logging.getLogger(__name__)
 
 class RenderStepConfig(BaseModel):
     render_mode: str = "broadcast"  # "broadcast" | "coach"
+    # Gated + recency-windowed pan smoother (the experiment-tuned camera path). When False,
+    # falls back to the legacy instantaneous-target EMA + velocity lead-room (frantic on
+    # noisy/sparse tracks). See CameraMode.pan_* for the tunables.
+    render_pan_smoothing: bool = True
     render_output_width: int = 1920
     render_output_height: int = 1080
     # Source optics. The stitched Reolink/Dahua panorama is ~180° horizontal.
@@ -187,6 +191,23 @@ class CameraMode:
     missing_ball_long_zoom: float = 0.30
 
     velocity_ema: float = 0.3  # EMA on per-frame finite-difference velocity
+
+    # --- Gated + recency-windowed pan smoother (active when render_pan_smoothing=True) ---
+    # Reject detection teleports (gate), aim at a recency-weighted average of recent accepted
+    # yaws over a short window, and ease there with a low-gain EMA whose gain rises with recent
+    # spread. Tuned on real game footage to broadcast-quality steadiness (per-frame pan ~5 px
+    # median vs the legacy path's frequent >100 px lunges).
+    pan_gate_px: float = (
+        700.0  # reject a detection jumping farther than this (source px)
+    )
+    pan_reacq_frames: int = (
+        15  # frames lost before a far detection is accepted (reacquire)
+    )
+    pan_window_sec: float = 3.0  # recency-weighted averaging window (seconds)
+    pan_inertia: float = 0.985  # base camera EMA; alpha = 1 - this (higher = smoother)
+    pan_vf_gain: float = 1.0  # extra responsiveness from recent-detection spread
+    pan_vf_smooth: float = 0.75  # smoothing of the adaptive (spread) term
+    pan_vf_norm_deg: float = 9.375  # yaw spread (deg) mapping to vf=1 (~400 source px)
 
 
 BROADCAST_MODE = CameraMode()
@@ -512,6 +533,16 @@ class _CameraState:
     smoothed_zoom: float | None = None
     stationary_frames: int = 0
     missing_frames: int = 0
+    # Video frame rate — set by the render loop so the pan window (seconds) maps to frames.
+    fps: float = 20.0
+    # Gated + recency-windowed pan smoother state (render_pan_smoothing).
+    pan_frame: int = 0
+    pan_last: tuple[float, float] | None = (
+        None  # last accepted ball (px, py) for gating
+    )
+    pan_lost: int = 0
+    pan_vf: float = 0.0
+    pan_buf: list = field(default_factory=list)  # (frame_idx, yaw_raw) recent accepted
 
 
 def _tick(
@@ -644,25 +675,75 @@ def _tick(
             target_zoom, whole_field, containment_zoom(ball_pitch, view_pitch)
         )
 
-    # ---- pan: ball yaw + velocity lead room ----
-    if speed > 1e-6:
-        crop_width_px = target_zoom * src_w
-        max_lead_px = mode.max_lead_room_fraction * crop_width_px
-        lead_px = (vx / speed) * (norm_speed * max_lead_px)
-        target_yaw = yaw_raw + lead_px * (geom.src_hfov_deg / src_w)
+    # ---- pan ----
+    if cfg.render_pan_smoothing:
+        # Gated + recency-windowed pan (ported from the experiment camera tuner). Reject
+        # detection teleports (gate), aim at a recency-weighted average of recent accepted
+        # yaws over a short window, and ease there with a low-gain EMA whose gain rises with
+        # recent spread. This holds steady on noisy / sparse tracks instead of chasing the
+        # instantaneous ball yaw every frame — the fix for "frantic" pan.
+        state.pan_frame += 1
+        accept = (
+            state.pan_last is None
+            or state.pan_lost > mode.pan_reacq_frames
+            or math.hypot(px - state.pan_last[0], py - state.pan_last[1])
+            < mode.pan_gate_px
+        )
+        if accept:
+            state.pan_last = (px, py)
+            state.pan_lost = 0
+            state.pan_buf.append((state.pan_frame, yaw_raw))
+        else:
+            state.pan_lost += 1
+        cutoff = state.pan_frame - max(1, int(mode.pan_window_sec * state.fps))
+        while state.pan_buf and state.pan_buf[0][0] <= cutoff:
+            state.pan_buf.pop(0)
+        if state.pan_buf:
+            kmin = state.pan_buf[0][0]
+            wsum = ysum = 0.0
+            for kf, yw in state.pan_buf:
+                w = kf - kmin + 1.0
+                wsum += w
+                ysum += w * yw
+            target_yaw = ysum / wsum
+            if len(state.pan_buf) > 1:
+                mean = sum(yw for _, yw in state.pan_buf) / len(state.pan_buf)
+                spread = (
+                    sum((yw - mean) ** 2 for _, yw in state.pan_buf)
+                    / len(state.pan_buf)
+                ) ** 0.5
+            else:
+                spread = 0.0
+            state.pan_vf = mode.pan_vf_smooth * state.pan_vf + (
+                1 - mode.pan_vf_smooth
+            ) * min(1.0, spread / mode.pan_vf_norm_deg)
+            alpha = (1 - mode.pan_inertia) * (1 + state.pan_vf * mode.pan_vf_gain)
+            state.smoothed_yaw = (
+                target_yaw
+                if state.smoothed_yaw is None
+                else state.smoothed_yaw + alpha * (target_yaw - state.smoothed_yaw)
+            )
+        elif state.smoothed_yaw is None:
+            state.smoothed_yaw = yaw_raw
     else:
-        target_yaw = yaw_raw
-
-    pan_alpha = (
-        mode.pan_smoothing_min
-        + (mode.pan_smoothing_max - mode.pan_smoothing_min) * norm_speed
-    )
-
-    state.smoothed_yaw = (
-        target_yaw
-        if state.smoothed_yaw is None
-        else state.smoothed_yaw + pan_alpha * (target_yaw - state.smoothed_yaw)
-    )
+        # Legacy: chase the instantaneous ball yaw (+ velocity lead room) with a
+        # speed-adaptive EMA. Frantic on noisy / sparse trajectories.
+        if speed > 1e-6:
+            crop_width_px = target_zoom * src_w
+            max_lead_px = mode.max_lead_room_fraction * crop_width_px
+            lead_px = (vx / speed) * (norm_speed * max_lead_px)
+            target_yaw = yaw_raw + lead_px * (geom.src_hfov_deg / src_w)
+        else:
+            target_yaw = yaw_raw
+        pan_alpha = (
+            mode.pan_smoothing_min
+            + (mode.pan_smoothing_max - mode.pan_smoothing_min) * norm_speed
+        )
+        state.smoothed_yaw = (
+            target_yaw
+            if state.smoothed_yaw is None
+            else state.smoothed_yaw + pan_alpha * (target_yaw - state.smoothed_yaw)
+        )
     state.smoothed_zoom = (
         target_zoom
         if state.smoothed_zoom is None
@@ -846,6 +927,7 @@ def _render_video(
         in_audio = next((s for s in in_container.streams if s.type == "audio"), None)
 
         state = _CameraState()
+        state.fps = float(in_video.average_rate) if in_video.average_rate else 20.0
         warper = _make_warper(geom, cfg, src_w, src_h, out_w, out_h)
 
         with av.open(output_path, mode="w") as out_container:
@@ -967,6 +1049,7 @@ class RenderFrameConsumer(FrameConsumer):
         self._yaw_min = max(ymin - cfg.render_yaw_padding_deg, -half)
         self._yaw_max = min(ymax + cfg.render_yaw_padding_deg, half)
         self._state = _CameraState()
+        self._state.fps = float(source.average_rate) if source.average_rate else 20.0
         self._out_path = ctx.group_dir / cfg.output_name
         self._oc = av.open(str(self._out_path), mode="w")
         st = self._oc.add_stream("h264", rate=source.average_rate)
