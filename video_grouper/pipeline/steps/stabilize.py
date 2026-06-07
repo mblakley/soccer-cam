@@ -130,11 +130,31 @@ def _analyze_video(
         src_w = int(stream.width)
         src_h = int(stream.height)
         mask = soccer_stability_mask(src_w, src_h, polygon)
+        # Pre-compute the mask bbox once: ORB's FAST corner detection still
+        # scans the whole image even with a mask, so on an 8K source the
+        # whole-frame call costs ~1 s/frame. Cropping to the mask's bbox
+        # first cuts that to ~100 ms/frame at the same accuracy — we just
+        # offset the returned keypoints back into source coords.
+        mask_ys, mask_xs = np.where(mask > 0)
+        if len(mask_ys) == 0:
+            raise RuntimeError(
+                "stabilize: soccer_stability_mask produced an empty mask — "
+                "no stable-reference regions available; check src dims + polygon."
+            )
+        roi_y0, roi_y1 = int(mask_ys.min()), int(mask_ys.max()) + 1
+        roi_x0, roi_x1 = int(mask_xs.min()), int(mask_xs.max()) + 1
+        cropped_mask = mask[roi_y0:roi_y1, roi_x0:roi_x1]
+        keypoint_offset = (float(roi_x0), float(roi_y0))
         logger.info(
-            "stabilize: %dx%d source, mask non-zero %.1f%% — soccer_polygon=%s",
+            "stabilize: %dx%d source, mask non-zero %.1f%%, ORB ROI bbox %dx%d "
+            "(offset %d,%d) — soccer_polygon=%s",
             src_w,
             src_h,
             100.0 * (mask > 0).mean(),
+            roi_x1 - roi_x0,
+            roi_y1 - roi_y0,
+            roi_x0,
+            roi_y0,
             polygon is not None,
         )
 
@@ -146,8 +166,13 @@ def _analyze_video(
                 continue
             for frame in packet.decode():
                 rgb = frame.to_ndarray(format="rgb24")
+                cropped_rgb = rgb[roi_y0:roi_y1, roi_x0:roi_x1]
                 motion, reanchor = measure_frame_motion(
-                    rgb, mask, reference, estimation_cfg
+                    cropped_rgb,
+                    cropped_mask,
+                    reference,
+                    estimation_cfg,
+                    keypoint_offset=keypoint_offset,
                 )
                 cum_tx.append(motion.cum_tx)
                 cum_ty.append(motion.cum_ty)
@@ -161,11 +186,12 @@ def _analyze_video(
                 # this-frame as the new reference's "zero".
                 if reference.descriptors is None or reanchor:
                     kp, desc = extract_features(
-                        rgb,
-                        mask,
+                        cropped_rgb,
+                        cropped_mask,
                         n_features=cfg.stabilize_n_features,
                         edge_threshold=cfg.stabilize_edge_threshold,
                         fast_threshold=cfg.stabilize_fast_threshold,
+                        keypoint_offset=keypoint_offset,
                     )
                     if desc is not None and len(desc) >= cfg.stabilize_min_inliers:
                         reference.keypoints = kp

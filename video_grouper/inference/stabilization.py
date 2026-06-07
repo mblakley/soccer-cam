@@ -131,8 +131,15 @@ def extract_features(
     n_features: int = 1500,
     edge_threshold: int = 12,
     fast_threshold: int = 15,
+    keypoint_offset: tuple[float, float] = (0.0, 0.0),
 ):
     """Detect ORB keypoints + compute BRIEF-like descriptors inside ``mask``.
+
+    The mask filters returned keypoints, but FAST corner detection still
+    scans the whole image — at 7680×2160 that costs ~1 s/frame. Callers
+    that have already cropped the image to a smaller region (the mask
+    bbox, say) pass ``keypoint_offset=(dx, dy)`` so the returned keypoints
+    are translated back into the original (source) coordinate frame.
 
     Returns ``(keypoints, descriptors)``. ``descriptors`` is ``None`` when no
     keypoints are found (caller must guard).
@@ -144,6 +151,10 @@ def extract_features(
     )
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY) if rgb.ndim == 3 else rgb
     keypoints, descriptors = orb.detectAndCompute(gray, mask=mask)
+    dx, dy = keypoint_offset
+    if (dx or dy) and keypoints:
+        for kp in keypoints:
+            kp.pt = (kp.pt[0] + dx, kp.pt[1] + dy)
     return keypoints, descriptors
 
 
@@ -583,6 +594,7 @@ def measure_frame_motion(
     mask: np.ndarray,
     reference: _ReferenceState,
     cfg: MotionEstimationConfig,
+    keypoint_offset: tuple[float, float] = (0.0, 0.0),
 ) -> tuple[FrameMotion, bool]:
     """Estimate (one frame's) similarity to the active reference + cumulative offset.
 
@@ -599,6 +611,7 @@ def measure_frame_motion(
         n_features=cfg.n_features,
         edge_threshold=cfg.edge_threshold,
         fast_threshold=cfg.fast_threshold,
+        keypoint_offset=keypoint_offset,
     )
     if desc is None or reference.descriptors is None:
         # First frame, or features missing — just seed cumulative as identity.

@@ -218,3 +218,4 @@ certs/
 # Stray test/demo media outputs at repo root
 /*.mp4
 /*.mp4.jsonl
+.verify/
