@@ -49,6 +49,11 @@ except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step render unavailable (%s: %s)", type(e).__name__, e)
 
 try:
+    from video_grouper.pipeline.steps import stabilize  # noqa: F401
+except Exception as e:  # noqa: BLE001
+    logger.debug("pipeline: step stabilize unavailable (%s: %s)", type(e).__name__, e)
+
+try:
     # Imports render too (the built-in "render" frame consumer), so import after it.
     from video_grouper.pipeline.steps import fanout  # noqa: F401
 except Exception as e:  # noqa: BLE001
