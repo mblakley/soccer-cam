@@ -52,6 +52,13 @@ class DetectStepConfig(BaseModel):
     # re-running detection. Keep this comfortably below any confidence threshold you'd want to sweep.
     detect_confidence: float = 0.10
     detect_frame_interval: int = 4
+    # In-memory stabilization: when on, each decoded frame is warp-affined
+    # by a per-frame stabilizing similarity loaded from the manifest's
+    # ``motion_path`` (produced by the ``stabilize`` step) before ONNX sees
+    # it. Detections then come out in stabilized-frame coords, so the
+    # downstream follow-cam isn't yanked by the camera's wobble. No-op when
+    # ``motion_path`` is absent from the manifest.
+    detect_stabilize: bool = False
 
 
 def _run_detection_with_session(
@@ -60,6 +67,7 @@ def _run_detection_with_session(
     session: Any,
     confidence: float,
     frame_interval: int,
+    stabilizer: Any = None,
 ) -> int:
     """Sync helper: run detection against a pre-built session, write raw detections JSON."""
     detections = detect_video(
@@ -67,6 +75,7 @@ def _run_detection_with_session(
         session,
         frame_interval=frame_interval,
         conf_threshold=confidence,
+        stabilizer=stabilizer,
     )
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(detections, f)
@@ -80,11 +89,17 @@ def _run_detection_from_path(
     confidence: float,
     frame_interval: int,
     use_gpu: bool,
+    stabilizer: Any = None,
 ) -> int:
     """Community/BYO variant: load the model from disk, then run detection."""
     sess = create_session(Path(model_path), use_gpu=use_gpu)
     return _run_detection_with_session(
-        video_path, output_json_path, sess, confidence, frame_interval
+        video_path,
+        output_json_path,
+        sess,
+        confidence,
+        frame_interval,
+        stabilizer=stabilizer,
     )
 
 
@@ -149,6 +164,21 @@ class DetectStep(PipelineStep[DetectStepConfig]):
         # Detect emits RAW candidates (x, y, confidence) above the low save floor — no field/
         # confidence filtering here. The track step applies the (tunable) location + confidence
         # filters, so they can be re-swept without re-running this expensive step.
+
+        # Optional in-memory stabilization (no re-encode). Loaded once,
+        # applied per decoded frame inside detect_video before ONNX inference.
+        stabilizer = None
+        motion_path = manifest.get("motion_path")
+        if cfg.detect_stabilize and motion_path:
+            from video_grouper.inference.stabilization import FrameStabilizer
+
+            stabilizer = FrameStabilizer.from_json(motion_path)
+            logger.info(
+                "detect: stabilization on (motion_path=%s, output_shape=%s)",
+                motion_path,
+                stabilizer.output_shape,
+            )
+
         if cfg.model_key:
             session = await asyncio.to_thread(
                 _build_secure_loader_session,
@@ -164,6 +194,7 @@ class DetectStep(PipelineStep[DetectStepConfig]):
                 session,
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
+                stabilizer,
             )
         elif cfg.model_path:
             use_gpu = cfg.device.startswith(("cuda", "gpu"))
@@ -175,6 +206,7 @@ class DetectStep(PipelineStep[DetectStepConfig]):
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
                 use_gpu,
+                stabilizer,
             )
         else:
             raise RuntimeError(

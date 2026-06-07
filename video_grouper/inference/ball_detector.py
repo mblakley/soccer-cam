@@ -217,6 +217,7 @@ def detect_video(
     conf_threshold: float = CONF_THRESHOLD,
     field_polygon: np.ndarray | None = None,
     field_margin: float = 50.0,
+    stabilizer: "object | None" = None,
 ) -> list[dict]:
     """Run ball detection on every Nth frame of a video.
 
@@ -226,6 +227,12 @@ def detect_video(
 
     Returns a list of ``{frame_idx, cx, cy, w, h, conf, mask_coeffs?}``
     dicts in panoramic pixel coords.
+
+    ``stabilizer`` (a :class:`~video_grouper.inference.stabilization.FrameStabilizer`
+    or ``None``) is applied in-memory to each decoded frame before
+    detection. When set, detections come out in stabilized-frame coords,
+    not raw-source coords — the canonical "anchor detections to a stable
+    world frame" path.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -234,6 +241,12 @@ def detect_video(
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     logger.info("Video: %d frames, processing every %d", total_frames, frame_interval)
+    if stabilizer is not None:
+        logger.info(
+            "detect: stabilization on — output_shape=%s, safe_inset=%s",
+            stabilizer.output_shape,
+            stabilizer.safe_inset,
+        )
 
     detections: list[dict] = []
     frame_idx = 0
@@ -246,6 +259,11 @@ def detect_video(
             break
 
         if frame_idx % frame_interval == 0:
+            if stabilizer is not None:
+                # FrameStabilizer.apply expects RGB; OpenCV decode is BGR.
+                # Apply on BGR directly — the per-frame similarity transform
+                # is colour-agnostic and detect_balls cv2.cvtColors internally.
+                frame = stabilizer.apply(frame, frame_idx)
             for d in detect_balls(
                 frame,
                 sess,

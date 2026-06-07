@@ -160,6 +160,14 @@ class RenderStepConfig(BaseModel):
     # Pan clamp padding beyond the field's lateral extent.
     render_yaw_padding_deg: float = 8.0
     render_video_bitrate: str = "8M"
+    # In-memory stabilization: when on, each decoded frame is warp-affined
+    # by a per-frame stabilizing similarity loaded from the manifest's
+    # ``motion_path`` (produced by the ``stabilize`` step) before the
+    # cylindrical warp/crop runs. The ball trajectory the renderer follows
+    # was computed by ``detect`` against the same stabilized frames (when
+    # ``detect_stabilize`` is on), so geometry stays consistent end-to-end.
+    # No-op when ``motion_path`` is absent from the manifest.
+    render_stabilize: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +875,7 @@ def _render_video(
     output_path: str,
     trajectory_path: str,
     field_polygon_path: str | None,
+    motion_path: str | None,
     cfg: RenderStepConfig,
 ) -> None:
     """Sync helper: per-frame cylindrical render with the broadcast control logic."""
@@ -887,10 +896,28 @@ def _render_video(
 
     polygon, homography = load_field(field_polygon_path)
 
+    # Optional in-memory stabilization: warp each decoded frame by a per-
+    # frame similarity from motion.json before the cylindrical warp/crop.
+    # When on, src_w/src_h that the cylindrical geometry is sized against
+    # are the STABILIZED dims, since that's what the renderer actually sees.
+    stabilizer = None
+    if cfg.render_stabilize and motion_path:
+        from video_grouper.inference.stabilization import FrameStabilizer
+
+        stabilizer = FrameStabilizer.from_json(motion_path)
+        logger.info(
+            "render: stabilization on — output_shape=%s safe_inset=%s",
+            stabilizer.output_shape,
+            stabilizer.safe_inset,
+        )
+
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
-        src_w = in_video.width
-        src_h = in_video.height
+        if stabilizer is not None:
+            src_h, src_w = stabilizer.output_shape
+        else:
+            src_w = in_video.width
+            src_h = in_video.height
 
         geom = _resolve_geometry(src_w, src_h, cfg, polygon)
         yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, geom.src_hfov_deg)
@@ -980,6 +1007,8 @@ def _render_video(
                             out_h,
                         )
                         rgb = frame.to_ndarray(format="rgb24")
+                        if stabilizer is not None:
+                            rgb = stabilizer.apply(rgb, frame_idx)
                         rendered = _warp_frame(rgb, geom, cfg, params, view_yaw, warper)
                         new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
                         new_frame.pts = frame.pts
@@ -1051,14 +1080,31 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         cfg = self.config
         self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
-        self._sw, self._sh = source.width, source.height
+        # Optional in-memory stabilization: the geometry must be sized
+        # against STABILIZED dims, not raw source dims, since that's what
+        # the consumer's per-frame work sees after stabilizer.apply().
+        self._stabilizer = None
+        motion_path = manifest.get("motion_path")
+        if cfg.render_stabilize and motion_path:
+            from video_grouper.inference.stabilization import FrameStabilizer
+
+            self._stabilizer = FrameStabilizer.from_json(motion_path)
+            self._sh, self._sw = self._stabilizer.output_shape
+            logger.info(
+                "render(fanout): stabilization on — output_shape=%s safe_inset=%s",
+                self._stabilizer.output_shape,
+                self._stabilizer.safe_inset,
+            )
+        else:
+            self._sw, self._sh = source.width, source.height
+
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
         polygon, self._homography = load_field(manifest.get("field_polygon_path"))
-        self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)
+        self._geom = _resolve_geometry(self._sw, self._sh, cfg, polygon)
 
         ymin, ymax = field_lateral_yaw_extent(
-            polygon, source.width, self._geom.src_hfov_deg
+            polygon, self._sw, self._geom.src_hfov_deg
         )
         half = self._geom.src_hfov_deg / 2.0
         self._yaw_min = max(ymin - cfg.render_yaw_padding_deg, -half)
@@ -1075,12 +1121,14 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         st.options = {"maxrate": cfg.render_video_bitrate, "bufsize": str(br * 2)}
         self._stream = st
         self._warper = _make_warper(
-            self._geom, cfg, source.width, source.height, self._ow, self._oh
+            self._geom, cfg, self._sw, self._sh, self._ow, self._oh
         )
 
     def consume(self, rgb, frame_pts: int | None, frame_idx: int) -> None:
         import av
 
+        if self._stabilizer is not None:
+            rgb = self._stabilizer.apply(rgb, frame_idx)
         entry = self._entries[frame_idx] if frame_idx < len(self._entries) else None
         params, view_yaw = _frame_view(
             self._state,
@@ -1132,6 +1180,9 @@ class RenderStep(PipelineStep[RenderStepConfig]):
         # Optional: a field-detect step upstream supplies the ROI polygon used
         # for pan clamping + vertical geometry. Absent ⇒ unconstrained pan.
         field_polygon_path = manifest.get("field_polygon_path")
+        # Optional: a stabilize step upstream supplies the per-frame
+        # stabilizing similarity. Absent ⇒ raw source frames pass through.
+        motion_path = manifest.get("motion_path")
 
         await asyncio.to_thread(
             _render_video,
@@ -1139,6 +1190,7 @@ class RenderStep(PipelineStep[RenderStepConfig]):
             str(out_path),
             trajectory_path,
             field_polygon_path,
+            motion_path,
             self.config,
         )
         logger.info("render: wrote broadcast-style output to %s", out_path)

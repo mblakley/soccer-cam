@@ -110,9 +110,12 @@ async def test_detect_step_local_path(tmp_path, monkeypatch):
         captured["use_gpu"] = use_gpu
         return object()
 
-    def fake_detect_video(video_path, session, frame_interval=1, conf_threshold=0.0):
+    def fake_detect_video(
+        video_path, session, frame_interval=1, conf_threshold=0.0, stabilizer=None
+    ):
         captured["frame_interval"] = frame_interval
         captured["conf_threshold"] = conf_threshold
+        captured["stabilizer"] = stabilizer
         return [{"frame_idx": 0, "cx": 1.0, "cy": 2.0, "w": 3, "h": 4, "conf": 0.9}]
 
     monkeypatch.setattr(
