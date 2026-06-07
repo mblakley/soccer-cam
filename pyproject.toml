@@ -11,7 +11,7 @@ dependencies = [
     "httpx>=0.25.0",
     "aiofiles>=23.2.1",
     "pytz>=2024.1",
-    "pywinauto>=0.6.8",
+    "pywinauto>=0.6.8; sys_platform == 'win32'",
     "google-api-python-client>=2.100.0",
     "google-auth-oauthlib>=1.0.0",
     "requests>=2.31.0",
@@ -26,7 +26,8 @@ dependencies = [
     "pillow>=11.3.0",
     "numpy>=2.2.0",
     "opencv-python-headless>=4.13.0",
-    "onnxruntime-gpu>=1.24.4",
+    "onnxruntime-gpu>=1.24.4; sys_platform != 'darwin'",
+    "onnxruntime>=1.24.4; sys_platform == 'darwin'",
     "uvicorn>=0.42.0",
     "fastapi>=0.135.2",
     "python-multipart>=0.0.9",
@@ -135,7 +136,7 @@ asyncio_mode = "strict"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
-environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'", "sys_platform == 'darwin'"]
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
@@ -143,8 +144,8 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
+torch = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
+torchvision = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
 
 [dependency-groups]
 dev = [
