@@ -15,6 +15,7 @@ Keypoint layout (panoramic view from the side)::
 
 from __future__ import annotations
 
+import json
 import logging
 
 import cv2
@@ -113,6 +114,32 @@ def pixel_to_field(px: float, py: float, homography: np.ndarray) -> tuple[float,
     pt = np.array([[[float(px), float(py)]]], dtype=np.float32)
     out = cv2.perspectiveTransform(pt, homography)
     return float(out[0, 0, 0]), float(out[0, 0, 1])
+
+
+def load_field(
+    polygon_path: str | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Load ``(polygon, homography)`` from a field-detect JSON sidecar.
+
+    Returns ``(None, None)`` on missing path, missing file, or JSON parse error
+    (logged at warning level). When the payload has ``keypoints`` but no
+    ``homography``, derives the homography via :func:`field_homography`.
+    """
+    if not polygon_path:
+        return None, None
+    try:
+        with open(polygon_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("field polygon %s unusable (%s)", polygon_path, e)
+        return None, None
+    poly = payload.get("polygon")
+    polygon = np.array(poly, dtype=np.float32) if poly is not None else None
+    h = payload.get("homography")
+    homography = np.array(h, dtype=np.float32) if h is not None else None
+    if homography is None and "keypoints" in payload:
+        homography = field_homography(payload["keypoints"])
+    return polygon, homography
 
 
 def field_lateral_yaw_extent(

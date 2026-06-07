@@ -797,34 +797,6 @@ def _ball_field_x(px: float, py: float, src_w: int, homography) -> float:
     return max(0.0, min(1.0, px / src_w))
 
 
-# ---------------------------------------------------------------------------
-# Field polygon loading
-# ---------------------------------------------------------------------------
-
-
-def _load_field(polygon_path: str | None):
-    """Return ``(polygon ndarray | None, homography ndarray | None)``."""
-    if not polygon_path:
-        return None, None
-    try:
-        with open(polygon_path, encoding="utf-8") as f:
-            payload = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("render: field polygon %s unusable (%s)", polygon_path, e)
-        return None, None
-    import numpy as np
-
-    poly = payload.get("polygon")
-    polygon = np.array(poly, dtype=np.float32) if poly is not None else None
-    h = payload.get("homography")
-    homography = np.array(h, dtype=np.float32) if h is not None else None
-    if homography is None and "keypoints" in payload:
-        from video_grouper.inference.field_geometry import field_homography
-
-        homography = field_homography(payload["keypoints"])
-    return polygon, homography
-
-
 def _parse_bitrate(bitrate: str) -> int:
     s = bitrate.strip().lower()
     if s.endswith("m"):
@@ -900,7 +872,10 @@ def _render_video(
     """Sync helper: per-frame cylindrical render with the broadcast control logic."""
     import av
 
-    from video_grouper.inference.field_geometry import field_lateral_yaw_extent
+    from video_grouper.inference.field_geometry import (
+        field_lateral_yaw_extent,
+        load_field,
+    )
 
     mode = _resolve_mode(cfg.render_mode)
     out_w = cfg.render_output_width
@@ -910,7 +885,7 @@ def _render_video(
         raw_trajectory = json.load(f)
     entries = compute_entries(raw_trajectory, mode.velocity_ema)
 
-    polygon, homography = _load_field(field_polygon_path)
+    polygon, homography = load_field(field_polygon_path)
 
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
@@ -1068,15 +1043,19 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     def open(self, source: FrameSourceInfo, ctx: StepContext, manifest) -> None:
         import av
 
+        from video_grouper.inference.field_geometry import (
+            field_lateral_yaw_extent,
+            load_field,
+        )
+
         cfg = self.config
         self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
         self._sw, self._sh = source.width, source.height
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
-        polygon, self._homography = _load_field(manifest.get("field_polygon_path"))
+        polygon, self._homography = load_field(manifest.get("field_polygon_path"))
         self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)
-        from video_grouper.inference.field_geometry import field_lateral_yaw_extent
 
         ymin, ymax = field_lateral_yaw_extent(
             polygon, source.width, self._geom.src_hfov_deg
