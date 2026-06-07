@@ -330,3 +330,20 @@ The trade-off is one extra analysis pass (~10–15 minutes on a typical 80-min
 game on the camera-manager box) for visibly steadier output. The render's
 existing **warp-once-crop** optimization is preserved — `build_leveled_pano`
 still runs ONCE, just at the stabilized dimensions.
+
+### Field polygon is highly recommended
+
+The soccer-stability mask is what makes ORB+RANSAC reliable here. **Without a
+field polygon** the step falls back to a generic top-of-source sky strip,
+which works on calm overcast days but is dominated by **cloud motion** on
+windy ones (clouds drift slowly and ORB tracks them as if they were stable
+world features). On real footage we have measured the no-polygon fallback
+producing residuals dominated by accumulated estimation noise — the
+stabilizer ends up shifting frames by tens of pixels in the wrong direction
+because the cumulative motion estimate is wrong, not because the camera
+actually moved that much.
+
+With a polygon the mask covers genuinely stable world references — goal
+frames, far-touchline edge, corner-flag pole bases — and the estimate becomes
+robust. The `field_detect` step is the natural upstream provider; the
+`broadcast_stabilized` preset assumes it runs before `stabilize`.

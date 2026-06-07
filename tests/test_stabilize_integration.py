@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import cv2
 import numpy as np
 import pytest
 
@@ -238,3 +239,186 @@ def test_detect_step_config_has_stabilize_flag():
 
     cfg = DetectStepConfig()
     assert cfg.detect_stabilize is False
+
+
+# ---------------------------------------------------------------------------
+# End-to-end sign-direction guard — catches "stabilizer amplifies wobble"
+# ---------------------------------------------------------------------------
+
+
+def test_stabilizer_reduces_wobble_not_amplifies(tmp_path):
+    """Wire up the full estimate → smooth → apply chain on a synthetic
+    wobbling sequence and assert the stabilized output has LESS
+    frame-to-frame drift than the raw input.
+
+    Regression guard for the 2026-06-07 sign bug where the residual was
+    composed instead of its inverse — the stabilizer was doubling the
+    wobble instead of canceling it. The unit tests for each piece passed
+    because the test fixtures simulated cum values directly without going
+    through the cur→ref convention ``cv2.estimateAffinePartial2D`` returns.
+    """
+    import math
+
+    from video_grouper.inference.stabilization import (
+        FrameStabilizer,
+        MotionEstimationConfig,
+        SimilarityTransform,
+        _ReferenceState,
+        compose_stabilizing_transforms,
+        compute_safe_inset,
+        extract_features,
+        l1_smooth_path,
+        measure_frame_motion,
+        soccer_stability_mask,
+        write_motion_json,
+    )
+
+    # Build a 30-frame textured sequence where every frame is the same
+    # base, translated by a known sinusoidal wobble. The "stabilizer"
+    # must invert that exact wobble.
+    rng = np.random.default_rng(0)
+    h, w = 480, 720
+    base = np.full((h, w, 3), 128, dtype=np.uint8)
+    for _ in range(500):
+        x = int(rng.integers(20, w - 20))
+        y = int(rng.integers(20, h - 20))
+        r = int(rng.integers(3, 12))
+        color = tuple(int(c) for c in rng.integers(0, 256, size=3))
+        if rng.random() < 0.5:
+            cv2.rectangle(base, (x - r, y - r), (x + r, y + r), color, -1)
+        else:
+            cv2.circle(base, (x, y), r, color, -1)
+
+    n_frames = 30
+    wobble = [
+        (
+            6.0 * math.sin(2 * math.pi * i / 10),
+            4.0 * math.cos(2 * math.pi * i / 10),
+        )
+        for i in range(n_frames)
+    ]
+    frames = []
+    for dx, dy in wobble:
+        M_translate = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+        frames.append(
+            cv2.warpAffine(
+                base,
+                M_translate,
+                (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+        )
+
+    # Run the estimation loop just like StabilizeStep does.
+    mask = soccer_stability_mask(w, h, polygon=None)
+    mys, mxs = np.where(mask > 0)
+    roi_y0, roi_y1 = int(mys.min()), int(mys.max()) + 1
+    roi_x0, roi_x1 = int(mxs.min()), int(mxs.max()) + 1
+    cropped_mask = mask[roi_y0:roi_y1, roi_x0:roi_x1]
+    kp_offset = (float(roi_x0), float(roi_y0))
+
+    cfg = MotionEstimationConfig(min_inliers=8, min_inlier_ratio=0.15)
+    reference = _ReferenceState()
+    cum_tx, cum_ty, cum_theta, cum_log_scale = [], [], [], []
+    confidences = []
+    for i, rgb in enumerate(frames):
+        cropped = rgb[roi_y0:roi_y1, roi_x0:roi_x1]
+        motion, reanchor = measure_frame_motion(
+            cropped, cropped_mask, reference, cfg, keypoint_offset=kp_offset
+        )
+        cum_tx.append(motion.cum_tx)
+        cum_ty.append(motion.cum_ty)
+        cum_theta.append(motion.cum_theta)
+        cum_log_scale.append(motion.cum_log_scale)
+        confidences.append(motion.confidence)
+        if reference.descriptors is None or reanchor:
+            kp, desc = extract_features(
+                cropped,
+                cropped_mask,
+                n_features=cfg.n_features,
+                keypoint_offset=kp_offset,
+            )
+            if desc is not None and len(desc) >= cfg.min_inliers:
+                reference.keypoints = kp
+                reference.descriptors = desc
+                reference.cumulative = SimilarityTransform(
+                    tx=motion.cum_tx,
+                    ty=motion.cum_ty,
+                    theta=motion.cum_theta,
+                    log_scale=motion.cum_log_scale,
+                )
+                reference.frame_idx = i
+
+    cum_tx = np.array(cum_tx)
+    cum_ty = np.array(cum_ty)
+    cum_theta = np.array(cum_theta)
+    cum_log_scale = np.array(cum_log_scale)
+
+    smooth_tx = l1_smooth_path(cum_tx, budget=20.0)
+    smooth_ty = l1_smooth_path(cum_ty, budget=20.0)
+    smooth_theta = l1_smooth_path(cum_theta, budget=math.radians(1.0))
+    smooth_log_scale = l1_smooth_path(cum_log_scale, budget=0.01)
+
+    inset_y, inset_x = compute_safe_inset(20.0, 20.0, 1.0, 0.01, w, h)
+    mats = compose_stabilizing_transforms(
+        cum_tx,
+        cum_ty,
+        cum_theta,
+        cum_log_scale,
+        smooth_tx,
+        smooth_ty,
+        smooth_theta,
+        smooth_log_scale,
+        inset_x=inset_x,
+        inset_y=inset_y,
+    )
+    out_h, out_w = h - 2 * inset_y, w - 2 * inset_x
+    json_path = tmp_path / "motion.json"
+    write_motion_json(
+        json_path,
+        src_size=(h, w),
+        output_size=(out_h, out_w),
+        safe_inset=(inset_y, inset_x),
+        transforms=mats,
+        confidences=confidences,
+    )
+    stabilizer = FrameStabilizer.from_json(json_path)
+
+    # Measure adjacent-frame drift on raw vs stabilized using phase
+    # correlation on a fixed background ROI.
+    def gray(arr):
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+    raw_drift_y = []
+    stab_drift_y = []
+    prev_raw = None
+    prev_stab = None
+    for i, rgb in enumerate(frames):
+        # ROI in raw vs stabilized frames (different shapes; use a relative
+        # central band that exists in both).
+        raw_roi = gray(rgb[20 : h - 20, 50 : w - 50])
+        stab_rgb = stabilizer.apply(rgb, i)
+        stab_roi = gray(stab_rgb[10 : out_h - 10, 30 : out_w - 30])
+        if prev_raw is not None:
+            (_, dy), _ = cv2.phaseCorrelate(prev_raw, raw_roi)
+            raw_drift_y.append(abs(dy))
+            (_, dy), _ = cv2.phaseCorrelate(prev_stab, stab_roi)
+            stab_drift_y.append(abs(dy))
+        prev_raw = raw_roi
+        prev_stab = stab_roi
+
+    raw_mean = float(np.mean(raw_drift_y))
+    stab_mean = float(np.mean(stab_drift_y))
+    # Stabilized adjacent-frame drift should be SMALLER than raw.
+    # Without the inverse fix the bottom would be 2-10x WORSE (the
+    # regression we're guarding against).
+    assert stab_mean < raw_mean, (
+        f"stabilizer is AMPLIFYING wobble: raw={raw_mean:.3f} stab={stab_mean:.3f}. "
+        f"The sign on the residual transform is likely flipped."
+    )
+    # And by a substantive margin — at least 30% reduction on this clean
+    # synthetic input.
+    assert stab_mean < raw_mean * 0.7, (
+        f"stabilization too weak: raw={raw_mean:.3f} stab={stab_mean:.3f}"
+    )

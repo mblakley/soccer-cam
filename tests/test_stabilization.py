@@ -347,14 +347,27 @@ class TestCompositionAndStabilizer:
 
     def test_translation_residual_undone_in_warp(self, tmp_path: Path):
         """Construct motion.json with a single-frame translation residual,
-        apply to an unwarped frame, expect the offset to reproduce."""
+        End-to-end: simulate a frame where content has shifted by a known
+        wobble in source coords, build motion.json from the cumulative that
+        ORB+RANSAC would have produced (the INVERSE of that wobble, because
+        ``estimateAffinePartial2D(src=cur, dst=ref)`` returns ref-from-cur),
+        apply the stabilizer, and assert the displaced bright pixel reappears
+        at its REFERENCE position in the output canvas — proving the
+        stabilizer CANCELS the wobble rather than amplifying it.
+        """
         src_h, src_w = 200, 400
-        out_h, out_w = 180, 360
         inset_y, inset_x = 10, 20
-        cum_tx = np.array([5.0])
-        cum_ty = np.array([3.0])
+        out_h, out_w = src_h - 2 * inset_y, src_w - 2 * inset_x
+
+        # Physical wobble at this frame: content has shifted by (+5, +3) in
+        # source pixels relative to the reference. The cumulative ORB+RANSAC
+        # produces is the inverse: ty = -3, tx = -5.
+        wobble_tx, wobble_ty = 5.0, 3.0
+        cum_tx = np.array([-wobble_tx])
+        cum_ty = np.array([-wobble_ty])
         zeros = np.zeros(1)
-        smooth = np.zeros(1)  # all motion is residual
+        smooth = np.zeros(1)  # fixed-camera ideal — smoothed path is 0
+
         mats = compose_stabilizing_transforms(
             cum_tx,
             cum_ty,
@@ -378,23 +391,25 @@ class TestCompositionAndStabilizer:
         )
         stabilizer = FrameStabilizer.from_json(json_path)
         assert stabilizer.output_shape == (out_h, out_w)
-        # Build a sentinel frame: a single white pixel at a known location.
+
+        # Place a bright pixel at the displaced (current-frame) location.
+        # After stabilization it should reappear at the REFERENCE position,
+        # mapped into the smaller output canvas (subtracting the inset).
+        ref_x, ref_y = 100, 50
+        cur_x = int(ref_x + wobble_tx)
+        cur_y = int(ref_y + wobble_ty)
         rgb = np.zeros((src_h, src_w, 3), dtype=np.uint8)
-        target_y, target_x = 50, 100  # source location of the white pixel
-        rgb[target_y, target_x] = 255
+        rgb[cur_y, cur_x] = 255
+
         out = stabilizer.apply(rgb, frame_idx=0)
-        # After stabilization, the white pixel should appear at
-        # (target_y - cum_ty - inset_y, target_x - cum_tx - inset_x)
-        expected_y = int(target_y - cum_ty[0] - inset_y)
-        expected_x = int(target_x - cum_tx[0] - inset_x)
-        # warpAffine + INTER_LINEAR smears the unit pixel across neighbours,
-        # so look for the bright spot in a small window.
+        expected_x = ref_x - inset_x
+        expected_y = ref_y - inset_y
         window = out[
             max(0, expected_y - 3) : expected_y + 3,
             max(0, expected_x - 3) : expected_x + 3,
         ]
         assert window.max() > 100, (
-            f"expected bright spot near ({expected_y},{expected_x}), got max={window.max()}"
+            f"expected stabilized bright spot near ({expected_y},{expected_x}), got max={window.max()}"
         )
 
 

@@ -692,16 +692,19 @@ def compose_stabilizing_transforms(
     inset_x: int,
     inset_y: int,
 ) -> list[np.ndarray]:
-    """Per-frame 2×3 warpAffine matrix that maps stabilized-output pixel →
-    wobbling-source pixel (cv2.warpAffine sampling convention).
+    """Per-frame 2×3 warpAffine matrix (dst→src under WARP_INVERSE_MAP) that
+    samples the wobbling source so a stabilized output pixel shows the
+    content the smoothed-camera-path frame would have at that pixel.
 
-    The composition::
+    ``cv2.estimateAffinePartial2D(src=cur_kp, dst=ref_kp)`` gives the
+    transform that maps a CURRENT keypoint into the REFERENCE frame, so the
+    cumulative ``(cum_tx, cum_ty, cum_theta, cum_log_scale)`` is the
+    current→reference transform — the **inverse** of the camera's wobble in
+    source coords. To undo the residual wobble we therefore apply
+    ``residual.inverse()`` (which is exactly the wobble in source coords),
+    then re-centre the smaller "safe" crop with ``T_inset``::
 
-        T_residual ∘ T_inset
-
-    where ``T_residual`` is the residual cumulative-minus-smoothed similarity
-    (cancels the wobble), and ``T_inset`` is a constant translation that
-    re-centres the smaller "safe" crop onto the source canvas.
+        M = T_residual_inverse ∘ T_inset
     """
     t_inset = SimilarityTransform(tx=float(inset_x), ty=float(inset_y))
     matrices = []
@@ -712,7 +715,7 @@ def compose_stabilizing_transforms(
             theta=float(cum_theta[i] - smooth_theta[i]),
             log_scale=float(cum_log_scale[i] - smooth_log_scale[i]),
         )
-        combined = residual.compose(t_inset)
+        combined = residual.inverse().compose(t_inset)
         matrices.append(combined.to_affine())
     return matrices
 
