@@ -538,6 +538,23 @@ def crop_box(pano: LeveledPano, p: CylindricalViewParams, view_yaw_deg: float):
     return x0i, y0i, x1i - x0i, y1i - y0i
 
 
+def normalize_crop_box(
+    box: tuple[int, int, int, int], pano_w: int, pano_h: int
+) -> tuple[int, int, int, int]:
+    """Translate crop_box()'s Python-slice semantics to absolute positive dims.
+
+    When cw or ch is negative (view near pano edge with high mount tilt),
+    convert to the equivalent positive extent so GPU kernels (Metal, OpenCL)
+    that sample literally at ``cx + (x+0.5)*cw/ow`` produce correct output.
+    """
+    cx, cy, cw, ch = box
+    if cw < 0:
+        cw = pano_w - cx + cw
+    if ch < 0:
+        ch = pano_h - cy + ch
+    return (cx, cy, cw, ch)
+
+
 def warp_crop_maps(pano: LeveledPano, p: CylindricalViewParams, view_yaw_deg: float):
     """Per-frame ``(map_x, map_y)`` for ``cv2.remap`` via a crop+zoom of the constant
     leveled panorama -- no per-frame projection trig. The window centres on the view's

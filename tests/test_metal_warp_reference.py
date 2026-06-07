@@ -24,6 +24,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from video_grouper.inference.cylindrical_view import normalize_crop_box
+
 # Source / pano use the SAME half-pixel offset cv2.resize/cv2.remap use,
 # which is the OpenCL reference's convention. Documented at the top of the
 # Metal kernel.
@@ -46,32 +48,6 @@ def _bilinear_sample_map(L: np.ndarray, px: np.ndarray, py: np.ndarray) -> np.nd
     c = L[y0 + 1, x0]
     d = L[y0 + 1, x0 + 1]
     return (a * (1.0 - ax) + b * ax) * (1.0 - ay) + (c * (1.0 - ax) + d * ax) * ay
-
-
-def normalize_crop_box(
-    box: tuple[int, int, int, int], pano_w: int, pano_h: int
-) -> tuple[int, int, int, int]:
-    """Translate crop_box()'s Python-slice semantics to absolute positive dims.
-
-    cylindrical_view.crop_box() returns ``(cx, cy, cw, ch)`` where ``cw`` /
-    ``ch`` may be NEGATIVE — interpreted by the production path as Python
-    slice ends (``pano[cy:cy+ch]`` with ``ch<0`` slices to ``pano_h+ch``).
-    The Metal kernel literally samples at ``cx + (x+0.5)*cw/ow - 0.5``,
-    which produces an all-black output when ``cw<0``. Normalize first:
-
-        if cw < 0: cw = pano_w - cx + cw
-        if ch < 0: ch = pano_h - cy + ch
-
-    Documented in ios-port-prep/design/metal_warp_shader.md under "Key
-    parity rules". Hostside helper for both the NumPy reference and any
-    Swift wrapper around the Metal kernel.
-    """
-    cx, cy, cw, ch = box
-    if cw < 0:
-        cw = pano_w - cx + cw
-    if ch < 0:
-        ch = pano_h - cy + ch
-    return (cx, cy, cw, ch)
 
 
 def metal_warp_numpy_reference(

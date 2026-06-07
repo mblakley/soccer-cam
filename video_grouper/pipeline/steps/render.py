@@ -46,6 +46,7 @@ from video_grouper.inference.cylindrical_view import (
     center_column_rows,
     crop_box,
     cylindrical_remap,
+    normalize_crop_box,
     field_world_up,
     leveling_roll,
     mount_tilt_from_up,
@@ -411,7 +412,9 @@ def _warp_frame(rgb, geom: _ViewGeom, cfg: RenderStepConfig, params, view_yaw, w
     """Render one frame: the GPU OpenCL warp (constant pano + crop box) when ``warper`` is
     present, else the cv2 remap path. Both return an ``out_h x out_w x 3`` uint8 image."""
     if warper is not None:
-        return warper.warp(rgb, crop_box(geom.leveled_pano, params, view_yaw))
+        box = crop_box(geom.leveled_pano, params, view_yaw)
+        ph, pw = geom.leveled_pano.map_x.shape
+        return warper.warp(rgb, normalize_crop_box(box, pw, ph))
     import cv2
 
     map_x, map_y = _project_maps(geom, cfg, params, view_yaw)
