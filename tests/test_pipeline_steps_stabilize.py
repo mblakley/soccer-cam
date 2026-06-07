@@ -126,13 +126,13 @@ def test_stabilize_step_metadata():
 def test_create_stabilize_step_validates_config():
     step = create_step(
         "stabilize",
-        {"stabilize_R_tx_px": 100.0, "stabilize_R_ty_px": 80.0},
+        {"stabilize_max_tx_px": 100.0, "stabilize_max_ty_px": 80.0},
     )
     assert isinstance(step, StabilizeStep)
-    assert step.config.stabilize_R_tx_px == 100.0
-    assert step.config.stabilize_R_ty_px == 80.0
+    assert step.config.stabilize_max_tx_px == 100.0
+    assert step.config.stabilize_max_ty_px == 80.0
     # default unchanged
-    assert step.config.stabilize_R_rotation_deg == 0.5
+    assert step.config.stabilize_max_rotation_deg == 0.5
 
 
 def test_consumes_produces_contract():
@@ -164,9 +164,9 @@ async def test_stabilize_writes_motion_json(tmp_path: Path):
         {
             # Permissive thresholds — the synthetic frames are very small so
             # the L1 budget shouldn't bind and the residual is tiny.
-            "stabilize_R_tx_px": 30.0,
-            "stabilize_R_ty_px": 30.0,
-            "stabilize_R_rotation_deg": 1.0,
+            "stabilize_max_tx_px": 30.0,
+            "stabilize_max_ty_px": 30.0,
+            "stabilize_max_rotation_deg": 1.0,
         },
     )
     ok = await step.run(manifest, _ctx(tmp_path))
@@ -236,7 +236,7 @@ async def test_stabilize_residual_within_budget(tmp_path: Path):
     R_ty = 10.0
     step = create_step(
         "stabilize",
-        {"stabilize_R_tx_px": R_tx, "stabilize_R_ty_px": R_ty},
+        {"stabilize_max_tx_px": R_tx, "stabilize_max_ty_px": R_ty},
     )
     await step.run(manifest, _ctx(tmp_path))
     motion_path = manifest.get("motion_path")

@@ -84,6 +84,62 @@ PRESETS: dict[str, list[_PresetStep]] = {
             },
         ),
     ],
+    # Homegrown pipeline + camera stabilization. Same as `homegrown` plus a
+    # `stabilize` step inserted ahead of detect, with detect_stabilize and
+    # render_stabilize turned on so the trajectory + broadcast crop both sit on
+    # top of the stabilized frames. Adds one analysis pass to the run (no
+    # re-encode); opt-in for users whose camera physically moves in wind.
+    "broadcast_stabilized": [
+        (
+            "stitch_correct",
+            "stitch_correct",
+            {"stitch_profile_path": ""},
+        ),
+        (
+            "stabilize",
+            "stabilize",
+            {
+                # Per-axis safe budgets. 60 px each at 7680x2160 covers gusty
+                # tripod wobble well beyond typical calm-window numbers
+                # (~2 px adjacent-frame, ~10-30 px cumulative). Bump if the
+                # smoke test shows the L1 LP saturating these.
+                "stabilize_max_tx_px": 60.0,
+                "stabilize_max_ty_px": 60.0,
+                "stabilize_max_rotation_deg": 0.5,
+            },
+        ),
+        (
+            "detect",
+            "detect",
+            # Model source intentionally omitted — user supplies model_key
+            # (via TTT login) or model_path (local .onnx).
+            {
+                "device": "cuda:0",
+                "detect_confidence": 0.45,
+                "detect_frame_interval": 4,
+                "detect_stabilize": True,
+            },
+        ),
+        (
+            "track",
+            "track",
+            {
+                "track_kalman_gate": 200.0,
+                "track_max_missing": 15,
+            },
+        ),
+        (
+            "render",
+            "render",
+            {
+                "render_mode": "broadcast",
+                "render_output_width": 1920,
+                "render_output_height": 1080,
+                "render_vertical_tracking": True,
+                "render_stabilize": True,
+            },
+        ),
+    ],
     # AutoCam pipeline: a single step that drives the Once AutoCam desktop app.
     # The executable path is left unset — the user fills it in with their
     # AutoCam install location.

@@ -35,10 +35,10 @@ class StabilizeStepConfig(BaseModel):
 
     # Per-axis safe budgets (the path-optimization cannot let the residual
     # exceed these, which keeps the output crop borderless).
-    stabilize_R_tx_px: float = 60.0
-    stabilize_R_ty_px: float = 60.0
-    stabilize_R_rotation_deg: float = 0.5
-    stabilize_R_log_scale: float = 0.005  # ≈ ±0.5% scale change
+    stabilize_max_tx_px: float = 60.0
+    stabilize_max_ty_px: float = 60.0
+    stabilize_max_rotation_deg: float = 0.5
+    stabilize_max_log_scale: float = 0.005  # ≈ ±0.5% scale change
 
     # L1 path-smoothing weights (velocity : acceleration : jerk) — standard
     # Grundmann 1 : 10 : 100 strongly prefers zero-jerk paths.
@@ -196,14 +196,14 @@ def _analyze_video(
     cum_theta_arr = np.asarray(cum_theta, dtype=np.float64)
     cum_log_scale_arr = np.asarray(cum_log_scale, dtype=np.float64)
 
-    R_theta_rad = math.radians(cfg.stabilize_R_rotation_deg)
+    R_theta_rad = math.radians(cfg.stabilize_max_rotation_deg)
 
     smooth_tx = l1_smooth_path(
         cum_tx_arr,
         w1=cfg.stabilize_w1,
         w2=cfg.stabilize_w2,
         w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_R_tx_px,
+        budget=cfg.stabilize_max_tx_px,
         w_stay=cfg.stabilize_w_stay,
     )
     smooth_ty = l1_smooth_path(
@@ -211,7 +211,7 @@ def _analyze_video(
         w1=cfg.stabilize_w1,
         w2=cfg.stabilize_w2,
         w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_R_ty_px,
+        budget=cfg.stabilize_max_ty_px,
         w_stay=cfg.stabilize_w_stay,
     )
     smooth_theta = l1_smooth_path(
@@ -227,16 +227,16 @@ def _analyze_video(
         w1=cfg.stabilize_w1,
         w2=cfg.stabilize_w2,
         w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_R_log_scale,
+        budget=cfg.stabilize_max_log_scale,
         w_stay=cfg.stabilize_w_stay,
     )
 
     # ----- Compose per-frame stabilizing matrices -----
     inset_y, inset_x = compute_safe_inset(
-        cfg.stabilize_R_tx_px,
-        cfg.stabilize_R_ty_px,
-        cfg.stabilize_R_rotation_deg,
-        cfg.stabilize_R_log_scale,
+        cfg.stabilize_max_tx_px,
+        cfg.stabilize_max_ty_px,
+        cfg.stabilize_max_rotation_deg,
+        cfg.stabilize_max_log_scale,
         src_w,
         src_h,
     )

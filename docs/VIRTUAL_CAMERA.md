@@ -263,3 +263,70 @@ Dead-ball overrides in coach mode:
 - Codec: H.264 (mp4)
 - Frame rate: match source
 - The output should look like a single continuous camera shot with smooth, professional panning and zooming
+
+## Camera Stabilization (opt-in)
+
+Wind shakes a 16' tripod-mounted Reolink Duo 3 enough that the rendered horizon
+visibly rolls and the follow-cam chases a wobbling ball trajectory. The
+`stabilize` pipeline step does an offline single-pass motion analysis and
+writes a `motion.json` sidecar that the `detect` and `render` steps consume
+to warp every decoded frame in memory before their own work — no new file,
+no re-encode.
+
+### Algorithm
+
+Per-frame, against a maintained reference:
+
+1. **Multi-region soccer mask.** ORB looks only at the genuinely stable
+   references in a soccer scene: the sky / distant treeline strip above the
+   field, the far-touchline white-line edge, the goal-frame vicinities at the
+   far corners, and the corner-flag pole bases. The field interior, the
+   near-sideline foot-traffic strip, the lateral dewarp corners, and the
+   spectator band immediately above the far touchline are all excluded — those
+   are where the failure modes live (moving players, walking parents, flapping
+   tents, fluttering corner flags). The mask is built ONCE per recording from
+   the upstream field polygon; the camera doesn't move during the recording.
+2. **ORB features in the mask** → BFMatcher knn-2 + Lowe ratio test
+   (drops ambiguous matches on repetitive moving textures).
+3. **`cv2.estimateAffinePartial2D` constrained to a similarity** (translation
+   + rotation + uniform scale; no shear). A **tight 1.5 px RANSAC reprojection
+   threshold** rejects any feature on a moving spectator / walking parent /
+   flag fabric whose actual motion exceeds the camera's wobble.
+4. **Drift-aware reference.** Re-anchor on inlier-ratio drop, on a large
+   one-shot drift (a real shake event), or on age cap (~30 s at 20 fps), so
+   one gust event doesn't pollute the reference for the rest of the
+   recording.
+
+Cumulative path is integrated additively in `(tx, ty, theta, log_scale)` —
+valid under the small-rotation assumption for a tripod. Each axis is then
+smoothed independently via **L1-norm path optimization** (Grundmann et al.
+2011) with the standard 1 : 10 : 100 (velocity : acceleration : jerk) weight
+ratio that strongly prefers zero-jerk paths. The L1 LP runs through
+`scipy.optimize.linprog` with the HiGHS solver and per-axis safe budgets as
+hard box constraints (default: 60 px translation, 0.5° rotation, 0.5%
+scale). The per-frame **stabilizing similarity** is the residual
+`cumulative − smoothed`, composed with a constant translation that recentres
+the slightly smaller output crop onto the wobbling source.
+
+### Output
+
+`motion.json` carries: `src_size`, `output_size`, `safe_inset`, and per-frame
+`[M, confidence]`. The `M` is a 2×3 similarity that `cv2.warpAffine` applies
+with `WARP_INVERSE_MAP + BORDER_REPLICATE` to produce an `(out_h, out_w)`
+stabilized RGB frame.
+
+### Opt-in
+
+Add `stabilize` to your pipeline config, OR select the `broadcast_stabilized`
+preset which wires it together with `detect_stabilize` and `render_stabilize`
+turned on. The default `homegrown` preset is unchanged.
+
+```ini
+[PIPELINE]
+preset = broadcast_stabilized
+```
+
+The trade-off is one extra analysis pass (~10–15 minutes on a typical 80-min
+game on the camera-manager box) for visibly steadier output. The render's
+existing **warp-once-crop** optimization is preserved — `build_leveled_pano`
+still runs ONCE, just at the stabilized dimensions.
