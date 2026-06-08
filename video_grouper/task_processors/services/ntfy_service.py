@@ -12,7 +12,10 @@ from typing import Any
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.utils.config import NtfyConfig
 
-from ...utils.paths import get_ntfy_service_state_path
+from ...utils.paths import (
+    get_ntfy_processed_log_path,
+    get_ntfy_service_state_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,13 @@ BUFFER_FRESHNESS_WINDOW_SECONDS = 60
 # entry must have been received within this many seconds (monotonic) of the
 # task registering. We never replay an older entry on this weak signal.
 BUFFER_RACE_WINDOW_SECONDS = 10
+
+# How long to remember consumed NTFY message ids. The ntfy.sh free tier
+# retains topic messages ~12-24h, so the ?since=24h replay can only ever
+# resurface an id younger than that; anything older can never replay and is
+# pruned from the ledger on load to keep it bounded. 48h gives comfortable
+# headroom over the replay window.
+NTFY_PROCESSED_LOG_RETENTION_SECONDS = 48 * 3600
 
 
 class NtfyService:
@@ -61,6 +71,16 @@ class NtfyService:
         self._pending_tasks: dict[str, dict[str, Any]] = {}
         self._processed_dirs: set[str] = set()
         self._state_file = get_ntfy_service_state_path(storage_path)
+
+        # Authoritative replay guard: the set of NTFY message ids we have
+        # already consumed. The ?since=24h replay on listener reconnect
+        # redelivers every recent message with its stable server-assigned id;
+        # ids in this set are skipped at ingest so a tap can never be applied
+        # twice (e.g. an earlier game's "Yes" walking a new game's question).
+        # Backed by an append-only JSONL audit log so it survives restarts.
+        # The topic is the source of truth; this records what we used from it.
+        self._processed_log_file = get_ntfy_processed_log_path(storage_path)
+        self._used_message_ids: set[str] = set()
 
         # Buffer for responses that arrived before any task was registered
         # to receive them. The recurring race: state_auditor queues a new
@@ -101,6 +121,7 @@ class NtfyService:
 
         self._initialize_api()
         self._load_state()
+        self._load_used_messages()
 
     def _initialize_api(self) -> None:
         """Initialize NTFY API."""
@@ -177,6 +198,90 @@ class NtfyService:
                 json.dump(state, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving NTFY unified state: {e}")
+
+    def _load_used_messages(self) -> None:
+        """Load consumed NTFY message ids from the audit log.
+
+        Drops entries older than the retention window (they can no longer
+        replay) and rewrites the file compacted so it stays bounded. A
+        corrupt or unreadable log must never block startup — on any error we
+        keep whatever ids parsed so far and carry on.
+        """
+        if not os.path.exists(self._processed_log_file):
+            return
+        cutoff = datetime.now().timestamp() - NTFY_PROCESSED_LOG_RETENTION_SECONDS
+        kept_lines: list[str] = []
+        try:
+            with open(self._processed_log_file, encoding="utf-8") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # skip a torn line, don't lose the rest
+                    recorded_at = entry.get("recorded_at")
+                    if recorded_at:
+                        try:
+                            if datetime.fromisoformat(recorded_at).timestamp() < cutoff:
+                                continue  # stale, prune
+                        except ValueError:
+                            pass
+                    mid = entry.get("id")
+                    if mid:
+                        self._used_message_ids.add(mid)
+                        kept_lines.append(line)
+            # Rewrite compacted so pruned/stale entries don't accumulate.
+            with open(self._processed_log_file, "w", encoding="utf-8") as f:
+                if kept_lines:
+                    f.write("\n".join(kept_lines) + "\n")
+            logger.debug(
+                f"NTFY: loaded {len(self._used_message_ids)} consumed message ids"
+            )
+        except Exception as e:
+            logger.error(f"Error loading NTFY processed-message log: {e}")
+
+    def has_used_message(self, message_id: str | None) -> bool:
+        """Return True if we have already consumed this NTFY message id.
+
+        Used by the listener to drop ?since=24h replays of a tap we already
+        acted on, so a stale response can never re-answer a live question.
+        """
+        return bool(message_id) and message_id in self._used_message_ids
+
+    def record_used_message(
+        self,
+        message_id: str | None,
+        *,
+        server_time: float | None = None,
+        event: str | None = None,
+        message: str | None = None,
+        decision: str | None = None,
+    ) -> None:
+        """Record that we consumed (used) an NTFY topic message.
+
+        Appends one line to the audit log keyed on the message's
+        server-assigned id. Idempotent: a no-op if the id was already
+        recorded. A failed write is logged but never raised — the listener
+        must keep processing even if the ledger can't be persisted.
+        """
+        if not message_id or message_id in self._used_message_ids:
+            return
+        self._used_message_ids.add(message_id)
+        entry = {
+            "id": message_id,
+            "ntfy_time": server_time,
+            "event": event,
+            "message": (message or "")[:200],
+            "decision": decision,
+            "recorded_at": datetime.now().isoformat(),
+        }
+        try:
+            with open(self._processed_log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.warning(f"NTFY: failed to append processed-message log: {e}")
 
     def is_waiting_for_input(self, group_dir: str) -> bool:
         """Check if we're waiting for user input for a specific directory."""

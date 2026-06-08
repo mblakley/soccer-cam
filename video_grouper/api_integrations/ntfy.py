@@ -286,6 +286,49 @@ class NtfyAPI:
             # reconnect. Absent for synthetic/internal events → None.
             server_time = response_data.get("time")
 
+            # The NTFY topic is the source of truth; ?since=24h redelivers every
+            # recent message on listener reconnect with its stable server id.
+            # Guard against re-applying a tap we already consumed (e.g. an
+            # earlier game's "Yes" walking a fresh question forward) by skipping
+            # ids already in the service's ledger. A missing callback or a
+            # ledger hiccup must never block live processing.
+            ntfy_msg_id = response_data.get("id")
+            cb = self.service_callback
+            if (
+                ntfy_msg_id
+                and cb is not None
+                and hasattr(cb, "has_used_message")
+                and cb.has_used_message(ntfy_msg_id)
+            ):
+                logger.debug(
+                    f"NTFY: skipping already-consumed message id={ntfy_msg_id} "
+                    "(?since=24h replay)"
+                )
+                return
+
+            # Record response-bearing messages as consumed. Skip keepalive/open
+            # heartbeats and our own echoed notifications (title/actions/tags/
+            # attachment) — we never act on those, so they shouldn't enter the
+            # audit log. This is what lets the skip above work across restarts.
+            is_echoed_notification = event_type == "message" and any(
+                key in response_data
+                for key in ("actions", "attachment", "title", "tags")
+            )
+            if (
+                ntfy_msg_id
+                and cb is not None
+                and hasattr(cb, "record_used_message")
+                and event_type in ("message", "action", "click", "response")
+                and not is_echoed_notification
+            ):
+                cb.record_used_message(
+                    ntfy_msg_id,
+                    server_time=server_time,
+                    event=event_type,
+                    message=message,
+                    decision="consumed",
+                )
+
             # For message events (regular messages)
             if event_type == "message":
                 # Check for responses to our questions (case insensitive)
