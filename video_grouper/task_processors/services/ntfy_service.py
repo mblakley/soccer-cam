@@ -12,7 +12,11 @@ from typing import Any
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.utils.config import NtfyConfig
 
-from ...utils.paths import get_ntfy_service_state_path
+from ...utils.locking import FileLock
+from ...utils.paths import (
+    get_ntfy_processed_log_path,
+    get_ntfy_service_state_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,13 @@ BUFFER_FRESHNESS_WINDOW_SECONDS = 60
 # entry must have been received within this many seconds (monotonic) of the
 # task registering. We never replay an older entry on this weak signal.
 BUFFER_RACE_WINDOW_SECONDS = 10
+
+# How long to remember consumed NTFY message ids. The ntfy.sh free tier
+# retains topic messages ~12-24h, so the ?since=24h replay can only ever
+# resurface an id younger than that; anything older can never replay and is
+# pruned from the ledger on load to keep it bounded. 48h gives comfortable
+# headroom over the replay window.
+NTFY_PROCESSED_LOG_RETENTION_SECONDS = 48 * 3600
 
 
 class NtfyService:
@@ -61,6 +72,16 @@ class NtfyService:
         self._pending_tasks: dict[str, dict[str, Any]] = {}
         self._processed_dirs: set[str] = set()
         self._state_file = get_ntfy_service_state_path(storage_path)
+
+        # Authoritative replay guard: the set of NTFY message ids we have
+        # already consumed. The ?since=24h replay on listener reconnect
+        # redelivers every recent message with its stable server-assigned id;
+        # ids in this set are skipped at ingest so a tap can never be applied
+        # twice (e.g. an earlier game's "Yes" walking a new game's question).
+        # Backed by an append-only JSONL audit log so it survives restarts.
+        # The topic is the source of truth; this records what we used from it.
+        self._processed_log_file = get_ntfy_processed_log_path(storage_path)
+        self._used_message_ids: set[str] = set()
 
         # Buffer for responses that arrived before any task was registered
         # to receive them. The recurring race: state_auditor queues a new
@@ -101,6 +122,7 @@ class NtfyService:
 
         self._initialize_api()
         self._load_state()
+        self._load_used_messages()
 
     def _initialize_api(self) -> None:
         """Initialize NTFY API."""
@@ -177,6 +199,106 @@ class NtfyService:
                 json.dump(state, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving NTFY unified state: {e}")
+
+    def _load_used_messages(self) -> None:
+        """Load consumed NTFY message ids from the audit log.
+
+        Drops entries older than the retention window (they can no longer
+        replay) and rewrites the file compacted so it stays bounded. A
+        corrupt or unreadable log must never block startup — on any error we
+        keep whatever ids parsed so far and carry on.
+
+        The read-then-compacting-rewrite is taken under FileLock so a
+        concurrent appender (e.g. a second tray agent) can't be clobbered by
+        the truncate. NOTE: the in-memory id set is per-process, so this guards
+        the file's integrity, not cross-process dedup — two live listeners each
+        consume a given tap once. See record_used_message.
+        """
+        if not os.path.exists(self._processed_log_file):
+            return
+        cutoff = datetime.now().timestamp() - NTFY_PROCESSED_LOG_RETENTION_SECONDS
+        kept_lines: list[str] = []
+        try:
+            with FileLock(self._processed_log_file):
+                with open(self._processed_log_file, encoding="utf-8") as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue  # skip a torn line, don't lose the rest
+                        recorded_at = entry.get("recorded_at")
+                        if recorded_at:
+                            try:
+                                if (
+                                    datetime.fromisoformat(recorded_at).timestamp()
+                                    < cutoff
+                                ):
+                                    continue  # stale, prune
+                            except ValueError:
+                                pass
+                        mid = entry.get("id")
+                        if mid:
+                            self._used_message_ids.add(mid)
+                            kept_lines.append(line)
+                # Rewrite compacted so pruned/stale entries don't accumulate.
+                with open(self._processed_log_file, "w", encoding="utf-8") as f:
+                    if kept_lines:
+                        f.write("\n".join(kept_lines) + "\n")
+            logger.debug(
+                f"NTFY: loaded {len(self._used_message_ids)} consumed message ids"
+            )
+        except Exception as e:
+            logger.error(f"Error loading NTFY processed-message log: {e}")
+
+    def has_used_message(self, message_id: str | None) -> bool:
+        """Return True if we have already consumed this NTFY message id.
+
+        Used by the listener to drop ?since=24h replays of a tap we already
+        acted on, so a stale response can never re-answer a live question.
+        """
+        return bool(message_id) and message_id in self._used_message_ids
+
+    def record_used_message(
+        self,
+        message_id: str | None,
+        *,
+        server_time: float | None = None,
+        message: str | None = None,
+        decision: str | None = None,
+    ) -> None:
+        """Record that we consumed (used) an NTFY topic message.
+
+        Appends one line to the audit log keyed on the message's
+        server-assigned id. Idempotent: a no-op if the id was already
+        recorded. A failed write is logged but never raised — the listener
+        must keep processing even if the ledger can't be persisted.
+
+        The append is taken under FileLock so it can't interleave with another
+        process's compacting rewrite (see _load_used_messages). This protects
+        the file, NOT cross-process dedup: the id set is per-process and only
+        loaded at init, so two live listeners on the same topic each consume a
+        given tap once — concurrent dual-consumers are out of scope here (the
+        single-instance tray lock is what prevents that).
+        """
+        if not message_id or message_id in self._used_message_ids:
+            return
+        self._used_message_ids.add(message_id)
+        entry = {
+            "id": message_id,
+            "ntfy_time": server_time,
+            "message": (message or "")[:200],
+            "decision": decision,
+            "recorded_at": datetime.now().isoformat(),
+        }
+        try:
+            with FileLock(self._processed_log_file):
+                with open(self._processed_log_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.warning(f"NTFY: failed to append processed-message log: {e}")
 
     def is_waiting_for_input(self, group_dir: str) -> bool:
         """Check if we're waiting for user input for a specific directory."""
@@ -520,7 +642,10 @@ class NtfyService:
         self._response_handlers.pop(key, None)
 
     async def process_response(
-        self, response: str, server_time: float | None = None
+        self,
+        response: str,
+        server_time: float | None = None,
+        topic_msg_id: str | None = None,
     ) -> None:
         """
         Process a response from NTFY and route it to the appropriate pending task.
@@ -534,8 +659,23 @@ class NtfyService:
                 seconds), when available. Used to reject stale replays when the
                 response has to be buffered. None for synthetic/internal
                 responses (e.g. the mock API or registered response handlers).
+            topic_msg_id: The NTFY topic message id this response came from,
+                when available. Recorded to the consumed-id ledger at the point
+                the response is actually used (matched/handled/buffered) so the
+                ?since=24h replay never re-applies it. None for synthetic calls.
         """
         logger.info(f"Processing NTFY response: {response}")
+
+        def _record_consumed(decision: str) -> None:
+            # Record-on-use: only called once we've actually consumed the
+            # response, so a dispatch that throws before this is left
+            # un-recorded and the next replay can retry it.
+            self.record_used_message(
+                topic_msg_id,
+                server_time=server_time,
+                message=str(response)[:200],
+                decision=decision,
+            )
 
         # Check generic response handlers first (e.g. home recording deletion)
         response_lower = response.lower()
@@ -544,6 +684,7 @@ class NtfyService:
                 logger.info(f"Matched response handler: {key}")
                 try:
                     await handler(response)
+                    _record_consumed("handler")
                 except Exception as e:
                     logger.error(f"Error in response handler '{key}': {e}")
                 return
@@ -563,6 +704,7 @@ class NtfyService:
                     await self._process_task_response(
                         self._last_notified_group_dir, task_type, metadata, response
                     )
+                    _record_consumed("applied")
                     return
 
         # Fall back to iterating all pending tasks (sorted by sent_at descending)
@@ -584,6 +726,7 @@ class NtfyService:
                 await self._process_task_response(
                     group_dir, task_type, metadata, response
                 )
+                _record_consumed("applied")
                 return
         # No task currently waiting for this response. Buffer it — a task
         # registration may be moments away (state_auditor and the response
@@ -595,6 +738,7 @@ class NtfyService:
 
         self._prune_unmatched_buffer()
         self._unmatched_responses.append((time.monotonic(), server_time, response))
+        _record_consumed("buffered")
         logger.warning(
             f"No matching task found for response: {response} "
             f"(buffered {len(self._unmatched_responses)} unmatched responses, "

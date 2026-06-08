@@ -169,6 +169,24 @@ def get_ntfy_service_state_path(storage_path: str) -> str:
     return os.path.join(storage_path, "ntfy_service_state.json")
 
 
+def get_ntfy_processed_log_path(storage_path: str) -> str:
+    """Get the path to the NTFY processed-message audit log.
+
+    Append-only JSONL recording every NTFY topic message we have consumed,
+    keyed by the message's server-assigned id. The NTFY topic is the source
+    of truth; this log is our record of what we actually used from it, so the
+    ``?since=24h`` replay on listener reconnect never re-applies a tap we have
+    already acted on. Also doubles as a human-readable audit trail.
+
+    Args:
+        storage_path: The storage path
+
+    Returns:
+        Path to the ntfy_processed.jsonl file
+    """
+    return os.path.join(storage_path, "ntfy_processed.jsonl")
+
+
 def get_home_cleanup_state_path(storage_path: str) -> str:
     """Get the path to the home recording cleanup state file.
 
