@@ -7,7 +7,11 @@ import tempfile
 
 from ..utils.config import Config
 from .base_polling_processor import PollingProcessor
-from .recording_locator import find_combined_video, resolve_recording_dir
+from .recording_locator import (
+    find_combined_video,
+    find_processed_video,
+    resolve_recording_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ class ClipRequestProcessor(PollingProcessor):
 
     Flow per request:
     1. Mark as in_progress via TTT API
-    2. Locate combined.mp4 in recording_group_dir
+    2. Locate the processed video (fall back to combined.mp4) in recording_group_dir
     3. Extract clips via FFmpeg
     4. Dispatch on delivery_method:
        - 'youtube': always produce one video (compile multi-segment), upload to YouTube
@@ -348,8 +352,15 @@ class ClipRequestProcessor(PollingProcessor):
         return resolved
 
     def _find_source_video(self, recording_dir: str) -> str | None:
-        """Find combined.mp4 in the recording directory tree."""
-        return find_combined_video(recording_dir)
+        """Find the source video to clip from in the recording directory tree.
+
+        Prefer the processed (AutoCam) broadcast video — clip requests target the
+        game video the user watches, whose timeline is game-clock, so segment
+        offsets line up directly. Fall back to ``combined.mp4`` (the full,
+        untrimmed raw panorama) only when no processed video exists yet (e.g.
+        ball-tracking hasn't run for this recording).
+        """
+        return find_processed_video(recording_dir) or find_combined_video(recording_dir)
 
     def _notify_missing_footage(self, req: dict, recording_dir: str) -> None:
         """Send notification about missing footage."""

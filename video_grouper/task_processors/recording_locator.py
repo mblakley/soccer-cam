@@ -1,5 +1,5 @@
-"""Locate a local recording group dir + its combined.mp4 from a TTT-supplied
-``recording_group_dir`` value.
+"""Locate a local recording group dir + its source video (the processed
+broadcast video, or ``combined.mp4``) from a TTT-supplied ``recording_group_dir``.
 
 Used by any processor that needs to resolve a TTT-side recording reference
 (e.g., a clip request's ``game_session.recording_group_dir``, a highlight reel
@@ -9,8 +9,11 @@ soccer-cam install.
 The resolution strategy mirrors what ``ClipRequestProcessor`` has done since
 clip requests existed: TTT sends a directory string; try it as an absolute
 path first, then fall back to joining it under ``storage_path``. Once the
-dir is resolved, ``combined.mp4`` is looked up either directly inside it or
-one level of subdirectory deep (the camera-manager's group/subgroup layout).
+dir is resolved, the source video is looked up either directly inside it or
+one level of subdirectory deep (the camera-manager's group/subgroup layout):
+:func:`find_processed_video` for the dewarped, ball-following broadcast output
+the user watches (game-clock timeline), and :func:`find_combined_video` for the
+full, untrimmed raw panorama.
 """
 
 from __future__ import annotations
@@ -63,5 +66,56 @@ def find_combined_video(recording_dir: str) -> str | None:
             combined = os.path.join(subdir, "combined.mp4")
             if os.path.isfile(combined):
                 return combined
+
+    return None
+
+
+def _processed_video_in(directory: str) -> str | None:
+    """Return the ``<slug>.mp4`` paired with a ``<slug>-raw.mp4`` in ``directory``.
+
+    The pipeline writes the trimmed full-field input as ``<slug>-raw.mp4`` and
+    the dewarped, ball-following AutoCam output as ``<slug>.mp4`` (same pairing
+    the YouTube upload task uses to tell processed from raw). Returns the
+    processed sibling's absolute path, or ``None`` if no such pair is here.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    for name in names:
+        if name.endswith("-raw.mp4"):
+            processed = os.path.join(directory, name[: -len("-raw.mp4")] + ".mp4")
+            if os.path.isfile(processed):
+                return processed
+    return None
+
+
+def find_processed_video(recording_dir: str) -> str | None:
+    """Find the processed (AutoCam) broadcast video in a recording dir tree.
+
+    The processed video is the dewarped, ball-following output the pipeline
+    uploads as the game video; its timeline is game-clock (0:00 = kickoff), so
+    clip-request offsets line up directly. It lives as ``<slug>.mp4`` beside its
+    raw full-field input ``<slug>-raw.mp4`` — usually inside the
+    ``"<date> - <team> vs <opp> (<loc>)"`` subdirectory.
+
+    Looks directly inside ``recording_dir`` then one level of subdirectory deep
+    (mirroring :func:`find_combined_video`). Returns the absolute path or ``None``.
+    """
+    hit = _processed_video_in(recording_dir)
+    if hit:
+        return hit
+
+    try:
+        entries = os.listdir(recording_dir)
+    except OSError:
+        return None
+
+    for entry in entries:
+        subdir = os.path.join(recording_dir, entry)
+        if os.path.isdir(subdir):
+            hit = _processed_video_in(subdir)
+            if hit:
+                return hit
 
     return None

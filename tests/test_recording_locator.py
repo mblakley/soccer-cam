@@ -6,6 +6,7 @@ import os
 
 from video_grouper.task_processors.recording_locator import (
     find_combined_video,
+    find_processed_video,
     resolve_recording_dir,
 )
 
@@ -108,3 +109,49 @@ def test_resolve_storage_path_join_handles_windows_separators(tmp_path):
     result = resolve_recording_dir(str(storage), os.path.join("sub", "group"))
 
     assert result == str(nested)
+
+
+def test_find_processed_video_in_subdir(tmp_path):
+    """The processed <slug>.mp4 sibling of <slug>-raw.mp4 is found one dir deep."""
+    group = tmp_path / "group"
+    sub = group / "2026.03.08 - Flash vs IYSA (home)"
+    sub.mkdir(parents=True)
+    (sub / "flash-iysa-home-03-08-2026-raw.mp4").write_bytes(b"x")
+    processed = sub / "flash-iysa-home-03-08-2026.mp4"
+    processed.write_bytes(b"x")
+
+    assert find_processed_video(str(group)) == str(processed)
+
+
+def test_find_processed_video_direct_hit(tmp_path):
+    group = tmp_path / "group"
+    group.mkdir()
+    (group / "flash-iysa-home-03-08-2026-raw.mp4").write_bytes(b"x")
+    processed = group / "flash-iysa-home-03-08-2026.mp4"
+    processed.write_bytes(b"x")
+
+    assert find_processed_video(str(group)) == str(processed)
+
+
+def test_find_processed_video_missing_when_only_raw(tmp_path):
+    """A raw full-field input with no processed sibling yields None."""
+    group = tmp_path / "group"
+    sub = group / "sub"
+    sub.mkdir(parents=True)
+    (sub / "flash-iysa-home-03-08-2026-raw.mp4").write_bytes(b"x")
+
+    assert find_processed_video(str(group)) is None
+
+
+def test_find_processed_video_ignores_combined_only(tmp_path):
+    """combined.mp4 alone is not a processed video."""
+    group = tmp_path / "group"
+    sub = group / "sub"
+    sub.mkdir(parents=True)
+    (sub / "combined.mp4").write_bytes(b"x")
+
+    assert find_processed_video(str(group)) is None
+
+
+def test_find_processed_video_unreadable_dir(tmp_path):
+    assert find_processed_video(str(tmp_path / "does-not-exist")) is None
