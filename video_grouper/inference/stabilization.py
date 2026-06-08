@@ -218,6 +218,87 @@ def estimate_similarity(
 
 
 # ---------------------------------------------------------------------------
+# Phase correlation — direct sub-pixel translation estimator
+# ---------------------------------------------------------------------------
+#
+# Empirically (on 30s slices of real BU14 game footage, calm + windy stretches)
+# phase correlation on a fixed sky/treeline ROI beats ORB+RANSAC by a wide
+# margin: ~93% reduction in adjacent-frame |dy| vs ORB's -25% (which actively
+# made things worse). Three reasons it wins:
+#
+#   1. Sub-pixel translation directly (~0.1 px noise floor).
+#   2. ORB+RANSAC on cylindrically-warped panoramic source has spatial bias:
+#      pixels-per-degree varies across the image, so the similarity fit
+#      averages mismatched scales, over-estimating translation by ~2.8x.
+#   3. A tripod camera's wobble is dominated by translation; rotation/scale
+#      are sub-degree/sub-percent and the broadcast crop tolerates them.
+#
+# So the production estimator is phase correlation. ORB+RANSAC stays in the
+# module as a fallback estimator (selected via StabilizeStepConfig) but is
+# not the default.
+
+
+def background_strip_roi(
+    src_w: int,
+    src_h: int,
+    polygon: np.ndarray | None,
+    *,
+    lateral_inset_frac: float = 0.08,
+    polygon_edge_overlap_px: int = 25,
+    above_polygon_target_px: int = 240,
+    top_skip_frac: float = 0.025,
+) -> tuple[int, int, int, int]:
+    """Derive a ``(y0, y1, x0, x1)`` ROI in the source for phase correlation.
+
+    The ROI straddles the field polygon's top edge — the treeline boundary
+    is the strongest stable feature in a soccer-camera panorama. ``polygon_
+    edge_overlap_px`` controls how far the ROI extends BELOW the polygon's
+    highest top-edge point (positive = into the upper edge of the field
+    polygon, capturing treeline pixels), and ``above_polygon_target_px``
+    sets the total ROI height extending upward into the sky.
+
+    Lateral inset (8 % default) drops the extreme dewarp distortion at the
+    image edges. ``top_skip_frac`` skips the very top rows that often carry
+    a camera-burned timestamp overlay (fixed in image coords — useless for
+    phase correlation and even biases it toward 0).
+
+    With no polygon, falls back to a fixed top-of-source band.
+    """
+    x0 = int(src_w * lateral_inset_frac)
+    x1 = int(src_w * (1.0 - lateral_inset_frac))
+    y_top_safe = int(src_h * top_skip_frac)
+    if polygon is None or len(polygon) == 0:
+        # No-polygon fallback: top ~15 % of source so we still pick up the
+        # likely treeline / distant horizon.
+        y0 = y_top_safe
+        y1 = max(y0 + 50, int(src_h * 0.15))
+        return y0, y1, x0, x1
+    poly = np.asarray(polygon, dtype=np.float32)
+    polygon_top_y = int(poly[:, 1].min())
+    # Extend ROI a configurable margin BELOW the polygon's highest point so
+    # the strip captures the treeline boundary (where most stable features
+    # live), not just sky which can have moving clouds.
+    y1 = max(y_top_safe + 50, polygon_top_y + polygon_edge_overlap_px)
+    y0 = max(y_top_safe, y1 - above_polygon_target_px)
+    return y0, y1, x0, x1
+
+
+def phase_correlate_translation(
+    prev_gray: np.ndarray,
+    cur_gray: np.ndarray,
+) -> tuple[float, float, float]:
+    """Sub-pixel ``(dx, dy)`` translation from *prev_gray* to *cur_gray*,
+    plus a [0, 1] response score (the correlation peak magnitude).
+
+    Inputs must be the same shape, grayscale, float32. The response score
+    drops on featureless / low-texture frames — caller can use it as a
+    confidence gate.
+    """
+    (dx, dy), response = cv2.phaseCorrelate(prev_gray, cur_gray)
+    return float(dx), float(dy), float(response)
+
+
+# ---------------------------------------------------------------------------
 # Soccer-aware background mask (the heart of "yes, this works for soccer")
 # ---------------------------------------------------------------------------
 

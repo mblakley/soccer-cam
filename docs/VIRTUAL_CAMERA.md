@@ -331,19 +331,37 @@ game on the camera-manager box) for visibly steadier output. The render's
 existing **warp-once-crop** optimization is preserved — `build_leveled_pano`
 still runs ONCE, just at the stabilized dimensions.
 
+### Estimator: phase correlation (default)
+
+The motion estimator is **phase correlation** on a fixed sky/treeline ROI.
+Empirically on real BU14 game footage (calm + windy 30-second slices):
+
+| Slice                       | Raw \|dy\| mean | Stabilized \|dy\| mean | Reduction |
+|---|---|---|---|
+| Calm (peak 4.7 px wobble)   | 1.00 px         | **0.07 px**            | **+93.1 %** |
+| Windy (peak 16.8 px wobble) | 2.54 px         | **0.18 px**            | **+92.8 %** |
+
+The legacy ORB + RANSAC similarity estimator is kept under
+`stabilize_estimator = "orb"` as a fallback (e.g. for cases where phase
+correlation degrades on a totally featureless overcast sky) but is no
+longer the default — on the same footage it gave **−25 %** reduction
+(actively made things worse) because ORB+RANSAC on a cylindrically-warped
+panoramic source has spatial bias: pixels-per-degree varies across the
+image, so the similarity fit averages mismatched scales and over-estimates
+translation by ~2.8 ×.
+
+Phase correlation wins on three fronts: sub-pixel translation directly
+(~0.1 px noise floor), no descriptor / feature-matching complexity (~3
+lines vs ~150), and no reference-frame state machine.
+
 ### Field polygon is highly recommended
 
-The soccer-stability mask is what makes ORB+RANSAC reliable here. **Without a
-field polygon** the step falls back to a generic top-of-source sky strip,
-which works on calm overcast days but is dominated by **cloud motion** on
-windy ones (clouds drift slowly and ORB tracks them as if they were stable
-world features). On real footage we have measured the no-polygon fallback
-producing residuals dominated by accumulated estimation noise — the
-stabilizer ends up shifting frames by tens of pixels in the wrong direction
-because the cumulative motion estimate is wrong, not because the camera
-actually moved that much.
+The phase-correlation ROI is derived from the field polygon's top edge so
+the strip captures the **treeline boundary** — the most stable feature in
+a soccer panorama. **Without a field polygon** the step falls back to a
+generic top-of-source sky strip, which works on calm overcast days but
+degrades on clear-sky windy days because cloud motion contaminates the
+estimate.
 
-With a polygon the mask covers genuinely stable world references — goal
-frames, far-touchline edge, corner-flag pole bases — and the estimate becomes
-robust. The `field_detect` step is the natural upstream provider; the
+The `field_detect` step is the natural upstream provider; the
 `broadcast_stabilized` preset assumes it runs before `stabilize`.

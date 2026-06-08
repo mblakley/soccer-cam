@@ -15,6 +15,7 @@ from video_grouper.inference.stabilization import (
     MotionEstimationConfig,
     SimilarityTransform,
     _ReferenceState,
+    background_strip_roi,
     compose_stabilizing_transforms,
     compute_safe_inset,
     estimate_similarity,
@@ -22,6 +23,7 @@ from video_grouper.inference.stabilization import (
     l1_smooth_path,
     match_with_ratio_test,
     measure_frame_motion,
+    phase_correlate_translation,
     soccer_stability_mask,
     write_motion_json,
 )
@@ -546,3 +548,100 @@ class TestMotionJsonRoundtrip:
         assert stabilizer.confidence(0) == 0.9
         assert stabilizer.confidence(1) == 0.7
         assert stabilizer.confidence(99) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase correlation primitives (the production translation estimator)
+# ---------------------------------------------------------------------------
+
+
+class TestPhaseCorrelate:
+    def test_recovers_pure_translation(self):
+        """Phase correlation should sub-pixel-recover a known integer shift."""
+        rng = np.random.default_rng(0)
+        h, w = 240, 480
+        base = (rng.standard_normal((h, w)) * 50 + 128).astype(np.float32)
+        # Apply a known translation via warpAffine. The matrix M maps
+        # dst-pixel → src-pixel by default (it's an inverse map), so a
+        # +5/+3 translation in M shifts content by -5/-3 in display, and
+        # phaseCorrelate(prev, cur) reports the displacement to undo that —
+        # i.e. it returns the matrix's translation amount, with sign matching
+        # the warp matrix.
+        T = np.array([[1, 0, 5], [0, 1, 3]], dtype=np.float32)
+        shifted = cv2.warpAffine(
+            base,
+            T,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        dx, dy, response = phase_correlate_translation(base, shifted)
+        assert dx == pytest.approx(5.0, abs=0.3)
+        assert dy == pytest.approx(3.0, abs=0.3)
+        assert response > 0.3
+
+    def test_zero_response_on_unrelated_frames(self):
+        a = (np.random.default_rng(1).standard_normal((100, 200)) * 50 + 128).astype(
+            np.float32
+        )
+        b = (np.random.default_rng(2).standard_normal((100, 200)) * 50 + 128).astype(
+            np.float32
+        )
+        _, _, response = phase_correlate_translation(a, b)
+        # Two uncorrelated random fields produce a low correlation response;
+        # the exact bound depends on resolution, but it should be much lower
+        # than the textured-translation case (>0.3).
+        assert response < 0.25
+
+
+class TestBackgroundStripROI:
+    def test_polygon_overlap_roi_default_function_args(self):
+        """ROI straddles the polygon's highest top-edge point so the strip
+        captures the treeline (function-level defaults)."""
+        polygon = np.array(
+            [
+                [275, 1097],
+                [1350, 1201],
+                [3920, 1297],
+                [6855, 1215],
+                [7390, 1148],
+                [5530, 453],
+                [4745, 326],
+                [3875, 295],
+                [2925, 312],
+                [2295, 416],
+            ],
+            dtype=np.float32,
+        )
+        src_w, src_h = 7680, 2160
+        y0, y1, x0, x1 = background_strip_roi(src_w, src_h, polygon)
+        # ROI extends BELOW the polygon's highest point (y=295) by the
+        # overlap amount (default 25) so it captures the treeline.
+        assert y1 == 295 + 25
+        # ROI height matches the above_polygon_target_px default.
+        assert y1 - y0 == 240
+        # Function-level lateral inset default is 0.08 → central 84 % of source width.
+        # (The StabilizeStepConfig overrides to 0.18 for production.)
+        assert x0 == int(src_w * 0.08)
+        assert x1 == int(src_w * (1.0 - 0.08))
+
+    def test_no_polygon_fallback(self):
+        src_w, src_h = 1920, 1080
+        y0, y1, x0, x1 = background_strip_roi(src_w, src_h, polygon=None)
+        # Fallback covers top ~15% of source.
+        assert 0 < y0 < y1 <= int(src_h * 0.15) + 1
+        assert x0 > 0 and x1 < src_w
+
+    def test_lateral_inset_tunable(self):
+        polygon = np.array(
+            [[100, 500], [800, 500], [700, 200], [200, 200]],
+            dtype=np.float32,
+        )
+        _, _, x0, x1 = background_strip_roi(
+            1000,
+            800,
+            polygon,
+            lateral_inset_frac=0.10,
+        )
+        assert x0 == 100
+        assert x1 == 900

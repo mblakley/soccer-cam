@@ -31,7 +31,14 @@ logger = logging.getLogger(__name__)
 
 
 class StabilizeStepConfig(BaseModel):
-    """Per-axis safe budgets + reference + L1 weights for the analysis pass."""
+    """Per-axis safe budgets + estimator + L1 weights for the analysis pass."""
+
+    # Motion estimator. "phasecorr" (default) uses sub-pixel phase correlation
+    # on a fixed sky/treeline ROI — empirically gives ~93% reduction in
+    # adjacent-frame drift on real game footage. "orb" uses the older ORB +
+    # RANSAC similarity estimator (kept as a fallback for cases where phase
+    # correlation fails — e.g. a featureless overcast sky with no treeline).
+    stabilize_estimator: str = "phasecorr"
 
     # Per-axis safe budgets (the path-optimization cannot let the residual
     # exceed these, which keeps the output crop borderless).
@@ -47,7 +54,20 @@ class StabilizeStepConfig(BaseModel):
     stabilize_w3: float = 100.0
     stabilize_w_stay: float = 1.0e-3
 
-    # ORB / RANSAC tuning.
+    # Phase correlation tuning. The ROI straddles the field polygon's top
+    # edge (so it captures the treeline boundary — the most stable feature).
+    # Lateral inset of 18% drops the cylindrical-projection corners where
+    # angular-to-pixel scale varies most; empirically a 4000-wide central
+    # ROI gives a 4-5x cleaner motion estimate than the full 6500-wide one.
+    stabilize_roi_lateral_inset_frac: float = 0.18
+    stabilize_roi_polygon_edge_overlap_px: int = 25
+    stabilize_roi_above_polygon_target_px: int = 240
+    stabilize_roi_top_skip_frac: float = 0.025
+    # Below this phase-correlation response, hold previous motion estimate
+    # (defends against featureless / overcast frames).
+    stabilize_phasecorr_response_min: float = 0.05
+
+    # ORB / RANSAC tuning (only used when stabilize_estimator == "orb").
     stabilize_n_features: int = 1500
     stabilize_edge_threshold: int = 12
     stabilize_fast_threshold: int = 15
@@ -56,8 +76,7 @@ class StabilizeStepConfig(BaseModel):
     stabilize_ransac_max_iters: int = 2000
     stabilize_min_inliers: int = 20
     stabilize_min_inlier_ratio: float = 0.30
-
-    # Drifting-reference policy.
+    # Drifting-reference policy (ORB path only).
     stabilize_reanchor_min_frames: int = 60
     stabilize_reanchor_max_frames: int = 600
     stabilize_reanchor_inlier_ratio: float = 0.40
@@ -73,35 +92,121 @@ class StabilizeStepConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _analyze_video(
-    input_path: str,
-    output_path: str,
-    field_polygon_path: str | None,
-    cfg: StabilizeStepConfig,
-) -> dict:
-    """Single-pass motion analysis + L1 path optimization.
+def _estimate_motion_phasecorr(input_path, polygon, cfg):
+    """Phase-correlation translation estimator (the production default).
 
-    Returns a small summary dict (frame_count, peak residuals, mean confidence)
-    for logging / smoke checks. The full per-frame matrices land in
-    ``output_path`` (``motion.json``).
+    Returns ``(cum_tx, cum_ty, cum_theta, cum_log_scale, confidences,
+    src_h, src_w, frame_count)``. ``theta`` and ``log_scale`` are zeros
+    arrays — tripod-camera rotation is sub-degree and the broadcast crop
+    tolerates it without explicit correction.
+
+    Empirically (real BU14 game footage, calm + windy 30 s slices):
+    ~93 % reduction in adjacent-frame |dy| vs raw, +0.93 to +1.00
+    correlation with ground truth. ORB+RANSAC on the same source gave
+    -25 % reduction (worse than no stabilization).
+    """
+    import av
+    import cv2
+
+    from video_grouper.inference.stabilization import (
+        background_strip_roi,
+        phase_correlate_translation,
+    )
+
+    cum_tx_deltas: list[float] = []
+    cum_ty_deltas: list[float] = []
+    responses: list[float] = []
+
+    with av.open(input_path) as container:
+        stream = container.streams.video[0]
+        src_w = int(stream.width)
+        src_h = int(stream.height)
+        y0, y1, x0, x1 = background_strip_roi(
+            src_w,
+            src_h,
+            polygon,
+            lateral_inset_frac=cfg.stabilize_roi_lateral_inset_frac,
+            polygon_edge_overlap_px=cfg.stabilize_roi_polygon_edge_overlap_px,
+            above_polygon_target_px=cfg.stabilize_roi_above_polygon_target_px,
+            top_skip_frac=cfg.stabilize_roi_top_skip_frac,
+        )
+        logger.info(
+            "stabilize(phasecorr): %dx%d source, ROI [y %d-%d, x %d-%d] "
+            "(%dx%d) — soccer_polygon=%s",
+            src_w,
+            src_h,
+            y0,
+            y1,
+            x0,
+            x1,
+            x1 - x0,
+            y1 - y0,
+            polygon is not None,
+        )
+
+        prev_gray = None
+        frame_idx = 0
+        last_dx = 0.0
+        last_dy = 0.0
+        for packet in container.demux(stream):
+            if packet.dts is None:
+                continue
+            for frame in packet.decode():
+                rgb = frame.to_ndarray(format="rgb24")
+                gray = cv2.cvtColor(rgb[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY).astype(
+                    np.float32
+                )
+                if prev_gray is None:
+                    # First frame — seed deltas at zero.
+                    cum_tx_deltas.append(0.0)
+                    cum_ty_deltas.append(0.0)
+                    responses.append(1.0)
+                else:
+                    dx, dy, response = phase_correlate_translation(prev_gray, gray)
+                    if response < cfg.stabilize_phasecorr_response_min:
+                        # Featureless / low-confidence frame: hold previous
+                        # delta to avoid injecting noise into the cumulative.
+                        dx, dy = last_dx, last_dy
+                    cum_tx_deltas.append(dx)
+                    cum_ty_deltas.append(dy)
+                    responses.append(response)
+                    last_dx, last_dy = dx, dy
+                prev_gray = gray
+                frame_idx += 1
+
+    if frame_idx == 0:
+        raise RuntimeError(f"stabilize: input {input_path!r} had no decodable frames")
+
+    # Phase correlation reports motion FROM prev TO cur — integrated, that's
+    # the source-frame camera trajectory. The downstream composition was
+    # tuned for the ORB convention where cum tracks the INVERSE of camera
+    # motion (current→reference). Negate to match.
+    cum_tx = -np.cumsum(np.array(cum_tx_deltas, dtype=np.float64))
+    cum_ty = -np.cumsum(np.array(cum_ty_deltas, dtype=np.float64))
+    n = len(cum_tx)
+    cum_theta = np.zeros(n, dtype=np.float64)
+    cum_log_scale = np.zeros(n, dtype=np.float64)
+    return cum_tx, cum_ty, cum_theta, cum_log_scale, responses, src_h, src_w, frame_idx
+
+
+def _estimate_motion_orb(input_path, polygon, cfg):
+    """ORB + RANSAC similarity estimator (legacy / fallback).
+
+    Kept for cases where phase correlation might fail — e.g. a featureless
+    overcast sky with no treeline texture. On the BU14 footage it was the
+    original production path and underperformed phasecorr by ~120 percentage
+    points of adjacent-frame |dy| reduction.
     """
     import av
 
-    from video_grouper.inference.field_geometry import load_field
     from video_grouper.inference.stabilization import (
         MotionEstimationConfig,
         SimilarityTransform,
         _ReferenceState,
-        compose_stabilizing_transforms,
-        compute_safe_inset,
         extract_features,
-        l1_smooth_path,
         measure_frame_motion,
         soccer_stability_mask,
-        write_motion_json,
     )
-
-    polygon, _homography = load_field(field_polygon_path)
 
     estimation_cfg = MotionEstimationConfig(
         n_features=cfg.stabilize_n_features,
@@ -130,11 +235,6 @@ def _analyze_video(
         src_w = int(stream.width)
         src_h = int(stream.height)
         mask = soccer_stability_mask(src_w, src_h, polygon)
-        # Pre-compute the mask bbox once: ORB's FAST corner detection still
-        # scans the whole image even with a mask, so on an 8K source the
-        # whole-frame call costs ~1 s/frame. Cropping to the mask's bbox
-        # first cuts that to ~100 ms/frame at the same accuracy — we just
-        # offset the returned keypoints back into source coords.
         mask_ys, mask_xs = np.where(mask > 0)
         if len(mask_ys) == 0:
             raise RuntimeError(
@@ -146,8 +246,8 @@ def _analyze_video(
         cropped_mask = mask[roi_y0:roi_y1, roi_x0:roi_x1]
         keypoint_offset = (float(roi_x0), float(roi_y0))
         logger.info(
-            "stabilize: %dx%d source, mask non-zero %.1f%%, ORB ROI bbox %dx%d "
-            "(offset %d,%d) — soccer_polygon=%s",
+            "stabilize(orb): %dx%d source, mask non-zero %.1f%%, ORB ROI bbox "
+            "%dx%d (offset %d,%d) — soccer_polygon=%s",
             src_w,
             src_h,
             100.0 * (mask > 0).mean(),
@@ -160,7 +260,6 @@ def _analyze_video(
 
         reference = _ReferenceState()
         frame_idx = 0
-        frames_since_anchor = 0
         for packet in container.demux(stream):
             if packet.dts is None:
                 continue
@@ -179,11 +278,6 @@ def _analyze_video(
                 cum_theta.append(motion.cum_theta)
                 cum_log_scale.append(motion.cum_log_scale)
                 confidences.append(motion.confidence)
-                frames_since_anchor += 1
-
-                # Seed or re-anchor reference: cache the current frame's
-                # features as the new reference and bake the cumulative-at-
-                # this-frame as the new reference's "zero".
                 if reference.descriptors is None or reanchor:
                     kp, desc = extract_features(
                         cropped_rgb,
@@ -203,25 +297,73 @@ def _analyze_video(
                             log_scale=motion.cum_log_scale,
                         )
                         reference.frame_idx = frame_idx
-                        frames_since_anchor = 0
-                        logger.debug(
-                            "stabilize: re-anchored reference at frame %d (cum=(%.2f, %.2f) theta=%.3f°)",
-                            frame_idx,
-                            motion.cum_tx,
-                            motion.cum_ty,
-                            math.degrees(motion.cum_theta),
-                        )
                 frame_idx += 1
 
     if frame_idx == 0:
         raise RuntimeError(f"stabilize: input {input_path!r} had no decodable frames")
+    return (
+        np.asarray(cum_tx, dtype=np.float64),
+        np.asarray(cum_ty, dtype=np.float64),
+        np.asarray(cum_theta, dtype=np.float64),
+        np.asarray(cum_log_scale, dtype=np.float64),
+        confidences,
+        src_h,
+        src_w,
+        frame_idx,
+    )
+
+
+def _analyze_video(
+    input_path: str,
+    output_path: str,
+    field_polygon_path: str | None,
+    cfg: StabilizeStepConfig,
+) -> dict:
+    """Single-pass motion analysis + L1 path optimization.
+
+    Returns a small summary dict (frame_count, peak residuals, mean confidence)
+    for logging / smoke checks. The full per-frame matrices land in
+    ``output_path`` (``motion.json``).
+    """
+    from video_grouper.inference.field_geometry import load_field
+    from video_grouper.inference.stabilization import (
+        compose_stabilizing_transforms,
+        compute_safe_inset,
+        l1_smooth_path,
+        write_motion_json,
+    )
+
+    polygon, _homography = load_field(field_polygon_path)
+
+    estimator = cfg.stabilize_estimator
+    if estimator == "phasecorr":
+        (
+            cum_tx_arr,
+            cum_ty_arr,
+            cum_theta_arr,
+            cum_log_scale_arr,
+            confidences,
+            src_h,
+            src_w,
+            frame_idx,
+        ) = _estimate_motion_phasecorr(input_path, polygon, cfg)
+    elif estimator == "orb":
+        (
+            cum_tx_arr,
+            cum_ty_arr,
+            cum_theta_arr,
+            cum_log_scale_arr,
+            confidences,
+            src_h,
+            src_w,
+            frame_idx,
+        ) = _estimate_motion_orb(input_path, polygon, cfg)
+    else:
+        raise ValueError(
+            f"stabilize_estimator must be 'phasecorr' or 'orb', got {estimator!r}"
+        )
 
     # ----- Stage B: L1-norm path optimization per axis -----
-    cum_tx_arr = np.asarray(cum_tx, dtype=np.float64)
-    cum_ty_arr = np.asarray(cum_ty, dtype=np.float64)
-    cum_theta_arr = np.asarray(cum_theta, dtype=np.float64)
-    cum_log_scale_arr = np.asarray(cum_log_scale, dtype=np.float64)
-
     R_theta_rad = math.radians(cfg.stabilize_max_rotation_deg)
 
     smooth_tx = l1_smooth_path(
