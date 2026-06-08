@@ -278,6 +278,110 @@ def background_strip_roi(
     return y0, y1, x0, x1
 
 
+def stabilization_grid_rois(
+    src_w: int,
+    src_h: int,
+    polygon: np.ndarray | None,
+    *,
+    roi_w_px: int = 1300,
+    roi_h_px: int = 280,
+) -> list[tuple[int, int, int, int]]:
+    """3x3 grid of phase-correlation ROIs spanning the source spatially.
+
+    Per-ROI phase correlation gives 9 motion vectors that
+    :func:`fit_similarity_from_motion_vectors` then fits to a 2D similarity
+    (translation + rotation + scale). Multiple X positions at the same Y
+    are what reveal ROLL — left and right edges of a roll-wobbling camera
+    move in opposite vertical directions, and the per-frame slope yields θ.
+
+    Three Y bands (sky / field-mid / foreground) and three X bands
+    (left / center / right). Center positions are picked to keep ROIs inside
+    the typical field polygon's lateral extent and the dewarped-safe
+    horizontal band (drops the worst cylindrical-projection corners).
+    """
+    if polygon is None or len(polygon) == 0:
+        # Without a polygon, fall back to a single-band 3x1 grid in the
+        # top of the source so we still get rotation from the left/right
+        # vertical-motion gradient.
+        y_top = max(40, int(src_h * 0.04))
+        y_bot = y_top + roi_h_px
+        x_step = src_w // 4
+        return [
+            (y_top, y_bot, x_step, x_step + roi_w_px),
+            (y_top, y_bot, 2 * x_step - roi_w_px // 2, 2 * x_step + roi_w_px // 2),
+            (y_top, y_bot, 3 * x_step - roi_w_px, 3 * x_step),
+        ]
+    poly = np.asarray(polygon, dtype=np.float32)
+    polygon_top_y = int(poly[:, 1].min())
+    polygon_bottom_y = int(poly[:, 1].max())
+    poly_h = max(1, polygon_bottom_y - polygon_top_y)
+
+    # Y anchors: sky strip (just above polygon top), mid-field (~35% down
+    # into polygon, where field lines provide texture), foreground (just
+    # below polygon bottom, where the near sideline / bench lives).
+    y_anchors = [
+        max(40, polygon_top_y - roi_h_px + 50),
+        polygon_top_y + int(poly_h * 0.35),
+        min(src_h - roi_h_px - 1, polygon_bottom_y + 100),
+    ]
+    # X anchors: evenly spaced across the laterally-safe band. Center
+    # positions chosen so the LEFT-RIGHT span is maximised (more rotation
+    # leverage per degree of roll) while staying off the extreme dewarp
+    # corners. With a 7680-wide source: left x=1450, center x=3200, right
+    # x=5300 — giving ~3850 px span between left and right ROI centers,
+    # ~0.5 of the source width.
+    x_anchors_pct = [0.19, 0.42, 0.69]
+    x_anchors = [int(src_w * p) for p in x_anchors_pct]
+
+    rois = []
+    for ya in y_anchors:
+        for xa in x_anchors:
+            rois.append((ya, ya + roi_h_px, xa, xa + roi_w_px))
+    return rois
+
+
+def fit_similarity_from_motion_vectors(
+    roi_centers: list[tuple[float, float]],
+    motion_vectors: list[tuple[float, float]],
+    *,
+    method: int | None = None,
+    ransac_threshold: float = 2.0,
+) -> SimilarityTransform:
+    """Fit a 2D similarity (translation + rotation + uniform scale) to per-ROI
+    motion vectors.
+
+    *roi_centers* are the (x, y) source pixel coordinates of the ROI midpoints;
+    *motion_vectors* are the per-ROI (dx, dy) measured by phase correlation.
+    Together they give 2D point correspondences (src → src + delta) that
+    :func:`cv2.estimateAffinePartial2D` can fit a similarity to.
+
+    Why this matters for stabilization: a per-frame similarity captures the
+    ROLL component that pure translation can't. For a camera rolling about its
+    optical center, left/right edges move in opposite vertical directions; the
+    fitted similarity's ``theta`` recovers that rotation directly, and the
+    downstream warpAffine in :class:`FrameStabilizer` undoes it across the
+    whole frame.
+    """
+    if len(roi_centers) < 2:
+        return SimilarityTransform.identity()
+    src_pts = np.array(roi_centers, dtype=np.float32).reshape(-1, 1, 2)
+    dst_pts = np.array(
+        [(cx + dx, cy + dy) for (cx, cy), (dx, dy) in zip(roi_centers, motion_vectors)],
+        dtype=np.float32,
+    ).reshape(-1, 1, 2)
+    if method is None:
+        method = cv2.RANSAC
+    M, _ = cv2.estimateAffinePartial2D(
+        src_pts,
+        dst_pts,
+        method=method,
+        ransacReprojThreshold=ransac_threshold,
+    )
+    if M is None:
+        return SimilarityTransform.identity()
+    return SimilarityTransform.from_affine(M)
+
+
 def stabilization_rois(
     src_w: int,
     src_h: int,

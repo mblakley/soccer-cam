@@ -132,7 +132,7 @@ def test_create_stabilize_step_validates_config():
     assert step.config.stabilize_max_tx_px == 100.0
     assert step.config.stabilize_max_ty_px == 80.0
     # default unchanged
-    assert step.config.stabilize_max_rotation_deg == 0.5
+    assert step.config.stabilize_max_rotation_deg == 1.5
 
 
 def test_consumes_produces_contract():

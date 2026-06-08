@@ -41,10 +41,13 @@ class StabilizeStepConfig(BaseModel):
     stabilize_estimator: str = "phasecorr"
 
     # Per-axis safe budgets (the path-optimization cannot let the residual
-    # exceed these, which keeps the output crop borderless).
+    # exceed these, which keeps the output crop borderless). Rotation budget
+    # is generous (1.5°) because real tripod-mast wobble on the BU14 footage
+    # cumulated to ~1.45° over 30s, and clipping that throws away the actual
+    # roll component we need to cancel.
     stabilize_max_tx_px: float = 60.0
     stabilize_max_ty_px: float = 60.0
-    stabilize_max_rotation_deg: float = 0.5
+    stabilize_max_rotation_deg: float = 1.5
     stabilize_max_log_scale: float = 0.005  # ≈ ±0.5% scale change
 
     # L1 path-smoothing weights (velocity : acceleration : jerk) — standard
@@ -109,41 +112,41 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
     import cv2
 
     from video_grouper.inference.stabilization import (
+        SimilarityTransform,
+        fit_similarity_from_motion_vectors,
         phase_correlate_translation,
-        stabilization_rois,
+        stabilization_grid_rois,
     )
 
+    # Per-frame DELTA accumulator (one delta per axis). The cumulative is
+    # an additive per-axis integration of the per-frame delta-INVERSES (to
+    # match the ORB convention compose_stabilizing_transforms expects).
     cum_tx_deltas: list[float] = []
     cum_ty_deltas: list[float] = []
+    cum_theta_deltas: list[float] = []
+    cum_log_scale_deltas: list[float] = []
     responses: list[float] = []
 
     with av.open(input_path) as container:
         stream = container.streams.video[0]
         src_w = int(stream.width)
         src_h = int(stream.height)
-        rois = stabilization_rois(
-            src_w,
-            src_h,
-            polygon,
-            lateral_inset_frac=cfg.stabilize_roi_lateral_inset_frac,
-            polygon_edge_overlap_px=cfg.stabilize_roi_polygon_edge_overlap_px,
-            above_polygon_target_px=cfg.stabilize_roi_above_polygon_target_px,
-            top_skip_frac=cfg.stabilize_roi_top_skip_frac,
-        )
+        rois = stabilization_grid_rois(src_w, src_h, polygon)
+        roi_centers = [((x0 + x1) / 2.0, (y0 + y1) / 2.0) for (y0, y1, x0, x1) in rois]
         logger.info(
-            "stabilize(phasecorr): %dx%d source, %d ROIs averaged: %s — "
-            "soccer_polygon=%s",
+            "stabilize(phasecorr+similarity): %dx%d source, %dx grid of ROIs "
+            "(each %dx%d) — soccer_polygon=%s",
             src_w,
             src_h,
             len(rois),
-            [(y1 - y0, x1 - x0) for (y0, y1, x0, x1) in rois],
+            rois[0][3] - rois[0][2],
+            rois[0][1] - rois[0][0],
             polygon is not None,
         )
 
         prev_grays: list[np.ndarray | None] = [None] * len(rois)
         frame_idx = 0
-        last_dx = 0.0
-        last_dy = 0.0
+        last_delta = SimilarityTransform.identity()
         for packet in container.demux(stream):
             if packet.dts is None:
                 continue
@@ -159,47 +162,56 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
                     # First frame — seed deltas at zero.
                     cum_tx_deltas.append(0.0)
                     cum_ty_deltas.append(0.0)
+                    cum_theta_deltas.append(0.0)
+                    cum_log_scale_deltas.append(0.0)
                     responses.append(1.0)
                 else:
-                    # Phase-correlate each ROI independently; average the
-                    # per-frame deltas across ROIs. Multi-depth averaging
-                    # defuses parallax from camera-mast translation —
-                    # near-foreground content moves more than distant
-                    # treeline under the same wobble, and a sky-only
-                    # estimate would under-correct everything below it.
-                    per_roi_dx: list[float] = []
-                    per_roi_dy: list[float] = []
-                    per_roi_response: list[float] = []
+                    # Per-ROI phase correlation → 9 motion vectors. Fit a 2D
+                    # similarity (translation + rotation + scale) to the
+                    # vectors via cv2.estimateAffinePartial2D. The fitted
+                    # rotation is the ROLL component: left/right ROIs at the
+                    # same Y move in opposite vertical directions when the
+                    # camera rolls about its mount, and the similarity slope
+                    # recovers that directly.
+                    motion_vecs: list[tuple[float, float]] = []
+                    per_response: list[float] = []
                     for prev, cur in zip(prev_grays, cur_grays):
-                        dx, dy, response = phase_correlate_translation(prev, cur)
-                        per_roi_dx.append(dx)
-                        per_roi_dy.append(dy)
-                        per_roi_response.append(response)
-                    response = float(np.mean(per_roi_response))
+                        dx, dy, resp = phase_correlate_translation(prev, cur)
+                        motion_vecs.append((dx, dy))
+                        per_response.append(resp)
+                    response = float(np.mean(per_response))
                     if response < cfg.stabilize_phasecorr_response_min:
-                        dx, dy = last_dx, last_dy
+                        delta = last_delta
                     else:
-                        dx = float(np.mean(per_roi_dx))
-                        dy = float(np.mean(per_roi_dy))
-                    cum_tx_deltas.append(dx)
-                    cum_ty_deltas.append(dy)
+                        delta = fit_similarity_from_motion_vectors(
+                            roi_centers, motion_vecs
+                        )
+                        last_delta = delta
+                    # Negate to match the ORB-convention cumulative
+                    # (current → reference). phaseCorrelate(prev, cur)
+                    # returns CONTENT motion (cur − prev), so the delta in
+                    # current → reference terms is the INVERSE.
+                    delta_inv = delta.inverse()
+                    cum_tx_deltas.append(delta_inv.tx)
+                    cum_ty_deltas.append(delta_inv.ty)
+                    cum_theta_deltas.append(delta_inv.theta)
+                    cum_log_scale_deltas.append(delta_inv.log_scale)
                     responses.append(response)
-                    last_dx, last_dy = dx, dy
                 prev_grays = cur_grays
                 frame_idx += 1
 
     if frame_idx == 0:
         raise RuntimeError(f"stabilize: input {input_path!r} had no decodable frames")
 
-    # Phase correlation reports motion FROM prev TO cur — integrated, that's
-    # the source-frame camera trajectory. The downstream composition was
-    # tuned for the ORB convention where cum tracks the INVERSE of camera
-    # motion (current→reference). Negate to match.
-    cum_tx = -np.cumsum(np.array(cum_tx_deltas, dtype=np.float64))
-    cum_ty = -np.cumsum(np.array(cum_ty_deltas, dtype=np.float64))
-    n = len(cum_tx)
-    cum_theta = np.zeros(n, dtype=np.float64)
-    cum_log_scale = np.zeros(n, dtype=np.float64)
+    # Deltas are already ORB-convention (current→reference, the inverse of
+    # camera motion) because the per-frame loop above stored ``delta_inv``
+    # values. Per-axis additive integration is exact for translation and a
+    # good small-angle approximation for theta/log_scale (≤ a few degrees
+    # over a 30 s clip on a tripod camera).
+    cum_tx = np.cumsum(np.array(cum_tx_deltas, dtype=np.float64))
+    cum_ty = np.cumsum(np.array(cum_ty_deltas, dtype=np.float64))
+    cum_theta = np.cumsum(np.array(cum_theta_deltas, dtype=np.float64))
+    cum_log_scale = np.cumsum(np.array(cum_log_scale_deltas, dtype=np.float64))
     return cum_tx, cum_ty, cum_theta, cum_log_scale, responses, src_h, src_w, frame_idx
 
 
