@@ -102,6 +102,9 @@ class NtfyAPI:
         self.listener_task = None
         self.session_id = str(uuid.uuid4())[:8]  # Create a unique session ID
         self.service_callback = service_callback
+        # Id of the topic message currently being dispatched, threaded to the
+        # consume path so the service records it on use (see _process_response).
+        self._pending_topic_msg_id = None
 
         # Track sent messages and their responses
         self.pending_messages = {}  # message_id -> future
@@ -306,28 +309,16 @@ class NtfyAPI:
                 )
                 return
 
-            # Record response-bearing messages as consumed. Skip keepalive/open
-            # heartbeats and our own echoed notifications (title/actions/tags/
-            # attachment) — we never act on those, so they shouldn't enter the
-            # audit log. This is what lets the skip above work across restarts.
-            is_echoed_notification = event_type == "message" and any(
-                key in response_data
-                for key in ("actions", "attachment", "title", "tags")
-            )
-            if (
-                ntfy_msg_id
-                and cb is not None
-                and hasattr(cb, "record_used_message")
-                and event_type in ("message", "action", "click", "response")
-                and not is_echoed_notification
-            ):
-                cb.record_used_message(
-                    ntfy_msg_id,
-                    server_time=server_time,
-                    event=event_type,
-                    message=message,
-                    decision="consumed",
-                )
+            # Thread this message's id to the consume path so the service
+            # records it only once it actually USES the response (record-on-use;
+            # see NtfyService.process_response). Recording at consume rather than
+            # here at ingest means a dispatch that fails still gets retried by
+            # the next ?since=24h replay, and the audit log reflects what was
+            # used rather than merely received. Reset every call — the listener
+            # processes one message at a time, so a non-dispatching event
+            # (echoed notification / keepalive) can't leak a stale id onto the
+            # next dispatch.
+            self._pending_topic_msg_id = ntfy_msg_id
 
             # For message events (regular messages)
             if event_type == "message":
@@ -477,6 +468,23 @@ class NtfyAPI:
         except Exception as e:
             logger.error(f"Error processing NTFY response: {e}", exc_info=True)
 
+    def _record_consumed(self, topic_msg_id, response, server_time, decision):
+        """Record a consumed topic message id on the service ledger (guarded).
+
+        No-op when there's no id (synthetic/internal responses) or the callback
+        doesn't expose the ledger (e.g. a bare mock). This is the API-side
+        consume point for the legacy pending-future paths; the service records
+        its own consume points (task match / buffer) in process_response.
+        """
+        cb = self.service_callback
+        if topic_msg_id and cb is not None and hasattr(cb, "record_used_message"):
+            cb.record_used_message(
+                topic_msg_id,
+                server_time=server_time,
+                message=str(response)[:200],
+                decision=decision,
+            )
+
     def _handle_response(self, response: str, server_time: float | None = None):
         """Handle a response to a message.
 
@@ -487,6 +495,7 @@ class NtfyAPI:
                 it can reject stale replays. None for synthetic/internal
                 responses or the legacy pending-future path.
         """
+        topic_msg_id = getattr(self, "_pending_topic_msg_id", None)
         # First, try to handle as a pending message (for legacy compatibility)
         if self.pending_messages:
             # Find the most recent message
@@ -501,6 +510,7 @@ class NtfyAPI:
                 future.set_result(response)
 
                 self._cleanup_pending_message(most_recent_id)
+                self._record_consumed(topic_msg_id, response, server_time, "future")
 
                 logger.info(
                     f"Processed response for message {most_recent_id}: {response}"
@@ -517,7 +527,7 @@ class NtfyAPI:
             # Use asyncio.create_task to avoid blocking
             asyncio.create_task(
                 self.service_callback.process_response(
-                    response, server_time=server_time
+                    response, server_time=server_time, topic_msg_id=topic_msg_id
                 )
             )
         else:
@@ -540,6 +550,12 @@ class NtfyAPI:
                 future.set_result(response_data)
 
                 self._cleanup_pending_message(message_id)
+                self._record_consumed(
+                    getattr(self, "_pending_topic_msg_id", None),
+                    response,
+                    None,
+                    "future",
+                )
 
                 logger.info(
                     f"Processed specific response for message {message_id}: {response}"
