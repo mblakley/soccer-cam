@@ -109,8 +109,8 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
     import cv2
 
     from video_grouper.inference.stabilization import (
-        background_strip_roi,
         phase_correlate_translation,
+        stabilization_rois,
     )
 
     cum_tx_deltas: list[float] = []
@@ -121,7 +121,7 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
         stream = container.streams.video[0]
         src_w = int(stream.width)
         src_h = int(stream.height)
-        y0, y1, x0, x1 = background_strip_roi(
+        rois = stabilization_rois(
             src_w,
             src_h,
             polygon,
@@ -131,20 +131,16 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
             top_skip_frac=cfg.stabilize_roi_top_skip_frac,
         )
         logger.info(
-            "stabilize(phasecorr): %dx%d source, ROI [y %d-%d, x %d-%d] "
-            "(%dx%d) — soccer_polygon=%s",
+            "stabilize(phasecorr): %dx%d source, %d ROIs averaged: %s — "
+            "soccer_polygon=%s",
             src_w,
             src_h,
-            y0,
-            y1,
-            x0,
-            x1,
-            x1 - x0,
-            y1 - y0,
+            len(rois),
+            [(y1 - y0, x1 - x0) for (y0, y1, x0, x1) in rois],
             polygon is not None,
         )
 
-        prev_gray = None
+        prev_grays: list[np.ndarray | None] = [None] * len(rois)
         frame_idx = 0
         last_dx = 0.0
         last_dy = 0.0
@@ -153,25 +149,43 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
                 continue
             for frame in packet.decode():
                 rgb = frame.to_ndarray(format="rgb24")
-                gray = cv2.cvtColor(rgb[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY).astype(
-                    np.float32
-                )
-                if prev_gray is None:
+                cur_grays = [
+                    cv2.cvtColor(rgb[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY).astype(
+                        np.float32
+                    )
+                    for (y0, y1, x0, x1) in rois
+                ]
+                if any(g is None for g in prev_grays):
                     # First frame — seed deltas at zero.
                     cum_tx_deltas.append(0.0)
                     cum_ty_deltas.append(0.0)
                     responses.append(1.0)
                 else:
-                    dx, dy, response = phase_correlate_translation(prev_gray, gray)
+                    # Phase-correlate each ROI independently; average the
+                    # per-frame deltas across ROIs. Multi-depth averaging
+                    # defuses parallax from camera-mast translation —
+                    # near-foreground content moves more than distant
+                    # treeline under the same wobble, and a sky-only
+                    # estimate would under-correct everything below it.
+                    per_roi_dx: list[float] = []
+                    per_roi_dy: list[float] = []
+                    per_roi_response: list[float] = []
+                    for prev, cur in zip(prev_grays, cur_grays):
+                        dx, dy, response = phase_correlate_translation(prev, cur)
+                        per_roi_dx.append(dx)
+                        per_roi_dy.append(dy)
+                        per_roi_response.append(response)
+                    response = float(np.mean(per_roi_response))
                     if response < cfg.stabilize_phasecorr_response_min:
-                        # Featureless / low-confidence frame: hold previous
-                        # delta to avoid injecting noise into the cumulative.
                         dx, dy = last_dx, last_dy
+                    else:
+                        dx = float(np.mean(per_roi_dx))
+                        dy = float(np.mean(per_roi_dy))
                     cum_tx_deltas.append(dx)
                     cum_ty_deltas.append(dy)
                     responses.append(response)
                     last_dx, last_dy = dx, dy
-                prev_gray = gray
+                prev_grays = cur_grays
                 frame_idx += 1
 
     if frame_idx == 0:

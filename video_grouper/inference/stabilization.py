@@ -248,21 +248,16 @@ def background_strip_roi(
     above_polygon_target_px: int = 240,
     top_skip_frac: float = 0.025,
 ) -> tuple[int, int, int, int]:
-    """Derive a ``(y0, y1, x0, x1)`` ROI in the source for phase correlation.
+    """Derive a ``(y0, y1, x0, x1)`` ROI for phase correlation that straddles
+    the field polygon's top edge — the treeline boundary, the strongest
+    stable feature in a soccer-camera panorama.
 
-    The ROI straddles the field polygon's top edge — the treeline boundary
-    is the strongest stable feature in a soccer-camera panorama. ``polygon_
-    edge_overlap_px`` controls how far the ROI extends BELOW the polygon's
-    highest top-edge point (positive = into the upper edge of the field
-    polygon, capturing treeline pixels), and ``above_polygon_target_px``
-    sets the total ROI height extending upward into the sky.
+    Kept as a single-ROI helper for callers that don't need multi-region
+    averaging; :func:`stabilization_rois` returns the full 3-region list used
+    by the production estimator.
 
-    Lateral inset (8 % default) drops the extreme dewarp distortion at the
-    image edges. ``top_skip_frac`` skips the very top rows that often carry
-    a camera-burned timestamp overlay (fixed in image coords — useless for
-    phase correlation and even biases it toward 0).
-
-    With no polygon, falls back to a fixed top-of-source band.
+    Lateral inset (8 % default) drops the extreme dewarp distortion. With no
+    polygon, falls back to a fixed top-of-source band.
     """
     x0 = int(src_w * lateral_inset_frac)
     x1 = int(src_w * (1.0 - lateral_inset_frac))
@@ -281,6 +276,79 @@ def background_strip_roi(
     y1 = max(y_top_safe + 50, polygon_top_y + polygon_edge_overlap_px)
     y0 = max(y_top_safe, y1 - above_polygon_target_px)
     return y0, y1, x0, x1
+
+
+def stabilization_rois(
+    src_w: int,
+    src_h: int,
+    polygon: np.ndarray | None,
+    *,
+    lateral_inset_frac: float = 0.18,
+    polygon_edge_overlap_px: int = 25,
+    above_polygon_target_px: int = 240,
+    top_skip_frac: float = 0.025,
+    roi_strip_height_px: int = 300,
+) -> list[tuple[int, int, int, int]]:
+    """Return THREE phase-correlation ROIs spanning the source vertically:
+    sky/treeline (above polygon top), field mid, and foreground (below
+    polygon bottom). The production estimator averages per-frame deltas
+    across all three to defuse parallax from camera-mast translation.
+
+    Why three: a tripod mast flexing in wind produces both rotation AND
+    translation. Translation causes parallax — near objects (foreground)
+    shift more than distant ones (treeline). A single ROI's motion estimate
+    over-corrects far-away regions and under-corrects nearby ones. Averaging
+    three depth bands lands the estimate in the middle, giving roughly
+    uniform stabilization across the full vertical extent (empirically
+    +68 % reduction in the worst-region vs +51 % for sky-only on the same
+    BU14 windy slice).
+
+    Wider lateral inset (18 % default) drops the extreme dewarp corners
+    where the cylindrical projection's pixels-per-degree is most distorted.
+
+    Falls back to a single sky-strip ROI when no polygon is available.
+    """
+    # Without a polygon we can only place the sky strip — fall back to the
+    # single-ROI helper.
+    if polygon is None or len(polygon) == 0:
+        return [
+            background_strip_roi(
+                src_w,
+                src_h,
+                None,
+                lateral_inset_frac=lateral_inset_frac,
+                polygon_edge_overlap_px=polygon_edge_overlap_px,
+                above_polygon_target_px=above_polygon_target_px,
+                top_skip_frac=top_skip_frac,
+            )
+        ]
+    poly = np.asarray(polygon, dtype=np.float32)
+    polygon_top_y = int(poly[:, 1].min())
+    polygon_bottom_y = int(poly[:, 1].max())
+    x0 = int(src_w * lateral_inset_frac)
+    x1 = int(src_w * (1.0 - lateral_inset_frac))
+    y_top_safe = int(src_h * top_skip_frac)
+    h = roi_strip_height_px
+
+    # 1. Sky / treeline strip (above polygon, capturing the boundary).
+    sky_y1 = max(y_top_safe + 50, polygon_top_y + polygon_edge_overlap_px)
+    sky_y0 = max(y_top_safe, sky_y1 - above_polygon_target_px)
+    rois = [(sky_y0, sky_y1, x0, x1)]
+
+    # 2. Field-mid strip (between polygon top and bottom). Phase correlation
+    # works despite moving players because grass+field-line pixels dominate.
+    poly_h = max(1, polygon_bottom_y - polygon_top_y)
+    mid_y0 = polygon_top_y + int(poly_h * 0.35)
+    mid_y1 = min(src_h, mid_y0 + h)
+    rois.append((mid_y0, mid_y1, x0, x1))
+
+    # 3. Foreground strip (below polygon's near sideline). Captures
+    # bench / gear / grass below the field — the highest-parallax region.
+    fg_y0 = min(src_h - h - 1, polygon_bottom_y + 100)
+    fg_y1 = min(src_h, fg_y0 + h)
+    if fg_y1 > fg_y0:
+        rois.append((fg_y0, fg_y1, x0, x1))
+    return rois
 
 
 def phase_correlate_translation(

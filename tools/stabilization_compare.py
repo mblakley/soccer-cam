@@ -44,41 +44,51 @@ from video_grouper.pipeline.base import StepContext  # noqa: E402
 from video_grouper.pipeline.manifest import PipelineManifest  # noqa: E402
 import video_grouper.pipeline.register_steps  # noqa: F401, E402
 
-PANEL_W, PANEL_H = 1920, 1080
+# Each panel is sized at a 2x downscale of the 7680x2160 source — 3840x1080.
+# At that scale a 1 px source wobble is 0.5 px on screen, just at the edge of
+# visibility; the horizontal reference line below amplifies it for the eye.
+# Two panels side-by-side gives a 7680x1080 frame (the source's native aspect),
+# which is wide but plays cleanly at native resolution.
+PANEL_W, PANEL_H = 3840, 1080
 DIVIDER_PX = 2
-OUT_W = 1920
-OUT_H = 2 * PANEL_H + DIVIDER_PX
+OUT_W = 2 * PANEL_W + DIVIDER_PX
+OUT_H = PANEL_H
 LABEL_BG = (32, 32, 32)
 LABEL_FG = (240, 240, 240)
-LABEL_HEIGHT = 48
+LABEL_HEIGHT = 56
+# Horizontal reference line — at the same source-frame y position on BOTH
+# panels, so the eye instantly sees vertical motion of the horizon/treeline
+# relative to a known-fixed line.
+REF_LINE_Y_FRAC = 0.18  # roughly across the treeline / horizon
+REF_LINE_COLOR = (40, 220, 240)  # yellow-ish — high contrast against sky/green
+REF_LINE_PX = 2
 
 
 def _label_panel(img: np.ndarray, text: str) -> None:
-    """Burn a small label strip at the top of *img* (in-place)."""
+    """Burn a label strip at the top of *img* (in-place)."""
     h, w = img.shape[:2]
     cv2.rectangle(img, (0, 0), (w, LABEL_HEIGHT), LABEL_BG, -1)
     cv2.putText(
         img,
         text,
-        (16, 32),
+        (24, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
+        1.4,
         LABEL_FG,
-        2,
+        3,
         cv2.LINE_AA,
     )
 
 
-def _fit_panel(rgb: np.ndarray) -> np.ndarray:
-    """Downscale ``rgb`` to (PANEL_H, PANEL_W) preserving aspect via letterbox.
+def _fit_panel(rgb: np.ndarray, reference_line: bool = True) -> np.ndarray:
+    """Downscale ``rgb`` to fit (PANEL_H, PANEL_W) preserving aspect.
 
-    For 7680x2160 source, output is 1920x540 letterboxed inside 1920x1080,
-    so the eye sees the full 21:6 panoramic field of view rather than a
-    cropped 16:9 slice — the horizon-tilt comparison reads cleanly.
+    For 7680x2160 source, output is 3840x1080 letterboxed inside the panel
+    (~2x downscale). The reference line is drawn AFTER the label strip so it
+    sits at a fixed panel-relative y position across both panels.
     """
     src_h, src_w = rgb.shape[:2]
     panel = np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)
-    # Aspect-preserving fit inside the panel.
     scale = min(PANEL_W / src_w, PANEL_H / src_h)
     fit_w = int(src_w * scale)
     fit_h = int(src_h * scale)
@@ -86,6 +96,9 @@ def _fit_panel(rgb: np.ndarray) -> np.ndarray:
     y0 = (PANEL_H - fit_h) // 2
     x0 = (PANEL_W - fit_w) // 2
     panel[y0 : y0 + fit_h, x0 : x0 + fit_w] = resized
+    if reference_line:
+        line_y = int(PANEL_H * REF_LINE_Y_FRAC)
+        cv2.line(panel, (0, line_y), (PANEL_W, line_y), REF_LINE_COLOR, REF_LINE_PX)
     return panel
 
 
@@ -169,18 +182,24 @@ def compose_comparison(
                     continue
                 for frame in packet.decode():
                     rgb = frame.to_ndarray(format="rgb24")
-                    # Top panel: raw source — show the wobble.
-                    top = _fit_panel(rgb)
-                    _label_panel(top, "Original (wobbling)")
-                    # Bottom panel: stabilized source — show the cancellation.
+                    # LEFT panel: raw source — show the wobble.
+                    left = _fit_panel(rgb)
+                    _label_panel(left, "Original (wobbling)")
+                    # RIGHT panel: stabilized source — show the cancellation.
                     stabilized = stabilizer.apply(rgb, frame_idx)
-                    bot = _fit_panel(stabilized)
-                    _label_panel(bot, "Stabilized")
-                    # Vertical stack with a 2-px divider between panels.
+                    right = _fit_panel(stabilized)
+                    _label_panel(right, "Stabilized")
+                    # Horizontal layout with a 2-px divider between panels.
+                    # The yellow reference line is at the same panel-relative
+                    # y on both sides, so vertical wobble in the original is
+                    # visible as horizon moving off the line, while the
+                    # stabilized panel's horizon stays glued to the line.
                     stacked = np.zeros((OUT_H, OUT_W, 3), dtype=np.uint8)
-                    stacked[:PANEL_H] = top
-                    stacked[PANEL_H : PANEL_H + DIVIDER_PX] = LABEL_FG
-                    stacked[PANEL_H + DIVIDER_PX : PANEL_H + DIVIDER_PX + PANEL_H] = bot
+                    stacked[:, :PANEL_W] = left
+                    stacked[:, PANEL_W : PANEL_W + DIVIDER_PX] = LABEL_FG
+                    stacked[
+                        :, PANEL_W + DIVIDER_PX : PANEL_W + DIVIDER_PX + PANEL_W
+                    ] = right
                     new_frame = av.VideoFrame.from_ndarray(stacked, format="rgb24")
                     new_frame.pts = frame.pts
                     for pkt in out_stream.encode(new_frame):

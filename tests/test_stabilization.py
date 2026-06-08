@@ -645,3 +645,71 @@ class TestBackgroundStripROI:
         )
         assert x0 == 100
         assert x1 == 900
+
+
+class TestStabilizationROIs:
+    """Multi-ROI helper: returns 3 vertical strips spanning the source so the
+    production estimator can average per-frame deltas across depths and
+    defuse parallax from camera-mast translation."""
+
+    def test_three_rois_with_polygon(self):
+        from video_grouper.inference.stabilization import stabilization_rois
+
+        polygon = np.array(
+            [
+                [275, 1097],
+                [1350, 1201],
+                [3920, 1297],
+                [6855, 1215],
+                [7390, 1148],
+                [5530, 453],
+                [4745, 326],
+                [3875, 295],
+                [2925, 312],
+                [2295, 416],
+            ],
+            dtype=np.float32,
+        )
+        src_w, src_h = 7680, 2160
+        rois = stabilization_rois(src_w, src_h, polygon)
+        assert len(rois) == 3
+        # All ROIs share lateral inset
+        x0s = {r[2] for r in rois}
+        x1s = {r[3] for r in rois}
+        assert len(x0s) == 1 and len(x1s) == 1
+        # ROIs span the source vertically: sky < field_mid < foreground
+        sky, field, fg = rois
+        assert sky[1] < field[0]
+        assert field[1] < fg[0]
+        # Sky straddles polygon top (y=295)
+        assert sky[0] < 295 < sky[1] + 50
+        # Foreground sits below polygon bottom (y=1297)
+        assert fg[0] >= 1297
+
+    def test_falls_back_to_single_roi_without_polygon(self):
+        from video_grouper.inference.stabilization import stabilization_rois
+
+        rois = stabilization_rois(1920, 1080, polygon=None)
+        assert len(rois) == 1
+        # Single fallback ROI is the sky band
+        y0, y1, x0, x1 = rois[0]
+        assert y0 < y1 <= int(1080 * 0.15) + 1
+
+    def test_no_overlap_between_rois(self):
+        from video_grouper.inference.stabilization import stabilization_rois
+
+        polygon = np.array(
+            [
+                [100, 800],
+                [1000, 800],
+                [1900, 800],
+                [1900, 200],
+                [1000, 200],
+                [100, 200],
+            ],
+            dtype=np.float32,
+        )
+        rois = stabilization_rois(1920, 1080, polygon)
+        sky, field, fg = rois
+        assert sky[1] <= field[0]
+        assert field[1] <= fg[0]
