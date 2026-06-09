@@ -265,6 +265,55 @@ class TestVideoProcessorTransitions:
         mock_ntfy.request_match_info_for_directory.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_combine_success_with_populated_match_info_queues_valid_trim(
+        self, temp_storage, mock_config
+    ):
+        """Regression: when match info is already populated (e.g. reprocessing a
+        completed game), the post-combine handoff must queue a properly built
+        TrimTask via from_match_info — carrying start_time — not TrimTask(group_dir),
+        which raises 'missing 1 required positional argument: start_time' and
+        silently strands the group at status 'combined'.
+        """
+        mock_mis = Mock()
+        mock_mis.populate_match_info_from_apis = AsyncMock()
+        mock_ntfy = Mock()
+        mock_ntfy.request_match_info_for_directory = AsyncMock()
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            Mock(),
+            match_info_service=mock_mis,
+            ntfy_processor=mock_ntfy,
+        )
+        queued = []
+        processor.add_work = AsyncMock(side_effect=lambda task: queued.append(task))
+
+        populated = Mock()
+        populated.is_populated.return_value = True
+        populated.get_start_offset.return_value = "00:21:00"
+        populated.get_total_duration_seconds.return_value = 0
+
+        combine_task = CombineTask(group_dir="/test/group")
+        with (
+            patch.object(
+                combine_task, "execute", new_callable=AsyncMock, return_value=True
+            ),
+            patch("video_grouper.models.MatchInfo.from_file", return_value=populated),
+        ):
+            await processor.process_item(combine_task)
+            await asyncio.sleep(0.05)
+
+        # Already-populated match info must NOT fall through to API/NTFY.
+        mock_mis.populate_match_info_from_apis.assert_not_called()
+        mock_ntfy.request_match_info_for_directory.assert_not_called()
+        # Exactly one TrimTask queued, built from match info (start_time present).
+        trims = [t for t in queued if isinstance(t, TrimTask)]
+        assert len(trims) == 1
+        assert trims[0].group_dir == "/test/group"
+        assert trims[0].start_time == "00:21:00"
+
+    @pytest.mark.asyncio
     async def test_trim_success_does_not_trigger_combine_transitions(
         self, temp_storage, mock_config
     ):

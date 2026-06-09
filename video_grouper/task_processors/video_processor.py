@@ -146,7 +146,14 @@ class VideoProcessor(QueueProcessor):
                     )
                     from video_grouper.task_processors.tasks.video import TrimTask
 
-                    await self.add_work(TrimTask(group_dir))
+                    trim_end = getattr(
+                        self.config.processing, "trim_end_enabled", False
+                    )
+                    await self.add_work(
+                        TrimTask.from_match_info(
+                            group_dir, match_info, trim_end_enabled=trim_end
+                        )
+                    )
                     return
 
             # Try API-based population first (TeamSnap, PlayMetrics)
@@ -165,7 +172,14 @@ class VideoProcessor(QueueProcessor):
                     )
                     from video_grouper.task_processors.tasks.video import TrimTask
 
-                    await self.add_work(TrimTask(group_dir))
+                    trim_end = getattr(
+                        self.config.processing, "trim_end_enabled", False
+                    )
+                    await self.add_work(
+                        TrimTask.from_match_info(
+                            group_dir, match_info, trim_end_enabled=trim_end
+                        )
+                    )
                     return
 
             # Queue NTFY tasks for remaining info (game start time, team info
