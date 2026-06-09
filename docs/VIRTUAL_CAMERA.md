@@ -365,3 +365,79 @@ estimate.
 
 The `field_detect` step is the natural upstream provider; the
 `broadcast_stabilized` preset assumes it runs before `stabilize`.
+
+### Polygon-zone blend (handles the dome / parallax of mast flex)
+
+A single rigid 2D similarity fits the *average* motion of the source. On
+real gusts the camera doesn't move rigidly: a flexing tripod mast acts
+like a small dome, with the camera body swinging through an arc in 3D.
+Different depths in the scene get different apparent motion, so the
+horizon-edge wobble that survives the single-similarity fit is
+**parallax**, not residual translation.
+
+The field polygon is reused as a 2D depth proxy. Each pixel is
+classified into one of three zones:
+
+- **sky** — above the polygon's top edge AND laterally between its
+  far-left and far-right top corners (the far treeline / sky band).
+- **field** — inside the polygon.
+- **near** — everything else: below the polygon, plus the lateral
+  corners above the polygon's top edge (spectator strips above the
+  side touchlines), which are geometrically *near* the camera even
+  though they sit above the field plane.
+
+Per frame the `stabilize` step fits three separate similarities (one
+from each of the 3 ROIs in that band of the 3×3 grid), L1-smooths each
+path independently, and emits a `motion.json` that contains all three
+sets of stabilizing matrices plus the polygon (so the apply side can
+rebuild the zone mask). `FrameStabilizer.apply` then runs three
+`cv2.warpAffine` calls and a per-pixel `np.where` blend.
+
+The polygon-zone format is the default when both the field polygon is
+available AND `stabilize_polygon_blend = True` (the default). Without a
+polygon the step falls back to single-warp (current production
+behaviour). The two `motion.json` shapes:
+
+```jsonc
+// single-warp (no polygon, or polygon-blend explicitly off)
+{
+  "src_size":   [src_h, src_w],
+  "output_size":[out_h, out_w],
+  "safe_inset": [iy, ix],
+  "frames":     [{"M": [[…]], "confidence": …}, …]
+}
+
+// polygon-zone blend
+{
+  "src_size":   [src_h, src_w],
+  "output_size":[out_h, out_w],
+  "safe_inset": [iy, ix],
+  "polygon":    [[x0,y0], [x1,y1], …],
+  "zones":      {
+    "sky":   [[[…]], …],   // 2×3 stabilizing similarity per frame
+    "field": [[[…]], …],
+    "near":  [[[…]], …]
+  },
+  "confidences": [c0, c1, …]
+}
+```
+
+### Sharing the apply work via `frame_fanout`
+
+Polygon-zone blend's per-frame cost is **3× a single-similarity warp**
+(three `cv2.warpAffine` calls and a per-pixel blend), so naively
+applying it inside every consumer that touches frames would multiply
+the cost by the consumer count. The cost is instead amortised at the
+`frame_fanout` step level: enabling `fanout_stabilize = True` on a
+fan-out makes the fanout decode loop apply `FrameStabilizer` ONCE per
+decoded frame and hand the stabilized RGB array (and updated
+`FrameSourceInfo` reporting the stabilized dimensions) to every
+consumer. N render variants, one stabilize.
+
+This means a comparison run (e.g. AutoCam vs homegrown vs a candidate
+model) pays the polygon-blend cost exactly once across all variants,
+not once per variant. Inside the consumer the source dimensions seen
+by `_resolve_geometry` are already the stabilized output dims, so the
+cylindrical warp/crop sizes itself correctly without per-consumer
+configuration. The standalone `render` step (no fan-out) keeps its
+own `render_stabilize` flag for the equivalent inline path.

@@ -1080,23 +1080,10 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         cfg = self.config
         self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
-        # Optional in-memory stabilization: the geometry must be sized
-        # against STABILIZED dims, not raw source dims, since that's what
-        # the consumer's per-frame work sees after stabilizer.apply().
-        self._stabilizer = None
-        motion_path = manifest.get("motion_path")
-        if cfg.render_stabilize and motion_path:
-            from video_grouper.inference.stabilization import FrameStabilizer
-
-            self._stabilizer = FrameStabilizer.from_json(motion_path)
-            self._sh, self._sw = self._stabilizer.output_shape
-            logger.info(
-                "render(fanout): stabilization on — output_shape=%s safe_inset=%s",
-                self._stabilizer.output_shape,
-                self._stabilizer.safe_inset,
-            )
-        else:
-            self._sw, self._sh = source.width, source.height
+        # ``source`` already reflects the stabilized dims when fanout has
+        # ``fanout_stabilize`` on — the consumer simply trusts whatever
+        # dimensions the fanout reports and renders against those.
+        self._sw, self._sh = source.width, source.height
 
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
@@ -1127,8 +1114,6 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     def consume(self, rgb, frame_pts: int | None, frame_idx: int) -> None:
         import av
 
-        if self._stabilizer is not None:
-            rgb = self._stabilizer.apply(rgb, frame_idx)
         entry = self._entries[frame_idx] if frame_idx < len(self._entries) else None
         params, view_yaw = _frame_view(
             self._state,

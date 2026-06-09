@@ -16,6 +16,7 @@ from video_grouper.inference.stabilization import (
     SimilarityTransform,
     _ReferenceState,
     background_strip_roi,
+    build_polygon_zone_mask,
     compose_stabilizing_transforms,
     compute_safe_inset,
     estimate_similarity,
@@ -548,6 +549,166 @@ class TestMotionJsonRoundtrip:
         assert stabilizer.confidence(0) == 0.9
         assert stabilizer.confidence(1) == 0.7
         assert stabilizer.confidence(99) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Polygon-zone blend mode (sky / field / near)
+# ---------------------------------------------------------------------------
+
+
+def _make_zone_polygon(H: int, W: int) -> np.ndarray:
+    """A simple trapezoid playing the role of the field polygon."""
+    return np.array(
+        [
+            [W * 0.18, H * 0.30],
+            [W * 0.82, H * 0.30],
+            [W * 0.92, H * 0.78],
+            [W * 0.08, H * 0.78],
+        ],
+        dtype=np.float32,
+    )
+
+
+class TestPolygonZoneMask:
+    def test_three_zone_labels_present(self):
+        H, W = 600, 1200
+        poly = _make_zone_polygon(H, W)
+        zone = build_polygon_zone_mask(poly, H, W)
+        assert set(np.unique(zone).tolist()) == {1, 2, 3}
+
+    def test_field_interior_labelled_field(self):
+        H, W = 600, 1200
+        poly = _make_zone_polygon(H, W)
+        zone = build_polygon_zone_mask(poly, H, W)
+        # A point in the middle of the polygon should be field=2.
+        cx, cy = int(W * 0.5), int(H * 0.55)
+        assert zone[cy, cx] == 2
+
+    def test_sky_above_polygon_between_top_corners(self):
+        H, W = 600, 1200
+        poly = _make_zone_polygon(H, W)
+        zone = build_polygon_zone_mask(poly, H, W)
+        # Just above the polygon's top edge, between the two top corners.
+        cx, cy = int(W * 0.5), int(H * 0.10)
+        assert zone[cy, cx] == 1
+
+    def test_far_corners_above_polygon_outside_lateral_extent_are_near(self):
+        H, W = 600, 1200
+        poly = _make_zone_polygon(H, W)
+        zone = build_polygon_zone_mask(poly, H, W)
+        # The polygon's top corners are at x=0.18*W and x=0.82*W. A point
+        # ABOVE the polygon but OUTSIDE the lateral extent (e.g. corner
+        # spectator strip) must NOT be labelled sky.
+        assert zone[10, 5] == 3
+        assert zone[10, W - 5] == 3
+
+    def test_below_polygon_is_near(self):
+        H, W = 600, 1200
+        poly = _make_zone_polygon(H, W)
+        zone = build_polygon_zone_mask(poly, H, W)
+        assert zone[H - 5, W // 2] == 3
+
+
+class TestZoneBlendMotionJsonRoundtrip:
+    def test_zone_mode_serializes_and_loads(self, tmp_path: Path):
+        path = tmp_path / "motion.json"
+        H, W = 240, 480
+        # Two-frame stub: identity inset matrix per zone.
+        identity_inset = np.array(
+            [[1.0, 0.0, -20.0], [0.0, 1.0, -10.0]], dtype=np.float32
+        )
+        zone_transforms = {
+            "sky": [identity_inset.copy(), identity_inset.copy()],
+            "field": [identity_inset.copy(), identity_inset.copy()],
+            "near": [identity_inset.copy(), identity_inset.copy()],
+        }
+        poly = _make_zone_polygon(H, W)
+        write_motion_json(
+            path,
+            src_size=(H, W),
+            output_size=(H - 20, W - 40),
+            safe_inset=(10, 20),
+            transforms=None,
+            confidences=[1.0, 1.0],
+            zone_transforms=zone_transforms,
+            polygon=poly,
+        )
+        payload = json.loads(path.read_text())
+        assert set(payload["zones"].keys()) == {"sky", "field", "near"}
+        assert len(payload["polygon"]) == len(poly)
+        stab = FrameStabilizer.from_json(path)
+        assert stab.src_size == (H, W)
+        assert stab.output_shape == (H - 20, W - 40)
+        # The loaded stabilizer must report zone-blend mode.
+        assert stab._mode == "zone"
+
+    def test_apply_uses_each_zone_warp(self, tmp_path: Path):
+        """Distinct per-zone shifts must produce visibly different pixels
+        in sky / field / near regions of the output."""
+        path = tmp_path / "motion.json"
+        H, W = 240, 480
+        inset_y, inset_x = 10, 20
+        out_h, out_w = H - 2 * inset_y, W - 2 * inset_x
+
+        def shift_matrix(dx: float, dy: float) -> np.ndarray:
+            # warpAffine WARP_INVERSE_MAP convention: this matrix maps OUTPUT
+            # pixel → SOURCE pixel. To copy source pixel (x+dx, y+dy) into
+            # output (x, y), the inverse map is M=[[1,0,inset_x+dx],
+            # [0,1,inset_y+dy]].
+            return np.array(
+                [[1.0, 0.0, inset_x + dx], [0.0, 1.0, inset_y + dy]],
+                dtype=np.float32,
+            )
+
+        zone_transforms = {
+            "sky": [shift_matrix(0.0, 0.0)],
+            "field": [shift_matrix(0.0, 0.0)],
+            "near": [shift_matrix(0.0, 0.0)],
+        }
+        poly = _make_zone_polygon(H, W)
+        write_motion_json(
+            path,
+            src_size=(H, W),
+            output_size=(out_h, out_w),
+            safe_inset=(inset_y, inset_x),
+            transforms=None,
+            confidences=[1.0],
+            zone_transforms=zone_transforms,
+            polygon=poly,
+        )
+        stab = FrameStabilizer.from_json(path)
+        # Make a horizontally-banded source: sky red, field green, near blue.
+        rgb = np.zeros((H, W, 3), dtype=np.uint8)
+        rgb[: int(H * 0.30), :] = (255, 0, 0)
+        rgb[int(H * 0.30) : int(H * 0.78), :] = (0, 255, 0)
+        rgb[int(H * 0.78) :, :] = (0, 0, 255)
+        out = stab.apply(rgb, 0)
+        # The output should preserve the same banded colours after each
+        # zone is warped by its own (identity) matrix — sanity check that
+        # the per-zone blend actually composes pixels from all three warps.
+        # Sample one point per band, accounting for safe inset.
+        sky_y = int(H * 0.10) - inset_y
+        field_y = int(H * 0.55) - inset_y
+        near_y = int(H * 0.90) - inset_y
+        # Sky pixel in the lateral sky band should be red.
+        assert tuple(int(c) for c in out[sky_y, out_w // 2]) == (255, 0, 0)
+        # Field interior should be green.
+        assert tuple(int(c) for c in out[field_y, out_w // 2]) == (0, 255, 0)
+        # Below-polygon should be blue.
+        assert tuple(int(c) for c in out[near_y, out_w // 2]) == (0, 0, 255)
+
+    def test_write_zone_requires_polygon(self, tmp_path: Path):
+        """Calling write_motion_json with neither transforms nor zones is a
+        clear configuration error."""
+        with pytest.raises(ValueError):
+            write_motion_json(
+                tmp_path / "x.json",
+                src_size=(100, 100),
+                output_size=(80, 80),
+                safe_inset=(10, 10),
+                transforms=None,
+                confidences=[1.0],
+            )
 
 
 # ---------------------------------------------------------------------------

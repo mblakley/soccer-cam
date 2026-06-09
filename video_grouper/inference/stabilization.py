@@ -978,6 +978,69 @@ def compose_stabilizing_transforms(
 # ---------------------------------------------------------------------------
 
 
+def build_polygon_zone_mask(
+    polygon: np.ndarray,
+    src_h: int,
+    src_w: int,
+) -> np.ndarray:
+    """Build a 3-zone classification mask from the field polygon — the
+    foundation of polygon-aware stabilization.
+
+    The polygon is a 2D depth proxy:
+
+    * **Zone 1 (sky):** above the polygon's top edge AND laterally within
+      the polygon's top extent (i.e. actual sky/treeline beyond the field).
+      Far-distance content — minimal parallax.
+    * **Zone 2 (field):** inside the polygon. Field surface — moderate depth.
+    * **Zone 3 (near):** everything else. Below the polygon (foreground /
+      bench / coach line) AND above the polygon at the lateral corners
+      where sideline spectators sit — these are physically NEAR the camera
+      despite being at the top of the source image, which is why a naive
+      top/bottom row blend fails them.
+
+    Returns a ``(src_h, src_w)`` uint8 array with values 1, 2, or 3.
+    """
+    poly = np.asarray(polygon, dtype=np.float32)
+    mid_y = 0.5 * (poly[:, 1].min() + poly[:, 1].max())
+    top_half = poly[poly[:, 1] < mid_y]
+    if len(top_half) < 2:
+        # Degenerate polygon — fall back to "everything is field" so the
+        # caller's existing single-warp path still works.
+        return np.full((src_h, src_w), 2, dtype=np.uint8)
+    top_x_min = int(top_half[:, 0].min())
+    top_x_max = int(top_half[:, 0].max())
+
+    # Hard polygon fill: zone-2 pixels.
+    poly_int = poly.astype(np.int32).reshape(-1, 1, 2)
+    poly_fill = np.zeros((src_h, src_w), dtype=np.uint8)
+    cv2.fillPoly(poly_fill, [poly_int], 255)
+
+    # For each x column, look up the polygon's top-edge y at that x by
+    # piecewise-linear interpolation between adjacent top-half vertices.
+    top_y_per_x = np.full(src_w, src_h, dtype=np.int32)
+    top_sorted = top_half[np.argsort(top_half[:, 0])]
+    for i in range(len(top_sorted) - 1):
+        x0, y0 = int(top_sorted[i, 0]), int(top_sorted[i, 1])
+        x1, y1 = int(top_sorted[i + 1, 0]), int(top_sorted[i + 1, 1])
+        if x1 == x0:
+            continue
+        for x in range(x0, x1 + 1):
+            t = (x - x0) / (x1 - x0)
+            top_y_per_x[x] = int(y0 + t * (y1 - y0))
+
+    # Default everything to zone 3 (near), then carve out field + sky.
+    zone = np.full((src_h, src_w), 3, dtype=np.uint8)
+    yy = np.arange(src_h).reshape(-1, 1)
+    xx = np.arange(src_w).reshape(1, -1)
+    poly_top_y = top_y_per_x.reshape(1, -1)
+    in_polygon = poly_fill > 0
+    above_polygon = yy < poly_top_y
+    in_lateral_sky = (xx >= top_x_min) & (xx <= top_x_max)
+    zone[in_polygon] = 2
+    zone[above_polygon & in_lateral_sky & ~in_polygon] = 1
+    return zone
+
+
 class FrameStabilizer:
     """Loads a ``motion.json`` produced by ``StabilizeStep`` and applies the
     per-frame stabilizing similarity to decoded RGB frames in-memory.
@@ -986,6 +1049,17 @@ class FrameStabilizer:
     (``(out_h, out_w)``) rather than the raw source dimensions — the
     stabilized frames are smaller by ``2·safe_inset`` on each axis so the
     warp never samples outside the source.
+
+    Two modes:
+
+    * **single-warp** (default) — one similarity matrix per frame, applied
+      to the whole frame with a single ``warpAffine``.
+    * **polygon-zone blend** — three similarity matrices per frame, one for
+      each of the three depth zones derived from the field polygon, blended
+      per-pixel via the precomputed zone mask. Roughly 3 × the apply cost
+      of single-warp, in exchange for stabilising the high-parallax corners
+      (sideline spectators above the polygon's lateral extent) that no
+      single similarity can handle.
     """
 
     def __init__(
@@ -993,15 +1067,16 @@ class FrameStabilizer:
         src_size: tuple[int, int],
         output_size: tuple[int, int],
         safe_inset: tuple[int, int],
-        transforms: list[np.ndarray],
+        transforms: list[np.ndarray] | None,
         confidences: list[float],
+        *,
+        zone_transforms: dict[str, list[np.ndarray]] | None = None,
+        polygon: np.ndarray | None = None,
     ):
         self.src_size = src_size  # (h, w)
         self.output_size = output_size  # (h, w)
         self.safe_inset = safe_inset  # (y, x)
-        self._transforms = [np.asarray(M, dtype=np.float32) for M in transforms]
         self._confidences = list(confidences)
-        # Identity-with-inset fallback when frame_idx is past the end.
         out_h, out_w = output_size
         y0, x0 = safe_inset
         self._identity_inset = np.array(
@@ -1010,6 +1085,30 @@ class FrameStabilizer:
         )
         self._out_w = out_w
         self._out_h = out_h
+        if zone_transforms is not None and polygon is not None:
+            # Polygon-zone blend mode.
+            self._mode = "zone"
+            self._zone_transforms = {
+                name: [np.asarray(M, dtype=np.float32) for M in lst]
+                for name, lst in zone_transforms.items()
+            }
+            src_h, src_w = src_size
+            full_mask = build_polygon_zone_mask(polygon, src_h, src_w)
+            iy, ix = safe_inset
+            zone_crop = full_mask[iy : iy + out_h, ix : ix + out_w]
+            # Pre-compute per-zone broadcast masks (H, W, 1) once.
+            self._mask_sky = (zone_crop == 1)[..., None]
+            self._mask_field = (zone_crop == 2)[..., None]
+            # near is the remainder — no mask needed if we use np.where chains
+            self._transforms = None
+        else:
+            self._mode = "single"
+            if transforms is None:
+                raise ValueError(
+                    "FrameStabilizer: single-warp mode requires a 'transforms' "
+                    "list; zone mode requires 'zone_transforms' + 'polygon'."
+                )
+            self._transforms = [np.asarray(M, dtype=np.float32) for M in transforms]
 
     @classmethod
     def from_json(cls, path: str | Path) -> "FrameStabilizer":
@@ -1018,11 +1117,34 @@ class FrameStabilizer:
         src_size = tuple(data["src_size"])
         output_size = tuple(data["output_size"])
         safe_inset = tuple(data["safe_inset"])
-        transforms = [
-            np.asarray(frame["M"], dtype=np.float32) for frame in data["frames"]
-        ]
-        confidences = [float(frame["confidence"]) for frame in data["frames"]]
-        return cls(src_size, output_size, safe_inset, transforms, confidences)
+        # Backward-compatible single-warp path.
+        if "frames" in data:
+            transforms = [
+                np.asarray(frame["M"], dtype=np.float32) for frame in data["frames"]
+            ]
+            confidences = [float(frame["confidence"]) for frame in data["frames"]]
+            return cls(src_size, output_size, safe_inset, transforms, confidences)
+        # Polygon-zone blend path.
+        if "zones" not in data or "polygon" not in data:
+            raise ValueError(
+                f"motion.json at {path} has neither 'frames' nor "
+                f"('zones' + 'polygon') — cannot construct FrameStabilizer."
+            )
+        zone_transforms = {
+            name: [np.asarray(M, dtype=np.float32) for M in lst]
+            for name, lst in data["zones"].items()
+        }
+        confidences = [float(c) for c in data.get("confidences", [])]
+        polygon = np.asarray(data["polygon"], dtype=np.float32)
+        return cls(
+            src_size,
+            output_size,
+            safe_inset,
+            transforms=None,
+            confidences=confidences,
+            zone_transforms=zone_transforms,
+            polygon=polygon,
+        )
 
     @property
     def output_shape(self) -> tuple[int, int]:
@@ -1036,12 +1158,13 @@ class FrameStabilizer:
         → source pixel), so we pass ``WARP_INVERSE_MAP`` to keep OpenCV from
         internally inverting it (its default treats ``M`` as forward).
         """
+        if self._mode == "zone":
+            return self._apply_zones(rgb, frame_idx)
         if 0 <= frame_idx < len(self._transforms):
             M = self._transforms[frame_idx]
         else:
-            # Past the end of the trajectory (e.g. trailing trim frames). Use
-            # the constant-inset translation so the consumer's geometry stays
-            # valid for these frames.
+            # Past the end of the trajectory — use the constant-inset
+            # translation so consumer geometry stays valid.
             M = self._identity_inset
         return cv2.warpAffine(
             rgb,
@@ -1050,6 +1173,24 @@ class FrameStabilizer:
             flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
             borderMode=cv2.BORDER_REPLICATE,
         )
+
+    def _apply_zones(self, rgb: np.ndarray, frame_idx: int) -> np.ndarray:
+        def pick(name: str) -> np.ndarray:
+            lst = self._zone_transforms[name]
+            if 0 <= frame_idx < len(lst):
+                return lst[frame_idx]
+            return self._identity_inset
+
+        common = dict(
+            dsize=(self._out_w, self._out_h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        sky = cv2.warpAffine(rgb, pick("sky"), **common)
+        field = cv2.warpAffine(rgb, pick("field"), **common)
+        near = cv2.warpAffine(rgb, pick("near"), **common)
+        # Per-pixel select: sky if zone==1, field if zone==2, else near.
+        return np.where(self._mask_sky, sky, np.where(self._mask_field, field, near))
 
     def confidence(self, frame_idx: int) -> float:
         if 0 <= frame_idx < len(self._confidences):
@@ -1067,23 +1208,51 @@ def write_motion_json(
     src_size: tuple[int, int],
     output_size: tuple[int, int],
     safe_inset: tuple[int, int],
-    transforms: list[np.ndarray],
+    transforms: list[np.ndarray] | None,
     confidences: list[float],
+    *,
+    zone_transforms: dict[str, list[np.ndarray]] | None = None,
+    polygon: np.ndarray | None = None,
 ) -> None:
-    """Serialise to ``motion.json`` with the format consumed by
-    :class:`FrameStabilizer`."""
-    payload = {
-        "src_size": list(src_size),
-        "output_size": list(output_size),
-        "safe_inset": list(safe_inset),
-        "frames": [
-            {
-                "M": [list(map(float, row)) for row in M],
-                "confidence": float(c),
-            }
-            for M, c in zip(transforms, confidences)
-        ],
-    }
+    """Serialise to ``motion.json`` consumed by :class:`FrameStabilizer`.
+
+    Single-warp mode (default): pass ``transforms`` as the per-frame 2×3
+    similarities. Zone-blend mode: pass ``zone_transforms`` (dict keyed by
+    ``sky`` / ``field`` / ``near``) and the ``polygon`` used to build the
+    zone mask at apply time.
+
+    The two modes are mutually exclusive — one of the two pair must be set.
+    """
+    if zone_transforms is not None and polygon is not None:
+        payload = {
+            "src_size": list(src_size),
+            "output_size": list(output_size),
+            "safe_inset": list(safe_inset),
+            "polygon": [[float(x), float(y)] for x, y in np.asarray(polygon)],
+            "zones": {
+                name: [[[float(v) for v in row] for row in M] for M in lst]
+                for name, lst in zone_transforms.items()
+            },
+            "confidences": [float(c) for c in confidences],
+        }
+    else:
+        if transforms is None:
+            raise ValueError(
+                "write_motion_json: single-warp mode needs 'transforms'; zone "
+                "mode needs 'zone_transforms' + 'polygon'."
+            )
+        payload = {
+            "src_size": list(src_size),
+            "output_size": list(output_size),
+            "safe_inset": list(safe_inset),
+            "frames": [
+                {
+                    "M": [list(map(float, row)) for row in M],
+                    "confidence": float(c),
+                }
+                for M, c in zip(transforms, confidences)
+            ],
+        }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
 

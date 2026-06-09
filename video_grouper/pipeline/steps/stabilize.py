@@ -89,6 +89,20 @@ class StabilizeStepConfig(BaseModel):
     # Output file name (under ``ctx.group_dir``).
     stabilize_output_name: str = "motion.json"
 
+    # Polygon-zone blend: fit + smooth 3 separate similarities per frame
+    # (sky / field / near band) and emit a zone-blend ``motion.json``.
+    # The field polygon doubles as a coarse depth proxy — pixels inside the
+    # polygon are warped by the field path; pixels above the polygon's top
+    # edge (and laterally between its top corners) are warped by the sky
+    # path; everything else by the near path. Cancels the parallax that a
+    # single rigid 2D similarity can't because tripod-mast flex moves the
+    # camera through a small dome in 3D. ~3× the apply cost (3 warpAffine +
+    # a np.where blend), amortised by FrameFanoutStep applying the
+    # stabilizer once per decoded frame and sharing the result with all
+    # downstream consumers. Falls back to single-warp when polygon is
+    # unavailable.
+    stabilize_polygon_blend: bool = True
+
 
 # ---------------------------------------------------------------------------
 # Sync analysis worker
@@ -98,15 +112,24 @@ class StabilizeStepConfig(BaseModel):
 def _estimate_motion_phasecorr(input_path, polygon, cfg):
     """Phase-correlation translation estimator (the production default).
 
-    Returns ``(cum_tx, cum_ty, cum_theta, cum_log_scale, confidences,
-    src_h, src_w, frame_count)``. ``theta`` and ``log_scale`` are zeros
-    arrays — tripod-camera rotation is sub-degree and the broadcast crop
-    tolerates it without explicit correction.
+    Returns a dict whose keys depend on whether ``polygon`` is supplied AND
+    ``cfg.stabilize_polygon_blend`` is true:
+
+    Always present:
+      ``"all"`` → ``(cum_tx, cum_ty, cum_theta, cum_log_scale)``
+        (the single-warp 9-ROI similarity fit, current production behaviour).
+      ``"confidences"``, ``"src_h"``, ``"src_w"``, ``"frame_count"``.
+
+    Zone-blend extra keys (only when polygon AND polygon-blend on AND the
+    grid actually produced 9 ROIs — i.e. 3 sky + 3 field + 3 near):
+      ``"sky"``, ``"field"``, ``"near"`` → each is the same 4-tuple of
+      cumulative paths, fit from that band's 3 ROIs only.
 
     Empirically (real BU14 game footage, calm + windy 30 s slices):
     ~93 % reduction in adjacent-frame |dy| vs raw, +0.93 to +1.00
-    correlation with ground truth. ORB+RANSAC on the same source gave
-    -25 % reduction (worse than no stabilization).
+    correlation with ground truth on the single-warp output. The zone
+    blend additionally cancels horizon-edge parallax that the single
+    warp can't (camera-on-mast acts as a small 3D dome under gust).
     """
     import av
     import cv2
@@ -121,10 +144,12 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
     # Per-frame DELTA accumulator (one delta per axis). The cumulative is
     # an additive per-axis integration of the per-frame delta-INVERSES (to
     # match the ORB convention compose_stabilizing_transforms expects).
-    cum_tx_deltas: list[float] = []
-    cum_ty_deltas: list[float] = []
-    cum_theta_deltas: list[float] = []
-    cum_log_scale_deltas: list[float] = []
+    # The "all" entry is the 9-ROI single-similarity fit (current
+    # production); the optional sky/field/near entries are 3-ROI per-band
+    # fits used by the zone-blend output.
+    delta_axes = ("tx", "ty", "theta", "log_scale")
+    cum_all: dict[str, list[float]] = {a: [] for a in delta_axes}
+    cum_zones: dict[str, dict[str, list[float]]] = {}
     responses: list[float] = []
 
     with av.open(input_path) as container:
@@ -133,6 +158,18 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
         src_h = int(stream.height)
         rois = stabilization_grid_rois(src_w, src_h, polygon)
         roi_centers = [((x0 + x1) / 2.0, (y0 + y1) / 2.0) for (y0, y1, x0, x1) in rois]
+        # 3-row × 3-col grid (sky / field / near). Per-zone fitting is
+        # only possible when we have all 9. Without polygon, the grid
+        # function returns 3 sky ROIs only, so single-warp is the only
+        # mode available.
+        zone_blend = (
+            getattr(cfg, "stabilize_polygon_blend", False)
+            and polygon is not None
+            and len(rois) == 9
+        )
+        zone_indices = {"sky": (0, 1, 2), "field": (3, 4, 5), "near": (6, 7, 8)}
+        if zone_blend:
+            cum_zones = {z: {a: [] for a in delta_axes} for z in zone_indices}
         logger.info(
             "stabilize(phasecorr+similarity): %dx%d source, %dx grid of ROIs "
             "(each %dx%d) — soccer_polygon=%s",
@@ -159,11 +196,14 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
                     for (y0, y1, x0, x1) in rois
                 ]
                 if any(g is None for g in prev_grays):
-                    # First frame — seed deltas at zero.
-                    cum_tx_deltas.append(0.0)
-                    cum_ty_deltas.append(0.0)
-                    cum_theta_deltas.append(0.0)
-                    cum_log_scale_deltas.append(0.0)
+                    # First frame — seed deltas at zero for every axis,
+                    # for every output stream (single + optional zones).
+                    for a in delta_axes:
+                        cum_all[a].append(0.0)
+                    if zone_blend:
+                        for z in cum_zones:
+                            for a in delta_axes:
+                                cum_zones[z][a].append(0.0)
                     responses.append(1.0)
                 else:
                     # Per-ROI phase correlation → 9 motion vectors. Fit a 2D
@@ -180,22 +220,49 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
                         motion_vecs.append((dx, dy))
                         per_response.append(resp)
                     response = float(np.mean(per_response))
-                    if response < cfg.stabilize_phasecorr_response_min:
-                        delta = last_delta
-                    else:
-                        delta = fit_similarity_from_motion_vectors(
-                            roi_centers, motion_vecs
+
+                    def _fit(idxs):
+                        return fit_similarity_from_motion_vectors(
+                            [roi_centers[k] for k in idxs],
+                            [motion_vecs[k] for k in idxs],
                         )
-                        last_delta = delta
-                    # Negate to match the ORB-convention cumulative
-                    # (current → reference). phaseCorrelate(prev, cur)
-                    # returns CONTENT motion (cur − prev), so the delta in
-                    # current → reference terms is the INVERSE.
-                    delta_inv = delta.inverse()
-                    cum_tx_deltas.append(delta_inv.tx)
-                    cum_ty_deltas.append(delta_inv.ty)
-                    cum_theta_deltas.append(delta_inv.theta)
-                    cum_log_scale_deltas.append(delta_inv.log_scale)
+
+                    if response < cfg.stabilize_phasecorr_response_min:
+                        # Low-response frame — freeze the last accepted
+                        # delta on every axis for every stream so we
+                        # don't inject motion-vector noise.
+                        delta_all_inv = last_delta.inverse()
+                        cum_all["tx"].append(delta_all_inv.tx)
+                        cum_all["ty"].append(delta_all_inv.ty)
+                        cum_all["theta"].append(delta_all_inv.theta)
+                        cum_all["log_scale"].append(delta_all_inv.log_scale)
+                        if zone_blend:
+                            for z in cum_zones:
+                                cum_zones[z]["tx"].append(delta_all_inv.tx)
+                                cum_zones[z]["ty"].append(delta_all_inv.ty)
+                                cum_zones[z]["theta"].append(delta_all_inv.theta)
+                                cum_zones[z]["log_scale"].append(
+                                    delta_all_inv.log_scale
+                                )
+                    else:
+                        delta_all = _fit(range(len(roi_centers)))
+                        last_delta = delta_all
+                        # Negate to match the ORB-convention cumulative
+                        # (current → reference). phaseCorrelate(prev, cur)
+                        # returns CONTENT motion (cur − prev), so the delta in
+                        # current → reference terms is the INVERSE.
+                        delta_all_inv = delta_all.inverse()
+                        cum_all["tx"].append(delta_all_inv.tx)
+                        cum_all["ty"].append(delta_all_inv.ty)
+                        cum_all["theta"].append(delta_all_inv.theta)
+                        cum_all["log_scale"].append(delta_all_inv.log_scale)
+                        if zone_blend:
+                            for z, idxs in zone_indices.items():
+                                d_inv = _fit(idxs).inverse()
+                                cum_zones[z]["tx"].append(d_inv.tx)
+                                cum_zones[z]["ty"].append(d_inv.ty)
+                                cum_zones[z]["theta"].append(d_inv.theta)
+                                cum_zones[z]["log_scale"].append(d_inv.log_scale)
                     responses.append(response)
                 prev_grays = cur_grays
                 frame_idx += 1
@@ -208,11 +275,22 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
     # values. Per-axis additive integration is exact for translation and a
     # good small-angle approximation for theta/log_scale (≤ a few degrees
     # over a 30 s clip on a tripod camera).
-    cum_tx = np.cumsum(np.array(cum_tx_deltas, dtype=np.float64))
-    cum_ty = np.cumsum(np.array(cum_ty_deltas, dtype=np.float64))
-    cum_theta = np.cumsum(np.array(cum_theta_deltas, dtype=np.float64))
-    cum_log_scale = np.cumsum(np.array(cum_log_scale_deltas, dtype=np.float64))
-    return cum_tx, cum_ty, cum_theta, cum_log_scale, responses, src_h, src_w, frame_idx
+    def _integrate(deltas: dict[str, list[float]]) -> tuple[np.ndarray, ...]:
+        return tuple(
+            np.cumsum(np.array(deltas[a], dtype=np.float64)) for a in delta_axes
+        )
+
+    result: dict = {
+        "all": _integrate(cum_all),
+        "confidences": responses,
+        "src_h": src_h,
+        "src_w": src_w,
+        "frame_count": frame_idx,
+    }
+    if zone_blend:
+        for z, dz in cum_zones.items():
+            result[z] = _integrate(dz)
+    return result
 
 
 def _estimate_motion_orb(input_path, polygon, cfg):
@@ -327,16 +405,18 @@ def _estimate_motion_orb(input_path, polygon, cfg):
 
     if frame_idx == 0:
         raise RuntimeError(f"stabilize: input {input_path!r} had no decodable frames")
-    return (
-        np.asarray(cum_tx, dtype=np.float64),
-        np.asarray(cum_ty, dtype=np.float64),
-        np.asarray(cum_theta, dtype=np.float64),
-        np.asarray(cum_log_scale, dtype=np.float64),
-        confidences,
-        src_h,
-        src_w,
-        frame_idx,
-    )
+    return {
+        "all": (
+            np.asarray(cum_tx, dtype=np.float64),
+            np.asarray(cum_ty, dtype=np.float64),
+            np.asarray(cum_theta, dtype=np.float64),
+            np.asarray(cum_log_scale, dtype=np.float64),
+        ),
+        "confidences": confidences,
+        "src_h": src_h,
+        "src_w": src_w,
+        "frame_count": frame_idx,
+    }
 
 
 def _analyze_video(
@@ -363,69 +443,20 @@ def _analyze_video(
 
     estimator = cfg.stabilize_estimator
     if estimator == "phasecorr":
-        (
-            cum_tx_arr,
-            cum_ty_arr,
-            cum_theta_arr,
-            cum_log_scale_arr,
-            confidences,
-            src_h,
-            src_w,
-            frame_idx,
-        ) = _estimate_motion_phasecorr(input_path, polygon, cfg)
+        result = _estimate_motion_phasecorr(input_path, polygon, cfg)
     elif estimator == "orb":
-        (
-            cum_tx_arr,
-            cum_ty_arr,
-            cum_theta_arr,
-            cum_log_scale_arr,
-            confidences,
-            src_h,
-            src_w,
-            frame_idx,
-        ) = _estimate_motion_orb(input_path, polygon, cfg)
+        result = _estimate_motion_orb(input_path, polygon, cfg)
     else:
         raise ValueError(
             f"stabilize_estimator must be 'phasecorr' or 'orb', got {estimator!r}"
         )
 
-    # ----- Stage B: L1-norm path optimization per axis -----
+    confidences = result["confidences"]
+    src_h = result["src_h"]
+    src_w = result["src_w"]
+    frame_idx = result["frame_count"]
     R_theta_rad = math.radians(cfg.stabilize_max_rotation_deg)
 
-    smooth_tx = l1_smooth_path(
-        cum_tx_arr,
-        w1=cfg.stabilize_w1,
-        w2=cfg.stabilize_w2,
-        w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_max_tx_px,
-        w_stay=cfg.stabilize_w_stay,
-    )
-    smooth_ty = l1_smooth_path(
-        cum_ty_arr,
-        w1=cfg.stabilize_w1,
-        w2=cfg.stabilize_w2,
-        w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_max_ty_px,
-        w_stay=cfg.stabilize_w_stay,
-    )
-    smooth_theta = l1_smooth_path(
-        cum_theta_arr,
-        w1=cfg.stabilize_w1,
-        w2=cfg.stabilize_w2,
-        w3=cfg.stabilize_w3,
-        budget=R_theta_rad,
-        w_stay=cfg.stabilize_w_stay,
-    )
-    smooth_log_scale = l1_smooth_path(
-        cum_log_scale_arr,
-        w1=cfg.stabilize_w1,
-        w2=cfg.stabilize_w2,
-        w3=cfg.stabilize_w3,
-        budget=cfg.stabilize_max_log_scale,
-        w_stay=cfg.stabilize_w_stay,
-    )
-
-    # ----- Compose per-frame stabilizing matrices -----
     inset_y, inset_x = compute_safe_inset(
         cfg.stabilize_max_tx_px,
         cfg.stabilize_max_ty_px,
@@ -437,32 +468,102 @@ def _analyze_video(
     out_h = src_h - 2 * inset_y
     out_w = src_w - 2 * inset_x
 
-    matrices = compose_stabilizing_transforms(
-        cum_tx_arr,
-        cum_ty_arr,
-        cum_theta_arr,
-        cum_log_scale_arr,
-        smooth_tx,
-        smooth_ty,
-        smooth_theta,
-        smooth_log_scale,
-        inset_x=inset_x,
-        inset_y=inset_y,
-    )
+    def _smooth_and_compose(cums: tuple[np.ndarray, ...]):
+        """L1-smooth each of (tx, ty, theta, log_scale) under per-axis
+        budgets, then compose the per-frame 2×3 stabilizing similarity.
 
-    write_motion_json(
-        output_path,
-        src_size=(src_h, src_w),
-        output_size=(out_h, out_w),
-        safe_inset=(inset_y, inset_x),
-        transforms=matrices,
-        confidences=confidences,
-    )
+        Returns ``(matrices, peak_residuals_dict)`` where
+        ``peak_residuals_dict`` carries x / y / rot-deg peaks for logging.
+        """
+        cum_tx_a, cum_ty_a, cum_theta_a, cum_log_scale_a = cums
+        s_tx = l1_smooth_path(
+            cum_tx_a,
+            w1=cfg.stabilize_w1,
+            w2=cfg.stabilize_w2,
+            w3=cfg.stabilize_w3,
+            budget=cfg.stabilize_max_tx_px,
+            w_stay=cfg.stabilize_w_stay,
+        )
+        s_ty = l1_smooth_path(
+            cum_ty_a,
+            w1=cfg.stabilize_w1,
+            w2=cfg.stabilize_w2,
+            w3=cfg.stabilize_w3,
+            budget=cfg.stabilize_max_ty_px,
+            w_stay=cfg.stabilize_w_stay,
+        )
+        s_th = l1_smooth_path(
+            cum_theta_a,
+            w1=cfg.stabilize_w1,
+            w2=cfg.stabilize_w2,
+            w3=cfg.stabilize_w3,
+            budget=R_theta_rad,
+            w_stay=cfg.stabilize_w_stay,
+        )
+        s_ls = l1_smooth_path(
+            cum_log_scale_a,
+            w1=cfg.stabilize_w1,
+            w2=cfg.stabilize_w2,
+            w3=cfg.stabilize_w3,
+            budget=cfg.stabilize_max_log_scale,
+            w_stay=cfg.stabilize_w_stay,
+        )
+        mats = compose_stabilizing_transforms(
+            cum_tx_a,
+            cum_ty_a,
+            cum_theta_a,
+            cum_log_scale_a,
+            s_tx,
+            s_ty,
+            s_th,
+            s_ls,
+            inset_x=inset_x,
+            inset_y=inset_y,
+        )
+        peaks = {
+            "x": float(np.max(np.abs(cum_tx_a - s_tx))),
+            "y": float(np.max(np.abs(cum_ty_a - s_ty))),
+            "rot_deg": float(math.degrees(np.max(np.abs(cum_theta_a - s_th)))),
+        }
+        return mats, peaks
 
-    # Summary for logging.
-    peak_res_x = float(np.max(np.abs(cum_tx_arr - smooth_tx)))
-    peak_res_y = float(np.max(np.abs(cum_ty_arr - smooth_ty)))
-    peak_res_rot_deg = float(math.degrees(np.max(np.abs(cum_theta_arr - smooth_theta))))
+    zone_keys = ("sky", "field", "near")
+    zone_mode = all(z in result for z in zone_keys)
+
+    if zone_mode:
+        zone_matrices: dict[str, list] = {}
+        zone_peaks: dict[str, dict] = {}
+        for z in zone_keys:
+            zone_matrices[z], zone_peaks[z] = _smooth_and_compose(result[z])
+        # Peak summary reports the worst across zones — that's the value
+        # the safe-inset budget actually has to absorb.
+        peak_res_x = max(zone_peaks[z]["x"] for z in zone_keys)
+        peak_res_y = max(zone_peaks[z]["y"] for z in zone_keys)
+        peak_res_rot_deg = max(zone_peaks[z]["rot_deg"] for z in zone_keys)
+        write_motion_json(
+            output_path,
+            src_size=(src_h, src_w),
+            output_size=(out_h, out_w),
+            safe_inset=(inset_y, inset_x),
+            transforms=None,
+            confidences=confidences,
+            zone_transforms=zone_matrices,
+            polygon=polygon,
+        )
+    else:
+        matrices, peaks = _smooth_and_compose(result["all"])
+        peak_res_x = peaks["x"]
+        peak_res_y = peaks["y"]
+        peak_res_rot_deg = peaks["rot_deg"]
+        write_motion_json(
+            output_path,
+            src_size=(src_h, src_w),
+            output_size=(out_h, out_w),
+            safe_inset=(inset_y, inset_x),
+            transforms=matrices,
+            confidences=confidences,
+        )
+
     return {
         "frame_count": int(frame_idx),
         "src_size": (src_h, src_w),
@@ -472,6 +573,7 @@ def _analyze_video(
         "peak_residual_y_px": peak_res_y,
         "peak_residual_rotation_deg": peak_res_rot_deg,
         "mean_confidence": float(np.mean(confidences) if confidences else 0.0),
+        "mode": "zone-blend" if zone_mode else "single",
     }
 
 
@@ -512,8 +614,10 @@ class StabilizeStep(PipelineStep):
             self.config,
         )
         logger.info(
-            "stabilize: %d frames -> %s (peak residual: x=%.2f px, y=%.2f px, "
-            "rot=%.3f°; mean confidence %.2f; output %dx%d, inset %dx%d)",
+            "stabilize[%s]: %d frames -> %s (peak residual: x=%.2f px, "
+            "y=%.2f px, rot=%.3f°; mean confidence %.2f; output %dx%d, "
+            "inset %dx%d)",
+            summary["mode"],
             summary["frame_count"],
             out_path,
             summary["peak_residual_x_px"],

@@ -35,10 +35,23 @@ class ConsumerSpec(BaseModel):
 
 class FanoutStepConfig(BaseModel):
     consumers: list[ConsumerSpec]
+    # When true and the manifest carries a ``motion_path``, the fanout
+    # decode loop applies :class:`FrameStabilizer` ONCE per decoded frame
+    # and passes the stabilized frame to every consumer (with a
+    # FrameSourceInfo reporting the stabilized output dims). Consumers
+    # therefore don't need their own stabilizer — the per-frame
+    # ``warpAffine`` work happens once even with N consumers.
+    fanout_stabilize: bool = False
 
 
 class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
-    """Single-decode, multi-consumer fan-out over one input video."""
+    """Single-decode, multi-consumer fan-out over one input video.
+
+    Optionally applies frame stabilization in the decode loop so that all
+    consumers receive already-stabilized frames (one apply for N
+    consumers, with polygon-zone blend's 3× cost amortized across the
+    full downstream pipeline).
+    """
 
     name = "frame_fanout"
     config_model = FanoutStepConfig
@@ -62,6 +75,8 @@ class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
     @property
     def consumes(self) -> tuple[str, ...]:  # type: ignore[override]
         keys = ["input_path"]
+        if self.config.fanout_stabilize:
+            keys.append("motion_path")
         for c in self._consumers:
             keys.extend(c.consumes)
         return tuple(dict.fromkeys(keys))  # dedupe, order-preserving
@@ -89,9 +104,31 @@ class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
     ) -> None:
         import av
 
+        stabilizer = None
+        if self.config.fanout_stabilize:
+            motion_path = manifest.get("motion_path")
+            from video_grouper.inference.stabilization import FrameStabilizer
+
+            stabilizer = FrameStabilizer.from_json(motion_path)
+
         with av.open(in_path) as in_container:
             iv = in_container.streams.video[0]
-            source = FrameSourceInfo(iv.width, iv.height, iv.average_rate, iv.time_base)
+            if stabilizer is not None:
+                sh, sw = stabilizer.output_shape
+                source = FrameSourceInfo(sw, sh, iv.average_rate, iv.time_base)
+                logger.info(
+                    "frame_fanout: stabilization on — consumers see %dx%d "
+                    "(raw source %dx%d, safe_inset=%s)",
+                    sw,
+                    sh,
+                    iv.width,
+                    iv.height,
+                    stabilizer.safe_inset,
+                )
+            else:
+                source = FrameSourceInfo(
+                    iv.width, iv.height, iv.average_rate, iv.time_base
+                )
             for c in self._consumers:
                 c.open(source, ctx, manifest)
             frame_idx = 0
@@ -100,6 +137,8 @@ class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
                     continue
                 for frame in packet.decode():
                     rgb = frame.to_ndarray(format="rgb24")
+                    if stabilizer is not None:
+                        rgb = stabilizer.apply(rgb, frame_idx)
                     for c in self._consumers:
                         c.consume(rgb, frame.pts, frame_idx)
                     frame_idx += 1
