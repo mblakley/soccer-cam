@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from video_grouper.models import DirectoryState
-from video_grouper.utils.ffmpeg_utils import combine_videos
+from video_grouper.utils.ffmpeg_utils import combine_videos, detect_audio_video_gaps
 from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
@@ -91,10 +91,28 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             True if command succeeded, False otherwise
         """
+        # Segments whose audio is materially shorter than their video, detected
+        # before combining. The combine itself pads each gap with silence (see
+        # _combine_copy); VideoProcessor reads this list to warn the user.
+        self.audio_gaps: list[dict] = []
+
         dav_files = self.get_dav_files()
         if not dav_files:
             await self._handle_task_failure()
             return False
+
+        self.audio_gaps = detect_audio_video_gaps(dav_files)
+        if self.audio_gaps:
+            logger.warning(
+                "COMBINE: %d segment(s) in %s have audio/video length mismatch: %s",
+                len(self.audio_gaps),
+                os.path.basename(self.group_dir),
+                ", ".join(
+                    f"{os.path.basename(g['path'])} "
+                    f"({g['gap_seconds']:.0f}s {g.get('kind', 'short')})"
+                    for g in self.audio_gaps
+                ),
+            )
 
         output_path = self.get_output_path()
 

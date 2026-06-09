@@ -36,6 +36,36 @@ FFMPEG_TIMEOUT = 1800
 # thread can't kill the underlying C call since Python threads are unkillable.
 AV_IO_TIMEOUT = 30.0
 
+# Audio/video sync guards for the combine step (see _combine_copy and
+# detect_audio_video_gaps). Cameras occasionally drop audio for part of a
+# recording (e.g. a Reolink mic glitch that ends the audio track ~12s before
+# the video). Left alone, the combine packs each segment's audio contiguously
+# while video gets a per-segment offset, so one short segment shifts every
+# later segment's audio earlier than its video and the whole game drifts.
+#
+# _AUDIO_PAD_EPSILON_SECONDS: pad a segment's audio with silence once it is at
+# least this much shorter than its own video. Small enough to correct real
+# dropouts, large enough to ignore normal AAC framing slack (~0.06s/segment).
+_AUDIO_PAD_EPSILON_SECONDS = 0.5
+# AUDIO_GAP_WARN_THRESHOLD_SECONDS: surface an NTFY warning to the camera
+# manager when this much game audio is missing — a genuinely lost stretch, not
+# encoder framing. Padding still happens regardless; this only gates the alert.
+AUDIO_GAP_WARN_THRESHOLD_SECONDS = 3.0
+
+# numpy dtype (as a string) to allocate silence for each libav sample format.
+_SILENCE_DTYPE = {
+    "dbl": "float64",
+    "dblp": "float64",
+    "flt": "float32",
+    "fltp": "float32",
+    "s16": "int16",
+    "s16p": "int16",
+    "s32": "int32",
+    "s32p": "int32",
+    "u8": "uint8",
+    "u8p": "uint8",
+}
+
 _EXT_TO_AV_FORMAT = {
     ".mp4": "mp4",
     ".m4v": "mp4",
@@ -535,6 +565,92 @@ async def trim_video(
         return False
 
 
+def _encode_silence(
+    out_audio_stream, output_container, template_frame, seconds: float
+) -> None:
+    """Encode ``seconds`` of silence into ``out_audio_stream`` and mux it.
+
+    Silence frames are built in the same sample format / layout / rate as a
+    previously-decoded real frame (``template_frame``) so the AAC encoder
+    accepts them on the exact path it already accepted the camera audio —
+    no resampling or layout surprises.
+    """
+    import numpy as np
+
+    rate = template_frame.sample_rate
+    if not rate or seconds <= 0:
+        return
+    fmt = template_frame.format
+    layout = template_frame.layout
+    dtype = _SILENCE_DTYPE.get(fmt.name, "float32")
+    nchannels = len(layout.channels)
+    total_samples = int(round(seconds * rate))
+    chunk = 1024
+    written = 0
+    while written < total_samples:
+        n = min(chunk, total_samples - written)
+        if fmt.is_planar:
+            arr = np.zeros((nchannels, n), dtype=dtype)
+        else:
+            arr = np.zeros((1, n * nchannels), dtype=dtype)
+        silence = av.AudioFrame.from_ndarray(arr, format=fmt.name, layout=layout.name)
+        silence.sample_rate = rate
+        silence.pts = None
+        for out_packet in out_audio_stream.encode(silence):
+            output_container.mux(out_packet)
+        written += n
+
+
+def detect_audio_video_gaps(
+    file_paths: list[str],
+    threshold_seconds: float = AUDIO_GAP_WARN_THRESHOLD_SECONDS,
+) -> list[dict]:
+    """Return source segments whose audio length materially differs from video.
+
+    Each entry is ``{"path", "video_seconds", "audio_seconds", "gap_seconds",
+    "kind"}`` where ``gap_seconds`` is the absolute mismatch and ``kind`` is
+    ``"short"`` (audio shorter than video) or ``"long"`` (audio longer). A
+    segment with no audio stream reports the full video length as a short gap.
+
+    This is the user-facing signal: ``_combine_copy`` pads short audio with
+    silence and trims long audio so playback stays in sync, but the camera
+    manager still wants to know a segment's audio didn't match its video
+    (almost always a camera glitch).
+    """
+    gaps: list[dict] = []
+    for path in file_paths:
+        try:
+            with av_open_read(path) as container:
+                video = next((s for s in container.streams if s.type == "video"), None)
+                audio = next((s for s in container.streams if s.type == "audio"), None)
+                if video is None:
+                    continue
+                if video.duration:
+                    video_seconds = float(video.duration * video.time_base)
+                elif container.duration:
+                    video_seconds = container.duration / 1_000_000
+                else:
+                    continue
+                if audio is not None and audio.duration:
+                    audio_seconds = float(audio.duration * audio.time_base)
+                else:
+                    audio_seconds = 0.0
+                gap = video_seconds - audio_seconds
+                if abs(gap) > threshold_seconds:
+                    gaps.append(
+                        {
+                            "path": path,
+                            "video_seconds": video_seconds,
+                            "audio_seconds": audio_seconds,
+                            "gap_seconds": abs(gap),
+                            "kind": "short" if gap > 0 else "long",
+                        }
+                    )
+        except Exception as exc:
+            logger.warning(f"COMBINE: audio-gap probe failed for {path}: {exc}")
+    return gaps
+
+
 def _combine_videos_sync(
     file_paths: list[str],
     output_path: str,
@@ -588,8 +704,27 @@ def _combine_videos_sync(
 def _combine_copy(
     file_paths: list[str], output_container, out_video_stream, out_audio_stream
 ) -> bool:
-    """Concatenate files using stream copy (fast path for H.264 input)."""
+    """Concatenate files using stream copy (fast path for H.264 input).
+
+    Video packets are stream-copied with a per-segment PTS offset. Audio is
+    decoded and re-encoded contiguously, then — crucially — each segment's
+    audio is topped up with silence to match that segment's own video duration
+    before moving to the next file. Without that pad, a segment whose camera
+    audio is short (e.g. the mic dropped for the last ~12s of a 5-minute file)
+    would leave its audio track short while video advanced the full length, so
+    every later segment's audio would land earlier than its video and the whole
+    game would drift out of sync. Padding confines a camera audio gap to
+    trailing silence inside the one bad segment.
+
+    The mirror case is handled too: if a segment's audio overruns its video
+    (audio longer than video), the excess audio is trimmed so it can't push
+    later segments' audio ahead of their video. ``detect_audio_video_gaps``
+    surfaces either condition to the user as an NTFY warning.
+    """
     video_pts_offset = 0
+    # A decoded real frame, reused as the format/layout/rate template for any
+    # silence we synthesize. Captured from the first segment that has audio.
+    audio_template = None
 
     for file_path in file_paths:
         with av_open_read(file_path) as input_container:
@@ -609,6 +744,14 @@ def _combine_copy(
 
             first_dts = {}
             max_video_pts = 0
+            seg_audio_samples = 0
+            seg_audio_rate = 0
+            # Metadata video duration for this segment. Needed to trim
+            # overrunning audio mid-stream, since the decode-accurate
+            # ``max_video_pts`` isn't known until after the demux loop.
+            seg_video_target_s = None
+            if in_video is not None and in_video.duration:
+                seg_video_target_s = float(in_video.duration * in_video.time_base)
 
             for packet in input_container.demux(streams_to_demux):
                 if packet.dts is None:
@@ -637,11 +780,48 @@ def _combine_copy(
 
                     elif packet.stream == in_audio and out_audio_stream:
                         for frame in packet.decode():
+                            if audio_template is None:
+                                audio_template = frame
+                            if frame.sample_rate:
+                                seg_audio_rate = frame.sample_rate
+                            # Trim: once this segment's audio already covers its
+                            # video (plus tolerance), drop the rest so a too-long
+                            # audio track can't push later segments' audio ahead
+                            # of their video.
+                            if (
+                                seg_video_target_s is not None
+                                and seg_audio_rate
+                                and seg_audio_samples / seg_audio_rate
+                                > seg_video_target_s + _AUDIO_PAD_EPSILON_SECONDS
+                            ):
+                                continue
+                            seg_audio_samples += frame.samples
                             frame.pts = None
                             for out_packet in out_audio_stream.encode(frame):
                                 output_container.mux(out_packet)
                 except (av.InvalidDataError, av.error.FFmpegError):
                     continue
+
+            # Keep cumulative audio aligned with cumulative video: pad this
+            # segment's audio with silence up to its own video duration. Only
+            # acts on a meaningful shortfall (> epsilon) and only once we have a
+            # template frame to synthesize silence from.
+            if out_audio_stream is not None and in_video is not None and seg_audio_rate:
+                seg_video_seconds = float(max_video_pts * in_video.time_base)
+                seg_audio_seconds = seg_audio_samples / seg_audio_rate
+                deficit = seg_video_seconds - seg_audio_seconds
+                if deficit > _AUDIO_PAD_EPSILON_SECONDS and audio_template is not None:
+                    logger.info(
+                        "COMBINE: padding %.1fs of silence for %s "
+                        "(audio %.1fs < video %.1fs)",
+                        deficit,
+                        os.path.basename(file_path),
+                        seg_audio_seconds,
+                        seg_video_seconds,
+                    )
+                    _encode_silence(
+                        out_audio_stream, output_container, audio_template, deficit
+                    )
 
             video_pts_offset += max_video_pts
 
