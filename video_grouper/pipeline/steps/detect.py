@@ -24,7 +24,6 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-import numpy as np
 from pydantic import BaseModel
 
 # Top-level import: pulls in onnxruntime/cv2. In a bundle without the inference
@@ -47,32 +46,12 @@ class DetectStepConfig(BaseModel):
     detect_channel: Optional[str] = None  # canary / beta / stable
     detect_pipeline_version: Optional[str] = None
     device: str = "cuda:0"
-    detect_confidence: float = 0.45
+    # SAVE FLOOR, not the working threshold. Detection is the expensive step, so it writes ALL raw
+    # candidates (x, y, confidence) above this low floor — the location (field polygon) and confidence
+    # filters are applied cheaply downstream in the track step, where they can be re-tuned without
+    # re-running detection. Keep this comfortably below any confidence threshold you'd want to sweep.
+    detect_confidence: float = 0.10
     detect_frame_interval: int = 4
-    # Reject ball detections whose center falls >field_margin px outside the field
-    # polygon (manifest ``field_polygon_path``). Off-field FPs — the camera's
-    # burned-in timestamp, spectators, a scoreboard — otherwise out-compete the
-    # real ball. Always on when a field polygon is available.
-    field_margin: float = 50.0
-
-
-def _load_field_polygon(path: str | None) -> "np.ndarray | None":
-    """Load the field-perimeter polygon from the manifest's ``field_polygon_path``
-    (the same artifact the render step consumes). Returns None if unavailable."""
-    if not path:
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning(
-            "detect: field polygon %s unusable (%s); detecting unmasked", path, e
-        )
-        return None
-    poly = payload.get("polygon")
-    if not poly or len(poly) < 3:
-        return None
-    return np.array(poly, dtype=np.float32)
 
 
 def _run_detection_with_session(
@@ -81,17 +60,13 @@ def _run_detection_with_session(
     session: Any,
     confidence: float,
     frame_interval: int,
-    field_polygon: "np.ndarray | None" = None,
-    field_margin: float = 50.0,
 ) -> int:
-    """Sync helper: run detection against a pre-built session, write JSON."""
+    """Sync helper: run detection against a pre-built session, write raw detections JSON."""
     detections = detect_video(
         Path(video_path),
         session,
         frame_interval=frame_interval,
         conf_threshold=confidence,
-        field_polygon=field_polygon,
-        field_margin=field_margin,
     )
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(detections, f)
@@ -105,19 +80,11 @@ def _run_detection_from_path(
     confidence: float,
     frame_interval: int,
     use_gpu: bool,
-    field_polygon: "np.ndarray | None" = None,
-    field_margin: float = 50.0,
 ) -> int:
     """Community/BYO variant: load the model from disk, then run detection."""
     sess = create_session(Path(model_path), use_gpu=use_gpu)
     return _run_detection_with_session(
-        video_path,
-        output_json_path,
-        sess,
-        confidence,
-        frame_interval,
-        field_polygon=field_polygon,
-        field_margin=field_margin,
+        video_path, output_json_path, sess, confidence, frame_interval
     )
 
 
@@ -178,14 +145,9 @@ class DetectStep(PipelineStep):
         in_path = Path(manifest.get("input_path"))
         detections_path = in_path.with_name("detections.json")
 
-        field_polygon = _load_field_polygon(manifest.get("field_polygon_path"))
-        if field_polygon is None:
-            logger.warning(
-                "detect: no usable field_polygon_path in manifest — detecting "
-                "UNMASKED; off-field false positives (camera timestamp, spectators, "
-                "scoreboard) will not be filtered out"
-            )
-
+        # Detect emits RAW candidates (x, y, confidence) above the low save floor — no field/
+        # confidence filtering here. The track step applies the (tunable) location + confidence
+        # filters, so they can be re-swept without re-running this expensive step.
         if cfg.model_key:
             session = await asyncio.to_thread(
                 _build_secure_loader_session,
@@ -201,8 +163,6 @@ class DetectStep(PipelineStep):
                 session,
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
-                field_polygon,
-                cfg.field_margin,
             )
         elif cfg.model_path:
             use_gpu = cfg.device.startswith(("cuda", "gpu"))
@@ -214,8 +174,6 @@ class DetectStep(PipelineStep):
                 cfg.detect_confidence,
                 cfg.detect_frame_interval,
                 use_gpu,
-                field_polygon,
-                cfg.field_margin,
             )
         else:
             raise RuntimeError(
