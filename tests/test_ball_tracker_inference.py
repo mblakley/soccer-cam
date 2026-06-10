@@ -80,6 +80,36 @@ class TestEmptyInput:
         assert tracker.get_best_track() is None
 
 
+class TestBuildTrajectory:
+    """build_trajectory stitches the ball's gated track fragments into one trajectory while
+    dropping long stationary false-positive tracks (sprinkler / standing bystander)."""
+
+    def test_single_moving_ball_full_coverage(self):
+        tracker = BallTracker()
+        for f in range(20):
+            tracker.update(f, [Detection(100.0 + 10.0 * f, 200.0, 0.9, f)])
+        traj = tracker.build_trajectory(20)
+        assert all(p is not None for p in traj)
+        assert traj[0] == [100.0, 200.0]
+
+    def test_stitches_fragments_and_drops_stationary_fp(self):
+        # A moving ball (lost frames 12-15, so it gates into two tracks at max_missing=2) plus a
+        # STATIONARY false positive present every frame off to the side.
+        tracker = BallTracker(gate_distance=200, max_missing=2)
+        n = 30
+        for f in range(n):
+            dets = [Detection(1000.0, 1000.0, 0.9, f)]  # stationary FP
+            if not (12 <= f <= 15):
+                dets.append(Detection(100.0 + 20.0 * f, 200.0, 0.9, f))  # moving ball
+            tracker.update(f, dets)
+        traj = tracker.build_trajectory(n, move_px=80, stationary_len=10, interp_gap=16)
+        cov = sum(1 for p in traj if p is not None)
+        assert cov >= 26  # both ball fragments stitched + the short gap interpolated
+        for p in traj:  # never follows the stationary FP at x=1000
+            if p is not None:
+                assert p[0] < 900
+
+
 class TestShortTrackFiltering:
     def test_min_track_length_filters_out_short_tracks(self):
         tracker = BallTracker(min_track_length=5, max_missing=0)

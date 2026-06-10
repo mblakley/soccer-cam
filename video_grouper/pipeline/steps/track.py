@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 class TrackStepConfig(BaseModel):
     track_kalman_gate: float = 200.0
     track_max_missing: int = 15
+    # Trajectory stitching (see BallTracker.build_trajectory): the ball is gated into several short
+    # tracks, so stitch them best-first instead of keeping only the longest. A track is dropped if it
+    # is shorter than track_stationary_len AND spans < track_move_px (i.e. a sustained stationary FP
+    # like a sprinkler/bystander is kept out; brief real tracks are kept). Gaps up to interp are filled.
+    track_move_px: float = 80.0
+    track_stationary_len: int = 20
+    track_interp_gap: int = 16
 
 
 def _run_tracking(
@@ -33,6 +40,9 @@ def _run_tracking(
     output_json_path: str,
     gate_distance: float,
     max_missing: int,
+    move_px: float = 250.0,
+    stationary_len: int = 20,
+    interp_gap: int = 16,
 ) -> int:
     """Sync helper: load detections, run tracker, write trajectory JSON."""
     with open(detections_path, "r", encoding="utf-8") as f:
@@ -62,14 +72,12 @@ def _run_tracking(
     for frame_idx in range(last_frame + 1):
         tracker.update(frame_idx, by_frame.get(frame_idx, []))
 
-    best = tracker.get_best_track() if hasattr(tracker, "get_best_track") else None
-    trajectory: list[list[float] | None] = [None] * (last_frame + 1)
-    if best is not None and getattr(best, "detections", None):
-        for det in best.detections:
-            trajectory[det.frame_idx] = [det.x, det.y]
-        for frame_idx, x, y in getattr(best, "predictions", []):
-            if 0 <= frame_idx < len(trajectory) and trajectory[frame_idx] is None:
-                trajectory[frame_idx] = [float(x), float(y)]
+    trajectory = tracker.build_trajectory(
+        last_frame + 1,
+        move_px=move_px,
+        stationary_len=stationary_len,
+        interp_gap=interp_gap,
+    )
 
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(trajectory, f)
@@ -98,6 +106,9 @@ class TrackStep(PipelineStep):
             str(trajectory_path),
             self.config.track_kalman_gate,
             self.config.track_max_missing,
+            self.config.track_move_px,
+            self.config.track_stationary_len,
+            self.config.track_interp_gap,
         )
         logger.info(
             "track: wrote trajectory with %d populated frames to %s",

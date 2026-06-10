@@ -218,16 +218,56 @@ class BallTracker:
             min_length = self.min_track_length
         return [t for t in self.tracks if t.length >= min_length]
 
+    @staticmethod
+    def _score(t: Track) -> float:
+        avg_conf = sum(d.confidence for d in t.detections) / max(len(t.detections), 1)
+        return t.length * avg_conf
+
+    @staticmethod
+    def _span(t: Track) -> float:
+        """Max axis extent of a track's detections (px) — small ⇒ stationary."""
+        xs = [d.x for d in t.detections]
+        ys = [d.y for d in t.detections]
+        return max(max(xs) - min(xs), max(ys) - min(ys))
+
     def get_best_track(self) -> Track | None:
         """Return the highest-scoring track (length × average confidence)."""
         valid = self.get_tracks()
-        if not valid:
-            return None
+        return max(valid, key=self._score) if valid else None
 
-        def score(t: Track) -> float:
-            avg_conf = sum(d.confidence for d in t.detections) / max(
-                len(t.detections), 1
-            )
-            return t.length * avg_conf
+    def build_trajectory(
+        self,
+        n_frames: int,
+        move_px: float = 80.0,
+        stationary_len: int = 20,
+        interp_gap: int = 16,
+    ) -> list[list[float] | None]:
+        """Stitch the ball's track fragments into one per-frame trajectory.
 
-        return max(valid, key=score)
+        The single-best-track approach throws away most of the trajectory: the ball is gated into
+        several short tracks (each FP/loss starts a new one), so returning only the longest covers a
+        small fraction of frames. Instead, fill from ALL qualifying tracks best-first (higher
+        length×confidence wins overlaps), dropping short tracks and LONG-but-stationary tracks
+        (sustained false positives — a sprinkler head, a standing bystander — never move), then
+        linearly interpolate gaps up to ``interp_gap`` frames. Returns one ``[x, y]`` per frame
+        (``None`` where no estimate is available).
+        """
+        tracks = [
+            t
+            for t in self.get_tracks()
+            if self._span(t) > move_px or t.length < stationary_len
+        ]
+        tracks.sort(key=self._score, reverse=True)
+        traj: list[list[float] | None] = [None] * n_frames
+        for t in tracks:
+            for d in t.detections:
+                if 0 <= d.frame_idx < n_frames and traj[d.frame_idx] is None:
+                    traj[d.frame_idx] = [d.x, d.y]
+        keys = [i for i, p in enumerate(traj) if p is not None]
+        for a, b in zip(keys, keys[1:]):
+            if 1 < b - a <= interp_gap:
+                (xa, ya), (xb, yb) = traj[a], traj[b]
+                for f in range(a + 1, b):
+                    tt = (f - a) / (b - a)
+                    traj[f] = [xa + (xb - xa) * tt, ya + (yb - ya) * tt]
+        return traj
