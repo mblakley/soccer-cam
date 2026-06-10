@@ -1242,3 +1242,52 @@ class TTTApiClient:
         """
         url = f"{self.api_base_url}/api/pipeline-questions/{question_id}/respond"
         self._request("PATCH", url, json={"response_value": "__cancelled__"})
+
+    # ------------------------------------------------------------------
+    # Reprocess requests (cross-network reprocess flow)
+    # ------------------------------------------------------------------
+
+    def get_reprocess_queue(self) -> list[dict[str, Any]]:
+        """Pending + this-user's in-flight reprocess requests across all
+        teams the caller is a camera_manager for.
+
+        GET {api_base_url}/api/reprocess-requests/queue
+        """
+        url = f"{self.api_base_url}/api/reprocess-requests/queue"
+        return self._request("GET", url)
+
+    def claim_reprocess_request(self, request_id: str) -> dict[str, Any]:
+        """Atomically claim a pending request — only one camera-manager wins.
+
+        POST {api_base_url}/api/reprocess-requests/{request_id}/claim
+        """
+        url = f"{self.api_base_url}/api/reprocess-requests/{request_id}/claim"
+        return self._request("POST", url)
+
+    def update_reprocess_status(
+        self,
+        request_id: str,
+        status: str,
+        current_step: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Advance the lifecycle column (claimed → running → completed/cancelled/failed).
+
+        POST {api_base_url}/api/reprocess-requests/{request_id}/status
+        """
+        url = f"{self.api_base_url}/api/reprocess-requests/{request_id}/status"
+        body: dict[str, Any] = {"status": status}
+        if current_step is not None:
+            body["current_step"] = current_step
+        if error_message is not None:
+            body["error_message"] = error_message
+        return self._request("POST", url, json=body)
+
+    def get_camera_recording(self, recording_id: str) -> dict[str, Any]:
+        """Fetch a single recording by id — used by the reprocess flow to
+        resolve the recording's ``file_group`` (= local recording_group_dir name).
+
+        GET {api_base_url}/api/camera-recordings/{recording_id}
+        """
+        url = f"{self.api_base_url}/api/camera-recordings/{recording_id}"
+        return self._request("GET", url)
