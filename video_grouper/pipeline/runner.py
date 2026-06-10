@@ -47,6 +47,9 @@ class PipelineResult:
     - ``complete``: every step finished and the final output exists.
     - ``awaiting``: stopped at a step that must run in ``awaiting_runtime``
       (cross-session handoff); not an error.
+    - ``cancelled``: a ``cancel_request.json`` marker was observed
+      between steps; the in-flight step completed but no further steps
+      ran. The pipeline_processor reports this back to the dashboard.
     - ``failed``: a step failed; ``failed_step`` / ``error`` describe it.
     """
 
@@ -120,7 +123,28 @@ class PipelineRunner:
 
         dirty = False
 
+        # Cancel marker check: between steps, NOT mid-step. A long-running
+        # step (PyAV decode, ONNX inference) keeps going to completion;
+        # the cancel takes effect at the next boundary. Cheap (a single
+        # filesystem stat per step) and respects the existing
+        # serial-step contract.
+        from video_grouper.pipeline.reprocess import (
+            cancel_requested,
+            consume_cancel_request,
+        )
+
         for spec in specs:
+            if cancel_requested(ctx.group_dir):
+                consume_cancel_request(ctx.group_dir)
+                logger.info(
+                    "pipeline: cancel request observed before step %s; stopping",
+                    spec.step_id,
+                )
+                return PipelineResult(
+                    "cancelled",
+                    failed_step=spec.step_id,
+                    error="cancelled by user request",
+                )
             fp = fingerprint(spec)
 
             # Resume: skip an unchanged, already-complete step whose outputs survive.

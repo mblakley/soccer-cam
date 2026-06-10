@@ -75,6 +75,24 @@ class _RenderStub(PipelineStep):
         return True
 
 
+def _write_pipeline_state(group_dir: Path, *, running: bool) -> None:
+    """Seed pipeline_state.json with a single step at running/complete."""
+    payload = {
+        "version": 1,
+        "input_path": str(group_dir / "src.mp4"),
+        "output_path": str(group_dir / "out.mp4"),
+        "artifacts": {},
+        "steps": [
+            {
+                "step_id": "stabilize",
+                "type": "stabilize",
+                "status": "running" if running else "complete",
+            }
+        ],
+    }
+    (group_dir / "pipeline_state.json").write_text(json.dumps(payload))
+
+
 # ---------------------------------------------------------------------------
 # read_reprocess_request
 # ---------------------------------------------------------------------------
@@ -261,6 +279,106 @@ async def test_runner_honours_reprocess_strength_patch(tmp_path: Path):
         _CAPTURED_STRENGTHS.clear()
         result = await runner.run(str(in_path), str(out_path), ctx)
         assert result.status == "complete", result
+        assert _CAPTURED_STRENGTHS == []
+    finally:
+        _STEP_REGISTRY.clear()
+        _STEP_REGISTRY.update(orig)
+
+
+# ---------------------------------------------------------------------------
+# is_pipeline_running + cancel marker
+# ---------------------------------------------------------------------------
+
+
+class TestRunningDetection:
+    """The web layer + dashboard ask `is_pipeline_running` to decide
+    whether to reject a new reprocess and show a Cancel button instead."""
+
+    def test_no_state_file_means_not_running(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
+        assert is_pipeline_running(tmp_path) is False
+
+    def test_running_step_returns_true(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
+        _write_pipeline_state(tmp_path, running=True)
+        assert is_pipeline_running(tmp_path) is True
+
+    def test_only_complete_steps_returns_false(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
+        _write_pipeline_state(tmp_path, running=False)
+        assert is_pipeline_running(tmp_path) is False
+
+    def test_garbage_state_file_is_not_running(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
+        (tmp_path / "pipeline_state.json").write_text("not json {")
+        # Tolerant: a parse failure is reported as not-running so the
+        # dashboard doesn't get stuck showing Cancel forever.
+        assert is_pipeline_running(tmp_path) is False
+
+
+class TestCancelMarker:
+    def test_write_then_observe_then_consume(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import (
+            cancel_requested,
+            consume_cancel_request,
+            write_cancel_request,
+        )
+
+        assert cancel_requested(tmp_path) is False
+        write_cancel_request(tmp_path)
+        assert cancel_requested(tmp_path) is True
+        consume_cancel_request(tmp_path)
+        assert cancel_requested(tmp_path) is False
+
+    def test_consume_missing_marker_is_noop(self, tmp_path: Path):
+        from video_grouper.pipeline.reprocess import consume_cancel_request
+
+        # Should not raise on a missing marker.
+        consume_cancel_request(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_runner_returns_cancelled_when_marker_present(tmp_path: Path):
+    """End-to-end: a cancel marker written between steps makes the
+    runner exit with PipelineResult('cancelled') instead of running
+    the next step. The marker is consumed so it doesn't poison the
+    next run."""
+    from video_grouper.pipeline import _STEP_REGISTRY
+    from video_grouper.pipeline.base import StepContext
+    from video_grouper.pipeline.reprocess import (
+        cancel_requested,
+        write_cancel_request,
+    )
+    from video_grouper.pipeline.runner import PipelineRunner
+
+    orig = dict(_STEP_REGISTRY)
+    try:
+        register_step("stabilize", _StabilizeStub, _StabilizeStubConfig)
+        register_step("render", _RenderStub, _RenderStubConfig)
+        in_path = tmp_path / "in.mp4"
+        in_path.write_text("source")
+        out_path = tmp_path / "out.mp4"
+        ctx = StepContext(group_dir=tmp_path, team_name=None, storage_path=tmp_path)
+        # Plant the cancel marker BEFORE the first step runs.
+        write_cancel_request(tmp_path)
+
+        specs = [
+            StepSpec("stabilize", "stabilize", {}),
+            StepSpec("render", "render", {}),
+        ]
+        _CAPTURED_STRENGTHS.clear()
+        result = await PipelineRunner(specs, runtime="any").run(
+            str(in_path), str(out_path), ctx
+        )
+        assert result.status == "cancelled"
+        # The cancel observation cleared the marker so the next run
+        # isn't poisoned.
+        assert cancel_requested(tmp_path) is False
+        # No steps ran.
         assert _CAPTURED_STRENGTHS == []
     finally:
         _STEP_REGISTRY.clear()

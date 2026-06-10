@@ -470,6 +470,8 @@ def _scan_games(storage_path: Path) -> list[dict]:
                     current_strength = rd.get("stabilization_strength")
             except (json.JSONDecodeError, OSError):
                 pass
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
         games.append(
             {
                 "name": child.name,
@@ -477,6 +479,7 @@ def _scan_games(storage_path: Path) -> list[dict]:
                 "error_message": data.get("error_message"),
                 "files_count": len(data.get("files", {})),
                 "current_strength": current_strength,
+                "running": is_pipeline_running(child),
             }
         )
     games.sort(key=lambda g: g["name"], reverse=True)
@@ -753,15 +756,31 @@ def _render_cameras_section(status: dict | None) -> str:
 _STRENGTH_OPTIONS = ("light", "standard", "heavy", "extreme")
 
 
-def _render_reprocess_form(game_name: str, current_strength: str | None) -> str:
+def _render_reprocess_form(
+    game_name: str, current_strength: str | None, running: bool
+) -> str:
     """Per-row reprocess form: pick a stabilization strength + cheap-detect
-    flag, POST writes ``reprocess_request.json`` into the group dir."""
+    flag, POST writes ``reprocess_request.json`` into the group dir.
+
+    When the pipeline is currently running for this group, the form is
+    replaced by a Cancel button — one run at a time, with explicit
+    user-driven cancellation if they want to change settings mid-flight.
+    """
+    name_esc = html.escape(game_name)
+    if running:
+        return (
+            f'<form method="post" action="/recordings/{name_esc}/cancel" '
+            'class="reproc reproc-cancel">'
+            '<span class="muted">Pipeline running. </span>'
+            '<button type="submit">Cancel</button>'
+            "</form>"
+        )
     options_html = "".join(
         f'<option value="{s}"{" selected" if s == current_strength else ""}>'
         f"{s}</option>"
         for s in _STRENGTH_OPTIONS
     )
-    action = f"/recordings/{html.escape(game_name)}/reprocess"
+    action = f"/recordings/{name_esc}/reprocess"
     current_label = (
         f' <span class="muted">(current: {html.escape(current_strength)})</span>'
         if current_strength
@@ -789,7 +808,9 @@ def _render_games_section(games: list[dict]) -> str:
         err_html = (
             f' <span class="err">&mdash; {html.escape(err)}</span>' if err else ""
         )
-        reproc_html = _render_reprocess_form(g["name"], g.get("current_strength"))
+        reproc_html = _render_reprocess_form(
+            g["name"], g.get("current_strength"), bool(g.get("running"))
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(g['name'])}</code></td>"
@@ -1234,6 +1255,20 @@ def create_app(
         group_dir = (storage / name).resolve()
         if not group_dir.is_dir() or storage.resolve() not in group_dir.parents:
             raise HTTPException(status_code=404, detail="recording not found")
+        # One pipeline run per group at a time. If something is already
+        # running here, the user must Cancel first — the runner can't
+        # mid-flight swap configs cleanly and a queued "next config"
+        # would silently shadow whatever the in-flight run produces.
+        from video_grouper.pipeline.reprocess import is_pipeline_running
+
+        if is_pipeline_running(group_dir):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "a pipeline run is already in progress for this "
+                    "recording; cancel it first to change settings"
+                ),
+            )
         # Pull form fields; tolerate missing skip_detect (checkbox unchecked).
         form = await request.form()
         strength = form.get("stabilization_strength", "")
@@ -1279,6 +1314,32 @@ def create_app(
             strength,
             skip_detect,
         )
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/recordings/{name}/cancel")
+    async def cancel_recording(name: str) -> Response:
+        """Drop a cancel marker the runner sees between steps. The
+        in-flight step keeps going to completion (PyAV/ONNX can't be
+        torn down mid-frame cleanly), but no subsequent steps run; the
+        pipeline_processor marks the group ``pipeline_cancelled`` and
+        clears any pending reprocess request."""
+        if not _GAME_DIR_RE.match(name):
+            raise HTTPException(status_code=400, detail="bad recording name")
+        group_dir = (storage / name).resolve()
+        if not group_dir.is_dir() or storage.resolve() not in group_dir.parents:
+            raise HTTPException(status_code=404, detail="recording not found")
+        from video_grouper.pipeline.reprocess import (
+            is_pipeline_running,
+            write_cancel_request,
+        )
+
+        if not is_pipeline_running(group_dir):
+            raise HTTPException(
+                status_code=409,
+                detail="no pipeline run is currently in progress",
+            )
+        write_cancel_request(group_dir)
+        logger.info("cancel: requested for %s", name)
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/logout")

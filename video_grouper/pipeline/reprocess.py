@@ -41,6 +41,64 @@ logger = logging.getLogger(__name__)
 
 
 REPROCESS_REQUEST_FILENAME = "reprocess_request.json"
+CANCEL_REQUEST_FILENAME = "cancel_request.json"
+
+
+def pipeline_state_path(group_dir: Path) -> Path:
+    """The runner persists its per-step status here (mirrors
+    ``manifest.MANIFEST_FILENAME``; duplicated to avoid a cross-module
+    import for callers that only need to peek at running-ness)."""
+    return Path(group_dir) / "pipeline_state.json"
+
+
+def is_pipeline_running(group_dir: Path) -> bool:
+    """True iff the runner has a step in ``status="running"`` for this
+    group — i.e. the pipeline is actively executing. The web layer uses
+    this to gate "only one run at a time" + to decide whether to surface
+    a Cancel button instead of the Reprocess form."""
+    path = pipeline_state_path(group_dir)
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    for step in data.get("steps", []):
+        if step.get("status") == "running":
+            return True
+    return False
+
+
+def write_cancel_request(group_dir: Path) -> Path:
+    """Drop the marker the runner checks between steps. Idempotent —
+    re-writing during an existing cancel is a no-op."""
+    path = Path(group_dir) / CANCEL_REQUEST_FILENAME
+    path.write_text(json.dumps({"requested_at": _now_iso()}), encoding="utf-8")
+    return path
+
+
+def cancel_requested(group_dir: Path) -> bool:
+    """True iff ``cancel_request.json`` exists in *group_dir*. The runner
+    polls this between steps; the file is removed on observation so a
+    stale cancel from a previous run can't poison the next."""
+    return (Path(group_dir) / CANCEL_REQUEST_FILENAME).exists()
+
+
+def consume_cancel_request(group_dir: Path) -> None:
+    """Remove the cancel marker after the runner has honored it.
+    Tolerant of the file being missing (the user could have removed it
+    by hand)."""
+    path = Path(group_dir) / CANCEL_REQUEST_FILENAME
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("could not remove %s: %s", path, exc)
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 class ReprocessRequest(BaseModel):
