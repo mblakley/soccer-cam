@@ -35,10 +35,12 @@ class TrackStepConfig(BaseModel):
     track_max_missing: int = 15
     # Trajectory stitching (see BallTracker.build_trajectory): the ball is gated into several short
     # tracks, so stitch them best-first instead of keeping only the longest. A track is dropped if it
-    # is shorter than track_stationary_len AND spans < track_move_px (i.e. a sustained stationary FP
-    # like a sprinkler/bystander is kept out; brief real tracks are kept). Gaps up to interp are filled.
+    # is a sustained stationary FP (sprinkler/bystander: spans < track_move_px over >= stationary_len
+    # frames) OR a fixed object (spans < track_tiny_span_px at any length — a real ball jitters more,
+    # so a rigider track is a marker/post the camera must not hold on). Gaps up to interp are filled.
     track_move_px: float = 80.0
     track_stationary_len: int = 20
+    track_tiny_span_px: float = 6.0
     track_interp_gap: int = 16
 
 
@@ -72,6 +74,7 @@ def _run_tracking(
     conf_threshold: float = 0.45,
     field_polygon: "np.ndarray | None" = None,
     field_margin: float = 50.0,
+    tiny_span_px: float = 6.0,
 ) -> int:
     """Load raw detections, apply the (tunable) confidence + field-location filters, run the tracker,
     write the trajectory JSON."""
@@ -121,6 +124,7 @@ def _run_tracking(
         move_px=move_px,
         stationary_len=stationary_len,
         interp_gap=interp_gap,
+        tiny_span_px=tiny_span_px,
     )
 
     with open(output_json_path, "w", encoding="utf-8") as f:
@@ -157,6 +161,7 @@ class TrackStep(PipelineStep):
             self.config.track_conf_threshold,
             field_polygon,
             self.config.track_field_margin,
+            self.config.track_tiny_span_px,
         )
         logger.info(
             "track: wrote trajectory with %d populated frames to %s",

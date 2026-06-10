@@ -109,6 +109,35 @@ class TestBuildTrajectory:
             if p is not None:
                 assert p[0] < 900
 
+    def test_drops_short_fixed_object_so_hold_falls_back_to_ball(self):
+        # The ball moves through the left, then a SHORT fixed-object FP (a corner marker, ~2px of
+        # jitter over 10 frames) appears far away, then the ball returns near its earlier path. The
+        # fixed object is "short" so the sustained-stationary rule keeps it — but tiny_span_px must
+        # drop it, otherwise the render would hold/coast on the corner instead of the ball's bearing.
+        tracker = BallTracker(gate_distance=400, max_missing=2)
+        n = 30
+        for f in range(0, 10):
+            tracker.update(
+                f, [Detection(100.0 + 20.0 * f, 200.0, 0.9, f)]
+            )  # ball, left
+        for f in range(10, 20):
+            tracker.update(
+                f, [Detection(6000.0 + (f % 2), 1300.0, 0.9, f)]
+            )  # fixed corner FP
+        for f in range(20, n):
+            tracker.update(
+                f, [Detection(300.0 + 20.0 * f, 210.0, 0.9, f)]
+            )  # ball returns, left
+        traj = tracker.build_trajectory(
+            n, move_px=80, stationary_len=20, interp_gap=16, tiny_span_px=6.0
+        )
+        for p in traj:  # the corner FP at x~6000 is never emitted
+            if p is not None:
+                assert p[0] < 1500
+        # Mid-"FP" frame is the ball's own path (interpolated across the gap), NOT the corner — so the
+        # camera stays on the play instead of holding the marker.
+        assert traj[15] is not None and traj[15][0] < 1500
+
     def test_does_not_interpolate_teleport_between_objects(self):
         # A stationary FP at (5000, 1200) for the first frames, then the real ball appears far across
         # the field at (2000, 350) and moves. The gap between the FP's last frame and the ball's first

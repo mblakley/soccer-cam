@@ -243,16 +243,25 @@ class BallTracker:
         stationary_len: int = 20,
         interp_gap: int = 16,
         interp_max_speed: float | None = None,
+        tiny_span_px: float = 6.0,
     ) -> list[list[float] | None]:
         """Stitch the ball's track fragments into one per-frame trajectory.
 
         The single-best-track approach throws away most of the trajectory: the ball is gated into
         several short tracks (each FP/loss starts a new one), so returning only the longest covers a
         small fraction of frames. Instead, fill from ALL qualifying tracks best-first (higher
-        length×confidence wins overlaps), dropping short tracks and LONG-but-stationary tracks
-        (sustained false positives — a sprinkler head, a standing bystander — never move), then
-        linearly interpolate gaps up to ``interp_gap`` frames. Returns one ``[x, y]`` per frame
-        (``None`` where no estimate is available).
+        length×confidence wins overlaps), then linearly interpolate gaps up to ``interp_gap`` frames.
+        Returns one ``[x, y]`` per frame (``None`` where no estimate is available).
+
+        A track is dropped when it is a false positive that would pull the camera off the play:
+
+        - **Sustained stationary** (``span <= move_px`` over ``>= stationary_len`` frames): a sprinkler
+          head or a standing bystander tracked for a long time — never moves like a ball.
+        - **Fixed object** (``span < tiny_span_px`` at ANY length): a point that barely moves over its
+          whole life (e.g. a corner marker detected for 24 frames within ~2 px). A real ball, even
+          braked, jitters more than this; a track this rigid is a fixed object. Without this, a brief
+          fixed-object track survives the stationary rule (it is "short"), and the render holds/coasts
+          on its bearing — pointing the camera at empty grass instead of the last real ball position.
 
         A gap is only bridged if the straight-line speed between its endpoints is plausible for a
         single ball (``<= interp_max_speed`` px/frame, default the tracker's ``gate_distance``).
@@ -265,7 +274,8 @@ class BallTracker:
         tracks = [
             t
             for t in self.get_tracks()
-            if self._span(t) > move_px or t.length < stationary_len
+            if self._span(t) > move_px
+            or (t.length < stationary_len and self._span(t) >= tiny_span_px)
         ]
         tracks.sort(key=self._score, reverse=True)
         traj: list[list[float] | None] = [None] * n_frames
