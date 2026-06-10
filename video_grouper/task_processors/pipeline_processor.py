@@ -158,6 +158,13 @@ class PipelineProcessor(QueueProcessor):
                     item.group_dir.name,
                     result.awaiting_runtime,
                 )
+            elif result.status == "cancelled":
+                logger.info(
+                    "PIPELINE: %s cancelled by user request at step %s",
+                    item.group_dir.name,
+                    result.failed_step,
+                )
+                await self._mark_cancelled(item)
             else:  # failed
                 logger.error(
                     "PIPELINE: task failed at step %s for %s: %s",
@@ -224,6 +231,38 @@ class PipelineProcessor(QueueProcessor):
             logger.info(
                 "PIPELINE: YouTube uploads disabled; skipping upload for %s", group_name
             )
+
+    async def _mark_cancelled(self, item: PipelineTask) -> None:
+        """Mark the group as cancelled and clear the reprocess request.
+
+        Leaving ``reprocess_request.json`` in place after a cancel would
+        re-queue the same config the user just abandoned. Deleting it
+        means a cancelled reprocess returns the recording to a stable
+        "use whatever's already on disk" state.
+        """
+        state_file = item.group_dir / "state.json"
+        if state_file.exists():
+            try:
+                with open(state_file, "r") as f:
+                    state_data = json.load(f)
+                state_data["status"] = "pipeline_cancelled"
+                state_data.pop("pipeline_error", None)
+                with open(state_file, "w") as f:
+                    json.dump(state_data, f, indent=4)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(
+                    "PIPELINE: could not record cancellation for %s: %s",
+                    item.group_dir.name,
+                    e,
+                )
+        # Clear the reprocess request so the next run doesn't pick up
+        # the config that was just cancelled.
+        reproc = item.group_dir / "reprocess_request.json"
+        if reproc.exists():
+            try:
+                reproc.unlink()
+            except OSError as e:
+                logger.warning("PIPELINE: could not delete %s: %s", reproc, e)
 
     async def _mark_failed(self, item: PipelineTask, error: str | None) -> None:
         """Record a pipeline failure on the group's state.json (non-fatal).

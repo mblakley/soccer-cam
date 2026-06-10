@@ -326,6 +326,82 @@ class TestReprocessEndpoint:
         )
         assert r.status_code == 404
 
+    def _seed_running_state(self, storage):
+        """Make is_pipeline_running return True for the test game."""
+        (storage / self.GAME / "pipeline_state.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "input_path": "",
+                    "output_path": "",
+                    "artifacts": {},
+                    "steps": [
+                        {
+                            "step_id": "stabilize",
+                            "type": "stabilize",
+                            "status": "running",
+                        }
+                    ],
+                }
+            )
+        )
+
+    def test_post_rejected_with_409_when_pipeline_running(self, storage, client):
+        """Single in-flight reprocess: a POST while a run is in progress
+        must fail rather than overwriting the request file mid-run."""
+        _write_game(storage, self.GAME, "running", files=3)
+        self._seed_running_state(storage)
+        r = client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "extreme", "skip_detect": "1"},
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 409
+        assert not (storage / self.GAME / "reprocess_request.json").exists()
+
+    def test_dashboard_shows_cancel_button_when_running(self, storage, client):
+        """Form is replaced by a Cancel button while the pipeline is
+        running — the user can't change settings without cancelling first."""
+        _write_game(storage, self.GAME, "running", files=3)
+        self._seed_running_state(storage)
+        body = client.get("/").text
+        assert f"/recordings/{self.GAME}/cancel" in body
+        assert "Cancel" in body
+        # The strength <select> should be gone for this row.
+        assert 'name="stabilization_strength"' not in body
+
+    def test_cancel_writes_marker(self, storage, client):
+        _write_game(storage, self.GAME, "running")
+        self._seed_running_state(storage)
+        r = client.post(
+            f"/recordings/{self.GAME}/cancel",
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        marker = storage / self.GAME / "cancel_request.json"
+        assert marker.exists()
+        # Marker carries a timestamp so post-mortem logs can see when it happened.
+        body = json.loads(marker.read_text())
+        assert "requested_at" in body
+
+    def test_cancel_rejected_when_not_running(self, storage, client):
+        """A cancel for a completed group is a user error — return 409
+        so the dashboard surfaces it instead of silently doing nothing."""
+        _write_game(storage, self.GAME, "pipeline_complete")
+        r = client.post(
+            f"/recordings/{self.GAME}/cancel",
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 409
+
+    def test_cancel_rejects_path_traversal(self, storage, client):
+        r = client.post(
+            "/recordings/..%2F..%2Fetc/cancel",
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code in (400, 404)
+
     def test_form_shows_current_strength_when_already_set(self, storage, client):
         _write_game(storage, self.GAME, "pipeline_complete")
         (storage / self.GAME / "reprocess_request.json").write_text(
