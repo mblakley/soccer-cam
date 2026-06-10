@@ -111,7 +111,10 @@ class RenderStepConfig(BaseModel):
     # put the ball at this fraction from the top, but clamp the view so it never
     # samples past the source edge (no black cap), zooming in only if the field is
     # taller than the source allows.
-    render_target_ball_frac: float = 0.45
+    # Calibrated against the AutoCam GUI output (cmp3 vision study): a higher ball fraction
+    # pitches the camera up for far-field play, cropping the near-touchline foreground that
+    # AutoCam excludes (0.45 sat too low and dumped spectators/grass into the bottom third).
+    render_target_ball_frac: float = 0.58
     render_cap_margin_deg: float = 1.5
     # Allowed black top-cap (deg of source above the top edge). 0 = strict no-cap
     # (the view never samples past the source top). A positive value lets the camera
@@ -135,11 +138,11 @@ class RenderStepConfig(BaseModel):
     render_zoom_speed_norm_px: float = 15.0
     render_zoom_speed_gain_deg: float = 8.0
     render_zoom_depth_gain_deg: float = 5.0
-    # Uniform widening of the final view HFOV (and derived VFOV). The distance/velocity
-    # curve above is calibrated for pinhole framing; broadcast framing runs ~1.25x wider,
-    # so the cylindrical default opens the view to match. Kept as a multiplier so the curve's
-    # dynamics are preserved.
-    render_zoom_scale: float = 1.25
+    # Uniform scale on the final view HFOV (and derived VFOV). Multiplier so the distance/velocity
+    # curve's dynamics are preserved. Calibrated against the AutoCam GUI output (cmp3 vision study):
+    # 1.25 framed ~25% wider than AutoCam (play small, excess field), so the action read smaller and
+    # less broadcast-tight; 0.90 matches AutoCam's framing on the majority of sampled frames.
+    render_zoom_scale: float = 0.90
     # Vertical framing.
     render_vertical_tracking: bool = True
     render_view_pitch_deg: float = 0.0  # fallback field-centre pitch (no polygon)
