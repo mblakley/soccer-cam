@@ -243,13 +243,13 @@ class PipelineProcessor(QueueProcessor):
         state_file = item.group_dir / "state.json"
         if state_file.exists():
             try:
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     state_data = json.load(f)
                 state_data["status"] = "pipeline_cancelled"
                 state_data.pop("pipeline_error", None)
                 with open(state_file, "w") as f:
                     json.dump(state_data, f, indent=4)
-            except (json.JSONDecodeError, IOError) as e:
+            except (OSError, json.JSONDecodeError) as e:
                 logger.error(
                     "PIPELINE: could not record cancellation for %s: %s",
                     item.group_dir.name,

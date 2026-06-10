@@ -30,19 +30,23 @@ def _make_processor(
     ntfy_service=None,
     folder_id: str | None = "folder-abc",
 ):
+    """Returns ``(handler, ttt_client)``. The handler no longer holds
+    its own TTT client — the TTTPoller passes it into :py:meth:`poll`
+    and the worker captures it per item. Tests that need to verify
+    TTT calls inspect the returned client."""
     if ttt_client is None:
         ttt_client = MagicMock()
         ttt_client.is_authenticated = MagicMock(return_value=True)
     drive_uploader = drive_uploader or MagicMock()
-    return ClipRequestProcessor(
+    processor = ClipRequestProcessor(
         storage_path=str(tmp_path),
         config=_make_config(folder_id=folder_id),
         ttt_client=ttt_client,
         drive_uploader=drive_uploader,
         ntfy_service=ntfy_service,
         youtube_uploader=youtube_uploader,
-        poll_interval=60,
     )
+    return processor
 
 
 def _make_request(
@@ -257,7 +261,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         ttt.start_clip_request.assert_called_once_with(req["id"])
         drive.upload_and_share.assert_called_once()
@@ -302,7 +306,7 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         mock_compile.assert_awaited_once()
         # Single upload after compilation
@@ -337,7 +341,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         assert drive.upload_and_share.call_count == 2
         fulfilled_url = ttt.fulfill_clip_request.call_args.args[1]
@@ -376,7 +380,7 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         mock_compile.assert_awaited_once()
         yt.upload_video.assert_called_once()
@@ -412,7 +416,7 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         mock_compile.assert_not_awaited()
         yt.upload_video.assert_called_once()
@@ -435,7 +439,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         ttt.fulfill_clip_request.assert_not_called()
 
@@ -452,7 +456,7 @@ class TestProcessRequestDispatch:
         proc = _make_processor(tmp_path, ttt_client=ttt, ntfy_service=ntfy)
         req = _make_request(recording_group_dir="game-x")
 
-        await proc._process_request(req)
+        await proc._process_request(proc.ttt_client, req)
 
         ttt.start_clip_request.assert_not_called()
         ttt.fulfill_clip_request.assert_not_called()
@@ -482,7 +486,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         ttt.fulfill_clip_request.assert_called_once()
 
@@ -505,7 +509,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         ttt.fulfill_clip_request.assert_not_called()
 
@@ -554,7 +558,7 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="https://drive.google.com/file/d/abc/view"),
             ) as mock_upload,
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         mock_upload.assert_awaited_once()
         # Legacy Drive SDK path must not be used when resumable URL is present
@@ -599,7 +603,7 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(side_effect=ResumableUploadError("403 forbidden")),
             ),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         ttt.fulfill_clip_request.assert_not_called()
 
@@ -635,7 +639,7 @@ class TestProcessRequestDispatch:
             ),
             caplog.at_level(_logging.ERROR),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         # Must surface the error and must NOT touch the legacy Drive SDK
         assert any(
@@ -670,7 +674,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         drive.upload_and_share.assert_not_called()
         yt.upload_video.assert_not_called()
@@ -696,7 +700,7 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(req)
+            await proc._process_request(proc.ttt_client, req)
 
         drive.upload_and_share.assert_not_called()
         ttt.fulfill_clip_request.assert_not_called()
@@ -707,42 +711,23 @@ class TestProcessRequestDispatch:
 # ---------------------------------------------------------------------------
 
 
-class TestDiscoverWorkDedup:
+class TestAddWorkDedup:
+    """The ``add_work`` path dedups via the QueueProcessor's
+    ``_queued_items`` set keyed by ``get_item_key`` (= ttt_id)."""
+
     @pytest.mark.asyncio
-    async def test_duplicate_request_ids_skipped(self, tmp_path):
-        """Same request id returned twice → only one processing task created."""
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
-        ttt.get_pending_clip_requests = MagicMock(
-            return_value=[{"id": "dup"}, {"id": "dup"}, {"id": "other"}]
+    async def test_duplicate_ttt_ids_skipped(self, tmp_path):
+        from video_grouper.task_processors.tasks.clip.clip_request_task import (
+            ClipRequestTask,
         )
 
-        proc = _make_processor(tmp_path, ttt_client=ttt)
-
-        created = []
-
-        async def fake_process(req):
-            created.append(req["id"])
-
-        with patch.object(proc, "_process_request", new=fake_process):
-            await proc.discover_work()
-            # Let scheduled tasks run
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-        assert sorted(created) == ["dup", "other"]
-
-    @pytest.mark.asyncio
-    async def test_not_authenticated_skips_poll(self, tmp_path):
-        """TTT auth down → discover_work is a no-op."""
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=False)
-        ttt.get_pending_clip_requests = MagicMock()
-
-        proc = _make_processor(tmp_path, ttt_client=ttt)
-        await proc.discover_work()
-
-        ttt.get_pending_clip_requests.assert_not_called()
+        processor = _make_processor(tmp_path)
+        await processor.add_work(ClipRequestTask(ttt_id="dup", payload={"id": "dup"}))
+        await processor.add_work(ClipRequestTask(ttt_id="dup", payload={"id": "dup"}))
+        await processor.add_work(
+            ClipRequestTask(ttt_id="other", payload={"id": "other"})
+        )
+        assert processor._queue.qsize() == 2
 
 
 # ---------------------------------------------------------------------------

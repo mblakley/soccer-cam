@@ -1,4 +1,4 @@
-"""Task for processing TTT clip requests."""
+"""Task for processing TTT processing-jobs."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,25 +8,20 @@ from ..base_task import BaseTask
 
 
 @dataclass(unsafe_hash=True)
-class ClipRequestTask(BaseTask):
-    """Carries a TTT clip request response dict to the processor.
-
-    The processor reads ``payload`` directly (segments, delivery
-    method, etc.); the only structured field on the task itself is
-    ``ttt_id`` so the queue's dedup-by-key check can identify
-    duplicates without parsing the payload.
-    """
+class TTTJobTask(BaseTask):
+    """Carries a TTT job response dict (download → combine → trim →
+    upload pipeline driven by remote config) to the processor."""
 
     ttt_id: str
     payload: dict[str, Any] = field(default_factory=dict, hash=False)
 
     @classmethod
     def queue_type(cls) -> QueueType:
-        return QueueType.CLIP_REQUEST
+        return QueueType.TTT_JOB
 
     @property
     def task_type(self) -> str:
-        return "clip_request"
+        return "ttt_job"
 
     def get_item_path(self) -> str:
         return self.ttt_id
@@ -39,12 +34,12 @@ class ClipRequestTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: dict[str, object]) -> "ClipRequestTask":
+    def deserialize(cls, data: dict[str, object]) -> "TTTJobTask":
         return cls(ttt_id=data["ttt_id"], payload=dict(data.get("payload") or {}))
 
     async def execute(self) -> bool:
-        """Execution is handled by ClipRequestProcessor.process_item()."""
-        raise NotImplementedError("Use ClipRequestProcessor.process_item()")
+        """Execution is handled by TTTJobQueueProcessor.process_item()."""
+        raise NotImplementedError("Use TTTJobQueueProcessor.process_item()")
 
     def __str__(self) -> str:
-        return f"ClipRequestTask(id={self.ttt_id})"
+        return f"TTTJobTask(id={self.ttt_id})"

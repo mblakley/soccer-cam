@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -96,9 +97,9 @@ def consume_cancel_request(group_dir: Path) -> None:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class ReprocessRequest(BaseModel):

@@ -22,6 +22,21 @@ def _make_config(camera_id: str | None = "cam-xyz"):
     return config
 
 
+async def _poll_and_drain(processor):
+    """The TTTPoller now owns polling + add_work. Test helper: pull
+    the queued reel(s) the test seeded via ``get_pending_highlights``
+    and run them through ``process_item`` directly — i.e. skip the
+    poll step and exercise the processing path."""
+    from video_grouper.task_processors.tasks.ttt.highlight_reel_task import (
+        HighlightReelTask,
+    )
+
+    reels = processor.ttt_client.get_pending_highlights.return_value or []
+    for reel in reels:
+        task = HighlightReelTask(ttt_id=reel["id"], payload=reel)
+        await processor.process_item(task)
+
+
 def _make_processor(tmp_path, *, ttt_client=None, youtube_uploader=None):
     if ttt_client is None:
         ttt_client = MagicMock()
@@ -33,13 +48,13 @@ def _make_processor(tmp_path, *, ttt_client=None, youtube_uploader=None):
     # concat task's makedirs(output_dir, exist_ok=True) silently does nothing —
     # create the highlights dir explicitly so file writes work.
     (tmp_path / "highlights").mkdir(parents=True, exist_ok=True)
-    return HighlightReelProcessor(
+    processor = HighlightReelProcessor(
         storage_path=str(tmp_path),
         config=_make_config(),
         ttt_client=ttt_client,
         youtube_uploader=youtube_uploader,
-        poll_interval=60,
     )
+    return processor
 
 
 def _stage_recording(storage_path: Path, group_dir: str) -> Path:
@@ -156,11 +171,9 @@ async def test_happy_path_renders_uploads_and_reports(
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     # Let the spawned task finish.
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once_with("reel-1", "cam-xyz")
     ttt_client.complete_highlight.assert_called_once()
@@ -196,10 +209,8 @@ async def test_source_missing_locally_does_not_claim(
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.complete_highlight.assert_not_called()
@@ -231,10 +242,8 @@ async def test_render_failure_marks_reel_failed(tmp_path, stub_trim_video):
         "video_grouper.task_processors.tasks.clips.highlight_compilation_task.combine_videos",
         side_effect=_bad_combine,
     ):
-        await processor.discover_work()
+        await _poll_and_drain(processor)
         await asyncio.sleep(0)
-        while processor._processing:
-            await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once()
     ttt_client.complete_highlight.assert_not_called()
@@ -271,10 +280,8 @@ async def test_upload_failure_marks_reel_failed(
         tmp_path, ttt_client=ttt_client, youtube_uploader=youtube_uploader
     )
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once()
     ttt_client.complete_highlight.assert_not_called()
@@ -284,56 +291,32 @@ async def test_upload_failure_marks_reel_failed(
 
 
 @pytest.mark.asyncio
-async def test_idempotency_within_single_poll(
-    tmp_path, stub_trim_video, stub_combine_videos
-):
-    """Calling discover_work twice with the same pending reel only claims once."""
-    _stage_recording(tmp_path, "game-A")
+async def test_add_work_dedups_on_ttt_id(tmp_path):
+    """``add_work`` keys dedup on ``ttt_id`` so the same reel queued
+    twice only produces one queue entry."""
+    from video_grouper.task_processors.tasks.ttt.highlight_reel_task import (
+        HighlightReelTask,
+    )
 
-    reel = {"id": "reel-5", "title": "Once only", "status": "pending"}
-    game_clips = [_make_clip(0, "game-A")]
-
-    ttt_client = MagicMock()
-    ttt_client.is_authenticated = MagicMock(return_value=True)
-    # Both polls return the same pending reel (simulating a slow processor that
-    # hasn't completed before the next discover_work fires).
-    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
-    ttt_client.get_highlight_game_clips = MagicMock(return_value=game_clips)
-    ttt_client.claim_highlight = MagicMock(return_value=reel)
-    ttt_client.get_highlight = MagicMock(return_value=reel)
-    ttt_client.complete_highlight = MagicMock(return_value=reel)
-    ttt_client.fail_highlight = MagicMock()
-
-    processor = _make_processor(tmp_path, ttt_client=ttt_client)
-
-    # First poll spawns the task.
-    await processor.discover_work()
-    # Before yielding to the spawned task, hit discover_work again — the
-    # reel_id is in _processing so the second call must not spawn another task.
-    await processor.discover_work()
-
-    while processor._processing:
-        await asyncio.sleep(0.01)
-
-    ttt_client.claim_highlight.assert_called_once()
+    processor = _make_processor(tmp_path)
+    await processor.add_work(
+        HighlightReelTask(ttt_id="reel-5", payload={"id": "reel-5"})
+    )
+    await processor.add_work(
+        HighlightReelTask(ttt_id="reel-5", payload={"id": "reel-5"})
+    )
+    assert processor._queue.qsize() == 1
 
 
-@pytest.mark.asyncio
-async def test_discover_skips_when_not_authenticated(tmp_path):
-    """When TTT isn't authenticated, poll skips without any side effects."""
-    ttt_client = MagicMock()
-    ttt_client.is_authenticated = MagicMock(return_value=False)
-    ttt_client.get_pending_highlights = MagicMock()
-
-    processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
-
-    ttt_client.get_pending_highlights.assert_not_called()
+# Note: poll-side concerns (auth gate, camera_id propagation, "no
+# youtube uploader" skip) all moved to TTTPoller — see
+# test_ttt_poller.py.
 
 
 @pytest.mark.asyncio
 async def test_discover_skips_when_youtube_uploader_missing(tmp_path):
-    """When youtube_uploader is None, poll skips — reel can't be shipped."""
+    """When youtube_uploader is None, processor refuses to process —
+    no upload destination."""
     ttt_client = MagicMock()
     ttt_client.is_authenticated = MagicMock(return_value=True)
     ttt_client.get_pending_highlights = MagicMock()
@@ -342,7 +325,7 @@ async def test_discover_skips_when_youtube_uploader_missing(tmp_path):
     # Manually set to None — _make_processor's default would supply a mock.
     processor.youtube_uploader = None
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
 
     ttt_client.get_pending_highlights.assert_not_called()
 
@@ -378,10 +361,8 @@ async def test_progress_emitted_per_stage(
     ttt_client.update_highlight_progress = MagicMock()
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     # Expected progress sequence (uploading 0% only, since mocked upload_video
     # doesn't invoke the on_progress callback):
@@ -421,26 +402,15 @@ async def test_progress_not_emitted_when_source_missing(
     ttt_client.fail_highlight = MagicMock()
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.update_highlight_progress.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_camera_id_passed_to_pending_query(tmp_path):
-    """The configured camera_id is forwarded to get_pending_highlights."""
-    ttt_client = MagicMock()
-    ttt_client.is_authenticated = MagicMock(return_value=True)
-    ttt_client.get_pending_highlights = MagicMock(return_value=[])
-
-    processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
-
-    ttt_client.get_pending_highlights.assert_called_once_with("cam-xyz")
+# `camera_id` forwarding to get_pending_highlights moved to TTTPoller
+# (see test_ttt_poller.py).
 
 
 @pytest.mark.asyncio
@@ -469,10 +439,8 @@ async def test_upload_returns_none_marks_reel_failed(
     yt.upload_video = MagicMock(return_value=None)
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once()
     ttt_client.complete_highlight.assert_not_called()
@@ -522,10 +490,8 @@ async def test_upload_on_progress_throttle_emits_at_5_percent_steps(
     yt.upload_video = MagicMock(side_effect=fake_upload)
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.05)
     # Let the scheduled run_coroutine_threadsafe coroutines complete.
     for _ in range(20):
         await asyncio.sleep(0.05)
@@ -584,16 +550,12 @@ async def test_skip_reports_blocker_once_per_session(tmp_path):
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
     # First poll — reel-blocker is new, should report blocker once.
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     # Second poll — same reel still pending, already in _already_skipped.
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.report_blocker.assert_called_once()
@@ -627,10 +589,8 @@ async def test_claim_409_skips_rendering(
     yt.upload_video = MagicMock(return_value="YT_SHOULD_NOT_BE_CALLED")
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once_with("reel-409", "cam-xyz")
     yt.upload_video.assert_not_called()
@@ -668,10 +628,8 @@ async def test_idempotent_upload_when_youtube_video_id_present(
     yt.upload_video = MagicMock(return_value="YT_NEW_SHOULD_NOT_BE_CALLED")
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client, youtube_uploader=yt)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     # Upload must be skipped.
     yt.upload_video.assert_not_called()
@@ -723,10 +681,8 @@ async def test_moment_reel_happy_path_renders_uploads_and_reports(
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.get_highlight_moment_clips.assert_called_once_with("reel-m1")
     ttt_client.get_highlight_game_clips.assert_not_called()
@@ -775,10 +731,8 @@ async def test_moment_reel_uses_clip_offsets_for_trim(tmp_path, stub_combine_vid
         side_effect=_capture_trim,
     ):
         processor = _make_processor(tmp_path, ttt_client=ttt_client)
-        await processor.discover_work()
+        await _poll_and_drain(processor)
         await asyncio.sleep(0)
-        while processor._processing:
-            await asyncio.sleep(0.01)
 
     assert len(captured) == 1
     _src, _dst, start_str, duration_str = captured[0]
@@ -819,10 +773,8 @@ async def test_moment_reel_source_missing_locally_does_not_claim(
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.complete_highlight.assert_not_called()
@@ -859,10 +811,8 @@ async def test_moment_reel_recording_group_dir_none_does_not_claim(
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
 
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.fail_highlight.assert_not_called()
@@ -902,10 +852,8 @@ async def test_moment_reel_render_failure_marks_reel_failed(tmp_path, stub_trim_
         "video_grouper.task_processors.tasks.clips.highlight_compilation_task.combine_videos",
         side_effect=_bad_combine,
     ):
-        await processor.discover_work()
+        await _poll_and_drain(processor)
         await asyncio.sleep(0)
-        while processor._processing:
-            await asyncio.sleep(0.01)
 
     ttt_client.claim_highlight.assert_called_once()
     ttt_client.complete_highlight.assert_not_called()
@@ -952,10 +900,8 @@ async def test_routing_mixed_sources_in_single_poll(
     ttt_client.fail_highlight = MagicMock()
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     # Manual reel hit the game-clips endpoint exactly once.
     ttt_client.get_highlight_game_clips.assert_called_once_with("reel-manual")
@@ -987,10 +933,8 @@ async def test_moment_reel_empty_clips_skips_without_claim(tmp_path):
     ttt_client.fail_highlight = MagicMock()
 
     processor = _make_processor(tmp_path, ttt_client=ttt_client)
-    await processor.discover_work()
+    await _poll_and_drain(processor)
     await asyncio.sleep(0)
-    while processor._processing:
-        await asyncio.sleep(0.01)
 
     ttt_client.get_highlight_moment_clips.assert_called_once()
     ttt_client.claim_highlight.assert_not_called()

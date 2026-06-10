@@ -1268,8 +1268,8 @@ class TTTApiClient:
         self,
         request_id: str,
         status: str,
-        current_step: Optional[str] = None,
-        error_message: Optional[str] = None,
+        current_step: str | None = None,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         """Advance the lifecycle column (claimed → running → completed/cancelled/failed).
 

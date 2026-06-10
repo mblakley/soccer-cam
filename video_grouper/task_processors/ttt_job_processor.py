@@ -3,134 +3,67 @@
 import asyncio
 import logging
 import os
-import platform
 
 from ..utils.config import Config
-from .base_polling_processor import PollingProcessor
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
+from .tasks.ttt.ttt_job_task import TTTJobTask
 
 logger = logging.getLogger(__name__)
 
 
-class TTTJobProcessor(PollingProcessor):
-    """Polls TTT API for processing jobs and executes them via existing pipeline.
+class TTTJobProcessor(QueueProcessor):
+    """Drains the TTT processing-job queue.
 
-    Flow per job:
-    1. Poll TTT for pending jobs
-    2. Claim job
-    3. Drive through pipeline: download -> combine -> trim -> upload
-    4. Report progress at each stage
-    5. Report completion with YouTube URL
+    Service registration + heartbeats are owned by :class:`TTTPoller`
+    (they're cheap calls on the poll cadence). This processor's job is
+    purely the per-task pipeline: claim → download → combine → trim →
+    upload. The entire flow runs under ``ram_heavy``.
     """
 
     def __init__(
         self,
         storage_path: str,
         config: Config,
-        ttt_client,
+        ttt_client=None,
         camera=None,
         download_processor=None,
         video_processor=None,
         upload_processor=None,
-        poll_interval: int = 30,
+        resource_manager=None,
     ):
-        super().__init__(storage_path, config, poll_interval)
+        super().__init__(storage_path, config)
         self.ttt_client = ttt_client
         self.camera = camera
         self.download_processor = download_processor
         self.video_processor = video_processor
         self.upload_processor = upload_processor
-        self._processing_jobs: set[str] = set()
-        self._service_id: str | None = None
-        self._heartbeat_task: asyncio.Task | None = None
+        self.resource_manager = resource_manager
+        self._service_id: str | None = None  # set by TTTPoller via setter
 
-    async def start(self) -> None:
-        """Start the processor and register service with TTT."""
-        await self._register_service()
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        await super().start()
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.TTT_JOB
 
-    async def stop(self) -> None:
-        """Stop the processor and cancel heartbeat."""
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-        await super().stop()
+    def get_item_key(self, item: TTTJobTask) -> str:
+        return item.ttt_id
 
-    async def _register_service(self) -> None:
-        """Register this service instance with TTT."""
-        if not self.ttt_client.is_authenticated():
-            logger.warning(
-                "TTT client not authenticated, skipping service registration"
-            )
-            return
-        try:
-            machine_name = self.config.ttt.machine_name or platform.node()
-            capabilities = {
-                "ffmpeg": True,
-                "pipeline": self.config.pipeline.is_active(),
-                "camera_type": self.config.camera.type,
-                "camera_ip": self.config.camera.device_ip,
-            }
-            result = await asyncio.to_thread(
-                self.ttt_client.register_service, machine_name, capabilities
-            )
-            self._service_id = result.get("id") if result else None
-            logger.info(
-                "TTT_JOBS: Registered service as '%s' (id=%s)",
-                machine_name,
-                self._service_id,
-            )
-        except Exception as e:
-            logger.error("TTT_JOBS: Failed to register service: %s", e)
+    async def process_item(self, item: TTTJobTask) -> None:
+        if self.ttt_client is None:
+            raise RuntimeError("TTTJobProcessor needs a ttt_client; check TTT config")
+        if self.resource_manager is not None:
+            async with self.resource_manager.acquire(("ram_heavy",)):
+                await self._process_job(self.ttt_client, item.payload)
+        else:
+            await self._process_job(self.ttt_client, item.payload)
 
-    async def _heartbeat_loop(self) -> None:
-        """Send periodic heartbeat to TTT."""
-        while True:
-            try:
-                await asyncio.sleep(60)
-                if self._service_id and self.ttt_client.is_authenticated():
-                    await asyncio.to_thread(
-                        self.ttt_client.send_heartbeat, self._service_id, "online"
-                    )
-                    logger.debug("TTT_JOBS: Heartbeat sent")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("TTT_JOBS: Heartbeat failed: %s", e)
-
-    async def discover_work(self) -> None:
-        """Poll TTT for pending processing jobs."""
-        if not self.ttt_client.is_authenticated():
-            logger.debug("TTT_JOBS: Client not authenticated, skipping poll")
-            return
-
-        try:
-            jobs = await asyncio.to_thread(self.ttt_client.get_pending_jobs)
-        except Exception as e:
-            logger.error("TTT_JOBS: Failed to poll for jobs: %s", e)
-            return
-
-        if not jobs:
-            return
-
-        for job in jobs:
-            job_id = job.get("id")
-            if not job_id or job_id in self._processing_jobs:
-                continue
-
-            self._processing_jobs.add(job_id)
-            asyncio.create_task(self._process_job(job))
-
-    async def _process_job(self, job: dict) -> None:
+    async def _process_job(self, ttt_client, job: dict) -> None:
         """Process a single TTT job through the pipeline."""
         job_id = job["id"]
         try:
             # Claim the job
             try:
-                await asyncio.to_thread(self.ttt_client.claim_job, job_id)
+                await asyncio.to_thread(ttt_client.claim_job, job_id)
                 logger.info("TTT_JOBS: Claimed job %s", job_id)
             except Exception as e:
                 logger.error("TTT_JOBS: Failed to claim job %s: %s", job_id, e)
@@ -140,6 +73,7 @@ class TTTJobProcessor(PollingProcessor):
 
             # Step 1: Report downloading status
             await self._update_progress(
+                ttt_client,
                 job_id,
                 "downloading",
                 {"percent": 0, "message": "Starting download from camera"},
@@ -148,19 +82,20 @@ class TTTJobProcessor(PollingProcessor):
             group_dir = await self._resolve_or_create_group(job, config)
             if not group_dir:
                 await self._fail_job(
-                    job_id, "Could not resolve recording group directory"
+                    ttt_client, job_id, "Could not resolve recording group directory"
                 )
                 return
 
             # Step 2: Wait for combine (or trigger it)
             await self._update_progress(
+                ttt_client,
                 job_id,
                 "combining",
                 {"percent": 30, "message": "Combining video files"},
             )
             combined_path = await self._wait_for_combined(group_dir)
             if not combined_path:
-                await self._fail_job(job_id, "Combined video not found")
+                await self._fail_job(ttt_client, job_id, "Combined video not found")
                 return
 
             # Step 3: Trim if config specifies trim times
@@ -168,6 +103,7 @@ class TTTJobProcessor(PollingProcessor):
             trim_end = config.get("trim_end")
             if trim_start is not None:
                 await self._update_progress(
+                    ttt_client,
                     job_id,
                     "trimming",
                     {"percent": 50, "message": "Trimming video"},
@@ -181,6 +117,7 @@ class TTTJobProcessor(PollingProcessor):
 
             # Step 4: Upload
             await self._update_progress(
+                ttt_client,
                 job_id,
                 "uploading",
                 {"percent": 70, "message": "Uploading to YouTube"},
@@ -189,30 +126,30 @@ class TTTJobProcessor(PollingProcessor):
 
             # Step 5: Complete
             result = {"youtube_url": youtube_url} if youtube_url else {}
-            await asyncio.to_thread(self.ttt_client.complete_job, job_id, result)
+            await asyncio.to_thread(ttt_client.complete_job, job_id, result)
             logger.info("TTT_JOBS: Completed job %s", job_id)
 
         except Exception as e:
             logger.error(
                 "TTT_JOBS: Error processing job %s: %s", job_id, e, exc_info=True
             )
-            await self._fail_job(job_id, str(e))
-        finally:
-            self._processing_jobs.discard(job_id)
+            await self._fail_job(ttt_client, job_id, str(e))
 
-    async def _update_progress(self, job_id: str, status: str, progress: dict) -> None:
+    async def _update_progress(
+        self, ttt_client, job_id: str, status: str, progress: dict
+    ) -> None:
         """Update job progress in TTT."""
         try:
             await asyncio.to_thread(
-                self.ttt_client.update_job_progress, job_id, status, progress
+                ttt_client.update_job_progress, job_id, status, progress
             )
         except Exception as e:
             logger.warning("TTT_JOBS: Failed to update progress for %s: %s", job_id, e)
 
-    async def _fail_job(self, job_id: str, error: str) -> None:
+    async def _fail_job(self, ttt_client, job_id: str, error: str) -> None:
         """Mark a job as failed in TTT."""
         try:
-            await asyncio.to_thread(self.ttt_client.fail_job, job_id, error)
+            await asyncio.to_thread(ttt_client.fail_job, job_id, error)
             logger.warning("TTT_JOBS: Job %s failed: %s", job_id, error)
         except Exception as e:
             logger.error("TTT_JOBS: Failed to report failure for %s: %s", job_id, e)
