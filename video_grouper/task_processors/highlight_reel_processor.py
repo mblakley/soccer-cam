@@ -35,47 +35,68 @@ from pathlib import Path
 
 from ..utils.config import Config
 from ..utils.ffmpeg_utils import trim_video
-from .base_polling_processor import PollingProcessor
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
 from .recording_locator import find_combined_video, resolve_recording_dir
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
+from .tasks.ttt.highlight_reel_task import HighlightReelTask
 
 logger = logging.getLogger(__name__)
 
 
-class HighlightReelProcessor(PollingProcessor):
-    """Polls TTT for pending highlight reels and renders/uploads them."""
+class HighlightReelProcessor(QueueProcessor):
+    """Drains the TTT highlight-reel queue. ``process_item`` runs the
+    full trim → concat → upload flow under the shared ``ram_heavy``
+    gate so FFmpeg work can't overlap the main pipeline's render
+    step.
+
+    The "source not local" skip-and-don't-claim path used to live in
+    the polling loop; it now happens in ``process_item`` (the
+    processor sees an item the poller already enqueued, then defers it
+    by raising — the base class requeue logic handles retries).
+    """
 
     def __init__(
         self,
         storage_path: str,
         config: Config,
-        ttt_client,
-        youtube_uploader,
-        poll_interval: int = 60,
+        ttt_client=None,
+        youtube_uploader=None,
+        resource_manager=None,
     ):
-        super().__init__(storage_path, config, poll_interval)
+        super().__init__(storage_path, config)
         self.ttt_client = ttt_client
         self.youtube_uploader = youtube_uploader
-        self._processing: set[str] = set()
-        # Track per-reel render tasks so stop() can cancel them cleanly.
-        self._render_tasks: set[asyncio.Task] = set()
-        # Suppress repeat "skipped — source not local" logs across polling
-        # cycles. Cleared when a reel is no longer pending or moves on.
+        self.resource_manager = resource_manager
+        # Suppress repeat "skipped — source not local" logs across
+        # retries. Used by `_process_reel_from_clips`.
         self._already_skipped: set[str] = set()
 
-    async def stop(self) -> None:
-        """Cancel in-flight render tasks then defer to the polling-loop stop."""
-        for t in list(self._render_tasks):
-            t.cancel()
-        if self._render_tasks:
-            await asyncio.gather(*self._render_tasks, return_exceptions=True)
-        await super().stop()
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.TTT_HIGHLIGHT_REEL
 
-    async def _report_progress(self, reel_id: str, stage: str, percent: int) -> None:
+    def get_item_key(self, item: HighlightReelTask) -> str:
+        return item.ttt_id
+
+    async def process_item(self, item: HighlightReelTask) -> None:
+        if self.ttt_client is None or self.youtube_uploader is None:
+            raise RuntimeError(
+                "HighlightReelProcessor needs a ttt_client + youtube_uploader"
+            )
+        if self.resource_manager is not None:
+            async with self.resource_manager.acquire(("ram_heavy",)):
+                await self._process_reel(self.ttt_client, item.payload)
+        else:
+            await self._process_reel(self.ttt_client, item.payload)
+
+    async def _report_progress(
+        self, ttt_client, reel_id: str, stage: str, percent: int
+    ) -> None:
         """Fire-and-forget progress report to TTT. Failures are logged, not raised."""
         try:
             await asyncio.to_thread(
-                self.ttt_client.update_highlight_progress,
+                ttt_client.update_highlight_progress,
                 reel_id,
                 stage=stage,
                 percent=percent,
@@ -89,46 +110,7 @@ class HighlightReelProcessor(PollingProcessor):
                 exc,
             )
 
-    async def discover_work(self) -> None:
-        """Poll TTT for pending highlight reels and process them."""
-        if not self.ttt_client.is_authenticated():
-            logger.debug("HIGHLIGHT_REEL: TTT client not authenticated, skipping poll")
-            return
-
-        if not self.youtube_uploader:
-            logger.debug(
-                "HIGHLIGHT_REEL: no YouTube uploader configured, skipping poll"
-            )
-            return
-
-        camera_id = getattr(self.config.ttt, "camera_id", None) or None
-
-        try:
-            reels = await asyncio.to_thread(
-                self.ttt_client.get_pending_highlights, camera_id
-            )
-        except Exception as e:
-            logger.error("HIGHLIGHT_REEL: failed to poll TTT for highlights: %s", e)
-            return
-
-        # Prune the skip-suppression set: keep only ids still pending. Reels
-        # cancelled or completed server-side disappear from the response, and
-        # we want their entries garbage-collected so the set doesn't grow
-        # unboundedly across the lifetime of the process.
-        pending_ids = {r.get("id") for r in reels if r.get("id")}
-        self._already_skipped &= pending_ids
-
-        for reel in reels:
-            reel_id = reel.get("id")
-            if not reel_id or reel_id in self._processing:
-                continue
-
-            self._processing.add(reel_id)
-            task = asyncio.create_task(self._process_reel(reel))
-            self._render_tasks.add(task)
-            task.add_done_callback(self._render_tasks.discard)
-
-    async def _process_reel(self, reel: dict) -> None:
+    async def _process_reel(self, ttt_client, reel: dict) -> None:
         """Dispatch + run the correct render path based on the reel's source.
 
         - ``source='manual'`` (default) — user-curated game-clip reel, fetched
@@ -144,52 +126,49 @@ class HighlightReelProcessor(PollingProcessor):
         ``_process_reel_from_clips``; only the fetch + per-clip offset
         extraction differ.
 
-        ``_processing.discard(reel_id)`` runs in our ``finally`` here so the
-        processor never leaks the reel_id even if the helpers raise.
+        Failures inside ``_process_reel_from_clips`` propagate so the
+        QueueProcessor base requeues / nacks per its normal retry
+        rules.
         """
         reel_id = reel["id"]
+        source = reel.get("source", "manual")
+        if source == "moment_tagger":
+            clips_fn = ttt_client.get_highlight_moment_clips
+            fetch_label = "MOMENT_REEL"
+
+            def extract_offsets(clip: dict) -> tuple[float, float]:
+                start = clip.get("clip_start_offset")
+                end = clip.get("clip_end_offset")
+                if start is None or end is None:
+                    raise ValueError(
+                        f"moment_clip {clip.get('id')} missing clip_start_offset"
+                        f" / clip_end_offset (got start={start!r}, end={end!r})"
+                    )
+                return float(start), float(end)
+        else:
+            clips_fn = ttt_client.get_highlight_game_clips
+            fetch_label = "HIGHLIGHT_REEL"
+
+            def extract_offsets(clip: dict) -> tuple[float, float]:
+                return float(clip["start_time"]), float(clip["end_time"])
+
         try:
-            source = reel.get("source", "manual")
-            if source == "moment_tagger":
-                clips_fn = self.ttt_client.get_highlight_moment_clips
-                fetch_label = "MOMENT_REEL"
+            clips = await asyncio.to_thread(clips_fn, reel_id)
+        except Exception as e:
+            logger.error(
+                "%s: failed to fetch clips for %s: %s", fetch_label, reel_id, e
+            )
+            return
 
-                def extract_offsets(clip: dict) -> tuple[float, float]:
-                    start = clip.get("clip_start_offset")
-                    end = clip.get("clip_end_offset")
-                    if start is None or end is None:
-                        raise ValueError(
-                            f"moment_clip {clip.get('id')} missing clip_start_offset"
-                            f" / clip_end_offset (got start={start!r}, end={end!r})"
-                        )
-                    return float(start), float(end)
-            else:
-                clips_fn = self.ttt_client.get_highlight_game_clips
-                fetch_label = "HIGHLIGHT_REEL"
+        if not clips:
+            logger.warning("%s: reel %s has no clips, skipping", fetch_label, reel_id)
+            return
 
-                def extract_offsets(clip: dict) -> tuple[float, float]:
-                    return float(clip["start_time"]), float(clip["end_time"])
-
-            try:
-                clips = await asyncio.to_thread(clips_fn, reel_id)
-            except Exception as e:
-                logger.error(
-                    "%s: failed to fetch clips for %s: %s", fetch_label, reel_id, e
-                )
-                return
-
-            if not clips:
-                logger.warning(
-                    "%s: reel %s has no clips, skipping", fetch_label, reel_id
-                )
-                return
-
-            await self._process_reel_from_clips(reel, clips, extract_offsets)
-        finally:
-            self._processing.discard(reel_id)
+        await self._process_reel_from_clips(ttt_client, reel, clips, extract_offsets)
 
     async def _process_reel_from_clips(
         self,
+        ttt_client,
         reel: dict,
         clips: list[dict],
         extract_offsets,
@@ -249,7 +228,7 @@ class HighlightReelProcessor(PollingProcessor):
                         )
                         self._already_skipped.add(reel_id)
                         await asyncio.to_thread(
-                            self.ttt_client.report_blocker,
+                            ttt_client.report_blocker,
                             reel_id,
                             self.config.ttt.camera_id,
                             reason,
@@ -267,7 +246,7 @@ class HighlightReelProcessor(PollingProcessor):
                         )
                         self._already_skipped.add(reel_id)
                         await asyncio.to_thread(
-                            self.ttt_client.report_blocker,
+                            ttt_client.report_blocker,
                             reel_id,
                             self.config.ttt.camera_id,
                             reason,
@@ -283,7 +262,7 @@ class HighlightReelProcessor(PollingProcessor):
             # already claimed it (409) — skip without rendering in that case.
             camera_id = getattr(self.config.ttt, "camera_id", None) or ""
             claim_result = await asyncio.to_thread(
-                self.ttt_client.claim_highlight, reel_id, camera_id
+                ttt_client.claim_highlight, reel_id, camera_id
             )
             if claim_result is None:
                 logger.info(
@@ -300,7 +279,7 @@ class HighlightReelProcessor(PollingProcessor):
             )
 
             total_clips = len(resolved_sources)
-            await self._report_progress(reel_id, "trimming", 0)
+            await self._report_progress(ttt_client, reel_id, "trimming", 0)
 
             # Trim each clip into a tmpdir. Use float for start/end to preserve
             # sub-second precision — moment-tag offsets may legitimately carry
@@ -324,11 +303,14 @@ class HighlightReelProcessor(PollingProcessor):
                     )
                 trimmed_paths.append(out_path)
                 await self._report_progress(
-                    reel_id, "trimming", int((idx + 1) * 100 / total_clips)
+                    ttt_client,
+                    reel_id,
+                    "trimming",
+                    int((idx + 1) * 100 / total_clips),
                 )
 
             # Concatenate via the existing HighlightCompilationTask.
-            await self._report_progress(reel_id, "concatenating", 0)
+            await self._report_progress(ttt_client, reel_id, "concatenating", 0)
             output_dir = str(Path(self.storage_path) / "highlights")
             task = HighlightCompilationTask(
                 highlight_id=reel_id,
@@ -340,7 +322,7 @@ class HighlightReelProcessor(PollingProcessor):
             ok = await task.execute()
             if not ok:
                 raise RuntimeError("combine_videos failed during reel concatenation")
-            await self._report_progress(reel_id, "concatenating", 100)
+            await self._report_progress(ttt_client, reel_id, "concatenating", 100)
 
             final_output_path = task.output_path
 
@@ -348,9 +330,7 @@ class HighlightReelProcessor(PollingProcessor):
             # failed to PATCH complete (transient TTT outage), the reel already
             # carries a youtube_video_id. Reuse it instead of creating an orphan.
             try:
-                latest_reel = await asyncio.to_thread(
-                    self.ttt_client.get_highlight, reel_id
-                )
+                latest_reel = await asyncio.to_thread(ttt_client.get_highlight, reel_id)
                 existing_yt_id = (latest_reel or {}).get("youtube_video_id")
             except Exception as exc:
                 logger.warning(
@@ -369,7 +349,7 @@ class HighlightReelProcessor(PollingProcessor):
                     existing_yt_id,
                 )
                 await asyncio.to_thread(
-                    self.ttt_client.complete_highlight,
+                    ttt_client.complete_highlight,
                     reel_id,
                     file_path=final_output_path,
                     youtube_video_id=existing_yt_id,
@@ -383,7 +363,7 @@ class HighlightReelProcessor(PollingProcessor):
 
             # Upload to YouTube. on_progress is called on the uploader's thread
             # so it cannot await — schedule the PATCH back on this loop instead.
-            await self._report_progress(reel_id, "uploading", 0)
+            await self._report_progress(ttt_client, reel_id, "uploading", 0)
             loop = asyncio.get_running_loop()
             last_reported = [-1]
 
@@ -397,7 +377,8 @@ class HighlightReelProcessor(PollingProcessor):
                 if pct == 100 or pct - last_reported[0] >= 5:
                     last_reported[0] = pct
                     asyncio.run_coroutine_threadsafe(
-                        self._report_progress(reel_id, "uploading", pct), loop
+                        self._report_progress(ttt_client, reel_id, "uploading", pct),
+                        loop,
                     )
 
             player_name = reel.get("player_name")
@@ -428,7 +409,7 @@ class HighlightReelProcessor(PollingProcessor):
 
             # Report back.
             await asyncio.to_thread(
-                self.ttt_client.complete_highlight,
+                ttt_client.complete_highlight,
                 reel_id,
                 file_path=final_output_path,
                 youtube_video_id=youtube_video_id,
@@ -446,7 +427,7 @@ class HighlightReelProcessor(PollingProcessor):
             if claimed:
                 try:
                     await asyncio.to_thread(
-                        self.ttt_client.fail_highlight, reel_id, str(e)[:500]
+                        ttt_client.fail_highlight, reel_id, str(e)[:500]
                     )
                 except Exception as report_exc:
                     logger.error(

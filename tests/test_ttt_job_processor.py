@@ -1,8 +1,7 @@
 """Tests for the TTTJobProcessor."""
 
-import asyncio
 import tempfile
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -96,13 +95,15 @@ def mock_ttt_client():
 
 @pytest.fixture
 def processor(ttt_storage, ttt_config, mock_ttt_client):
-    """Create a TTTJobProcessor instance."""
-    return TTTJobProcessor(
+    """Create a TTTJobProcessor instance. Back-compat shim attaches the
+    TTT mock as ``handler.ttt_client`` so existing tests can keep
+    reading it; the live TTTPoller passes it via :py:meth:`poll`."""
+    h = TTTJobProcessor(
         storage_path=ttt_storage,
         config=ttt_config,
-        ttt_client=mock_ttt_client,
-        poll_interval=1,
     )
+    h.ttt_client = mock_ttt_client
+    return h
 
 
 class TestTTTJobProcessorInit:
@@ -114,10 +115,10 @@ class TestTTTJobProcessorInit:
     def test_init_stores_ttt_client(self, processor, mock_ttt_client):
         assert processor.ttt_client is mock_ttt_client
 
-    def test_init_empty_processing_jobs(self, processor):
-        assert len(processor._processing_jobs) == 0
-
     def test_init_no_service_id(self, processor):
+        # Service registration moved to TTTPoller; the processor itself
+        # doesn't track service id anymore. Sanity check the attr still
+        # exists on the (rare) path that sets it.
         assert processor._service_id is None
 
     def test_init_stores_optional_processors(
@@ -130,175 +131,32 @@ class TestTTTJobProcessorInit:
         proc = TTTJobProcessor(
             storage_path=ttt_storage,
             config=ttt_config,
-            ttt_client=mock_ttt_client,
             camera=camera,
             download_processor=download,
             video_processor=video,
             upload_processor=upload,
         )
+        proc.ttt_client = mock_ttt_client
         assert proc.camera is camera
         assert proc.download_processor is download
         assert proc.video_processor is video
         assert proc.upload_processor is upload
 
 
-class TestServiceRegistration:
-    """Tests for service registration."""
-
-    @pytest.mark.asyncio
-    async def test_register_service_success(self, processor, mock_ttt_client):
-        await processor._register_service()
-        mock_ttt_client.register_service.assert_called_once_with(
-            "test-machine",
-            {
-                "ffmpeg": True,
-                "pipeline": False,
-                "camera_type": "dahua",
-                "camera_ip": "127.0.0.1",
-            },
-        )
-        assert processor._service_id == "service-123"
-
-    @pytest.mark.asyncio
-    async def test_register_service_not_authenticated(self, processor, mock_ttt_client):
-        mock_ttt_client.is_authenticated.return_value = False
-        await processor._register_service()
-        mock_ttt_client.register_service.assert_not_called()
-        assert processor._service_id is None
-
-    @pytest.mark.asyncio
-    async def test_register_service_api_error(self, processor, mock_ttt_client):
-        mock_ttt_client.register_service.side_effect = Exception("API error")
-        await processor._register_service()
-        assert processor._service_id is None
-
-    @pytest.mark.asyncio
-    async def test_register_service_uses_platform_node_fallback(
-        self, ttt_storage, mock_ttt_client
-    ):
-        config = Config(
-            cameras=[
-                CameraConfig(
-                    name="test-camera",
-                    type="dahua",
-                    device_ip="127.0.0.1",
-                    username="admin",
-                    password="password",
-                )
-            ],
-            storage=StorageConfig(path=ttt_storage),
-            recording=RecordingConfig(),
-            processing=ProcessingConfig(),
-            logging=LoggingConfig(),
-            app=AppConfig(
-                storage_path=ttt_storage,
-                check_interval_seconds=1,
-                timezone="America/New_York",
-            ),
-            teamsnap=TeamSnapConfig(enabled=False, team_id="1", my_team_name="Team A"),
-            playmetrics=PlayMetricsConfig(
-                enabled=False, username="user", password="pass", team_name="Team A"
-            ),
-            ntfy=NtfyConfig(enabled=False, server_url="http://ntfy.sh", topic="test"),
-            youtube=YouTubeConfig(enabled=False),
-            autocam=AutocamConfig(enabled=False),
-            cloud_sync=CloudSyncConfig(enabled=False),
-            ttt=TTTConfig(enabled=True, job_polling_enabled=True, machine_name=""),
-        )
-        proc = TTTJobProcessor(
-            storage_path=ttt_storage,
-            config=config,
-            ttt_client=mock_ttt_client,
-            poll_interval=1,
-        )
-        with patch(
-            "video_grouper.task_processors.ttt_job_processor.platform"
-        ) as mock_platform:
-            mock_platform.node.return_value = "my-hostname"
-            await proc._register_service()
-        call_args = mock_ttt_client.register_service.call_args
-        assert call_args[0][0] == "my-hostname"
+# Service registration + heartbeat + polling moved to TTTPoller —
+# their coverage now lives in test_ttt_poller.py.
 
 
-class TestHeartbeat:
-    """Tests for heartbeat loop."""
+@pytest.mark.asyncio
+async def test_add_work_dedups_on_ttt_id(processor):
+    """``add_work`` keys dedup on ``ttt_id`` so the same job queued
+    twice only produces one queue entry."""
+    from video_grouper.task_processors.tasks.ttt.ttt_job_task import TTTJobTask
 
-    @pytest.mark.asyncio
-    async def test_heartbeat_sends_when_service_registered(
-        self, processor, mock_ttt_client
-    ):
-        processor._service_id = "service-123"
-        task = asyncio.create_task(processor._heartbeat_loop())
-        await asyncio.sleep(0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    @pytest.mark.asyncio
-    async def test_heartbeat_skips_when_no_service_id(self, processor, mock_ttt_client):
-        processor._service_id = None
-        task = asyncio.create_task(processor._heartbeat_loop())
-        await asyncio.sleep(0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        mock_ttt_client.send_heartbeat.assert_not_called()
-
-
-class TestDiscoverWork:
-    """Tests for discover_work polling."""
-
-    @pytest.mark.asyncio
-    async def test_discover_work_not_authenticated(self, processor, mock_ttt_client):
-        mock_ttt_client.is_authenticated.return_value = False
-        await processor.discover_work()
-        mock_ttt_client.get_pending_jobs.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_discover_work_no_jobs(self, processor, mock_ttt_client):
-        mock_ttt_client.get_pending_jobs.return_value = []
-        await processor.discover_work()
-        mock_ttt_client.get_pending_jobs.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_discover_work_api_error(self, processor, mock_ttt_client):
-        mock_ttt_client.get_pending_jobs.side_effect = Exception("Network error")
-        await processor.discover_work()
-        # Should not raise
-
-    @pytest.mark.asyncio
-    async def test_discover_work_spawns_task_for_new_job(
-        self, processor, mock_ttt_client
-    ):
-        mock_ttt_client.get_pending_jobs.return_value = [{"id": "job-1", "config": {}}]
-        with patch.object(processor, "_process_job", new_callable=AsyncMock):
-            await processor.discover_work()
-            assert "job-1" in processor._processing_jobs
-
-    @pytest.mark.asyncio
-    async def test_discover_work_deduplication(self, processor, mock_ttt_client):
-        processor._processing_jobs.add("job-1")
-        mock_ttt_client.get_pending_jobs.return_value = [{"id": "job-1", "config": {}}]
-        with patch.object(
-            processor, "_process_job", new_callable=AsyncMock
-        ) as mock_process:
-            await processor.discover_work()
-            mock_process.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_discover_work_skips_jobs_without_id(
-        self, processor, mock_ttt_client
-    ):
-        mock_ttt_client.get_pending_jobs.return_value = [{"config": {}}]
-        with patch.object(
-            processor, "_process_job", new_callable=AsyncMock
-        ) as mock_process:
-            await processor.discover_work()
-            mock_process.assert_not_called()
+    await processor.add_work(TTTJobTask(ttt_id="job-1", payload={"id": "job-1"}))
+    await processor.add_work(TTTJobTask(ttt_id="job-1", payload={"id": "job-1"}))
+    await processor.add_work(TTTJobTask(ttt_id="job-2", payload={"id": "job-2"}))
+    assert processor._queue.qsize() == 2
 
 
 class TestProcessJob:
@@ -307,64 +165,22 @@ class TestProcessJob:
     @pytest.mark.asyncio
     async def test_process_job_claim_failure(self, processor, mock_ttt_client):
         mock_ttt_client.claim_job.side_effect = Exception("Already claimed")
-        await processor._process_job({"id": "job-1", "config": {}})
+        await processor._process_job(
+            processor.ttt_client, {"id": "job-1", "config": {}}
+        )
         mock_ttt_client.update_job_progress.assert_not_called()
-        assert "job-1" not in processor._processing_jobs
 
     @pytest.mark.asyncio
     async def test_process_job_no_group_dir(self, processor, mock_ttt_client):
         job = {"id": "job-1", "config": {}}
-        await processor._process_job(job)
+        await processor._process_job(processor.ttt_client, job)
         mock_ttt_client.fail_job.assert_called_once_with(
             "job-1", "Could not resolve recording group directory"
         )
-        assert "job-1" not in processor._processing_jobs
 
-    @pytest.mark.asyncio
-    async def test_process_job_discards_from_set_on_completion(
-        self, processor, mock_ttt_client, ttt_storage
-    ):
-        import os
 
-        group_dir = os.path.join(ttt_storage, "2025-01-01_game")
-        os.makedirs(group_dir, exist_ok=True)
-        combined = os.path.join(group_dir, "combined.mp4")
-        with open(combined, "w") as f:
-            f.write("fake")
-
-        job = {
-            "id": "job-2",
-            "config": {"recording_group_dir": "2025-01-01_game"},
-        }
-
-        processor._processing_jobs.add("job-2")
-
-        with (
-            patch(
-                "video_grouper.task_processors.ttt_job_processor.os.path.isdir",
-                return_value=True,
-            ),
-            patch(
-                "video_grouper.task_processors.ttt_job_processor.os.path.isfile",
-                return_value=True,
-            ),
-            patch(
-                "video_grouper.utils.paths.get_combined_video_path",
-                return_value=combined,
-            ),
-        ):
-            await processor._process_job(job)
-
-        assert "job-2" not in processor._processing_jobs
-
-    @pytest.mark.asyncio
-    async def test_process_job_discards_from_set_on_error(
-        self, processor, mock_ttt_client
-    ):
-        mock_ttt_client.claim_job.side_effect = Exception("Boom")
-        processor._processing_jobs.add("job-err")
-        await processor._process_job({"id": "job-err", "config": {}})
-        assert "job-err" not in processor._processing_jobs
+# NOTE: ``_processing_jobs`` set is gone — QueueProcessor's
+# ``_queued_items`` dedup handles it now. See test_add_work_dedup below.
 
 
 class TestProgressAndFailure:
@@ -372,7 +188,9 @@ class TestProgressAndFailure:
 
     @pytest.mark.asyncio
     async def test_update_progress(self, processor, mock_ttt_client):
-        await processor._update_progress("job-1", "downloading", {"percent": 50})
+        await processor._update_progress(
+            processor.ttt_client, "job-1", "downloading", {"percent": 50}
+        )
         mock_ttt_client.update_job_progress.assert_called_once_with(
             "job-1", "downloading", {"percent": 50}
         )
@@ -382,12 +200,14 @@ class TestProgressAndFailure:
         self, processor, mock_ttt_client
     ):
         mock_ttt_client.update_job_progress.side_effect = Exception("API down")
-        await processor._update_progress("job-1", "downloading", {})
+        await processor._update_progress(
+            processor.ttt_client, "job-1", "downloading", {}
+        )
         # Should not raise
 
     @pytest.mark.asyncio
     async def test_fail_job(self, processor, mock_ttt_client):
-        await processor._fail_job("job-1", "Something went wrong")
+        await processor._fail_job(processor.ttt_client, "job-1", "Something went wrong")
         mock_ttt_client.fail_job.assert_called_once_with(
             "job-1", "Something went wrong"
         )
@@ -395,7 +215,7 @@ class TestProgressAndFailure:
     @pytest.mark.asyncio
     async def test_fail_job_error_does_not_raise(self, processor, mock_ttt_client):
         mock_ttt_client.fail_job.side_effect = Exception("API down")
-        await processor._fail_job("job-1", "error")
+        await processor._fail_job(processor.ttt_client, "job-1", "error")
         # Should not raise
 
 
@@ -442,29 +262,6 @@ class TestResolveGroup:
         assert result is None
 
 
-class TestStartStop:
-    """Tests for start/stop lifecycle."""
-
-    @pytest.mark.asyncio
-    async def test_start_registers_service_and_starts_heartbeat(
-        self, processor, mock_ttt_client
-    ):
-        with patch.object(
-            processor, "_register_service", new_callable=AsyncMock
-        ) as mock_reg:
-            await processor.start()
-            mock_reg.assert_called_once()
-            assert processor._heartbeat_task is not None
-            assert processor._processor_task is not None
-            await processor.stop()
-
-    @pytest.mark.asyncio
-    async def test_stop_cancels_heartbeat(self, processor):
-        with patch.object(processor, "_register_service", new_callable=AsyncMock):
-            await processor.start()
-            assert processor._heartbeat_task is not None
-            await processor.stop()
-            assert (
-                processor._heartbeat_task.cancelled()
-                or processor._heartbeat_task.done()
-            )
+# start/stop is now QueueProcessor's, with its own coverage in
+# test_base_queue_processor.py. The heartbeat is owned by TTTPoller —
+# its coverage lives in test_ttt_poller.py.

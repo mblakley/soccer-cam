@@ -882,14 +882,16 @@ class TestStandaloneOperation:
 
     @pytest.mark.asyncio
     async def test_job_processor_skips_when_not_authenticated(self):
-        """TTTJobProcessor.discover_work() does nothing when not authenticated."""
+        """TTTPoller.discover_work() does nothing when not authenticated."""
         from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
+        from video_grouper.task_processors.ttt_poller import TTTPoller
 
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = False
         mock_client.get_pending_jobs = MagicMock()
 
         config = MagicMock()
+        config.ttt.enabled = True
         config.ttt.job_polling_enabled = True
         config.ttt.machine_name = "test"
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
@@ -900,7 +902,13 @@ class TestStandaloneOperation:
             config=config,
             ttt_client=mock_client,
         )
-        await processor.discover_work()
+        poller = TTTPoller(
+            storage_path=tempfile.mkdtemp(),
+            config=config,
+            ttt_client=mock_client,
+            ttt_job_processor=processor,
+        )
+        await poller.discover_work()
         mock_client.get_pending_jobs.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1000,14 +1008,18 @@ class TestGracefulDegradation:
 
     @pytest.mark.asyncio
     async def test_job_processor_survives_api_error(self):
-        """TTTJobProcessor.discover_work() handles API errors gracefully."""
+        """TTTPoller.discover_work() handles API errors gracefully."""
         from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
+        from video_grouper.task_processors.ttt_poller import TTTPoller
 
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = True
+        mock_client.register_service = MagicMock(return_value={"id": "svc-1"})
+        mock_client.send_heartbeat = MagicMock()
         mock_client.get_pending_jobs.side_effect = Exception("Network error")
 
         config = MagicMock()
+        config.ttt.enabled = True
         config.ttt.job_polling_enabled = True
         config.ttt.machine_name = "test"
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
@@ -1018,8 +1030,14 @@ class TestGracefulDegradation:
             config=config,
             ttt_client=mock_client,
         )
+        poller = TTTPoller(
+            storage_path=tempfile.mkdtemp(),
+            config=config,
+            ttt_client=mock_client,
+            ttt_job_processor=processor,
+        )
         # Should not raise
-        await processor.discover_work()
+        await poller.discover_work()
 
 
 class TestIntegrationValueAdd:
