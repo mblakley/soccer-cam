@@ -21,7 +21,7 @@ jobs:
       # uv handles its own Python install and bundles the project venv;
       # matches how scripts/smoke_real_service.py runs locally.
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
