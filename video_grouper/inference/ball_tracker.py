@@ -8,6 +8,7 @@ runtime doesn't depend on filterpy/scipy.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -241,6 +242,7 @@ class BallTracker:
         move_px: float = 80.0,
         stationary_len: int = 20,
         interp_gap: int = 16,
+        interp_max_speed: float | None = None,
     ) -> list[list[float] | None]:
         """Stitch the ball's track fragments into one per-frame trajectory.
 
@@ -251,7 +253,15 @@ class BallTracker:
         (sustained false positives — a sprinkler head, a standing bystander — never move), then
         linearly interpolate gaps up to ``interp_gap`` frames. Returns one ``[x, y]`` per frame
         (``None`` where no estimate is available).
+
+        A gap is only bridged if the straight-line speed between its endpoints is plausible for a
+        single ball (``<= interp_max_speed`` px/frame, default the tracker's ``gate_distance``).
+        Otherwise the two ends belong to DIFFERENT objects — e.g. a stationary false-positive track
+        and the real ball across the field — and interpolating would sweep the camera through empty
+        grass on a straight line between them. Leaving that gap as ``None`` lets the render coast.
         """
+        if interp_max_speed is None:
+            interp_max_speed = self.gate_distance
         tracks = [
             t
             for t in self.get_tracks()
@@ -265,9 +275,13 @@ class BallTracker:
                     traj[d.frame_idx] = [d.x, d.y]
         keys = [i for i, p in enumerate(traj) if p is not None]
         for a, b in zip(keys, keys[1:]):
-            if 1 < b - a <= interp_gap:
-                (xa, ya), (xb, yb) = traj[a], traj[b]
-                for f in range(a + 1, b):
-                    tt = (f - a) / (b - a)
-                    traj[f] = [xa + (xb - xa) * tt, ya + (yb - ya) * tt]
+            gap = b - a
+            if not (1 < gap <= interp_gap):
+                continue
+            (xa, ya), (xb, yb) = traj[a], traj[b]
+            if math.hypot(xb - xa, yb - ya) / gap > interp_max_speed:
+                continue  # implausible teleport between two objects — coast, don't draw a line
+            for f in range(a + 1, b):
+                tt = (f - a) / gap
+                traj[f] = [xa + (xb - xa) * tt, ya + (yb - ya) * tt]
         return traj

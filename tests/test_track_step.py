@@ -6,7 +6,13 @@ import json
 
 import numpy as np
 
-from video_grouper.pipeline.steps.track import _run_tracking
+# Force cv2 to bootstrap NOW, at collection time. _run_tracking imports field_detector (-> cv2)
+# lazily, inside the test; the autouse mock_file_system fixture patches os.path.exists, which breaks
+# cv2's config-file loader. Importing it here — before any fixture runs — makes this file pass in
+# isolation, not only when a cv2-importing test module happens to be collected first.
+import video_grouper.inference.field_detector  # noqa: F401,E402
+
+from video_grouper.pipeline.steps.track import _run_tracking  # noqa: E402
 
 
 def test_run_tracking_applies_conf_and_field_filters(tmp_path):

@@ -109,6 +109,30 @@ class TestBuildTrajectory:
             if p is not None:
                 assert p[0] < 900
 
+    def test_does_not_interpolate_teleport_between_objects(self):
+        # A stationary FP at (5000, 1200) for the first frames, then the real ball appears far across
+        # the field at (2000, 350) and moves. The gap between the FP's last frame and the ball's first
+        # is a ~3000px jump — implausibly fast for one ball — so it must NOT be bridged (that straight
+        # line would sweep the camera through empty grass). The gap stays None for the render to coast.
+        tracker = BallTracker(gate_distance=200, max_missing=15)
+        n = 30
+        for f in range(0, 8):
+            tracker.update(
+                f, [Detection(5000.0, 1200.0, 0.4, f)]
+            )  # stationary FP, then disappears
+        for f in range(8, 14):
+            tracker.update(f, [])  # gap
+        for f in range(14, n):
+            tracker.update(
+                f, [Detection(2000.0 + 15.0 * (f - 14), 350.0, 0.7, f)]
+            )  # real ball
+        traj = tracker.build_trajectory(n, move_px=80, stationary_len=20, interp_gap=16)
+        assert all(traj[f] is None for f in range(8, 14)), (
+            "teleport gap must stay un-interpolated"
+        )
+        # A short gap WITHIN the real ball's motion would still bridge (plausible speed):
+        assert traj[20] is not None and traj[20][0] > 1900
+
 
 class TestShortTrackFiltering:
     def test_min_track_length_filters_out_short_tracks(self):
