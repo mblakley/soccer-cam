@@ -187,6 +187,8 @@ module = [
     "lapx.*",
     "filterpy",
     "filterpy.*",
+    "pyopencl",
+    "pyopencl.*",
     "scipy",
     "scipy.*",
 ]

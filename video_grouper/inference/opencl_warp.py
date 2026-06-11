@@ -26,19 +26,20 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# pyopencl is an optional accel dep with no type stubs; treat it as Any so the
-# C-level enqueue_map_buffer / Buffer calls (whose runtime signatures mypy can't
-# model) type-check, and so the None fallback assignment below is allowed.
-_cl: Any
+# pyopencl is an optional accel dep with no type stubs (see the mypy
+# ignore_missing_imports override); mypy treats it as Any so the C-level
+# enqueue_map_buffer / Buffer calls type-check and the None fallback is allowed.
+_cl: Any = None
+_HAVE_CL = False
 try:
-    import pyopencl as _cl
+    import pyopencl
 
+    _cl = pyopencl
     _HAVE_CL = True
 except (
     ImportError
 ):  # pragma: no cover - pyopencl is an optional acceleration dependency
-    _cl = None
-    _HAVE_CL = False
+    pass
 
 # Output pixel -> pano coord (matching cv2.resize's half-pixel convention) -> bilinear sample
 # of L (pano->source coords) -> bilinear sample of the source. ``L`` is constant; only the
