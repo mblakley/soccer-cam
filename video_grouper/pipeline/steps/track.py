@@ -41,9 +41,6 @@ class TrackStepConfig(BaseModel):
     track_move_px: float = 80.0
     track_stationary_len: int = 20
     track_tiny_span_px: float = 6.0
-    # A stationary track is kept (not treated as a sprinkler/marker FP) when its median detection
-    # confidence is this high — a real dead ball (goal kick / throw-in) is confident even when still.
-    track_stationary_conf: float = 0.45
     track_interp_gap: int = 16
 
 
@@ -78,7 +75,6 @@ def _run_tracking(
     field_polygon: "np.ndarray | None" = None,
     field_margin: float = 50.0,
     tiny_span_px: float = 6.0,
-    stationary_conf: float = 0.45,
 ) -> int:
     """Load raw detections, apply the (tunable) confidence + field-location filters, run the tracker,
     write the trajectory JSON."""
@@ -129,7 +125,6 @@ def _run_tracking(
         stationary_len=stationary_len,
         interp_gap=interp_gap,
         tiny_span_px=tiny_span_px,
-        stationary_conf=stationary_conf,
     )
 
     with open(output_json_path, "w", encoding="utf-8") as f:
@@ -167,7 +162,6 @@ class TrackStep(PipelineStep):
             field_polygon,
             self.config.track_field_margin,
             self.config.track_tiny_span_px,
-            self.config.track_stationary_conf,
         )
         logger.info(
             "track: wrote trajectory with %d populated frames to %s",

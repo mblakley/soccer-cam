@@ -94,13 +94,11 @@ class TestBuildTrajectory:
 
     def test_stitches_fragments_and_drops_stationary_fp(self):
         # A moving ball (lost frames 12-15, so it gates into two tracks at max_missing=2) plus a
-        # STATIONARY, LOW-CONFIDENCE false positive (a sprinkler) present every frame off to the side.
+        # STATIONARY false positive present every frame off to the side.
         tracker = BallTracker(gate_distance=200, max_missing=2)
         n = 30
         for f in range(n):
-            dets = [
-                Detection(1000.0, 1000.0, 0.2, f)
-            ]  # low-conf stationary FP (sprinkler)
+            dets = [Detection(1000.0, 1000.0, 0.9, f)]  # stationary FP
             if not (12 <= f <= 15):
                 dets.append(Detection(100.0 + 20.0 * f, 200.0, 0.9, f))  # moving ball
             tracker.update(f, dets)
@@ -116,7 +114,6 @@ class TestBuildTrajectory:
         # jitter over 10 frames) appears far away, then the ball returns near its earlier path. The
         # fixed object is "short" so the sustained-stationary rule keeps it — but tiny_span_px must
         # drop it, otherwise the render would hold/coast on the corner instead of the ball's bearing.
-        # A real marker is LOW confidence (a sprinkler/post the detector half-fires on, ~0.2).
         tracker = BallTracker(gate_distance=400, max_missing=2)
         n = 30
         for f in range(0, 10):
@@ -125,8 +122,8 @@ class TestBuildTrajectory:
             )  # ball, left
         for f in range(10, 20):
             tracker.update(
-                f, [Detection(6000.0 + (f % 2), 1300.0, 0.2, f)]
-            )  # low-conf corner FP
+                f, [Detection(6000.0 + (f % 2), 1300.0, 0.9, f)]
+            )  # fixed corner FP
         for f in range(20, n):
             tracker.update(
                 f, [Detection(300.0 + 20.0 * f, 210.0, 0.9, f)]
@@ -140,36 +137,6 @@ class TestBuildTrajectory:
         # Mid-"FP" frame is the ball's own path (interpolated across the gap), NOT the corner — so the
         # camera stays on the play instead of holding the marker.
         assert traj[15] is not None and traj[15][0] < 1500
-
-    def test_keeps_confident_stationary_dead_ball(self):
-        # A dead ball (goal kick / throw-in setup) sits still at the far touchline for many frames.
-        # The detector still fires on it at HIGH confidence — unlike a sprinkler/marker (low conf).
-        # It must NOT be dropped as a stationary FP, or the camera blanks through every dead ball.
-        tracker = BallTracker(gate_distance=200, max_missing=15)
-        n = 40
-        for f in range(n):
-            # stationary (±2px jitter) but confident — a real ball at rest
-            tracker.update(f, [Detection(2400.0 + (f % 2) * 2, 300.0, 0.6, f)])
-        traj = tracker.build_trajectory(
-            n, move_px=80, stationary_len=20, tiny_span_px=6.0, stationary_conf=0.45
-        )
-        kept = sum(1 for p in traj if p is not None)
-        assert kept >= 38, (
-            "a confident dead ball must be kept, not dropped as a stationary FP"
-        )
-
-    def test_drops_lowconf_sustained_stationary_fp(self):
-        # Same geometry but LOW confidence (a sprinkler head): must still be dropped.
-        tracker = BallTracker(gate_distance=200, max_missing=15)
-        n = 40
-        for f in range(n):
-            tracker.update(f, [Detection(2400.0 + (f % 2) * 2, 300.0, 0.18, f)])
-        traj = tracker.build_trajectory(
-            n, move_px=80, stationary_len=20, tiny_span_px=6.0, stationary_conf=0.45
-        )
-        assert all(p is None for p in traj), (
-            "a low-confidence stationary FP must be dropped"
-        )
 
     def test_does_not_interpolate_teleport_between_objects(self):
         # A stationary FP at (5000, 1200) for the first frames, then the real ball appears far across
