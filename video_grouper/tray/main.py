@@ -16,7 +16,6 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QIcon, QAction
 import win32serviceutil
 
-from video_grouper.tray.autocam_automation import run_autocam_on_file
 from video_grouper.update.update_manager import check_and_update
 from video_grouper.version import get_version, get_full_version
 from video_grouper.utils.youtube_upload import authenticate_youtube
@@ -86,34 +85,6 @@ class UpdateChecker(threading.Thread):
 
             # Sleep for an hour
             threading.Event().wait(3600)
-
-
-class RunnerSignals(QObject):
-    finished = Signal(Path, bool)
-
-
-class AutocamRunner(QRunnable):
-    def __init__(
-        self, input_path: str, output_path: str, group_dir: Path, autocam_config
-    ):
-        super().__init__()
-        self.input_path = input_path
-        self.output_path = output_path
-        self.group_dir = group_dir
-        self.autocam_config = autocam_config
-        self.signals = RunnerSignals()
-
-    @Slot()
-    def run(self):
-        try:
-            # Assuming run_autocam_on_file returns True on success, False on failure
-            success = run_autocam_on_file(
-                self.autocam_config, self.input_path, self.output_path
-            )
-            self.signals.finished.emit(self.group_dir, success)
-        except Exception as e:
-            logger.error(f"An error occurred during Once Autocam automation: {e}")
-            self.signals.finished.emit(self.group_dir, False)
 
 
 class YouTubeAuthRunner(QRunnable):
