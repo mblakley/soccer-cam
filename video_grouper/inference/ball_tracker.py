@@ -231,6 +231,11 @@ class BallTracker:
         ys = [d.y for d in t.detections]
         return max(max(xs) - min(xs), max(ys) - min(ys))
 
+    @staticmethod
+    def _median_conf(t: Track) -> float:
+        """Median detection confidence of a track — high ⇒ a real ball even when it isn't moving."""
+        return float(np.median([d.confidence for d in t.detections]))
+
     def get_best_track(self) -> Track | None:
         """Return the highest-scoring track (length × average confidence)."""
         valid = self.get_tracks()
@@ -244,6 +249,7 @@ class BallTracker:
         interp_gap: int = 16,
         interp_max_speed: float | None = None,
         tiny_span_px: float = 6.0,
+        stationary_conf: float = 0.45,
     ) -> list[list[float] | None]:
         """Stitch the ball's track fragments into one per-frame trajectory.
 
@@ -253,15 +259,22 @@ class BallTracker:
         length×confidence wins overlaps), then linearly interpolate gaps up to ``interp_gap`` frames.
         Returns one ``[x, y]`` per frame (``None`` where no estimate is available).
 
-        A track is dropped when it is a false positive that would pull the camera off the play:
+        A non-moving track is dropped only when it is ALSO low-confidence — the stationary-FP rules
+        are gated on confidence so a real but motionless ball survives:
 
-        - **Sustained stationary** (``span <= move_px`` over ``>= stationary_len`` frames): a sprinkler
-          head or a standing bystander tracked for a long time — never moves like a ball.
-        - **Fixed object** (``span < tiny_span_px`` at ANY length): a point that barely moves over its
-          whole life (e.g. a corner marker detected for 24 frames within ~2 px). A real ball, even
-          braked, jitters more than this; a track this rigid is a fixed object. Without this, a brief
-          fixed-object track survives the stationary rule (it is "short"), and the render holds/coasts
-          on its bearing — pointing the camera at empty grass instead of the last real ball position.
+        - **Confident & still ⇒ KEEP.** A dead ball (goal kick / throw-in / corner setup) sits at the
+          far touchline for seconds; the detector still fires on it at high confidence (~0.6). A
+          sprinkler head or corner marker fires at low confidence (~0.15-0.2). So a stationary track
+          whose median confidence is ``>= stationary_conf`` is treated as a real ball and kept, even
+          though it doesn't move. (Without this gate, the rules below delete real dead balls — the
+          single biggest source of far-play "blackouts".)
+        - **Sustained stationary, low-conf** (``span <= move_px`` over ``>= stationary_len`` frames): a
+          sprinkler head or a standing bystander tracked for a long time — never moves like a ball.
+        - **Fixed object, low-conf** (``span < tiny_span_px`` at ANY length): a point that barely moves
+          over its whole life (e.g. a corner marker detected for 24 frames within ~2 px). A real ball,
+          even braked, jitters more than this; a track this rigid is a fixed object. Without this, a
+          brief fixed-object track survives the stationary rule (it is "short"), and the render
+          holds/coasts on its bearing — pointing the camera at empty grass instead of the ball.
 
         A gap is only bridged if the straight-line speed between its endpoints is plausible for a
         single ball (``<= interp_max_speed`` px/frame, default the tracker's ``gate_distance``).
@@ -275,6 +288,7 @@ class BallTracker:
             t
             for t in self.get_tracks()
             if self._span(t) > move_px
+            or self._median_conf(t) >= stationary_conf
             or (t.length < stationary_len and self._span(t) >= tiny_span_px)
         ]
         tracks.sort(key=self._score, reverse=True)
