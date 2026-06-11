@@ -15,6 +15,7 @@ stack). The heavy step modules are imported lazily by the runner / processor.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from ...queue_type import QueueType
 from ..base_task import BaseTask
@@ -69,13 +70,16 @@ class PipelineTask(BaseTask):
 
     @classmethod
     def deserialize(cls, data: dict[str, object]) -> PipelineTask:
-        ttt_cfg = data.get("ttt_config")
+        # data is the serialized form produced by serialize(); the value types
+        # are known from that schema but typed as `object` in the dict, so cast
+        # each field to the type the constructor expects.
+        ttt_cfg = cast("dict[str, object] | None", data.get("ttt_config"))
         return cls(
-            group_dir=Path(data["group_dir"]),
-            input_path=data["input_path"],
-            output_path=data["output_path"],
-            team_name=data.get("team_name"),
-            storage_path=data.get("storage_path"),
+            group_dir=Path(cast(str, data["group_dir"])),
+            input_path=cast(str, data["input_path"]),
+            output_path=cast(str, data["output_path"]),
+            team_name=cast("str | None", data.get("team_name")),
+            storage_path=cast("str | None", data.get("storage_path")),
             ttt_config=dict(ttt_cfg) if ttt_cfg else None,
         )
 

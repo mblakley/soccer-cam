@@ -130,14 +130,18 @@ class PipelineDiscoveryProcessor(PollingProcessor):
     async def _recover_upload(self, group_dir: Path) -> None:
         """Queue YouTube upload for completed groups that haven't been uploaded.
 
-        Checks whether the group already reached ``complete`` status (i.e.
-        upload succeeded) before re-queuing. This allows recovery after
-        transient failures (expired token, network error) without duplicate
-        uploads for groups that already finished.
+        Dedups two ways so the same group is never uploaded twice: an in-memory
+        set guards against re-queuing within a process lifetime (across discovery
+        cycles), and the on-disk ``complete`` status guards against re-queuing a
+        group that already finished uploading (this survives a tray/service
+        restart, when the in-memory set is empty again).
         """
+        group_key = str(group_dir)
+        if group_key in self._recovered_uploads:
+            return
         if not self.config.youtube.enabled:
             return
-        # If the group already reached "complete", no upload needed
+        # If the group already reached "complete", the upload succeeded — skip.
         state_file = group_dir / "state.json"
         try:
             with open(state_file) as f:
@@ -151,12 +155,12 @@ class PipelineDiscoveryProcessor(PollingProcessor):
         if not upload_processor:
             return
 
-        # Don't re-queue if the upload processor already has this group
         from .tasks.upload import YoutubeUploadTask
 
         relative_group_dir = os.path.relpath(str(group_dir), self.storage_path)
         youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
         await upload_processor.add_work(youtube_task)
+        self._recovered_uploads.add(group_key)
         logger.info(
             "PIPELINE_DISCOVERY: recovered YouTube upload for %s", group_dir.name
         )

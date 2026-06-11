@@ -33,8 +33,16 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    # Type-only: av is imported lazily inside functions (see NOTE below) so the
+    # module stays importable in the tray bundle, which excludes av.
+    from av.audio.frame import AudioFrame
+    from av.audio.stream import AudioStream
+    from av.video.frame import VideoFrame
 
 # NOTE: cylindrical_view is numpy-only and safe to import at module top, but
 # field_geometry imports cv2 — keep it LAZY (inside the functions that use it)
@@ -42,6 +50,7 @@ from pydantic import BaseModel
 # step is gated out there at runtime by runtime="service" + requires=().
 from video_grouper.inference.cylindrical_view import (
     CylindricalViewParams,
+    LeveledPano,
     build_leveled_pano,
     center_column_rows,
     crop_box,
@@ -329,9 +338,8 @@ class _ViewGeom:
     pitch_limit_deg: float  # |view_pitch| max before the view samples off-source
     mount_tilt_deg: float = 0.0  # camera down-pitch (polygon-derived or cfg fallback)
     world_up: object = None  # field-plane normal (cam coords) for leveling, or None
-    leveled_pano: object = (
-        None  # constant world-up cylindrical map (cylindrical projection)
-    )
+    # constant world-up cylindrical map (cylindrical projection), or None
+    leveled_pano: LeveledPano | None = None
     polygon: object = None  # field polygon (source px); gates off-field ball detections
 
 
@@ -435,6 +443,8 @@ def _warp_frame(rgb, geom: _ViewGeom, cfg: RenderStepConfig, params, view_yaw, w
     """Render one frame: the GPU OpenCL warp (constant pano + crop box) when ``warper`` is
     present, else the cv2 remap path. Both return an ``out_h x out_w x 3`` uint8 image."""
     if warper is not None:
+        # A warper is only built when leveled_pano is non-None (see _make_warper).
+        assert geom.leveled_pano is not None
         return warper.warp(rgb, crop_box(geom.leveled_pano, params, view_yaw))
     import cv2
 
@@ -927,7 +937,13 @@ def _render_video(
             cfg.render_vertical_tracking,
         )
 
-        in_audio = next((s for s in in_container.streams if s.type == "audio"), None)
+        # The s.type == "audio" filter guarantees an AudioStream; av types the
+        # generic streams iterator as the base Stream, so narrow it for the
+        # audio-specific attributes used below (.rate, template add_stream).
+        in_audio = cast(
+            "AudioStream | None",
+            next((s for s in in_container.streams if s.type == "audio"), None),
+        )
 
         state = _CameraState()
         state.fps = float(in_video.average_rate) if in_video.average_rate else 20.0
@@ -939,7 +955,9 @@ def _render_video(
             out_stream.height = out_h
             out_stream.pix_fmt = "yuv420p"
             # Match source time_base — PyAV's default mis-budgets the bitrate
-            # (output ~13× too large) and corrupts duration metadata.
+            # (output ~13× too large) and corrupts duration metadata. A decoded
+            # video stream always carries a time_base (av types it Optional).
+            assert in_video.time_base is not None
             out_stream.codec_context.time_base = in_video.time_base
             out_stream.codec_context.bit_rate = _parse_bitrate(cfg.render_video_bitrate)
             out_stream.options = {
@@ -947,11 +965,15 @@ def _render_video(
                 "bufsize": str(_parse_bitrate(cfg.render_video_bitrate) * 2),
             }
 
-            out_audio = None
+            out_audio: AudioStream | None = None
             audio_passthrough = False
             if in_audio is not None:
                 try:
-                    out_audio = out_container.add_stream(template=in_audio)
+                    # add_stream(template=...) is a real (deprecated) PyAV API that
+                    # routes to add_stream_from_template, but av's stubs only type
+                    # add_stream with a required positional codec_name — so the
+                    # keyword-only template form matches no overload. Stub gap.
+                    out_audio = out_container.add_stream(template=in_audio)  # type: ignore[call-overload]
                     audio_passthrough = True
                 except Exception:
                     out_audio = out_container.add_stream("aac", rate=in_audio.rate)
@@ -963,7 +985,10 @@ def _render_video(
                 if packet.dts is None:
                     continue
                 if packet.stream is in_video:
-                    for frame in packet.decode():
+                    # Mixed-stream demux yields generic Packet[Stream], so decode()
+                    # returns the frame-type union; this branch only sees the video
+                    # stream's packets, so the frames are VideoFrames.
+                    for frame in cast("list[VideoFrame]", packet.decode()):
                         entry = entries[frame_idx] if frame_idx < len(entries) else None
                         params, view_yaw = _frame_view(
                             state,
@@ -987,11 +1012,16 @@ def _render_video(
                             out_container.mux(v_packet)
                         frame_idx += 1
                 elif in_audio is not None and packet.stream is in_audio:
+                    # out_audio is set whenever in_audio is not None (above), so it
+                    # is non-None here; assert to narrow it for mypy.
+                    assert out_audio is not None
                     if audio_passthrough:
                         packet.stream = out_audio
                         out_container.mux(packet)
                     else:
-                        for a_frame in packet.decode():
+                        # Same mixed-demux union as the video branch; these packets
+                        # belong to the audio stream, so they decode to AudioFrames.
+                        for a_frame in cast("list[AudioFrame]", packet.decode()):
                             for a_packet in out_audio.encode(a_frame):
                                 out_container.mux(a_packet)
 
@@ -1018,18 +1048,21 @@ class RenderConsumerConfig(RenderStepConfig):
     output_name: str  # output filename, written under ctx.group_dir
 
 
-class RenderFrameConsumer(FrameConsumer):
+class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     """Renders the broadcast view for one trajectory, encoding to its own output, fed
     decoded frames by the fan-out step (so the source is decoded once for all variants)."""
 
     config_model = RenderConsumerConfig
 
+    # consumes/produces are config-driven per instance, so they override the
+    # base's writeable class attribute with a read-only property. mypy flags the
+    # writeable->property override; it's the intended design here.
     @property
-    def consumes(self) -> tuple[str, ...]:
+    def consumes(self) -> tuple[str, ...]:  # type: ignore[override]
         return (self.config.trajectory_key,)
 
     @property
-    def produces(self) -> tuple[str, ...]:
+    def produces(self) -> tuple[str, ...]:  # type: ignore[override]
         return (self.config.output_key,)
 
     def open(self, source: FrameSourceInfo, ctx: StepContext, manifest) -> None:
@@ -1066,7 +1099,7 @@ class RenderFrameConsumer(FrameConsumer):
             self._geom, cfg, source.width, source.height, self._ow, self._oh
         )
 
-    def consume(self, rgb, frame_pts: int, frame_idx: int) -> None:
+    def consume(self, rgb, frame_pts: int | None, frame_idx: int) -> None:
         import av
 
         entry = self._entries[frame_idx] if frame_idx < len(self._entries) else None
@@ -1104,7 +1137,7 @@ class RenderFrameConsumer(FrameConsumer):
 register_frame_consumer("render", RenderFrameConsumer, RenderConsumerConfig)
 
 
-class RenderStep(PipelineStep):
+class RenderStep(PipelineStep[RenderStepConfig]):
     name = "render"
     config_model = RenderStepConfig
     consumes = ("input_path", "trajectory_path")
@@ -1114,9 +1147,9 @@ class RenderStep(PipelineStep):
     resources = ("ram_heavy",)
 
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
-        in_path = Path(manifest.get("input_path"))
-        out_path = Path(manifest.get("output_path"))
-        trajectory_path = manifest.get("trajectory_path")
+        in_path = Path(cast(str, manifest.get("input_path")))
+        out_path = Path(cast(str, manifest.get("output_path")))
+        trajectory_path = cast(str, manifest.get("trajectory_path"))
         # Optional: a field-detect step upstream supplies the ROI polygon used
         # for pan clamping + vertical geometry. Absent ⇒ unconstrained pan.
         field_polygon_path = manifest.get("field_polygon_path")

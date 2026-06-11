@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -36,7 +37,7 @@ class FanoutStepConfig(BaseModel):
     consumers: list[ConsumerSpec]
 
 
-class FrameFanoutStep(PipelineStep):
+class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
     """Single-decode, multi-consumer fan-out over one input video."""
 
     name = "frame_fanout"
@@ -54,22 +55,27 @@ class FrameFanoutStep(PipelineStep):
             create_frame_consumer(c.type, c.config) for c in config.consumers
         ]
 
+    # This step's consumes/produces are dynamic (aggregated from its consumers),
+    # so it overrides the base's writeable class attribute with a read-only
+    # property. mypy flags the writeable->property override, but it's the
+    # intended design and read-only is correct here.
     @property
-    def consumes(self) -> tuple[str, ...]:
+    def consumes(self) -> tuple[str, ...]:  # type: ignore[override]
         keys = ["input_path"]
         for c in self._consumers:
             keys.extend(c.consumes)
         return tuple(dict.fromkeys(keys))  # dedupe, order-preserving
 
     @property
-    def produces(self) -> tuple[str, ...]:
+    def produces(self) -> tuple[str, ...]:  # type: ignore[override]
         keys: list[str] = []
         for c in self._consumers:
             keys.extend(c.produces)
         return tuple(dict.fromkeys(keys))
 
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
-        in_path = manifest.get("input_path")
+        # input_path is the immutable source the runner binds before run().
+        in_path = cast(str, manifest.get("input_path"))
         await asyncio.to_thread(self._run_sync, in_path, ctx, manifest)
         logger.info(
             "frame_fanout: %d consumer(s) rendered from one decode of %s",

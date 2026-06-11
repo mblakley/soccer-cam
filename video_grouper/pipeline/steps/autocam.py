@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -45,7 +46,7 @@ def _invoke_autocam(
     return run_autocam_on_file(legacy_cfg, input_path, output_path, group_dir=group_dir)
 
 
-class AutocamStep(PipelineStep):
+class AutocamStep(PipelineStep[AutocamStepConfig]):
     name = "autocam"
     config_model = AutocamStepConfig
     consumes = ("input_path",)
@@ -55,8 +56,10 @@ class AutocamStep(PipelineStep):
     resources = ("autocam_ui",)
 
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
-        input_path = manifest.get("input_path")
-        output_path = manifest.get("output_path")
+        # Guaranteed present: the step declares consumes = ("input_path",) and
+        # the runner binds both paths before invoking run().
+        input_path = cast(str, manifest.get("input_path"))
+        output_path = cast(str, manifest.get("output_path"))
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(

@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from pydantic import BaseModel
@@ -134,7 +135,7 @@ def _run_tracking(
     return populated
 
 
-class TrackStep(PipelineStep):
+class TrackStep(PipelineStep[TrackStepConfig]):
     name = "track"
     config_model = TrackStepConfig
     consumes = ("detections_path",)
@@ -144,8 +145,10 @@ class TrackStep(PipelineStep):
     resources = ()
 
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
-        detections_path = manifest.get("detections_path")
-        in_path = Path(manifest.get("input_path"))
+        # Both keys are bound by the runner before run() (detections_path is
+        # consumed; input_path is the immutable source); narrow Any|None -> str.
+        detections_path = cast(str, manifest.get("detections_path"))
+        in_path = Path(cast(str, manifest.get("input_path")))
         trajectory_path = in_path.with_name("trajectory.json")
         field_polygon = _load_field_polygon(manifest.get("field_polygon_path"))
 

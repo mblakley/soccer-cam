@@ -16,9 +16,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
+
+ConfigT = TypeVar("ConfigT", bound=BaseModel)
 
 if TYPE_CHECKING:
     from video_grouper.pipeline.manifest import PipelineManifest
@@ -60,7 +62,7 @@ class StepSpec:
     config: dict
 
 
-class PipelineStep(ABC):
+class PipelineStep(ABC, Generic[ConfigT]):  # noqa: UP046 - explicit Generic[ConfigT] keeps the module-level TypeVar shared with subclasses
     """One step in the processing pipeline.
 
     Concrete steps register themselves at import time via
@@ -95,8 +97,8 @@ class PipelineStep(ABC):
     requires: ClassVar[tuple[str, ...]] = ()
     resources: ClassVar[tuple[str, ...]] = ()
 
-    def __init__(self, config: BaseModel):
-        self.config = config
+    def __init__(self, config: ConfigT) -> None:
+        self.config: ConfigT = config
 
     @abstractmethod
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:

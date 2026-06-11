@@ -61,7 +61,9 @@ class PipelineResult:
 
 
 def _nonempty_file(path: str | None) -> bool:
-    return bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+    if not path:
+        return False
+    return os.path.isfile(path) and os.path.getsize(path) > 0
 
 
 def fingerprint(spec: StepSpec) -> str:

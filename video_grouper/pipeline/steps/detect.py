@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -131,7 +131,7 @@ def _build_secure_loader_session(
     return loaded.session
 
 
-class DetectStep(PipelineStep):
+class DetectStep(PipelineStep[DetectStepConfig]):
     name = "detect"
     config_model = DetectStepConfig
     consumes = ("input_path",)
@@ -142,7 +142,8 @@ class DetectStep(PipelineStep):
 
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
         cfg = self.config
-        in_path = Path(manifest.get("input_path"))
+        # input_path is the immutable source the runner binds before run().
+        in_path = Path(cast(str, manifest.get("input_path")))
         detections_path = in_path.with_name("detections.json")
 
         # Detect emits RAW candidates (x, y, confidence) above the low save floor — no field/

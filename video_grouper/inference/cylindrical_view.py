@@ -43,7 +43,10 @@ from functools import lru_cache
 import numpy as np
 
 try:  # Numba JITs the per-frame projection to native parallel code (exact, ~4x numpy).
-    from numba import njit, prange
+    from numba import (  # type: ignore[import-not-found]  # optional accel dep, no stubs
+        njit,
+        prange,
+    )
 
     _HAVE_NUMBA = True
 except ImportError:  # pragma: no cover - numba is an optional acceleration dependency

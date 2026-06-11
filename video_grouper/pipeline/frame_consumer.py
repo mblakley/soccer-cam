@@ -21,9 +21,11 @@ from __future__ import annotations
 import importlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
+
+ConfigT = TypeVar("ConfigT", bound=BaseModel)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -43,7 +45,7 @@ class FrameSourceInfo:
     time_base: Any  # av Fraction
 
 
-class FrameConsumer(ABC):
+class FrameConsumer(ABC, Generic[ConfigT]):  # noqa: UP046 - explicit Generic[ConfigT] keeps the module-level TypeVar shared with subclasses
     """One per-frame consumer driven by the ``frame_fanout`` step.
 
     Lifecycle: ``open`` once (after the source dimensions + resolved geometry are known),
@@ -56,8 +58,8 @@ class FrameConsumer(ABC):
     consumes: tuple[str, ...] = ()
     produces: tuple[str, ...] = ()
 
-    def __init__(self, config: BaseModel):
-        self.config = config
+    def __init__(self, config: ConfigT) -> None:
+        self.config: ConfigT = config
 
     @abstractmethod
     def open(
@@ -70,8 +72,13 @@ class FrameConsumer(ABC):
         resolve any per-consumer geometry, open outputs)."""
 
     @abstractmethod
-    def consume(self, rgb: np.ndarray, frame_pts: int, frame_idx: int) -> None:
-        """Process one decoded RGB frame."""
+    def consume(self, rgb: np.ndarray, frame_pts: int | None, frame_idx: int) -> None:
+        """Process one decoded RGB frame.
+
+        ``frame_pts`` is the source frame's presentation timestamp, which av
+        leaves ``None`` on frames without one; consumers pass it straight back
+        onto their output frame's ``pts`` (which also accepts ``None``).
+        """
 
     @abstractmethod
     def close(self, manifest: PipelineManifest) -> None:

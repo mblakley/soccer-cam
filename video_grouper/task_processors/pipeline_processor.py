@@ -73,10 +73,14 @@ class PipelineProcessor(QueueProcessor):
     def queue_type(self) -> QueueType:
         return QueueType.PIPELINE
 
-    def get_item_key(self, item: PipelineTask) -> str:
+    def get_item_key(self, item: PipelineTask) -> str:  # type: ignore[override]
+        # Narrows BaseTask -> PipelineTask like the other QueueProcessor
+        # subclasses (download/upload/ntfy/video): a queue only ever holds tasks
+        # of its own queue_type, so every item here is a PipelineTask.
         return f"{item.task_type}:{item.get_item_path()}:{hash(item)}"
 
-    async def process_item(self, item: PipelineTask) -> None:
+    async def process_item(self, item: PipelineTask) -> None:  # type: ignore[override]
+        # See get_item_key: this processor's queue is homogeneous (PipelineTask).
         async with self._semaphore:
             await self._process_one(item)
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -77,7 +78,7 @@ def _correct_video(input_path: str, output_path: str, profile_path: str) -> bool
         return False
 
 
-class StitchCorrectStep(PipelineStep):
+class StitchCorrectStep(PipelineStep[StitchCorrectStepConfig]):
     name = "stitch_correct"
     config_model = StitchCorrectStepConfig
     consumes = ("input_path",)
@@ -98,7 +99,8 @@ class StitchCorrectStep(PipelineStep):
             )
             return True
 
-        in_path = Path(manifest.get("input_path"))
+        # input_path is the immutable source the runner binds before run().
+        in_path = Path(cast(str, manifest.get("input_path")))
         out_path = in_path.with_name(f"{in_path.stem}.stitched.mp4")
 
         success = await asyncio.to_thread(

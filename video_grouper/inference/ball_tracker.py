@@ -288,7 +288,10 @@ class BallTracker:
             gap = b - a
             if not (1 < gap <= interp_gap):
                 continue
-            (xa, ya), (xb, yb) = traj[a], traj[b]
+            pa, pb = traj[a], traj[b]
+            # a and b come from `keys`, the indices where traj is not None.
+            assert pa is not None and pb is not None
+            (xa, ya), (xb, yb) = pa, pb
             if math.hypot(xb - xa, yb - ya) / gap > interp_max_speed:
                 continue  # implausible teleport between two objects — coast, don't draw a line
             for f in range(a + 1, b):

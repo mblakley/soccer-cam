@@ -20,11 +20,16 @@ Falls back to cv2 when pyopencl or an OpenCL device is unavailable (see
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# pyopencl is an optional accel dep with no type stubs; treat it as Any so the
+# C-level enqueue_map_buffer / Buffer calls (whose runtime signatures mypy can't
+# model) type-check, and so the None fallback assignment below is allowed.
+_cl: Any
 try:
     import pyopencl as _cl
 
