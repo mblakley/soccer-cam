@@ -83,34 +83,69 @@ privacy_status = private
 
 
 
-[BALL_TRACKING]
-# Master switch — when false, video stops at trimmed and skips straight to upload
-enabled = true
+[PIPELINE]
+# The processing pipeline: an ordered list of plugin steps run after a game is
+# trimmed. Master switch — when false (or no steps), video stops at trimmed and
+# skips straight to upload. Define the pipeline by hand: list the ordered step
+# ids in `steps`, then give each one a [PIPELINE.<step_id>] section naming its
+# `type` plus that step's options.
+enabled = false
 
-# Which ball-tracking provider to run. Options: autocam_gui, homegrown
-provider = autocam_gui
+# Ordered step ids (the homegrown ball-tracking pipeline). Reorder / remove freely.
+steps = stitch, detect, track, render
 
-[BALL_TRACKING.AUTOCAM_GUI]
-# Path to the Once Sport AutoCam executable (used when provider = autocam_gui)
-executable = /path/to/autocam
+# Opt in to loading unsigned community plugins from <storage>/plugins/community/
+# (they run in-process with full privileges — only enable code you trust).
+community_plugins_enabled = false
 
-[BALL_TRACKING.HOMEGROWN]
-# Pipeline stages, in order (used when provider = homegrown).
-# Comment out a stage name to skip it.
-stages = stitch_correct, detect, track, render
+# Resource-pool capacities — how many of each contended resource run at once.
+gpu_concurrency = 1
+ram_heavy_concurrency = 1
 
-# Path to the homegrown ball-detection model (required when provider = homegrown)
-# model_path =
-# device = cuda:0
-
-# Optional path to the per-camera stitch calibration profile.
-# When unset, stitch_correct passes the source video through unchanged.
+[PIPELINE.stitch]
+type = stitch_correct
+# Optional per-camera stitch calibration profile; passes through unchanged when unset.
 # stitch_profile_path =
 
-# [BALL_TRACKING.PER_TEAM]
-# # Per-team override of the default provider. Key = MatchInfo team_name.
-# # flash = homegrown
-# # heat = autocam_gui
+[PIPELINE.detect]
+type = detect
+# Ball-detection model source — pick ONE:
+#   model_key  : a TTT-provided model (requires a TTT account, free or premium)
+#   model_path : a community / bring-your-own local model (no TTT account)
+# model_key = ball_detection
+# model_path = /path/to/model.onnx
+# device = cuda:0
+# detect_confidence = 0.45
+
+[PIPELINE.track]
+type = track
+# track_kalman_gate = 200.0
+# track_max_missing = 15
+
+[PIPELINE.render]
+type = render
+# Broadcast-style virtual camera: cylindrical de-fisheye + ball-following pan,
+# field-zone/speed zoom, lead room, dead-ball and missing-ball handling.
+# render_mode = broadcast          ; broadcast (tight, dramatic) | coach (wider, tactical)
+# render_output_width = 1920
+# render_output_height = 1080
+# Source horizontal FOV of the stitched panorama (Reolink/Dahua are ~180).
+# render_src_hfov_deg = 180
+# Vertical framing without a hard tilt:
+#   true  = gently follow the ball's height (natural broadcast feel)
+#   false = hold the field centre and zoom out to always keep the ball in frame
+# render_vertical_tracking = true
+# render_video_bitrate = 8M
+
+# Alternative: drive the Once Sport AutoCam GUI instead (Windows + tray only).
+# Replace the `steps` above with `steps = autocam` and configure:
+# [PIPELINE.autocam]
+# type = autocam
+# executable = C:\path\to\AutoCam.exe
+
+# [PIPELINE.PER_TEAM]
+# # Per-team pipeline override. Key = MatchInfo team_name.
+# # flash = ...
 
 # Playlist configuration for processed videos
 [YOUTUBE.PLAYLIST.PROCESSED]

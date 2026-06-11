@@ -39,6 +39,9 @@ metrics = [
 ]
 tray = [
     "PyQt6>=6.6.0",
+    # The tray parents + monitors the AutoCam process (tray/autocam_automation.py imports
+    # psutil at module top level), so psutil is a tray runtime dependency, not just metrics.
+    "psutil>=5.9.0",
     "pywin32>=306",
 ]
 service = [
@@ -54,6 +57,13 @@ dev = [
     "pyinstaller>=6.0.0",
     "cython>=3.0.0",
     "setuptools>=70.0.0",
+]
+# Optional GPU warp acceleration for the broadcast renderer. The cv2 backend is the
+# default and needs nothing here; install this for the zero-copy OpenCL render backend
+# (render_backend="opencl"), which is faster on integrated GPUs. Falls back to cv2 if
+# absent or no OpenCL device is present.
+render-gpu = [
+    "pyopencl>=2024.1",
 ]
 # Training-only extras. The core `[project] dependencies` already covers
 # the inference path (onnxruntime-gpu + opencv-python-headless + numpy +
@@ -177,6 +187,8 @@ module = [
     "lapx.*",
     "filterpy",
     "filterpy.*",
+    "pyopencl",
+    "pyopencl.*",
     "scipy",
     "scipy.*",
 ]

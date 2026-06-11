@@ -82,7 +82,7 @@ def test_node_config_defaults():
     assert nc.role == "standalone"
     assert nc.master_url == ""
     assert "combine" in nc.capabilities
-    assert "ball_tracking" in nc.capabilities
+    assert "pipeline" in nc.capabilities
 
 
 def test_node_capabilities_round_trip_from_string():

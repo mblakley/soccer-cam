@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from video_grouper.pipeline.presets import apply_preset
 from video_grouper.utils.config import (
     AppConfig,
     AutocamConfig,
@@ -932,6 +933,14 @@ def _build_config(state) -> Config:
     # disabled; the user can enable it later from the dashboard.
     yt_token = Path(state.storage_path) / "youtube" / "token.json"
     youtube_cfg = YouTubeConfig(enabled=yt_token.exists())
+    # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
+    # has a real, hand-editable pipeline scaffold (stitch -> detect -> track ->
+    # render) rather than a blank section. It's left DISABLED: the detect step
+    # needs a model source the wizard doesn't collect (TTT login resolves a
+    # model_key, or the user points model_path at a local .onnx), so the user
+    # finishes wiring it up on /config before flipping enabled = true. We keep
+    # onboarding minimal here — no visual pipeline editor.
+    pipeline_cfg = apply_preset("homegrown", enabled=False)
     return Config.model_validate(
         {
             "cameras": [
@@ -956,6 +965,7 @@ def _build_config(state) -> Config:
             "CLOUD_SYNC": CloudSyncConfig().model_dump(),
             "TTT": TTTConfig().model_dump(),
             "SETUP": SetupConfig(onboarding_completed=True).model_dump(),
+            "PIPELINE": pipeline_cfg.model_dump(),
         },
         by_alias=True,
         by_name=True,

@@ -21,6 +21,12 @@ def temp_storage():
 def mock_config():
     """Create a mock config for testing."""
     config = Mock()
+    # Default: the config-driven pipeline is OFF (matches the real default
+    # PipelineConfig(enabled=False)). The config-driven pipeline is the sole
+    # post-trim-processing path, so when it is inactive a trimmed group skips
+    # straight to upload.
+    config.pipeline.is_active.return_value = False
+    config.post_trim_processing_active.return_value = False
     return config
 
 
@@ -322,7 +328,7 @@ class TestVideoProcessorTransitions:
         mock_mis.populate_match_info_from_apis = AsyncMock()
         mock_ntfy = Mock()
         mock_ntfy.request_match_info_for_directory = AsyncMock()
-        mock_config.ball_tracking.enabled = True
+        mock_config.post_trim_processing_active.return_value = True
 
         processor = VideoProcessor(
             temp_storage,
@@ -344,11 +350,11 @@ class TestVideoProcessorTransitions:
         mock_ntfy.request_match_info_for_directory.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_trim_success_skips_autocam_when_disabled(
+    async def test_trim_success_skips_to_upload_when_pipeline_inactive(
         self, temp_storage, mock_config
     ):
-        """When autocam is disabled, trim success should queue upload directly."""
-        mock_config.ball_tracking.enabled = False
+        """When the pipeline is inactive, trim success should queue upload directly."""
+        mock_config.post_trim_processing_active.return_value = False
         mock_config.youtube.enabled = True
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
@@ -374,11 +380,11 @@ class TestVideoProcessorTransitions:
             mock_upload.add_work.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_trim_success_no_upload_when_autocam_disabled_youtube_disabled(
+    async def test_trim_success_no_upload_when_pipeline_inactive_youtube_disabled(
         self, temp_storage, mock_config
     ):
-        """When autocam and youtube are both disabled, no upload is queued."""
-        mock_config.ball_tracking.enabled = False
+        """When the pipeline is inactive and youtube is disabled, no upload is queued."""
+        mock_config.post_trim_processing_active.return_value = False
         mock_config.youtube.enabled = False
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
@@ -404,11 +410,11 @@ class TestVideoProcessorTransitions:
             mock_upload.add_work.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_trim_success_does_not_skip_when_autocam_enabled(
+    async def test_trim_success_does_not_skip_when_pipeline_active(
         self, temp_storage, mock_config
     ):
-        """When autocam is enabled, trim success should NOT queue upload."""
-        mock_config.ball_tracking.enabled = True
+        """When the pipeline is active, trim success should NOT queue upload."""
+        mock_config.post_trim_processing_active.return_value = True
         mock_upload = AsyncMock()
         mock_upload.add_work = AsyncMock()
 

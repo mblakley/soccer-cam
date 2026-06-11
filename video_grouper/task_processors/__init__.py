@@ -1,7 +1,5 @@
 """Task processors package for video grouper application."""
 
-from .ball_tracking_discovery_processor import BallTrackingDiscoveryProcessor
-from .ball_tracking_processor import BallTrackingProcessor
 from .base_polling_processor import PollingProcessor
 from .base_queue_processor import QueueProcessor
 from .camera_poller import CameraPoller
@@ -23,8 +21,6 @@ __all__ = [
     "StateAuditor",
     "UploadProcessor",
     "VideoProcessor",
-    "BallTrackingProcessor",
-    "BallTrackingDiscoveryProcessor",
     "ClipProcessor",
     "ClipDiscoveryProcessor",
     "TTTJobProcessor",

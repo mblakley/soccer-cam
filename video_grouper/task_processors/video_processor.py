@@ -102,7 +102,14 @@ class VideoProcessor(QueueProcessor):
                             item.get_item_path(), audio_gaps
                         )
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
-                elif item.task_type == "trim" and not self.config.ball_tracking.enabled:
+                elif (
+                    item.task_type == "trim"
+                    and not self.config.post_trim_processing_active()
+                ):
+                    # No processing stage (the config-driven pipeline) owns this
+                    # group, so skip straight to upload. When the pipeline is
+                    # active, leave the group at ``trimmed`` for the pipeline
+                    # discovery to pick up.
                     asyncio.create_task(self._on_trim_complete(item.get_item_path()))
             else:
                 logger.error(f"VIDEO: Task execution failed: {item}")
@@ -243,14 +250,20 @@ class VideoProcessor(QueueProcessor):
             logger.error(f"VIDEO: Failed to send audio-gap NTFY for {group_dir}: {e}")
 
     async def _on_trim_complete(self, group_dir: str) -> None:
-        """Skip ball-tracking and transition directly to upload when disabled."""
+        """Skip post-trim processing and transition directly to upload.
+
+        Called when no post-trim processing stage (the config-driven pipeline)
+        is active. Writes the existing ``ball_tracking_complete`` sentinel
+        (kept for on-disk back-compat with in-flight groups) and queues upload.
+        """
         try:
             from video_grouper.models import DirectoryState
 
             dir_state = DirectoryState(group_dir)
             await dir_state.update_group_status("ball_tracking_complete")
             logger.info(
-                f"VIDEO: Ball tracking disabled, set {group_dir} to ball_tracking_complete"
+                f"VIDEO: No post-trim processing active, set {group_dir} to "
+                "ball_tracking_complete"
             )
 
             if self.config.youtube.enabled and self.upload_processor:

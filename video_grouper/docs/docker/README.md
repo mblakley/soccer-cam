@@ -46,7 +46,7 @@ cp video_grouper/config.ini.dist shared_data/config.ini
 # edit shared_data/config.ini: set [CAMERA.default] device_ip / username / password,
 # [YOUTUBE] credentials, etc. The default [STORAGE] path = ./shared_data
 # is correct -- it resolves to /app/shared_data inside the container.
-# Make sure [BALL_TRACKING] enabled = false (default) for now.
+# Make sure [PIPELINE] enabled = false (default) for now.
 
 docker compose build
 docker compose up -d
@@ -111,15 +111,26 @@ Soccer-cam ships a homegrown ball-detection provider that runs an ONNX model via
 Two sections need to be set up. Replace the placeholder values with your TTT credentials.
 
 ```ini
-[BALL_TRACKING]
+[PIPELINE]
 enabled = true
-provider = homegrown
+# Ordered step ids. Each needs a matching [PIPELINE.<id>] section below; a
+# listed step with no section is skipped.
+steps = stitch, detect, track, render
 
-[BALL_TRACKING.HOMEGROWN]
+[PIPELINE.stitch]
+type = stitch_correct
+
+[PIPELINE.detect]
+type = detect
 # Triggers the licensed/encrypted path (vs. local plaintext model_path for testing)
 model_key = premium.video.ball_detection
 device = cuda:0           # cuda:0 prefers GPU; falls back to CPU automatically. Use 'cpu' to force CPU.
-stages = stitch_correct, detect, track, render
+
+[PIPELINE.track]
+type = track
+
+[PIPELINE.render]
+type = render
 
 [TTT]
 enabled = true
@@ -236,7 +247,8 @@ ls -la shared_data/<your-game>/
 For development, skip TTT and point at a plain ONNX file:
 
 ```ini
-[BALL_TRACKING.HOMEGROWN]
+[PIPELINE.detect]
+type = detect
 model_path = /models/ball_detector.onnx   # plain .onnx, no encryption
 device = cuda:0
 # leave model_key unset
@@ -293,7 +305,7 @@ Or pass `--gpus all` to `docker run` directly (works on every host with the tool
 Two ways:
 
 - Drop `--gpus all` (or remove the `deploy.resources` block) — the container won't see the GPU.
-- Set `device = cpu` in `[BALL_TRACKING.HOMEGROWN]` — the inference session is built with CPU-only providers regardless of host.
+- Set `device = cpu` in `[PIPELINE.detect]` — the inference session is built with CPU-only providers regardless of host.
 
 ---
 
@@ -305,7 +317,7 @@ The host doesn't have a usable NVIDIA driver. On Windows, install the latest NVI
 
 ### `detect: model_key is set but TTT integration is disabled`
 
-`[BALL_TRACKING.HOMEGROWN] model_key` is set but `[TTT] enabled` is `false`. Either flip TTT on (and configure credentials) or use `model_path` instead for local testing.
+`[PIPELINE.detect] model_key` is set but `[TTT] enabled` is `false`. Either flip TTT on (and configure credentials) or use `model_path` instead for local testing.
 
 ### `License signature did not validate against any known key`
 

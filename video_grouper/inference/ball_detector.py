@@ -77,6 +77,8 @@ def detect_balls(
     nms_iou: float = NMS_IOU_THRESHOLD,
     tile_size: int = TILE_SIZE,
     tile_step: int = STEP_X,
+    field_polygon: np.ndarray | None = None,
+    field_margin: float = 50.0,
 ) -> list[dict]:
     """Detect balls in a BGR panoramic frame by tiling into square windows.
 
@@ -89,6 +91,12 @@ def detect_balls(
 
     Model output is the post-NMS Ultralytics format: ``(N, 6)`` rows of
     ``[x1, y1, x2, y2, conf, class]`` in tile pixel coords.
+
+    When ``field_polygon`` is given (an ``(M, 2)`` array of field-perimeter
+    points in the input frame's pixel coords), any candidate whose center
+    falls more than ``field_margin`` pixels outside the field is discarded
+    *before* NMS — so off-field false positives (a burned-in timestamp,
+    spectators, a scoreboard) can never out-compete the real on-field ball.
 
     Returns ``{cx, cy, w, h, conf}`` dicts in the input frame's pixel coords.
     """
@@ -112,6 +120,12 @@ def detect_balls(
     all_centers: list[
         tuple[float, float, float, float]
     ] = []  # (cx, cy, w, h) in original frame coords
+
+    field_poly = (
+        field_polygon.reshape(-1, 1, 2).astype(np.float32)
+        if field_polygon is not None and len(field_polygon) >= 3
+        else None
+    )
 
     for x0, y0 in _tile_origins(work_w, work_h, tile_size, tile_step):
         tile = rgb[y0 : y0 + tile_size, x0 : x0 + tile_size]
@@ -137,6 +151,11 @@ def detect_balls(
             cy = (oy1 + oy2) / 2
             w = ox2 - ox1
             h = oy2 - oy1
+            if (
+                field_poly is not None
+                and cv2.pointPolygonTest(field_poly, (cx, cy), True) < -field_margin
+            ):
+                continue  # off-field FP (timestamp, spectators, scoreboard)
             all_centers.append((cx, cy, w, h))
             all_boxes.append([ox1, oy1, ox2, oy2])
             all_scores.append(conf)
@@ -196,8 +215,14 @@ def detect_video(
     sess: ort.InferenceSession,
     frame_interval: int = 8,
     conf_threshold: float = CONF_THRESHOLD,
+    field_polygon: np.ndarray | None = None,
+    field_margin: float = 50.0,
 ) -> list[dict]:
     """Run ball detection on every Nth frame of a video.
+
+    When ``field_polygon`` is given, off-field detections are dropped per frame
+    (see :func:`detect_balls`) so the trajectory follows the real ball instead
+    of fixed off-field false positives such as the camera's burned-in timestamp.
 
     Returns a list of ``{frame_idx, cx, cy, w, h, conf, mask_coeffs?}``
     dicts in panoramic pixel coords.
@@ -221,7 +246,13 @@ def detect_video(
             break
 
         if frame_idx % frame_interval == 0:
-            for d in detect_balls(frame, sess, conf_threshold):
+            for d in detect_balls(
+                frame,
+                sess,
+                conf_threshold,
+                field_polygon=field_polygon,
+                field_margin=field_margin,
+            ):
                 d["frame_idx"] = frame_idx
                 detections.append(d)
 

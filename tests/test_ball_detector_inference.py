@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 from video_grouper.inference import ball_detector
 
 
@@ -61,6 +63,69 @@ class TestPanoToTile:
             assert 0.0 <= label["cy_norm"] < 1.0
             assert 0.0 < label["w_norm"] < 1.0
             assert 0.0 < label["h_norm"] < 1.0
+
+
+class TestFieldMaskFiltering:
+    """detect_balls drops candidates whose center falls outside the field
+    polygon — so off-field FPs (the camera's burned-in timestamp, spectators)
+    can't out-compete the real on-field ball."""
+
+    SQUARE = np.array(
+        [[100, 100], [300, 100], [300, 300], [100, 300]], dtype=np.float32
+    )
+
+    @staticmethod
+    def _frame():
+        return np.zeros((640, 640, 3), dtype=np.uint8)  # one tile, scale 1.0
+
+    @staticmethod
+    def _session(rows):
+        sess = MagicMock()
+        sess.run.return_value = [np.array([rows], dtype=np.float32)]
+        return sess
+
+    def test_off_field_detection_dropped(self):
+        # in-field (200,200) kept; off-field (500,500) dropped
+        sess = self._session(
+            [[190, 190, 210, 210, 0.9, 0.0], [490, 490, 510, 510, 0.8, 0.0]]
+        )
+        res = ball_detector.detect_balls(
+            self._frame(),
+            sess,
+            conf_threshold=0.5,
+            field_polygon=self.SQUARE,
+            field_margin=0.0,
+        )
+        centers = {(round(r["cx"]), round(r["cy"])) for r in res}
+        assert centers == {(200, 200)}
+
+    def test_no_polygon_keeps_all(self):
+        sess = self._session(
+            [[190, 190, 210, 210, 0.9, 0.0], [490, 490, 510, 510, 0.8, 0.0]]
+        )
+        res = ball_detector.detect_balls(self._frame(), sess, conf_threshold=0.5)
+        centers = {(round(r["cx"]), round(r["cy"])) for r in res}
+        assert centers == {(200, 200), (500, 500)}
+
+    def test_margin_keeps_near_edge_drops_far(self):
+        # center (320,200): 20px right of the square's right edge (x=300)
+        sess = self._session([[310, 190, 330, 210, 0.9, 0.0]])
+        kept = ball_detector.detect_balls(
+            self._frame(),
+            sess,
+            conf_threshold=0.5,
+            field_polygon=self.SQUARE,
+            field_margin=50.0,
+        )
+        dropped = ball_detector.detect_balls(
+            self._frame(),
+            sess,
+            conf_threshold=0.5,
+            field_polygon=self.SQUARE,
+            field_margin=5.0,
+        )
+        assert len(kept) == 1  # 20px outside, within 50px margin
+        assert len(dropped) == 0  # 20px outside, beyond 5px margin
 
 
 class TestModuleHasNoHeavyImports:

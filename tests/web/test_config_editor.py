@@ -204,3 +204,90 @@ def test_config_editor_not_mounted_when_path_missing(tmp_path):
     with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
         resp = c.get("/config")
     assert resp.status_code == 404
+
+
+# Config with a populated [PIPELINE] (steps + per-step sections). The editor
+# only renders scalar fields and skips list/dict ones, so it must NOT clobber
+# these complex sections when saving an unrelated scalar.
+_PIPELINE_INI = (
+    _DIST_INI
+    + """
+[PIPELINE]
+enabled = true
+gpu_concurrency = 2
+steps = stitch, detect, track, render
+
+[PIPELINE.stitch]
+type = stitch_correct
+stitch_profile_path = /calib/flash.json
+
+[PIPELINE.detect]
+type = detect
+model_path = /m/model.onnx
+detect_confidence = 0.5
+
+[PIPELINE.track]
+type = track
+track_kalman_gate = 300
+
+[PIPELINE.render]
+type = render
+render_output_width = 1920
+"""
+)
+
+
+@pytest.fixture
+def pipeline_config_path(tmp_path):
+    p = tmp_path / "config.ini"
+    p.write_text(_PIPELINE_INI, encoding="utf-8")
+    return p
+
+
+@pytest.fixture
+def pipeline_client(tmp_path, pipeline_config_path):
+    app = create_app(TTTConfig(), str(tmp_path), config_path=pipeline_config_path)
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
+        yield c
+
+
+def test_post_config_preserves_pipeline_section(pipeline_client, pipeline_config_path):
+    """Editing an unrelated scalar must not drop the [PIPELINE] steps/specs.
+
+    The editor reconstructs Config from the loaded config + scalar form
+    overrides only; complex sections (pipeline, cameras, teams) ride through
+    untouched. This guards against a regression where the editor rebuilt Config
+    from form fields alone and silently lost the pipeline.
+    """
+    # Sanity: the pipeline loaded as expected before the edit.
+    before = load_config(pipeline_config_path)
+    assert before.pipeline.steps == ["stitch", "detect", "track", "render"]
+
+    resp = pipeline_client.post(
+        "/config",
+        data={
+            "STORAGE.path": "/data/games",
+            "LOGGING.level": "DEBUG",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    reloaded = load_config(pipeline_config_path)
+    # The edited scalar took effect...
+    assert reloaded.storage.path == "/data/games"
+    assert reloaded.logging.level == "DEBUG"
+    # ...and the entire [PIPELINE] survived.
+    assert reloaded.pipeline.enabled is True
+    assert reloaded.pipeline.gpu_concurrency == 2
+    assert reloaded.pipeline.steps == ["stitch", "detect", "track", "render"]
+    ordered = reloaded.pipeline.ordered_steps()
+    assert [s.type for s in ordered] == [
+        "stitch_correct",
+        "detect",
+        "track",
+        "render",
+    ]
+    by_id = {s.step_id: s for s in ordered}
+    assert by_id["stitch"].config["stitch_profile_path"] == "/calib/flash.json"
+    assert by_id["detect"].config["model_path"] == "/m/model.onnx"

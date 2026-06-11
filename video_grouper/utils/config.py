@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import configparser
+import logging
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, RootModel, field_validator
 
-from video_grouper.ball_tracking.config import BallTrackingConfig
+from video_grouper.pipeline.config import PipelineConfig
+
+logger = logging.getLogger(__name__)
 
 # Monkey-patch ConfigParser to allow attribute-style access to sections used by tests
 if not hasattr(configparser.ConfigParser, "__getattr__"):
@@ -223,7 +226,7 @@ class NodeConfig(BaseModel):
     worker_tokens: list[str] = Field(default_factory=list)
     # Worker-side: which capabilities this node advertises to the master.
     capabilities: list[str] = Field(
-        default_factory=lambda: ["combine", "trim", "ball_tracking"]
+        default_factory=lambda: ["combine", "trim", "pipeline"]
     )
 
     @field_validator("worker_tokens", "capabilities", mode="before")
@@ -378,10 +381,8 @@ class Config(BaseModel):
         default_factory=MomentTaggingConfig, alias="MOMENT_TAGGING"
     )
     setup: SetupConfig = Field(alias="SETUP", default_factory=SetupConfig)
-    ball_tracking: BallTrackingConfig = Field(
-        alias="BALL_TRACKING", default_factory=BallTrackingConfig
-    )
     node: NodeConfig = Field(alias="NODE", default_factory=NodeConfig)
+    pipeline: PipelineConfig = Field(alias="PIPELINE", default_factory=PipelineConfig)
 
     model_config = {"validate_by_name": True}
 
@@ -389,6 +390,16 @@ class Config(BaseModel):
     def camera(self) -> CameraConfig:
         """Convenience accessor for the first camera config."""
         return self.cameras[0]
+
+    def post_trim_processing_active(self) -> bool:
+        """True when a post-trim processing stage owns ``trimmed`` groups.
+
+        The config-driven pipeline (``[PIPELINE]``) is the sole post-trim
+        processing path. When it is inactive, a trimmed group skips straight to
+        upload.
+        """
+        pipeline = getattr(self, "pipeline", None)
+        return bool(pipeline is not None and pipeline.is_active())
 
 
 def load_config(config_path: Path) -> Config:
@@ -422,6 +433,34 @@ def load_config(config_path: Path) -> Config:
             sub_alias = section.split(".", 1)[1]  # e.g. "AUTOCAM_GUI" or "PER_TEAM"
             sub_value = config_dict.pop(section)
             config_dict.setdefault("BALL_TRACKING", {})[sub_alias] = sub_value
+
+    # Handle PIPELINE sub-sections: [PIPELINE.PER_TEAM] -> per-team overrides;
+    # every other [PIPELINE.<step_id>] -> one step spec (its `type` + raw config).
+    # PIPELINE.PER_TEAM is a RESERVED sub-section (per-team overrides) — a step
+    # may not be named PER_TEAM. Every other [PIPELINE.<step_id>] is a step spec.
+    # A step section without a `type` is malformed; skip it with a warning rather
+    # than failing the entire config load (these sections are hand-editable).
+    pipeline_step_specs: dict[str, dict] = {}
+    for section in list(config_dict.keys()):
+        if section.startswith("PIPELINE."):
+            sub = section.split(".", 1)[1]
+            sub_value = config_dict.pop(section)
+            if sub == "PER_TEAM":
+                config_dict.setdefault("PIPELINE", {})["PER_TEAM"] = sub_value
+                continue
+            step_type = sub_value.pop("type", None)
+            if step_type is None:
+                logger.warning(
+                    "[PIPELINE.%s] has no `type`; ignoring this step section", sub
+                )
+                continue
+            pipeline_step_specs[sub] = {
+                "step_id": sub,
+                "type": step_type,
+                "config": sub_value,
+            }
+    if pipeline_step_specs:
+        config_dict.setdefault("PIPELINE", {})["step_specs"] = pipeline_step_specs
 
     # Handle PlayMetrics teams
     playmetrics_teams = []
@@ -457,6 +496,27 @@ def load_config(config_path: Path) -> Config:
     # Add teams to the main teamsnap config
     if "TEAMSNAP" in config_dict:
         config_dict["TEAMSNAP"]["teams"] = teamsnap_teams
+
+    # Legacy migration: a pre-pipeline install has a [BALL_TRACKING] section but
+    # NO [PIPELINE] section at all — auto-adopt the config-driven pipeline so it
+    # lights up the new path without hand-editing the INI. We key on the
+    # *absence of any [PIPELINE] section* (not merely absence of steps) so an
+    # explicit `[PIPELINE]\nenabled = false` — which save_config always emits —
+    # is respected as a deliberate "pipeline off" choice rather than silently
+    # re-migrated on every round-trip. The migrated dict is injected as
+    # config_dict["PIPELINE"] so model_validate builds it.
+    from video_grouper.pipeline.config import migrate_ball_tracking_to_pipeline
+
+    if "PIPELINE" not in config_dict and config_dict.get("BALL_TRACKING"):
+        migrated = migrate_ball_tracking_to_pipeline(config_dict["BALL_TRACKING"])
+        if migrated:
+            config_dict["PIPELINE"] = migrated
+
+    # The legacy [BALL_TRACKING] section (and its nested sub-sections) is no
+    # longer a Config field — drop it after migration so it isn't passed to
+    # model_validate. Migration above has already lifted anything worth keeping
+    # into [PIPELINE].
+    config_dict.pop("BALL_TRACKING", None)
 
     return Config.model_validate(config_dict)
 
@@ -513,6 +573,30 @@ def save_config(config: Config, config_path: Path):
             }
             continue
 
+        if field_name == "pipeline":
+            # [PIPELINE] scalars + ordered step ids; one [PIPELINE.<id>] per step
+            # (type + that step's raw config); [PIPELINE.PER_TEAM] if present.
+            main = {
+                "enabled": str(value.enabled),
+                "community_plugins_enabled": str(value.community_plugins_enabled),
+                "gpu_concurrency": str(value.gpu_concurrency),
+                "ram_heavy_concurrency": str(value.ram_heavy_concurrency),
+            }
+            if value.steps:
+                main["steps"] = ", ".join(value.steps)
+            parser["PIPELINE"] = main
+            for step_id, spec in value.step_specs.items():
+                section_items = {"type": spec.type}
+                for k, v in spec.config.items():
+                    if v is not None:
+                        section_items[k] = str(v)
+                parser[f"PIPELINE.{step_id}"] = section_items
+            if value.per_team:
+                parser["PIPELINE.PER_TEAM"] = {
+                    k: str(v) for k, v in value.per_team.items()
+                }
+            continue
+
         if isinstance(value, BaseModel):
             section_items = {}
             for sub_field_name, sub_field in type(value).model_fields.items():
@@ -563,7 +647,6 @@ def create_default_config(config_path: Path, storage_path: str) -> Config:
             "PLAYMETRICS": {},
             "NTFY": {},
             "YOUTUBE": {},
-            "BALL_TRACKING": {"enabled": False},
             "CLOUD_SYNC": {},
             "TTT": {},
             "SETUP": {"onboarding_completed": False},

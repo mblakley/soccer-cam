@@ -8,6 +8,7 @@ runtime doesn't depend on filterpy/scipy.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -218,16 +219,82 @@ class BallTracker:
             min_length = self.min_track_length
         return [t for t in self.tracks if t.length >= min_length]
 
+    @staticmethod
+    def _score(t: Track) -> float:
+        avg_conf = sum(d.confidence for d in t.detections) / max(len(t.detections), 1)
+        return t.length * avg_conf
+
+    @staticmethod
+    def _span(t: Track) -> float:
+        """Max axis extent of a track's detections (px) — small ⇒ stationary."""
+        xs = [d.x for d in t.detections]
+        ys = [d.y for d in t.detections]
+        return max(max(xs) - min(xs), max(ys) - min(ys))
+
     def get_best_track(self) -> Track | None:
         """Return the highest-scoring track (length × average confidence)."""
         valid = self.get_tracks()
-        if not valid:
-            return None
+        return max(valid, key=self._score) if valid else None
 
-        def score(t: Track) -> float:
-            avg_conf = sum(d.confidence for d in t.detections) / max(
-                len(t.detections), 1
-            )
-            return t.length * avg_conf
+    def build_trajectory(
+        self,
+        n_frames: int,
+        move_px: float = 80.0,
+        stationary_len: int = 20,
+        interp_gap: int = 16,
+        interp_max_speed: float | None = None,
+        tiny_span_px: float = 6.0,
+    ) -> list[list[float] | None]:
+        """Stitch the ball's track fragments into one per-frame trajectory.
 
-        return max(valid, key=score)
+        The single-best-track approach throws away most of the trajectory: the ball is gated into
+        several short tracks (each FP/loss starts a new one), so returning only the longest covers a
+        small fraction of frames. Instead, fill from ALL qualifying tracks best-first (higher
+        length×confidence wins overlaps), then linearly interpolate gaps up to ``interp_gap`` frames.
+        Returns one ``[x, y]`` per frame (``None`` where no estimate is available).
+
+        A track is dropped when it is a false positive that would pull the camera off the play:
+
+        - **Sustained stationary** (``span <= move_px`` over ``>= stationary_len`` frames): a sprinkler
+          head or a standing bystander tracked for a long time — never moves like a ball.
+        - **Fixed object** (``span < tiny_span_px`` at ANY length): a point that barely moves over its
+          whole life (e.g. a corner marker detected for 24 frames within ~2 px). A real ball, even
+          braked, jitters more than this; a track this rigid is a fixed object. Without this, a brief
+          fixed-object track survives the stationary rule (it is "short"), and the render holds/coasts
+          on its bearing — pointing the camera at empty grass instead of the last real ball position.
+
+        A gap is only bridged if the straight-line speed between its endpoints is plausible for a
+        single ball (``<= interp_max_speed`` px/frame, default the tracker's ``gate_distance``).
+        Otherwise the two ends belong to DIFFERENT objects — e.g. a stationary false-positive track
+        and the real ball across the field — and interpolating would sweep the camera through empty
+        grass on a straight line between them. Leaving that gap as ``None`` lets the render coast.
+        """
+        if interp_max_speed is None:
+            interp_max_speed = self.gate_distance
+        tracks = [
+            t
+            for t in self.get_tracks()
+            if self._span(t) > move_px
+            or (t.length < stationary_len and self._span(t) >= tiny_span_px)
+        ]
+        tracks.sort(key=self._score, reverse=True)
+        traj: list[list[float] | None] = [None] * n_frames
+        for t in tracks:
+            for d in t.detections:
+                if 0 <= d.frame_idx < n_frames and traj[d.frame_idx] is None:
+                    traj[d.frame_idx] = [d.x, d.y]
+        keys = [i for i, p in enumerate(traj) if p is not None]
+        for a, b in zip(keys, keys[1:], strict=False):
+            gap = b - a
+            if not (1 < gap <= interp_gap):
+                continue
+            pa, pb = traj[a], traj[b]
+            # a and b come from `keys`, the indices where traj is not None.
+            assert pa is not None and pb is not None
+            (xa, ya), (xb, yb) = pa, pb
+            if math.hypot(xb - xa, yb - ya) / gap > interp_max_speed:
+                continue  # implausible teleport between two objects — coast, don't draw a line
+            for f in range(a + 1, b):
+                tt = (f - a) / gap
+                traj[f] = [xa + (xb - xa) * tt, ya + (yb - ya) * tt]
+        return traj

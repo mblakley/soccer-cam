@@ -121,22 +121,9 @@ class TaskRegistry:
             if task_type == "recording_file":
                 return RecordingFile.from_dict(data)
 
-            # Back-compat: pre-v0.3.4 queues used a single "ball_tracking_process"
-            # task type that routed to providers by `provider_name`. v0.3.4 split
-            # this into two classes (homegrown vs external) so the tray bundle
-            # can drop PyAV/ONNX/CV2. Map the legacy name to whichever class is
-            # registered in this bundle.
-            if task_type == "ball_tracking_process":
-                provider_name = data.get("provider_name", "")
-                legacy_target = (
-                    "ball_tracking_external"
-                    if provider_name == "autocam_gui"
-                    else "ball_tracking_homegrown"
-                )
-                if legacy_target in self._task_types:
-                    task_type = legacy_target
-                    data = {**data, "task_type": task_type}
-
+            # A legacy "ball_tracking_process" task left on a queue by a pre-pipeline install
+            # deserializes to None here (its classes are gone); the group is still at `trimmed`
+            # on disk and gets re-discovered + re-enqueued as a PipelineTask, so no video is lost.
             task_class = self.get_task_class(task_type, queue_type)
             if not task_class:
                 logger.error(

@@ -1,14 +1,15 @@
 """Polling discovery processor that recovers missed YouTube uploads.
 
-Scans the storage tree on an interval for groups at status
-``ball_tracking_complete`` and enqueues a ``YoutubeUploadTask`` to the
+Scans the storage tree on an interval for groups at a completion status —
+``ball_tracking_complete`` (legacy path) or ``pipeline_complete`` (the
+config-driven pipeline) — and enqueues a ``YoutubeUploadTask`` to the
 shared ``UploadProcessor``. This is the cross-app handoff point for
-autocam_gui setups, where ball-tracking runs in the tray (which has no
-``UploadProcessor``) and only flips state.json.
+tray-driven setups (autocam), where processing runs in the tray (which has
+no ``UploadProcessor``) and only flips state.json.
 
-For homegrown setups the in-process ``BallTrackingProcessor`` already
-queues uploads directly; this processor's per-cycle dedupe set + the
-upload queue's own dedupe make double-enqueue a no-op there.
+For in-process service setups the processor already queues uploads
+directly; this processor's per-cycle dedupe set + the upload queue's own
+dedupe make double-enqueue a no-op there.
 """
 
 from __future__ import annotations
@@ -58,7 +59,9 @@ class UploadRecoveryProcessor(PollingProcessor):
                     e,
                 )
                 continue
-            if status == "ball_tracking_complete":
+            # Accept BOTH completion statuses: ``ball_tracking_complete``
+            # (legacy path) and ``pipeline_complete`` (config-driven pipeline).
+            if status in ("ball_tracking_complete", "pipeline_complete"):
                 await self._recover_upload(group_dir)
 
     async def _recover_upload(self, group_dir: Path) -> None:

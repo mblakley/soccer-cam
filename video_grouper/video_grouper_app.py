@@ -41,19 +41,27 @@ class VideoGrouperApp:
             config: Configuration object
             camera: Camera object or dict of {name: Camera} (optional, will be created if not provided)
         """
-        # Fail fast on incompatible platform/provider combinations BEFORE any
-        # side effects (logging setup, file handles). Otherwise a downstream
-        # raise leaves loggers open and breaks test cleanup on Windows.
-        if (
-            config.ball_tracking.enabled
-            and config.ball_tracking.provider == "autocam_gui"
-            and platform.system() != "Windows"
-        ):
-            raise RuntimeError(
-                "[BALL_TRACKING].provider = 'autocam_gui' is Windows-only "
-                "(the AutoCam GUI app does not run on Linux/Docker). "
-                "Switch to provider = 'homegrown'."
-            )
+        # Fail fast on incompatible platform/step combinations BEFORE any side
+        # effects (logging setup, file handles). Otherwise a downstream raise
+        # leaves loggers open and breaks test cleanup on Windows. A tray-runtime
+        # step (e.g. autocam, which drives an interactive desktop app) can't run
+        # on Linux/Docker — refuse to start when one is configured on a
+        # non-Windows host.
+        if config.pipeline.is_active() and platform.system() != "Windows":
+            import video_grouper.pipeline.register_steps  # noqa: F401
+            from video_grouper.pipeline import get_step_meta
+
+            for spec in config.pipeline.ordered_steps():
+                try:
+                    meta = get_step_meta(spec.type)
+                except ValueError:
+                    continue
+                if meta.runtime == "tray":
+                    raise RuntimeError(
+                        f"[PIPELINE] step {spec.type!r} requires the interactive "
+                        "desktop (runtime='tray') and is Windows-only. "
+                        "Remove it or run on Windows."
+                    )
 
         # Phase 4: a node configured as a worker MUST run via
         # `python -m video_grouper.worker` — the regular orchestrator
@@ -105,53 +113,69 @@ class VideoGrouperApp:
             upload_processor=self.upload_processor,
         )
 
-        # Ball-tracking placement is gated on the configured provider.
-        # - autocam_gui: drives the Once Sport GUI app (needs Session 1+); the
-        #   tray runs the BallTrackingProcessor for this provider, not us.
-        # - homegrown: pure ONNX/CUDA compute (Session 0 fine); we run it.
-        # See `~/.claude/plans/web-ui-consolidation.md` Phase 0a for the matrix.
-        self.ball_tracking_processor = None
-        self.ball_tracking_discovery_processor = None
-        bt = self.config.ball_tracking
-        if bt.enabled and bt.provider == "homegrown":
-            # Side-effect import: registers the BallTrackingProvider implementations.
-            import video_grouper.ball_tracking.register_providers  # noqa: F401
-            from video_grouper.task_processors.ball_tracking_discovery_processor import (
-                BallTrackingDiscoveryProcessor,
+        # The config-driven pipeline is the sole post-trim-processing path.
+        # When [PIPELINE] is active we run the PipelineProcessor (service
+        # runtime — Session-0-safe steps; tray steps hand off to the tray) +
+        # PipelineDiscoveryProcessor. When it is not active, trimmed groups skip
+        # straight to upload (see VideoProcessor / StateAuditor).
+        self.pipeline_processor = None
+        self.pipeline_discovery_processor = None
+        self.community_plugin_loader = None
+        if self.config.pipeline.is_active():
+            # Side-effect import: registers the built-in pipeline steps.
+            import video_grouper.pipeline.register_steps  # noqa: F401
+
+            # Community (unsigned, local, opt-in) plugins register next, before
+            # the TTT premium loader runs later in the TTT-enabled block. Load
+            # order: built-in -> community -> TTT (last writer wins on a name
+            # collision). Wrapped so a loader failure never crashes startup.
+            if self.config.pipeline.community_plugins_enabled:
+                try:
+                    from video_grouper.plugins.community_loader import (
+                        CommunityPluginLoader,
+                    )
+
+                    self.community_plugin_loader = CommunityPluginLoader(
+                        Path(self.storage_path) / "plugins" / "community"
+                    )
+                    self.community_plugin_loader.load_plugins()
+                    logger.info(
+                        "Community plugins enabled, %d loaded",
+                        len(self.community_plugin_loader.get_loaded()),
+                    )
+                except Exception:
+                    logger.warning("Failed to load community plugins", exc_info=True)
+
+            from video_grouper.task_processors.pipeline_discovery_processor import (
+                PipelineDiscoveryProcessor,
             )
-            from video_grouper.task_processors.ball_tracking_processor import (
-                BallTrackingProcessor,
+            from video_grouper.task_processors.pipeline_processor import (
+                PipelineProcessor,
             )
 
-            self.ball_tracking_processor = BallTrackingProcessor(
+            self.pipeline_processor = PipelineProcessor(
                 storage_path=self.storage_path,
                 config=self.config,
                 upload_processor=self.upload_processor,
+                runtime="service",
             )
-            self.ball_tracking_discovery_processor = BallTrackingDiscoveryProcessor(
+            self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
                 storage_path=self.storage_path,
                 config=self.config,
-                ball_tracking_processor=self.ball_tracking_processor,
+                pipeline_processor=self.pipeline_processor,
             )
-        elif bt.enabled and bt.provider == "autocam_gui":
-            # Linux refusal already happened at the top of __init__.
             logger.info(
-                "BALL_TRACKING: provider = autocam_gui; the service does not run "
-                "ball-tracking processors (Session 0 has no GUI). Run the tray "
-                "for AutoCam, or switch [BALL_TRACKING].provider to 'homegrown'."
-            )
-        elif bt.enabled:
-            logger.warning(
-                "BALL_TRACKING: unknown provider %r; ball-tracking disabled",
-                bt.provider,
+                "PIPELINE: config-driven pipeline active (%d steps).",
+                len(self.config.pipeline.ordered_steps()),
             )
 
-        # Cross-app handoff for autocam_gui: tray flips state.json to
-        # ``ball_tracking_complete`` but has no UploadProcessor of its own.
-        # StateAuditor only runs at startup so it can't catch the transition
-        # post-boot. This polling processor scans state.json files every 60s
-        # and queues uploads to the service's UploadProcessor. Also acts as
-        # a safety net for the homegrown in-process handoff.
+        # Cross-app handoff for a tray-runtime step (e.g. autocam): the tray
+        # flips state.json to ``pipeline_complete`` (or the legacy
+        # ``ball_tracking_complete`` for in-flight groups) but has no
+        # UploadProcessor of its own. StateAuditor only runs at startup so it
+        # can't catch the transition post-boot. This polling processor scans
+        # state.json files every 60s and queues uploads to the service's
+        # UploadProcessor. Also acts as a safety net for the in-process handoff.
         self.upload_recovery_processor = None
         if self.config.youtube.enabled:
             from video_grouper.task_processors.upload_recovery_processor import (
@@ -583,12 +607,11 @@ class VideoGrouperApp:
             self.processors.append(self.clip_discovery_processor)
         if self.ttt_job_processor:
             self.processors.append(self.ttt_job_processor)
-        # Ball-tracking placement (homegrown only, see __init__ above).
-        # autocam_gui ball-tracking lives in the tray.
-        if self.ball_tracking_processor:
-            self.processors.append(self.ball_tracking_processor)
-        if self.ball_tracking_discovery_processor:
-            self.processors.append(self.ball_tracking_discovery_processor)
+        # Config-driven pipeline (only constructed in __init__ when active).
+        if self.pipeline_processor:
+            self.processors.append(self.pipeline_processor)
+        if self.pipeline_discovery_processor:
+            self.processors.append(self.pipeline_discovery_processor)
         if self.upload_recovery_processor:
             self.processors.append(self.upload_recovery_processor)
         # Polling processors last -- StateAuditor discover_work() must see
