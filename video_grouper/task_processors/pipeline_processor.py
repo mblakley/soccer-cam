@@ -31,10 +31,11 @@ import json
 import logging
 from pathlib import Path
 
+from video_grouper.utils.config import Config
+
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
 from .tasks.pipeline import PipelineTask
-from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class PipelineProcessor(QueueProcessor):
             state_file = item.group_dir / "state.json"
             if state_file.exists():
                 try:
-                    with open(state_file, "r") as f:
+                    with open(state_file) as f:
                         current_status = json.load(f).get("status")
                 except (json.JSONDecodeError, OSError) as e:
                     logger.warning(
@@ -201,12 +202,12 @@ class PipelineProcessor(QueueProcessor):
             return
 
         try:
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
             state_data["status"] = "pipeline_complete"
             with open(state_file, "w") as f:
                 json.dump(state_data, f, indent=4)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.error(
                 "PIPELINE: could not update status for group %s: %s", group_name, e
             )
@@ -230,14 +231,14 @@ class PipelineProcessor(QueueProcessor):
         if not state_file.exists():
             return
         try:
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 state_data = json.load(f)
             state_data["status"] = "pipeline_failed"
             if error:
                 state_data["pipeline_error"] = error
             with open(state_file, "w") as f:
                 json.dump(state_data, f, indent=4)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.error(
                 "PIPELINE: could not record failure for group %s: %s",
                 item.group_dir.name,

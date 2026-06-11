@@ -21,8 +21,8 @@ import threading
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from starlette.responses import Response
 from pydantic import BaseModel
+from starlette.responses import Response
 
 from training.pipeline.queue import WorkQueue
 from training.pipeline.registry import GameRegistry

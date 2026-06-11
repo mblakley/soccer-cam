@@ -9,7 +9,7 @@ gate, per the api-namespaces convention in TTT).
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -48,7 +48,7 @@ class MomentApiClient:
 
     async def get_game_session_by_dir(
         self, recording_group_dir: str
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Find a game session by its recording_group_dir."""
         try:
             resp = await self._client.get(
@@ -87,8 +87,8 @@ class MomentApiClient:
         self,
         tag_id: str,
         video_offset: float,
-        trimmed_offset: Optional[float] = None,
-    ) -> Optional[dict[str, Any]]:
+        trimmed_offset: float | None = None,
+    ) -> dict[str, Any] | None:
         """Update a moment tag's computed offsets.
 
         PATCH /api/internal/moment-tags/{tag_id} — see TTT
@@ -115,10 +115,10 @@ class MomentApiClient:
         self,
         moment_tag_id: str,
         game_session_id: str,
-        clip_start: Optional[float] = None,
-        clip_end: Optional[float] = None,
+        clip_start: float | None = None,
+        clip_end: float | None = None,
         clip_duration: float = 30.0,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Create a moment clip record."""
         payload: dict[str, Any] = {
             "moment_tag_id": moment_tag_id,
@@ -141,10 +141,10 @@ class MomentApiClient:
         self,
         clip_id: str,
         *,
-        status: Optional[str] = None,
-        file_path: Optional[str] = None,
-        youtube_video_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        status: str | None = None,
+        file_path: str | None = None,
+        youtube_video_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Update a moment clip's status, file_path, or youtube_video_id."""
         payload: dict[str, Any] = {}
         if status is not None:
@@ -193,10 +193,10 @@ class MomentApiClient:
         self,
         highlight_id: str,
         *,
-        status: Optional[str] = None,
-        file_path: Optional[str] = None,
-        youtube_video_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        status: str | None = None,
+        file_path: str | None = None,
+        youtube_video_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Update a highlight reel's status, file_path, or youtube_video_id."""
         payload: dict[str, Any] = {}
         if status is not None:

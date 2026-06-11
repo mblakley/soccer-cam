@@ -2,26 +2,27 @@
 Tests for the enhanced StateAuditor with service integrations.
 """
 
-import pytest
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
 from video_grouper.task_processors.state_auditor import StateAuditor
 from video_grouper.utils.config import (
-    Config,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    CloudSyncConfig,
-    YouTubeConfig,
     AppConfig,
     CameraConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
-from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
 
 
 @pytest.fixture

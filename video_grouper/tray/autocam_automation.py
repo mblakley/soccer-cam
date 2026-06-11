@@ -1,15 +1,14 @@
-import time
+import datetime
 import logging
 import os
 import subprocess
-import win32gui
-import psutil
-from pywinauto import Desktop
-import datetime
-from typing import Optional
+import time
 
-from video_grouper.utils.config import AutocamConfig
+import win32gui
+from pywinauto import Desktop
+
 from video_grouper.models.directory_state import DirectoryState
+from video_grouper.utils.config import AutocamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +18,172 @@ logger = logging.getLogger(__name__)
 _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAME = "GUI.exe"
 
+# Suppress the console flash on every tasklist/wmic poll -- the tray is
+# a GUI app and these run on a 30s discovery loop.
+_NO_WINDOW = 0x08000000
 
-def _find_autocam_hwnd() -> Optional[int]:
+# Substrings (case-insensitive) that mark AutoCam's C-level shutdown
+# phase. When the notification reaches one of these AND the output
+# file is at expected size, AutoCam has finished writing and is just
+# tearing down the FrameReader / GUI process. This build never emits
+# "finished processing" on its own, so framereader_close is the
+# authoritative end-of-run signal.
+_SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
+
+
+# Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output;
+# a healthy completed render is roughly input_duration_seconds * 1 MB/s.
+# The 10 MB absolute floor is a backstop for empty/header-only output;
+# the moov-atom presence check (below) is the load-bearing reject for
+# the 2026-06-01 failure mode.
+_MIN_OUTPUT_BYTES_ABSOLUTE = 10 * 1024 * 1024  # 10 MB
+
+
+def _mp4_has_moov_atom(path: str) -> bool:
+    """Walk top-level MP4 boxes looking for the 'moov' atom.
+
+    A clean AutoCam exit writes ftyp + ... + moov + mdat (or with
+    movflags=faststart, ftyp + moov + mdat). A mid-write or truncated
+    output has the ftyp box but no moov -- the same shape as the 15.5 MB
+    file produced 2026-06-01 that v0.4.10 wrongly marked
+    ball_tracking_complete.
+
+    Pure-Python so the tray binary doesn't need PyAV bundled (v0.4.11
+    shipped with PyAV in the validator but av.open isn't reachable from
+    the tray PyInstaller bundle -- AttributeError on av.open at runtime
+    fed the broad exception handler and produced the right verdict for
+    the wrong reason).
+
+    Returns False on any I/O error or malformed box header.
+    """
+    try:
+        with open(path, "rb") as f:
+            while True:
+                header = f.read(8)
+                if len(header) < 8:
+                    return False
+                size = int.from_bytes(header[:4], "big")
+                box_type = header[4:8]
+                if box_type == b"moov":
+                    return True
+                if size == 1:
+                    # 'largesize' extension box: real size is the next 8 bytes.
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    size = int.from_bytes(ext, "big")
+                    skip = size - 16
+                elif size == 0:
+                    # Box extends to EOF -- no further boxes, so no moov.
+                    return False
+                else:
+                    skip = size - 8
+                if skip < 0:
+                    return False
+                f.seek(skip, 1)
+    except OSError:
+        return False
+
+
+def _validate_autocam_output(
+    output_path: str,
+    input_path: str | None = None,
+    min_bytes: int = _MIN_OUTPUT_BYTES_ABSOLUTE,
+) -> tuple[bool, str]:
+    """Validate an AutoCam output is a real processed video, not a partial.
+
+    Two checks, in order:
+
+    1. Absolute size floor (default 10 MB). Cheap reject for empty or
+       barely-started files; primarily a backstop in case the moov scan
+       returns spuriously True on a tiny well-formed test fixture.
+    2. moov-atom presence via :func:`_mp4_has_moov_atom`. AutoCam writes
+       the moov atom only at clean exit, so its absence means the file
+       is a partial -- the exact 2026-06-01 failure mode where a 15.5 MB
+       header-only MP4 passed the size-only check and got marked
+       ball_tracking_complete.
+
+    Returns (ok, reason). On a False result the caller deletes the file
+    as a crashed partial before retry.
+
+    Note (v0.4.12): the PyAV-based duration parity / bitrate floor that
+    v0.4.11 attempted was unreachable in the production tray binary
+    (PyAV's av.open isn't exposed there). For v0.4.12 we rely on the
+    pure-Python moov scan, which catches the actual observed failure
+    mode. The duration-parity defense returns when the tray binary
+    properly bundles PyAV.
+
+    ``input_path`` is accepted for forward compatibility but unused.
+    """
+    del input_path  # kept in signature for caller compatibility
+
+    if not os.path.isfile(output_path):
+        return False, f"output file does not exist: {output_path}"
+    try:
+        size = os.path.getsize(output_path)
+    except OSError as e:
+        return False, f"could not stat output: {e}"
+    if size < min_bytes:
+        return (
+            False,
+            f"output {size / 1024 / 1024:.1f} MB below "
+            f"{min_bytes / 1024 / 1024:.0f} MB absolute floor",
+        )
+
+    if not _mp4_has_moov_atom(output_path):
+        return (
+            False,
+            f"output {size / 1024 / 1024:.1f} MB has no moov atom "
+            f"(AutoCam exited before finalizing the MP4 container)",
+        )
+
+    return True, f"OK: {size / 1024 / 1024:.1f} MB, moov atom present"
+
+
+def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> bool:
+    """True if a previous tray run is still actively rendering this output.
+
+    Reads ``state.get_autocam_run()`` and checks whether any recorded
+    GUI.exe PID for the same ``input_path`` is still alive. Guard for
+    the validate-and-delete short-circuit at function entry: a mid-write
+    output has the ftyp box but no moov atom yet, so the validator will
+    correctly reject it -- but deleting that file out from under a live
+    AutoCam would corrupt the in-flight render. When this returns True
+    the caller must skip validation and fall through to the resume
+    reattach path.
+
+    Returns False when:
+      - state is None (no group_dir tracking enabled)
+      - no autocam_run marker exists
+      - marker exists but input_path doesn't match (different render)
+      - marker exists for this input but no PIDs are alive (stale)
+    """
+    if state is None:
+        return False
+    existing = state.get_autocam_run()
+    if not existing:
+        return False
+    if existing.get("input_path") != input_path:
+        return False
+    live = _live_autocam_pids(existing.get("gui_pids", []))
+    return bool(live)
+
+
+def _taskkill_autocam_tree() -> None:
+    """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
+    as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
+    orphaned, eating CPU and holding the output file handle so the
+    next pass can't delete the partial.
+    """
+    for image in ("GUI.exe", "autocam.exe"):
+        subprocess.run(
+            ["taskkill", "/F", "/IM", image],
+            capture_output=True,
+            creationflags=_NO_WINDOW,
+        )
+
+
+def _find_autocam_hwnd() -> int | None:
     """Return the hwnd of an Once Sport Autocam window, or None.
 
     Uses win32gui.EnumWindows (fast, non-blocking) instead of
@@ -39,8 +202,123 @@ def _find_autocam_hwnd() -> Optional[int]:
     return found[0] if found else None
 
 
+def _run_console(cmd: list[str], timeout: float = 10.0) -> str:
+    """Run a Windows console helper (tasklist/wmic), return stdout, or ''
+    on timeout / OSError. Swallow-and-log matches the posture of the
+    callers, which treat absent data as 'no match' rather than fatal.
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("console helper %s failed: %s", cmd[0], e)
+        return ""
+    return result.stdout or ""
+
+
+def _parse_tasklist_csv_pids(stdout: str) -> list[int]:
+    """Parse `tasklist /FO CSV /NH` output and return PIDs (column 2).
+
+    Returns an empty list if tasklist's "no tasks running" banner is
+    present (some Windows versions route that to stdout instead of
+    stderr) or any other unparseable content appears.
+    """
+    pids: list[int] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) < 2:
+            continue
+        try:
+            pids.append(int(parts[1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _parse_wmi_datetime(s: str) -> float | None:
+    """Parse a WMI CIM_DATETIME field to Unix epoch seconds.
+
+    Format: ``yyyymmddHHMMSS.ffffff±UUU`` (UUU = minutes east of UTC).
+    Example: ``20260529182708.123456-300`` is 2026-05-29 18:27:08.123456
+    in UTC-5h. Returns None on any parse failure.
+    """
+    s = s.strip()
+    if len(s) < 25:
+        return None
+    try:
+        year = int(s[0:4])
+        month = int(s[4:6])
+        day = int(s[6:8])
+        hour = int(s[8:10])
+        minute = int(s[10:12])
+        second = int(s[12:14])
+        micro = int(s[15:21])
+        sign = s[21]
+        tz_minutes = int(s[22:25])
+        if sign == "-":
+            tz_minutes = -tz_minutes
+        dt = datetime.datetime(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            micro,
+            tzinfo=datetime.timezone(datetime.timedelta(minutes=tz_minutes)),
+        )
+        return dt.timestamp()
+    except (ValueError, IndexError):
+        return None
+
+
+def _wmi_creation_time(pid: int) -> float | None:
+    """Return Unix-epoch creation time for ``pid`` via wmic, or None.
+
+    `wmic` is deprecated on newer Windows but still ships on Win10/11.
+    None means we couldn't determine it; callers treat that as
+    'no filter' (fail-open) -- a false positive is harmless because
+    every downstream consumer revalidates via _live_autocam_pids.
+    """
+    out = _run_console(
+        [
+            "wmic",
+            "process",
+            "where",
+            f"ProcessId={pid}",
+            "get",
+            "CreationDate",
+            "/FORMAT:CSV",
+        ]
+    )
+    for line in out.splitlines():
+        line = line.strip()
+        if (
+            not line
+            or line.lower().startswith("node")
+            or "creationdate" in line.lower()
+        ):
+            continue
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        epoch = _parse_wmi_datetime(parts[-1])
+        if epoch is not None:
+            return epoch
+    return None
+
+
 def _find_autocam_gui_pids(
-    since_epoch: Optional[float] = None,
+    since_epoch: float | None = None,
 ) -> list[int]:
     """Return PIDs of running GUI.exe processes (case-insensitive).
 
@@ -49,47 +327,62 @@ def _find_autocam_gui_pids(
     Both PIDs go into the resume marker; reattach validates that at
     least one is still alive.
 
+    Uses `tasklist` (+ `wmic` for the optional since_epoch filter)
+    rather than psutil: psutil's PyInstaller bundle is unreliable in
+    this tray's onedir build (v0.4.x bundles raised AttributeError on
+    psutil.process_iter even with the metrics extra synced). Subprocess
+    over stdlib is what every other process-enum site in the repo uses.
+
     Args:
-        since_epoch: If provided, only return processes whose create_time
-            is at-or-after this Unix timestamp (seconds). Used by the
-            launch path to avoid grabbing PIDs of unrelated GUI.exe
+        since_epoch: If provided, only return processes whose creation
+            time is at-or-after this Unix timestamp (seconds). Used by
+            the launch path to avoid grabbing PIDs of unrelated GUI.exe
             instances that were already running.
     """
-    pids: list[int] = []
-    for proc in psutil.process_iter(["pid", "name", "create_time"]):
-        try:
-            name = (proc.info.get("name") or "").lower()
-            if name != _AUTOCAM_PROCESS_NAME.lower():
-                continue
-            if (
-                since_epoch is not None
-                and proc.info.get("create_time", 0) < since_epoch
-            ):
-                continue
-            pids.append(proc.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return pids
+    pids = _parse_tasklist_csv_pids(
+        _run_console(
+            [
+                "tasklist",
+                "/FI",
+                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                "/FO",
+                "CSV",
+                "/NH",
+            ]
+        )
+    )
+    if since_epoch is None:
+        return pids
+    filtered: list[int] = []
+    for pid in pids:
+        created = _wmi_creation_time(pid)
+        if created is None or created >= since_epoch:
+            filtered.append(pid)
+    return filtered
 
 
 def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
     """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
 
-    A bare ``pid_exists`` check would accept a PID that's been recycled
-    by an unrelated process; the name guard prevents that.
+    Uses a single ``tasklist`` call to get all GUI.exe PIDs, then
+    intersects with ``candidate_pids``. This avoids spawning one
+    subprocess per PID on every 30-second poll.
     """
-    live: list[int] = []
-    for pid in candidate_pids:
-        try:
-            proc = psutil.Process(pid)
-            if (
-                proc.is_running()
-                and proc.name().lower() == _AUTOCAM_PROCESS_NAME.lower()
-            ):
-                live.append(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return live
+    all_gui = set(
+        _parse_tasklist_csv_pids(
+            _run_console(
+                [
+                    "tasklist",
+                    "/FI",
+                    f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ]
+            )
+        )
+    )
+    return [pid for pid in candidate_pids if pid in all_gui]
 
 
 def _validate_autocam_inputs(
@@ -290,9 +583,10 @@ def _set_file_via_browse_dialog(
 
 def _wait_for_completion_and_cleanup(
     main_window,
-    state: Optional[DirectoryState],
-    output_path: Optional[str] = None,
-    tracked_pids: Optional[list[int]] = None,
+    state: DirectoryState | None,
+    output_path: str | None = None,
+    tracked_pids: list[int] | None = None,
+    input_path: str | None = None,
 ) -> bool:
     """Poll AutoCam's Notification text until processing finishes, then clean up.
 
@@ -320,10 +614,6 @@ def _wait_for_completion_and_cleanup(
     timeout_seconds = 60 * 60 * 24  # 24 hours
     startup_timeout_seconds = 300  # 5 minutes to start processing
     poll_interval = 30  # 30 seconds
-    # Min size below which we treat the output file as a partial-write
-    # rather than a real success. Anything smaller than this means
-    # AutoCam exited before producing a usable processed video.
-    output_min_bytes = 10 * 1024 * 1024  # 10 MB
     found = False
     processing_started = False
 
@@ -333,60 +623,117 @@ def _wait_for_completion_and_cleanup(
                 notification = main_window.child_window(
                     auto_id="Notification", control_type="Text"
                 )
-                notification_text = notification.window_text().lower()
+                raw_notification = notification.window_text()
+                notification_text = raw_notification.lower()
+                logger.info("Autocam status: %r", raw_notification)
+
+                # Shutdown-marker fast path: when AutoCam's notification
+                # contains a shutdown marker (e.g. "framereader_close"),
+                # the render pipeline has finished writing the output
+                # and is just tearing down the C-level framereader
+                # struct. The user-facing "finished processing" string
+                # is not always emitted in this build, so without this
+                # branch the loop would have to wait for GUI.exe to
+                # exit on its own -- which can take an indeterminate
+                # amount of time after the shutdown marker first
+                # appears. Treating the marker as authoritative end-of-
+                # run lets us break+taskkill within one poll.
+                if (
+                    processing_started
+                    and output_path
+                    and any(m in notification_text for m in _SHUTDOWN_MARKERS)
+                ):
+                    ok, reason = _validate_autocam_output(
+                        output_path, input_path=input_path
+                    )
+                    if ok:
+                        found = True
+                        logger.info(
+                            "AutoCam shutdown marker observed "
+                            "(notification=%r, validation=%s); "
+                            "treating as success and breaking out.",
+                            raw_notification,
+                            reason,
+                        )
+                        break
+                    logger.error(
+                        "AutoCam shutdown marker observed but output "
+                        "failed validation (%s); treating as failure.",
+                        reason,
+                    )
+                    if os.path.isfile(output_path):
+                        try:
+                            os.remove(output_path)
+                        except OSError as rm_err:
+                            logger.warning(
+                                "Could not remove invalid output %s: %s",
+                                output_path,
+                                rm_err,
+                            )
+                    break
 
                 if "finished processing" in notification_text:
                     found = True
-                    logger.info(
-                        f"Detected success message: '{notification.window_text()}'"
-                    )
+                    logger.info("Detected success message: %r", raw_notification)
                     break
                 elif "error" in notification_text:
-                    logger.error(
-                        f"Autocam reported an error: '{notification.window_text()}'"
-                    )
+                    logger.error("Autocam reported an error: %r", raw_notification)
+                    if output_path and os.path.isfile(output_path):
+                        try:
+                            os.remove(output_path)
+                        except OSError:
+                            pass
                     break
                 elif (
                     "processing" in notification_text
                     or "processed" in notification_text
                 ):
-                    # Autocam reports "% of video processed" during active processing.
-                    # Both "processing" and "processed" indicate the job is underway.
                     if not processing_started:
                         processing_started = True
-                        logger.info(
-                            f"Processing started: '{notification.window_text()}'"
-                        )
-                    else:
-                        logger.debug(f"Autocam status: '{notification.window_text()}'")
-                else:
-                    logger.debug(f"Autocam status: '{notification.window_text()}'")
+                        logger.info("Processing started: %r", raw_notification)
             except Exception as e:
                 logger.warning(f"Error while checking for success message: {e}")
 
             # Exit-detection fallback: if AutoCam's GUI processes have
-            # all exited, infer success/failure from the output file
-            # rather than waiting for a notification string that may
-            # never come (some AutoCam builds end with a C-level
-            # cleanup message instead of a user-facing success).
-            if tracked_pids and not _live_autocam_pids(tracked_pids):
+            # all exited, decide success/failure from the output file's
+            # actual contents -- not just byte count. Size-only let a
+            # 15.5 MB header-only MP4 (no moov atom) pass through on
+            # 2026-06-01; full validation catches that, truncated
+            # outputs, and implausibly low bitrates.
+            live_pids = _live_autocam_pids(tracked_pids) if tracked_pids else None
+            if tracked_pids and not live_pids:
                 if output_path and os.path.isfile(output_path):
-                    try:
-                        size = os.path.getsize(output_path)
-                    except OSError:
-                        size = 0
-                    if size >= output_min_bytes:
+                    ok, reason = _validate_autocam_output(
+                        output_path, input_path=input_path
+                    )
+                    if ok:
                         found = True
                         logger.info(
-                            "AutoCam GUI exited and output exists "
-                            f"({size / 1024 / 1024:.1f} MB at {output_path}); "
-                            "treating as success."
+                            "AutoCam GUI exited with validated output (%s); "
+                            "treating as success.",
+                            reason,
                         )
                         break
                     logger.error(
-                        "AutoCam GUI exited but output file is too small "
-                        f"({size} bytes at {output_path}); treating as failure."
+                        "AutoCam GUI exited but output failed validation "
+                        "(%s); treating as crash. Deleting so next "
+                        "attempt re-runs.",
+                        reason,
                     )
+                    try:
+                        os.remove(output_path)
+                    except OSError as e:
+                        logger.warning(
+                            "Could not remove crashed partial %s: %s",
+                            output_path,
+                            e,
+                        )
+                    jsonl = output_path + ".jsonl"
+                    if os.path.isfile(jsonl):
+                        try:
+                            os.remove(jsonl)
+                        except OSError:
+                            pass
                     break
                 logger.error(
                     "AutoCam GUI exited without producing the expected "
@@ -416,7 +763,7 @@ def _wait_for_completion_and_cleanup(
         return found
     finally:
         logger.info("Automation script finished, closing application.")
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         if state is not None:
             state.clear_autocam_run()
 
@@ -425,7 +772,7 @@ def _execute_autocam_gui_automation(
     executable_path: str,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Execute the autocam GUI automation process for Once Sport Autocam 3.x.
@@ -463,26 +810,65 @@ def _execute_autocam_gui_automation(
 
     state = DirectoryState(group_dir) if group_dir else None
 
-    # Already-done short-circuit: if the output mp4 exists at non-trivial
-    # size, AutoCam already produced it. Re-running would waste 1-2 hours
-    # of GPU work on output we already have. Most common trigger: the
-    # tray crashed after AutoCam finished but before the success was
-    # recorded; the in_progress task was restored from disk on the next
-    # tray boot and would otherwise relaunch GUI.exe from scratch.
-    if os.path.isfile(abs_output_path):
+    # Already-done short-circuit: if the output mp4 already passes the
+    # same validator the poll loop uses, AutoCam previously produced a
+    # real result; re-running would waste 1-2 hours of GPU work on
+    # output we already have. Most common trigger: the tray crashed
+    # after AutoCam finished but before the success was recorded; the
+    # in_progress task was restored from disk on the next tray boot and
+    # would otherwise relaunch GUI.exe from scratch.
+    #
+    # Validation here is identical to the poll-loop exit check so a
+    # broken pre-existing output (e.g. a header-only MP4 left over from
+    # a previous bug) is detected and deleted rather than skipped.
+    #
+    # SAFETY: if a previous tray run is still writing this output
+    # (resume-marker has live AutoCam PIDs), DON'T validate-and-delete --
+    # the file is mid-write and has no moov atom yet, but deleting it
+    # would corrupt the in-flight render. Skip the short-circuit and
+    # let the resume-marker reattach path below take over.
+    if os.path.isfile(abs_output_path) and not _autocam_still_writing(
+        state, abs_input_path
+    ):
+        ok, reason = _validate_autocam_output(
+            abs_output_path, input_path=abs_input_path
+        )
         try:
             existing_size = os.path.getsize(abs_output_path)
         except OSError:
             existing_size = 0
-        if existing_size >= 10 * 1024 * 1024:
+        if ok:
             logger.info(
-                "AutoCam output already exists at %s (%.1f MB); skipping re-run.",
+                "AutoCam output already validated at %s (%s); skipping re-run.",
                 abs_output_path,
-                existing_size / 1024 / 1024,
+                reason,
             )
             if state is not None:
                 state.clear_autocam_run()
             return True
+        # Pre-existing file failed validation AND no live AutoCam PIDs --
+        # safe to delete before relaunch. Could be junk from a previous
+        # failed Save-dialog interaction, a header-only MP4 from an
+        # aborted render, or any other partial. Removing it avoids the
+        # overwrite-confirm overlay (which the dialog automation can't
+        # drive).
+        logger.info(
+            "Pre-existing output failed validation (%s); deleting before relaunch.",
+            reason,
+        )
+        try:
+            os.remove(abs_output_path)
+            logger.info(
+                "Removed invalid pre-existing output at %s (%.1f MB) before relaunch",
+                abs_output_path,
+                existing_size / 1024 / 1024,
+            )
+        except OSError as e:
+            logger.warning(
+                "Could not remove pre-existing output %s: %s; continuing anyway",
+                abs_output_path,
+                e,
+            )
 
     desktop = Desktop(backend="uia")
 
@@ -522,6 +908,7 @@ def _execute_autocam_gui_automation(
                         state,
                         output_path=existing.get("output_path", abs_output_path),
                         tracked_pids=live,
+                        input_path=existing.get("input_path", abs_input_path),
                     )
             else:
                 logger.info(
@@ -533,13 +920,8 @@ def _execute_autocam_gui_automation(
 
     try:
         # Kill any existing Autocam instance before launching a new one
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         time.sleep(1)
-
-        # Capture the wall-clock so PID discovery only picks up GUI.exe
-        # processes that postdate our launch (avoids grabbing an unrelated
-        # AutoCam if the user happened to start one manually).
-        launch_epoch = time.time()
 
         # Use Popen so we don't block on the launcher process.
         # The new Autocam (GUI.exe) spawns a child process for the actual window,
@@ -567,10 +949,14 @@ def _execute_autocam_gui_automation(
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
         # Persist PIDs to state.json so a tray crash mid-pass can reattach
-        # on restart. We capture every GUI.exe whose create_time is after
-        # launch_epoch — typically the launcher + the spawned UI process.
+        # on restart. Get the window-owning PID via win32process (instant,
+        # no subprocess spawn) — this is the child GUI.exe that actually
+        # owns the AutoCam window, not just the launcher which may exit.
+        import win32process
+
+        _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
         if state is not None:
-            gui_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+            gui_pids = list({launcher.pid, window_pid})
             state.set_autocam_run(
                 {
                     "launcher_pid": launcher.pid,
@@ -747,23 +1133,20 @@ def _execute_autocam_gui_automation(
         ).click()
         time.sleep(2)
 
-        # Re-snapshot the GUI.exe PIDs now that processing has started.
-        # The processing pass usually re-spawns or stabilizes the worker
-        # processes, and the post-launch list captured up at line 498+
-        # reflects that final set. The exit-detection fallback in
-        # _wait_for_completion_and_cleanup needs the right PIDs to know
-        # when AutoCam is "done" via process exit.
-        final_pids = _find_autocam_gui_pids(since_epoch=launch_epoch)
+        # Track both the launcher and the window-owning PID for exit
+        # detection. No subprocess spawning — window_pid was already
+        # captured via win32process above.
         return _wait_for_completion_and_cleanup(
             main_window,
             state,
             output_path=abs_output_path,
-            tracked_pids=final_pids,
+            tracked_pids=list({launcher.pid, window_pid}),
+            input_path=abs_input_path,
         )
 
     except Exception as e:
         logger.error(f"An error occurred during Once Autocam automation: {e}")
-        subprocess.run(["taskkill", "/F", "/IM", "GUI.exe"], capture_output=True)
+        _taskkill_autocam_tree()
         if state is not None:
             state.clear_autocam_run()
         return False
@@ -773,7 +1156,7 @@ def run_autocam_on_file(
     autocam_config: AutocamConfig,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """
     Automates the Once Autocam GUI to process a video file.

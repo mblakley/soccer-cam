@@ -42,7 +42,7 @@ class ResourceManager:
         self._capacities: dict[str, int] = {
             name: int(cap)
             for name, cap in (capacities or {}).items()
-            if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0
+            if isinstance(cap, int | float) and not isinstance(cap, bool) and cap > 0
         }
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._lock = asyncio.Lock()

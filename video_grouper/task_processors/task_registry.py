@@ -3,11 +3,11 @@ Task registry for managing task types and deserialization.
 """
 
 import logging
-from typing import Dict, Type, Optional
 
-from .tasks.base_task import BaseTask
-from .queue_type import QueueType
 from video_grouper.models import RecordingFile
+
+from .queue_type import QueueType
+from .tasks.base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +18,10 @@ class TaskRegistry:
     """
 
     def __init__(self):
-        self._task_types: Dict[str, Type[BaseTask]] = {}
-        self._queue_task_types: Dict[QueueType, Dict[str, Type[BaseTask]]] = {}
+        self._task_types: dict[str, type[BaseTask]] = {}
+        self._queue_task_types: dict[QueueType, dict[str, type[BaseTask]]] = {}
 
-    def register_task(self, task_class: Type[BaseTask]) -> None:
+    def register_task(self, task_class: type[BaseTask]) -> None:
         """
         Register a task class for deserialization.
 
@@ -78,8 +78,8 @@ class TaskRegistry:
         )
 
     def get_task_class(
-        self, task_type: str, queue_type: Optional[QueueType] = None
-    ) -> Optional[Type[BaseTask]]:
+        self, task_type: str, queue_type: QueueType | None = None
+    ) -> type[BaseTask] | None:
         """
         Get a task class by type.
 
@@ -99,8 +99,8 @@ class TaskRegistry:
         return self._task_types.get(task_type)
 
     def deserialize_task(
-        self, data: Dict[str, object], queue_type: Optional[QueueType] = None
-    ) -> Optional[BaseTask]:
+        self, data: dict[str, object], queue_type: QueueType | None = None
+    ) -> BaseTask | None:
         """
         Deserialize a task from its data.
 

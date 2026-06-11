@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -41,10 +41,10 @@ class DetectStepConfig(BaseModel):
     # Pick exactly one source:
     #   model_key:  ask TTT for a license + encrypted artifact (TTT free/premium)
     #   model_path: load a plaintext .onnx from disk (community / bring-your-own)
-    model_key: Optional[str] = None
-    model_path: Optional[str] = None
-    detect_channel: Optional[str] = None  # canary / beta / stable
-    detect_pipeline_version: Optional[str] = None
+    model_key: str | None = None
+    model_path: str | None = None
+    detect_channel: str | None = None  # canary / beta / stable
+    detect_pipeline_version: str | None = None
     device: str = "cuda:0"
     # SAVE FLOOR, not the working threshold. Detection is the expensive step, so it writes ALL raw
     # candidates (x, y, confidence) above this low floor — the location (field polygon) and confidence

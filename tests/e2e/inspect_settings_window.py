@@ -3,12 +3,12 @@ Inspect SettingsWindow AFTER loading source/destination files.
 Run: uv run python tests/e2e/inspect_settings_window.py
 """
 
-import time
 import subprocess
 import sys
+import time
+
 import win32gui
 from pywinauto import Desktop
-
 
 AUTOCAM_EXE = r"C:\Users\markb\AppData\Local\Programs\Autocam\GUI.exe"
 TEST_INPUT = r"C:\Users\markb\projects\soccer-cam\tests\e2e\test_clips\clip_01.mp4"

@@ -479,7 +479,7 @@ class Orchestrator:
         if task_type == "stage":
             return self.cfg.server.hostname
         if task_type == "train":
-            for name, m in self.cfg.machines.items():
+            for _name, m in self.cfg.machines.items():
                 if "train" in m.capabilities:
                     return m.hostname
         return None
@@ -637,7 +637,7 @@ class Orchestrator:
         # Sort oldest first
         reclaimable.sort(key=lambda x: x[0])
 
-        for mtime, pack in reclaimable:
+        for _mtime, pack in reclaimable:
             if freed >= target_free - (total - used):
                 break
             size = pack.stat().st_size

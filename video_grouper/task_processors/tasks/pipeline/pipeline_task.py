@@ -15,10 +15,9 @@ stack). The heavy step modules are imported lazily by the runner / processor.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
 
-from ..base_task import BaseTask
 from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 
 class PipelineTask(BaseTask):
@@ -37,7 +36,7 @@ class PipelineTask(BaseTask):
         output_path: str,
         team_name: str | None = None,
         storage_path: str | None = None,
-        ttt_config: Dict[str, object] | None = None,
+        ttt_config: dict[str, object] | None = None,
     ):
         self.group_dir = group_dir
         self.input_path = input_path
@@ -57,7 +56,7 @@ class PipelineTask(BaseTask):
     def get_item_path(self) -> str:
         return str(self.group_dir)
 
-    def serialize(self) -> Dict[str, object]:
+    def serialize(self) -> dict[str, object]:
         return {
             "task_type": self.task_type,
             "group_dir": str(self.group_dir),
@@ -69,7 +68,7 @@ class PipelineTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "PipelineTask":
+    def deserialize(cls, data: dict[str, object]) -> PipelineTask:
         ttt_cfg = data.get("ttt_config")
         return cls(
             group_dir=Path(data["group_dir"]),
@@ -81,7 +80,7 @@ class PipelineTask(BaseTask):
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> "PipelineTask":
+    def from_dict(cls, data: dict[str, object]) -> PipelineTask:
         return cls.deserialize(data)
 
     async def execute(self) -> bool:

@@ -5,26 +5,28 @@ This module provides functionality to send notifications with screenshots to use
 and receive responses to identify when a game starts and ends.
 """
 
-import os
-import logging
-import json
 import asyncio
-import httpx
-import uuid
-import time
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Any
-from pathlib import Path
-from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
-from video_grouper.utils.config import NtfyConfig
+import json
+import logging
+import os
 import re
+import time
+import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from video_grouper.utils.config import NtfyConfig
+from video_grouper.utils.ffmpeg_utils import create_screenshot, get_video_duration
 
 logger = logging.getLogger(__name__)
 
 
 async def compress_image(
     input_path: str,
-    output_path: Optional[str] = None,
+    output_path: str | None = None,
     quality: int = 60,
     max_width: int = 800,
 ) -> str:
@@ -100,6 +102,9 @@ class NtfyAPI:
         self.listener_task = None
         self.session_id = str(uuid.uuid4())[:8]  # Create a unique session ID
         self.service_callback = service_callback
+        # Id of the topic message currently being dispatched, threaded to the
+        # consume path so the service records it on use (see _process_response).
+        self._pending_topic_msg_id = None
 
         # Track sent messages and their responses
         self.pending_messages = {}  # message_id -> future
@@ -269,7 +274,7 @@ class NtfyAPI:
                 )
                 await asyncio.sleep(10)  # Wait before retrying
 
-    async def _process_response(self, response_data: Dict[str, Any]):
+    async def _process_response(self, response_data: dict[str, Any]):
         """Process a response from the NTFY topic."""
         try:
             # Log all responses for debugging
@@ -278,6 +283,42 @@ class NtfyAPI:
             # Extract event type and message
             event_type = response_data.get("event")
             message = response_data.get("message", "")
+            # NTFY stamps every message with the server-side receive time
+            # (epoch seconds). Thread it through so the service can tell a
+            # fresh user tap from a stale one replayed by ?since=24h on
+            # reconnect. Absent for synthetic/internal events → None.
+            server_time = response_data.get("time")
+
+            # The NTFY topic is the source of truth; ?since=24h redelivers every
+            # recent message on listener reconnect with its stable server id.
+            # Guard against re-applying a tap we already consumed (e.g. an
+            # earlier game's "Yes" walking a fresh question forward) by skipping
+            # ids already in the service's ledger. A missing callback or a
+            # ledger hiccup must never block live processing.
+            ntfy_msg_id = response_data.get("id")
+            cb = self.service_callback
+            if (
+                ntfy_msg_id
+                and cb is not None
+                and hasattr(cb, "has_used_message")
+                and cb.has_used_message(ntfy_msg_id)
+            ):
+                logger.debug(
+                    f"NTFY: skipping already-consumed message id={ntfy_msg_id} "
+                    "(?since=24h replay)"
+                )
+                return
+
+            # Thread this message's id to the consume path so the service
+            # records it only once it actually USES the response (record-on-use;
+            # see NtfyService.process_response). Recording at consume rather than
+            # here at ingest means a dispatch that fails still gets retried by
+            # the next ?since=24h replay, and the audit log reflects what was
+            # used rather than merely received. Reset every call — the listener
+            # processes one message at a time, so a non-dispatching event
+            # (echoed notification / keepalive) can't leak a stale id onto the
+            # next dispatch.
+            self._pending_topic_msg_id = ntfy_msg_id
 
             # For message events (regular messages)
             if event_type == "message":
@@ -329,18 +370,18 @@ class NtfyAPI:
                     ]
                 ):
                     logger.info(f"Detected YES response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
                 elif any(
                     keyword in lower_message
                     for keyword in ["no", "not yet", "continue"]
                 ):
                     logger.info(f"Detected NO response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
                 elif message.strip():
                     # Route any non-empty text to the service callback
                     # (e.g. team name, opponent name, location replies)
                     logger.info(f"Routing free-text response: '{message}'")
-                    self._handle_response(message)
+                    self._handle_response(message, server_time=server_time)
 
             # For action events (button clicks)
             elif event_type in ["action", "click", "response"]:
@@ -373,7 +414,9 @@ class NtfyAPI:
                     if message_id:
                         self._handle_specific_response(message_id, input_text)
                     else:
-                        self._handle_response({"response": input_text})
+                        self._handle_response(
+                            {"response": input_text}, server_time=server_time
+                        )
                     return
 
                 # Check for game started/ended responses in any field
@@ -389,14 +432,14 @@ class NtfyAPI:
                     ]
                 ):
                     logger.info(f"Detected YES in action event: {response_data}")
-                    self._handle_response("Yes")
+                    self._handle_response("Yes", server_time=server_time)
                 elif any(
                     keyword in str(value).lower()
                     for value in response_data.values()
                     for keyword in ["no", "not yet", "continue"]
                 ):
                     logger.info(f"Detected NO in action event: {response_data}")
-                    self._handle_response("No")
+                    self._handle_response("No", server_time=server_time)
 
             elif event_type == "keepalive":
                 logger.debug(f"Received keepalive event: {response_data}")
@@ -420,13 +463,39 @@ class NtfyAPI:
                     logger.info(
                         f"Found potential response in unhandled event: {response_data}"
                     )
-                    self._handle_response(str(response_data))
+                    self._handle_response(str(response_data), server_time=server_time)
 
         except Exception as e:
             logger.error(f"Error processing NTFY response: {e}", exc_info=True)
 
-    def _handle_response(self, response: str):
-        """Handle a response to a message."""
+    def _record_consumed(self, topic_msg_id, response, server_time, decision):
+        """Record a consumed topic message id on the service ledger (guarded).
+
+        No-op when there's no id (synthetic/internal responses) or the callback
+        doesn't expose the ledger (e.g. a bare mock). This is the API-side
+        consume point for the legacy pending-future paths; the service records
+        its own consume points (task match / buffer) in process_response.
+        """
+        cb = self.service_callback
+        if topic_msg_id and cb is not None and hasattr(cb, "record_used_message"):
+            cb.record_used_message(
+                topic_msg_id,
+                server_time=server_time,
+                message=str(response)[:200],
+                decision=decision,
+            )
+
+    def _handle_response(self, response: str, server_time: float | None = None):
+        """Handle a response to a message.
+
+        Args:
+            response: The user's response text (or a dict for structured input).
+            server_time: NTFY server receive time (epoch seconds) for this
+                message, when available. Forwarded to the service callback so
+                it can reject stale replays. None for synthetic/internal
+                responses or the legacy pending-future path.
+        """
+        topic_msg_id = getattr(self, "_pending_topic_msg_id", None)
         # First, try to handle as a pending message (for legacy compatibility)
         if self.pending_messages:
             # Find the most recent message
@@ -441,6 +510,7 @@ class NtfyAPI:
                 future.set_result(response)
 
                 self._cleanup_pending_message(most_recent_id)
+                self._record_consumed(topic_msg_id, response, server_time, "future")
 
                 logger.info(
                     f"Processed response for message {most_recent_id}: {response}"
@@ -455,7 +525,11 @@ class NtfyAPI:
         if self.service_callback:
             logger.info(f"Routing response to service callback: {response}")
             # Use asyncio.create_task to avoid blocking
-            asyncio.create_task(self.service_callback.process_response(response))
+            asyncio.create_task(
+                self.service_callback.process_response(
+                    response, server_time=server_time, topic_msg_id=topic_msg_id
+                )
+            )
         else:
             logger.warning(
                 f"Received response but no pending messages and no service callback: {response}"
@@ -476,6 +550,12 @@ class NtfyAPI:
                 future.set_result(response_data)
 
                 self._cleanup_pending_message(message_id)
+                self._record_consumed(
+                    getattr(self, "_pending_topic_msg_id", None),
+                    response,
+                    None,
+                    "future",
+                )
 
                 logger.info(
                     f"Processed specific response for message {message_id}: {response}"
@@ -547,7 +627,7 @@ class NtfyAPI:
 
     async def ask_game_start_time(
         self, combined_video_path: str, group_dir: str, time_offset_minutes: int = 5
-    ) -> Optional[str]:
+    ) -> str | None:
         """Send notification about the need to set game start time."""
         if not self.enabled:
             logger.warning(
@@ -585,7 +665,7 @@ class NtfyAPI:
         group_dir: str,
         start_time_offset: str,
         time_offset_minutes: int = 5,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Send notification about the need to set game end time."""
         if not self.enabled:
             logger.warning(
@@ -621,10 +701,10 @@ class NtfyAPI:
         self,
         message: str,
         title: str = None,
-        tags: List[str] = None,
+        tags: list[str] = None,
         priority: int = None,
         image_path: str = None,
-        actions: List[Dict[str, Any]] = None,
+        actions: list[dict[str, Any]] = None,
     ) -> bool:
         """
         Send a notification to the NTFY topic.
@@ -734,7 +814,7 @@ class NtfyAPI:
 
     async def wait_for_response(
         self, message_id: str, timeout: float = 60.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Wait for a response to a specific message.
 
@@ -751,7 +831,7 @@ class NtfyAPI:
                     self.pending_messages[message_id], timeout=timeout
                 )
                 return response
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     f"Timed out waiting for response to message {message_id}"
                 )
@@ -765,8 +845,8 @@ class NtfyAPI:
         self,
         group_dir: str,
         combined_video_path: str,
-        existing_info: Dict[str, str] = None,
-    ) -> Dict[str, str]:
+        existing_info: dict[str, str] = None,
+    ) -> dict[str, str]:
         """
         Send notifications about missing team information fields.
 
@@ -848,8 +928,8 @@ class NtfyAPI:
         self,
         combined_video_path: str,
         group_dir: str,
-        game_options: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        game_options: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         """
         Send notification asking the user to resolve a conflict between games from different sources.
 
@@ -882,7 +962,7 @@ class NtfyAPI:
         if combined_video_path and os.path.exists(combined_video_path):
             try:
                 duration = await get_video_duration(combined_video_path)
-                if duration and isinstance(duration, (int, float)) and duration > 0:
+                if duration and isinstance(duration, int | float) and duration > 0:
                     mid_point = int(duration) // 2
                     time_offset = str(timedelta(seconds=mid_point)).split(".")[0]
             except Exception as e:
@@ -1029,7 +1109,7 @@ class NtfyAPI:
                 )
                 return None
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Timed out waiting for game conflict resolution")
             self._cleanup_pending_message(message_id)
             return None

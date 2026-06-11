@@ -3,7 +3,6 @@ Base class for all tasks.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict
 
 from ..queue_type import QueueType
 
@@ -33,13 +32,13 @@ class BaseTask(ABC):
         pass
 
     @abstractmethod
-    def serialize(self) -> Dict[str, object]:
+    def serialize(self) -> dict[str, object]:
         """Serialize the task for state persistence."""
         pass
 
     @classmethod
     @abstractmethod
-    def deserialize(cls, data: Dict[str, object]) -> "BaseTask":
+    def deserialize(cls, data: dict[str, object]) -> "BaseTask":
         """Deserialize a task from its serialized data."""
         pass
 

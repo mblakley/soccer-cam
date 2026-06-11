@@ -272,7 +272,7 @@ def _build_tile_indices(
         if segment_game_map:
             # Log game clusters
             clusters: dict[int, list] = defaultdict(list)
-            for seg, (ci, gs) in segment_game_map.items():
+            for seg, (ci, _gs) in segment_game_map.items():
                 t = _parse_segment_time(seg)
                 if t:
                     clusters[ci].append((t[0], t[1], seg))

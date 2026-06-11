@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 from datetime import UTC, datetime, timedelta
-from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -88,7 +87,7 @@ def _build_license_response(
     wrapped_key: bytes,
     *,
     user_id: str = USER_ID,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     artifact_url: str = "https://cdn.example/balldet-1.0.0.enc",
     tier: str = "free",
     version: str = VERSION,

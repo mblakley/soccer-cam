@@ -30,7 +30,6 @@ from typing import Any
 
 from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
 
-
 # A preset entry is an ordered list of (step_id, type, default_config) rows.
 # Defaults mirror each step's own ``config_model`` defaults so a freshly seeded
 # pipeline behaves identically whether a field is written explicitly or left to

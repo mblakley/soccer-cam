@@ -2,14 +2,14 @@
 Tests for the shared game selection logic (proximity guard + midpoint heuristic).
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from video_grouper.utils.game_selection import select_best_game
 
 
 def _utc(*args):
     """Create a UTC-aware datetime."""
-    return datetime(*args, tzinfo=timezone.utc)
+    return datetime(*args, tzinfo=UTC)
 
 
 class TestSelectBestGame:

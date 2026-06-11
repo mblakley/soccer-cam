@@ -10,18 +10,19 @@ This processor acts as the central coordinator for NTFY interactions:
 """
 
 import asyncio
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
+from typing import Any
 
+from video_grouper.models import MatchInfo
+from video_grouper.task_processors.services.match_info_service import MatchInfoService
+from video_grouper.utils.config import Config
+from video_grouper.utils.paths import get_combined_video_path
+
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
 from .services.ntfy_service import NtfyService
 from .tasks.ntfy import BaseNtfyTask, NtfyTaskFactory
-from video_grouper.models import MatchInfo
-from .base_queue_processor import QueueProcessor
-from video_grouper.utils.config import Config
-from .queue_type import QueueType
-from video_grouper.task_processors.services.match_info_service import MatchInfoService
-from video_grouper.utils.paths import get_combined_video_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class NtfyProcessor(QueueProcessor):
         ntfy_service: NtfyService,
         match_info_service: MatchInfoService,
         poll_interval: int = 30,
-        video_processor: Optional[Any] = None,
+        video_processor: Any | None = None,
     ):
         """
         Initialize the NTFY queue processor.
@@ -63,7 +64,7 @@ class NtfyProcessor(QueueProcessor):
         self.poll_interval = poll_interval
         self.video_processor = video_processor
         self._stopping = False
-        self._response_events: Dict[str, asyncio.Event] = {}
+        self._response_events: dict[str, asyncio.Event] = {}
 
     @property
     def queue_type(self) -> QueueType:
@@ -123,7 +124,7 @@ class NtfyProcessor(QueueProcessor):
                         return
                     try:
                         await asyncio.wait_for(event.wait(), timeout=30.0)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.debug(f"NTFY: Still waiting for response to {item}")
                         continue
             finally:
@@ -140,8 +141,17 @@ class NtfyProcessor(QueueProcessor):
             raise RuntimeError(f"Failed to send NTFY notification for {item}")
 
     def get_item_key(self, item: BaseNtfyTask) -> str:
-        """Get unique key for a BaseNtfyTask."""
-        return f"{item.get_task_type()}:{item.group_dir}:{hash(item)}"
+        """Get a stable dedup key for a BaseNtfyTask.
+
+        Keyed on task_type + group_dir only — NOT hash(item). A per-instance
+        hash made two equivalent enqueues (e.g. a fresh game_start_time task
+        queued twice by racing startup-recovery and state-auditor passes)
+        look distinct, so both ran and the user got two identical phone
+        notifications for one game. There is never more than one in-flight
+        question of a given type for a given directory: the iterative
+        game-start / team-info follow-ups are executed inline, not re-queued.
+        """
+        return f"{item.get_task_type()}:{item.group_dir}"
 
     async def _process_pending_requests_on_startup(self) -> None:
         """Process any pending NTFY requests on startup."""
@@ -177,7 +187,7 @@ class NtfyProcessor(QueueProcessor):
                 self.ntfy_service.clear_pending_task(group_dir)
 
     async def _recreate_queued_task(
-        self, group_dir: str, task_type: str, metadata: Dict[str, Any]
+        self, group_dir: str, task_type: str, metadata: dict[str, Any]
     ) -> None:
         """Recreate a task that was queued but not sent."""
         logger.info(f"Recreating queued task for {group_dir}: {task_type}")
@@ -470,15 +480,10 @@ class NtfyProcessor(QueueProcessor):
             group_dir: Directory associated with the task
             task_type: Type of task that was completed
         """
-        # Find the task in the queue by matching task_type and group_dir
-        # We need to find the exact key that includes the hash
-        item_key_to_remove = None
-        for item_key in list(self._queued_items):
-            if item_key.startswith(f"{task_type}:{group_dir}:"):
-                item_key_to_remove = item_key
-                break
-
-        if item_key_to_remove:
+        # Item keys are stable (task_type:group_dir, see get_item_key), so
+        # rebuild the key directly rather than scanning.
+        item_key_to_remove = f"{task_type}:{group_dir}"
+        if item_key_to_remove in self._queued_items:
             # Remove from _queued_items set
             self._queued_items.discard(item_key_to_remove)
             logger.info(

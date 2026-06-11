@@ -1,15 +1,17 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Add the project root to the Python path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PyQt6.QtWidgets import QApplication
-from video_grouper.tray.main import SystemTrayIcon
-from video_grouper.utils.config import Config, AppConfig, StorageConfig
+
 from video_grouper.pipeline.config import PipelineConfig
+from video_grouper.tray.main import SystemTrayIcon
+from video_grouper.utils.config import AppConfig, Config, StorageConfig
 
 
 # We need a QApplication instance to test PyQt components
@@ -85,7 +87,12 @@ def test_system_tray_icon_initialization(
     assert tray_icon.config_path == config_file
     mock_load_config.assert_called_once_with(config_file)
     assert tray_icon.config == mock_config
-    assert tray_icon.github_repo == "test-owner/test-repo"
+    # github_repo is no longer a tray attribute: the GitHub poll lives
+    # in the service now. The tray polls /api/update/status instead.
+    # Probe __dict__ directly rather than hasattr -- hasattr triggers
+    # Qt's __getattr__ which raises here because the super-class init
+    # is mocked out.
+    assert "github_repo" not in tray_icon.__dict__
     mock_init_ui.assert_called_once()
     mock_start_update_checker.assert_called_once()
 

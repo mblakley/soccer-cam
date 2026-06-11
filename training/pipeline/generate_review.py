@@ -89,7 +89,7 @@ def _find_trajectory_breaks(conn, game_id, frame_interval=4):
         tracks[(seg, row, col)].append((fidx, cx, cy, w, h, conf, stem))
 
     breaks = []
-    for key, detections in tracks.items():
+    for _key, detections in tracks.items():
         if len(detections) < 3:
             continue  # need some track history
 

@@ -2,16 +2,17 @@
 YouTube upload task for uploading videos to YouTube.
 """
 
-import os
+import asyncio
 import logging
-from typing import Dict, Any, Optional
+import os
 from dataclasses import dataclass
+from typing import Any
 
+from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.utils.config import YouTubeConfig
 from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
-from video_grouper.models import MatchInfo, DirectoryState
-from video_grouper.utils.config import YouTubeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class YoutubeUploadTask(BaseUploadTask):
         """Return the group directory path."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -154,6 +155,12 @@ class YoutubeUploadTask(BaseUploadTask):
                 )
                 return False
 
+            # googleapiclient is sync; without asyncio.to_thread the
+            # 60-90 minute resumable upload would block this event loop,
+            # which the auth server, tray status poller, and other queue
+            # processors share. Symptoms observed live tonight:
+            # "update status poll unexpected error: timed out" every
+            # 60s in the tray log throughout the upload window.
             # Upload processed (trimmed) video
             if processed_video_path and os.path.exists(processed_video_path):
                 logger.info(f"Uploading processed video: {processed_video_path}")
@@ -162,11 +169,14 @@ class YoutubeUploadTask(BaseUploadTask):
                 playlist_id = None
 
                 if processed_playlist_name:
-                    playlist_id = uploader.get_or_create_playlist(
-                        processed_playlist_name, description
+                    playlist_id = await asyncio.to_thread(
+                        uploader.get_or_create_playlist,
+                        processed_playlist_name,
+                        description,
                     )
 
-                video_id = uploader.upload_video(
+                video_id = await asyncio.to_thread(
+                    uploader.upload_video,
                     processed_video_path,
                     title,
                     description,
@@ -188,11 +198,14 @@ class YoutubeUploadTask(BaseUploadTask):
                 playlist_id = None
 
                 if raw_playlist_name:
-                    playlist_id = uploader.get_or_create_playlist(
-                        raw_playlist_name, description
+                    playlist_id = await asyncio.to_thread(
+                        uploader.get_or_create_playlist,
+                        raw_playlist_name,
+                        description,
                     )
 
-                video_id = uploader.upload_video(
+                video_id = await asyncio.to_thread(
+                    uploader.upload_video,
                     raw_video_path,
                     title,
                     description,
@@ -251,7 +264,7 @@ class YoutubeUploadTask(BaseUploadTask):
         config: YouTubeConfig,
         ntfy_service,
         storage_path: str,
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Get playlist names for processed and raw videos.
 
@@ -348,7 +361,7 @@ class YoutubeUploadTask(BaseUploadTask):
         return f"YoutubeUploadTask({os.path.basename(self.group_dir)})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "YoutubeUploadTask":
+    def from_dict(cls, data: dict[str, Any]) -> "YoutubeUploadTask":
         """
         Create a YoutubeUploadTask from serialized data.
 
@@ -363,7 +376,7 @@ class YoutubeUploadTask(BaseUploadTask):
         return cls(group_dir=group_dir)
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "YoutubeUploadTask":
+    def deserialize(cls, data: dict[str, object]) -> "YoutubeUploadTask":
         """
         Deserialize a YoutubeUploadTask from its serialized data.
 

@@ -79,7 +79,7 @@ def test_preset_round_trips_through_save_load(tmp_path, name):
     assert [s.type for s in back] == [s.type for s in orig]
     # Config values survive (raw strings after reload — same contract as the
     # rest of the [PIPELINE] layer).
-    for o, b in zip(orig, back):
+    for o, b in zip(orig, back, strict=False):
         assert {k: str(v) for k, v in o.config.items()} == b.config
 
 

@@ -24,7 +24,7 @@ os.makedirs(local, exist_ok=True)
 print("Phase 1: Copying tars from share...", flush=True)
 start = time.time()
 n = 0
-for root, dirs, files in os.walk(share):
+for root, _dirs, files in os.walk(share):
     for f in sorted(files):
         if not f.endswith(".tar"):
             continue
@@ -47,7 +47,7 @@ print(f"Phase 1 done: {n} tars in {time.time() - start:.0f}s", flush=True)
 print("Phase 2: Extracting...", flush=True)
 start2 = time.time()
 n2 = 0
-for root, dirs, files in os.walk(cache):
+for root, _dirs, files in os.walk(cache):
     for f in sorted(files):
         if not f.endswith(".tar"):
             continue

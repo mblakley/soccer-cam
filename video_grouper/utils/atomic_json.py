@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from video_grouper.utils.locking import FileLock
 
@@ -41,7 +42,7 @@ def read_json(path: str, default: Any = None) -> Any:
     try:
         with FileLock(path):
             if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     return json.load(f)
     except (json.JSONDecodeError, FileNotFoundError) as e:
         logger.error("Could not parse JSON at %s: %s", path, e)
@@ -77,7 +78,7 @@ def update_json(
             data: dict = base
             if os.path.exists(path):
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(path, encoding="utf-8") as f:
                         data = json.load(f)
                 except (json.JSONDecodeError, FileNotFoundError):
                     data = dict(default or {})

@@ -99,7 +99,7 @@ class PipelineStep(ABC):
         self.config = config
 
     @abstractmethod
-    async def run(self, manifest: "PipelineManifest", ctx: StepContext) -> bool:
+    async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
         """Process this step.
 
         Read inputs from the manifest's artifact map (the keys named in

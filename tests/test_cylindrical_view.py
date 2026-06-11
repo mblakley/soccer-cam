@@ -12,7 +12,6 @@ from video_grouper.inference.cylindrical_view import (
     yaw_pitch_to_pixel,
 )
 
-
 SRC_W = 4096
 SRC_H = 1800
 SRC_HFOV = 180.0

@@ -245,7 +245,7 @@ def generate_review_packet(
         "frames": [],
     }
 
-    for sel, filename in zip(selections, filenames):
+    for sel, filename in zip(selections, filenames, strict=False):
         manifest["frames"].append(
             {
                 "frame_idx": sel.frame_idx,

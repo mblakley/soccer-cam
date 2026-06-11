@@ -1,7 +1,7 @@
 """Remote training script — maps share via WNet, then trains YOLO."""
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from map_share import map_share  # noqa: E402

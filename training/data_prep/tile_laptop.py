@@ -18,9 +18,9 @@ import time
 import zipfile
 from pathlib import Path
 
-import psutil
 import cv2
 import numpy as np
+import psutil
 
 try:
     import av

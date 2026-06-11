@@ -1,25 +1,25 @@
-import os
 import logging
+import os
 
-from .base_polling_processor import PollingProcessor
-from .download_processor import DownloadProcessor
-from .video_processor import VideoProcessor
 from ..models import DirectoryState, RecordingFile
 from ..models.match_info import MatchInfo
 from ..task_processors.tasks.video import CombineTask, TrimTask
+from ..utils.config import Config
+from ..utils.ffmpeg_utils import get_video_duration
 from ..utils.paths import (
-    get_state_file_path,
     get_combined_video_path,
     get_match_info_path,
+    get_state_file_path,
 )
-from ..utils.ffmpeg_utils import get_video_duration
+from .base_polling_processor import PollingProcessor
+from .download_processor import DownloadProcessor
 from .services import (
-    NtfyService,
-    MatchInfoService,
     CleanupService,
+    MatchInfoService,
+    NtfyService,
 )
-from .services.mock_services import create_teamsnap_service, create_playmetrics_service
-from ..utils.config import Config
+from .services.mock_services import create_playmetrics_service, create_teamsnap_service
+from .video_processor import VideoProcessor
 
 logger = logging.getLogger(__name__)
 

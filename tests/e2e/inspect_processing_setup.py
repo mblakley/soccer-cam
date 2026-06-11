@@ -3,12 +3,12 @@ Standalone script to inspect Autocam's Processing Setup dialog.
 Run: uv run python tests/e2e/inspect_processing_setup.py
 """
 
-import time
 import subprocess
 import sys
+import time
+
 import win32gui
 from pywinauto import Desktop
-
 
 AUTOCAM_EXE = r"C:\Users\markb\AppData\Local\Programs\Autocam\GUI.exe"
 

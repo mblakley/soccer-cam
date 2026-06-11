@@ -1,15 +1,16 @@
 import logging
 import logging.handlers
 from pathlib import Path
-from typing import Optional
-from .paths import get_shared_data_path
+
 from video_grouper.utils.paths import resolve_path
+
+from .paths import get_shared_data_path
 
 
 def setup_logging(
     level: str = "INFO",
-    log_dir: Optional[Path] = None,
-    log_file: Optional[Path] = None,
+    log_dir: Path | None = None,
+    log_file: Path | None = None,
     app_name: str = "video_grouper",
     backup_count: int = 30,
 ) -> None:

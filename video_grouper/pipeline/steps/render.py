@@ -511,7 +511,7 @@ def _solve_framing(
         c0 = center_column_rows(p0, round(yaw_s, 1))
         c1 = center_column_rows(p1, round(yaw_s, 1))
 
-        def solve(idx, target):
+        def solve(idx, target, c0=c0, c1=c1):
             slope = (c1[idx] - c0[idx]) / 10.0
             return (target - c0[idx]) / slope if abs(slope) > 1e-6 else 0.0
 
@@ -797,7 +797,7 @@ def _load_field(polygon_path: str | None):
     if not polygon_path:
         return None, None
     try:
-        with open(polygon_path, "r", encoding="utf-8") as f:
+        with open(polygon_path, encoding="utf-8") as f:
             payload = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("render: field polygon %s unusable (%s)", polygon_path, e)
@@ -896,7 +896,7 @@ def _render_video(
     out_w = cfg.render_output_width
     out_h = cfg.render_output_height
 
-    with open(trajectory_path, "r", encoding="utf-8") as f:
+    with open(trajectory_path, encoding="utf-8") as f:
         raw_trajectory = json.load(f)
     entries = compute_entries(raw_trajectory, mode.velocity_ema)
 
@@ -1039,7 +1039,7 @@ class RenderFrameConsumer(FrameConsumer):
         self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
         self._sw, self._sh = source.width, source.height
-        with open(manifest.get(cfg.trajectory_key), "r", encoding="utf-8") as f:
+        with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
         polygon, self._homography = _load_field(manifest.get("field_polygon_path"))
         self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)

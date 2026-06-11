@@ -44,13 +44,13 @@ class TrackStepConfig(BaseModel):
     track_interp_gap: int = 16
 
 
-def _load_field_polygon(path: str | None) -> "np.ndarray | None":
+def _load_field_polygon(path: str | None) -> np.ndarray | None:
     """Load the field-perimeter polygon from the manifest's ``field_polygon_path`` (the same
     artifact the render step consumes). Returns None if unavailable."""
     if not path:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning(
@@ -72,13 +72,13 @@ def _run_tracking(
     stationary_len: int = 20,
     interp_gap: int = 16,
     conf_threshold: float = 0.45,
-    field_polygon: "np.ndarray | None" = None,
+    field_polygon: np.ndarray | None = None,
     field_margin: float = 50.0,
     tiny_span_px: float = 6.0,
 ) -> int:
     """Load raw detections, apply the (tunable) confidence + field-location filters, run the tracker,
     write the trajectory JSON."""
-    with open(detections_path, "r", encoding="utf-8") as f:
+    with open(detections_path, encoding="utf-8") as f:
         per_frame: list[dict] = json.load(f)
 
     # Tunable filters on the RAW detections — kept out of the expensive detect step so they can be

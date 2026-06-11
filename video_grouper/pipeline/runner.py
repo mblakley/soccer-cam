@@ -80,7 +80,7 @@ class PipelineRunner:
         self,
         specs: list[StepSpec],
         runtime: str = "service",
-        resource_manager: "ResourceManager | None" = None,
+        resource_manager: ResourceManager | None = None,
     ):
         self.specs = list(specs)
         self.runtime = runtime

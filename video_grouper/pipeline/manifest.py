@@ -59,7 +59,7 @@ class PipelineManifest:
         group_dir: str | os.PathLike,
         input_path: str,
         output_path: str,
-    ) -> "PipelineManifest":
+    ) -> PipelineManifest:
         """Load an existing manifest, or initialize a fresh one.
 
         A manifest from an unrecognized version is discarded and re-initialized

@@ -4,10 +4,9 @@ import asyncio
 import logging
 import os
 import platform
-from typing import Optional
 
-from .base_polling_processor import PollingProcessor
 from ..utils.config import Config
+from .base_polling_processor import PollingProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +40,8 @@ class TTTJobProcessor(PollingProcessor):
         self.video_processor = video_processor
         self.upload_processor = upload_processor
         self._processing_jobs: set[str] = set()
-        self._service_id: Optional[str] = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._service_id: str | None = None
+        self._heartbeat_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the processor and register service with TTT."""
@@ -218,7 +217,7 @@ class TTTJobProcessor(PollingProcessor):
         except Exception as e:
             logger.error("TTT_JOBS: Failed to report failure for %s: %s", job_id, e)
 
-    async def _resolve_or_create_group(self, job: dict, config: dict) -> Optional[str]:
+    async def _resolve_or_create_group(self, job: dict, config: dict) -> str | None:
         """Resolve or create the recording group directory for this job."""
         recording_dir = config.get("recording_group_dir")
         if recording_dir:
@@ -233,7 +232,7 @@ class TTTJobProcessor(PollingProcessor):
 
     async def _wait_for_combined(
         self, group_dir: str, timeout: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         """Wait for combined.mp4 to appear in the group directory."""
         from ..utils.paths import get_combined_video_path
 
@@ -253,8 +252,8 @@ class TTTJobProcessor(PollingProcessor):
         group_dir: str,
         combined_path: str,
         trim_start: str,
-        trim_end: Optional[str],
-    ) -> Optional[str]:
+        trim_end: str | None,
+    ) -> str | None:
         """Trim the combined video using FFmpeg."""
         from ..utils.ffmpeg_utils import trim_video
 
@@ -264,7 +263,7 @@ class TTTJobProcessor(PollingProcessor):
 
     async def _upload_video(
         self, group_dir: str, video_path: str, config: dict
-    ) -> Optional[str]:
+    ) -> str | None:
         """Upload video to YouTube via the upload processor."""
         if not self.upload_processor or not self.config.youtube.enabled:
             logger.info("TTT_JOBS: YouTube uploads not enabled, skipping")

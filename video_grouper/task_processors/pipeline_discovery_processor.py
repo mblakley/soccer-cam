@@ -16,10 +16,11 @@ import logging
 import os
 from pathlib import Path
 
+from video_grouper.utils.config import Config
+
 from .base_polling_processor import PollingProcessor
 from .tasks.pipeline import PipelineTask
 from .tasks.pipeline.utils import get_ball_tracking_io_paths
-from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class PipelineDiscoveryProcessor(PollingProcessor):
                 continue
 
             try:
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     state_data = json.load(f)
                 status = state_data.get("status")
             except (json.JSONDecodeError, OSError) as e:
@@ -127,24 +128,35 @@ class PipelineDiscoveryProcessor(PollingProcessor):
         return None
 
     async def _recover_upload(self, group_dir: Path) -> None:
-        """Queue YouTube upload for completed groups missing an upload.
+        """Queue YouTube upload for completed groups that haven't been uploaded.
 
-        Tracks recovered dirs across cycles to avoid duplicate uploads.
+        Checks whether the group already reached ``complete`` status (i.e.
+        upload succeeded) before re-queuing. This allows recovery after
+        transient failures (expired token, network error) without duplicate
+        uploads for groups that already finished.
         """
-        group_key = str(group_dir)
-        if group_key in self._recovered_uploads:
-            return
         if not self.config.youtube.enabled:
             return
+        # If the group already reached "complete", no upload needed
+        state_file = group_dir / "state.json"
+        try:
+            with open(state_file) as f:
+                state_data = json.load(f)
+            if state_data.get("status") == "complete":
+                return
+        except (json.JSONDecodeError, OSError):
+            return
+
         upload_processor = getattr(self.pipeline_processor, "upload_processor", None)
         if not upload_processor:
             return
+
+        # Don't re-queue if the upload processor already has this group
         from .tasks.upload import YoutubeUploadTask
 
         relative_group_dir = os.path.relpath(str(group_dir), self.storage_path)
         youtube_task = YoutubeUploadTask(group_dir=relative_group_dir)
         await upload_processor.add_work(youtube_task)
-        self._recovered_uploads.add(group_key)
         logger.info(
             "PIPELINE_DISCOVERY: recovered YouTube upload for %s", group_dir.name
         )

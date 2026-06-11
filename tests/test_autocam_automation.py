@@ -1,15 +1,17 @@
 """Tests for the autocam automation function."""
 
+import datetime
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from video_grouper.tray.autocam_automation import (
-    run_autocam_on_file,
+    _execute_autocam_gui_automation,
     _validate_autocam_inputs,
     _wait_for_completion_and_cleanup,
-    _execute_autocam_gui_automation,
+    run_autocam_on_file,
 )
 
 
@@ -296,11 +298,12 @@ class TestWaitForCompletionExitDetection:
     def test_exit_with_real_output_returns_success(
         self, mock_main_window, mock_file_system
     ):
-        """GUI.exe PIDs exit + output file is large enough → True.
-
-        The autouse ``mock_file_system`` conftest fixture pins
-        ``os.path.getsize`` to 1 MB; we override it here so the size
-        check exercises the success branch.
+        """GUI.exe PIDs exit + output passes validation → True.
+        v0.4.12 validation = size floor + moov-atom presence. The test
+        fixture is an empty ``output.touch()`` file; we mock the moov
+        scan to True because this test's purpose is the exit-detection
+        branch behavior, not the validator internals (those have
+        dedicated tests in test_autocam_output_validation.py).
         """
         mock_file_system["getsize"].return_value = 11 * 1024 * 1024  # > 10 MB threshold
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,6 +313,10 @@ class TestWaitForCompletionExitDetection:
                 patch(
                     "video_grouper.tray.autocam_automation._live_autocam_pids",
                     return_value=[],
+                ),
+                patch(
+                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    return_value=True,
                 ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
                 patch(
@@ -385,6 +392,10 @@ class TestWaitForCompletionExitDetection:
                     "video_grouper.tray.autocam_automation._live_autocam_pids",
                     side_effect=lambda pids: next(live_results),
                 ),
+                patch(
+                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    return_value=True,
+                ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
                 patch("video_grouper.tray.autocam_automation.subprocess.run"),
             ):
@@ -404,8 +415,11 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
     tray crash would re-process a video we already have."""
 
     def test_skips_when_output_already_exists(self, tmp_path, mock_file_system):
-        """Output file present + large enough → return True immediately
-        without launching subprocess.Popen / Desktop / pywinauto."""
+        """Output file present + passes validation → return True
+        immediately without launching subprocess.Popen / Desktop /
+        pywinauto. v0.4.12: validation = size floor + moov-atom
+        presence; mocked True here because the test fixture is an
+        empty ``touch()``ed file."""
         mock_file_system["getsize"].return_value = 50 * 1024 * 1024  # > 10 MB
         input_path = tmp_path / "input.mp4"
         input_path.touch()
@@ -416,6 +430,10 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
                 "video_grouper.tray.autocam_automation.subprocess.Popen"
             ) as mock_popen,
             patch("video_grouper.tray.autocam_automation.Desktop") as mock_desktop,
+            patch(
+                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                return_value=True,
+            ),
         ):
             result = _execute_autocam_gui_automation(
                 "C:/fake/GUI.exe", str(input_path), str(output_path)
@@ -441,6 +459,7 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             ) as mock_popen,
             patch("video_grouper.tray.autocam_automation.Desktop"),
             patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.os.remove"),
             patch(
                 "video_grouper.tray.autocam_automation._find_autocam_hwnd",
                 return_value=None,
@@ -453,3 +472,246 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             except Exception:
                 pass  # downstream pywinauto interactions will fail; that's ok
         mock_popen.assert_called()
+
+    def test_pre_deletes_partial_output(self, tmp_path, mock_file_system):
+        """A sub-threshold partial output gets os.remove'd before any
+        AutoCam launch. Leaving it would trigger the Windows Save
+        dialog's "Confirm Save As" overwrite-confirm overlay, which
+        the dialog automation can't drive; AutoCam then errors
+        "No output file selected" the instant Start Processing fires.
+        """
+        mock_file_system["getsize"].return_value = 5 * 1024 * 1024  # 5 MB < 10 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.os.remove") as mock_remove,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass  # downstream pywinauto will fail; we only care that
+                # the precheck ran the remove + reached Popen
+        # mp4 deleted; sentinel cleanup also called (defense against
+        # stale-sentinel-without-mp4 state). Both touch os.remove.
+        removed = [c.args[0] for c in mock_remove.call_args_list]
+        assert any(p.endswith("output.mp4") for p in removed), removed
+        # And we still launched AutoCam afterwards.
+        mock_popen.assert_called()
+
+    def test_partial_output_remove_oserror_does_not_abort_run(
+        self, tmp_path, mock_file_system
+    ):
+        """If os.remove fails (file locked, permissions, etc.), log a
+        warning and proceed with the launch anyway -- a doomed retry
+        attempt is still better than skipping the queue entry."""
+        mock_file_system["getsize"].return_value = 5 * 1024 * 1024  # 5 MB
+        input_path = tmp_path / "input.mp4"
+        input_path.touch()
+        output_path = tmp_path / "output.mp4"
+        output_path.touch()
+        with (
+            patch(
+                "video_grouper.tray.autocam_automation.subprocess.Popen"
+            ) as mock_popen,
+            patch("video_grouper.tray.autocam_automation.Desktop"),
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.remove",
+                side_effect=PermissionError("locked"),
+            ) as mock_remove,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd",
+                return_value=None,
+            ),
+        ):
+            try:
+                _execute_autocam_gui_automation(
+                    "C:/fake/GUI.exe", str(input_path), str(output_path)
+                )
+            except Exception:
+                pass
+        # remove was attempted (and swallowed the PermissionError),
+        # and we continued to launch AutoCam.
+        mock_remove.assert_called()
+        mock_popen.assert_called()
+
+
+class TestTaskkillAutocamTree:
+    """The taskkill in the cleanup paths must kill both GUI.exe and
+    autocam.exe (the actual processing child). Killing only GUI.exe
+    leaves autocam.exe orphaned, eating CPU and holding the partial
+    output file handle so the next pass can't delete it (observed
+    2026-05-31: two orphaned autocam.exe processes from two consecutive
+    Fix C wedges)."""
+
+    def test_taskkill_kills_both_images(self):
+        from video_grouper.tray.autocam_automation import _taskkill_autocam_tree
+
+        with patch("video_grouper.tray.autocam_automation.subprocess.run") as mock_run:
+            _taskkill_autocam_tree()
+        # Two calls, one for each image name. taskkill order doesn't matter
+        # operationally but the test pins it for clarity.
+        image_names = [c.args[0][3] for c in mock_run.call_args_list]
+        assert image_names == ["GUI.exe", "autocam.exe"]
+
+
+class TestShutdownMarkerFastPath:
+    """The shutdown-marker fast path: the first poll whose notification
+    contains a shutdown marker (e.g. ``framereader_close``) and a
+    real-sized output (>= 10 MB) breaks out as success immediately.
+    Without this, the loop would wait for GUI.exe to exit on its own --
+    on the West Seneca run, manual taskkill was required because the
+    GUI sat in shutdown phase forever from the user's perspective.
+    """
+
+    def test_shutdown_marker_breaks_immediately(self):
+        """Notification goes processing → framereader_close. Loop must
+        break within a couple polls, not wait."""
+        import video_grouper.tray.autocam_automation as mod
+
+        texts = [
+            "* average time per frame: 60 [ms]\r\n* 50% of video processed",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        notification = MagicMock()
+        idx = [0]
+        notification.window_text.side_effect = lambda: texts[
+            min(idx[0], len(texts) - 1)
+        ]
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 6, 1, 7, 50, 0)
+        clock = [start]
+        polls_done = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(_seconds):
+            polls_done[0] += 1
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            idx[0] += 1
+            # Force loop exit after a few polls so a missed fast path
+            # fails the assertion explicitly rather than spinning.
+            if polls_done[0] >= 8:
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(mod, "_live_autocam_pids", return_value=[12345]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=lambda p: p == "C:/fake/out.mp4",
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                return_value=3_800_000_000,  # 3.8 GB
+            ),
+            # v0.4.12: validator also requires moov atom; mock True since
+            # this test's purpose is the fast-path timing, not the
+            # validator (covered in test_autocam_output_validation.py).
+            patch(
+                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                return_value=True,
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            from video_grouper.tray.autocam_automation import (
+                _wait_for_completion_and_cleanup,
+            )
+
+            result = _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path="C:/fake/out.mp4",
+                tracked_pids=[12345],
+            )
+
+        assert result is True
+        assert polls_done[0] <= 3, (
+            f"loop should break on first shutdown-marker poll, got "
+            f"{polls_done[0]} polls"
+        )
+
+    def test_shutdown_marker_with_tiny_output_does_not_short_circuit(self):
+        """When the shutdown marker appears but the output is below
+        the 10 MB threshold, the fast path must NOT fire as success --
+        the run is a real crash, not a normal cleanup."""
+        import video_grouper.tray.autocam_automation as mod
+
+        texts = [
+            "* average time per frame: 60 [ms]\r\n* 10% of video processed",
+            "Reader\r\nFrameReader_close: call free for struct FrameReader *reader",
+        ]
+        notification = MagicMock()
+        idx = [0]
+        notification.window_text.side_effect = lambda: texts[
+            min(idx[0], len(texts) - 1)
+        ]
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 6, 1, 7, 50, 0)
+        clock = [start]
+        polls_done = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(_seconds):
+            polls_done[0] += 1
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            idx[0] += 1
+            if polls_done[0] >= 5:
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(mod, "_live_autocam_pids", return_value=[12345]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=lambda p: p == "C:/fake/out.mp4",
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                return_value=2 * 1024 * 1024,  # 2 MB
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            from video_grouper.tray.autocam_automation import (
+                _wait_for_completion_and_cleanup,
+            )
+
+            result = _wait_for_completion_and_cleanup(
+                mw,
+                state=None,
+                output_path="C:/fake/out.mp4",
+                tracked_pids=[12345],
+            )
+
+        # With tiny output, the loop should not return success via the
+        # fast path. It eventually falls through and returns False once
+        # the synthetic 24h ceiling triggers.
+        assert result is False

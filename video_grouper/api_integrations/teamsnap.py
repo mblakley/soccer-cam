@@ -2,13 +2,13 @@
 TeamSnap API integration for video_grouper.
 """
 
-import re
-
-import requests
-from datetime import datetime, timedelta
 import logging
-from typing import Dict, List, Optional, TypedDict, Union
+import re
+from datetime import datetime, timedelta
+from typing import TypedDict
+
 import pytz
+import requests
 
 from video_grouper.utils.config import TeamSnapConfig, TeamSnapTeamConfig
 
@@ -39,7 +39,7 @@ class TeamSnapEvent(TypedDict, total=False):
     team_name: str
 
     # Custom fields
-    custom_fields: dict[str, Union[str, int, float, bool]]
+    custom_fields: dict[str, str | int | float | bool]
 
 
 class TeamSnapGame(TeamSnapEvent):
@@ -170,8 +170,8 @@ class TeamSnapAPI:
             return False
 
     def _make_api_request(
-        self, url: str, method: str = "GET", params: Dict = None, json_data: Dict = None
-    ) -> Optional[Dict]:
+        self, url: str, method: str = "GET", params: dict = None, json_data: dict = None
+    ) -> dict | None:
         """
         Make a request to the TeamSnap API.
 
@@ -272,7 +272,7 @@ class TeamSnapAPI:
                     self.endpoints[rel] = href
                     logger.debug(f"Discovered endpoint: {rel} -> {href}")
 
-    def _find_link_by_rel(self, collection: Dict, rel: str) -> Optional[str]:
+    def _find_link_by_rel(self, collection: dict, rel: str) -> str | None:
         """
         Find a link in a collection by its rel attribute.
 
@@ -290,7 +290,7 @@ class TeamSnapAPI:
 
         return None
 
-    def _find_link_in_item(self, item: Dict, rel: str) -> Optional[str]:
+    def _find_link_in_item(self, item: dict, rel: str) -> str | None:
         """
         Find a link in an item by its rel attribute.
 
@@ -308,7 +308,7 @@ class TeamSnapAPI:
 
         return None
 
-    def _extract_data_from_item(self, item: Dict) -> TeamSnapEvent:
+    def _extract_data_from_item(self, item: dict) -> TeamSnapEvent:
         """
         Extract data fields from a Collection+JSON item.
 
@@ -329,7 +329,7 @@ class TeamSnapAPI:
 
         return result
 
-    def get_team_events(self) -> List[TeamSnapEvent]:
+    def get_team_events(self) -> list[TeamSnapEvent]:
         """
         Get events for the configured team.
 
@@ -370,7 +370,7 @@ class TeamSnapAPI:
         logger.info(f"Found {len(events)} team events")
         return events
 
-    def get_games(self) -> List[TeamSnapGame]:
+    def get_games(self) -> list[TeamSnapGame]:
         """
         Get games for the configured team.
 
@@ -407,7 +407,7 @@ class TeamSnapAPI:
 
     def find_game_for_recording(
         self, recording_start: datetime, recording_end: datetime
-    ) -> Optional[TeamSnapGame]:
+    ) -> TeamSnapGame | None:
         """
         Find a game that corresponds to a recording timespan.
 
@@ -683,7 +683,7 @@ class TeamSnapAPI:
             logger.error(f"TeamSnap connection test failed with exception: {e}")
             return False
 
-    def get_teams(self) -> List[TeamSnapEvent]:
+    def get_teams(self) -> list[TeamSnapEvent]:
         """
         Get all teams accessible to the user.
 

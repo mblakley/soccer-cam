@@ -5,11 +5,12 @@ Task for compiling multiple clips into a highlight reel using FFmpeg concat.
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
-from ..base_task import BaseTask
-from ...queue_type import QueueType
 from video_grouper.utils.ffmpeg_utils import combine_videos
+
+from ...queue_type import QueueType
+from ..base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class HighlightCompilationTask(BaseTask):
 
         return success
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         return {
             "task_type": self.task_type,
             "highlight_id": self.highlight_id,
@@ -72,7 +73,7 @@ class HighlightCompilationTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, Any]) -> "HighlightCompilationTask":
+    def deserialize(cls, data: dict[str, Any]) -> "HighlightCompilationTask":
         return cls(
             highlight_id=data["highlight_id"],
             title=data["title"],

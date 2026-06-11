@@ -4,13 +4,14 @@ For each gap from Exp 1, seek to that frame, check for motion blob
 near the predicted position. Record matches with color/shape analysis.
 """
 
-import cv2
 import json
 import logging
-import numpy as np
 import time
 from collections import defaultdict
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)

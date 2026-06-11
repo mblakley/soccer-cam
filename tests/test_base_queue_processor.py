@@ -10,7 +10,6 @@ from video_grouper.task_processors.base_queue_processor import QueueProcessor
 from video_grouper.task_processors.queue_type import QueueType
 from video_grouper.task_processors.tasks.base_task import BaseTask
 
-
 # ---------------------------------------------------------------------------
 # Minimal concrete implementations for testing
 # ---------------------------------------------------------------------------

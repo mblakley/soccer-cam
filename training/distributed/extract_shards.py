@@ -24,7 +24,7 @@ print("Phase 1: Copying tars to local disk...", flush=True)
 start = time.time()
 n = 0
 total_bytes = 0
-for root, dirs, files in os.walk(share):
+for root, _dirs, files in os.walk(share):
     for f in sorted(files):
         if not f.endswith(".tar"):
             continue
@@ -51,7 +51,7 @@ print(f"Phase 1 done: {n} tars, {mb:.0f} MB in {elapsed:.0f}s", flush=True)
 print("Phase 2: Extracting locally...", flush=True)
 start2 = time.time()
 extracted = 0
-for root, dirs, files in os.walk(tars_local):
+for root, _dirs, files in os.walk(tars_local):
     for f in sorted(files):
         if not f.endswith(".tar"):
             continue

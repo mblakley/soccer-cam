@@ -9,15 +9,16 @@ Asks sequential questions for missing match info fields:
 Each response is written to match_info.ini immediately.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+import os
+from typing import Any
 
-from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
+from video_grouper.models.match_info import MatchInfo
+from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_combined_video_path, resolve_path
-from video_grouper.task_processors.services.ntfy_service import NtfyService
-from video_grouper.models.match_info import MatchInfo
+
+from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,8 @@ class TeamInfoTask(BaseNtfyTask):
         config: Config,
         ntfy_service: NtfyService,
         combined_video_path: str,
-        existing_info: Optional[Dict[str, str]] = None,
-        asking_field: Optional[str] = None,
+        existing_info: dict[str, str] | None = None,
+        asking_field: str | None = None,
     ):
         metadata = {
             "combined_video_path": combined_video_path,
@@ -77,7 +78,7 @@ class TeamInfoTask(BaseNtfyTask):
 
     _PLACEHOLDER_VALUES = {"my team", "opponent", "location", "unknown", ""}
 
-    def _get_missing_fields(self) -> List[str]:
+    def _get_missing_fields(self) -> list[str]:
         """Return field keys from FIELD_SEQUENCE that are still empty or placeholder."""
         match_info = self._load_match_info()
         missing = []
@@ -87,14 +88,14 @@ class TeamInfoTask(BaseNtfyTask):
                 missing.append(field_key)
         return missing
 
-    def _load_match_info(self) -> Optional[MatchInfo]:
+    def _load_match_info(self) -> MatchInfo | None:
         """Load the current MatchInfo for this group."""
         mi, _ = MatchInfo.get_or_create(self.group_dir)
         if mi:
             mi.group_dir = self.group_dir
         return mi
 
-    def _next_field_to_ask(self) -> Optional[str]:
+    def _next_field_to_ask(self) -> str | None:
         """Return the first missing field key, or None if all filled.
 
         If my_team_name is missing but there's only one configured team,
@@ -116,7 +117,7 @@ class TeamInfoTask(BaseNtfyTask):
 
         return missing[0] if missing else None
 
-    def _field_meta(self, field_key: str) -> Tuple[str, Optional[str]]:
+    def _field_meta(self, field_key: str) -> tuple[str, str | None]:
         """Return (label, hint) for a field key."""
         for key, label, hint in FIELD_SEQUENCE:
             if key == field_key:
@@ -127,7 +128,7 @@ class TeamInfoTask(BaseNtfyTask):
     # Team names from config
     # ------------------------------------------------------------------
 
-    def _get_configured_teams(self) -> List[str]:
+    def _get_configured_teams(self) -> list[str]:
         """Get all configured team names from TeamSnap and PlayMetrics."""
         teams = []
         config = self.config
@@ -153,14 +154,15 @@ class TeamInfoTask(BaseNtfyTask):
                     teams.append(pm.team_name)
         return teams
 
-    async def _get_midpoint_screenshot(self) -> Optional[str]:
+    async def _get_midpoint_screenshot(self) -> str | None:
         """Take a screenshot from the middle of the combined video."""
         try:
-            from video_grouper.utils.ffmpeg_utils import (
-                get_video_duration,
-                create_screenshot,
-            )
             from datetime import datetime
+
+            from video_grouper.utils.ffmpeg_utils import (
+                create_screenshot,
+                get_video_duration,
+            )
 
             combined = get_combined_video_path(self.group_dir, self.storage_path)
             if not os.path.exists(combined):
@@ -203,7 +205,7 @@ class TeamInfoTask(BaseNtfyTask):
     # NTFY question / response
     # ------------------------------------------------------------------
 
-    async def create_question(self) -> Dict[str, Any]:
+    async def create_question(self) -> dict[str, Any]:
         # Determine which field to ask about
         field_key = self.asking_field or self._next_field_to_ask()
         if not field_key:
@@ -384,11 +386,11 @@ class TeamInfoTask(BaseNtfyTask):
     # ------------------------------------------------------------------
 
     @classmethod
-    def deserialize(cls, data: Dict[str, Any]) -> "TeamInfoTask":
+    def deserialize(cls, data: dict[str, Any]) -> "TeamInfoTask":
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TeamInfoTask":
+    def from_dict(cls, data: dict[str, Any]) -> "TeamInfoTask":
         from video_grouper.utils.config import NtfyConfig
 
         ntfy_config_data = data.get("metadata", {}).get("config", {}).get("ntfy", {})
@@ -407,5 +409,5 @@ class TeamInfoTask(BaseNtfyTask):
             asking_field=data.get("metadata", {}).get("asking_field"),
         )
 
-    def get_missing_fields(self) -> List[str]:
+    def get_missing_fields(self) -> list[str]:
         return self._get_missing_fields()

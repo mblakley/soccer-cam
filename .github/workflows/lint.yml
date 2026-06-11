@@ -1,0 +1,43 @@
+name: Lint
+
+# Runs ruff (check + format) and mypy on every PR targeting main, plus
+# every push to main itself. This is the gate that catches regressions
+# in already-clean modules; deferred per-module ignore_errors entries in
+# pyproject.toml are tracked separately.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # uv handles its own Python install and bundles the project venv;
+      # matches how scripts/smoke_real_service.py runs locally.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync project dependencies
+        # --frozen to honor uv.lock; --no-install-project skips compiling
+        # the package itself (mypy and ruff don't need it built).
+        run: uv sync --frozen --no-install-project
+
+      - name: ruff check
+        run: uv run --with ruff ruff check .
+
+      - name: ruff format check
+        run: uv run --with ruff ruff format --check .
+
+      - name: mypy
+        run: uv run mypy video_grouper/

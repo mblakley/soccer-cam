@@ -3,14 +3,15 @@ Tests for NTFY Queue Processor.
 """
 
 import asyncio
-import pytest
 import tempfile
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from video_grouper.task_processors.base_queue_processor import QueueProcessor
 from video_grouper.task_processors.ntfy_processor import NtfyProcessor
 from video_grouper.task_processors.services.ntfy_service import NtfyService
 from video_grouper.utils.config import Config
-from video_grouper.task_processors.base_queue_processor import QueueProcessor
 
 
 @pytest.fixture
@@ -236,11 +237,12 @@ class TestNtfyProcessor:
             match_info_service=mock_match_info_service,
         )
 
-        # Initialize the queue
+        # Initialize the queue. Keys are stable (task_type:group_dir) — see
+        # NtfyProcessor.get_item_key.
         processor._queue = Mock()
         processor._queued_items = {
-            "game_start_time:/test/path:123",
-            "team_info:/test/path:456",
+            "game_start_time:/test/path",
+            "team_info:/test/path",
         }
 
         # Mock save_state to avoid file operations
@@ -250,13 +252,40 @@ class TestNtfyProcessor:
             )
 
             # Should remove the task from _queued_items
-            assert "game_start_time:/test/path:123" not in processor._queued_items
+            assert "game_start_time:/test/path" not in processor._queued_items
             assert (
-                "team_info:/test/path:456" in processor._queued_items
+                "team_info:/test/path" in processor._queued_items
             )  # Other task should remain
 
             # Should save state
             mock_save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_enqueue_is_deduped(
+        self, mock_config, mock_ntfy_service, mock_match_info_service, storage_path
+    ):
+        """Two equivalent game_start_time tasks for the same dir must dedup to a
+        single queued item (stable get_item_key), so a startup race that
+        enqueues the same question twice yields one notification, not two."""
+        processor = NtfyProcessor(
+            storage_path=storage_path,
+            config=mock_config,
+            ntfy_service=mock_ntfy_service,
+            match_info_service=mock_match_info_service,
+        )
+
+        def make_task():
+            task = Mock()
+            task.get_task_type.return_value = "game_start_time"
+            task.group_dir = "/test/dir"
+            return task
+
+        await processor.add_work(make_task())
+        await processor.add_work(make_task())
+
+        # Distinct instances, same stable key → only one enqueued.
+        assert processor._queued_items == {"game_start_time:/test/dir"}
+        assert processor._queue.qsize() == 1
 
 
 class TestNtfyProcessorBlocking:

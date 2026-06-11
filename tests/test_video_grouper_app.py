@@ -2,30 +2,31 @@
 
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 
-from video_grouper.video_grouper_app import VideoGrouperApp
 from video_grouper.models import RecordingFile
-from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.task_processors.tasks.upload import YoutubeUploadTask
+from video_grouper.task_processors.tasks.video import CombineTask
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 from video_grouper.utils.logger import close_loggers
+from video_grouper.video_grouper_app import VideoGrouperApp
 
 
 @pytest.fixture(autouse=True)
@@ -39,8 +40,8 @@ def cleanup_loggers():
 @pytest.fixture
 def temp_storage():
     """Create a temporary storage directory for testing."""
-    import time
     import shutil
+    import time
 
     with tempfile.TemporaryDirectory() as temp_dir:
         yield temp_dir
@@ -502,8 +503,8 @@ class TestPipelinePlacement:
         A single service-runtime step (``track``) keeps ``is_active()`` true
         without pulling in a tray-runtime step (which is refused on non-Windows).
         """
-        from video_grouper.utils.config import Config
         from video_grouper.pipeline.config import PipelineConfig, PipelineStepSpec
+        from video_grouper.utils.config import Config
 
         pipeline = PipelineConfig(
             enabled=enabled,

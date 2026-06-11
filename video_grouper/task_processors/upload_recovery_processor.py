@@ -19,9 +19,10 @@ import logging
 import os
 from pathlib import Path
 
+from video_grouper.utils.config import Config
+
 from .base_polling_processor import PollingProcessor
 from .upload_processor import UploadProcessor
-from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class UploadRecoveryProcessor(PollingProcessor):
             if not state_file.exists():
                 continue
             try:
-                with open(state_file, "r") as f:
+                with open(state_file) as f:
                     status = json.load(f).get("status")
             except (json.JSONDecodeError, OSError) as e:
                 logger.error(

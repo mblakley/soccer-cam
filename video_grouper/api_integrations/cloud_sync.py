@@ -1,15 +1,16 @@
+import asyncio
 import base64
+import configparser
 import json
 import logging
-import requests
-from pathlib import Path
-from typing import Dict, Any, Optional
-import configparser
-import asyncio
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
 import secrets
+from pathlib import Path
+from typing import Any
+
+import requests
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 
@@ -46,7 +47,7 @@ class CloudSync:
         self.username = username
         self.password = password
 
-    def encrypt_config(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
+    def encrypt_config(self, config_data: dict[str, Any]) -> dict[str, Any]:
         """
         Encrypt configuration data using hybrid encryption (RSA + AES).
 
@@ -145,8 +146,8 @@ class CloudSync:
             return False
 
     async def _make_async_request(
-        self, payload: Dict[str, Any]
-    ) -> Optional[requests.Response]:
+        self, payload: dict[str, Any]
+    ) -> requests.Response | None:
         """
         Make an asynchronous HTTP request.
 
@@ -182,7 +183,7 @@ class GoogleAuthProvider:
     """
 
     @staticmethod
-    async def authenticate() -> Optional[Dict[str, str]]:
+    async def authenticate() -> dict[str, str] | None:
         """
         Authenticate with Google OAuth.
 

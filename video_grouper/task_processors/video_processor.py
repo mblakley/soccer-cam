@@ -1,14 +1,15 @@
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_combined_video_path, get_match_info_path
+
 from .base_queue_processor import QueueProcessor
-from .tasks.video import BaseFfmpegTask
 from .queue_type import QueueType
+from .tasks.video import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,8 @@ class VideoProcessor(QueueProcessor):
         storage_path: str,
         config: Config,
         upload_processor: UploadProcessor,
-        match_info_service: Optional[Any] = None,
-        ntfy_processor: Optional[Any] = None,
+        match_info_service: Any | None = None,
+        ntfy_processor: Any | None = None,
     ):
         super().__init__(storage_path, config)
         self.upload_processor = upload_processor
@@ -93,6 +94,13 @@ class VideoProcessor(QueueProcessor):
 
                 # Trigger event-driven transitions based on task type
                 if item.task_type == "combine":
+                    # Warn the camera manager if any segment was missing audio
+                    # (combine padded it with silence; this is the heads-up).
+                    audio_gaps = getattr(item, "audio_gaps", None)
+                    if audio_gaps:
+                        await self._send_audio_gap_warning(
+                            item.get_item_path(), audio_gaps
+                        )
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
                 elif (
                     item.task_type == "trim"
@@ -145,7 +153,14 @@ class VideoProcessor(QueueProcessor):
                     )
                     from video_grouper.task_processors.tasks.video import TrimTask
 
-                    await self.add_work(TrimTask(group_dir))
+                    trim_end = getattr(
+                        self.config.processing, "trim_end_enabled", False
+                    )
+                    await self.add_work(
+                        TrimTask.from_match_info(
+                            group_dir, match_info, trim_end_enabled=trim_end
+                        )
+                    )
                     return
 
             # Try API-based population first (TeamSnap, PlayMetrics)
@@ -164,7 +179,14 @@ class VideoProcessor(QueueProcessor):
                     )
                     from video_grouper.task_processors.tasks.video import TrimTask
 
-                    await self.add_work(TrimTask(group_dir))
+                    trim_end = getattr(
+                        self.config.processing, "trim_end_enabled", False
+                    )
+                    await self.add_work(
+                        TrimTask.from_match_info(
+                            group_dir, match_info, trim_end_enabled=trim_end
+                        )
+                    )
                     return
 
             # Queue NTFY tasks for remaining info (game start time, team info
@@ -182,6 +204,50 @@ class VideoProcessor(QueueProcessor):
             logger.error(
                 f"VIDEO: Error in post-combine transition for {group_dir}: {e}"
             )
+
+    async def _send_audio_gap_warning(self, group_dir: str, gaps: list[dict]) -> None:
+        """Notify the camera manager (via NTFY) of audio/video length mismatches.
+
+        The combine step has already auto-corrected each one (short audio padded
+        with silence, long audio trimmed) so video and audio stay in sync; this
+        is just the heads-up that a segment's audio didn't match its video —
+        almost always a camera-side glitch, not a bug in the pipeline.
+        Best-effort: never let a notification failure affect video processing.
+        """
+        try:
+            ntfy_api = None
+            ntfy_service = getattr(self.ntfy_processor, "ntfy_service", None)
+            if ntfy_service is not None:
+                ntfy_api = getattr(ntfy_service, "ntfy_api", None)
+            if ntfy_api is None:
+                return
+
+            total_seconds = sum(g["gap_seconds"] for g in gaps)
+            worst = max(gaps, key=lambda g: g["gap_seconds"])
+            game = os.path.basename(group_dir.rstrip("/\\"))
+            message = (
+                f"{len(gaps)} segment(s) had audio out of sync with the video "
+                f"(~{total_seconds:.0f}s total; worst "
+                f"{os.path.basename(worst['path'])} {worst['gap_seconds']:.0f}s "
+                f"{worst.get('kind', 'short')}). Auto-corrected (short audio "
+                f"padded, long audio trimmed) to keep playback in sync — likely "
+                f"a camera glitch."
+            )
+            await ntfy_api.send_notification(
+                message=message,
+                title=f"Audio gap in {game}",
+                tags=["warning"],
+                priority=4,
+            )
+            logger.warning(
+                "VIDEO: audio gap(s) in %s — %.0fs missing across %d segment(s); "
+                "padded with silence and notified user",
+                group_dir,
+                total_seconds,
+                len(gaps),
+            )
+        except Exception as e:
+            logger.error(f"VIDEO: Failed to send audio-gap NTFY for {group_dir}: {e}")
 
     async def _on_trim_complete(self, group_dir: str) -> None:
         """Skip post-trim processing and transition directly to upload.

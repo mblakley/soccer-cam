@@ -7,7 +7,6 @@ import pytest
 
 from video_grouper.task_processors.clip_request_processor import ClipRequestProcessor
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -132,6 +131,18 @@ class TestFindSourceVideo:
         game_dir.mkdir()
         proc = _make_processor(tmp_path)
         assert proc._find_source_video(str(game_dir)) is None
+
+    def test_prefers_processed_over_combined(self, tmp_path):
+        """The dewarped processed video wins over the raw combined.mp4."""
+        game_dir = tmp_path / "g"
+        sub = game_dir / "2026.04.01 - Flash vs IYSA (home)"
+        sub.mkdir(parents=True)
+        (sub / "flash-iysa-home-04-01-2026-raw.mp4").write_bytes(b"\x00")
+        processed = sub / "flash-iysa-home-04-01-2026.mp4"
+        processed.write_bytes(b"\x00")
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+        proc = _make_processor(tmp_path)
+        assert proc._find_source_video(str(game_dir)) == str(processed)
 
 
 # ---------------------------------------------------------------------------

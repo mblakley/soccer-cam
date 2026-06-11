@@ -1,20 +1,21 @@
 import json
-import os
-import httpx
 import logging
+import os
 import time
-import aiofiles
-from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
+import aiofiles
+import httpx
 import pytz
 
-from .base import Camera, ConfigResult, DeviceInfo
-from . import register_camera
-from .reolink_download import download_and_mux
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
+
+from . import register_camera
+from .base import Camera, ConfigResult, DeviceInfo
+from .reolink_download import download_and_mux
 
 # Default timeout for camera HTTP requests (30 seconds connect, 60 seconds read)
 CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
@@ -33,13 +34,13 @@ class ReolinkCamera(Camera):
         self.password = config.password
         self.channel = config.channel
         self._state_file = get_camera_state_path(storage_path)
-        self._connection_events: List[ConnectionEvent] = []
+        self._connection_events: list[ConnectionEvent] = []
         self._is_connected = False
         self._log_dir = os.path.join(self.storage_path, "camera_http_logs")
         os.makedirs(self._log_dir, exist_ok=True)
         self._client = client
         self.logger = logging.getLogger(__name__)
-        self._token: Optional[str] = None
+        self._token: str | None = None
         self._token_expiry: float = 0
         self._file_sizes: dict[str, int] = {}
         self._load_state()
@@ -98,10 +99,10 @@ class ReolinkCamera(Camera):
         self,
         client: httpx.AsyncClient,
         cmd: str,
-        param: Dict[str, Any],
+        param: dict[str, Any],
         action: int = 0,
         log_name: str = "",
-    ) -> Optional[List[Dict]]:
+    ) -> list[dict] | None:
         """Make an authenticated API call. Returns the JSON response array or None."""
         if not await self._ensure_token(client):
             return None
@@ -123,7 +124,7 @@ class ReolinkCamera(Camera):
         return data
 
     @staticmethod
-    def _datetime_to_reolink(dt: datetime) -> Dict[str, int]:
+    def _datetime_to_reolink(dt: datetime) -> dict[str, int]:
         """Convert a datetime to ReoLink's time dict format."""
         return {
             "year": dt.year,
@@ -135,14 +136,14 @@ class ReolinkCamera(Camera):
         }
 
     @staticmethod
-    def _reolink_to_datetime_str(t: Dict[str, int]) -> str:
+    def _reolink_to_datetime_str(t: dict[str, int]) -> str:
         """Convert ReoLink's time dict to an ISO-style datetime string."""
         return (
             f"{t['year']:04d}-{t['mon']:02d}-{t['day']:02d} "
             f"{t['hour']:02d}:{t['min']:02d}:{t['sec']:02d}"
         )
 
-    def _parse_file_list(self, raw_files: list) -> List[Dict[str, Any]]:
+    def _parse_file_list(self, raw_files: list) -> list[dict[str, Any]]:
         """Parse raw file entries from SearchResult into our file list format."""
         files = []
         for f in raw_files:
@@ -167,7 +168,7 @@ class ReolinkCamera(Camera):
         status_entries: list,
         start_time: datetime,
         end_time: datetime,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search day-by-day for files on days marked active in the status bitmap.
 
         Reolink's Search API returns a status bitmap (31-char string, one per day)
@@ -237,7 +238,7 @@ class ReolinkCamera(Camera):
     def _load_state(self):
         try:
             if os.path.exists(self._state_file):
-                with open(self._state_file, "r") as f:
+                with open(self._state_file) as f:
                     all_state = json.load(f)
                     state = all_state.get(self.config.name, {})
                     self._connection_events = state.get("connection_events", [])
@@ -249,7 +250,7 @@ class ReolinkCamera(Camera):
         try:
             all_state = {}
             if os.path.exists(self._state_file):
-                with open(self._state_file, "r") as f:
+                with open(self._state_file) as f:
                     all_state = json.load(f)
             all_state[self.config.name] = {
                 "connection_events": self._connection_events,
@@ -283,7 +284,7 @@ class ReolinkCamera(Camera):
         self._connection_events.append(event)
         self._save_state()
 
-    def get_connected_timeframes(self) -> List[Tuple[datetime, Optional[datetime]]]:
+    def get_connected_timeframes(self) -> list[tuple[datetime, datetime | None]]:
         timeframes = []
         start_time = None
 
@@ -353,7 +354,7 @@ class ReolinkCamera(Camera):
 
     # ── Client helper ─────────────────────────────────────────────────
 
-    def _get_client(self) -> Tuple[httpx.AsyncClient, bool]:
+    def _get_client(self) -> tuple[httpx.AsyncClient, bool]:
         """Return (client, should_close) tuple."""
         if self._client:
             return self._client, False
@@ -409,7 +410,7 @@ class ReolinkCamera(Camera):
 
     async def get_file_list(
         self, start_time: datetime, end_time: datetime
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             client, close_client = self._get_client()
             try:
@@ -438,12 +439,23 @@ class ReolinkCamera(Camera):
                     return []
 
                 search_result = resp.get("value", {}).get("SearchResult", {})
-                status_only = search_result.get("Status")
-                if status_only is not None and not search_result.get("File"):
-                    # Wide time range: camera returns day-level status bitmap
-                    # instead of file list. Search day-by-day for active days.
+                status_bitmap = search_result.get("Status")
+                # Reolink's Search response shape varies with the query range:
+                #   - same-day:               Status: list(1)  +  File: full
+                #   - cross-day same-month:   Status: list(1)  +  File: []
+                #   - cross-MONTH:            Status: list(2+) +  File: 1 file (start day only)
+                # The cross-month variant silently drops every file outside
+                # the start day, so an HWM that lands on a month-end day
+                # never advances past the boundary. Route every multi-day
+                # query through the day-by-day helper, which iterates the
+                # bitmap and issues a per-day Search for each active day.
+                if (
+                    start_time.date() != end_time.date()
+                    and isinstance(status_bitmap, list)
+                    and status_bitmap
+                ):
                     return await self._search_by_active_days(
-                        client, status_only, start_time, end_time
+                        client, status_bitmap, start_time, end_time
                     )
 
                 return self._parse_file_list(search_result.get("File", []))
@@ -536,6 +548,7 @@ class ReolinkCamera(Camera):
                 channel=self.channel,
                 on_progress=_progress,
                 http_port=self.config.http_port,
+                download_protocol=self.config.download_protocol,
             )
 
             if success:
@@ -593,7 +606,7 @@ class ReolinkCamera(Camera):
             logger.error(f"Error setting recording enabled={enabled}: {e}")
             return False
 
-    async def delete_files(self, file_paths: List[str]) -> int:
+    async def delete_files(self, file_paths: list[str]) -> int:
         """Delete recording files from the camera.
 
         Most Reolink models (including Duo 3 PoE) do not support
@@ -685,7 +698,7 @@ class ReolinkCamera(Camera):
             )
 
     @property
-    def connection_events(self) -> List[Tuple[datetime, str]]:
+    def connection_events(self) -> list[tuple[datetime, str]]:
         return []
 
     @property
@@ -703,9 +716,7 @@ class ReolinkCamera(Camera):
         Uses stdlib only -- no pytz/tzlocal dependency needed.
         """
         try:
-            from datetime import timezone as dt_tz
-
-            offset = datetime.now(dt_tz.utc).astimezone().utcoffset()
+            offset = datetime.now(UTC).astimezone().utcoffset()
             if offset is None:
                 return None
             return -int(offset.total_seconds())

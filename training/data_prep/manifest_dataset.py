@@ -23,9 +23,11 @@ Usage:
     model.train(data="training_sets/v3.1/dataset.yaml", trainer=ManifestTrainer, ...)
 """
 
+import logging
 import math
 import random
 import re
+import shutil
 import sqlite3
 import time
 from collections import defaultdict
@@ -33,10 +35,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-import logging
-import shutil
-
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils import LOGGER, colorstr
@@ -78,10 +76,10 @@ def _resolve_pack_path(pack_file: str) -> str:
         games_idx = parts.index("games")
         game_id = parts[games_idx + 1]
         pack_name = parts[-1]
-    except (ValueError, IndexError):
+    except (ValueError, IndexError) as exc:
         raise FileNotFoundError(
             f"Pack file not found and can't parse game_id: {pack_file}"
-        )
+        ) from exc
 
     archive_packs = _get_archive_tile_packs()
     archive_path = archive_packs / game_id / pack_name

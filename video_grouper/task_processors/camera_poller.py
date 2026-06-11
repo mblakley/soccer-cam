@@ -1,22 +1,31 @@
 import json
-import os
 import logging
+import os
 from datetime import datetime, timedelta
-from typing import Optional, List
+
 import pytz
 
 from video_grouper.cameras.base import Camera
+from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_camera_state_path, get_home_cleanup_state_path
+
 from .base_polling_processor import PollingProcessor
-from video_grouper.models import DirectoryState
-from video_grouper.models import RecordingFile
 
 logger = logging.getLogger(__name__)
 
 # Constants
 default_date_format = "%Y-%m-%d %H:%M:%S"
+
+# Max gap between the end of one recording and the start of the next for
+# them to be treated as the same continuous group. The camera segments a
+# continuous recording into back-to-back files with sub-second gaps, so
+# anything beyond this is a separate recording session.
+GROUP_GAP_SECONDS = 5
+# A recording shorter than this is only meaningful as a runt when it also
+# has no neighbors — see _identify_runt_recordings.
+MIN_SEGMENT_SECONDS = 5
 
 
 def create_directory(path):
@@ -24,47 +33,55 @@ def create_directory(path):
     os.makedirs(path, exist_ok=True)
 
 
+def find_existing_group_for(
+    file_start_time: datetime, existing_dirs: list[str]
+) -> str | None:
+    """Return the existing group directory a file belongs to, or None.
+
+    A file joins a group if its start time is within GROUP_GAP_SECONDS
+    after the group's last file end time, or falls within the group's
+    existing [first.start, last.end] range (re-discovery on later polls).
+    Pure lookup — never creates a directory.
+    """
+    for group_dir_path in sorted(existing_dirs, reverse=True):
+        state_file_path = os.path.join(group_dir_path, "state.json")
+        if not os.path.exists(state_file_path):
+            continue
+        try:
+            dir_state = DirectoryState(group_dir_path)
+            first_file = dir_state.get_first_file()
+            last_file = dir_state.get_last_file()
+            if last_file and last_file.end_time:
+                # File appends to the end of the group (within the gap).
+                time_after_end = (file_start_time - last_file.end_time).total_seconds()
+                if 0 <= time_after_end <= GROUP_GAP_SECONDS:
+                    return group_dir_path
+                # File falls within the group's existing time range.
+                if (
+                    first_file
+                    and first_file.start_time
+                    and first_file.start_time <= file_start_time <= last_file.end_time
+                ):
+                    return group_dir_path
+        except Exception as e:
+            logger.error(f"Error reading state for {group_dir_path}: {e}")
+    return None
+
+
 def find_group_directory(
-    file_start_time: datetime, storage_path: str, existing_dirs: List[str]
+    file_start_time: datetime, storage_path: str, existing_dirs: list[str]
 ) -> str:
     """
     Finds or creates a group directory for a video file based on its start time.
     A new group is created if the file's start time is more than 5 seconds after the previous file's end time.
     """
-    # Check existing directories to find a match
-    for group_dir_path in sorted(existing_dirs, reverse=True):
-        state_file_path = os.path.join(group_dir_path, "state.json")
-        if os.path.exists(state_file_path):
-            try:
-                dir_state = DirectoryState(group_dir_path)
-                first_file = dir_state.get_first_file()
-                last_file = dir_state.get_last_file()
-                if last_file and last_file.end_time:
-                    # Check if file appends to end of group (within 5s gap)
-                    time_after_end = (
-                        file_start_time - last_file.end_time
-                    ).total_seconds()
-                    if 0 <= time_after_end <= 5:
-                        logger.info(
-                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time}, with time matching file end time {last_file.end_time}"
-                        )
-                        return group_dir_path
-
-                    # Check if file falls within the group's existing time range
-                    # (handles re-discovery on subsequent polls)
-                    if (
-                        first_file
-                        and first_file.start_time
-                        and first_file.start_time
-                        <= file_start_time
-                        <= last_file.end_time
-                    ):
-                        logger.info(
-                            f"Found matching group directory {os.path.basename(group_dir_path)} for file starting at {file_start_time} (within group range {first_file.start_time} - {last_file.end_time})"
-                        )
-                        return group_dir_path
-            except Exception as e:
-                logger.error(f"Error reading state for {group_dir_path}: {e}")
+    existing = find_existing_group_for(file_start_time, existing_dirs)
+    if existing is not None:
+        logger.info(
+            f"Found matching group directory {os.path.basename(existing)} "
+            f"for file starting at {file_start_time}"
+        )
+        return existing
 
     # No matching directory found, create a new one
     new_dir_name = file_start_time.strftime("%Y.%m.%d-%H.%M.%S")
@@ -74,6 +91,96 @@ def find_group_directory(
         f"Created new group directory {new_dir_path} for file starting at {file_start_time}"
     )
     return new_dir_path
+
+
+def _parse_recording_times(file_info: dict):
+    """Parse a file's start/end strings into datetimes.
+
+    Returns (start, end). ``end`` is None when the camera left it blank or
+    malformed (e.g. a ``..._000000_...`` aborted recording whose end time
+    is all zeros), which strptime can't parse. ``start`` is None only if
+    even the start time is unusable, in which case the caller leaves the
+    file for the normal processing loop to handle.
+    """
+    try:
+        start = datetime.strptime(file_info["startTime"], default_date_format)
+    except (ValueError, KeyError, TypeError):
+        return None, None
+    try:
+        end = datetime.strptime(file_info["endTime"], default_date_format)
+    except (ValueError, KeyError, TypeError):
+        end = None
+    return start, end
+
+
+def _identify_runt_recordings(files: list[dict], existing_dirs: list[str]) -> set[str]:
+    """Return the set of file paths that are *isolated* runt recordings.
+
+    A recording is a runt to skip only when it is BOTH:
+      - positively short: a parseable duration < MIN_SEGMENT_SECONDS (a
+        parseable end <= start, the common aborted-stub case, counts via its
+        negative duration). An *unparseable* end means the length is unknown,
+        so it is NOT treated as short — better to keep a file of unknown
+        length than drop a real (possibly still-recording) segment; and
+      - isolated: no other recording in this batch is contiguous with it
+        (within GROUP_GAP_SECONDS, mirroring the grouping rule), and it is
+        not adjacent to an already-persisted group.
+
+    This drops a lone startup stub (e.g. the camera powered on at home,
+    recorded a few seconds, then idled) while preserving a short power-off
+    tail that belongs to a real game — that tail sits within the gap of
+    the game's other segments, so it is not isolated.
+    """
+    parsed = []  # (path, start, effective_end)
+    for fi in files:
+        start, end = _parse_recording_times(fi)
+        if start is None:
+            continue  # unusable start — leave it for the main loop
+        # Use start as the effective end when the end time is invalid, so a
+        # zero/aborted end doesn't blow up the proximity math.
+        eff_end = end if (end is not None and end > start) else start
+        # Positively-short evidence only: a parseable end < MIN_SEGMENT_SECONDS
+        # after start (a parseable end <= start gives a negative duration and
+        # still counts). An UNPARSEABLE end -> unknown length -> not short
+        # (keep), so an isolated still-recording segment isn't dropped.
+        is_short = (
+            end is not None and (end - start).total_seconds() < MIN_SEGMENT_SECONDS
+        )
+        parsed.append((fi.get("path", ""), start, eff_end, is_short))
+
+    parsed.sort(key=lambda t: t[1])
+    runts: set[str] = set()
+
+    for i, (path, start, eff_end, is_short) in enumerate(parsed):
+        if not is_short:
+            continue
+
+        adjacent = False
+        for j, (_, ostart, o_eff_end, _) in enumerate(parsed):
+            if j == i:
+                continue
+            # Contiguous if a neighbor ends within the gap before this one
+            # starts, starts within the gap after this one ends, or overlaps.
+            if (
+                0 <= (start - o_eff_end).total_seconds() <= GROUP_GAP_SECONDS
+                or 0 <= (ostart - eff_end).total_seconds() <= GROUP_GAP_SECONDS
+                or (ostart <= eff_end and o_eff_end >= start)
+            ):
+                adjacent = True
+                break
+
+        if not adjacent and find_existing_group_for(start, existing_dirs) is not None:
+            adjacent = True
+
+        if not adjacent:
+            dur = (eff_end - start).total_seconds()
+            logger.info(
+                f"CAMERA_POLLER: Skipping isolated runt recording "
+                f"{os.path.basename(path)}: dur={dur:.0f}s, no adjacent recordings"
+            )
+            runts.add(path)
+
+    return runts
 
 
 class CameraPoller(PollingProcessor):
@@ -188,7 +295,26 @@ class CameraPoller(PollingProcessor):
             if os.path.isdir(os.path.join(self.storage_path, d))
         ]
 
+        # Drop isolated runt recordings (e.g. a few-second startup stub the
+        # camera writes before idling at home) before they reach the queue.
+        # A short tail that belongs to a real game is contiguous with its
+        # other segments, so it is not flagged here.
+        runt_paths = _identify_runt_recordings(files, existing_dirs)
+
         latest_end_time = None
+        latest_end_time_file = None
+        # Per-poll diagnostics so HWM stalls can be root-caused after the
+        # fact: classify every file the camera returned and emit a single
+        # summary line at end of poll. Without this, an HWM-stuck
+        # incident (5/30 runt stuck at 19:44:06 for 14+ hours, 2026-05-30
+        # tournament day) requires DEBUG logs to reconstruct.
+        counts = {
+            "new_added": 0,
+            "already_known": 0,
+            "runt": 0,
+            "home_connected": 0,
+            "unparseable": 0,
+        }
 
         # Get connected timeframes for filtering
         connected_timeframes = self.camera.get_connected_timeframes()
@@ -212,12 +338,25 @@ class CameraPoller(PollingProcessor):
         for file_info in files:
             try:
                 filename = os.path.basename(file_info["path"])
-                file_start_time = datetime.strptime(
-                    file_info["startTime"], default_date_format
-                )
-                file_end_time = datetime.strptime(
-                    file_info["endTime"], default_date_format
-                )
+
+                # Isolated runt (handled before parsing end time, which may
+                # be unparseable for an aborted recording).
+                if file_info["path"] in runt_paths:
+                    counts["runt"] += 1
+                    continue
+
+                file_start_time, file_end_time = _parse_recording_times(file_info)
+                if file_start_time is None:
+                    logger.warning(
+                        f"CAMERA_POLLER: unparseable start time for {filename}; skipping"
+                    )
+                    counts["unparseable"] += 1
+                    continue
+                if file_end_time is None or file_end_time <= file_start_time:
+                    # Aborted/unparseable end on a KEPT (contiguous) file — fall
+                    # back to a zero-length entry so it still queues and groups
+                    # sanely, instead of crashing strptime or being dropped.
+                    file_end_time = file_start_time
 
                 # Check if the file overlaps with any connected timeframe
                 should_skip = False
@@ -247,12 +386,14 @@ class CameraPoller(PollingProcessor):
                             break
 
                 if should_skip:
+                    counts["home_connected"] += 1
                     files_to_delete.append(file_info["path"])
                     continue
 
                 # Track high-water mark from non-skipped files only
                 if latest_end_time is None or file_end_time > latest_end_time:
                     latest_end_time = file_end_time
+                    latest_end_time_file = filename
 
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs
@@ -264,10 +405,16 @@ class CameraPoller(PollingProcessor):
 
                 dir_state = DirectoryState(group_dir)
                 if dir_state.is_file_in_state(local_path):
-                    logger.debug(
-                        f"CAMERA_POLLER: File {filename} is already known. Skipping."
+                    counts["already_known"] += 1
+                    logger.info(
+                        "CAMERA_POLLER: File %s (end=%s) already known; "
+                        "HWM advanced past it, no re-download.",
+                        filename,
+                        file_end_time,
                     )
                     continue
+
+                counts["new_added"] += 1
 
                 # Store camera identity in metadata for downstream use
                 file_info["camera_name"] = self.camera.name
@@ -324,19 +471,48 @@ class CameraPoller(PollingProcessor):
                         f"CAMERA_POLLER: TTT registration failed for {os.path.basename(group_dir)}: {e}"
                     )
 
+        total_seen = sum(counts.values())
+        logger.info(
+            "CAMERA_POLLER: poll summary -- %d files seen "
+            "(new=%d already_known=%d runt=%d home_connected=%d unparseable=%d)",
+            total_seen,
+            counts["new_added"],
+            counts["already_known"],
+            counts["runt"],
+            counts["home_connected"],
+            counts["unparseable"],
+        )
+
         if latest_end_time:
             await self._update_latest_processed_time(latest_end_time)
             logger.info(
-                f"CAMERA_POLLER: File sync complete. New high-water mark set to: {latest_end_time}"
+                "CAMERA_POLLER: HWM advanced to %s (by file %s)",
+                latest_end_time,
+                latest_end_time_file,
+            )
+        elif total_seen > 0:
+            # Files were returned but none advanced the HWM -- all were
+            # runts, home-connected, or unparseable. The HWM stays where
+            # it is, so the next poll re-queries the same window. If
+            # this repeats for many consecutive polls, the camera has
+            # effectively stalled on a class of files the poller won't
+            # process; manual recovery (delete the offending dir + bump
+            # HWM) may be needed.
+            logger.warning(
+                "CAMERA_POLLER: %d files seen but HWM not advanced "
+                "(all filtered out by runt/home-connected/unparseable). "
+                "HWM remains at previous value; next poll will re-query "
+                "the same window.",
+                total_seen,
             )
 
-    async def _get_latest_processed_time(self) -> Optional[datetime]:
+    async def _get_latest_processed_time(self) -> datetime | None:
         """Get the timestamp of the last processed video file for this camera."""
         state_path = get_camera_state_path(self.storage_path)
         if not os.path.exists(state_path):
             return None
         try:
-            with open(state_path, "r") as f:
+            with open(state_path) as f:
                 all_state = json.load(f)
             cam_state = all_state.get(self.camera.name, {})
             timestamp_str = cam_state.get("latest_video_time")
@@ -392,7 +568,7 @@ class CameraPoller(PollingProcessor):
 
     def _write_cleanup_state(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         file_infos: list,
         deletion_supported: bool = True,
     ) -> None:
@@ -525,7 +701,7 @@ class CameraPoller(PollingProcessor):
             state_path = get_camera_state_path(self.storage_path)
             all_state = {}
             if os.path.exists(state_path):
-                with open(state_path, "r") as f:
+                with open(state_path) as f:
                     all_state = json.load(f)
             cam_state = all_state.setdefault(self.camera.name, {})
             cam_state["latest_video_time"] = timestamp.strftime(default_date_format)

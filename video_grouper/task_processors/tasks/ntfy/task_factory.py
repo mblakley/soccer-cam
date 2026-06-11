@@ -6,13 +6,14 @@ based on task type and metadata.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
-from video_grouper.utils.config import Config
 from video_grouper.task_processors.services.ntfy_service import NtfyService
+from video_grouper.utils.config import Config
+
 from .base_ntfy_task import BaseNtfyTask
-from .game_start_task import GameStartTask
 from .game_end_task import GameEndTask
+from .game_start_task import GameStartTask
 from .team_info_task import TeamInfoTask
 from .was_there_a_match_task import WasThereAMatchTask
 
@@ -33,8 +34,8 @@ class NtfyTaskFactory:
         group_dir: str,
         config: Config,
         ntfy_service: NtfyService,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[BaseNtfyTask]:
+        metadata: dict[str, Any] | None = None,
+    ) -> BaseNtfyTask | None:
         """
         Create a task of the specified type.
 
@@ -204,7 +205,7 @@ class NtfyTaskFactory:
         config: Config,
         ntfy_service: NtfyService,
         combined_video_path: str,
-        existing_info: Optional[Dict[str, str]] = None,
+        existing_info: dict[str, str] | None = None,
     ) -> TeamInfoTask:
         """
         Create a team info task.

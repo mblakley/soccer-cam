@@ -12,12 +12,15 @@ on the `/downloadfile/` location, exposing /mnt/sda directly via nginx
 static-serve. Throughput is ~80–90 Mbps, files are already valid MP4
 (no remux needed), no auth (so don't expose to untrusted networks).
 
-`download_and_mux()` probes the HTTP path first and falls back to
-Baichuan if the camera returns 404 (unpatched) or refuses the
-connection. Per-camera result is cached so we only probe once.
+`download_and_mux()` strongly biases toward the HTTP fast path: it probes
+HTTP before every file until the endpoint is confirmed for the host, then
+uses HTTP for all remaining files. A per-file 404 or transient error falls
+back to Baichuan for that one file only and re-probes HTTP on the next —
+we never permanently give up on HTTP for the session.
 """
 
 import asyncio
+import enum
 import logging
 import os
 import re
@@ -25,7 +28,6 @@ import socket
 import struct
 import time
 from hashlib import md5
-from typing import Optional
 
 import httpx
 from Crypto.Cipher import AES
@@ -185,7 +187,7 @@ class BcMediaDemuxer:
 
     def __init__(self):
         self._buffer = bytearray()
-        self.video_codec: Optional[str] = None
+        self.video_codec: str | None = None
         self.width: int = 0
         self.height: int = 0
         self.fps: int = 0
@@ -326,11 +328,11 @@ class BaichuanStreamClient:
         self._port = port
         self._username = username
         self._password = password
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._aes_key: Optional[bytes] = None
-        self._nonce: Optional[str] = None
-        self._uid: Optional[str] = None
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._aes_key: bytes | None = None
+        self._nonce: str | None = None
+        self._uid: str | None = None
         self._mess_id = 0
         self._session_id = (
             20  # Session counter for replay channelId (camera rejects low values)
@@ -790,7 +792,7 @@ class BaichuanStreamClient:
                     hdr, xml_body, payload = await asyncio.wait_for(
                         self._read_message(), timeout=idle_timeout
                     )
-                except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                except (TimeoutError, asyncio.IncompleteReadError):
                     if stats["bytes_written"] > 0:
                         logger.info("Download stream ended (idle timeout)")
                     else:
@@ -1028,6 +1030,7 @@ def _download_and_mux_sync(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
     """Run download + mux in a dedicated event loop (called from a thread).
 
@@ -1048,50 +1051,68 @@ def _download_and_mux_sync(
                 channel,
                 on_progress,
                 http_port=http_port,
+                download_protocol=download_protocol,
             )
         )
     finally:
         loop.close()
 
 
-# Per-host cache: True = patched firmware confirmed (HTTP works);
-# False = HTTP unavailable, use Baichuan for the rest of the session.
-# Once decided per host, never oscillates — mixing HTTP and Baichuan
-# downloads within a single service run would interleave protocols
-# under load and surprise the user. Service restart re-probes.
-#
-# The probe at the start of the session does up to N retries with
-# backoff, so a transient 503 / connection reset right after the
-# camera has booted doesn't lock us onto Baichuan for hours.
+# Per-host cache of the HTTP fast path. Only ``True`` is ever stored:
+# once we confirm the patched ``/downloadfile/`` endpoint for a host we
+# use HTTP for every remaining file this session (sticky). A host that is
+# absent from the dict is simply "not yet confirmed" — we re-probe HTTP
+# before every file and, on a miss, fall back to Baichuan for that one
+# file only. We never record a permanent "unavailable" verdict, because
+# Mark wants a strong bias toward HTTP (~5x faster): an unpatched camera
+# just pays one cheap 404 probe per file before Baichuan.
 _HTTP_PATH_SUPPORTED: dict[str, bool] = {}
-# Probe retry tuning. 5 attempts cover ~30 seconds of probe time —
-# enough to ride through a busy nginx worker on the camera right after
-# Baichuan login, while still bounded so a truly-unpatched camera
-# doesn't keep us blocked indefinitely. Backoff is exponential.
+# Probe retry tuning, for the TRANSIENT path only (connection errors,
+# 5xx, empty-body 200). 5 attempts cover ~30 seconds — enough to ride
+# through a busy nginx worker right after Baichuan login. A 404 is
+# deterministic per-URL and short-circuits immediately (no retry).
 _HTTP_PROBE_RETRIES = 5
 _HTTP_PROBE_BACKOFF = (0.5, 1.5, 4.0, 10.0, 15.0)
+
+# Sticky-HTTP retry tuning. Once ANY file has downloaded successfully
+# via HTTP this session, transient failures on later files must retry
+# HTTP rather than fall to Baichuan -- Baichuan is reserved for cameras
+# where HTTP has never worked. 5 retries x cumulative ~105s of backoff
+# is generous enough to ride through any short blip the camera throws
+# at us; beyond that we surface failure to the queue layer which will
+# retry the whole download task later.
+_HTTP_STICKY_MAX_RETRIES = 5
+_HTTP_STICKY_BACKOFF = (1.0, 4.0, 10.0, 30.0, 60.0)
+
+
+class _ProbeResult(enum.Enum):
+    """Outcome of probing the HTTP fast path for a single file."""
+
+    OK = "ok"  # 200/206 with bytes — endpoint + file present
+    FILE_MISSING = "missing"  # 404 — this file absent (endpoint may still exist)
+    INCONCLUSIVE = "inconclusive"  # only transient errors after all retries
 
 
 async def _probe_http_path(
     client: "httpx.AsyncClient", host: str, url: str
-) -> Optional[bool]:
-    """Decide whether ``url`` is reachable via the patched-firmware HTTP path.
+) -> _ProbeResult:
+    """Probe ``url`` on the patched-firmware HTTP path for a single file.
 
     Uses a real 1 KB range GET rather than HEAD — Reolink's nginx
     sometimes returns 5xx on HEAD requests during busy moments even
-    when GET works fine. Retries with exponential backoff so a
-    transient probe failure doesn't lock the whole session onto
-    Baichuan.
+    when GET works fine. A 404 is deterministic for a static URL and
+    returns immediately; only transient failures (connection errors,
+    5xx, empty-body 200) are retried with exponential backoff so a busy
+    nginx worker right after boot doesn't send us to Baichuan needlessly.
 
     Returns:
-        True  — HTTP confirmed reachable (server returned content)
-        False — HTTP definitively unavailable (404, multiple times)
-        None  — inconclusive after all retries (caller decides)
+        _ProbeResult.OK            — server served bytes (200/206)
+        _ProbeResult.FILE_MISSING  — server returned 404 for this file
+        _ProbeResult.INCONCLUSIVE  — only transient errors after all retries
     """
     headers = {"Range": "bytes=0-1023"}
     last_status = None
     last_exc = None
-    saw_404_count = 0
     for attempt in range(_HTTP_PROBE_RETRIES):
         if attempt > 0:
             await asyncio.sleep(_HTTP_PROBE_BACKOFF[attempt - 1])
@@ -1111,16 +1132,13 @@ async def _probe_http_path(
                 f"{host}: HTTP probe attempt {attempt + 1} returned "
                 f"{r.status_code} with {len(r.content)} bytes — confirmed"
             )
-            return True
+            return _ProbeResult.OK
         if r.status_code == 404:
-            saw_404_count += 1
-            # Two 404s in a row = definitely unpatched. The retry loop
-            # is mostly there for transient 5xx; persistent 404 means
-            # the endpoint genuinely doesn't exist on this firmware.
-            if saw_404_count >= 2:
-                return False
-            continue
-        # Anything else (5xx, 401, 403, weird 200 with no body) — retry.
+            # Deterministic for a static URL — retrying the same path
+            # can't change it. This file isn't on the endpoint; the
+            # caller falls back to Baichuan for it and re-probes the next.
+            return _ProbeResult.FILE_MISSING
+        # Anything else (5xx, 401, 403, empty-body 200) — transient, retry.
         logger.debug(
             f"{host}: HTTP probe attempt {attempt + 1} returned {r.status_code}; "
             "retrying"
@@ -1130,7 +1148,7 @@ async def _probe_http_path(
         f"{host}: HTTP probe inconclusive — last status={last_status}, "
         f"last exception={last_exc!r}"
     )
-    return None
+    return _ProbeResult.INCONCLUSIVE
 
 
 CAMERA_RECORD_PREFIX = "/mnt/sda/"  # stripped to form the /downloadfile/ URL path
@@ -1145,12 +1163,18 @@ async def _download_via_http_async(
     file_path: str,
     output_mp4: str,
     on_progress=None,
-) -> Optional[bool]:
-    """Try the patched-firmware HTTP fast path.
+) -> bool | None:
+    """Try the patched-firmware HTTP fast path for one file.
 
-    Returns True on success, False if the camera responded but the download
-    failed mid-stream, None if HTTP is not supported (404 / connection
-    refused / dns error) — caller should fall back to Baichuan.
+    Returns:
+        True  — downloaded successfully over HTTP
+        False — the camera responded but the download failed mid-stream
+                (size mismatch / non-404 error); caller logs and falls
+                back to Baichuan for this file
+        None  — HTTP not used for this file (path not under the record
+                prefix, the endpoint isn't confirmed yet and the probe
+                missed, a 404, or a connection error). Caller falls back
+                to Baichuan for THIS file and re-probes HTTP on the next.
     """
     if not file_path.startswith(CAMERA_RECORD_PREFIX):
         logger.debug(
@@ -1162,10 +1186,6 @@ async def _download_via_http_async(
     rel = file_path[len(CAMERA_RECORD_PREFIX) :]
     url = f"http://{host}:{http_port}/downloadfile/{rel}"
 
-    cached = _HTTP_PATH_SUPPORTED.get(host)
-    if cached is False:
-        return None  # known-unpatched, skip the probe
-
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(
@@ -1175,41 +1195,32 @@ async def _download_via_http_async(
                 pool=5.0,
             )
         ) as client:
-            if cached is None:
-                # First download of this session — probe HTTP with
-                # retries before deciding. The probe does a real
-                # 1 KB GET (range: bytes=0-1023) rather than HEAD —
-                # HEAD can return 5xx on busy nginx workers even when
-                # GET works fine, and a single transient probe failure
-                # would otherwise lock us onto Baichuan for the
-                # entire session. Each retry waits a bit longer to
-                # ride through camera-boot or DST-rollover hiccups.
-                supported = await _probe_http_path(client, host, url)
-                if supported is None:
-                    # Probe was inconclusive: tried, retried, got
-                    # transient errors throughout. Commit to Baichuan
-                    # for the session — better one slower-than-ideal
-                    # session than oscillating between protocols on
-                    # every download.
-                    logger.warning(
-                        f"{host}: HTTP probe inconclusive after %d attempts; "
-                        f"committing to Baichuan for this session",
-                        _HTTP_PROBE_RETRIES,
-                    )
-                    _HTTP_PATH_SUPPORTED[host] = False
-                    return None
-                if supported is False:
+            if _HTTP_PATH_SUPPORTED.get(host) is not True:
+                # Endpoint not confirmed for this host yet — probe HTTP
+                # for THIS file. We never cache a permanent "unavailable"
+                # verdict: a miss just means Baichuan for this one file
+                # and a fresh HTTP probe on the next (strong bias toward
+                # HTTP, which is ~5x faster than Baichuan).
+                result = await _probe_http_path(client, host, url)
+                if result is _ProbeResult.OK:
+                    _HTTP_PATH_SUPPORTED[host] = True
                     logger.info(
-                        f"{host}: /downloadfile/ confirmed unavailable — "
-                        "firmware not patched, using Baichuan for this session"
+                        f"{host}: patched firmware confirmed — using HTTP fast "
+                        "path for all files this session"
                     )
-                    _HTTP_PATH_SUPPORTED[host] = False
+                elif result is _ProbeResult.FILE_MISSING:
+                    logger.info(
+                        f"{host}: {os.path.basename(file_path)} not served over "
+                        "HTTP (likely a cleaned-up/aborted recording) — Baichuan "
+                        "for this file, will retry HTTP on the next"
+                    )
                     return None
-                _HTTP_PATH_SUPPORTED[host] = True
-                logger.info(
-                    f"{host}: patched firmware confirmed, using HTTP fast path "
-                    "for this session"
-                )
+                else:  # _ProbeResult.INCONCLUSIVE
+                    logger.info(
+                        f"{host}: HTTP probe inconclusive (transient) — Baichuan "
+                        "for this file, will retry HTTP on the next"
+                    )
+                    return None
 
             # Stream GET → output file. Stage to <name>.partial so a
             # crash mid-stream leaves an obvious orphan that StateAuditor
@@ -1219,6 +1230,15 @@ async def _download_via_http_async(
             tmp = output_mp4 + ".partial"
             try:
                 async with client.stream("GET", url) as resp:
+                    if resp.status_code == 404:
+                        # File was cleaned up by the camera between listing
+                        # and download. Not an endpoint problem — stay on
+                        # HTTP, just fetch this one over Baichuan.
+                        logger.info(
+                            f"{host}: {os.path.basename(file_path)} returned 404 "
+                            "(file gone) — Baichuan for this file"
+                        )
+                        return None
                     if resp.status_code != 200:
                         logger.error(f"HTTP download {url} returned {resp.status_code}")
                         return False
@@ -1240,6 +1260,12 @@ async def _download_via_http_async(
                 os.replace(tmp, output_mp4)
                 elapsed = time.monotonic() - t0
                 mbps = (written * 8) / elapsed / 1e6 if elapsed > 0 else 0
+                # Streaming success is the strongest possible signal that
+                # HTTP works for this host — set the session sticky flag
+                # here too, not just on probe OK, so the sticky-retry
+                # policy below kicks in for the next file even on a
+                # camera where the first file skipped the probe path.
+                _HTTP_PATH_SUPPORTED[host] = True
                 logger.info(
                     f"HTTP download complete: {written / 1024 / 1024:.1f}MB "
                     f"in {elapsed:.1f}s ({mbps:.1f} Mbps)"
@@ -1272,26 +1298,77 @@ async def _download_and_mux_async(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
-    """Download a recording. HTTP fast path first; Baichuan fallback.
+    """Download a recording per ``download_protocol``.
 
-    1. Try patched-firmware HTTP fast path (~80–90 Mbps, no remux).
-    2. If unavailable (404 / connection refused), fall back to Baichuan
-       on port 9000: stream BcMedia -> Annex-B -> remux to MP4 via ffmpeg.
-
-    Returns True on success.
+    "auto" (default): probe HTTP fast path, fall back to Baichuan on
+    unconfirmed/unsupported, sticky-retry HTTP once any file in the
+    session has succeeded.
+    "http": HTTP only. Never fall back to Baichuan; failures surface
+    to the queue. Use this when mixed-protocol downloads have
+    produced AutoCam wedges (observed 2026-05-30 Fairport) and one
+    fully-HTTP session is preferred to oscillating between protocols.
+    "baichuan": skip HTTP entirely and stream directly via Baichuan
+    on port 9000 (BcMedia -> Annex-B -> remux to MP4 via ffmpeg).
     """
-    # Try HTTP first. None = not supported (fall through to Baichuan);
-    # True/False = HTTP path was attempted and resolved.
-    http_result = await _download_via_http_async(
-        host, http_port, file_path, output_mp4, on_progress
-    )
-    if http_result is True:
-        return True
-    if http_result is False:
-        logger.warning(
-            "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
+    if download_protocol == "baichuan":
+        logger.info(
+            "%s: download_protocol=baichuan; skipping HTTP fast path",
+            host,
         )
+    else:
+        # Try HTTP first. True = done over HTTP. None = HTTP not used
+        # for this file (unconfirmed-and-probe-missed / 404 /
+        # connection error). False = HTTP was serving but the transfer
+        # failed mid-stream.
+        http_result = await _download_via_http_async(
+            host, http_port, file_path, output_mp4, on_progress
+        )
+        if http_result is True:
+            return True
+
+        # Sticky-HTTP: once ANY file on this host has downloaded via
+        # HTTP this session, transient failures must retry HTTP rather
+        # than fall to Baichuan. Falling to Baichuan post-confirmation
+        # would drop us from ~10 MB/s to ~1.8 MB/s on a single blip.
+        # Only applies to files under CAMERA_RECORD_PREFIX.
+        if _HTTP_PATH_SUPPORTED.get(host) is True and file_path.startswith(
+            CAMERA_RECORD_PREFIX
+        ):
+            for attempt in range(_HTTP_STICKY_MAX_RETRIES):
+                await asyncio.sleep(_HTTP_STICKY_BACKOFF[attempt])
+                logger.info(
+                    f"{host}: HTTP confirmed for session; sticky retry "
+                    f"{attempt + 1}/{_HTTP_STICKY_MAX_RETRIES} "
+                    f"({os.path.basename(file_path)}) -- not falling to Baichuan"
+                )
+                http_result = await _download_via_http_async(
+                    host, http_port, file_path, output_mp4, on_progress
+                )
+                if http_result is True:
+                    return True
+            logger.error(
+                f"{host}: HTTP confirmed for session but all "
+                f"{_HTTP_STICKY_MAX_RETRIES} sticky retries failed for "
+                f"{os.path.basename(file_path)}; surfacing failure to queue"
+            )
+            return False
+
+        if download_protocol == "http":
+            logger.error(
+                "%s: download_protocol=http but HTTP unavailable for "
+                "%s (http_result=%r); not falling back to Baichuan",
+                host,
+                os.path.basename(file_path),
+                http_result,
+            )
+            return False
+
+        if http_result is False:
+            logger.warning(
+                "HTTP fast path attempted but failed mid-stream; falling back to Baichuan"
+            )
 
     # Baichuan delivers raw video + raw audio frames (no container);
     # we stage them as <name>.partial.video and <name>.partial.audio,
@@ -1368,11 +1445,13 @@ async def download_and_mux(
     channel: int = 0,
     on_progress=None,
     http_port: int = 80,
+    download_protocol: str = "auto",
 ) -> bool:
-    """Download a recording. HTTP fast path → Baichuan fallback → MP4 on disk.
+    """Download a recording per ``download_protocol`` and write MP4 to disk.
 
-    Runs in a dedicated thread with its own event loop to avoid contention
-    with the main service loop.
+    See ``_download_and_mux_async`` for protocol semantics. Runs in a
+    dedicated thread with its own event loop to avoid contention with
+    the main service loop.
     """
     return await asyncio.to_thread(
         _download_and_mux_sync,
@@ -1385,4 +1464,5 @@ async def download_and_mux(
         channel,
         on_progress,
         http_port,
+        download_protocol,
     )

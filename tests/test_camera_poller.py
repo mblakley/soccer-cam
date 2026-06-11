@@ -1,34 +1,35 @@
 """Tests for the CameraPoller processor."""
 
+import logging
 import os
 import tempfile
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 import pytz
 
-from pathlib import Path
-
+from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.camera_poller import (
     CameraPoller,
+    _identify_runt_recordings,
     find_group_directory,
 )
-from video_grouper.models import RecordingFile
-from video_grouper.models import DirectoryState
 from video_grouper.utils.config import (
-    Config,
-    CameraConfig,
-    TeamSnapConfig,
-    PlayMetricsConfig,
-    NtfyConfig,
-    YouTubeConfig,
-    AutocamConfig,
-    CloudSyncConfig,
     AppConfig,
-    StorageConfig,
-    RecordingConfig,
-    ProcessingConfig,
+    AutocamConfig,
+    CameraConfig,
+    CloudSyncConfig,
+    Config,
     LoggingConfig,
+    NtfyConfig,
+    PlayMetricsConfig,
+    ProcessingConfig,
+    RecordingConfig,
+    StorageConfig,
+    TeamSnapConfig,
+    YouTubeConfig,
 )
 
 
@@ -204,6 +205,53 @@ class TestCameraPoller:
         assert queued_file.file_path.endswith("test1.dav")
 
     @pytest.mark.asyncio
+    async def test_sync_excludes_isolated_runt(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """An isolated short recording is dropped before reaching the queue."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/stub.dav",
+                "startTime": "2026-05-28 09:33:28",
+                "endTime": "2026-05-28 09:33:32",  # 4s, alone -> runt
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        await poller._sync_files_from_camera()
+
+        mock_download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_queues_file_with_unparseable_end(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A file with an unparseable end time is kept (M1) and queued without
+        crashing the main loop (M2) — not dropped as a runt."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/seg.dav",
+                "startTime": "2026-05-28 10:00:00",
+                "endTime": "0000-00-00 00:00:00",  # strptime can't parse
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        await poller._sync_files_from_camera()  # must not raise
+
+        mock_download_processor.add_work.assert_called_once()
+        queued = mock_download_processor.add_work.call_args[0][0]
+        assert queued.file_path.endswith("seg.dav")
+
+    @pytest.mark.asyncio
     async def test_connected_timeframe_filtering(
         self, temp_storage, mock_config, mock_camera
     ):
@@ -291,6 +339,79 @@ class TestCameraPoller:
 
         # File should not be queued again
         mock_download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_summary_logs_when_all_files_are_runts(
+        self, temp_storage, mock_config, mock_camera, caplog
+    ):
+        """When the camera returns only runts (isolated short recordings),
+        no file advances the HWM. The poll-summary log must report
+        all-files-filtered AND a warning must fire so future stalls are
+        debuggable. Regression guard for the 2026-05-30 tournament
+        incident where the HWM stuck at a runt's end_time."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/runt1.dav",
+                "startTime": "2026-05-28 09:33:28",
+                "endTime": "2026-05-28 09:33:32",  # 4s, alone -> runt
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        with caplog.at_level(
+            logging.INFO, logger="video_grouper.task_processors.camera_poller"
+        ):
+            await poller._sync_files_from_camera()
+
+        # Summary line must reflect the 1 runt + 0 of everything else.
+        assert any(
+            "poll summary -- 1 files seen" in r.message
+            and "runt=1" in r.message
+            and "new=0" in r.message
+            for r in caplog.records
+        ), f"missing or wrong poll summary, got: {[r.message for r in caplog.records]}"
+        # Warning must fire to flag the HWM-stall risk.
+        assert any(
+            "HWM not advanced" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        ), "expected HWM-not-advanced warning for all-runts case"
+
+    @pytest.mark.asyncio
+    async def test_poll_summary_logs_normal_new_file(
+        self, temp_storage, mock_config, mock_camera, caplog
+    ):
+        """A normal poll with one new file must emit a summary showing
+        new=1 and an HWM-advanced INFO line citing the file."""
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/normal.dav",
+                "startTime": "2026-05-28 14:00:00",
+                "endTime": "2026-05-28 14:30:00",
+            }
+        ]
+        mock_download_processor = Mock()
+        mock_download_processor.add_work = AsyncMock()
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, mock_download_processor
+        )
+
+        with caplog.at_level(
+            logging.INFO, logger="video_grouper.task_processors.camera_poller"
+        ):
+            await poller._sync_files_from_camera()
+
+        assert any(
+            "poll summary -- 1 files seen" in r.message and "new=1" in r.message
+            for r in caplog.records
+        )
+        assert any(
+            "HWM advanced to" in r.message and "normal.dav" in r.message
+            for r in caplog.records
+        ), "expected HWM-advanced INFO line citing the new file"
 
     def test_find_group_directory_new_group(self, temp_storage):
         """Test finding group directory when creating a new group."""
@@ -614,7 +735,7 @@ class TestHomeRecordingDeletion:
 
         await poller._handle_deletion_response("yes, delete home recordings")
 
-        with open(poller._cleanup_state_path, "r") as f:
+        with open(poller._cleanup_state_path) as f:
             state = json.load(f)
         assert state["approved"] is True
 
@@ -838,3 +959,85 @@ class TestUnplugNotification:
         # _last_poll_found_files is now False (no files found)
         await poller.discover_work()
         assert poller.ntfy_service.send_notification.call_count == 2
+
+
+# ── Isolated-runt detection ──────────────────────────────────────────
+
+_RUNT_DAY = "2026-05-28"
+
+
+def _rec(path, start_hms, end_hms):
+    """Build a camera file-list entry on a fixed day from HH:MM:SS strings."""
+    return {
+        "path": path,
+        "startTime": f"{_RUNT_DAY} {start_hms}",
+        "endTime": f"{_RUNT_DAY} {end_hms}",
+    }
+
+
+class TestRuntDetection:
+    """_identify_runt_recordings: drop only *isolated* short/aborted files."""
+
+    def test_normal_long_file_kept(self):
+        files = [_rec("/mnt/sda/a.mp4", "10:00:00", "10:05:00")]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_isolated_short_file_skipped(self):
+        files = [_rec("/mnt/sda/runt.mp4", "09:33:28", "09:33:32")]  # 4s, alone
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+
+    def test_isolated_aborted_zero_end_skipped(self):
+        # 000000 end time parses to midnight (< start) -> aborted. (prod case)
+        files = [_rec("/mnt/sda/runt.mp4", "09:33:28", "00:00:00")]
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/runt.mp4"}
+
+    def test_isolated_unparseable_end_kept(self):
+        # Unparseable end -> unknown duration -> NOT treated as short, so it is
+        # kept even when isolated (fail toward keeping; could be a still-open
+        # game segment). The common aborted stub has a *parseable* zero end
+        # (test_isolated_aborted_zero_end_skipped) and is still dropped.
+        files = [
+            {
+                "path": "/mnt/sda/maybe_long.mp4",
+                "startTime": f"{_RUNT_DAY} 09:33:28",
+                "endTime": "0000-00-00 00:00:00",  # strptime can't parse
+            }
+        ]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_short_tail_after_long_segment_kept(self):
+        """A short power-off tail contiguous with a real game is preserved."""
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),  # long game seg
+            _rec("/mnt/sda/tail.mp4", "10:05:02", "10:05:06"),  # 4s, 2s later
+        ]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_short_aborted_tail_kept(self):
+        """Power cut mid-segment: tail is aborted but contiguous -> kept."""
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),
+            _rec("/mnt/sda/tail.mp4", "10:05:01", "00:00:00"),  # aborted, 1s later
+        ]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_stub_far_from_game_in_same_batch_skipped(self):
+        files = [
+            _rec("/mnt/sda/seg1.mp4", "10:00:00", "10:05:00"),  # long game seg
+            _rec("/mnt/sda/stub.mp4", "14:00:00", "14:00:04"),  # 4s, hours later
+        ]
+        assert _identify_runt_recordings(files, []) == {"/mnt/sda/stub.mp4"}
+
+    def test_full_length_isolated_first_segment_kept(self):
+        # A long first segment is not short, so it's never a runt candidate.
+        files = [_rec("/mnt/sda/first.mp4", "10:00:00", "10:10:00")]
+        assert _identify_runt_recordings(files, []) == set()
+
+    def test_short_file_adjacent_to_persisted_group_kept(self):
+        """No in-batch neighbor, but adjacent to a group grouped in a prior poll."""
+        files = [_rec("/mnt/sda/tail.mp4", "10:05:03", "00:00:00")]  # aborted, lone
+        with patch(
+            "video_grouper.task_processors.camera_poller.find_existing_group_for",
+            return_value="/storage/2026.05.28-10.00.00",
+        ):
+            assert _identify_runt_recordings(files, ["/storage/x"]) == set()

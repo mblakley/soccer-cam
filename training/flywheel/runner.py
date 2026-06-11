@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from training.flywheel.coverage import measure_all_games
@@ -64,7 +64,7 @@ def load_state() -> dict:
 
 def save_state(state: dict):
     """Persist flywheel state to disk."""
-    state["last_updated"] = datetime.now(timezone.utc).isoformat()
+    state["last_updated"] = datetime.now(UTC).isoformat()
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
@@ -442,7 +442,7 @@ def step_evaluate(state: dict) -> dict:
     state["history"].append(
         {
             "cycle": state["cycle"],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "coverage": avg_coverage,
             "total_gaps": state["total_gaps"],
             "long_gaps": state["long_gaps"],
@@ -485,7 +485,7 @@ STEP_FUNCTIONS = {
 def run_cycle(state: dict) -> dict:
     """Run one full cycle through all steps."""
     state["cycle"] += 1
-    state["started"] = datetime.now(timezone.utc).isoformat()
+    state["started"] = datetime.now(UTC).isoformat()
     logger.info("=== Starting cycle %d ===", state["cycle"])
 
     for i, step_name in enumerate(STEPS):

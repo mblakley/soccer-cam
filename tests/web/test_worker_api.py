@@ -9,7 +9,6 @@ from video_grouper.utils.config import TTTConfig
 from video_grouper.web.auth_server import create_app
 from video_grouper.web.worker_api import enqueue_task
 
-
 # auth_server's middleware requires same-origin Origin/Referer on every
 # state-changing method; bake it into the test client so each POST/PUT
 # is treated as a same-origin browser request.

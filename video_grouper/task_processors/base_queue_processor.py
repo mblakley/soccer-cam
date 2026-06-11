@@ -5,11 +5,11 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+
+from video_grouper.task_processors.tasks.base_task import BaseTask
+from video_grouper.utils.config import Config
 
 from .queue_type import QueueType
-from video_grouper.utils.config import Config
-from video_grouper.task_processors.tasks.base_task import BaseTask
 from .task_registry import task_registry
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class QueueProcessor(ABC):
         self._shutdown_event = asyncio.Event()
         self._max_retries = 3  # Maximum number of retry attempts
         self._retry_counts = {}  # Track retry counts for each item
-        self._in_progress_item: Optional[BaseTask] = None  # Currently processing item
+        self._in_progress_item: BaseTask | None = None  # Currently processing item
         self._sequence = 0
         self._items_by_key: dict[str, tuple[int, int, BaseTask]] = {}
 
@@ -66,9 +66,9 @@ class QueueProcessor(ABC):
     def _inject_storage_path(self, item: BaseTask) -> None:
         """Ensure the task knows the storage path and config for later execution."""
         if not hasattr(item, "storage_path"):
-            setattr(item, "storage_path", self.storage_path)
+            item.storage_path = self.storage_path
         if not hasattr(item, "config"):
-            setattr(item, "config", self.config)
+            item.config = self.config
 
     def _get_priority(self, item: BaseTask) -> int:
         """Return priority for this item. Lower = higher priority. Default: 2 (normal)."""
@@ -160,7 +160,7 @@ class QueueProcessor(ABC):
                     priority, seq, item = await asyncio.wait_for(
                         self._queue.get(), timeout=5.0
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Timeout - check if we should continue or exit
                     if self._shutdown_event.is_set():
                         logger.info(
@@ -204,8 +204,8 @@ class QueueProcessor(ABC):
                         f"{self.__class__.__name__}: Removed completed item from queue: {item} (queue size: {queue_size})"
                     )
                 except Exception as e:
-                    from video_grouper.utils.youtube_upload import YouTubeQuotaError
                     from video_grouper.cameras.base import CameraUnreachableError
+                    from video_grouper.utils.youtube_upload import YouTubeQuotaError
 
                     if isinstance(e, CameraUnreachableError):
                         # Camera-offline failures aren't the file's fault —
@@ -243,6 +243,7 @@ class QueueProcessor(ABC):
 
                         # Calculate wait: next midnight PT + 5 min buffer
                         from datetime import datetime, timedelta
+
                         import pytz
 
                         now_pt = datetime.now(pytz.timezone("US/Pacific"))
@@ -368,7 +369,7 @@ class QueueProcessor(ABC):
             return
 
         try:
-            with open(state_file, "r") as f:
+            with open(state_file) as f:
                 raw_state = json.load(f)
 
             # Support both new format (dict with "queue" key) and legacy format (plain list)
@@ -452,16 +453,47 @@ class QueueProcessor(ABC):
             logger.error(f"{self.__class__.__name__}: Error loading state: {e}")
 
     def get_queue_size(self) -> int:
-        """Get the current queue size."""
+        """Get the current pending queue size.
+
+        Does NOT include the currently-processing item (tracked separately
+        via ``_in_progress_item`` and surfaced through
+        :meth:`get_in_progress_summary`). Together they describe what the
+        processor is actually doing -- ``queue=0`` alone is ambiguous
+        between "idle" and "mid-flight on a 15-min task".
+        """
         if self._queue is None:
             return 0
         return self._queue.qsize()
 
-    def get_status(self) -> Dict[str, object]:
+    def get_in_progress_summary(self) -> str | None:
+        """Return a short identifier of the item currently being processed.
+
+        Format: ``<TaskClassName>(<get_item_path>)``, e.g.
+        ``TrimTask(2026.06.01-18.25.38)``. Returns ``None`` when the
+        processor is idle.
+
+        Surfaces the in-progress task to the periodic ``QUEUE_STATUS``
+        log line so a long silent stream copy (PyAV combine/trim, 15-min
+        wall time, no progress output) is distinguishable from a wedged
+        worker. Without this, ``video=0`` in the log was ambiguous on
+        2026-06-01 -- looked idle, was actually trimming.
+        """
+        item = self._in_progress_item
+        if item is None:
+            return None
+        cls = type(item).__name__
+        try:
+            path = item.get_item_path()
+        except Exception:
+            path = repr(item)
+        return f"{cls}({path})"
+
+    def get_status(self) -> dict[str, object]:
         """Get processor status information."""
         return {
             "queue_size": self.get_queue_size(),
             "queued_items_count": len(self._queued_items),
+            "in_progress": self.get_in_progress_summary(),
             "running": self._processor_task is not None
             and not self._processor_task.done(),
         }
@@ -490,7 +522,7 @@ class QueueProcessor(ABC):
         """Return a snapshot of all queued items (for inspection, not modification)."""
         return [task for _, _, task in sorted(self._items_by_key.values())]
 
-    def _deserialize_task(self, item_data: Dict[str, object]) -> BaseTask:
+    def _deserialize_task(self, item_data: dict[str, object]) -> BaseTask:
         """
         Deserialize a task from its serialized data.
 

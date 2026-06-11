@@ -1,16 +1,16 @@
 """Tests for clip extraction and highlight compilation tasks."""
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from video_grouper.task_processors.queue_type import QueueType
 from video_grouper.task_processors.tasks.clips.clip_extraction_task import (
     ClipExtractionTask,
 )
 from video_grouper.task_processors.tasks.clips.highlight_compilation_task import (
     HighlightCompilationTask,
 )
-from video_grouper.task_processors.queue_type import QueueType
-
 
 # ---------------------------------------------------------------------------
 # ClipExtractionTask

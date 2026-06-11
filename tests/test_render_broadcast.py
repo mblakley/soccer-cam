@@ -9,6 +9,7 @@ zoom-out. The cylindrical projection itself is covered by
 
 from __future__ import annotations
 
+from video_grouper.inference.cylindrical_view import pixel_to_yaw_pitch
 from video_grouper.pipeline.steps.render import (
     BROADCAST_MODE,
     RenderStepConfig,
@@ -19,7 +20,6 @@ from video_grouper.pipeline.steps.render import (
     _zone_base_zoom,
     compute_entries,
 )
-from video_grouper.inference.cylindrical_view import pixel_to_yaw_pitch
 
 SRC_W, SRC_H = 7680, 2160
 

@@ -2,18 +2,49 @@
 NTFY service for interactive user notifications and input.
 """
 
+import asyncio
 import json
 import logging
 import os
-from typing import Dict, Optional, Any, Set, List
 from datetime import datetime
-import asyncio
+from typing import Any
 
 from video_grouper.api_integrations.ntfy import NtfyAPI
 from video_grouper.utils.config import NtfyConfig
-from ...utils.paths import get_ntfy_service_state_path
+
+from ...utils.locking import FileLock
+from ...utils.paths import (
+    get_ntfy_processed_log_path,
+    get_ntfy_service_state_path,
+)
 
 logger = logging.getLogger(__name__)
+
+# A buffered response carries no group_dir of its own, so we use freshness
+# relative to task registration as an identity proxy: a response only replays
+# against a newly-registered task if it plausibly arrived AS an answer to that
+# task. This stops a stale tap from an earlier game (replayed by the listener's
+# ?since=24h reconnect) from auto-answering a different game's question.
+#
+# When we have the NTFY server timestamp (the normal phone-tap path), the tap
+# must have happened no earlier than this many seconds before the task was
+# registered. 60s comfortably covers the genuine sub-second race (the tap
+# arrives microseconds before mark_waiting_for_input finishes) while rejecting
+# taps that are minutes/hours old.
+BUFFER_FRESHNESS_WINDOW_SECONDS = 60
+
+# Fallback when a buffered response has no usable server timestamp
+# (synthetic/internal responses): only an in-flight race qualifies, so the
+# entry must have been received within this many seconds (monotonic) of the
+# task registering. We never replay an older entry on this weak signal.
+BUFFER_RACE_WINDOW_SECONDS = 10
+
+# How long to remember consumed NTFY message ids. The ntfy.sh free tier
+# retains topic messages ~12-24h, so the ?since=24h replay can only ever
+# resurface an id younger than that; anything older can never replay and is
+# pruned from the ledger on load to keep it bounded. 48h gives comfortable
+# headroom over the replay window.
+NTFY_PROCESSED_LOG_RETENTION_SECONDS = 48 * 3600
 
 
 class NtfyService:
@@ -38,9 +69,19 @@ class NtfyService:
         self.completion_callback = completion_callback
 
         # State tracking for pending tasks
-        self._pending_tasks: Dict[str, Dict[str, Any]] = {}
-        self._processed_dirs: Set[str] = set()
+        self._pending_tasks: dict[str, dict[str, Any]] = {}
+        self._processed_dirs: set[str] = set()
         self._state_file = get_ntfy_service_state_path(storage_path)
+
+        # Authoritative replay guard: the set of NTFY message ids we have
+        # already consumed. The ?since=24h replay on listener reconnect
+        # redelivers every recent message with its stable server-assigned id;
+        # ids in this set are skipped at ingest so a tap can never be applied
+        # twice (e.g. an earlier game's "Yes" walking a new game's question).
+        # Backed by an append-only JSONL audit log so it survives restarts.
+        # The topic is the source of truth; this records what we used from it.
+        self._processed_log_file = get_ntfy_processed_log_path(storage_path)
+        self._used_message_ids: set[str] = set()
 
         # Buffer for responses that arrived before any task was registered
         # to receive them. The recurring race: state_auditor queues a new
@@ -50,9 +91,14 @@ class NtfyService:
         # finds no matching task and drops the response — and then the
         # task registers and the user's phone shows the SAME question
         # again, even though they already answered.
-        # Buffer entries are (received_at, response_text). When a new task
-        # registers we replay the buffer against it; entries older than
-        # the TTL get pruned on every check so the buffer doesn't grow.
+        # Buffer entries are (received_monotonic, server_time, response_text)
+        # where server_time is the NTFY server receive time (epoch seconds,
+        # or None if unavailable). When a new task registers we replay the
+        # buffer against it, but ONLY for entries that are fresh relative to
+        # the task's registration time (see _try_buffered_responses_for) — a
+        # stale tap from a previous game must never auto-answer a new one.
+        # Entries older than the TTL get pruned on every check so the buffer
+        # doesn't grow.
         from collections import deque
 
         self._unmatched_responses: deque = deque(maxlen=64)
@@ -60,22 +106,23 @@ class NtfyService:
         # than the listener replay window typically needs.
 
         # For handling direct responses to prompts
-        self._response_events: Dict[str, asyncio.Event] = {}
-        self._response_data: Dict[str, Optional[str]] = {}
+        self._response_events: dict[str, asyncio.Event] = {}
+        self._response_data: dict[str, str | None] = {}
 
         # Generic response handlers for non-task components (e.g. camera poller)
-        self._response_handlers: Dict[str, Any] = {}
+        self._response_handlers: dict[str, Any] = {}
 
         # Track the most recently sent notification's group_dir
         # so responses get routed to the correct group
-        self._last_notified_group_dir: Optional[str] = None
+        self._last_notified_group_dir: str | None = None
 
-        self._state: Dict[str, Any] = {}
+        self._state: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
 
         self._initialize_api()
         self._load_state()
+        self._load_used_messages()
 
     def _initialize_api(self) -> None:
         """Initialize NTFY API."""
@@ -127,7 +174,7 @@ class NtfyService:
         if not os.path.exists(self._state_file):
             return
         try:
-            with open(self._state_file, "r") as f:
+            with open(self._state_file) as f:
                 state = json.load(f)
             self._pending_tasks = state.get("pending_tasks", {})
             self._processed_dirs = set(state.get("processed_dirs", []))
@@ -152,6 +199,106 @@ class NtfyService:
                 json.dump(state, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving NTFY unified state: {e}")
+
+    def _load_used_messages(self) -> None:
+        """Load consumed NTFY message ids from the audit log.
+
+        Drops entries older than the retention window (they can no longer
+        replay) and rewrites the file compacted so it stays bounded. A
+        corrupt or unreadable log must never block startup — on any error we
+        keep whatever ids parsed so far and carry on.
+
+        The read-then-compacting-rewrite is taken under FileLock so a
+        concurrent appender (e.g. a second tray agent) can't be clobbered by
+        the truncate. NOTE: the in-memory id set is per-process, so this guards
+        the file's integrity, not cross-process dedup — two live listeners each
+        consume a given tap once. See record_used_message.
+        """
+        if not os.path.exists(self._processed_log_file):
+            return
+        cutoff = datetime.now().timestamp() - NTFY_PROCESSED_LOG_RETENTION_SECONDS
+        kept_lines: list[str] = []
+        try:
+            with FileLock(self._processed_log_file):
+                with open(self._processed_log_file, encoding="utf-8") as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue  # skip a torn line, don't lose the rest
+                        recorded_at = entry.get("recorded_at")
+                        if recorded_at:
+                            try:
+                                if (
+                                    datetime.fromisoformat(recorded_at).timestamp()
+                                    < cutoff
+                                ):
+                                    continue  # stale, prune
+                            except ValueError:
+                                pass
+                        mid = entry.get("id")
+                        if mid:
+                            self._used_message_ids.add(mid)
+                            kept_lines.append(line)
+                # Rewrite compacted so pruned/stale entries don't accumulate.
+                with open(self._processed_log_file, "w", encoding="utf-8") as f:
+                    if kept_lines:
+                        f.write("\n".join(kept_lines) + "\n")
+            logger.debug(
+                f"NTFY: loaded {len(self._used_message_ids)} consumed message ids"
+            )
+        except Exception as e:
+            logger.error(f"Error loading NTFY processed-message log: {e}")
+
+    def has_used_message(self, message_id: str | None) -> bool:
+        """Return True if we have already consumed this NTFY message id.
+
+        Used by the listener to drop ?since=24h replays of a tap we already
+        acted on, so a stale response can never re-answer a live question.
+        """
+        return bool(message_id) and message_id in self._used_message_ids
+
+    def record_used_message(
+        self,
+        message_id: str | None,
+        *,
+        server_time: float | None = None,
+        message: str | None = None,
+        decision: str | None = None,
+    ) -> None:
+        """Record that we consumed (used) an NTFY topic message.
+
+        Appends one line to the audit log keyed on the message's
+        server-assigned id. Idempotent: a no-op if the id was already
+        recorded. A failed write is logged but never raised — the listener
+        must keep processing even if the ledger can't be persisted.
+
+        The append is taken under FileLock so it can't interleave with another
+        process's compacting rewrite (see _load_used_messages). This protects
+        the file, NOT cross-process dedup: the id set is per-process and only
+        loaded at init, so two live listeners on the same topic each consume a
+        given tap once — concurrent dual-consumers are out of scope here (the
+        single-instance tray lock is what prevents that).
+        """
+        if not message_id or message_id in self._used_message_ids:
+            return
+        self._used_message_ids.add(message_id)
+        entry = {
+            "id": message_id,
+            "ntfy_time": server_time,
+            "message": (message or "")[:200],
+            "decision": decision,
+            "recorded_at": datetime.now().isoformat(),
+        }
+        try:
+            with FileLock(self._processed_log_file):
+                with open(self._processed_log_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.warning(f"NTFY: failed to append processed-message log: {e}")
 
     def is_waiting_for_input(self, group_dir: str) -> bool:
         """Check if we're waiting for user input for a specific directory."""
@@ -178,7 +325,7 @@ class NtfyService:
         self._save_state()
 
     def mark_waiting_for_input(
-        self, group_dir: str, task_type: str, metadata: Optional[Dict[str, Any]] = None
+        self, group_dir: str, task_type: str, metadata: dict[str, Any] | None = None
     ) -> None:
         """Mark a directory as waiting for user input."""
         # Convert old metadata structure to new unified structure
@@ -218,7 +365,7 @@ class NtfyService:
                 pass
 
     def mark_failed_to_send(
-        self, group_dir: str, task_type: str, metadata: Optional[Dict[str, Any]] = None
+        self, group_dir: str, task_type: str, metadata: dict[str, Any] | None = None
     ) -> None:
         """Mark a directory as failed to send notification."""
         # Convert old metadata structure to new unified structure
@@ -245,15 +392,15 @@ class NtfyService:
             del self._pending_tasks[group_dir]
             self._save_state()
 
-    def get_pending_tasks(self) -> Dict[str, Dict[str, Any]]:
+    def get_pending_tasks(self) -> dict[str, dict[str, Any]]:
         """Get all pending tasks."""
         return self._pending_tasks.copy()
 
     # For backward compatibility
-    def get_pending_inputs(self) -> Dict[str, Dict[str, Any]]:
+    def get_pending_inputs(self) -> dict[str, dict[str, Any]]:
         return self.get_pending_tasks()
 
-    def get_processed_directories(self) -> Set[str]:
+    def get_processed_directories(self) -> set[str]:
         """Get all processed directories."""
         return self._processed_dirs.copy()
 
@@ -265,10 +412,10 @@ class NtfyService:
         self,
         message: str,
         title: str = None,
-        tags: List[str] = None,
+        tags: list[str] = None,
         priority: int = None,
         image_path: str = None,
-        actions: List[Dict[str, Any]] = None,
+        actions: list[dict[str, Any]] = None,
     ) -> bool:
         """
         Send a notification via NTFY, ensuring the API is initialized first.
@@ -494,7 +641,12 @@ class NtfyService:
         """Remove a previously registered response handler."""
         self._response_handlers.pop(key, None)
 
-    async def process_response(self, response: str) -> None:
+    async def process_response(
+        self,
+        response: str,
+        server_time: float | None = None,
+        topic_msg_id: str | None = None,
+    ) -> None:
         """
         Process a response from NTFY and route it to the appropriate pending task.
 
@@ -503,8 +655,27 @@ class NtfyService:
 
         Args:
             response: The user's response message
+            server_time: NTFY server receive time for this response (epoch
+                seconds), when available. Used to reject stale replays when the
+                response has to be buffered. None for synthetic/internal
+                responses (e.g. the mock API or registered response handlers).
+            topic_msg_id: The NTFY topic message id this response came from,
+                when available. Recorded to the consumed-id ledger at the point
+                the response is actually used (matched/handled/buffered) so the
+                ?since=24h replay never re-applies it. None for synthetic calls.
         """
         logger.info(f"Processing NTFY response: {response}")
+
+        def _record_consumed(decision: str) -> None:
+            # Record-on-use: only called once we've actually consumed the
+            # response, so a dispatch that throws before this is left
+            # un-recorded and the next replay can retry it.
+            self.record_used_message(
+                topic_msg_id,
+                server_time=server_time,
+                message=str(response)[:200],
+                decision=decision,
+            )
 
         # Check generic response handlers first (e.g. home recording deletion)
         response_lower = response.lower()
@@ -513,6 +684,7 @@ class NtfyService:
                 logger.info(f"Matched response handler: {key}")
                 try:
                     await handler(response)
+                    _record_consumed("handler")
                 except Exception as e:
                     logger.error(f"Error in response handler '{key}': {e}")
                 return
@@ -532,6 +704,7 @@ class NtfyService:
                     await self._process_task_response(
                         self._last_notified_group_dir, task_type, metadata, response
                     )
+                    _record_consumed("applied")
                     return
 
         # Fall back to iterating all pending tasks (sorted by sent_at descending)
@@ -553,6 +726,7 @@ class NtfyService:
                 await self._process_task_response(
                     group_dir, task_type, metadata, response
                 )
+                _record_consumed("applied")
                 return
         # No task currently waiting for this response. Buffer it — a task
         # registration may be moments away (state_auditor and the response
@@ -563,7 +737,8 @@ class NtfyService:
         import time
 
         self._prune_unmatched_buffer()
-        self._unmatched_responses.append((time.monotonic(), response))
+        self._unmatched_responses.append((time.monotonic(), server_time, response))
+        _record_consumed("buffered")
         logger.warning(
             f"No matching task found for response: {response} "
             f"(buffered {len(self._unmatched_responses)} unmatched responses, "
@@ -579,11 +754,48 @@ class NtfyService:
         while self._unmatched_responses and self._unmatched_responses[0][0] < cutoff:
             self._unmatched_responses.popleft()
 
+    @staticmethod
+    def _is_buffered_response_fresh(
+        server_time: float | None,
+        received_monotonic: float,
+        now_monotonic: float,
+        task_sent_at_epoch: float | None,
+    ) -> bool:
+        """Decide whether a buffered response is fresh enough to answer a task.
+
+        A response carries no group_dir, so we use freshness relative to the
+        task's registration time as an identity proxy. A response replays only
+        if it plausibly arrived AS an answer to the just-registered task:
+
+        - With an NTFY server timestamp (the normal phone-tap path), the tap
+          must have happened no earlier than BUFFER_FRESHNESS_WINDOW_SECONDS
+          before the task was registered. This rejects a tap replayed from a
+          previous game by ?since=24h on restart, while still accepting the
+          genuine sub-second race (the tap arrives microseconds before
+          mark_waiting_for_input finishes). If the task's sent_at can't be
+          parsed, fall back to the monotonic recency check below.
+        - Without a usable server timestamp (synthetic/internal responses),
+          only the genuine just-happened race qualifies: the entry must have
+          been received within BUFFER_RACE_WINDOW_SECONDS (monotonic). We never
+          replay an older entry on this weak signal.
+        """
+        if server_time is not None and task_sent_at_epoch is not None:
+            return server_time >= task_sent_at_epoch - BUFFER_FRESHNESS_WINDOW_SECONDS
+        return (now_monotonic - received_monotonic) <= BUFFER_RACE_WINDOW_SECONDS
+
     async def _try_buffered_responses_for(self, group_dir: str) -> bool:
         """Replay buffered unmatched responses against a freshly-registered task.
 
+        A buffered response is only replayed when it both matches the task type
+        AND is fresh relative to the task's registration time (see
+        _is_buffered_response_fresh). This prevents a stale answer from a
+        previous game — replayed by the listener's ?since=24h reconnect — from
+        auto-answering a newly-registered question for a different game.
+
         Returns True if a buffered response matched and was processed.
         """
+        import time
+
         self._prune_unmatched_buffer()
         if not self._unmatched_responses:
             return False
@@ -593,27 +805,51 @@ class NtfyService:
         task_type = task_data.get("task_type")
         metadata = task_data.get("task_metadata", {})
 
+        # Parse the task's registration time (epoch seconds) for the freshness
+        # check. Always written as ISO format by mark_waiting_for_input.
+        task_sent_at_epoch = None
+        sent_at_raw = task_data.get("sent_at")
+        if sent_at_raw:
+            try:
+                task_sent_at_epoch = datetime.fromisoformat(sent_at_raw).timestamp()
+            except (ValueError, TypeError):
+                task_sent_at_epoch = None
+
+        now_monotonic = time.monotonic()
+
         # Iterate a snapshot so we can mutate the deque safely.
         snapshot = list(self._unmatched_responses)
-        for received_at, response in snapshot:
-            if self._response_matches_task(group_dir, task_type, metadata, response):
+        for received_at, server_time, response in snapshot:
+            if not self._response_matches_task(
+                group_dir, task_type, metadata, response
+            ):
+                continue
+            if not self._is_buffered_response_fresh(
+                server_time, received_at, now_monotonic, task_sent_at_epoch
+            ):
                 logger.info(
-                    f"NTFY: Replaying buffered response '{response}' against "
-                    f"newly-registered task {task_type} for {group_dir}"
+                    f"NTFY: NOT replaying stale buffered response '{response}' "
+                    f"against task {task_type} for {group_dir} "
+                    f"(server_time={server_time}, task sent_at={sent_at_raw}) — "
+                    f"it predates this question, so it belongs to another game; "
+                    f"leaving it buffered to age out."
                 )
-                # Remove from buffer first so we don't loop on it.
-                try:
-                    self._unmatched_responses.remove((received_at, response))
-                except ValueError:
-                    pass
-                await self._process_task_response(
-                    group_dir, task_type, metadata, response
-                )
-                return True
+                continue
+            logger.info(
+                f"NTFY: Replaying buffered response '{response}' against "
+                f"newly-registered task {task_type} for {group_dir}"
+            )
+            # Remove from buffer first so we don't loop on it.
+            try:
+                self._unmatched_responses.remove((received_at, server_time, response))
+            except ValueError:
+                pass
+            await self._process_task_response(group_dir, task_type, metadata, response)
+            return True
         return False
 
     def _response_matches_task(
-        self, group_dir: str, input_type: str, metadata: Dict[str, Any], response: str
+        self, group_dir: str, input_type: str, metadata: dict[str, Any], response: str
     ) -> bool:
         """
         Check if a response matches a specific task.
@@ -693,7 +929,7 @@ class NtfyService:
             return False
 
     async def _process_task_response(
-        self, group_dir: str, input_type: str, metadata: Dict[str, Any], response: str
+        self, group_dir: str, input_type: str, metadata: dict[str, Any], response: str
     ) -> None:
         """
         Process a response for a specific task.

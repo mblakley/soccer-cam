@@ -89,7 +89,7 @@ def bootstrap_persons(
 
         results = model(batch_strs, conf=confidence, verbose=False)
 
-        for tile_path, result in zip(batch_paths, results):
+        for tile_path, result in zip(batch_paths, results, strict=False):
             stats["tiles_processed"] += 1
 
             detections = []

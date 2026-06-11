@@ -284,7 +284,7 @@ class BallTracker:
                 if 0 <= d.frame_idx < n_frames and traj[d.frame_idx] is None:
                     traj[d.frame_idx] = [d.x, d.y]
         keys = [i for i, p in enumerate(traj) if p is not None]
-        for a, b in zip(keys, keys[1:]):
+        for a, b in zip(keys, keys[1:], strict=False):
             gap = b - a
             if not (1 < gap <= interp_gap):
                 continue

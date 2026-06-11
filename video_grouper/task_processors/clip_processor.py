@@ -5,17 +5,18 @@ Handles ClipExtractionTask (FFmpeg trim) and HighlightCompilationTask (FFmpeg co
 then uploads results to YouTube and updates the API.
 """
 
+import asyncio
 import logging
 import os
-from typing import Optional
+
+from video_grouper.api_integrations.moment_api_client import MomentApiClient
+from video_grouper.utils.config import Config
 
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
 from .tasks.base_task import BaseTask
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
-from video_grouper.api_integrations.moment_api_client import MomentApiClient
-from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class ClipProcessor(QueueProcessor):
 
     async def _upload_to_youtube(
         self, video_path: str, title: str, description: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Upload a video to YouTube if the uploader is configured.
 
         Returns the YouTube video ID, or None.
@@ -115,7 +116,11 @@ class ClipProcessor(QueueProcessor):
             return None
 
         try:
-            video_id = self.youtube_uploader.upload_video(
+            # googleapiclient is sync; without asyncio.to_thread the upload
+            # blocks the event loop shared by the auth server, tray status
+            # poller, and other queue processors.
+            video_id = await asyncio.to_thread(
+                self.youtube_uploader.upload_video,
                 video_path,
                 title=title,
                 description=description,

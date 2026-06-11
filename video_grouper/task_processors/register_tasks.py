@@ -13,18 +13,18 @@ Entry points pick the right registration:
 * Tray (Windows desktop session)     -> :func:`register_tray_tasks`
 """
 
-from .tasks.video.combine_task import CombineTask
-from .tasks.video.trim_task import TrimTask
-from .tasks.ntfy.game_start_task import GameStartTask
-from .tasks.ntfy.game_end_task import GameEndTask
-from .tasks.ntfy.team_info_task import TeamInfoTask
-from .tasks.upload.youtube_upload_task import YoutubeUploadTask
+from video_grouper.task_processors.task_registry import task_registry
+
 from .tasks.clip.clip_request_task import ClipRequestTask
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
+from .tasks.ntfy.game_end_task import GameEndTask
+from .tasks.ntfy.game_start_task import GameStartTask
+from .tasks.ntfy.team_info_task import TeamInfoTask
 from .tasks.pipeline.pipeline_task import PipelineTask
-
-from video_grouper.task_processors.task_registry import task_registry
+from .tasks.upload.youtube_upload_task import YoutubeUploadTask
+from .tasks.video.combine_task import CombineTask
+from .tasks.video.trim_task import TrimTask
 
 
 def _register_common_tasks() -> None:

@@ -167,11 +167,11 @@ def _run_qa(manifest, task_io, cfg, game_id: str) -> dict:
 
     try:
         from training.data_prep.trajectory_gaps import (
+            build_gap_filmstrip,
             build_trajectories_from_manifest,
-            stitch_game_ball_track,
             find_gap_candidates,
             gap_to_tile_stem,
-            build_gap_filmstrip,
+            stitch_game_ball_track,
         )
 
         has_phases = bool(manifest.get_phases())

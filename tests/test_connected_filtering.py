@@ -6,7 +6,7 @@ Test that the TeamSnap integration respects the connected camera filtering rule.
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 # Add the parent directory to the path so we can import the video_grouper package
@@ -72,7 +72,7 @@ class TestConnectedFiltering(unittest.TestCase):
         mock_get_games.return_value = self.games
 
         # Create a recording timespan that overlaps with the first game
-        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
+        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=UTC)
         recording_end = recording_start + timedelta(minutes=60)
 
         # Test that no game is found when the camera is connected
@@ -90,7 +90,7 @@ class TestConnectedFiltering(unittest.TestCase):
         mock_get_games.return_value = self.games
 
         # Create a recording timespan that overlaps with the first game
-        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=timezone.utc)
+        recording_start = datetime(2025, 3, 8, 17, 15, 0, tzinfo=UTC)
         recording_end = recording_start + timedelta(minutes=60)
 
         # Test that a game is found when the camera is disconnected

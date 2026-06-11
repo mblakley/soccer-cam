@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -24,14 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class AutocamStepConfig(BaseModel):
-    executable: Optional[str] = None
+    executable: str | None = None
 
 
 def _invoke_autocam(
-    executable: Optional[str],
+    executable: str | None,
     input_path: str,
     output_path: str,
-    group_dir: Optional[str] = None,
+    group_dir: str | None = None,
 ) -> bool:
     """Lazy-import the GUI driver and run AutoCam on a single file.
 

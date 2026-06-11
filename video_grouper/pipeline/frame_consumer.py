@@ -63,18 +63,18 @@ class FrameConsumer(ABC):
     def open(
         self,
         source: FrameSourceInfo,
-        ctx: "StepContext",
-        manifest: "PipelineManifest",
+        ctx: StepContext,
+        manifest: PipelineManifest,
     ) -> None:
         """Prepare to consume given the decoded ``source`` (read inputs from the manifest,
         resolve any per-consumer geometry, open outputs)."""
 
     @abstractmethod
-    def consume(self, rgb: "np.ndarray", frame_pts: int, frame_idx: int) -> None:
+    def consume(self, rgb: np.ndarray, frame_pts: int, frame_idx: int) -> None:
         """Process one decoded RGB frame."""
 
     @abstractmethod
-    def close(self, manifest: "PipelineManifest") -> None:
+    def close(self, manifest: PipelineManifest) -> None:
         """Flush/close outputs and record produced paths via ``manifest.put``."""
 
 

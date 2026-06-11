@@ -1,5 +1,6 @@
-from PIL import Image, ImageDraw
 import os
+
+from PIL import Image, ImageDraw
 
 
 def create_soccer_cam_icon():

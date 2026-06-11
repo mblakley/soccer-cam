@@ -2,11 +2,15 @@
 
 import asyncio
 import struct
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 from video_grouper.cameras.reolink_download import (
+    _HTTP_PATH_SUPPORTED,
+    _HTTP_PROBE_RETRIES,
+    _HTTP_STICKY_MAX_RETRIES,
     ANNEX_B_START_CODE,
     HEADER_MAGIC,
     HOST_CH_ID,
@@ -26,14 +30,17 @@ from video_grouper.cameras.reolink_download import (
     _aes_decrypt,
     _aes_encrypt,
     _decrypt_baichuan,
+    _download_and_mux_async,
+    _download_via_http_async,
     _encrypt_baichuan,
     _has_start_codes,
     _is_known_magic,
     _length_prefixed_to_annex_b,
     _md5_str_modern,
+    _probe_http_path,
+    _ProbeResult,
     _to_annex_b,
 )
-
 
 # ── Helper: build synthetic BcMedia packets ──────────────────────────
 
@@ -681,3 +688,591 @@ class TestDownloadAndMux:
             )
             assert result is False
             instance.close.assert_awaited_once()
+
+
+# ── HTTP fast-path probe + bias-toward-HTTP tests ────────────────────
+
+HOST = "192.168.1.50"
+# A realistic camera record path (must start with CAMERA_RECORD_PREFIX).
+SDA_FILE = "/mnt/sda/Mp4Record/RecM09_DST20260528_100000_100530.mp4"
+
+
+def _get_resp(status_code, content=b"x" * 1024):
+    """Build a mock non-streaming GET response (probe target)."""
+    r = Mock()
+    r.status_code = status_code
+    r.content = content
+    return r
+
+
+def _make_stream_resp(status_code, body=b"", headers=None):
+    """Build a mock streaming response (client.stream(...) target)."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.headers = headers if headers is not None else {}
+
+    async def _aiter_bytes(chunk_size):
+        if body:
+            yield body
+
+    resp.aiter_bytes = _aiter_bytes
+    return resp
+
+
+def _make_http_client(get_side_effect=None, stream_resp=None):
+    """Build a mock httpx client supporting .get (probe) and .stream (download)."""
+    client = MagicMock()
+    client.get = AsyncMock(
+        side_effect=get_side_effect if get_side_effect is not None else []
+    )
+    if stream_resp is not None:
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=stream_resp)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        client.stream = MagicMock(return_value=cm)
+    return client
+
+
+def _patch_async_client(client):
+    """patch() context manager for httpx.AsyncClient that yields `client`.
+
+    Overrides the autouse `mock_httpx` fixture in conftest for the test.
+    """
+    mock_cls = MagicMock()
+    instance = mock_cls.return_value
+    instance.__aenter__ = AsyncMock(return_value=client)
+    instance.__aexit__ = AsyncMock(return_value=False)
+    return patch("httpx.AsyncClient", mock_cls)
+
+
+def _no_sleep():
+    """patch() that makes the probe's backoff sleeps instant."""
+    return patch("video_grouper.cameras.reolink_download.asyncio.sleep", AsyncMock())
+
+
+@pytest.fixture(autouse=True)
+def _reset_http_cache():
+    """Clear the per-host HTTP confirmation cache around each test."""
+    _HTTP_PATH_SUPPORTED.clear()
+    yield
+    _HTTP_PATH_SUPPORTED.clear()
+
+
+class TestProbeHttpPath:
+    @pytest.mark.asyncio
+    async def test_200_with_bytes_returns_ok(self):
+        client = _make_http_client(get_side_effect=[_get_resp(200)])
+        result = await _probe_http_path(client, HOST, "http://h/downloadfile/x")
+        assert result is _ProbeResult.OK
+        assert client.get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_206_with_bytes_returns_ok(self):
+        client = _make_http_client(get_side_effect=[_get_resp(206)])
+        result = await _probe_http_path(client, HOST, "u")
+        assert result is _ProbeResult.OK
+
+    @pytest.mark.asyncio
+    async def test_404_returns_file_missing_immediately(self):
+        client = _make_http_client(get_side_effect=[_get_resp(404, content=b"")])
+        with _no_sleep() as sleep:
+            result = await _probe_http_path(client, HOST, "u")
+        assert result is _ProbeResult.FILE_MISSING
+        assert client.get.await_count == 1  # no retry on a deterministic 404
+        sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_transient_then_success(self):
+        client = _make_http_client(
+            get_side_effect=[
+                httpx.ConnectError("x"),
+                _get_resp(503, content=b""),
+                _get_resp(200),
+            ]
+        )
+        with _no_sleep() as sleep:
+            result = await _probe_http_path(client, HOST, "u")
+        assert result is _ProbeResult.OK
+        assert client.get.await_count == 3
+        assert sleep.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_all_transient_returns_inconclusive(self):
+        errs = [httpx.ConnectTimeout("x")] * _HTTP_PROBE_RETRIES
+        client = _make_http_client(get_side_effect=errs)
+        with _no_sleep():
+            result = await _probe_http_path(client, HOST, "u")
+        assert result is _ProbeResult.INCONCLUSIVE
+        assert client.get.await_count == _HTTP_PROBE_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_empty_body_200_is_inconclusive(self):
+        resps = [_get_resp(200, content=b"")] * _HTTP_PROBE_RETRIES
+        client = _make_http_client(get_side_effect=resps)
+        with _no_sleep():
+            result = await _probe_http_path(client, HOST, "u")
+        assert result is _ProbeResult.INCONCLUSIVE
+
+
+class TestDownloadViaHttp:
+    @pytest.mark.asyncio
+    async def test_first_file_404_does_not_blacklist(self, tmp_path):
+        """THE BUG: a per-file 404 must not blacklist the host for the session."""
+        client = _make_http_client(get_side_effect=[_get_resp(404, content=b"")])
+        with _patch_async_client(client):
+            result = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "out.mp4")
+            )
+        assert result is None
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is None  # unconfirmed, NOT False
+
+    @pytest.mark.asyncio
+    async def test_runt_then_real_file_uses_http(self, tmp_path):
+        """Runt 404s, then the real next file confirms HTTP (end-to-end bug fix)."""
+        c1 = _make_http_client(get_side_effect=[_get_resp(404, content=b"")])
+        with _patch_async_client(c1):
+            r1 = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "a.mp4")
+            )
+        assert r1 is None
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is None
+
+        body = b"video-bytes" * 1000
+        stream = _make_stream_resp(
+            200, body=body, headers={"content-length": str(len(body))}
+        )
+        c2 = _make_http_client(get_side_effect=[_get_resp(200)], stream_resp=stream)
+        out2 = tmp_path / "b.mp4"
+        with _patch_async_client(c2):
+            r2 = await _download_via_http_async(HOST, 80, SDA_FILE, str(out2))
+        assert r2 is True
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True
+        assert out2.exists()
+
+    @pytest.mark.asyncio
+    async def test_every_file_404_never_blacklists_and_reprobes(self, tmp_path):
+        """Unpatched camera: every file probes HTTP (404) then Baichuan; never gives up."""
+        for i in range(4):
+            client = _make_http_client(get_side_effect=[_get_resp(404, content=b"")])
+            with _patch_async_client(client):
+                r = await _download_via_http_async(
+                    HOST, 80, SDA_FILE, str(tmp_path / f"f{i}.mp4")
+                )
+            assert r is None
+            assert client.get.await_count == 1  # re-probed THIS file
+            assert _HTTP_PATH_SUPPORTED.get(HOST) is None  # never True, never False
+
+    @pytest.mark.asyncio
+    async def test_immediate_success(self, tmp_path):
+        body = b"x" * 4096
+        stream = _make_stream_resp(
+            200, body=body, headers={"content-length": str(len(body))}
+        )
+        client = _make_http_client(get_side_effect=[_get_resp(200)], stream_resp=stream)
+        out = tmp_path / "out.mp4"
+        with _patch_async_client(client):
+            r = await _download_via_http_async(HOST, 80, SDA_FILE, str(out))
+        assert r is True
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True
+        assert out.exists()
+
+    @pytest.mark.asyncio
+    async def test_transient_probe_then_success(self, tmp_path):
+        body = b"x" * 2048
+        stream = _make_stream_resp(
+            200, body=body, headers={"content-length": str(len(body))}
+        )
+        client = _make_http_client(
+            get_side_effect=[httpx.ConnectError("x"), _get_resp(200)],
+            stream_resp=stream,
+        )
+        out = tmp_path / "out.mp4"
+        with _no_sleep(), _patch_async_client(client):
+            r = await _download_via_http_async(HOST, 80, SDA_FILE, str(out))
+        assert r is True
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True
+
+    @pytest.mark.asyncio
+    async def test_confirmed_then_file_404_returns_none_stays_confirmed(self, tmp_path):
+        """A cleaned-up file 404 during streaming must not un-confirm the host."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        stream = _make_stream_resp(404)
+        client = _make_http_client(stream_resp=stream)
+        with _patch_async_client(client):
+            r = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert r is None
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True  # still confirmed
+        client.get.assert_not_awaited()  # no probe when already confirmed
+
+    @pytest.mark.asyncio
+    async def test_confirmed_then_500_returns_false(self, tmp_path):
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        stream = _make_stream_resp(500)
+        client = _make_http_client(stream_resp=stream)
+        with _patch_async_client(client):
+            r = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert r is False  # genuine mid-stream error -> caller logs + Baichuan
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True
+
+    @pytest.mark.asyncio
+    async def test_probe_ok_but_stream_404_toctou(self, tmp_path):
+        """File vanishes between probe and stream: None, but endpoint confirmed True."""
+        stream = _make_stream_resp(404)
+        client = _make_http_client(get_side_effect=[_get_resp(200)], stream_resp=stream)
+        with _patch_async_client(client):
+            r = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert r is None
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is True
+
+    @pytest.mark.asyncio
+    async def test_inconclusive_probe_stays_unconfirmed(self, tmp_path):
+        """Transient probe: Baichuan this file, host stays unconfirmed (re-probe next)."""
+        errs = [httpx.ConnectTimeout("x")] * _HTTP_PROBE_RETRIES
+        client = _make_http_client(get_side_effect=errs)
+        with _no_sleep(), _patch_async_client(client):
+            r = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert r is None
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is None  # unconfirmed -> retry HTTP next
+
+    @pytest.mark.asyncio
+    async def test_path_not_under_prefix_returns_none(self, tmp_path):
+        client = _make_http_client()
+        with _patch_async_client(client):
+            r = await _download_via_http_async(
+                HOST, 80, "/other/x.mp4", str(tmp_path / "o.mp4")
+            )
+        assert r is None
+        client.get.assert_not_awaited()
+        assert _HTTP_PATH_SUPPORTED.get(HOST) is None
+
+    @pytest.mark.asyncio
+    async def test_size_mismatch_returns_false(self, tmp_path):
+        body = b"x" * 100
+        stream = _make_stream_resp(200, body=body, headers={"content-length": "999999"})
+        client = _make_http_client(get_side_effect=[_get_resp(200)], stream_resp=stream)
+        out = tmp_path / "o.mp4"
+        with _patch_async_client(client):
+            r = await _download_via_http_async(HOST, 80, SDA_FILE, str(out))
+        assert r is False
+        assert not out.exists()  # never published on size mismatch
+
+
+class TestStickyHttpRetry:
+    """Sticky-HTTP: once any file has downloaded via HTTP this session,
+    transient failures must retry HTTP rather than fall back to Baichuan.
+    Baichuan is reserved for cameras where HTTP has never worked."""
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_retries_http_on_transient_failure(self, tmp_path):
+        """Confirmed host + 1st HTTP attempt False + 2nd attempt True → succeed via HTTP, never touch Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return True if len(calls) >= 2 else False
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        assert result is True
+        assert len(calls) == 2  # initial + 1 sticky retry
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_exhausts_retries_never_uses_baichuan(self, tmp_path):
+        """Confirmed host + all HTTP attempts fail → return False, never Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return False
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        assert result is False
+        assert len(calls) == 1 + _HTTP_STICKY_MAX_RETRIES
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_host_still_falls_to_baichuan(self, tmp_path):
+        """First file ever / unconfirmed host + HTTP fails → original Baichuan fallback (no sticky retry)."""
+        # _HTTP_PATH_SUPPORTED clear via autouse fixture
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # unconfirmed probe miss
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        # HTTP tried once (no sticky retries), then fell to Baichuan
+        # which we mocked to fail -> overall False, but Baichuan WAS
+        # attempted (the point of this test).
+        assert result is False
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_host_but_ineligible_path_uses_baichuan(self, tmp_path):
+        """Confirmed host + file outside /mnt/sda/ → HTTP not applicable, Baichuan still used."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        # File path not under CAMERA_RECORD_PREFIX
+        non_sda_path = "/some/other/path/x.mp4"
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # http_async itself returns None for non-prefix paths
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=non_sda_path,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+            )
+
+        # Sticky logic skipped because path is ineligible; falls to Baichuan.
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()
+        assert result is False  # because mocked Baichuan also fails
+
+
+class TestDownloadProtocolToggle:
+    """The ``download_protocol`` config selects http/baichuan/auto per
+    camera. Locking to one protocol avoids mixed-protocol GOP boundary
+    wedges in AutoCam (observed 2026-05-30 Fairport at 65.4%)."""
+
+    @pytest.mark.asyncio
+    async def test_protocol_baichuan_skips_http_probe_entirely(self, tmp_path):
+        """``download_protocol="baichuan"`` must skip the HTTP probe
+        and go straight to Baichuan, even when the host is in the
+        confirmed-HTTP cache."""
+        _HTTP_PATH_SUPPORTED[HOST] = True  # would normally force HTTP
+        http_calls = []
+
+        async def fake_http(*args, **kwargs):
+            http_calls.append(args)
+            return True
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="baichuan",
+            )
+
+        assert http_calls == [], "HTTP probe must not be called when protocol=baichuan"
+        MockBaichuan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_protocol_http_does_not_fall_to_baichuan_on_unconfirmed(
+        self, tmp_path
+    ):
+        """``download_protocol="http"`` + first-file probe miss must
+        return False rather than fall to Baichuan (which is what
+        ``auto`` would do here)."""
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None  # unconfirmed-and-probe-missed
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="http",
+            )
+
+        assert result is False
+        assert len(calls) == 1
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_protocol_http_does_not_fall_to_baichuan_on_midstream_fail(
+        self, tmp_path
+    ):
+        """``download_protocol="http"`` + HTTP-confirmed + sticky
+        retries exhausted must return False rather than fall to
+        Baichuan."""
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return False  # mid-stream failure every attempt
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+            _no_sleep(),
+        ):
+            result = await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="http",
+            )
+
+        assert result is False
+        assert len(calls) == 1 + _HTTP_STICKY_MAX_RETRIES
+        MockBaichuan.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_protocol_auto_preserves_existing_behavior(self, tmp_path):
+        """``download_protocol="auto"`` (default) + first-file probe
+        miss falls back to Baichuan as before — proves the new toggle
+        doesn't regress the original ``auto`` behavior."""
+        calls = []
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            calls.append(file_path)
+            return None
+
+        with (
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            patch(
+                "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+            ) as MockBaichuan,
+        ):
+            instance = MockBaichuan.return_value
+            instance.connect = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+            instance.close = AsyncMock()
+
+            await _download_and_mux_async(
+                host=HOST,
+                port=9000,
+                username="x",
+                password="y",
+                file_path=SDA_FILE,
+                output_mp4=str(tmp_path / "o.mp4"),
+                http_port=80,
+                download_protocol="auto",
+            )
+
+        assert len(calls) == 1
+        MockBaichuan.assert_called_once()

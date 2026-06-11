@@ -2,18 +2,19 @@
 Combine task for combining multiple DAV files into a single MP4 video.
 """
 
-import os
 import logging
-from typing import List, Dict, Any
+import os
 from dataclasses import dataclass
+from typing import Any
 
-from .base_ffmpeg_task import BaseFfmpegTask
 from video_grouper.models import DirectoryState
-from video_grouper.utils.ffmpeg_utils import combine_videos
+from video_grouper.utils.ffmpeg_utils import combine_videos, detect_audio_video_gaps
 from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
 )
+
+from .base_ffmpeg_task import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class CombineTask(BaseFfmpegTask):
         """Return the group directory path."""
         return self.group_dir
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """
         Serialize the task for state persistence.
 
@@ -60,7 +61,7 @@ class CombineTask(BaseFfmpegTask):
     # Files produced by the pipeline itself that should not be combined
     EXCLUDE_PREFIXES = ("combined",)
 
-    def get_dav_files(self) -> List[str]:
+    def get_dav_files(self) -> list[str]:
         """
         Get the list of video files to combine from the group directory.
 
@@ -90,10 +91,28 @@ class CombineTask(BaseFfmpegTask):
         Returns:
             True if command succeeded, False otherwise
         """
+        # Segments whose audio is materially shorter than their video, detected
+        # before combining. The combine itself pads each gap with silence (see
+        # _combine_copy); VideoProcessor reads this list to warn the user.
+        self.audio_gaps: list[dict] = []
+
         dav_files = self.get_dav_files()
         if not dav_files:
             await self._handle_task_failure()
             return False
+
+        self.audio_gaps = detect_audio_video_gaps(dav_files)
+        if self.audio_gaps:
+            logger.warning(
+                "COMBINE: %d segment(s) in %s have audio/video length mismatch: %s",
+                len(self.audio_gaps),
+                os.path.basename(self.group_dir),
+                ", ".join(
+                    f"{os.path.basename(g['path'])} "
+                    f"({g['gap_seconds']:.0f}s {g.get('kind', 'short')})"
+                    for g in self.audio_gaps
+                ),
+            )
 
         output_path = self.get_output_path()
 
@@ -156,7 +175,7 @@ class CombineTask(BaseFfmpegTask):
         return f"CombineTask({os.path.basename(self.group_dir)})"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CombineTask":
+    def from_dict(cls, data: dict[str, Any]) -> "CombineTask":
         """
         Create a CombineTask from serialized data.
 
@@ -169,7 +188,7 @@ class CombineTask(BaseFfmpegTask):
         return cls(group_dir=data["group_dir"])
 
     @classmethod
-    def deserialize(cls, data: Dict[str, object]) -> "CombineTask":
+    def deserialize(cls, data: dict[str, object]) -> "CombineTask":
         """
         Deserialize a CombineTask from its serialized data.
 
