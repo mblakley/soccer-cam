@@ -4,6 +4,15 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-008: Wind-noise reduction on the camera mic (2026-06-10)
+
+**Hypothesis:** The constant outdoor wind "scratching" on the camera mic can be reduced without mangling sideline/coach speech, via DSP and/or deep denoisers.
+**Method:** `wind_noise_reduction.py` — loudness-matched A/B harness over high-pass, ffmpeg afftdn/anlmdn, noisereduce, RNNoise, DeepFilterNet (+ attenuation-limited and hybrid combos); scores per-band energy (rumble/mid/gust) + DNSMOS SIG/BAK/OVRL; tested on a wobble-selected windy clip and a 156 s wind+talk montage.
+**Result:** Wind = low rumble (<200 Hz) + broadband "blowout" gust (~1.5–8 kHz); high-pass removes only the rumble. Deep speech models (DeepFilterNet/RNNoise) HALLUCINATE fake voices on mostly-wind audio — rejected by ear. Best non-generative chain: high-pass + afftdn + tuned non-stationary noisereduce; quiet-background vs voice is a monotonic tradeoff (noisereduce `prop_decrease`). DNSMOS OVRL only ~1.70→1.88.
+**Conclusion:** PARKED. `hybrid_p80` (high-pass 120 + afftdn str35 + noisereduce p≈0.80; ~2–5 min CPU per 90-min game) is the best working point but only a modest gain — wind genuinely buries close speech. Not yet wired into the pipeline.
+**Code:** `training/experiments/wind_noise_reduction.py`
+**Docs:** `training/docs/WIND_NOISE.md`
+
 ## EXP-007: Game phase detection from multi-ball patterns (2026-03-30)
 
 **Hypothesis:** Warmup/halftime/postgame have multiple scattered ball detections; active play has a single ball trajectory.
