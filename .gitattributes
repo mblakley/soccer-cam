@@ -1,0 +1,36 @@
+# LF everywhere. Pairs with core.autocrlf=false on dev machines: git
+# normalizes text to LF at commit AND checks out LF, so Windows working
+# trees never trip the "LF will be replaced by CRLF" conversion warning.
+* text=auto eol=lf
+
+# Windows-native script types are the one CRLF exception.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaries — never convert.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.mp4 binary
+*.dav binary
+*.mp3 binary
+*.wav binary
+*.onnx binary
+*.pt binary
+*.pyd binary
+*.dll binary
+*.exe binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# Lock files stay LF.
+uv.lock text eol=lf
+package-lock.json text eol=lf
