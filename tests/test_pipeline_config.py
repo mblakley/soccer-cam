@@ -27,14 +27,14 @@ _PIPELINE_INI = """\
 [PIPELINE]
 enabled = true
 gpu_concurrency = 2
-steps = stitch, detect, track, render
+steps = stitch, ball_detect, track, render
 
 [PIPELINE.stitch]
 type = stitch_correct
 stitch_profile_path = /calib/flash.json
 
-[PIPELINE.detect]
-type = detect
+[PIPELINE.ball_detect]
+type = ball_detect
 model_path = /m/model.onnx
 detect_confidence = 0.5
 
@@ -61,8 +61,13 @@ def test_load_pipeline_section(tmp_path):
     assert pc.gpu_concurrency == 2
 
     ordered = pc.ordered_steps()
-    assert [s.step_id for s in ordered] == ["stitch", "detect", "track", "render"]
-    assert [s.type for s in ordered] == ["stitch_correct", "detect", "track", "render"]
+    assert [s.step_id for s in ordered] == ["stitch", "ball_detect", "track", "render"]
+    assert [s.type for s in ordered] == [
+        "stitch_correct",
+        "ball_detect",
+        "track",
+        "render",
+    ]
     assert ordered[0].config["stitch_profile_path"] == "/calib/flash.json"
     assert ordered[1].config["model_path"] == "/m/model.onnx"
     assert ordered[1].config["detect_confidence"] == "0.5"  # raw until create_step
@@ -76,7 +81,7 @@ def test_pipeline_round_trips(tmp_path):
 
     assert reloaded.pipeline.enabled is True
     assert reloaded.pipeline.gpu_concurrency == 2
-    assert reloaded.pipeline.steps == ["stitch", "detect", "track", "render"]
+    assert reloaded.pipeline.steps == ["stitch", "ball_detect", "track", "render"]
     orig = {s.step_id: (s.type, s.config) for s in cfg.pipeline.ordered_steps()}
     back = {s.step_id: (s.type, s.config) for s in reloaded.pipeline.ordered_steps()}
     assert orig == back
@@ -132,11 +137,11 @@ def test_migrate_homegrown_splits_fields_per_step():
             },
         }
     )
-    assert out["steps"] == ["stitch_correct", "detect", "track", "render"]
+    assert out["steps"] == ["stitch_correct", "ball_detect", "track", "render"]
     specs = out["step_specs"]
     assert specs["stitch_correct"]["config"] == {"stitch_profile_path": "/p.json"}
     # detect gets only detect fields, not track/render fields
-    assert specs["detect"]["config"] == {
+    assert specs["ball_detect"]["config"] == {
         "model_key": "video.ball",
         "detect_confidence": "0.45",
     }
@@ -145,7 +150,7 @@ def test_migrate_homegrown_splits_fields_per_step():
     pc = PipelineConfig.model_validate(out)
     assert [s.type for s in pc.ordered_steps()] == [
         "stitch_correct",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
@@ -160,10 +165,10 @@ def test_migrate_unknown_provider_returns_none():
 _MISSING_TYPE = """\
 [PIPELINE]
 enabled = true
-steps = detect, bad
+steps = ball_detect, bad
 
-[PIPELINE.detect]
-type = detect
+[PIPELINE.ball_detect]
+type = ball_detect
 model_path = /m.onnx
 
 [PIPELINE.bad]
@@ -175,7 +180,7 @@ def test_missing_type_section_skipped_not_fatal(tmp_path):
     # A [PIPELINE.<id>] without `type` must not brick the whole config load.
     cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS + _MISSING_TYPE))
     assert cfg.storage.path == "/data"  # rest of config still loaded
-    assert [s.step_id for s in cfg.pipeline.ordered_steps()] == ["detect"]
+    assert [s.step_id for s in cfg.pipeline.ordered_steps()] == ["ball_detect"]
 
 
 _PER_TEAM_AS_STEP = """\
@@ -197,17 +202,17 @@ def test_per_team_is_reserved_not_a_step(tmp_path):
 _UNDEFINED_STEP = """\
 [PIPELINE]
 enabled = true
-steps = detect, ghost
+steps = ball_detect, ghost
 
-[PIPELINE.detect]
-type = detect
+[PIPELINE.ball_detect]
+type = ball_detect
 model_path = /m.onnx
 """
 
 
 def test_undefined_step_id_skipped(tmp_path):
     cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS + _UNDEFINED_STEP))
-    assert [s.step_id for s in cfg.pipeline.ordered_steps()] == ["detect"]
+    assert [s.step_id for s in cfg.pipeline.ordered_steps()] == ["ball_detect"]
 
 
 _EMPTY_STEP_CONFIG = """\
@@ -270,7 +275,7 @@ def test_explicit_pipeline_wins_over_legacy_ball_tracking(tmp_path):
     assert not hasattr(reloaded, "ball_tracking")
     assert [s.type for s in reloaded.pipeline.ordered_steps()] == [
         "stitch_correct",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
@@ -302,14 +307,14 @@ def test_load_migrates_ball_tracking_when_no_pipeline_section(tmp_path):
     ordered = pc.ordered_steps()
     assert [s.type for s in ordered] == [
         "stitch_correct",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
     # per-step fields split correctly through migration.
     by_id = {s.step_id: s for s in ordered}
     assert by_id["stitch_correct"].config["stitch_profile_path"] == "/calib/flash.json"
-    assert by_id["detect"].config["detect_confidence"] == "0.45"
+    assert by_id["ball_detect"].config["detect_confidence"] == "0.45"
     # The legacy [BALL_TRACKING] section is no longer a Config field — it is
     # consumed by migration and dropped before model_validate.
     assert not hasattr(cfg, "ball_tracking")
@@ -343,7 +348,7 @@ def test_load_does_not_migrate_when_pipeline_section_present(tmp_path):
     # PIPELINE steps come from the explicit [PIPELINE.*] sections, in that order.
     assert [s.step_id for s in cfg.pipeline.ordered_steps()] == [
         "stitch",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]

@@ -91,7 +91,7 @@ class PipelineConfig(BaseModel):
 # migrated pipeline carries only each step's own options.
 _HOMEGROWN_STAGE_FIELDS: dict[str, list[str]] = {
     "stitch_correct": ["stitch_profile_path"],
-    "detect": [
+    "ball_detect": [
         "model_key",
         "model_path",
         "detect_channel",
@@ -147,6 +147,10 @@ def migrate_ball_tracking_to_pipeline(bt: dict | None) -> dict | None:
             if isinstance(stages_raw, str)
             else list(stages_raw)
         )
+        # Part of the migration: the legacy "detect" stage IS the ball_detect
+        # step (renamed when field_detect arrived and bare "detect" became
+        # ambiguous).
+        stages = ["ball_detect" if s == "detect" else s for s in stages]
         out["steps"] = stages
         for stage in stages:
             fields = _HOMEGROWN_STAGE_FIELDS.get(stage, [])

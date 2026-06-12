@@ -12,11 +12,18 @@ import video_grouper.pipeline.register_steps  # noqa: F401
 from video_grouper.pipeline import create_step, get_step_meta, list_steps
 from video_grouper.pipeline.base import StepContext
 from video_grouper.pipeline.manifest import PipelineManifest
-from video_grouper.pipeline.steps.detect import DetectStep
+from video_grouper.pipeline.steps.ball_detect import BallDetectStep
 from video_grouper.pipeline.steps.stitch_correct import StitchCorrectStep
 from video_grouper.pipeline.steps.track import TrackStep
 
-BUILTINS = {"autocam", "stitch_correct", "field_detect", "detect", "track", "render"}
+BUILTINS = {
+    "autocam",
+    "stitch_correct",
+    "field_detect",
+    "ball_detect",
+    "track",
+    "render",
+}
 
 
 def _ctx(tmp_path):
@@ -28,7 +35,7 @@ def test_register_steps_registers_all_builtins():
 
 
 def test_step_metadata():
-    detect = get_step_meta("detect")
+    detect = get_step_meta("ball_detect")
     assert detect.runtime == "service"
     assert detect.resources == ("gpu",)
     assert detect.requires == ("onnxruntime", "cv2")
@@ -51,8 +58,10 @@ def test_step_metadata():
 
 
 def test_create_detect_step_validates_config():
-    step = create_step("detect", {"model_path": "m.onnx", "detect_confidence": 0.3})
-    assert isinstance(step, DetectStep)
+    step = create_step(
+        "ball_detect", {"model_path": "m.onnx", "detect_confidence": 0.3}
+    )
+    assert isinstance(step, BallDetectStep)
     assert step.config.model_path == "m.onnx"
     assert step.config.detect_confidence == 0.3
     assert step.config.device == "cuda:0"  # default
@@ -116,10 +125,10 @@ async def test_detect_step_local_path(tmp_path, monkeypatch):
         return [{"frame_idx": 0, "cx": 1.0, "cy": 2.0, "w": 3, "h": 4, "conf": 0.9}]
 
     monkeypatch.setattr(
-        "video_grouper.pipeline.steps.detect.create_session", fake_create_session
+        "video_grouper.pipeline.steps.ball_detect.create_session", fake_create_session
     )
     monkeypatch.setattr(
-        "video_grouper.pipeline.steps.detect.detect_video", fake_detect_video
+        "video_grouper.pipeline.steps.ball_detect.detect_video", fake_detect_video
     )
 
     in_path = tmp_path / "game.mp4"
@@ -127,7 +136,7 @@ async def test_detect_step_local_path(tmp_path, monkeypatch):
         tmp_path, str(in_path), str(tmp_path / "out.mp4")
     )
     step = create_step(
-        "detect",
+        "ball_detect",
         {"model_path": "m.onnx", "detect_confidence": 0.3, "detect_frame_interval": 4},
     )
     ok = await step.run(manifest, _ctx(tmp_path))
@@ -148,6 +157,6 @@ async def test_detect_step_errors_without_model(tmp_path):
     manifest = PipelineManifest.load_or_init(
         tmp_path, str(tmp_path / "game.mp4"), str(tmp_path / "out.mp4")
     )
-    step = create_step("detect", {})  # neither model_key nor model_path
+    step = create_step("ball_detect", {})  # neither model_key nor model_path
     with pytest.raises(RuntimeError, match="neither model_key nor model_path"):
         await step.run(manifest, _ctx(tmp_path))

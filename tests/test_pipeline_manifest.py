@@ -14,7 +14,7 @@ def test_load_or_init_fresh(tmp_path):
     assert m.get("output_path") == "out.mp4"
     assert m.output_path == "out.mp4"
     assert m.data["steps"] == []
-    assert m.status_of("detect") is None
+    assert m.status_of("ball_detect") is None
 
 
 def test_put_and_save_roundtrip(tmp_path):
@@ -34,23 +34,25 @@ def test_put_and_save_roundtrip(tmp_path):
 
 def test_mark_running_then_complete_persists(tmp_path):
     m = PipelineManifest.load_or_init(tmp_path, "in.mp4", "out.mp4")
-    m.mark_running("detect", "detect", "fp1", "service")
-    assert m.status_of("detect") == "running"
-    m.mark_complete("detect", {"detections_path": "/abs/det.json"})
+    m.mark_running("ball_detect", "ball_detect", "fp1", "service")
+    assert m.status_of("ball_detect") == "running"
+    m.mark_complete("ball_detect", {"detections_path": "/abs/det.json"})
 
     reloaded = PipelineManifest.load_or_init(tmp_path, "in.mp4", "out.mp4")
-    assert reloaded.status_of("detect") == "complete"
+    assert reloaded.status_of("ball_detect") == "complete"
     assert reloaded.get("detections_path") == "/abs/det.json"
-    assert reloaded.produced_paths("detect") == {"detections_path": "/abs/det.json"}
+    assert reloaded.produced_paths("ball_detect") == {
+        "detections_path": "/abs/det.json"
+    }
 
 
 def test_is_complete_requires_matching_fingerprint(tmp_path):
     m = PipelineManifest.load_or_init(tmp_path, "in.mp4", "out.mp4")
-    m.mark_running("detect", "detect", "fp1", "service")
-    m.mark_complete("detect", {})
-    assert m.is_complete("detect", "fp1") is True
+    m.mark_running("ball_detect", "ball_detect", "fp1", "service")
+    m.mark_complete("ball_detect", {})
+    assert m.is_complete("ball_detect", "fp1") is True
     # config changed -> different fingerprint -> must re-run
-    assert m.is_complete("detect", "fp2") is False
+    assert m.is_complete("ball_detect", "fp2") is False
     # unknown step is never complete
     assert m.is_complete("track", "fp1") is False
 

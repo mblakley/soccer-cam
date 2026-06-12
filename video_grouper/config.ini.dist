@@ -92,7 +92,7 @@ privacy_status = private
 enabled = false
 
 # Ordered step ids (the homegrown ball-tracking pipeline). Reorder / remove freely.
-steps = stitch, field_detect, detect, track, render
+steps = stitch, field_detect, ball_detect, track, render
 
 # Opt in to loading unsigned community plugins from <storage>/plugins/community/
 # (they run in-process with full privileges — only enable code you trust).
@@ -120,8 +120,8 @@ type = field_detect
 # field_sample_frames = 7    ; frames sampled to pick the best polygon
 # field_min_keypoints = 6    ; confident keypoints a frame needs to qualify
 
-[PIPELINE.detect]
-type = detect
+[PIPELINE.ball_detect]
+type = ball_detect
 # Ball-detection model source — pick ONE:
 #   model_key  : a TTT-provided model (requires a TTT account, free or premium)
 #   model_path : a community / bring-your-own local model (no TTT account)
