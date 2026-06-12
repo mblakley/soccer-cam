@@ -313,13 +313,17 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
     written = skipped = failed = 0
     score_sum = 0.0
 
-    per_video_cap = args.max_per_segment
     remaining_for_group = args.max_per_group
+    # The per-segment cap only makes sense when sampling many raw segments; a
+    # single combined.mp4 is the whole game and is bounded by max_per_group.
+    multi_segment = len(spec.videos) > 1
 
     for video in spec.videos:
         if remaining_for_group <= 0:
             break
-        cap = min(per_video_cap, remaining_for_group)
+        cap = remaining_for_group
+        if multi_segment:
+            cap = min(args.max_per_segment, cap)
         try:
             for frame_bgr, t_sec in sample_frames(video, args.interval_sec, cap):
                 stem = f"{video.stem}_t{int(t_sec):06d}"
