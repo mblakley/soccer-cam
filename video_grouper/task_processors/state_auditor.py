@@ -39,6 +39,11 @@ class StateAuditor(PollingProcessor):
     Now runs on a poll interval (default 60s). Safe to re-poll because
     every downstream ``add_work`` call dedupes on the task's item_key,
     so a still-in-progress task isn't re-enqueued.
+
+    Temp-file cleanup stays BOOT-ONLY (first successful pass): the
+    ``*.partial*`` / ``*.tmp`` suffixes it reaps are exactly what active
+    downloads, combines, trims and state saves stage to, so re-running
+    the sweep on every poll would race live writers.
     """
 
     def __init__(
@@ -77,6 +82,15 @@ class StateAuditor(PollingProcessor):
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
 
+        # Temp-file cleanup is BOOT-ONLY. Active operations stage to the
+        # same suffixes the cleanup reaps (downloads -> *.partial*,
+        # combine/trim -> *.tmp, state saves -> state.json.tmp), so a
+        # recurring sweep would race live writers: on POSIX an unlink of
+        # an open file makes the final os.replace fail; on Windows it
+        # spams sharing-violation warnings every poll. At boot nothing
+        # is in flight, so the orphan sweep is safe exactly once.
+        self._startup_cleanup_done = False
+
     @property
     def download_processor(self):
         """Backward compat: return the first download processor."""
@@ -92,12 +106,17 @@ class StateAuditor(PollingProcessor):
 
         try:
             # Get all directories in storage path
+            run_cleanup = not self._startup_cleanup_done
             items = os.listdir(self.storage_path)
             for item in items:
                 group_dir = os.path.join(self.storage_path, item)
                 if os.path.isdir(group_dir) and not item.startswith("."):
-                    self._cleanup_temp_files(group_dir)
+                    if run_cleanup:
+                        self._cleanup_temp_files(group_dir)
                     await self._audit_directory(group_dir)
+            # Only after a full pass — a failed listdir retries cleanup
+            # on the next poll instead of silently never sweeping.
+            self._startup_cleanup_done = True
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error during directory audit: {e}")
@@ -336,8 +355,11 @@ class StateAuditor(PollingProcessor):
                     f"STATE_AUDITOR: Found not_a_game status for {group_dir}, skipping further processing"
                 )
 
-            # Handle cleanup tasks
-            await self._handle_cleanup(group_dir)
+            # Handle cleanup tasks — boot-only, same reasoning as
+            # _cleanup_temp_files (CleanupService reaps *.tmp, which
+            # combine/trim and state saves actively stage to).
+            if not self._startup_cleanup_done:
+                await self._handle_cleanup(group_dir)
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")

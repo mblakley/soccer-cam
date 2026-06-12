@@ -623,6 +623,76 @@ class TestStateAuditorPolling:
     @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
     @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
     @pytest.mark.asyncio
+    async def test_temp_cleanup_runs_only_on_first_pass(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """Regression guard: the *.partial*/*.tmp orphan sweep is
+        boot-only. A recurring sweep would delete the staging files
+        that active downloads / combines / trims are writing (POSIX:
+        the final os.replace then fails; Windows: sharing-violation
+        spam every poll)."""
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        group_dir = tmp_path / "2026.06.12-10.00.00"
+        group_dir.mkdir()
+
+        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+
+        with (
+            patch.object(auditor, "_cleanup_temp_files") as mock_tmp,
+            patch.object(
+                auditor, "_audit_directory", new_callable=AsyncMock
+            ) as mock_audit,
+        ):
+            await auditor.discover_work()  # boot pass: sweep runs
+            assert mock_tmp.call_count == 1
+            assert mock_audit.call_count == 1
+
+            await auditor.discover_work()  # poll pass: sweep must NOT run
+            assert mock_tmp.call_count == 1, (
+                "temp-file cleanup ran on a polling pass — it would race "
+                "in-flight download/combine/trim staging files"
+            )
+            assert mock_audit.call_count == 2  # the audit itself still polls
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_partial_file_survives_polling_pass(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """End-to-end shape of the race: a .partial staging file created
+        AFTER boot (i.e. an in-flight download) must survive subsequent
+        discover_work() polls."""
+        mock_teamsnap.return_value.enabled = True
+        mock_playmetrics.return_value.enabled = True
+        mock_playmetrics.return_value.login.return_value = True
+        mock_ntfy.return_value.enabled = True
+
+        group_dir = tmp_path / "2026.06.12-10.00.00"
+        group_dir.mkdir()
+
+        auditor = StateAuditor(str(tmp_path), mock_config, Mock(), Mock())
+
+        with patch.object(auditor, "_audit_directory", new_callable=AsyncMock):
+            await auditor.discover_work()  # boot pass (nothing to sweep)
+
+            in_flight = group_dir / "0.10.03-0.20.07.mp4.partial"
+            in_flight.write_bytes(b"streaming download in progress")
+
+            await auditor.discover_work()  # polling pass
+            assert in_flight.exists(), (
+                "polling pass deleted an in-flight .partial staging file"
+            )
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
     async def test_start_creates_polling_loop(
         self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
     ):

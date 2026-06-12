@@ -183,22 +183,18 @@ class TestVideoGrouperAppRefactored:
         # Initialize should start all processors
         await app.initialize()
 
-        # All processors except StateAuditor (startup-only) should be running
+        # All processors run a polling/processing loop — including the
+        # StateAuditor, which polls so mid-session changes (e.g. a manual
+        # match_info.ini edit) get picked up without a restart.
         for processor in app.processors:
-            if processor is app.state_auditor:
-                # StateAuditor is startup-only: runs discover_work() once, no loop
-                assert processor._processor_task is None
-            else:
-                assert processor._processor_task is not None
-                assert not processor._processor_task.done()
+            assert processor._processor_task is not None
+            assert not processor._processor_task.done()
 
         # Shutdown should stop all processors
         await app.shutdown()
 
-        # All processors with tasks should be stopped
+        # All processors' tasks should be stopped
         for processor in app.processors:
-            if processor is app.state_auditor:
-                continue  # No task to check
             assert processor._processor_task.done()
 
     @pytest.mark.asyncio
