@@ -143,9 +143,9 @@ def discover_games(
                         my_team_name=my_team,
                         videos=videos,
                         unknown_reason=(
-                            "no match_info.ini"
+                            "no_match_info"
                             if mi is None
-                            else f"unrecognized team {my_team!r}"
+                            else f"unrecognized_team:{my_team!r}"
                         ),
                     )
                 )
@@ -173,27 +173,36 @@ def discover_games(
 
 
 def print_routing_table(games: list[GameSpec]) -> int:
-    """Print the Flash/Heat/UNKNOWN routing table. Returns the unknown count."""
+    """Print the routing table. Returns the count of *blocking* unknowns.
+
+    A dir with no ``match_info.ini`` isn't a game (warmup clip, ``_clips``,
+    etc.) and is skipped silently — not counted as blocking. A dir that *has*
+    match_info but an unrecognized team is a real game that must be fixed, so
+    it blocks unless ``--allow-unknown`` is passed.
+    """
     by_team: dict[str, int] = {"flash": 0, "heat": 0}
-    unknown = 0
+    routed = [g for g in games if g.team is not None]
+    no_mi = [g for g in games if g.team is None and g.unknown_reason == "no_match_info"]
+    bad_team = [
+        g for g in games if g.team is None and g.unknown_reason != "no_match_info"
+    ]
+
     print(f"\n{'TEAM':6} {'VENUE':28} {'DATE':11} GROUP")
     print("-" * 90)
-    for g in sorted(games, key=lambda g: (g.team or "zzz", g.date)):
-        if g.team is None:
-            unknown += 1
-            tag = "UNKNWN"
-            note = f"  <- {g.unknown_reason}"
-        else:
-            by_team[g.team] = by_team.get(g.team, 0) + 1
-            tag = g.team.upper()
-            note = ""
-        print(f"{tag:6} {g.venue[:28]:28} {g.date:11} {g.group_dir.name}{note}")
+    for g in sorted(routed, key=lambda g: (g.team, g.date)):
+        by_team[g.team] = by_team.get(g.team, 0) + 1
+        print(f"{g.team.upper():6} {g.venue[:28]:28} {g.date:11} {g.group_dir.name}")
+    for g in sorted(bad_team, key=lambda g: g.date):
+        print(
+            f"{'BADTEAM':6} {g.venue[:28]:28} {g.date:11} {g.group_dir.name}  <- {g.unknown_reason}"
+        )
     print("-" * 90)
     print(
         f"flash={by_team.get('flash', 0)}  heat={by_team.get('heat', 0)}  "
-        f"unknown={unknown}  total={len(games)}\n"
+        f"unrecognized_team={len(bad_team)}  skipped_non_games={len(no_mi)}  "
+        f"total={len(games)}\n"
     )
-    return unknown
+    return len(bad_team)
 
 
 # ---------------------------------------------------------------------------
@@ -441,15 +450,15 @@ def main() -> None:
     if not games:
         logger.error("No recording groups found under %s", args.roots)
         return
-    unknown = print_routing_table(games)
+    bad_team = print_routing_table(games)
 
     if args.dry_run:
         return
-    if unknown and not args.allow_unknown:
+    if bad_team and not args.allow_unknown:
         logger.error(
-            "%d game(s) could not be team-routed; fix match_info.ini or pass "
-            "--allow-unknown to process the rest",
-            unknown,
+            "%d game(s) have match_info but an unrecognized team; fix "
+            "my_team_name or pass --allow-unknown to skip them",
+            bad_team,
         )
         return
     if args.teacher_model is None:
