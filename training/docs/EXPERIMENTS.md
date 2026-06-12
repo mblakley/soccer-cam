@@ -4,6 +4,14 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-008: Field-boundary distillation pipeline (2026-06-11)
+
+**Hypothesis:** A small in-house CNN can reproduce the teacher's 10-point field polygon closely enough — IoU ≥ 0.90 vs teacher, gate agreement ≥ 90%, per-point error ≤ ~8px in 768×384 — to replace it as a drop-in ONNX.
+**Method:** Standalone distillation — label-gen (teacher over Reolink footage) → placement-split dataset + heavy augmentation → ResNet18 dual-head student → ONNX export matching the teacher's I/O signature + parity check. Corpus: ~33 Reolink games (7680×2160) from `D:/soccer-cam-storage`, ~9 venues, Heat-heavy plus a few Flash; Dahua footage excluded.
+**Result:** Pipeline implemented and unit/CPU-smoke verified locally — flip index remap, crop clipping, polygon IoU, coord/score/pixel losses, and the export contract (fp16 `[1,10,2]`+`[1,10]` scaled to 768×384). Full training run + held-out metrics pending on the GPU server.
+**Conclusion:** TBD after the server run — append IoU / gate-agreement / per-point error and the winning backbone here.
+**Code:** `training/field_keypoints/`, `training/cli/*_field_keypoints.py`
+
 ## EXP-007: Game phase detection from multi-ball patterns (2026-03-30)
 
 **Hypothesis:** Warmup/halftime/postgame have multiple scattered ball detections; active play has a single ball trajectory.

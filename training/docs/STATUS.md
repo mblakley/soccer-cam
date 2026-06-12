@@ -1,6 +1,21 @@
 # Current Status
 
-*Last updated: 2026-04-15*
+*Last updated: 2026-06-11*
+
+## Field-boundary distillation (in progress, 2026-06-11)
+
+Building an in-house "student" model to replace the third-party teacher field-polygon
+model, on branch `feat/field-keypoint-distillation`. Code is complete and unit-tested:
+`training/field_keypoints/` (package: augment, dataset, model) plus
+`training/cli/{generate,train,eval,export}_field_keypoints.py`. See DECISIONS 2026-06-11
+and EXP-008.
+
+**Next steps (run on the GPU server — footage + CUDA are local there):**
+1. Archive `D:/soccer-cam-storage` Reolink games to `F:` (team-routed Heat/Flash) and
+   confirm zero UNKNOWN team routing (`generate_field_labels --dry-run`).
+2. `generate_field_labels` over the F: archive → per-frame labels + overlays.
+3. `train_field_keypoints` (overfit smoke first, then full run).
+4. `eval_field_keypoints` on held-out venues; `export_field_keypoints --check` for parity.
 
 ## What's Running
 
