@@ -1,7 +1,7 @@
-"""Train the student field-keypoint model on distilled teacher labels.
+"""Train the student field-outline model on distilled teacher labels.
 
-Fits :class:`~training.field_keypoints.model.FieldKeypointNet` to the
-10-point labels written by ``generate_field_labels``. Splits are by venue
+Fits :class:`~training.field_outline.model.FieldOutlineNet` to the
+10-point labels written by ``generate_field_outline_labels``. Splits are by venue
 placement (never by frame); the coordinate loss is supervised only on
 in-frame, confident points of frames the teacher itself trusted, while the
 score head distills the teacher's per-point confidence.
@@ -9,13 +9,13 @@ score head distills the teacher's per-point confidence.
 Run on the GPU server (the footage and CUDA live there). Examples::
 
     # Overfit smoke test (proves model/loss plumbing) on a few frames
-    python -m training.cli.train_field_keypoints \\
-        --dataset-root F:/training_data/field_keypoints \\
+    python -m training.cli.train_field_outline \\
+        --dataset-root F:/training_data/field_outline \\
         --limit-frames 64 --no-aug --epochs 50 --device cpu
 
     # Real run
-    python -m training.cli.train_field_keypoints \\
-        --dataset-root F:/training_data/field_keypoints \\
+    python -m training.cli.train_field_outline \\
+        --dataset-root F:/training_data/field_outline \\
         --epochs 100 --batch 32
 """
 
@@ -33,13 +33,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from training.field_keypoints import INPUT_H, INPUT_W
-from training.field_keypoints.dataset import (
+from training.field_outline import INPUT_H, INPUT_W
+from training.field_outline.dataset import (
     build_datasets,
     cluster_weights,
     polygon_iou,
 )
-from training.field_keypoints.model import FieldKeypointNet
+from training.field_outline.model import FieldOutlineNet
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def _run_epoch(model, loader, device, optimizer=None, score_weight=0.25):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train field-keypoint student")
+    parser = argparse.ArgumentParser(description="Train field-outline student")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument(
         "--backbone", default="resnet18", choices=["resnet18", "mobilenet_v3_small"]
@@ -193,9 +193,7 @@ def main() -> None:
     )
 
     device = torch.device(args.device)
-    model = FieldKeypointNet(args.backbone, pretrained=not args.no_pretrained).to(
-        device
-    )
+    model = FieldOutlineNet(args.backbone, pretrained=not args.no_pretrained).to(device)
 
     optimizer = torch.optim.AdamW(
         [
@@ -216,7 +214,7 @@ def main() -> None:
         milestones=[warmup],
     )
 
-    run_name = args.run_name or time.strftime("field_kpts_%Y%m%d_%H%M%S")
+    run_name = args.run_name or time.strftime("field_outline_%Y%m%d_%H%M%S")
     run_dir = Path("training/runs") / run_name
     (run_dir / "weights").mkdir(parents=True, exist_ok=True)
     (run_dir / "args.json").write_text(

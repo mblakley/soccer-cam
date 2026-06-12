@@ -1,4 +1,4 @@
-"""Model/loss/export tests for the field-keypoint student.
+"""Model/loss/export tests for the field-outline student.
 
 These require torch (and the full-net test torchvision), which live in the
 ``[ml]`` extra — absent from the default dev venv. They skip cleanly where
@@ -11,12 +11,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.field_keypoints import INPUT_H, INPUT_W, NUM_KEYPOINTS  # noqa: E402
-from training.field_keypoints.model import (  # noqa: E402
+from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS  # noqa: E402
+from training.field_outline.model import (  # noqa: E402
     ExportWrapper,
     FieldHeads,
 )
-from training.cli.train_field_keypoints import (  # noqa: E402
+from training.cli.train_field_outline import (  # noqa: E402
     coord_loss,
     pixel_error,
     score_loss,
@@ -90,9 +90,9 @@ def test_score_loss_minimized_at_match():
 def test_full_net_forward_and_onnx_signature(tmp_path):
     pytest.importorskip("torchvision")
     ort = pytest.importorskip("onnxruntime")
-    from training.field_keypoints.model import FieldKeypointNet, export_onnx
+    from training.field_outline.model import FieldOutlineNet, export_onnx
 
-    net = FieldKeypointNet("resnet18", pretrained=False).eval()
+    net = FieldOutlineNet("resnet18", pretrained=False).eval()
     k, s = net(torch.rand(2, 3, INPUT_H, INPUT_W))
     assert k.shape == (2, NUM_KEYPOINTS, 2)
     assert s.shape == (2, NUM_KEYPOINTS)

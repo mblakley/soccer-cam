@@ -17,7 +17,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from training.field_keypoints import INPUT_H, INPUT_W, NUM_KEYPOINTS
+from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS
 
 # Horizontal-flip index remap: keeps semantics (index 0 stays "near-left")
 # after mirroring. near i -> 4-i, far i -> 14-i.

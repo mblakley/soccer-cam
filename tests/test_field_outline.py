@@ -1,4 +1,4 @@
-"""Unit tests for field-keypoint distillation helpers.
+"""Unit tests for field-outline distillation helpers.
 
 Covers the correctness-critical pure functions: the horizontal-flip index
 remap, crop clipping, team routing / id building, polygon IoU, and the
@@ -11,13 +11,13 @@ from pathlib import Path
 
 import numpy as np
 
-from training.field_keypoints import make_game_id, slugify, team_from_name
-from training.field_keypoints.augment import (
+from training.field_outline import make_game_id, slugify, team_from_name
+from training.field_outline.augment import (
     augment_sample,
     flip_keypoints,
     transform_keypoints_for_crop,
 )
-from training.field_keypoints.dataset import (
+from training.field_outline.dataset import (
     Sample,
     build_clusters,
     make_split,

@@ -19,8 +19,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from training.field_keypoints import INPUT_H, INPUT_W, NUM_KEYPOINTS
-from training.field_keypoints.dataset import load_samples, polygon_iou
+from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS
+from training.field_outline.dataset import load_samples, polygon_iou
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def run_check(student_onnx: Path, args) -> bool:
         create_field_session,
         detect_field_keypoints,
     )
-    from training.field_keypoints.model import FieldKeypointNet
+    from training.field_outline.model import FieldOutlineNet
 
     ok = True
     sess = ort.InferenceSession(str(student_onnx), providers=["CPUExecutionProvider"])
@@ -119,7 +119,7 @@ def run_check(student_onnx: Path, args) -> bool:
 
     # [3] checkpoint vs ONNX deviation (768x384 px space)
     ckpt = torch.load(args.checkpoint, map_location="cpu")
-    model = FieldKeypointNet(ckpt.get("backbone", "resnet18"), pretrained=False)
+    model = FieldOutlineNet(ckpt.get("backbone", "resnet18"), pretrained=False)
     model.load_state_dict(ckpt["model"])
     model.eval()
     scale = np.array([INPUT_W, INPUT_H], dtype=np.float32)
@@ -162,7 +162,7 @@ def run_check(student_onnx: Path, args) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Export + verify field-keypoint student"
+        description="Export + verify field-outline student"
     )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True, help="Output .onnx path")
@@ -176,10 +176,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     import torch
 
-    from training.field_keypoints.model import FieldKeypointNet, export_onnx
+    from training.field_outline.model import FieldOutlineNet, export_onnx
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
-    model = FieldKeypointNet(ckpt.get("backbone", "resnet18"), pretrained=False)
+    model = FieldOutlineNet(ckpt.get("backbone", "resnet18"), pretrained=False)
     model.load_state_dict(ckpt["model"])
     model.eval()
     out = export_onnx(model, args.out, full_fp16=args.full_fp16)

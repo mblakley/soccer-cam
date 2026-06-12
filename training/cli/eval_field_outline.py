@@ -1,4 +1,4 @@
-"""Evaluate the student field-keypoint model against teacher labels.
+"""Evaluate the student field-outline model against teacher labels.
 
 Reports, on held-out venue clusters: per-point pixel error (768x384
 space), polygon IoU vs the teacher, score-head MAE, and gate agreement
@@ -20,9 +20,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from training.field_keypoints import GATE_THRESHOLD, INPUT_H, INPUT_W, NUM_KEYPOINTS
-from training.field_keypoints.augment import COORD_SCORE_MIN, augment_sample
-from training.field_keypoints.dataset import build_datasets, polygon_iou
+from training.field_outline import GATE_THRESHOLD, INPUT_H, INPUT_W, NUM_KEYPOINTS
+from training.field_outline.augment import COORD_SCORE_MIN, augment_sample
+from training.field_outline.dataset import build_datasets, polygon_iou
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def _print_table(title: str, groups: dict[str, list[dict]]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate field-keypoint student")
+    parser = argparse.ArgumentParser(description="Evaluate field-outline student")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--split", default="test", choices=["val", "test", "train"])
@@ -144,13 +144,13 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     import torch
 
-    from training.field_keypoints.model import FieldKeypointNet
+    from training.field_outline.model import FieldOutlineNet
 
     device = torch.device(
         args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     )
     ckpt = torch.load(args.checkpoint, map_location=device)
-    model = FieldKeypointNet(ckpt.get("backbone", "resnet18"), pretrained=False)
+    model = FieldOutlineNet(ckpt.get("backbone", "resnet18"), pretrained=False)
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
 

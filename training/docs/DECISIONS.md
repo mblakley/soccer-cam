@@ -6,7 +6,7 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ## 2026-06-11: Field-boundary student model via teacher distillation
 
-**Context:** The 10-point field-boundary polygon (used to mask off-field ball detections and to drive the broadcast camera) comes from a third-party "teacher" ONNX model we want to retire. We own the footage, so we can distill it: run the teacher over our Reolink games to auto-label, then train an in-house student. Built as standalone tools (`training/field_keypoints/` + `training/cli/{generate,train,eval,export}_field_keypoints.py`), not yet wired into the pipeline task system.
+**Context:** The 10-point field-boundary polygon (used to mask off-field ball detections and to drive the broadcast camera) comes from a third-party "teacher" ONNX model we want to retire. We own the footage, so we can distill it: run the teacher over our Reolink games to auto-label, then train an in-house student. Built as standalone tools (`training/field_outline/` + `training/cli/{generate,train,eval,export}_field_outline.py`), not yet wired into the pipeline task system.
 
 **Decisions:**
 - **Direct 10-keypoint regression** — not heatmaps, segmentation, or YOLO-pose. The teacher is itself a direct regressor, so distillation targets map 1:1, and the exported graph stays simple enough to match the teacher's exact I/O.

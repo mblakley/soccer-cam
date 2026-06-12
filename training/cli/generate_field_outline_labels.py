@@ -12,15 +12,15 @@ identity lives in the repo.
 Usage::
 
     # Dry run: just print the team-routing table (confirm zero UNKNOWN)
-    python -m training.cli.generate_field_labels \\
+    python -m training.cli.generate_field_outline_labels \\
         --roots F:/Soccer_Archive/reolink/Heat F:/Soccer_Archive/reolink/Flash \\
-        --output-root F:/training_data/field_keypoints --dry-run
+        --output-root F:/training_data/field_outline --dry-run
 
     # Full label generation
-    python -m training.cli.generate_field_labels \\
+    python -m training.cli.generate_field_outline_labels \\
         --roots F:/Soccer_Archive/reolink/Heat F:/Soccer_Archive/reolink/Flash \\
         --teacher-model <teacher.onnx> \\
-        --output-root F:/training_data/field_keypoints \\
+        --output-root F:/training_data/field_outline \\
         --interval-sec 60 --max-per-group 150 --render-overlays
 """
 
@@ -38,7 +38,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from training.field_keypoints import (
+from training.field_outline import (
     GATE_THRESHOLD,
     LABEL_SCHEMA_VERSION,
     NUM_KEYPOINTS,
@@ -411,7 +411,7 @@ def _sha256(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate field keypoint labels")
+    parser = argparse.ArgumentParser(description="Generate field outline labels")
     parser.add_argument(
         "--roots",
         type=Path,

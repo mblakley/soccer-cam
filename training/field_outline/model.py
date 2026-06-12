@@ -1,4 +1,4 @@
-"""Student field-keypoint model + ONNX export wrapper.
+"""Student field-outline model + ONNX export wrapper.
 
 A small CNN backbone (ResNet18 by default) feeds two heads: a 20-dim
 coordinate regressor (10 ``(x, y)`` in ``[0, 1]``) and a 10-dim per-point
@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 from torch import nn
 
-from training.field_keypoints import INPUT_H, INPUT_W, NUM_KEYPOINTS
+from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -70,7 +70,7 @@ class FieldHeads(nn.Module):
         return kpts, scores
 
 
-class FieldKeypointNet(nn.Module):
+class FieldOutlineNet(nn.Module):
     """Backbone + heads. Input: RGB ``[B,3,384,768]`` in ``[0, 1]``.
 
     Outputs ``(kpts, scores)`` with ``kpts`` normalized to ``[0, 1]`` and
@@ -102,7 +102,7 @@ class FieldKeypointNet(nn.Module):
 
 
 class ExportWrapper(nn.Module):
-    """Adapt :class:`FieldKeypointNet` to the teacher's fp16 wire contract.
+    """Adapt :class:`FieldOutlineNet` to the teacher's fp16 wire contract.
 
     Input fp16 ``[1,3,384,768]`` (``/255`` RGB) -> ``keypoints`` fp16
     ``[1,10,2]`` in 768x384 pixel space + ``scores`` fp16 ``[1,10]``. The
@@ -110,7 +110,7 @@ class ExportWrapper(nn.Module):
     still presenting fp16 I/O.
     """
 
-    def __init__(self, model: FieldKeypointNet):
+    def __init__(self, model: FieldOutlineNet):
         super().__init__()
         self.model = model
 
@@ -121,7 +121,7 @@ class ExportWrapper(nn.Module):
 
 
 def export_onnx(
-    model: FieldKeypointNet, out_path: Path, full_fp16: bool = False
+    model: FieldOutlineNet, out_path: Path, full_fp16: bool = False
 ) -> Path:
     """Export to an ONNX with the exact teacher I/O signature.
 

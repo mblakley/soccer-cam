@@ -21,8 +21,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from training.field_keypoints import GATE_THRESHOLD, NUM_KEYPOINTS
-from training.field_keypoints.augment import COORD_SCORE_MIN, augment_sample
+from training.field_outline import GATE_THRESHOLD, NUM_KEYPOINTS
+from training.field_outline.augment import COORD_SCORE_MIN, augment_sample
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ def load_or_make_split(
 # ---------------------------------------------------------------------------
 
 
-class FieldKeypointDataset:
+class FieldOutlineDataset:
     """Map-style dataset of ``image``/``kpts``/``scores``/``coord_valid``.
 
     ``coord_valid`` masks which of the 10 points contribute to the
@@ -283,7 +283,7 @@ def cluster_weights(samples: list[Sample]):
 
 def build_datasets(
     dataset_root: Path, seed: int = 1234
-) -> tuple[FieldKeypointDataset, FieldKeypointDataset, FieldKeypointDataset, dict]:
+) -> tuple[FieldOutlineDataset, FieldOutlineDataset, FieldOutlineDataset, dict]:
     """Load samples, cluster, split, and return (train, val, test, split)."""
     samples = load_samples(dataset_root)
     if not samples:
@@ -301,9 +301,9 @@ def build_datasets(
             out += by_cluster.get(c, [])
         return out
 
-    train = FieldKeypointDataset(subset(split["train"]), train=True)
-    val = FieldKeypointDataset(subset(split["val"]), train=False)
-    test = FieldKeypointDataset(subset(split["test"]), train=False)
+    train = FieldOutlineDataset(subset(split["train"]), train=True)
+    val = FieldOutlineDataset(subset(split["val"]), train=False)
+    test = FieldOutlineDataset(subset(split["test"]), train=False)
     logger.info(
         "Datasets: train=%d val=%d test=%d frames", len(train), len(val), len(test)
     )
@@ -315,7 +315,7 @@ __all__ = [
     "GATE_THRESHOLD",
     "NUM_KEYPOINTS",
     "Sample",
-    "FieldKeypointDataset",
+    "FieldOutlineDataset",
     "build_clusters",
     "build_datasets",
     "cluster_weights",
