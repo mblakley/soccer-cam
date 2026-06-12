@@ -144,7 +144,7 @@ def _base_specs() -> list[StepSpec]:
     return [
         StepSpec("stitch_correct", "stitch_correct", {}),
         StepSpec("stabilize", "stabilize", {"stabilization_strength": "heavy"}),
-        StepSpec("detect", "detect", {"detect_confidence": 0.45}),
+        StepSpec("ball_detect", "ball_detect", {"detect_confidence": 0.45}),
         StepSpec("transform_detections", "transform_detections", {}),
         StepSpec("track", "track", {}),
         StepSpec("render", "render", {"render_mode": "broadcast"}),
@@ -170,7 +170,7 @@ def test_strength_patch_replaces_stabilization_strength_only():
     stab = next(s for s in new_specs if s.type == "stabilize")
     assert stab.config["stabilization_strength"] == "extreme"
     # Other steps untouched.
-    detect = next(s for s in new_specs if s.type == "detect")
+    detect = next(s for s in new_specs if s.type == "ball_detect")
     assert detect.config == {"detect_confidence": 0.45}
     assert preseed == []
 
@@ -186,7 +186,7 @@ def test_skip_detect_drops_detect_and_preseeds_its_output():
     new_specs, preseed = apply_overrides(specs, req)
     types = [s.type for s in new_specs]
     # detect is gone; transform_detections (already in the preset) stays.
-    assert "detect" not in types
+    assert "ball_detect" not in types
     assert "transform_detections" in types
     # Step order preserved (minus detect).
     assert types == [
@@ -196,7 +196,7 @@ def test_skip_detect_drops_detect_and_preseeds_its_output():
         "track",
         "render",
     ]
-    assert preseed == ["detect"]
+    assert preseed == ["ball_detect"]
 
 
 def test_both_overrides_compose():
@@ -209,8 +209,8 @@ def test_both_overrides_compose():
     # transform_detections must remain (it was in the input preset and
     # is the consumer of the preseeded detections_path).
     assert any(s.type == "transform_detections" for s in new_specs)
-    assert "detect" not in [s.type for s in new_specs]
-    assert preseed == ["detect"]
+    assert "ball_detect" not in [s.type for s in new_specs]
+    assert preseed == ["ball_detect"]
 
 
 def test_skip_detect_without_detect_in_specs_is_noop():

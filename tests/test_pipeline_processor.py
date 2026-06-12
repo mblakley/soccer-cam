@@ -111,7 +111,7 @@ class TestProcessItem:
     async def test_failed_sets_error_state(self, processor, group_dir):
         task = _make_task(group_dir)
         with _patch_runner(
-            PipelineResult("failed", failed_step="detect", error="boom")
+            PipelineResult("failed", failed_step="ball_detect", error="boom")
         ):
             await processor.process_item(task)
         state = json.loads((group_dir / "state.json").read_text())

@@ -67,8 +67,8 @@ PRESETS: dict[str, list[_PresetStep]] = {
             },
         ),
         (
-            "detect",
-            "detect",
+            "ball_detect",
+            "ball_detect",
             # Model source intentionally omitted — user supplies model_key
             # (via TTT login) or model_path (local .onnx). Only inference
             # tunables get defaults here.

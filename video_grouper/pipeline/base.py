@@ -72,7 +72,7 @@ class PipelineStep(ABC, Generic[ConfigT]):  # noqa: UP046 - explicit Generic[Con
 
     Class-level declarations:
         name: Registry key — the string that appears as ``type =`` in a
-            ``[PIPELINE.<id>]`` config section (e.g. ``"detect"``).
+            ``[PIPELINE.<id>]`` config section (e.g. ``"ball_detect"``).
         config_model: The step's own Pydantic config schema. The step owns and
             validates only its own fields; the runner hands it a validated
             instance.

@@ -183,7 +183,7 @@ def apply_overrides(
             new_specs.append(
                 StepSpec(step_id=spec.step_id, type=spec.type, config=patched)
             )
-        elif spec.type == "detect" and request.skip_detect:
+        elif spec.type == "ball_detect" and request.skip_detect:
             # Drop the detect step; the dropped step's produced
             # ``detections_path`` gets preseeded into the manifest so
             # the downstream ``transform_detections`` step sees the

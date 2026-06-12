@@ -89,20 +89,20 @@ def test_homegrown_preset_has_expected_five_steps_in_order():
     assert [s.type for s in ordered] == [
         "stitch_correct",
         "field_detect",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
     assert [s.step_id for s in ordered] == [
         "stitch_correct",
         "field_detect",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
 
 
-@pytest.mark.parametrize("step_id", ["detect", "field_detect"])
+@pytest.mark.parametrize("step_id", ["ball_detect", "field_detect"])
 def test_homegrown_model_steps_leave_model_source_unset(step_id):
     """Model-running steps must NOT seed a model source — the user supplies a
     model_key (TTT login) or model_path (local .onnx)."""

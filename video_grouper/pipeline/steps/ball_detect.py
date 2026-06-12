@@ -38,7 +38,7 @@ from video_grouper.pipeline.steps.licensed_model import build_secure_loader_sess
 logger = logging.getLogger(__name__)
 
 
-class DetectStepConfig(BaseModel):
+class BallDetectStepConfig(BaseModel):
     # Pick exactly one source:
     #   model_key:  ask TTT for a license + encrypted artifact (TTT free/premium)
     #   model_path: load a plaintext .onnx from disk (community / bring-your-own)
@@ -89,9 +89,9 @@ def _run_detection_from_path(
     )
 
 
-class DetectStep(PipelineStep[DetectStepConfig]):
-    name = "detect"
-    config_model = DetectStepConfig
+class BallDetectStep(PipelineStep[BallDetectStepConfig]):
+    name = "ball_detect"
+    config_model = BallDetectStepConfig
     consumes = ("input_path",)
     produces = ("detections_path",)
     runtime = "service"
@@ -147,4 +147,4 @@ class DetectStep(PipelineStep[DetectStepConfig]):
         return True
 
 
-register_step(DetectStep.name, DetectStep, DetectStepConfig)
+register_step(BallDetectStep.name, BallDetectStep, BallDetectStepConfig)

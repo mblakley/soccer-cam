@@ -215,14 +215,14 @@ _PIPELINE_INI = (
 [PIPELINE]
 enabled = true
 gpu_concurrency = 2
-steps = stitch, detect, track, render
+steps = stitch, ball_detect, track, render
 
 [PIPELINE.stitch]
 type = stitch_correct
 stitch_profile_path = /calib/flash.json
 
-[PIPELINE.detect]
-type = detect
+[PIPELINE.ball_detect]
+type = ball_detect
 model_path = /m/model.onnx
 detect_confidence = 0.5
 
@@ -261,7 +261,7 @@ def test_post_config_preserves_pipeline_section(pipeline_client, pipeline_config
     """
     # Sanity: the pipeline loaded as expected before the edit.
     before = load_config(pipeline_config_path)
-    assert before.pipeline.steps == ["stitch", "detect", "track", "render"]
+    assert before.pipeline.steps == ["stitch", "ball_detect", "track", "render"]
 
     resp = pipeline_client.post(
         "/config",
@@ -280,14 +280,14 @@ def test_post_config_preserves_pipeline_section(pipeline_client, pipeline_config
     # ...and the entire [PIPELINE] survived.
     assert reloaded.pipeline.enabled is True
     assert reloaded.pipeline.gpu_concurrency == 2
-    assert reloaded.pipeline.steps == ["stitch", "detect", "track", "render"]
+    assert reloaded.pipeline.steps == ["stitch", "ball_detect", "track", "render"]
     ordered = reloaded.pipeline.ordered_steps()
     assert [s.type for s in ordered] == [
         "stitch_correct",
-        "detect",
+        "ball_detect",
         "track",
         "render",
     ]
     by_id = {s.step_id: s for s in ordered}
     assert by_id["stitch"].config["stitch_profile_path"] == "/calib/flash.json"
-    assert by_id["detect"].config["model_path"] == "/m/model.onnx"
+    assert by_id["ball_detect"].config["model_path"] == "/m/model.onnx"
