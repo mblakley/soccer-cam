@@ -63,26 +63,24 @@ class TestSetClearAutocamRun:
         state.clear_autocam_run()
         assert DirectoryState(group_dir).get_autocam_run() is None
 
-    def test_save_state_preserves_autocam_run(self, group_dir):
+    @pytest.mark.asyncio
+    async def test_save_state_preserves_autocam_run(self, group_dir):
         """Status updates must not wipe the resume marker."""
         state = DirectoryState(group_dir)
         state.set_autocam_run({"launcher_pid": 1234, "gui_pids": [1234]})
         # Simulate a normal status update path that goes through
         # _save_state_nolock (e.g., StateAuditor demoting a state).
-        import asyncio
-
-        asyncio.run(state.update_group_status("trimmed"))
+        await state.update_group_status("trimmed")
         # The autocam_run field must survive.
         assert DirectoryState(group_dir).get_autocam_run() is not None
 
-    def test_save_state_preserves_youtube_playlist_name(self, group_dir):
+    @pytest.mark.asyncio
+    async def test_save_state_preserves_youtube_playlist_name(self, group_dir):
         """Same protection applies to the youtube_playlist_name field —
         previously, _save_state_nolock would silently wipe it."""
         state = DirectoryState(group_dir)
         state.set_youtube_playlist_name("Heat 2012s")
-        import asyncio
-
-        asyncio.run(state.update_group_status("trimmed"))
+        await state.update_group_status("trimmed")
         assert DirectoryState(group_dir).get_youtube_playlist_name() == "Heat 2012s"
 
 

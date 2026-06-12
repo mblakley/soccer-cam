@@ -963,7 +963,7 @@ def _execute_autocam_gui_automation(
                     "gui_pids": gui_pids,
                     "input_path": abs_input_path,
                     "output_path": abs_output_path,
-                    "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+                    "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
                 }
             )
             logger.info(

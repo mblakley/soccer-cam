@@ -30,7 +30,8 @@ def test_run_tracking_applies_conf_and_field_filters(tmp_path):
         )  # off-field FP
     det_path = tmp_path / "detections.json"
     traj_path = tmp_path / "trajectory.json"
-    json.dump(dets, open(det_path, "w"))
+    with open(det_path, "w") as f:
+        json.dump(dets, f)
 
     poly = np.array([[100, 100], [600, 100], [600, 400], [100, 400]], dtype=np.float32)
     populated = _run_tracking(
@@ -42,7 +43,8 @@ def test_run_tracking_applies_conf_and_field_filters(tmp_path):
         field_polygon=poly,
         field_margin=0.0,
     )
-    traj = json.load(open(traj_path))
+    with open(traj_path) as f:
+        traj = json.load(f)
     assert populated >= 15  # the ball is tracked across most frames
     for p in traj:
         if p is not None:
@@ -57,7 +59,8 @@ def test_run_tracking_no_polygon_keeps_all_in_field(tmp_path):
     ]
     det_path = tmp_path / "d.json"
     traj_path = tmp_path / "t.json"
-    json.dump(dets, open(det_path, "w"))
+    with open(det_path, "w") as f:
+        json.dump(dets, f)
     populated = _run_tracking(
         str(det_path),
         str(traj_path),
