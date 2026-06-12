@@ -869,12 +869,17 @@ class TTTApiClient:
         youtube_url: str | None = None,
         youtube_video_id: str | None = None,
         raw_youtube_video_id: str | None = None,
+        field_points: list[list[float]] | None = None,
     ) -> dict[str, Any] | None:
         """Update pipeline stage status for a recording.
 
         ``raw_youtube_video_id`` is the *full-field* (panorama) upload's id,
         kept distinct from the processed broadcast ``youtube_video_id`` — the
         field-mask editor draws on the full-field frame.
+
+        ``field_points`` is the 10-point field outline (normalized [0, 1]) the
+        video was processed with — auto-detected or a prior user override — so
+        the editor seeds with the actual polygon, not a blank default.
 
         PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
         """
@@ -888,6 +893,8 @@ class TTTApiClient:
             body["youtube_video_id"] = youtube_video_id
         if raw_youtube_video_id is not None:
             body["raw_youtube_video_id"] = raw_youtube_video_id
+        if field_points is not None:
+            body["field_points"] = field_points
         logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
         return self._request("PATCH", url, json=body)
 

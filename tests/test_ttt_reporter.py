@@ -286,7 +286,7 @@ class TestRecordingReporter:
     async def test_update_recording_status_calls_client(self):
         await self.reporter.update_recording_status("rec-1", "download", "downloaded")
         self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "download", "downloaded", None, None, None
+            "rec-1", "download", "downloaded", None, None, None, field_points=None
         )
 
     @pytest.mark.asyncio
@@ -314,9 +314,16 @@ class TestRecordingReporter:
             "complete",
             youtube_url="https://youtu.be/abc",
             youtube_video_id="abc",
+            field_points=[[0.1, 0.2]],
         )
         self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "upload", "complete", None, "https://youtu.be/abc", "abc"
+            "rec-1",
+            "upload",
+            "complete",
+            None,
+            "https://youtu.be/abc",
+            "abc",
+            field_points=[[0.1, 0.2]],
         )
 
     @pytest.mark.asyncio

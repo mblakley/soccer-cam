@@ -118,6 +118,19 @@ def _sample_times(duration: float, n: int) -> list[float]:
     return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
 
 
+def _normalize_points(
+    kpts: list[tuple[float | None, float | None, float]], src_w: int, src_h: int
+) -> list[list[float]]:
+    """Keypoint pixel coords -> clamped [0, 1], for the editor seed (always 10)."""
+
+    def clamp(v: float) -> float:
+        return min(max(v, 0.0), 1.0)
+
+    return [
+        [clamp((kp[0] or 0.0) / src_w), clamp((kp[1] or 0.0) / src_h)] for kp in kpts
+    ]
+
+
 def _detect_polygon_from_session(
     video_path: str,
     session: Any,
@@ -153,21 +166,34 @@ def _detect_polygon_from_session(
             if frame is None:
                 continue
             frame_bgr = frame.to_ndarray(format="bgr24")
-            kpts = detect_field_keypoints(frame_bgr, session, score_threshold)
-            detected = [kp for kp in kpts if kp[0] is not None]
-            if len(detected) < min_keypoints:
+            src_h, src_w = frame_bgr.shape[:2]
+            # All 10 keypoints (threshold 0 -> coords always present) so the
+            # editor seed is a full 10-point outline; threshold post-hoc for the
+            # confident polygon the pipeline actually filters/renders with.
+            kpts_all = detect_field_keypoints(frame_bgr, session, 0.0)
+            thresh = [
+                (kp[0], kp[1], kp[2])
+                if kp[2] >= score_threshold
+                else (None, None, kp[2])
+                for kp in kpts_all
+            ]
+            confident = [kp for kp in thresh if kp[0] is not None]
+            if len(confident) < min_keypoints:
                 continue
-            polygon = build_field_polygon(kpts)
+            polygon = build_field_polygon(thresh)
             if polygon is None:
                 continue
-            mean_score = sum(kp[2] for kp in detected) / len(detected)
+            mean_score = sum(kp[2] for kp in confident) / len(confident)
             if mean_score > best_score:
-                h = field_homography(kpts)
+                h = field_homography(thresh)
                 best_score = mean_score
                 best = {
                     "polygon": [[float(x), float(y)] for x, y in polygon],
-                    "keypoints": [[kp[0], kp[1], kp[2]] for kp in kpts],
+                    "polygon_norm": _normalize_points(kpts_all, src_w, src_h),
+                    "keypoints": [[kp[0], kp[1], kp[2]] for kp in kpts_all],
                     "homography": h.tolist() if h is not None else None,
+                    "src_w": src_w,
+                    "src_h": src_h,
                     "source": "model",
                     "mean_score": round(mean_score, 4),
                 }
@@ -179,13 +205,21 @@ def _override_payload(
     override_polygon: list[list[float]], src_w: int, src_h: int
 ) -> dict:
     """Scale the editor's normalized points to source pixels -> polygon payload."""
-    polygon = [[float(x) * src_w, float(y) * src_h] for x, y in override_polygon]
+
+    def clamp(v: float) -> float:
+        return min(max(float(v), 0.0), 1.0)
+
+    norm = [[clamp(x), clamp(y)] for x, y in override_polygon]
+    polygon = [[nx * src_w, ny * src_h] for nx, ny in norm]
     keypoints = [[px, py, 1.0] for px, py in polygon]
     h = field_homography([(px, py, 1.0) for px, py in polygon])
     return {
         "polygon": polygon,
+        "polygon_norm": norm,
         "keypoints": keypoints,
         "homography": h.tolist() if h is not None else None,
+        "src_w": src_w,
+        "src_h": src_h,
         "source": "user_override",
     }
 

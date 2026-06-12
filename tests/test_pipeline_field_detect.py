@@ -20,6 +20,7 @@ from video_grouper.pipeline.presets import get_preset
 from video_grouper.pipeline.steps.field_detect import (
     FieldDetectStep,
     FieldDetectStepConfig,
+    _normalize_points,
     _override_payload,
     _sample_times,
 )
@@ -55,10 +56,22 @@ def test_override_payload_scales_to_pixels():
     # normalized (0.0, 0.8) -> (0, 400); (0.4, 0.8) -> (400, 400)
     assert payload["polygon"][0] == [0.0, 400.0]
     assert payload["polygon"][4] == [400.0, 400.0]
+    # polygon_norm (the editor seed) round-trips the normalized input
+    assert payload["polygon_norm"] == norm
+    assert payload["src_w"] == 1000 and payload["src_h"] == 500
     # 10 keypoints with score 1.0; homography derivable (>=4 points)
     assert len(payload["keypoints"]) == 10
     assert payload["keypoints"][0][2] == 1.0
     assert payload["homography"] is not None
+
+
+def test_normalize_points_clamps_to_unit_square():
+    # (x, y) pixel coords -> [0,1]; out-of-frame points clamp, not wrap.
+    kpts = [(500.0, 250.0, 0.9), (-10.0, 600.0, 0.1), (None, None, 0.0)]
+    norm = _normalize_points(kpts, src_w=1000, src_h=500)
+    assert norm[0] == [0.5, 0.5]
+    assert norm[1] == [0.0, 1.0]  # x<0 -> 0, y>h -> 1
+    assert norm[2] == [0.0, 0.0]  # None -> 0
 
 
 def test_field_detect_registered_and_in_presets():

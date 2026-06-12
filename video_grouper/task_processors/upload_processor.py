@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from typing import Any
 
 from video_grouper.utils.config import Config
@@ -8,6 +10,25 @@ from .queue_type import QueueType
 from .tasks.upload import BaseUploadTask
 
 logger = logging.getLogger(__name__)
+
+
+def _read_processed_field_points(group_dir: str) -> list[list[float]] | None:
+    """The 10-point normalized field outline the video was processed with.
+
+    Read from ``field_polygon.json`` (written by the field_detect step —
+    auto-detected, or a prior user override on a reprocess). Reported to TTT
+    so the field-mask editor seeds with the actual polygon, not a default.
+    Returns None when absent/unusable.
+    """
+    path = os.path.join(group_dir, "field_polygon.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            points = json.load(f).get("polygon_norm")
+    except (OSError, json.JSONDecodeError):
+        return None
+    return points if isinstance(points, list) and len(points) == 10 else None
 
 
 class UploadProcessor(QueueProcessor):
@@ -128,7 +149,10 @@ class UploadProcessor(QueueProcessor):
 
                         dir_state = DirectoryState(group_dir)
                         await self.ttt_reporter.update_recording_status(
-                            dir_state.ttt_recording_id, "upload", "complete"
+                            dir_state.ttt_recording_id,
+                            "upload",
+                            "complete",
+                            field_points=_read_processed_field_points(group_dir),
                         )
                     except Exception:
                         pass  # Never block upload on TTT

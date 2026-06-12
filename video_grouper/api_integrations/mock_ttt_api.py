@@ -441,6 +441,8 @@ class MockTTTApiClient:
         error_message: str | None = None,
         youtube_url: str | None = None,
         youtube_video_id: str | None = None,
+        raw_youtube_video_id: str | None = None,
+        field_points: list[list[float]] | None = None,
     ) -> dict[str, Any]:
         logger.debug(
             "Mock update_recording_status %s: %s=%s", recording_id, stage, status
@@ -452,6 +454,8 @@ class MockTTTApiClient:
             "error_message": error_message,
             "youtube_url": youtube_url,
             "youtube_video_id": youtube_video_id,
+            "raw_youtube_video_id": raw_youtube_video_id,
+            "field_points": field_points,
         }
         self._recording_statuses.append(entry)
         if recording_id in self._recordings:

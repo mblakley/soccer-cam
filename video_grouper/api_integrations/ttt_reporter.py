@@ -472,8 +472,12 @@ class TTTReporter:
         error: str | None = None,
         youtube_url: str | None = None,
         youtube_video_id: str | None = None,
+        field_points: list[list[float]] | None = None,
     ) -> None:
         """Update pipeline stage status for a recording.
+
+        ``field_points`` (10 normalized [x, y]) reports the field outline the
+        video was processed with, so the TTT editor seeds with it.
 
         No-op if recording_id is None (TTT wasn't available during registration).
         """
@@ -489,6 +493,7 @@ class TTTReporter:
                     error,
                     youtube_url,
                     youtube_video_id,
+                    field_points=field_points,
                 ),
             )
             logger.debug("TTT: Updated recording %s %s=%s", recording_id, stage, status)
