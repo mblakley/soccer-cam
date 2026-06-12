@@ -29,7 +29,6 @@ from video_grouper.inference.stabilization import (
     write_motion_json,
 )
 
-
 # ---------------------------------------------------------------------------
 # SimilarityTransform
 # ---------------------------------------------------------------------------
@@ -709,6 +708,131 @@ class TestZoneBlendMotionJsonRoundtrip:
                 transforms=None,
                 confidences=[1.0],
             )
+
+
+# ---------------------------------------------------------------------------
+# Point transformation (source-coord → stabilized-output-coord)
+# ---------------------------------------------------------------------------
+
+
+class TestFrameStabilizerTransformPoints:
+    """The cheap-reprocess path: forward existing ball detections through
+    a new motion.json without re-decoding or re-running ONNX."""
+
+    def _make_single_warp_stabilizer(
+        self, src_h=100, src_w=200, inset_y=10, inset_x=20, sx=3.0, sy=-2.0
+    ) -> FrameStabilizer:
+        """A 1-frame single-warp stabilizer that shifts source pixel
+        (x, y) to output (x - inset_x - sx, y - inset_y - sy)."""
+        M = np.array(
+            [[1.0, 0.0, inset_x + sx], [0.0, 1.0, inset_y + sy]], dtype=np.float32
+        )
+        return FrameStabilizer(
+            src_size=(src_h, src_w),
+            output_size=(src_h - 2 * inset_y, src_w - 2 * inset_x),
+            safe_inset=(inset_y, inset_x),
+            transforms=[M],
+            confidences=[1.0],
+        )
+
+    def test_single_warp_matches_warpaffine_pixel_placement(self):
+        """Algebraic transform_points must agree with the actual pixel
+        location ``cv2.warpAffine`` writes to. If they ever drift, ball
+        detections would land in the wrong renderer position."""
+        stab = self._make_single_warp_stabilizer(
+            src_h=100, src_w=200, inset_y=10, inset_x=20, sx=3.0, sy=-2.0
+        )
+        # Mark a source pixel red and warp the image.
+        img = np.zeros((100, 200, 3), dtype=np.uint8)
+        img[50, 100] = (255, 0, 0)
+        warped = stab.apply(img, frame_idx=0)
+        ys, xs = np.where(warped[..., 0] > 0)
+        assert len(xs) == 1 and len(ys) == 1
+        # The algebraic transform should land within 1 px of where the
+        # pixel actually went.
+        out = stab.transform_points(np.array([[100.0, 50.0]]), frame_idx=0)
+        assert out.shape == (1, 2)
+        assert abs(out[0, 0] - xs[0]) < 1.0
+        assert abs(out[0, 1] - ys[0]) < 1.0
+
+    def test_empty_input_returns_empty(self):
+        stab = self._make_single_warp_stabilizer()
+        out = stab.transform_points(np.empty((0, 2)), frame_idx=0)
+        assert out.shape == (0, 2)
+
+    def test_bad_input_shape_raises(self):
+        stab = self._make_single_warp_stabilizer()
+        with pytest.raises(ValueError):
+            stab.transform_points(np.array([1.0, 2.0, 3.0]), frame_idx=0)
+
+    def test_past_end_falls_back_to_identity_inset(self):
+        """Asking for a frame past the trajectory must NOT crash —
+        downstream code (re-render past the smoothed range) needs a
+        deterministic fallback. Identity-inset means a source point
+        gets the constant inset offset, matching what ``apply`` does."""
+        stab = self._make_single_warp_stabilizer(inset_y=10, inset_x=20, sx=0.0, sy=0.0)
+        out = stab.transform_points(np.array([[50.0, 30.0]]), frame_idx=999)
+        # Identity inset: (50 - 20, 30 - 10) = (30, 20)
+        assert out[0, 0] == pytest.approx(30.0, abs=1e-4)
+        assert out[0, 1] == pytest.approx(20.0, abs=1e-4)
+
+    def test_zone_blend_picks_correct_zone_per_point(self, tmp_path: Path):
+        """In zone-blend mode each point looks up its zone at the SOURCE
+        pixel and uses that zone's per-frame similarity. A point in
+        the field band must NOT be warped by the sky band's shift."""
+        from video_grouper.inference.stabilization import write_motion_json
+
+        H, W = 240, 480
+        inset_y, inset_x = 10, 20
+        out_h, out_w = H - 2 * inset_y, W - 2 * inset_x
+
+        # Make each zone shift by a wildly different amount so the test
+        # is unambiguous about which zone won.
+        def M(sx: float, sy: float) -> np.ndarray:
+            return np.array(
+                [[1.0, 0.0, inset_x + sx], [0.0, 1.0, inset_y + sy]],
+                dtype=np.float32,
+            )
+
+        poly = np.array(
+            [
+                [W * 0.18, H * 0.30],
+                [W * 0.82, H * 0.30],
+                [W * 0.92, H * 0.78],
+                [W * 0.08, H * 0.78],
+            ],
+            dtype=np.float32,
+        )
+        path = tmp_path / "motion.json"
+        write_motion_json(
+            path,
+            src_size=(H, W),
+            output_size=(out_h, out_w),
+            safe_inset=(inset_y, inset_x),
+            transforms=None,
+            confidences=[1.0],
+            zone_transforms={
+                "sky": [M(+10.0, 0.0)],  # sky band: shift x by +10
+                "field": [M(0.0, -20.0)],  # field band: shift y by -20
+                "near": [M(-30.0, 0.0)],  # near band: shift x by -30
+            },
+            polygon=poly,
+        )
+        stab = FrameStabilizer.from_json(path)
+        # Three points, one in each zone.
+        sky_pt = np.array([W * 0.5, H * 0.10])  # above polygon, central
+        field_pt = np.array([W * 0.5, H * 0.55])  # inside polygon
+        near_pt = np.array([W * 0.5, H * 0.90])  # below polygon
+        out = stab.transform_points(np.stack([sky_pt, field_pt, near_pt]), frame_idx=0)
+        # Sky used sx=+10 → output_x = src_x - inset_x - 10
+        assert out[0, 0] == pytest.approx(sky_pt[0] - inset_x - 10.0, abs=1e-3)
+        assert out[0, 1] == pytest.approx(sky_pt[1] - inset_y, abs=1e-3)
+        # Field used sy=-20 → output_y = src_y - inset_y - (-20) = src_y - inset_y + 20
+        assert out[1, 0] == pytest.approx(field_pt[0] - inset_x, abs=1e-3)
+        assert out[1, 1] == pytest.approx(field_pt[1] - inset_y + 20.0, abs=1e-3)
+        # Near used sx=-30 → output_x = src_x - inset_x - (-30) = src_x - inset_x + 30
+        assert out[2, 0] == pytest.approx(near_pt[0] - inset_x + 30.0, abs=1e-3)
+        assert out[2, 1] == pytest.approx(near_pt[1] - inset_y, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------

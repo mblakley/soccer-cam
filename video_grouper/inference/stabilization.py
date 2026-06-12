@@ -77,7 +77,7 @@ class SimilarityTransform:
         )
 
     @classmethod
-    def from_affine(cls, M: np.ndarray) -> "SimilarityTransform":
+    def from_affine(cls, M: np.ndarray) -> SimilarityTransform:
         """Decompose a 2×3 affine (assumed to be a similarity) into its axes."""
         a = float(M[0, 0])
         b = float(M[1, 0])
@@ -90,16 +90,16 @@ class SimilarityTransform:
         )
 
     @classmethod
-    def identity(cls) -> "SimilarityTransform":
+    def identity(cls) -> SimilarityTransform:
         return cls()
 
-    def compose(self, other: "SimilarityTransform") -> "SimilarityTransform":
+    def compose(self, other: SimilarityTransform) -> SimilarityTransform:
         """Return ``self ∘ other`` — apply ``other`` first, then ``self``."""
         return SimilarityTransform.from_affine(
             _compose_affine(self.to_affine(), other.to_affine())
         )
 
-    def inverse(self) -> "SimilarityTransform":
+    def inverse(self) -> SimilarityTransform:
         """Return the inverse similarity."""
         s_inv = math.exp(-self.log_scale)
         c, sn = math.cos(-self.theta), math.sin(-self.theta)
@@ -366,7 +366,10 @@ def fit_similarity_from_motion_vectors(
         return SimilarityTransform.identity()
     src_pts = np.array(roi_centers, dtype=np.float32).reshape(-1, 1, 2)
     dst_pts = np.array(
-        [(cx + dx, cy + dy) for (cx, cy), (dx, dy) in zip(roi_centers, motion_vectors)],
+        [
+            (cx + dx, cy + dy)
+            for (cx, cy), (dx, dy) in zip(roi_centers, motion_vectors, strict=False)
+        ],
         dtype=np.float32,
     ).reshape(-1, 1, 2)
     if method is None:
@@ -617,7 +620,7 @@ class _ReferenceState:
 def _should_reanchor(
     measured: SimilarityTransform,
     inlier_ratio: float,
-    cfg: "MotionEstimationConfig",
+    cfg: MotionEstimationConfig,
     frames_since_anchor: int,
 ) -> bool:
     """Trigger re-anchor when the current reference is degrading.
@@ -1093,9 +1096,13 @@ class FrameStabilizer:
                 for name, lst in zone_transforms.items()
             }
             src_h, src_w = src_size
-            full_mask = build_polygon_zone_mask(polygon, src_h, src_w)
+            # The FULL (source-res) zone mask is kept around for point
+            # transformation — looking up which band a SOURCE-coord ball
+            # detection sits in so we can apply that band's per-frame
+            # similarity to its (x, y).
+            self._zone_mask_full = build_polygon_zone_mask(polygon, src_h, src_w)
             iy, ix = safe_inset
-            zone_crop = full_mask[iy : iy + out_h, ix : ix + out_w]
+            zone_crop = self._zone_mask_full[iy : iy + out_h, ix : ix + out_w]
             # Pre-compute per-zone broadcast masks (H, W, 1) once.
             self._mask_sky = (zone_crop == 1)[..., None]
             self._mask_field = (zone_crop == 2)[..., None]
@@ -1111,8 +1118,8 @@ class FrameStabilizer:
             self._transforms = [np.asarray(M, dtype=np.float32) for M in transforms]
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "FrameStabilizer":
-        with open(path, "r", encoding="utf-8") as f:
+    def from_json(cls, path: str | Path) -> FrameStabilizer:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         src_size = tuple(data["src_size"])
         output_size = tuple(data["output_size"])
@@ -1181,11 +1188,11 @@ class FrameStabilizer:
                 return lst[frame_idx]
             return self._identity_inset
 
-        common = dict(
-            dsize=(self._out_w, self._out_h),
-            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
+        common = {
+            "dsize": (self._out_w, self._out_h),
+            "flags": cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            "borderMode": cv2.BORDER_REPLICATE,
+        }
         sky = cv2.warpAffine(rgb, pick("sky"), **common)
         field = cv2.warpAffine(rgb, pick("field"), **common)
         near = cv2.warpAffine(rgb, pick("near"), **common)
@@ -1196,6 +1203,59 @@ class FrameStabilizer:
         if 0 <= frame_idx < len(self._confidences):
             return self._confidences[frame_idx]
         return 0.0
+
+    def transform_points(self, points_xy: np.ndarray, frame_idx: int) -> np.ndarray:
+        """Map ``points_xy`` from source pixels to stabilized output pixels.
+
+        ``points_xy`` is an ``(N, 2)`` float array of ``(x, y)`` source-frame
+        coordinates (e.g. ball-detection centroids). Returns an ``(N, 2)``
+        array of stabilized-output-frame coordinates.
+
+        In zone-blend mode each point looks up its zone from the polygon-
+        derived mask AT THE SOURCE PIXEL and uses that zone's per-frame
+        similarity — so a ball in the field band gets warped by the field
+        path, exactly like the rendered pixels around it.
+
+        This is the cheap path for re-running stabilization without
+        re-decoding: existing detections in raw-source coords can be
+        forwarded through a new ``motion.json`` for ~µs per point.
+
+        ``M`` in motion.json is the dst→src sampling map (output → source);
+        to send a source point forward to the output we apply ``M⁻¹``.
+        """
+        pts = np.asarray(points_xy, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[1] != 2:
+            raise ValueError(f"points_xy must be (N, 2); got shape {pts.shape}")
+        if pts.shape[0] == 0:
+            return pts.copy()
+
+        if self._mode == "single":
+            if 0 <= frame_idx < len(self._transforms):
+                M = self._transforms[frame_idx]
+            else:
+                M = self._identity_inset
+            M_inv = cv2.invertAffineTransform(M)
+            homog = np.concatenate(
+                [pts, np.ones((pts.shape[0], 1), dtype=np.float32)], axis=1
+            )
+            return (M_inv @ homog.T).T
+
+        # Zone-blend: per-point zone lookup + zone-specific inverse.
+        src_h, src_w = self.src_size
+        out = np.empty_like(pts)
+        zone_to_name = {1: "sky", 2: "field", 3: "near"}
+        for i, (xs, ys) in enumerate(pts):
+            ix = int(np.clip(xs, 0, src_w - 1))
+            iy = int(np.clip(ys, 0, src_h - 1))
+            zone_name = zone_to_name[int(self._zone_mask_full[iy, ix])]
+            lst = self._zone_transforms[zone_name]
+            if 0 <= frame_idx < len(lst):
+                M = lst[frame_idx]
+            else:
+                M = self._identity_inset
+            M_inv = cv2.invertAffineTransform(M)
+            out[i] = M_inv @ np.array([xs, ys, 1.0], dtype=np.float32)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -1250,7 +1310,7 @@ def write_motion_json(
                     "M": [list(map(float, row)) for row in M],
                     "confidence": float(c),
                 }
-                for M, c in zip(transforms, confidences)
+                for M, c in zip(transforms, confidences, strict=False)
             ],
         }
     with open(path, "w", encoding="utf-8") as f:

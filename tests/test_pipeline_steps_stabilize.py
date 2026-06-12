@@ -23,7 +23,6 @@ from video_grouper.pipeline.base import StepContext
 from video_grouper.pipeline.manifest import PipelineManifest
 from video_grouper.pipeline.steps.stabilize import StabilizeStep
 
-
 # Tests here need REAL PyAV (synthetic video write + decode) and REAL
 # filesystem checks. The conftest's autouse mock_ffmpeg / mock_file_system
 # fixtures would otherwise stub those out — override locally.
@@ -138,6 +137,111 @@ def test_create_stabilize_step_validates_config():
 def test_consumes_produces_contract():
     assert StabilizeStep.consumes == ("input_path",)
     assert StabilizeStep.produces == ("motion_path",)
+
+
+# ---------------------------------------------------------------------------
+# Strength preset enum
+# ---------------------------------------------------------------------------
+
+
+class TestStabilizationStrength:
+    """The strength preset is the user-facing dial for the
+    cheap↔aggressive trade-off; the UI dropdown and the reprocess
+    request mechanism both pass strength names through to this config."""
+
+    def test_no_preset_keeps_class_defaults(self):
+        from video_grouper.pipeline.steps.stabilize import StabilizeStepConfig
+
+        c = StabilizeStepConfig()
+        assert c.stabilization_strength is None
+        assert c.stabilize_max_tx_px == 60.0
+        assert c.stabilize_max_rotation_deg == 1.5
+        assert c.stabilize_polygon_blend is True
+
+    @pytest.mark.parametrize(
+        "name,expected_polygon_blend,expected_tx,expected_rot",
+        [
+            ("light", False, 30.0, 0.5),
+            ("standard", False, 60.0, 1.0),
+            ("heavy", True, 60.0, 1.5),
+            ("extreme", True, 100.0, 2.5),
+        ],
+    )
+    def test_each_strength_fills_in_budgets(
+        self, name, expected_polygon_blend, expected_tx, expected_rot
+    ):
+        from video_grouper.pipeline.steps.stabilize import StabilizeStepConfig
+
+        c = StabilizeStepConfig(stabilization_strength=name)
+        assert c.stabilize_polygon_blend is expected_polygon_blend
+        assert c.stabilize_max_tx_px == expected_tx
+        assert c.stabilize_max_rotation_deg == expected_rot
+
+    def test_strengths_form_monotonic_correction_budget(self):
+        """The cost ranking light < standard < heavy < extreme must show
+        up as monotonic non-decreasing per-axis budgets — otherwise the
+        UI dial would lie about what users get."""
+        from video_grouper.pipeline.steps.stabilize import (
+            STABILIZATION_STRENGTH_PRESETS,
+        )
+
+        order = ["light", "standard", "heavy", "extreme"]
+        for axis in (
+            "stabilize_max_tx_px",
+            "stabilize_max_ty_px",
+            "stabilize_max_rotation_deg",
+            "stabilize_max_log_scale",
+        ):
+            values = [STABILIZATION_STRENGTH_PRESETS[n][axis] for n in order]
+            assert values == sorted(values), (
+                f"{axis} is not monotonic across strengths: {values}"
+            )
+
+    def test_polygon_blend_engaged_only_for_heavy_and_extreme(self):
+        """The 3× per-frame apply cost (the actually-expensive part)
+        only switches on for heavy + extreme. light/standard stay
+        single-warp so their cost is comparable to today's production."""
+        from video_grouper.pipeline.steps.stabilize import (
+            STABILIZATION_STRENGTH_PRESETS,
+        )
+
+        assert (
+            STABILIZATION_STRENGTH_PRESETS["light"]["stabilize_polygon_blend"] is False
+        )
+        assert (
+            STABILIZATION_STRENGTH_PRESETS["standard"]["stabilize_polygon_blend"]
+            is False
+        )
+        assert (
+            STABILIZATION_STRENGTH_PRESETS["heavy"]["stabilize_polygon_blend"] is True
+        )
+        assert (
+            STABILIZATION_STRENGTH_PRESETS["extreme"]["stabilize_polygon_blend"] is True
+        )
+
+    def test_explicit_field_overrides_preset_value(self):
+        """If a caller passes both a preset name AND an explicit override,
+        the override wins — that's how power users keep full per-axis
+        control."""
+        from video_grouper.pipeline.steps.stabilize import StabilizeStepConfig
+
+        c = StabilizeStepConfig(
+            stabilization_strength="light",
+            stabilize_max_rotation_deg=4.0,  # way above light's 0.5
+            stabilize_polygon_blend=True,
+        )
+        # Light's other fields applied; the two overrides won.
+        assert c.stabilize_max_tx_px == 30.0
+        assert c.stabilize_max_rotation_deg == 4.0
+        assert c.stabilize_polygon_blend is True
+
+    def test_unknown_strength_rejected(self):
+        from pydantic import ValidationError
+
+        from video_grouper.pipeline.steps.stabilize import StabilizeStepConfig
+
+        with pytest.raises(ValidationError):
+            StabilizeStepConfig(stabilization_strength="ridiculous")
 
 
 # ---------------------------------------------------------------------------

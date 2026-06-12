@@ -21,7 +21,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
@@ -30,8 +30,60 @@ from video_grouper.pipeline.manifest import PipelineManifest
 logger = logging.getLogger(__name__)
 
 
+# Strength tiers bundle the four user-visible knobs that trade compute /
+# crop-size for correction power: per-axis budgets (translation +
+# rotation + scale) and whether to do the 3× per-frame polygon-zone
+# blend. Authoritative single source of truth — both the StabilizeStep
+# config validator and the reprocess machinery read this map.
+#
+#   light    — calm-day footage: tight budgets, single-warp. Fastest, smallest crop.
+#   standard — current production default: moderate budgets, single-warp.
+#   heavy    — breezy day with horizon-edge parallax: full budgets + zone blend.
+#   extreme  — gusty day, mast really swaying: wide budgets + zone blend.
+#              Output crop loses ~5% more on each side than `heavy`.
+STABILIZATION_STRENGTH_PRESETS: dict[str, dict] = {
+    "light": {
+        "stabilize_max_tx_px": 30.0,
+        "stabilize_max_ty_px": 30.0,
+        "stabilize_max_rotation_deg": 0.5,
+        "stabilize_max_log_scale": 0.003,
+        "stabilize_polygon_blend": False,
+    },
+    "standard": {
+        "stabilize_max_tx_px": 60.0,
+        "stabilize_max_ty_px": 60.0,
+        "stabilize_max_rotation_deg": 1.0,
+        "stabilize_max_log_scale": 0.005,
+        "stabilize_polygon_blend": False,
+    },
+    "heavy": {
+        "stabilize_max_tx_px": 60.0,
+        "stabilize_max_ty_px": 60.0,
+        "stabilize_max_rotation_deg": 1.5,
+        "stabilize_max_log_scale": 0.005,
+        "stabilize_polygon_blend": True,
+    },
+    "extreme": {
+        "stabilize_max_tx_px": 100.0,
+        "stabilize_max_ty_px": 100.0,
+        "stabilize_max_rotation_deg": 2.5,
+        "stabilize_max_log_scale": 0.008,
+        "stabilize_polygon_blend": True,
+    },
+}
+
+
 class StabilizeStepConfig(BaseModel):
     """Per-axis safe budgets + estimator + L1 weights for the analysis pass."""
+
+    # High-level strength preset. When set, fills in budgets +
+    # polygon-blend mode from STABILIZATION_STRENGTH_PRESETS for any
+    # individual knob the caller did NOT explicitly override. Lets
+    # presets / UI dropdowns ship a single string while power users keep
+    # full per-axis control via overrides. "off" is not a value here —
+    # turning stabilization off is a pipeline-preset choice (use the
+    # `broadcast` preset, which doesn't include this step).
+    stabilization_strength: str | None = None
 
     # Motion estimator. "phasecorr" (default) uses sub-pixel phase correlation
     # on a fixed sky/treeline ROI — empirically gives ~93% reduction in
@@ -102,6 +154,24 @@ class StabilizeStepConfig(BaseModel):
     # downstream consumers. Falls back to single-warp when polygon is
     # unavailable.
     stabilize_polygon_blend: bool = True
+
+    @model_validator(mode="after")
+    def _apply_strength_preset(self):
+        """Fill in budgets + polygon-blend from the named strength preset
+        for any field the caller did NOT explicitly set, so a preset name
+        and per-axis overrides can coexist (overrides win)."""
+        if self.stabilization_strength is None:
+            return self
+        if self.stabilization_strength not in STABILIZATION_STRENGTH_PRESETS:
+            raise ValueError(
+                f"unknown stabilization_strength {self.stabilization_strength!r}; "
+                f"expected one of {sorted(STABILIZATION_STRENGTH_PRESETS)}"
+            )
+        preset = STABILIZATION_STRENGTH_PRESETS[self.stabilization_strength]
+        for field, preset_value in preset.items():
+            if field not in self.model_fields_set:
+                setattr(self, field, preset_value)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -215,13 +285,13 @@ def _estimate_motion_phasecorr(input_path, polygon, cfg):
                     # recovers that directly.
                     motion_vecs: list[tuple[float, float]] = []
                     per_response: list[float] = []
-                    for prev, cur in zip(prev_grays, cur_grays):
+                    for prev, cur in zip(prev_grays, cur_grays, strict=False):
                         dx, dy, resp = phase_correlate_translation(prev, cur)
                         motion_vecs.append((dx, dy))
                         per_response.append(resp)
                     response = float(np.mean(per_response))
 
-                    def _fit(idxs):
+                    def _fit(idxs, motion_vecs=motion_vecs, roi_centers=roi_centers):
                         return fit_similarity_from_motion_vectors(
                             [roi_centers[k] for k in idxs],
                             [motion_vecs[k] for k in idxs],

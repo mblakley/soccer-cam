@@ -99,13 +99,12 @@ PRESETS: dict[str, list[_PresetStep]] = {
             "stabilize",
             "stabilize",
             {
-                # Per-axis safe budgets. 60 px each at 7680x2160 covers gusty
-                # tripod wobble well beyond typical calm-window numbers
-                # (~2 px adjacent-frame, ~10-30 px cumulative). Bump if the
-                # smoke test shows the L1 LP saturating these.
-                "stabilize_max_tx_px": 60.0,
-                "stabilize_max_ty_px": 60.0,
-                "stabilize_max_rotation_deg": 0.5,
+                # "heavy" picks the polygon-zone blend with full per-axis
+                # budgets — the right baseline for a typical breezy day on
+                # a 16' tripod. Drop to "light" / "standard" for calmer
+                # conditions or bump to "extreme" for a really gusty day;
+                # the reprocess flow exposes this as a dropdown.
+                "stabilization_strength": "heavy",
             },
         ),
         (
