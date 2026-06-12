@@ -148,8 +148,9 @@ class TrackStep(PipelineStep[TrackStepConfig]):
         detections_path = cast(str, manifest.get("detections_path"))
         in_path = Path(cast(str, manifest.get("input_path")))
         trajectory_path = in_path.with_name("trajectory.json")
-        # When a motion sidecar is in the manifest the upstream detect step ran
-        # against stabilized frames, so detections live in stabilized coords.
+        # When a motion sidecar is in the manifest the upstream
+        # ``transform_detections`` step has lifted detections into
+        # stabilized-output coords (see the broadcast_stabilized preset).
         # Translate the polygon into the same space or the location filter
         # discards valid mid-field detections by ``safe_inset``.
         field_polygon = _load_field_polygon(
