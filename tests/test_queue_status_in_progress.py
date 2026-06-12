@@ -136,6 +136,7 @@ class TestQueueStatusSummary:
             "soccer-cam": _mock_processor(download_qsize, download_busy)
         }
         app.clip_request_processor = None
+        app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
         return app
@@ -191,6 +192,7 @@ class TestQueueStatusSummary:
         app.upload_processor = _proc(0, None)
         app.ntfy_processor = None
         app.clip_request_processor = None
+        app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
 
@@ -222,6 +224,7 @@ class TestLogQueueStatusFormat:
         app.ntfy_processor = None
         app.download_processors = {}
         app.clip_request_processor = None
+        app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
 

@@ -1251,17 +1251,17 @@ class TTTApiClient:
         """Pending + this-user's in-flight reprocess requests across all
         teams the caller is a camera_manager for.
 
-        GET {api_base_url}/api/reprocess-requests/queue
+        GET {api_base_url}/api/internal/reprocess-requests/queue
         """
-        url = f"{self.api_base_url}/api/reprocess-requests/queue"
+        url = f"{self.api_base_url}/api/internal/reprocess-requests/queue"
         return self._request("GET", url)
 
     def claim_reprocess_request(self, request_id: str) -> dict[str, Any]:
         """Atomically claim a pending request — only one camera-manager wins.
 
-        POST {api_base_url}/api/reprocess-requests/{request_id}/claim
+        POST {api_base_url}/api/internal/reprocess-requests/{request_id}/claim
         """
-        url = f"{self.api_base_url}/api/reprocess-requests/{request_id}/claim"
+        url = f"{self.api_base_url}/api/internal/reprocess-requests/{request_id}/claim"
         return self._request("POST", url)
 
     def update_reprocess_status(
@@ -1273,9 +1273,9 @@ class TTTApiClient:
     ) -> dict[str, Any]:
         """Advance the lifecycle column (claimed → running → completed/cancelled/failed).
 
-        POST {api_base_url}/api/reprocess-requests/{request_id}/status
+        POST {api_base_url}/api/internal/reprocess-requests/{request_id}/status
         """
-        url = f"{self.api_base_url}/api/reprocess-requests/{request_id}/status"
+        url = f"{self.api_base_url}/api/internal/reprocess-requests/{request_id}/status"
         body: dict[str, Any] = {"status": status}
         if current_step is not None:
             body["current_step"] = current_step
