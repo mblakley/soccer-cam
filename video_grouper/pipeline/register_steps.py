@@ -34,6 +34,13 @@ except Exception as e:  # noqa: BLE001
     )
 
 try:
+    from video_grouper.pipeline.steps import field_detect  # noqa: F401
+except Exception as e:  # noqa: BLE001
+    logger.debug(
+        "pipeline: step field_detect unavailable (%s: %s)", type(e).__name__, e
+    )
+
+try:
     from video_grouper.pipeline.steps import detect  # noqa: F401
 except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step detect unavailable (%s: %s)", type(e).__name__, e)

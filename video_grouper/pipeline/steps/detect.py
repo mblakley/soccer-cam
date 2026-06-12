@@ -33,6 +33,7 @@ from video_grouper.inference.ball_detector import create_session, detect_video
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
 from video_grouper.pipeline.manifest import PipelineManifest
+from video_grouper.pipeline.steps.licensed_model import build_secure_loader_session
 
 logger = logging.getLogger(__name__)
 
@@ -88,49 +89,6 @@ def _run_detection_from_path(
     )
 
 
-def _build_secure_loader_session(
-    model_key: str,
-    channel: str | None,
-    pipeline_version: str | None,
-    ctx: StepContext,
-) -> Any:
-    """Acquire a license + decrypted ONNX session from TTT.
-
-    Constructs a TTTApiClient from ``ctx.ttt_config`` and runs the SecureLoader
-    against it. Returns the loaded ``InferenceSession``.
-    """
-    from video_grouper.api_integrations.ttt_api import TTTApiClient
-    from video_grouper.ball_tracking.secure_loader import SecureLoader
-
-    if not ctx.ttt_config:
-        raise RuntimeError(
-            "detect: model_key is set but TTT integration is disabled "
-            "(set [TTT] enabled = true and configure credentials, or fall back "
-            "to model_path for a community / bring-your-own model)"
-        )
-
-    cfg = ctx.ttt_config
-    client = TTTApiClient(
-        supabase_url=cfg.get("supabase_url", ""),
-        anon_key=cfg.get("anon_key", ""),
-        api_base_url=cfg.get("api_base_url", ""),
-        storage_path=str(ctx.storage_path),
-    )
-    public_keys = cfg.get("plugin_signing_public_keys") or []
-    loader = SecureLoader(client, public_keys, state_storage_path=str(ctx.storage_path))
-    loaded = loader.acquire(
-        model_key, channel=channel, pipeline_version=pipeline_version
-    )
-    logger.info(
-        "detect: licensed %s v%s (%s, provider=%s)",
-        loaded.model_key,
-        loaded.version,
-        loaded.tier,
-        loaded.provider,
-    )
-    return loaded.session
-
-
 class DetectStep(PipelineStep[DetectStepConfig]):
     name = "detect"
     config_model = DetectStepConfig
@@ -151,7 +109,8 @@ class DetectStep(PipelineStep[DetectStepConfig]):
         # filters, so they can be re-swept without re-running this expensive step.
         if cfg.model_key:
             session = await asyncio.to_thread(
-                _build_secure_loader_session,
+                build_secure_loader_session,
+                self.name,
                 cfg.model_key,
                 cfg.detect_channel,
                 cfg.detect_pipeline_version,

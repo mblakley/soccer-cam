@@ -29,7 +29,9 @@ class TrackStepConfig(BaseModel):
     # Tunable filters on the RAW detections (detect saves all candidates above its low floor):
     #   confidence threshold + field-polygon location filter. Applied here, cheaply, so they can be
     #   re-swept without re-running detection. The off-field reject (timestamp/spectators/scoreboard)
-    #   needs a field_polygon_path in the manifest; absent ⇒ confidence filter only.
+    #   needs a field_polygon_path in the manifest; absent, the field defaults to the FULL FRAME
+    #   (field_detect writes that fallback polygon itself) — every in-frame detection is kept,
+    #   which is exactly the confidence-filter-only behaviour.
     track_conf_threshold: float = 0.45
     track_field_margin: float = 50.0
     track_kalman_gate: float = 200.0

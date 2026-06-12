@@ -4,6 +4,20 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-12: Field-outline wired into the plugin pipeline as a `field_detect` step
+
+**Context:** The distilled field-outline model (EXP-008) needed to actually drive homegrown ball tracking + rendering. The pipeline's track and render steps already consume a `field_polygon_path` manifest artifact (location filtering, mount-tilt/leveling derivation, off-field rejection, pan bounds) — but nothing produced it automatically.
+
+**Decisions:**
+- **New `field_detect` pipeline step** (`video_grouper/pipeline/steps/field_detect.py`), inserted `stitch_correct → field_detect → detect → track → render` in the homegrown preset. Runs the field-outline model on a few sampled frames and keeps the **highest-confidence** polygon (the field is static per fixed camera, so one polygon serves the game). Writes `field_polygon.json` and records `field_polygon_path` in the manifest.
+- **The polygon is a required artifact with a neutral default, not an optional one.** With no model configured (or no usable polygon found) the step writes the **full-frame rectangle** (`source: "full_frame"`), and render synthesizes the same default if the manifest has no polygon at all. The full frame is the neutral element of the geometry: centred base pitch, full vertical extent, full pan range, derived mount tilt ≈ 0, and the off-field filter keeps every in-frame detection — one code path whether or not a real field was found.
+- **Same two-source loading as the ball model**: `model_key` (TTT-licensed — ships as a **free** TTT-provided model) or `model_path` (local plaintext, dev/community). The shared license-acquisition path moved to `pipeline/steps/licensed_model.py`, used by both `detect` and `field_detect`. No model binary or seeded model identifier in the OSS repo, per policy.
+- **No detect-side filtering and no render-side framing logic in this step** — the earlier provider-era draft filtered detections in detect and recentred the crop in render; both are superseded by the pipeline's existing design (track's re-sweepable `track_field_margin` filter, render's polygon-derived geometry). The step only *produces* the polygon.
+
+**Trade-off:** One model load + a few-frame inference per game (cheap, once per game). The full-frame default changes render's no-model behaviour from the hand-tuned config fallbacks (`render_view_pitch_deg`, `render_mount_tilt_deg`, `render_field_half_pitch_deg`) to polygon-derived neutral values — intentional: the polygon is the single source of framing truth.
+
+---
+
 ## 2026-06-11: Field-boundary student model via teacher distillation
 
 **Context:** The 10-point field-boundary polygon (used to mask off-field ball detections and to drive the broadcast camera) comes from a third-party "teacher" ONNX model we want to retire. We own the footage, so we can distill it: run the teacher over our Reolink games to auto-label, then train an in-house student. Built as standalone tools (`training/field_outline/` + `training/cli/{generate,train,eval,export}_field_outline.py`), not yet wired into the pipeline task system.
