@@ -101,16 +101,24 @@ class ReprocessRequestProcessor(QueueProcessor):
                 "requested_at": claimed.get("created_at"),
                 "requested_by": f"ttt:{claimed.get('requested_by', '')}",
             }
+            # Field-mask editor: carry the user-corrected outline (10 normalized
+            # [x, y] points) into the local marker so apply_overrides patches the
+            # field_detect step and track/render re-run with it.
+            override_polygon = claimed.get("override_polygon")
+            if override_polygon is not None:
+                local_request["override_polygon"] = override_polygon
             (group_dir / "reprocess_request.json").write_text(
                 json.dumps(local_request), encoding="utf-8"
             )
             self._nudge_state(group_dir)
             logger.info(
-                "reprocess: claimed %s -> %s (strength=%s, skip_detect=%s)",
+                "reprocess: claimed %s -> %s (strength=%s, skip_detect=%s, "
+                "field_override=%s)",
                 ttt_id,
                 group_dir,
                 claimed["stabilization_strength"],
                 claimed["skip_detect"],
+                override_polygon is not None,
             )
 
         if self.resource_manager is not None:

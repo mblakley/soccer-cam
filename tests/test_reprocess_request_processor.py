@@ -88,6 +88,39 @@ async def test_process_item_claims_and_writes_marker(tmp_path: Path):
     assert local["requested_by"] == "ttt:user-uuid"
     state = json.loads((group / "state.json").read_text())
     assert state["status"] == "pipeline_queued_reprocess"
+    # No field override in this request -> key omitted from the local marker.
+    assert "override_polygon" not in local
+
+
+@pytest.mark.asyncio
+async def test_process_item_carries_field_override_polygon(tmp_path: Path):
+    """A field-mask editor reprocess carries override_polygon into the marker."""
+    group = _seed_group(tmp_path, "2026.06.06-15.01.33")
+    poly = [[i / 10, 0.8 if i < 5 else 0.2] for i in range(10)]
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = {
+        "id": "req-2",
+        "status": "claimed",
+        "recording_id": "rec-1",
+        "stabilization_strength": "standard",
+        "skip_detect": True,
+        "override_polygon": poly,
+        "cancel_requested": False,
+        "created_at": "2026-06-12T12:00:00Z",
+        "requested_by": "user-uuid",
+    }
+    ttt.get_camera_recording.return_value = {
+        "id": "rec-1",
+        "file_group": "2026.06.06-15.01.33",
+    }
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-2", payload={"id": "req-2"})
+    )
+
+    local = json.loads((group / "reprocess_request.json").read_text())
+    assert local["override_polygon"] == poly
+    assert local["skip_detect"] is True
 
 
 @pytest.mark.asyncio
