@@ -42,16 +42,29 @@ PRESETS: dict[str, list[_PresetStep]] = {
     # ball per frame, link detections into a smoothed trajectory, then render a
     # broadcast-style virtual-camera crop following the ball.
     #
-    # NOTE: the detect step deliberately carries NO model source (model_key /
-    # model_path). The user supplies it after picking this preset — TTT login
-    # resolves a model_key, or a local model_path points at a .onnx. See the
-    # module docstring.
+    # NOTE: the detect and field_detect steps deliberately carry NO model
+    # source (model_key / model_path). The user supplies it after picking this
+    # preset — TTT login resolves a model_key, or a local model_path points at
+    # a .onnx. See the module docstring.
     "homegrown": [
         (
             "stitch_correct",
             "stitch_correct",
             # Opt-in seam calibration; user points this at their profile.
             {"stitch_profile_path": ""},
+        ),
+        (
+            "field_detect",
+            "field_detect",
+            # Model source intentionally omitted (same policy as detect). With
+            # no model configured the step still produces a polygon — the
+            # neutral full-frame rectangle — so track/render always have one.
+            {
+                "device": "cuda:0",
+                "field_score_threshold": 0.5,
+                "field_min_keypoints": 6,
+                "field_sample_frames": 7,
+            },
         ),
         (
             "detect",

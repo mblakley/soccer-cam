@@ -825,6 +825,28 @@ def _load_field(polygon_path: str | None):
     return polygon, homography
 
 
+def _polygon_or_full_frame(polygon, src_w: int, src_h: int):
+    """The render geometry requires a polygon; absent one, the field IS the frame.
+
+    A full-frame rectangle is the neutral default: centred base pitch, full
+    vertical extent, full lateral pan range, derived mount tilt ≈ 0 (its
+    world-up is straight up), and the off-field rejection keeps everything —
+    one code path whether or not an upstream field_detect found a real field.
+    """
+    if polygon is not None and len(polygon) > 0:
+        return polygon
+    import numpy as np
+
+    logger.info(
+        "render: no field polygon supplied; defaulting to the full %dx%d frame",
+        src_w,
+        src_h,
+    )
+    return np.array(
+        [[0.0, 0.0], [src_w, 0.0], [src_w, src_h], [0.0, src_h]], dtype=np.float32
+    )
+
+
 def _parse_bitrate(bitrate: str) -> int:
     s = bitrate.strip().lower()
     if s.endswith("m"):
@@ -917,6 +939,7 @@ def _render_video(
         src_w = in_video.width
         src_h = in_video.height
 
+        polygon = _polygon_or_full_frame(polygon, src_w, src_h)
         geom = _resolve_geometry(src_w, src_h, cfg, polygon)
         yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, geom.src_hfov_deg)
         yaw_min -= cfg.render_yaw_padding_deg
@@ -1075,6 +1098,7 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
         polygon, self._homography = _load_field(manifest.get("field_polygon_path"))
+        polygon = _polygon_or_full_frame(polygon, source.width, source.height)
         self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)
         from video_grouper.inference.field_geometry import field_lateral_yaw_extent
 

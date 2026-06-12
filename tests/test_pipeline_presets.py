@@ -83,32 +83,35 @@ def test_preset_round_trips_through_save_load(tmp_path, name):
         assert {k: str(v) for k, v in o.config.items()} == b.config
 
 
-def test_homegrown_preset_has_expected_four_steps_in_order():
+def test_homegrown_preset_has_expected_five_steps_in_order():
     pc = apply_preset("homegrown")
     ordered = pc.ordered_steps()
     assert [s.type for s in ordered] == [
         "stitch_correct",
+        "field_detect",
         "detect",
         "track",
         "render",
     ]
     assert [s.step_id for s in ordered] == [
         "stitch_correct",
+        "field_detect",
         "detect",
         "track",
         "render",
     ]
 
 
-def test_homegrown_detect_leaves_model_source_unset():
-    """The detect step must NOT seed a model source — the user supplies a
+@pytest.mark.parametrize("step_id", ["detect", "field_detect"])
+def test_homegrown_model_steps_leave_model_source_unset(step_id):
+    """Model-running steps must NOT seed a model source — the user supplies a
     model_key (TTT login) or model_path (local .onnx)."""
     pc = apply_preset("homegrown")
-    detect_cfg = pc.step_specs["detect"].config
-    assert "model_key" not in detect_cfg
-    assert "model_path" not in detect_cfg
+    cfg = pc.step_specs[step_id].config
+    assert "model_key" not in cfg
+    assert "model_path" not in cfg
     # but inference tunables are seeded
-    assert "detect_confidence" in detect_cfg
+    assert len(cfg) > 0
 
 
 def test_autocam_preset_is_single_autocam_step():

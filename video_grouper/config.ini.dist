@@ -92,7 +92,7 @@ privacy_status = private
 enabled = false
 
 # Ordered step ids (the homegrown ball-tracking pipeline). Reorder / remove freely.
-steps = stitch, detect, track, render
+steps = stitch, field_detect, detect, track, render
 
 # Opt in to loading unsigned community plugins from <storage>/plugins/community/
 # (they run in-process with full privileges — only enable code you trust).
@@ -106,6 +106,19 @@ ram_heavy_concurrency = 1
 type = stitch_correct
 # Optional per-camera stitch calibration profile; passes through unchanged when unset.
 # stitch_profile_path =
+
+[PIPELINE.field_detect]
+type = field_detect
+# Field-outline model — finds the playing-field boundary polygon once per game
+# so the track step can drop off-field ball detections and the render step can
+# level + frame the virtual camera to the field. With no model configured the
+# step writes the neutral full-frame polygon instead. Model source — pick ONE:
+#   model_key  : a TTT-provided model (requires a free TTT account)
+#   model_path : a community / bring-your-own local model (no TTT account)
+# model_key = field_outline
+# model_path = /path/to/model.onnx
+# field_sample_frames = 7    ; frames sampled to pick the best polygon
+# field_min_keypoints = 6    ; confident keypoints a frame needs to qualify
 
 [PIPELINE.detect]
 type = detect

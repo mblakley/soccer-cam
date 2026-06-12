@@ -16,7 +16,7 @@ from video_grouper.pipeline.steps.detect import DetectStep
 from video_grouper.pipeline.steps.stitch_correct import StitchCorrectStep
 from video_grouper.pipeline.steps.track import TrackStep
 
-BUILTINS = {"autocam", "stitch_correct", "detect", "track", "render"}
+BUILTINS = {"autocam", "stitch_correct", "field_detect", "detect", "track", "render"}
 
 
 def _ctx(tmp_path):
