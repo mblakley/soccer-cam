@@ -95,9 +95,32 @@ class PipelineRunner:
         # Rebuild the working artifact map from the immutable source; skipped
         # steps are replayed on top so a re-run never sees its own stale output.
         manifest.reset_working_artifacts()
+
+        # Per-recording reprocess override: stabilization_strength patch +
+        # optional cheap-detect (swap detect for transform_detections). If
+        # the override drops a step from the spec list, the runner's
+        # current replay logic would miss its produced artifacts, so we
+        # explicitly replay them up-front.
+        from video_grouper.pipeline.reprocess import (
+            apply_overrides,
+            read_reprocess_request,
+        )
+
+        specs = list(self.specs)
+        req = read_reprocess_request(ctx.group_dir)
+        if req is not None:
+            specs, preseed_ids = apply_overrides(specs, req)
+            for sid in preseed_ids:
+                manifest.replay_step(sid)
+            logger.info(
+                "pipeline: reprocess override active (%s); preseeded %s",
+                req.model_dump(exclude_none=True),
+                preseed_ids,
+            )
+
         dirty = False
 
-        for spec in self.specs:
+        for spec in specs:
             fp = fingerprint(spec)
 
             # Resume: skip an unchanged, already-complete step whose outputs survive.

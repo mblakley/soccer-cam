@@ -461,12 +461,22 @@ def _scan_games(storage_path: Path) -> list[dict]:
             data = json.loads(state_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        current_strength: str | None = None
+        reproc_path = child / "reprocess_request.json"
+        if reproc_path.exists():
+            try:
+                rd = json.loads(reproc_path.read_text(encoding="utf-8"))
+                if isinstance(rd, dict):
+                    current_strength = rd.get("stabilization_strength")
+            except (json.JSONDecodeError, OSError):
+                pass
         games.append(
             {
                 "name": child.name,
                 "status": data.get("status", "pending"),
                 "error_message": data.get("error_message"),
                 "files_count": len(data.get("files", {})),
+                "current_strength": current_strength,
             }
         )
     games.sort(key=lambda g: g["name"], reverse=True)
@@ -740,6 +750,36 @@ def _render_cameras_section(status: dict | None) -> str:
     )
 
 
+_STRENGTH_OPTIONS = ("light", "standard", "heavy", "extreme")
+
+
+def _render_reprocess_form(game_name: str, current_strength: str | None) -> str:
+    """Per-row reprocess form: pick a stabilization strength + cheap-detect
+    flag, POST writes ``reprocess_request.json`` into the group dir."""
+    options_html = "".join(
+        f'<option value="{s}"{" selected" if s == current_strength else ""}>'
+        f"{s}</option>"
+        for s in _STRENGTH_OPTIONS
+    )
+    action = f"/recordings/{html.escape(game_name)}/reprocess"
+    current_label = (
+        f' <span class="muted">(current: {html.escape(current_strength)})</span>'
+        if current_strength
+        else ""
+    )
+    return (
+        f'<form method="post" action="{action}" class="reproc">'
+        "<label>Strength: "
+        f'<select name="stabilization_strength">{options_html}</select>'
+        "</label> "
+        '<label><input type="checkbox" name="skip_detect" value="1" checked> '
+        "skip detect (reuse existing detections)</label> "
+        '<button type="submit">Reprocess</button>'
+        f"{current_label}"
+        "</form>"
+    )
+
+
 def _render_games_section(games: list[dict]) -> str:
     if not games:
         return '<p class="muted">No game groups in storage yet.</p>'
@@ -749,17 +789,18 @@ def _render_games_section(games: list[dict]) -> str:
         err_html = (
             f' <span class="err">&mdash; {html.escape(err)}</span>' if err else ""
         )
+        reproc_html = _render_reprocess_form(g["name"], g.get("current_strength"))
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(g['name'])}</code></td>"
             f"<td>{html.escape(g['status'])}</td>"
             f"<td>{g['files_count']} files{err_html}</td>"
+            f"<td>{reproc_html}</td>"
             "</tr>"
         )
     return (
-        "<table><tr><th>Group</th><th>Status</th><th>Files</th></tr>"
-        + "".join(rows)
-        + "</table>"
+        "<table><tr><th>Group</th><th>Status</th><th>Files</th>"
+        "<th>Reprocess</th></tr>" + "".join(rows) + "</table>"
     )
 
 
@@ -1176,6 +1217,69 @@ def create_app(
         clear_auth_needed(storage_path, "youtube")
         logger.info("YouTube OAuth complete, token saved to %s", token_path)
         return RedirectResponse(url=entry["return_to"], status_code=303)
+
+    @app.post("/recordings/{name}/reprocess")
+    async def reprocess_recording(name: str, request: Request) -> Response:
+        """Write ``reprocess_request.json`` to the named recording's group
+        dir. The pipeline runner picks it up on the next run and patches
+        the stabilize step (and optionally swaps detect for the cheap
+        ``transform_detections`` step).
+
+        Path traversal defense: ``name`` must match the canonical group
+        dir naming pattern (YYYY.MM.DD-HH.MM.SS) and the resolved path
+        must stay under ``storage``.
+        """
+        if not _GAME_DIR_RE.match(name):
+            raise HTTPException(status_code=400, detail="bad recording name")
+        group_dir = (storage / name).resolve()
+        if not group_dir.is_dir() or storage.resolve() not in group_dir.parents:
+            raise HTTPException(status_code=404, detail="recording not found")
+        # Pull form fields; tolerate missing skip_detect (checkbox unchecked).
+        form = await request.form()
+        strength = form.get("stabilization_strength", "")
+        if strength not in _STRENGTH_OPTIONS:
+            raise HTTPException(status_code=400, detail="invalid strength")
+        skip_detect = bool(form.get("skip_detect"))
+        payload = {
+            "stabilization_strength": strength,
+            "skip_detect": skip_detect,
+            "requested_at": datetime.now(UTC).isoformat(),
+            "requested_by": "tray",
+        }
+        (group_dir / "reprocess_request.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        # Also nudge the group's state.json so the orchestrator's discovery
+        # loop re-queues it. The runner's fingerprint check is what
+        # ultimately drives the re-run, but the discovery loop only looks
+        # at groups whose state.json isn't terminal.
+        state_path = group_dir / "state.json"
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                # Roll any terminal status back to "queued" so the
+                # pipeline_processor picks it up. Non-terminal statuses
+                # are left alone.
+                if state.get("status") in (
+                    "pipeline_complete",
+                    "ball_tracking_complete",
+                    "complete",
+                    "failed",
+                ):
+                    state["status"] = "pipeline_queued_reprocess"
+                    state.pop("error_message", None)
+                    state_path.write_text(json.dumps(state), encoding="utf-8")
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "reprocess: could not update state.json for %s: %s", name, exc
+                )
+        logger.info(
+            "reprocess: queued %s (strength=%s, skip_detect=%s)",
+            name,
+            strength,
+            skip_detect,
+        )
+        return RedirectResponse(url="/", status_code=303)
 
     @app.post("/logout")
     def logout() -> Response:
