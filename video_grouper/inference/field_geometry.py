@@ -15,6 +15,7 @@ Keypoint layout (panoramic view from the side)::
 
 from __future__ import annotations
 
+import json
 import logging
 
 import cv2
@@ -113,6 +114,78 @@ def pixel_to_field(px: float, py: float, homography: np.ndarray) -> tuple[float,
     pt = np.array([[[float(px), float(py)]]], dtype=np.float32)
     out = cv2.perspectiveTransform(pt, homography)
     return float(out[0, 0, 0]), float(out[0, 0, 1])
+
+
+def load_field(
+    polygon_path: str | None,
+    motion_path: str | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Load ``(polygon, homography)`` from a field-detect JSON sidecar.
+
+    Returns ``(None, None)`` on missing path, missing file, or JSON parse error
+    (logged at warning level). When the payload has ``keypoints`` but no
+    ``homography``, derives the homography via :func:`field_homography`.
+
+    When ``motion_path`` is set (i.e. the caller is operating on stabilized
+    frames), translates both polygon and homography out of raw-source pixel
+    coords into stabilized-output pixel coords using the stabilizer's
+    ``safe_inset``. The field is world-fixed and stabilization aligns frames
+    to a reference, so a fixed offset is exact at the reference frame and
+    approximate at all others (the stabilizer's whole job is to make that
+    approximation tight).
+    """
+    if not polygon_path:
+        return None, None
+    try:
+        with open(polygon_path, encoding="utf-8") as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("field polygon %s unusable (%s)", polygon_path, e)
+        return None, None
+    poly = payload.get("polygon")
+    polygon = np.array(poly, dtype=np.float32) if poly is not None else None
+    h = payload.get("homography")
+    homography = np.array(h, dtype=np.float32) if h is not None else None
+    if homography is None and "keypoints" in payload:
+        homography = field_homography(payload["keypoints"])
+
+    if motion_path:
+        polygon, homography = _shift_to_stabilized(polygon, homography, motion_path)
+
+    return polygon, homography
+
+
+def _shift_to_stabilized(
+    polygon: np.ndarray | None,
+    homography: np.ndarray | None,
+    motion_path: str,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Translate ``(polygon, homography)`` from raw-source coords to
+    stabilized-output coords using the motion sidecar's ``safe_inset``."""
+    try:
+        with open(motion_path, encoding="utf-8") as f:
+            motion = json.load(f)
+        iy, ix = motion["safe_inset"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+        logger.warning("motion sidecar %s unusable (%s)", motion_path, e)
+        return polygon, homography
+
+    if polygon is not None:
+        polygon = polygon.copy()
+        polygon[:, 0] -= float(ix)
+        polygon[:, 1] -= float(iy)
+
+    if homography is not None:
+        # H_stab maps stabilized-pixel → field-plane. Compose with the
+        # stabilized → raw translation so the existing field-plane mapping
+        # still applies: H_stab = H_raw @ T_stab_to_raw.
+        T = np.array(
+            [[1.0, 0.0, float(ix)], [0.0, 1.0, float(iy)], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+        homography = (homography @ T).astype(np.float32)
+
+    return polygon, homography
 
 
 def field_lateral_yaw_extent(

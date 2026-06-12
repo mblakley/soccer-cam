@@ -45,23 +45,21 @@ class TrackStepConfig(BaseModel):
     track_interp_gap: int = 16
 
 
-def _load_field_polygon(path: str | None) -> np.ndarray | None:
+def _load_field_polygon(
+    path: str | None, motion_path: str | None = None
+) -> np.ndarray | None:
     """Load the field-perimeter polygon from the manifest's ``field_polygon_path`` (the same
-    artifact the render step consumes). Returns None if unavailable."""
-    if not path:
+    artifact the render step consumes). Returns None if unavailable.
+
+    When ``motion_path`` is set, translates the polygon from raw-source coords
+    into stabilized-output coords so it lines up with detections produced
+    against stabilized frames."""
+    from video_grouper.inference.field_geometry import load_field
+
+    polygon, _ = load_field(path, motion_path=motion_path)
+    if polygon is None or len(polygon) < 3:
         return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            payload = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning(
-            "track: field polygon %s unusable (%s); skipping location filter", path, e
-        )
-        return None
-    poly = payload.get("polygon")
-    if not poly or len(poly) < 3:
-        return None
-    return np.array(poly, dtype=np.float32)
+    return polygon
 
 
 def _run_tracking(
@@ -150,7 +148,15 @@ class TrackStep(PipelineStep[TrackStepConfig]):
         detections_path = cast(str, manifest.get("detections_path"))
         in_path = Path(cast(str, manifest.get("input_path")))
         trajectory_path = in_path.with_name("trajectory.json")
-        field_polygon = _load_field_polygon(manifest.get("field_polygon_path"))
+        # When a motion sidecar is in the manifest the upstream
+        # ``transform_detections`` step has lifted detections into
+        # stabilized-output coords (see the broadcast_stabilized preset).
+        # Translate the polygon into the same space or the location filter
+        # discards valid mid-field detections by ``safe_inset``.
+        field_polygon = _load_field_polygon(
+            manifest.get("field_polygon_path"),
+            motion_path=manifest.get("motion_path"),
+        )
 
         populated = await asyncio.to_thread(
             _run_tracking,

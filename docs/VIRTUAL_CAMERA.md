@@ -263,3 +263,181 @@ Dead-ball overrides in coach mode:
 - Codec: H.264 (mp4)
 - Frame rate: match source
 - The output should look like a single continuous camera shot with smooth, professional panning and zooming
+
+## Camera Stabilization (opt-in)
+
+Wind shakes a 16' tripod-mounted Reolink Duo 3 enough that the rendered horizon
+visibly rolls and the follow-cam chases a wobbling ball trajectory. The
+`stabilize` pipeline step does an offline single-pass motion analysis and
+writes a `motion.json` sidecar that the `detect` and `render` steps consume
+to warp every decoded frame in memory before their own work — no new file,
+no re-encode.
+
+### Algorithm
+
+Per-frame, against a maintained reference:
+
+1. **Multi-region soccer mask.** ORB looks only at the genuinely stable
+   references in a soccer scene: the sky / distant treeline strip above the
+   field, the far-touchline white-line edge, the goal-frame vicinities at the
+   far corners, and the corner-flag pole bases. The field interior, the
+   near-sideline foot-traffic strip, the lateral dewarp corners, and the
+   spectator band immediately above the far touchline are all excluded — those
+   are where the failure modes live (moving players, walking parents, flapping
+   tents, fluttering corner flags). The mask is built ONCE per recording from
+   the upstream field polygon; the camera doesn't move during the recording.
+2. **ORB features in the mask** → BFMatcher knn-2 + Lowe ratio test
+   (drops ambiguous matches on repetitive moving textures).
+3. **`cv2.estimateAffinePartial2D` constrained to a similarity** (translation
+   + rotation + uniform scale; no shear). A **tight 1.5 px RANSAC reprojection
+   threshold** rejects any feature on a moving spectator / walking parent /
+   flag fabric whose actual motion exceeds the camera's wobble.
+4. **Drift-aware reference.** Re-anchor on inlier-ratio drop, on a large
+   one-shot drift (a real shake event), or on age cap (~30 s at 20 fps), so
+   one gust event doesn't pollute the reference for the rest of the
+   recording.
+
+Cumulative path is integrated additively in `(tx, ty, theta, log_scale)` —
+valid under the small-rotation assumption for a tripod. Each axis is then
+smoothed independently via **L1-norm path optimization** (Grundmann et al.
+2011) with the standard 1 : 10 : 100 (velocity : acceleration : jerk) weight
+ratio that strongly prefers zero-jerk paths. The L1 LP runs through
+`scipy.optimize.linprog` with the HiGHS solver and per-axis safe budgets as
+hard box constraints (default: 60 px translation, 0.5° rotation, 0.5%
+scale). The per-frame **stabilizing similarity** is the residual
+`cumulative − smoothed`, composed with a constant translation that recentres
+the slightly smaller output crop onto the wobbling source.
+
+### Output
+
+`motion.json` carries: `src_size`, `output_size`, `safe_inset`, and per-frame
+`[M, confidence]`. The `M` is a 2×3 similarity that `cv2.warpAffine` applies
+with `WARP_INVERSE_MAP + BORDER_REPLICATE` to produce an `(out_h, out_w)`
+stabilized RGB frame.
+
+### Opt-in
+
+Add `stabilize` to your pipeline config, OR select the `broadcast_stabilized`
+preset which wires it together with `detect_stabilize` and `render_stabilize`
+turned on. The default `homegrown` preset is unchanged.
+
+```ini
+[PIPELINE]
+preset = broadcast_stabilized
+```
+
+The trade-off is one extra analysis pass (~10–15 minutes on a typical 80-min
+game on the camera-manager box) for visibly steadier output. The render's
+existing **warp-once-crop** optimization is preserved — `build_leveled_pano`
+still runs ONCE, just at the stabilized dimensions.
+
+### Estimator: phase correlation (default)
+
+The motion estimator is **phase correlation** on a fixed sky/treeline ROI.
+Empirically on real BU14 game footage (calm + windy 30-second slices):
+
+| Slice                       | Raw \|dy\| mean | Stabilized \|dy\| mean | Reduction |
+|---|---|---|---|
+| Calm (peak 4.7 px wobble)   | 1.00 px         | **0.07 px**            | **+93.1 %** |
+| Windy (peak 16.8 px wobble) | 2.54 px         | **0.18 px**            | **+92.8 %** |
+
+The legacy ORB + RANSAC similarity estimator is kept under
+`stabilize_estimator = "orb"` as a fallback (e.g. for cases where phase
+correlation degrades on a totally featureless overcast sky) but is no
+longer the default — on the same footage it gave **−25 %** reduction
+(actively made things worse) because ORB+RANSAC on a cylindrically-warped
+panoramic source has spatial bias: pixels-per-degree varies across the
+image, so the similarity fit averages mismatched scales and over-estimates
+translation by ~2.8 ×.
+
+Phase correlation wins on three fronts: sub-pixel translation directly
+(~0.1 px noise floor), no descriptor / feature-matching complexity (~3
+lines vs ~150), and no reference-frame state machine.
+
+### Field polygon is highly recommended
+
+The phase-correlation ROI is derived from the field polygon's top edge so
+the strip captures the **treeline boundary** — the most stable feature in
+a soccer panorama. **Without a field polygon** the step falls back to a
+generic top-of-source sky strip, which works on calm overcast days but
+degrades on clear-sky windy days because cloud motion contaminates the
+estimate.
+
+The `field_detect` step is the natural upstream provider; the
+`broadcast_stabilized` preset assumes it runs before `stabilize`.
+
+### Polygon-zone blend (handles the dome / parallax of mast flex)
+
+A single rigid 2D similarity fits the *average* motion of the source. On
+real gusts the camera doesn't move rigidly: a flexing tripod mast acts
+like a small dome, with the camera body swinging through an arc in 3D.
+Different depths in the scene get different apparent motion, so the
+horizon-edge wobble that survives the single-similarity fit is
+**parallax**, not residual translation.
+
+The field polygon is reused as a 2D depth proxy. Each pixel is
+classified into one of three zones:
+
+- **sky** — above the polygon's top edge AND laterally between its
+  far-left and far-right top corners (the far treeline / sky band).
+- **field** — inside the polygon.
+- **near** — everything else: below the polygon, plus the lateral
+  corners above the polygon's top edge (spectator strips above the
+  side touchlines), which are geometrically *near* the camera even
+  though they sit above the field plane.
+
+Per frame the `stabilize` step fits three separate similarities (one
+from each of the 3 ROIs in that band of the 3×3 grid), L1-smooths each
+path independently, and emits a `motion.json` that contains all three
+sets of stabilizing matrices plus the polygon (so the apply side can
+rebuild the zone mask). `FrameStabilizer.apply` then runs three
+`cv2.warpAffine` calls and a per-pixel `np.where` blend.
+
+The polygon-zone format is the default when both the field polygon is
+available AND `stabilize_polygon_blend = True` (the default). Without a
+polygon the step falls back to single-warp (current production
+behaviour). The two `motion.json` shapes:
+
+```jsonc
+// single-warp (no polygon, or polygon-blend explicitly off)
+{
+  "src_size":   [src_h, src_w],
+  "output_size":[out_h, out_w],
+  "safe_inset": [iy, ix],
+  "frames":     [{"M": [[…]], "confidence": …}, …]
+}
+
+// polygon-zone blend
+{
+  "src_size":   [src_h, src_w],
+  "output_size":[out_h, out_w],
+  "safe_inset": [iy, ix],
+  "polygon":    [[x0,y0], [x1,y1], …],
+  "zones":      {
+    "sky":   [[[…]], …],   // 2×3 stabilizing similarity per frame
+    "field": [[[…]], …],
+    "near":  [[[…]], …]
+  },
+  "confidences": [c0, c1, …]
+}
+```
+
+### Sharing the apply work via `frame_fanout`
+
+Polygon-zone blend's per-frame cost is **3× a single-similarity warp**
+(three `cv2.warpAffine` calls and a per-pixel blend), so naively
+applying it inside every consumer that touches frames would multiply
+the cost by the consumer count. The cost is instead amortised at the
+`frame_fanout` step level: enabling `fanout_stabilize = True` on a
+fan-out makes the fanout decode loop apply `FrameStabilizer` ONCE per
+decoded frame and hand the stabilized RGB array (and updated
+`FrameSourceInfo` reporting the stabilized dimensions) to every
+consumer. N render variants, one stabilize.
+
+This means a comparison run (e.g. AutoCam vs homegrown vs a candidate
+model) pays the polygon-blend cost exactly once across all variants,
+not once per variant. Inside the consumer the source dimensions seen
+by `_resolve_geometry` are already the stabilized output dims, so the
+cylindrical warp/crop sizes itself correctly without per-consumer
+configuration. The standalone `render` step (no fan-out) keeps its
+own `render_stabilize` flag for the equivalent inline path.

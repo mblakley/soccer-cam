@@ -160,6 +160,14 @@ class RenderStepConfig(BaseModel):
     # Pan clamp padding beyond the field's lateral extent.
     render_yaw_padding_deg: float = 8.0
     render_video_bitrate: str = "8M"
+    # In-memory stabilization: when on, each decoded frame is warp-affined
+    # by a per-frame stabilizing similarity loaded from the manifest's
+    # ``motion_path`` (produced by the ``stabilize`` step) before the
+    # cylindrical warp/crop runs. The ball trajectory the renderer follows
+    # was computed by ``detect`` against the same stabilized frames (when
+    # ``detect_stabilize`` is on), so geometry stays consistent end-to-end.
+    # No-op when ``motion_path`` is absent from the manifest.
+    render_stabilize: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -797,34 +805,6 @@ def _ball_field_x(px: float, py: float, src_w: int, homography) -> float:
     return max(0.0, min(1.0, px / src_w))
 
 
-# ---------------------------------------------------------------------------
-# Field polygon loading
-# ---------------------------------------------------------------------------
-
-
-def _load_field(polygon_path: str | None):
-    """Return ``(polygon ndarray | None, homography ndarray | None)``."""
-    if not polygon_path:
-        return None, None
-    try:
-        with open(polygon_path, encoding="utf-8") as f:
-            payload = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("render: field polygon %s unusable (%s)", polygon_path, e)
-        return None, None
-    import numpy as np
-
-    poly = payload.get("polygon")
-    polygon = np.array(poly, dtype=np.float32) if poly is not None else None
-    h = payload.get("homography")
-    homography = np.array(h, dtype=np.float32) if h is not None else None
-    if homography is None and "keypoints" in payload:
-        from video_grouper.inference.field_geometry import field_homography
-
-        homography = field_homography(payload["keypoints"])
-    return polygon, homography
-
-
 def _parse_bitrate(bitrate: str) -> int:
     s = bitrate.strip().lower()
     if s.endswith("m"):
@@ -895,12 +875,16 @@ def _render_video(
     output_path: str,
     trajectory_path: str,
     field_polygon_path: str | None,
+    motion_path: str | None,
     cfg: RenderStepConfig,
 ) -> None:
     """Sync helper: per-frame cylindrical render with the broadcast control logic."""
     import av
 
-    from video_grouper.inference.field_geometry import field_lateral_yaw_extent
+    from video_grouper.inference.field_geometry import (
+        field_lateral_yaw_extent,
+        load_field,
+    )
 
     mode = _resolve_mode(cfg.render_mode)
     out_w = cfg.render_output_width
@@ -910,12 +894,33 @@ def _render_video(
         raw_trajectory = json.load(f)
     entries = compute_entries(raw_trajectory, mode.velocity_ema)
 
-    polygon, homography = _load_field(field_polygon_path)
+    polygon, homography = load_field(
+        field_polygon_path,
+        motion_path=motion_path if cfg.render_stabilize else None,
+    )
+
+    # Optional in-memory stabilization: warp each decoded frame by a per-
+    # frame similarity from motion.json before the cylindrical warp/crop.
+    # When on, src_w/src_h that the cylindrical geometry is sized against
+    # are the STABILIZED dims, since that's what the renderer actually sees.
+    stabilizer = None
+    if cfg.render_stabilize and motion_path:
+        from video_grouper.inference.stabilization import FrameStabilizer
+
+        stabilizer = FrameStabilizer.from_json(motion_path)
+        logger.info(
+            "render: stabilization on — output_shape=%s safe_inset=%s",
+            stabilizer.output_shape,
+            stabilizer.safe_inset,
+        )
 
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
-        src_w = in_video.width
-        src_h = in_video.height
+        if stabilizer is not None:
+            src_h, src_w = stabilizer.output_shape
+        else:
+            src_w = in_video.width
+            src_h = in_video.height
 
         geom = _resolve_geometry(src_w, src_h, cfg, polygon)
         yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, geom.src_hfov_deg)
@@ -1005,6 +1010,8 @@ def _render_video(
                             out_h,
                         )
                         rgb = frame.to_ndarray(format="rgb24")
+                        if stabilizer is not None:
+                            rgb = stabilizer.apply(rgb, frame_idx)
                         rendered = _warp_frame(rgb, geom, cfg, params, view_yaw, warper)
                         new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
                         new_frame.pts = frame.pts
@@ -1068,18 +1075,33 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     def open(self, source: FrameSourceInfo, ctx: StepContext, manifest) -> None:
         import av
 
+        from video_grouper.inference.field_geometry import (
+            field_lateral_yaw_extent,
+            load_field,
+        )
+
         cfg = self.config
         self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
+        # ``source`` already reflects the stabilized dims when fanout has
+        # ``fanout_stabilize`` on — the consumer simply trusts whatever
+        # dimensions the fanout reports and renders against those.
         self._sw, self._sh = source.width, source.height
+
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
-        polygon, self._homography = _load_field(manifest.get("field_polygon_path"))
-        self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)
-        from video_grouper.inference.field_geometry import field_lateral_yaw_extent
+        # When fanout has stabilization on, the polygon + homography on disk
+        # are in raw-source coords; shift them into stabilized-output space
+        # so polygon containment + homography → field-zone lookups line up
+        # with the stabilized frames the consumer sees.
+        polygon, self._homography = load_field(
+            manifest.get("field_polygon_path"),
+            motion_path=manifest.get("motion_path") if source.stabilized else None,
+        )
+        self._geom = _resolve_geometry(self._sw, self._sh, cfg, polygon)
 
         ymin, ymax = field_lateral_yaw_extent(
-            polygon, source.width, self._geom.src_hfov_deg
+            polygon, self._sw, self._geom.src_hfov_deg
         )
         half = self._geom.src_hfov_deg / 2.0
         self._yaw_min = max(ymin - cfg.render_yaw_padding_deg, -half)
@@ -1096,7 +1118,7 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         st.options = {"maxrate": cfg.render_video_bitrate, "bufsize": str(br * 2)}
         self._stream = st
         self._warper = _make_warper(
-            self._geom, cfg, source.width, source.height, self._ow, self._oh
+            self._geom, cfg, self._sw, self._sh, self._ow, self._oh
         )
 
     def consume(self, rgb, frame_pts: int | None, frame_idx: int) -> None:
@@ -1153,6 +1175,9 @@ class RenderStep(PipelineStep[RenderStepConfig]):
         # Optional: a field-detect step upstream supplies the ROI polygon used
         # for pan clamping + vertical geometry. Absent ⇒ unconstrained pan.
         field_polygon_path = manifest.get("field_polygon_path")
+        # Optional: a stabilize step upstream supplies the per-frame
+        # stabilizing similarity. Absent ⇒ raw source frames pass through.
+        motion_path = manifest.get("motion_path")
 
         await asyncio.to_thread(
             _render_video,
@@ -1160,6 +1185,7 @@ class RenderStep(PipelineStep[RenderStepConfig]):
             str(out_path),
             trajectory_path,
             field_polygon_path,
+            motion_path,
             self.config,
         )
         logger.info("render: wrote broadcast-style output to %s", out_path)

@@ -84,6 +84,77 @@ PRESETS: dict[str, list[_PresetStep]] = {
             },
         ),
     ],
+    # Homegrown pipeline + camera stabilization. Same as `homegrown` plus a
+    # `stabilize` step inserted ahead of detect, with detect_stabilize and
+    # render_stabilize turned on so the trajectory + broadcast crop both sit on
+    # top of the stabilized frames. Adds one analysis pass to the run (no
+    # re-encode); opt-in for users whose camera physically moves in wind.
+    "broadcast_stabilized": [
+        (
+            "stitch_correct",
+            "stitch_correct",
+            {"stitch_profile_path": ""},
+        ),
+        (
+            "stabilize",
+            "stabilize",
+            {
+                # "heavy" picks the polygon-zone blend with full per-axis
+                # budgets — the right baseline for a typical breezy day on
+                # a 16' tripod. Drop to "light" / "standard" for calmer
+                # conditions or bump to "extreme" for a really gusty day;
+                # the reprocess flow exposes this as a dropdown.
+                "stabilization_strength": "heavy",
+            },
+        ),
+        (
+            "detect",
+            "detect",
+            # Model source intentionally omitted — user supplies model_key
+            # (via TTT login) or model_path (local .onnx). ``detect_stabilize``
+            # runs ONNX on stabilized frames (better SNR) but writes the
+            # detections back in RAW source coords — the canonical schema
+            # for ``detections.json``, regardless of stabilization. The
+            # next step (``transform_detections``) lifts them into
+            # stabilized-output coords for the downstream consumers.
+            {
+                "device": "cuda:0",
+                "detect_confidence": 0.45,
+                "detect_frame_interval": 4,
+                "detect_stabilize": True,
+            },
+        ),
+        (
+            # Lift raw-coord detections into stabilized-output coords so
+            # track + render can operate against a single coord space.
+            # This step is also the reprocess flow's pivot — a
+            # ``skip_detect`` reprocess just re-runs this with the new
+            # ``motion.json`` instead of re-running ONNX, which is the
+            # whole point of writing detect's output in raw coords.
+            "transform_detections",
+            "transform_detections",
+            {},
+        ),
+        (
+            "track",
+            "track",
+            {
+                "track_kalman_gate": 200.0,
+                "track_max_missing": 15,
+            },
+        ),
+        (
+            "render",
+            "render",
+            {
+                "render_mode": "broadcast",
+                "render_output_width": 1920,
+                "render_output_height": 1080,
+                "render_vertical_tracking": True,
+                "render_stabilize": True,
+            },
+        ),
+    ],
     # AutoCam pipeline: a single step that drives the Once AutoCam desktop app.
     # The executable path is left unset — the user fills it in with their
     # AutoCam install location.
