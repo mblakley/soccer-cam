@@ -11,15 +11,15 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS  # noqa: E402
-from training.field_outline.model import (  # noqa: E402
-    ExportWrapper,
-    FieldHeads,
-)
 from training.cli.train_field_outline import (  # noqa: E402
     coord_loss,
     pixel_error,
     score_loss,
+)
+from training.field_outline import INPUT_H, INPUT_W, NUM_KEYPOINTS  # noqa: E402
+from training.field_outline.model import (  # noqa: E402
+    ExportWrapper,
+    FieldHeads,
 )
 
 

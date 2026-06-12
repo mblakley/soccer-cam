@@ -70,12 +70,12 @@ def run_check(student_onnx: Path, args) -> bool:
     import onnxruntime as ort
     import torch
 
+    from training.field_outline.model import FieldOutlineNet
     from video_grouper.inference.field_detector import (
         build_field_polygon,
         create_field_session,
         detect_field_keypoints,
     )
-    from training.field_outline.model import FieldOutlineNet
 
     ok = True
     sess = ort.InferenceSession(str(student_onnx), providers=["CPUExecutionProvider"])
