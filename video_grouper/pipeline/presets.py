@@ -111,13 +111,29 @@ PRESETS: dict[str, list[_PresetStep]] = {
             "detect",
             "detect",
             # Model source intentionally omitted — user supplies model_key
-            # (via TTT login) or model_path (local .onnx).
+            # (via TTT login) or model_path (local .onnx). ``detect_stabilize``
+            # runs ONNX on stabilized frames (better SNR) but writes the
+            # detections back in RAW source coords — the canonical schema
+            # for ``detections.json``, regardless of stabilization. The
+            # next step (``transform_detections``) lifts them into
+            # stabilized-output coords for the downstream consumers.
             {
                 "device": "cuda:0",
                 "detect_confidence": 0.45,
                 "detect_frame_interval": 4,
                 "detect_stabilize": True,
             },
+        ),
+        (
+            # Lift raw-coord detections into stabilized-output coords so
+            # track + render can operate against a single coord space.
+            # This step is also the reprocess flow's pivot — a
+            # ``skip_detect`` reprocess just re-runs this with the new
+            # ``motion.json`` instead of re-running ONNX, which is the
+            # whole point of writing detect's output in raw coords.
+            "transform_detections",
+            "transform_detections",
+            {},
         ),
         (
             "track",

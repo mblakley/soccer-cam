@@ -230,9 +230,16 @@ def detect_video(
 
     ``stabilizer`` (a :class:`~video_grouper.inference.stabilization.FrameStabilizer`
     or ``None``) is applied in-memory to each decoded frame before
-    detection. When set, detections come out in stabilized-frame coords,
-    not raw-source coords — the canonical "anchor detections to a stable
-    world frame" path.
+    detection — so ONNX sees a steady image — but every emitted detection
+    is then back-projected to raw-source pixel coords via
+    :meth:`FrameStabilizer.transform_points_to_raw`. ``detections.json``
+    is therefore always the canonical RAW-coord schema regardless of
+    whether stabilization ran; downstream consumers that operate on
+    stabilized frames (the ``broadcast_stabilized`` preset's
+    ``transform_detections`` step) forward those raw coords through the
+    motion sidecar at consumption time. That symmetry is what makes
+    re-running with a different ``stabilization_strength`` correct (the
+    reprocess flow never double-stabilizes).
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -264,13 +271,26 @@ def detect_video(
                 # Apply on BGR directly — the per-frame similarity transform
                 # is colour-agnostic and detect_balls cv2.cvtColors internally.
                 frame = stabilizer.apply(frame, frame_idx)
-            for d in detect_balls(
+            frame_dets = detect_balls(
                 frame,
                 sess,
                 conf_threshold,
                 field_polygon=field_polygon,
                 field_margin=field_margin,
-            ):
+            )
+            if stabilizer is not None and frame_dets:
+                # Back-project (cx, cy) from stabilized output coords to
+                # raw-source coords so detections.json is the canonical
+                # raw-coord schema. (w, h are pixel sizes, unaffected by
+                # the per-frame similarity at the small ball-bbox scale.)
+                stab_pts = np.array(
+                    [[d["cx"], d["cy"]] for d in frame_dets], dtype=np.float32
+                )
+                raw_pts = stabilizer.transform_points_to_raw(stab_pts, frame_idx)
+                for d, (rx, ry) in zip(frame_dets, raw_pts, strict=True):
+                    d["cx"] = float(rx)
+                    d["cy"] = float(ry)
+            for d in frame_dets:
                 d["frame_idx"] = frame_idx
                 detections.append(d)
 

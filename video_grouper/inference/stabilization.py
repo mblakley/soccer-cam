@@ -1103,6 +1103,10 @@ class FrameStabilizer:
             self._zone_mask_full = build_polygon_zone_mask(polygon, src_h, src_w)
             iy, ix = safe_inset
             zone_crop = self._zone_mask_full[iy : iy + out_h, ix : ix + out_w]
+            # Keep the cropped (stabilized-coord) zone mask around so
+            # ``transform_points_to_raw`` can look up zones by stabilized
+            # pixel without re-projecting through M⁻¹ first (chicken-and-egg).
+            self._zone_mask_crop = zone_crop
             # Pre-compute per-zone broadcast masks (H, W, 1) once.
             self._mask_sky = (zone_crop == 1)[..., None]
             self._mask_field = (zone_crop == 2)[..., None]
@@ -1255,6 +1259,56 @@ class FrameStabilizer:
                 M = self._identity_inset
             M_inv = cv2.invertAffineTransform(M)
             out[i] = M_inv @ np.array([xs, ys, 1.0], dtype=np.float32)
+        return out
+
+    def transform_points_to_raw(
+        self, points_xy: np.ndarray, frame_idx: int
+    ) -> np.ndarray:
+        """Map ``points_xy`` from stabilized output pixels back to source pixels.
+
+        The inverse of :meth:`transform_points`. Used by the detect step to
+        backproject stabilized-coord detections into raw-source coords so
+        ``detections.json`` stays the canonical raw-coord schema regardless
+        of whether stabilization was on. That keeps the cheap-reprocess
+        path (``transform_detections``) correct: applying a new motion to
+        raw-coord detections never double-stabilizes.
+
+        In single mode this is just ``M @ pt`` (no inversion). In
+        zone-blend mode the zone is looked up against the STABILIZED zone
+        mask (cropped at construction), then that zone's per-frame
+        similarity is applied. ``M`` in motion.json is the dst → src
+        sampling map, so ``M @ stab_pt`` gives the source pixel directly.
+        """
+        pts = np.asarray(points_xy, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[1] != 2:
+            raise ValueError(f"points_xy must be (N, 2); got shape {pts.shape}")
+        if pts.shape[0] == 0:
+            return pts.copy()
+
+        if self._mode == "single":
+            if 0 <= frame_idx < len(self._transforms):
+                M = self._transforms[frame_idx]
+            else:
+                M = self._identity_inset
+            homog = np.concatenate(
+                [pts, np.ones((pts.shape[0], 1), dtype=np.float32)], axis=1
+            )
+            return (M @ homog.T).T
+
+        # Zone-blend: zone lookup against the stabilized-coord zone mask.
+        out_h, out_w = self.output_size
+        out = np.empty_like(pts)
+        zone_to_name = {1: "sky", 2: "field", 3: "near"}
+        for i, (xs, ys) in enumerate(pts):
+            ix = int(np.clip(xs, 0, out_w - 1))
+            iy = int(np.clip(ys, 0, out_h - 1))
+            zone_name = zone_to_name[int(self._zone_mask_crop[iy, ix])]
+            lst = self._zone_transforms[zone_name]
+            if 0 <= frame_idx < len(lst):
+                M = lst[frame_idx]
+            else:
+                M = self._identity_inset
+            out[i] = M @ np.array([xs, ys, 1.0], dtype=np.float32)
         return out
 
 

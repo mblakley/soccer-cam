@@ -835,6 +835,105 @@ class TestFrameStabilizerTransformPoints:
         assert out[2, 1] == pytest.approx(near_pt[1] - inset_y, abs=1e-3)
 
 
+class TestFrameStabilizerTransformPointsToRaw:
+    """Inverse of transform_points: stabilized output coords → raw source.
+
+    detect uses this to back-project ONNX-detected ball coords (which
+    come out in the stabilized frame the model saw) into raw-source
+    coords for ``detections.json``. The whole point is that the
+    canonical schema is raw, so the cheap-reprocess flow
+    (``transform_detections`` with a new motion) never double-stabilizes.
+    """
+
+    def _make_single_warp_stabilizer(self):
+        # Same shape as TestFrameStabilizerTransformPoints helper.
+        inset_y, inset_x = 10, 20
+        sx, sy = 3.0, -2.0
+        M = np.array(
+            [[1.0, 0.0, inset_x + sx], [0.0, 1.0, inset_y + sy]], dtype=np.float32
+        )
+        return FrameStabilizer(
+            src_size=(100, 200),
+            output_size=(80, 160),
+            safe_inset=(inset_y, inset_x),
+            transforms=[M],
+            confidences=[1.0],
+        )
+
+    def test_roundtrip_single_warp(self):
+        """raw → stabilized → raw must return the original raw coords."""
+        stab = self._make_single_warp_stabilizer()
+        raw_in = np.array([[50.0, 30.0], [150.0, 70.0]], dtype=np.float32)
+        stab_pts = stab.transform_points(raw_in, frame_idx=0)
+        raw_back = stab.transform_points_to_raw(stab_pts, frame_idx=0)
+        np.testing.assert_allclose(raw_back, raw_in, atol=1e-3)
+
+    def test_empty_input_returns_empty(self):
+        stab = self._make_single_warp_stabilizer()
+        out = stab.transform_points_to_raw(np.empty((0, 2)), frame_idx=0)
+        assert out.shape == (0, 2)
+
+    def test_bad_input_shape_raises(self):
+        stab = self._make_single_warp_stabilizer()
+        with pytest.raises(ValueError):
+            stab.transform_points_to_raw(np.array([1.0, 2.0, 3.0]), frame_idx=0)
+
+    def test_zone_blend_roundtrip(self, tmp_path: Path):
+        """In zone-blend mode the forward direction looks up zone at the
+        SOURCE pixel; the inverse looks up zone at the STABILIZED pixel.
+        For each zone's per-frame transform the roundtrip must still
+        return the original raw coord."""
+        from video_grouper.inference.stabilization import write_motion_json
+
+        H, W = 240, 480
+        inset_y, inset_x = 10, 20
+        out_h, out_w = H - 2 * inset_y, W - 2 * inset_x
+
+        def M(sx: float, sy: float) -> np.ndarray:
+            return np.array(
+                [[1.0, 0.0, inset_x + sx], [0.0, 1.0, inset_y + sy]],
+                dtype=np.float32,
+            )
+
+        poly = np.array(
+            [
+                [W * 0.18, H * 0.30],
+                [W * 0.82, H * 0.30],
+                [W * 0.92, H * 0.78],
+                [W * 0.08, H * 0.78],
+            ],
+            dtype=np.float32,
+        )
+        path = tmp_path / "motion.json"
+        write_motion_json(
+            path,
+            src_size=(H, W),
+            output_size=(out_h, out_w),
+            safe_inset=(inset_y, inset_x),
+            transforms=None,
+            confidences=[1.0],
+            zone_transforms={
+                "sky": [M(+10.0, 0.0)],
+                "field": [M(0.0, -20.0)],
+                "near": [M(-30.0, 0.0)],
+            },
+            polygon=poly,
+        )
+        stab = FrameStabilizer.from_json(path)
+        # Each point in its own zone — roundtrip must hold.
+        raw = np.array(
+            [
+                [W * 0.5, H * 0.10],  # sky
+                [W * 0.5, H * 0.55],  # field
+                [W * 0.5, H * 0.90],  # near
+            ],
+            dtype=np.float32,
+        )
+        stab_pts = stab.transform_points(raw, frame_idx=0)
+        raw_back = stab.transform_points_to_raw(stab_pts, frame_idx=0)
+        np.testing.assert_allclose(raw_back, raw, atol=1e-3)
+
+
 # ---------------------------------------------------------------------------
 # Phase correlation primitives (the production translation estimator)
 # ---------------------------------------------------------------------------
