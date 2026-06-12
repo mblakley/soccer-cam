@@ -70,6 +70,25 @@ async def test_trimmed_enqueues_pipeline_task(storage_path):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_queued_reprocess_enqueues_pipeline_task(storage_path):
+    """The tray's Reprocess form (and the TTT bridge) flip state.json's
+    status to ``pipeline_queued_reprocess`` so a completed recording
+    gets re-picked-up. Without this status being enqueue-eligible the
+    Reprocess form is silent dead code (review found this on PR #80)."""
+    _make_group(
+        storage_path, "flash__2024.06.01_vs_IYSA_home", "pipeline_queued_reprocess"
+    )
+    proc, pipeline_processor = _processor(storage_path, _make_config())
+
+    await proc.discover_work()
+
+    pipeline_processor.add_work.assert_awaited_once()
+    enqueued = pipeline_processor.add_work.await_args.args[0]
+    assert isinstance(enqueued, PipelineTask)
+    assert enqueued.input_path.endswith("-raw.mp4")
+
+
+@pytest.mark.asyncio
 async def test_trimmed_without_raw_does_not_enqueue(storage_path):
     _make_group(
         storage_path, "flash__2024.06.01_vs_IYSA_home", "trimmed", with_raw=False

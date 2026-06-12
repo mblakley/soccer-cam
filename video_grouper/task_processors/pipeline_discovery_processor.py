@@ -68,7 +68,12 @@ class PipelineDiscoveryProcessor(PollingProcessor):
                 )
                 continue
 
-            if status == "trimmed":
+            if status in ("trimmed", "pipeline_queued_reprocess"):
+                # ``pipeline_queued_reprocess`` is the marker the tray's
+                # local Reprocess form and the TTT-side bridge use to
+                # nudge a completed group back into the pipeline-eligible
+                # set; the runner picks up the recording_dir's
+                # ``reprocess_request.json`` and applies the override.
                 await self._enqueue_for(group_dir)
             elif status in _COMPLETE_STATUSES:
                 await self._recover_upload(group_dir)

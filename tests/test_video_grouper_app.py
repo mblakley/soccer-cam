@@ -272,6 +272,41 @@ class TestVideoGrouperAppRefactored:
             # Ensure proper cleanup to prevent asyncio warnings
             shutdown_app(app)
 
+    def test_get_queue_status_summary_does_not_attribute_error_on_ttt_processors(
+        self, mock_config, mock_camera
+    ):
+        """Regression: after the TTT handler unification, clip_request and
+        ttt_jobs are QueueProcessors not the old set-based polling handlers.
+        The status summary used to reach into ``_processing`` /
+        ``_processing_jobs`` which no longer exist, AttributeError'ing on
+        every tick. Now every TTT processor goes through the same uniform
+        ``get_queue_size`` / ``get_in_progress_summary`` API as the rest."""
+        from unittest.mock import MagicMock
+
+        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        try:
+            # Inject minimal TTT processor doubles so the code paths that
+            # used to reach into the gone-after-refactor attributes execute.
+            for attr in (
+                "clip_request_processor",
+                "highlight_reel_processor",
+                "ttt_job_processor",
+                "reprocess_request_processor",
+            ):
+                p = MagicMock()
+                p.get_queue_size.return_value = 0
+                p.get_in_progress_summary.return_value = None
+                setattr(app, attr, p)
+
+            summary = app.get_queue_status_summary()
+            # Must not raise; must produce a uniform entry per TTT processor.
+            assert "clip_request" in summary
+            assert "highlight_reel" in summary
+            assert "ttt_jobs" in summary
+            assert "reprocess_request" in summary
+        finally:
+            shutdown_app(app)
+
     def test_get_processor_status(self, mock_config, mock_camera):
         """Test getting processor status."""
         app = VideoGrouperApp(mock_config, camera=mock_camera)

@@ -1248,9 +1248,10 @@ class VideoGrouperApp:
         QUEUE_STATUS log line can distinguish ``queue=0 + busy`` from
         ``truly idle``. Disabled processors are omitted from the dict.
 
-        For ``clip_request`` and ``ttt_jobs``, which use a set-of-active
-        model rather than a FIFO queue, ``queued`` is always 0 and the
-        active count is reported as an integer in ``in_progress``.
+        Every TTT-cloud processor (clip_request, highlight_reel, ttt_jobs,
+        reprocess_request) now inherits ``QueueProcessor`` and exposes the
+        same ``get_queue_size`` / ``get_in_progress_summary`` API as the
+        rest, so the per-processor summary is uniform.
         """
 
         def _summary(proc):
@@ -1277,45 +1278,34 @@ class VideoGrouperApp:
                 "in_progress": download_in_progress,
             },
         }
-        video_summary = _summary(self.video_processor)
-        if video_summary is not None:
-            summary["video"] = video_summary
-        youtube_summary = _summary(self.upload_processor)
-        if youtube_summary is not None:
-            summary["youtube"] = youtube_summary
-        ntfy_summary = _summary(self.ntfy_processor)
-        if ntfy_summary is not None:
-            summary["ntfy"] = ntfy_summary
-        if self.clip_request_processor:
-            active = len(self.clip_request_processor._processing)
-            summary["clip_request"] = {
-                "queued": 0,
-                "in_progress": active if active > 0 else None,
-            }
-        if self.ttt_job_processor:
-            active = len(self.ttt_job_processor._processing_jobs)
-            summary["ttt_jobs"] = {
-                "queued": 0,
-                "in_progress": active if active > 0 else None,
-            }
-        if self.clip_processor:
-            clips_summary = _summary(self.clip_processor)
-            if clips_summary is not None:
-                summary["clips"] = clips_summary
+        for key, proc in (
+            ("video", self.video_processor),
+            ("youtube", self.upload_processor),
+            ("ntfy", self.ntfy_processor),
+            ("clip_request", self.clip_request_processor),
+            ("highlight_reel", self.highlight_reel_processor),
+            ("ttt_jobs", self.ttt_job_processor),
+            (
+                "reprocess_request",
+                getattr(self, "reprocess_request_processor", None),
+            ),
+            ("clips", self.clip_processor),
+        ):
+            entry = _summary(proc)
+            if entry is not None:
+                summary[key] = entry
         return summary
 
     @staticmethod
     def _processor_status(processor) -> str:
         """Return 'running', 'stopped', or 'disabled' for a processor.
 
-        Handles both classic PollingProcessor / QueueProcessor objects
-        (which expose ``_processor_task``) and TTTPollHandler instances
-        whose worker is tracked on ``_worker_task``."""
+        Every PollingProcessor / QueueProcessor exposes ``_processor_task``
+        after the TTT handler unification, so the lookup is uniform.
+        """
         if processor is None:
             return "disabled"
-        task = getattr(processor, "_processor_task", None) or getattr(
-            processor, "_worker_task", None
-        )
+        task = getattr(processor, "_processor_task", None)
         if task is not None and not task.done():
             return "running"
         return "stopped"

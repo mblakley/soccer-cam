@@ -161,15 +161,18 @@ def apply_overrides(
 
     ``new_specs`` is the pipeline with the request's overrides applied:
     the stabilize step's config patched, and (if ``skip_detect`` is set)
-    the detect step replaced by a ``transform_detections`` step using
-    the same step_id slot — so the runner's fingerprint-based skip logic
-    naturally recognises a type change as "step changed, re-run".
+    the detect step dropped from the list. The pipeline's existing
+    ``transform_detections`` step (in the ``broadcast_stabilized`` preset)
+    already handles lifting raw-coord detections into the new stabilized
+    space using the patched motion sidecar — so reprocess + skip_detect
+    just needs the previous run's raw detections preseeded as input to
+    ``transform_detections`` for the ONNX pass to be elided correctly.
 
     ``preseed_step_ids`` is the step ids whose recorded produced
     artifacts must be replayed into the working manifest BEFORE the
     runner loop, so the replacement step sees them as inputs. For
-    ``skip_detect`` this is the old detect step's id (``transform_detections``
-    needs the previous detection JSON as its input).
+    ``skip_detect`` this is the dropped detect step's id (so
+    ``transform_detections`` sees the previous detection JSON).
     """
     new_specs: list[StepSpec] = []
     preseed: list[str] = []
@@ -181,18 +184,12 @@ def apply_overrides(
                 StepSpec(step_id=spec.step_id, type=spec.type, config=patched)
             )
         elif spec.type == "detect" and request.skip_detect:
-            # Same step_id, different type — the runner's fingerprint
-            # change drives a re-run with the new step's config.
-            new_specs.append(
-                StepSpec(
-                    step_id=spec.step_id,
-                    type="transform_detections",
-                    config={},
-                )
-            )
-            # The replacement step CONSUMES detections_path — needs the
-            # old detect record's produced detections_path replayed.
+            # Drop the detect step; the dropped step's produced
+            # ``detections_path`` gets preseeded into the manifest so
+            # the downstream ``transform_detections`` step sees the
+            # previous run's raw detections as input.
             preseed.append(spec.step_id)
+            continue
         else:
             new_specs.append(spec)
     return new_specs, preseed
