@@ -156,7 +156,9 @@ class TestStabilizationStrength:
         assert c.stabilization_strength is None
         assert c.stabilize_max_tx_px == 60.0
         assert c.stabilize_max_rotation_deg == 1.5
-        assert c.stabilize_polygon_blend is True
+        # Polygon-blend default off so the cheap single-warp path runs unless
+        # the user explicitly opts in (via the field or via heavy/extreme).
+        assert c.stabilize_polygon_blend is False
 
     @pytest.mark.parametrize(
         "name,expected_polygon_blend,expected_tx,expected_rot",

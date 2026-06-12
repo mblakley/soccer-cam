@@ -217,7 +217,7 @@ def detect_video(
     conf_threshold: float = CONF_THRESHOLD,
     field_polygon: np.ndarray | None = None,
     field_margin: float = 50.0,
-    stabilizer: "object | None" = None,
+    stabilizer: object | None = None,
 ) -> list[dict]:
     """Run ball detection on every Nth frame of a video.
 

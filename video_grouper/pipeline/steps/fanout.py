@@ -107,6 +107,12 @@ class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
         stabilizer = None
         if self.config.fanout_stabilize:
             motion_path = manifest.get("motion_path")
+            if not motion_path:
+                raise RuntimeError(
+                    "frame_fanout: fanout_stabilize=True but the manifest carries "
+                    "no 'motion_path'. Pipeline must run a 'stabilize' step "
+                    "upstream of the fanout."
+                )
             from video_grouper.inference.stabilization import FrameStabilizer
 
             stabilizer = FrameStabilizer.from_json(motion_path)
@@ -115,7 +121,9 @@ class FrameFanoutStep(PipelineStep[FanoutStepConfig]):
             iv = in_container.streams.video[0]
             if stabilizer is not None:
                 sh, sw = stabilizer.output_shape
-                source = FrameSourceInfo(sw, sh, iv.average_rate, iv.time_base)
+                source = FrameSourceInfo(
+                    sw, sh, iv.average_rate, iv.time_base, stabilized=True
+                )
                 logger.info(
                     "frame_fanout: stabilization on — consumers see %dx%d "
                     "(raw source %dx%d, safe_inset=%s)",

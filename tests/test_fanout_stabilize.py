@@ -34,7 +34,6 @@ from video_grouper.pipeline.frame_consumer import (
 )
 from video_grouper.pipeline.manifest import PipelineManifest
 
-
 SRC_H, SRC_W = 360, 640
 INSET_Y, INSET_X = 30, 40
 N_FRAMES = 12
@@ -59,8 +58,9 @@ def mock_file_system():  # noqa: PT004
 
 
 def _write_synthetic_clip(path: Path, n_frames: int = N_FRAMES) -> None:
-    import av
     from fractions import Fraction
+
+    import av
 
     rng = np.random.default_rng(0)
     base = (rng.random((SRC_H, SRC_W, 3)) * 255).astype(np.uint8)

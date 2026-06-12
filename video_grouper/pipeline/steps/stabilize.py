@@ -152,8 +152,9 @@ class StabilizeStepConfig(BaseModel):
     # a np.where blend), amortised by FrameFanoutStep applying the
     # stabilizer once per decoded frame and sharing the result with all
     # downstream consumers. Falls back to single-warp when polygon is
-    # unavailable.
-    stabilize_polygon_blend: bool = True
+    # unavailable. Default off so the cheap path runs unless the user (or
+    # a strength preset — ``heavy`` / ``extreme``) explicitly opts in.
+    stabilize_polygon_blend: bool = False
 
     @model_validator(mode="after")
     def _apply_strength_preset(self):

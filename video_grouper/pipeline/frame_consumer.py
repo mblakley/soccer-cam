@@ -37,12 +37,19 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FrameSourceInfo:
     """Decoded-source properties the fan-out step shares with every consumer (so a render
-    consumer can size + time-base its output encoder identically to the source)."""
+    consumer can size + time-base its output encoder identically to the source).
+
+    ``stabilized`` is True when the fan-out step is applying a frame stabilizer
+    before handing frames to consumers. Consumers that use geometry sourced
+    from a separate sidecar (field polygon, homography) need to translate
+    that geometry into stabilized-output coords when this is True.
+    """
 
     width: int
     height: int
     average_rate: Any  # av Fraction
     time_base: Any  # av Fraction
+    stabilized: bool = False
 
 
 class FrameConsumer(ABC, Generic[ConfigT]):  # noqa: UP046 - explicit Generic[ConfigT] keeps the module-level TypeVar shared with subclasses

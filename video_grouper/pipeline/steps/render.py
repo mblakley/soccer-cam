@@ -894,7 +894,10 @@ def _render_video(
         raw_trajectory = json.load(f)
     entries = compute_entries(raw_trajectory, mode.velocity_ema)
 
-    polygon, homography = load_field(field_polygon_path)
+    polygon, homography = load_field(
+        field_polygon_path,
+        motion_path=motion_path if cfg.render_stabilize else None,
+    )
 
     # Optional in-memory stabilization: warp each decoded frame by a per-
     # frame similarity from motion.json before the cylindrical warp/crop.
@@ -1087,7 +1090,14 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
 
         with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
             self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
-        polygon, self._homography = load_field(manifest.get("field_polygon_path"))
+        # When fanout has stabilization on, the polygon + homography on disk
+        # are in raw-source coords; shift them into stabilized-output space
+        # so polygon containment + homography → field-zone lookups line up
+        # with the stabilized frames the consumer sees.
+        polygon, self._homography = load_field(
+            manifest.get("field_polygon_path"),
+            motion_path=manifest.get("motion_path") if source.stabilized else None,
+        )
         self._geom = _resolve_geometry(self._sw, self._sh, cfg, polygon)
 
         ymin, ymax = field_lateral_yaw_extent(
