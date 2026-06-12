@@ -54,6 +54,20 @@ PRESETS: dict[str, list[_PresetStep]] = {
             {"stitch_profile_path": ""},
         ),
         (
+            # Field-outline model: produces the 10-point boundary polygon so
+            # track drops off-field detections + render frames to the field.
+            # Model source omitted like detect (user supplies model_key via
+            # TTT login, or model_path). No-ops gracefully (null polygon)
+            # until set; also the pivot for the field-mask editor's reprocess.
+            "field_detect",
+            "field_detect",
+            {
+                "device": "cuda:0",
+                "score_threshold": 0.5,
+                "sample_frames": 7,
+            },
+        ),
+        (
             "detect",
             "detect",
             # Model source intentionally omitted — user supplies model_key
@@ -94,6 +108,18 @@ PRESETS: dict[str, list[_PresetStep]] = {
             "stitch_correct",
             "stitch_correct",
             {"stitch_profile_path": ""},
+        ),
+        (
+            # Field-outline polygon (raw-source coords; track/render translate
+            # it into stabilized coords via the motion sidecar). Model source
+            # omitted like detect; no-ops gracefully until set.
+            "field_detect",
+            "field_detect",
+            {
+                "device": "cuda:0",
+                "score_threshold": 0.5,
+                "sample_frames": 7,
+            },
         ),
         (
             "stabilize",
