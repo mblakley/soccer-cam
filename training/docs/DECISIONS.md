@@ -4,6 +4,23 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-11: Field-boundary student model via teacher distillation
+
+**Context:** The 10-point field-boundary polygon (used to mask off-field ball detections and to drive the broadcast camera) comes from a third-party "teacher" ONNX model we want to retire. We own the footage, so we can distill it: run the teacher over our Reolink games to auto-label, then train an in-house student. Built as standalone tools (`training/field_outline/` + `training/cli/{generate,train,eval,export}_field_outline.py`), not yet wired into the pipeline task system.
+
+**Decisions:**
+- **Direct 10-keypoint regression** — not heatmaps, segmentation, or YOLO-pose. The teacher is itself a direct regressor, so distillation targets map 1:1, and the exported graph stays simple enough to match the teacher's exact I/O.
+- **ResNet18 backbone + dual heads** (20-dim coords, 10-dim scores); ImageNet normalization is baked into `forward` so the net takes the same `[0,1]` RGB input `field_detector` feeds the teacher — the exported `.onnx` is a **drop-in** with zero downstream changes. `mobilenet_v3_small` kept as a fallback flag if ResNet18 memorizes.
+- **Score head distills the teacher's per-point confidence** (soft-target BCE), preserving the `mean(scores) >= 0.70` gate semantics that downstream code relies on.
+- **Store every labelled frame** — never discard low-score/indoor frames at generation (irrecoverable, and they train the score head). The coordinate loss is gated at train time to in-frame, score≥0.5 points of frames the teacher itself trusted.
+- **Split by placement (team, venue), never by frame.** The camera is fixed per game, so a frame-level split leaks. Same-named venues across teams stay separate (Flash-"Home" ≠ Heat-"Home"); identical same-team fields merge by median-polygon IoU > 0.85.
+- **Augmentation is the primary overfitting defense** (~20 distinct placements): random crop + aspect jitter, horizontal flip with keypoint index remap, photometric, synthetic occlusion.
+- **Reolink only** (7680×2160). Dahua 4096×1800 footage is excluded for camera-geometry consistency.
+
+**Trade-off:** The student inherits the teacher's failure modes — it can be no better than the teacher's labels. Indoor/low-score venues train only the score head; human-corrected polygons (the existing `"source":"human"` flow) are the v2 path for those.
+
+---
+
 ## 2026-04-15: Single canonical deploy script for remote workers
 
 **Context:** Laptop worker kept dying after reboots and couldn't restart. Root cause: 3 conflicting scheduled tasks (`GPUWorker`, `LaptopWorker`, `PipelineWorker`) each pointing to different hand-edited bat files with wrong credentials, wrong CUDA paths, and TOML backslash escaping bugs. Each time someone fixed a problem they created a new bat/task instead of fixing the canonical deploy script.
