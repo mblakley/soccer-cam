@@ -868,8 +868,13 @@ class TTTApiClient:
         error_message: str | None = None,
         youtube_url: str | None = None,
         youtube_video_id: str | None = None,
+        raw_youtube_video_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Update pipeline stage status for a recording.
+
+        ``raw_youtube_video_id`` is the *full-field* (panorama) upload's id,
+        kept distinct from the processed broadcast ``youtube_video_id`` — the
+        field-mask editor draws on the full-field frame.
 
         PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
         """
@@ -881,6 +886,8 @@ class TTTApiClient:
             body["youtube_url"] = youtube_url
         if youtube_video_id is not None:
             body["youtube_video_id"] = youtube_video_id
+        if raw_youtube_video_id is not None:
+            body["raw_youtube_video_id"] = raw_youtube_video_id
         logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
         return self._request("PATCH", url, json=body)
 

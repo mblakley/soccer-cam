@@ -204,7 +204,10 @@ class YoutubeUploadTask(BaseUploadTask):
                         description,
                     )
 
-                video_id = await asyncio.to_thread(
+                # Keep the raw (full-field panorama) id distinct from the
+                # processed id — the TTT field-mask editor draws on the
+                # full-field frame, so it's reported as raw_youtube_video_id.
+                raw_video_id = await asyncio.to_thread(
                     uploader.upload_video,
                     raw_video_path,
                     title,
@@ -213,9 +216,11 @@ class YoutubeUploadTask(BaseUploadTask):
                     playlist_id=playlist_id,
                 )
 
-                if not video_id:
+                if not raw_video_id:
                     logger.error(f"Failed to upload raw video: {raw_video_path}")
                     success = False
+                else:
+                    logger.info("Raw full-field upload id: %s", raw_video_id)
 
             if success:
                 logger.info(
