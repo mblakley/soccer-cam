@@ -122,6 +122,15 @@ class ReprocessRequest(BaseModel):
     # motion.json instead of re-running ONNX. Saves ~minutes per game.
     skip_detect: bool = False
 
+    # User-corrected field outline from the TTT field-mask editor: 10
+    # normalized ``[x, y]`` points in ``[0, 1]`` (near sideline 0-4 left->
+    # right, far boundary 5-9 right->left). When set, the ``field_detect``
+    # step writes this polygon instead of running the model, and the
+    # downstream track/render steps re-run with it. Pairs naturally with
+    # ``skip_detect=True`` (raw ball detections don't change — only the
+    # on-field filter + framing do).
+    override_polygon: list[list[float]] | None = None
+
     # Provenance: ISO 8601 timestamp + who asked. Surfaced in logs only.
     requested_at: str | None = None
     requested_by: str | None = None  # e.g. "tray" or "ttt:user-uuid"
@@ -190,6 +199,16 @@ def apply_overrides(
             # previous run's raw detections as input.
             preseed.append(spec.step_id)
             continue
+        elif spec.type == "field_detect" and request.override_polygon is not None:
+            # Inject the user-corrected outline: the field_detect step
+            # writes this polygon instead of running the model. The config
+            # change re-fingerprints the step, so it + downstream track/
+            # render re-run; no preseed (we WANT field_detect to re-run).
+            patched = dict(spec.config)
+            patched["override_polygon"] = request.override_polygon
+            new_specs.append(
+                StepSpec(step_id=spec.step_id, type=spec.type, config=patched)
+            )
         else:
             new_specs.append(spec)
     return new_specs, preseed

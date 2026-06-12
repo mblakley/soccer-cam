@@ -225,6 +225,46 @@ def test_skip_detect_without_detect_in_specs_is_noop():
     assert preseed == []
 
 
+_POLY10 = [[i / 10, 0.8 if i < 5 else 0.2] for i in range(10)]
+
+
+def test_field_polygon_override_patches_field_detect_config():
+    """The user-corrected outline lands in the field_detect step's config
+    (re-fingerprinting it so it + downstream re-run); other config kept,
+    no preseed (we want field_detect to re-run, not be skipped)."""
+    specs = [
+        StepSpec("field_detect", "field_detect", {"model_key": "field-outline"}),
+        *_base_specs(),
+    ]
+    req = ReprocessRequest(override_polygon=_POLY10)
+    new_specs, preseed = apply_overrides(specs, req)
+    fd = next(s for s in new_specs if s.type == "field_detect")
+    assert fd.config["override_polygon"] == _POLY10
+    assert fd.config["model_key"] == "field-outline"  # preserved
+    assert preseed == []
+
+
+def test_field_polygon_override_noop_without_field_detect_step():
+    specs = _base_specs()  # no field_detect step present
+    req = ReprocessRequest(override_polygon=_POLY10)
+    new_specs, preseed = apply_overrides(specs, req)
+    assert [s.type for s in new_specs] == [s.type for s in specs]
+    assert preseed == []
+
+
+def test_field_override_composes_with_skip_detect():
+    specs = [
+        StepSpec("field_detect", "field_detect", {}),
+        *_base_specs(),
+    ]
+    req = ReprocessRequest(override_polygon=_POLY10, skip_detect=True)
+    new_specs, preseed = apply_overrides(specs, req)
+    assert "detect" not in [s.type for s in new_specs]
+    fd = next(s for s in new_specs if s.type == "field_detect")
+    assert fd.config["override_polygon"] == _POLY10
+    assert preseed == ["detect"]
+
+
 # ---------------------------------------------------------------------------
 # End-to-end runner integration
 # ---------------------------------------------------------------------------
