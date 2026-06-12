@@ -58,9 +58,11 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper()))
 
-    # Remove any existing handlers to avoid duplicates
+    # Remove (and close) any existing handlers to avoid duplicates and
+    # leaked open log files when logging is reconfigured.
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
+        handler.close()
 
     # Add our handlers
     root_logger.addHandler(file_handler)

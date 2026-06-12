@@ -332,8 +332,12 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
-    "--disable-warnings",
     "--tb=short",
+]
+filterwarnings = [
+    # pywinauto ships a docstring with an invalid escape sequence; their
+    # bug, not ours -- everything else stays visible.
+    "ignore::SyntaxWarning:pywinauto.keyboard",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
