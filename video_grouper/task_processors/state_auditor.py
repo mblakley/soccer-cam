@@ -26,12 +26,24 @@ logger = logging.getLogger(__name__)
 
 class StateAuditor(PollingProcessor):
     """
-    Startup recovery scanner for the pipeline.
+    Recovery scanner for the pipeline.
 
-    On app start, scans the shared_data directory for state.json files and
-    re-queues any interrupted work (pending downloads, combined dirs awaiting
-    match info, etc.). Does NOT run as a continuous poller during normal
-    operation — event-driven transitions handle ongoing work.
+    Scans the shared_data directory for state.json files and re-queues
+    any work that needs to start or restart (pending downloads,
+    combined dirs awaiting match info, ball_tracking_complete dirs
+    awaiting upload, etc.). Originally a one-shot startup scan, but
+    that left a gap: when a user manually populates a match_info.ini
+    after startup (e.g. tournament-day fix), the auditor wouldn't see
+    it until the next service restart.
+
+    Now runs on a poll interval (default 60s). Safe to re-poll because
+    every downstream ``add_work`` call dedupes on the task's item_key,
+    so a still-in-progress task isn't re-enqueued.
+
+    Temp-file cleanup stays BOOT-ONLY (first successful pass): the
+    ``*.partial*`` / ``*.tmp`` suffixes it reaps are exactly what active
+    downloads, combines, trims and state saves stage to, so re-running
+    the sweep on every poll would race live writers.
     """
 
     def __init__(
@@ -70,15 +82,14 @@ class StateAuditor(PollingProcessor):
         # Initialize cleanup service
         self.cleanup_service = CleanupService(storage_path)
 
-    async def start(self) -> None:
-        """Run a one-time startup scan to recover interrupted work.
-
-        Unlike the base PollingProcessor.start(), this does NOT create a
-        persistent polling loop. It runs discover_work() once and returns.
-        """
-        logger.info("STATE_AUDITOR: Running startup recovery scan")
-        await self.discover_work()
-        logger.info("STATE_AUDITOR: Startup recovery scan complete")
+        # Temp-file cleanup is BOOT-ONLY. Active operations stage to the
+        # same suffixes the cleanup reaps (downloads -> *.partial*,
+        # combine/trim -> *.tmp, state saves -> state.json.tmp), so a
+        # recurring sweep would race live writers: on POSIX an unlink of
+        # an open file makes the final os.replace fail; on Windows it
+        # spams sharing-violation warnings every poll. At boot nothing
+        # is in flight, so the orphan sweep is safe exactly once.
+        self._startup_cleanup_done = False
 
     @property
     def download_processor(self):
@@ -95,12 +106,17 @@ class StateAuditor(PollingProcessor):
 
         try:
             # Get all directories in storage path
+            run_cleanup = not self._startup_cleanup_done
             items = os.listdir(self.storage_path)
             for item in items:
                 group_dir = os.path.join(self.storage_path, item)
                 if os.path.isdir(group_dir) and not item.startswith("."):
-                    self._cleanup_temp_files(group_dir)
+                    if run_cleanup:
+                        self._cleanup_temp_files(group_dir)
                     await self._audit_directory(group_dir)
+            # Only after a full pass — a failed listdir retries cleanup
+            # on the next poll instead of silently never sweeping.
+            self._startup_cleanup_done = True
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error during directory audit: {e}")
@@ -339,8 +355,11 @@ class StateAuditor(PollingProcessor):
                     f"STATE_AUDITOR: Found not_a_game status for {group_dir}, skipping further processing"
                 )
 
-            # Handle cleanup tasks
-            await self._handle_cleanup(group_dir)
+            # Handle cleanup tasks — boot-only, same reasoning as
+            # _cleanup_temp_files (CleanupService reaps *.tmp, which
+            # combine/trim and state saves actively stage to).
+            if not self._startup_cleanup_done:
+                await self._handle_cleanup(group_dir)
 
         except Exception as e:
             logger.error(f"STATE_AUDITOR: Error auditing directory {group_dir}: {e}")
@@ -420,5 +439,6 @@ class StateAuditor(PollingProcessor):
             logger.error(f"STATE_AUDITOR: Error during cleanup for {group_dir}: {e}")
 
     async def stop(self) -> None:
-        """Clean up services. No polling loop to stop."""
+        """Cancel the polling loop and clean up services."""
+        await super().stop()
         await self.match_info_service.shutdown()
