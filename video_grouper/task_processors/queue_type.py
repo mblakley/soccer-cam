@@ -17,3 +17,7 @@ class QueueType(Enum):
     PIPELINE = "pipeline"
     CLIP_REQUEST = "clip_request"
     CLIPS = "clips"
+    # TTT cloud features — each polled into a QueueProcessor by TTTPoller.
+    TTT_HIGHLIGHT_REEL = "ttt_highlight_reel"
+    TTT_JOB = "ttt_job"
+    TTT_REPROCESS_REQUEST = "ttt_reprocess_request"

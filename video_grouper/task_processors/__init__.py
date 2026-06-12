@@ -9,6 +9,7 @@ from .download_processor import DownloadProcessor
 from .ntfy_processor import NtfyProcessor
 from .state_auditor import StateAuditor
 from .ttt_job_processor import TTTJobProcessor
+from .ttt_poller import TTTPoller
 from .upload_processor import UploadProcessor
 from .video_processor import VideoProcessor
 
@@ -24,4 +25,5 @@ __all__ = [
     "ClipProcessor",
     "ClipDiscoveryProcessor",
     "TTTJobProcessor",
+    "TTTPoller",
 ]

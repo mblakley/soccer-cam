@@ -6,26 +6,31 @@ import os
 import tempfile
 
 from ..utils.config import Config
-from .base_polling_processor import PollingProcessor
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
 from .recording_locator import (
     find_combined_video,
     find_processed_video,
     resolve_recording_dir,
 )
+from .tasks.clip.clip_request_task import ClipRequestTask
 
 logger = logging.getLogger(__name__)
 
 
-class ClipRequestProcessor(PollingProcessor):
-    """Polls TTT API for pending clip requests and processes them.
+class ClipRequestProcessor(QueueProcessor):
+    """Drains the TTT clip-request queue. ``process_item`` runs the
+    full extract → upload → fulfill flow inside the shared
+    ``ram_heavy`` gate so FFmpeg work can't overlap the main
+    pipeline's render step.
 
     Flow per request:
     1. Mark as in_progress via TTT API
     2. Locate the processed video (fall back to combined.mp4) in recording_group_dir
     3. Extract clips via FFmpeg
     4. Dispatch on delivery_method:
-       - 'youtube': always produce one video (compile multi-segment), upload to YouTube
-       - 'external_storage': honor is_compilation (compile → 1 upload, else N uploads), Drive
+       - 'youtube': compile multi-segment, upload to YouTube
+       - 'external_storage': honor is_compilation → 1 upload or N, Drive
     5. Report fulfilled URL back to TTT
     """
 
@@ -33,42 +38,41 @@ class ClipRequestProcessor(PollingProcessor):
         self,
         storage_path: str,
         config: Config,
-        ttt_client,
-        drive_uploader,
+        ttt_client=None,
+        drive_uploader=None,
         ntfy_service=None,
         youtube_uploader=None,
-        poll_interval: int = 60,
+        resource_manager=None,
     ):
-        super().__init__(storage_path, config, poll_interval)
+        super().__init__(storage_path, config)
         self.ttt_client = ttt_client
         self.drive_uploader = drive_uploader
         self.youtube_uploader = youtube_uploader
         self.ntfy_service = ntfy_service
-        self._processing = set()  # Track in-flight request IDs
+        self.resource_manager = resource_manager
 
-    async def discover_work(self) -> None:
-        """Poll TTT for pending clip requests and process them."""
-        if not self.ttt_client.is_authenticated():
-            logger.debug("TTT client not authenticated, skipping poll")
-            return
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.CLIP_REQUEST
 
-        try:
-            requests = await asyncio.to_thread(
-                self.ttt_client.get_pending_clip_requests
+    def get_item_key(self, item: ClipRequestTask) -> str:
+        return item.ttt_id
+
+    async def process_item(self, item: ClipRequestTask) -> None:
+        """Process one clip request. Wrapped in ``ram_heavy`` because
+        the FFmpeg extract phase saturates a CPU core for minutes per
+        clip and we don't want to overlap the render step."""
+        if self.ttt_client is None:
+            raise RuntimeError(
+                "ClipRequestProcessor needs a ttt_client; check TTT config"
             )
-        except Exception as e:
-            logger.error(f"Failed to poll TTT for clip requests: {e}")
-            return
+        if self.resource_manager is not None:
+            async with self.resource_manager.acquire(("ram_heavy",)):
+                await self._process_request(self.ttt_client, item.payload)
+        else:
+            await self._process_request(self.ttt_client, item.payload)
 
-        for req in requests:
-            req_id = req.get("id")
-            if not req_id or req_id in self._processing:
-                continue
-
-            self._processing.add(req_id)
-            asyncio.create_task(self._process_request(req))
-
-    async def _process_request(self, req: dict) -> None:
+    async def _process_request(self, ttt_client, req: dict) -> None:
         """Process a single clip request end-to-end."""
         req_id = req["id"]
         clip_paths: list[str] = []
@@ -86,7 +90,7 @@ class ClipRequestProcessor(PollingProcessor):
 
             # Mark as in_progress
             try:
-                await asyncio.to_thread(self.ttt_client.start_clip_request, req_id)
+                await asyncio.to_thread(ttt_client.start_clip_request, req_id)
             except Exception as e:
                 if "Cannot start" not in str(e):
                     logger.error(f"Failed to start clip request {req_id}: {e}")
@@ -125,7 +129,7 @@ class ClipRequestProcessor(PollingProcessor):
             notes = f"{len(segments)} clip(s) extracted and uploaded"
             try:
                 await asyncio.to_thread(
-                    self.ttt_client.fulfill_clip_request, req_id, fulfilled_url, notes
+                    ttt_client.fulfill_clip_request, req_id, fulfilled_url, notes
                 )
                 logger.info(f"Fulfilled clip request {req_id}: {fulfilled_url}")
             except Exception as e:
@@ -146,7 +150,6 @@ class ClipRequestProcessor(PollingProcessor):
             logger.error(f"Error processing clip request {req_id}: {e}", exc_info=True)
         finally:
             self._cleanup_temp_files(clip_paths, upload_paths)
-            self._processing.discard(req_id)
 
     async def _upload_via_drive(
         self, req: dict, clip_paths: list[str]

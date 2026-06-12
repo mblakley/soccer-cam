@@ -47,6 +47,9 @@ class PipelineResult:
     - ``complete``: every step finished and the final output exists.
     - ``awaiting``: stopped at a step that must run in ``awaiting_runtime``
       (cross-session handoff); not an error.
+    - ``cancelled``: a ``cancel_request.json`` marker was observed
+      between steps; the in-flight step completed but no further steps
+      ran. The pipeline_processor reports this back to the dashboard.
     - ``failed``: a step failed; ``failed_step`` / ``error`` describe it.
     """
 
@@ -95,9 +98,53 @@ class PipelineRunner:
         # Rebuild the working artifact map from the immutable source; skipped
         # steps are replayed on top so a re-run never sees its own stale output.
         manifest.reset_working_artifacts()
+
+        # Per-recording reprocess override: stabilization_strength patch +
+        # optional cheap-detect (swap detect for transform_detections). If
+        # the override drops a step from the spec list, the runner's
+        # current replay logic would miss its produced artifacts, so we
+        # explicitly replay them up-front.
+        from video_grouper.pipeline.reprocess import (
+            apply_overrides,
+            read_reprocess_request,
+        )
+
+        specs = list(self.specs)
+        req = read_reprocess_request(ctx.group_dir)
+        if req is not None:
+            specs, preseed_ids = apply_overrides(specs, req)
+            for sid in preseed_ids:
+                manifest.replay_step(sid)
+            logger.info(
+                "pipeline: reprocess override active (%s); preseeded %s",
+                req.model_dump(exclude_none=True),
+                preseed_ids,
+            )
+
         dirty = False
 
-        for spec in self.specs:
+        # Cancel marker check: between steps, NOT mid-step. A long-running
+        # step (PyAV decode, ONNX inference) keeps going to completion;
+        # the cancel takes effect at the next boundary. Cheap (a single
+        # filesystem stat per step) and respects the existing
+        # serial-step contract.
+        from video_grouper.pipeline.reprocess import (
+            cancel_requested,
+            consume_cancel_request,
+        )
+
+        for spec in specs:
+            if cancel_requested(ctx.group_dir):
+                consume_cancel_request(ctx.group_dir)
+                logger.info(
+                    "pipeline: cancel request observed before step %s; stopping",
+                    spec.step_id,
+                )
+                return PipelineResult(
+                    "cancelled",
+                    failed_step=spec.step_id,
+                    error="cancelled by user request",
+                )
             fp = fingerprint(spec)
 
             # Resume: skip an unchanged, already-complete step whose outputs survive.

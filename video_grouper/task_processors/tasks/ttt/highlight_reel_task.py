@@ -1,4 +1,4 @@
-"""Task for processing TTT clip requests."""
+"""Task for processing TTT highlight reels."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,13 +8,13 @@ from ..base_task import BaseTask
 
 
 @dataclass(unsafe_hash=True)
-class ClipRequestTask(BaseTask):
-    """Carries a TTT clip request response dict to the processor.
+class HighlightReelTask(BaseTask):
+    """Carries a TTT highlight reel response dict to the processor.
 
-    The processor reads ``payload`` directly (segments, delivery
-    method, etc.); the only structured field on the task itself is
-    ``ttt_id`` so the queue's dedup-by-key check can identify
-    duplicates without parsing the payload.
+    The processor reads ``payload`` directly (source, title, clips
+    etc.); the only structured field on the task itself is ``ttt_id``
+    so the queue's dedup-by-key check can identify duplicates without
+    parsing the payload.
     """
 
     ttt_id: str
@@ -22,11 +22,11 @@ class ClipRequestTask(BaseTask):
 
     @classmethod
     def queue_type(cls) -> QueueType:
-        return QueueType.CLIP_REQUEST
+        return QueueType.TTT_HIGHLIGHT_REEL
 
     @property
     def task_type(self) -> str:
-        return "clip_request"
+        return "ttt_highlight_reel"
 
     def get_item_path(self) -> str:
         return self.ttt_id
@@ -39,12 +39,12 @@ class ClipRequestTask(BaseTask):
         }
 
     @classmethod
-    def deserialize(cls, data: dict[str, object]) -> "ClipRequestTask":
+    def deserialize(cls, data: dict[str, object]) -> "HighlightReelTask":
         return cls(ttt_id=data["ttt_id"], payload=dict(data.get("payload") or {}))
 
     async def execute(self) -> bool:
-        """Execution is handled by ClipRequestProcessor.process_item()."""
-        raise NotImplementedError("Use ClipRequestProcessor.process_item()")
+        """Execution is handled by HighlightReelQueueProcessor.process_item()."""
+        raise NotImplementedError("Use HighlightReelQueueProcessor.process_item()")
 
     def __str__(self) -> str:
-        return f"ClipRequestTask(id={self.ttt_id})"
+        return f"HighlightReelTask(id={self.ttt_id})"

@@ -121,6 +121,19 @@ class VideoGrouperApp:
         self.pipeline_processor = None
         self.pipeline_discovery_processor = None
         self.community_plugin_loader = None
+        # Single ResourceManager shared by every worker that touches
+        # GPU / RAM-heavy compute on this box — the config-driven
+        # pipeline AND the TTT-feature workers (clip request /
+        # highlight reel / TTT job). Built once here so the TTT
+        # workers serialise against the same pool the pipeline steps
+        # use; otherwise a clip-request FFmpeg trim could overlap a
+        # render-step warpAffine and oversubscribe RAM.
+        from video_grouper.pipeline.resources import build_resource_manager
+
+        self.resource_manager = build_resource_manager(
+            gpu_concurrency=self.config.pipeline.gpu_concurrency,
+            ram_heavy_concurrency=self.config.pipeline.ram_heavy_concurrency,
+        )
         if self.config.pipeline.is_active():
             # Side-effect import: registers the built-in pipeline steps.
             import video_grouper.pipeline.register_steps  # noqa: F401
@@ -158,6 +171,7 @@ class VideoGrouperApp:
                 config=self.config,
                 upload_processor=self.upload_processor,
                 runtime="service",
+                resource_manager=self.resource_manager,
             )
             self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
                 storage_path=self.storage_path,
@@ -310,9 +324,6 @@ class VideoGrouperApp:
         if self.config.ttt.enabled:
             try:
                 from video_grouper.api_integrations.ttt_api import TTTApiClient
-                from video_grouper.task_processors.clip_request_processor import (
-                    ClipRequestProcessor,
-                )
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
                 ttt_client = TTTApiClient(
@@ -397,6 +408,17 @@ class VideoGrouperApp:
                 if self.ntfy_processor and hasattr(self.ntfy_processor, "ntfy_service"):
                     ntfy_service = self.ntfy_processor.ntfy_service
 
+                # Build the TTT feature processors. Each is a normal
+                # ``QueueProcessor`` — same pattern as Download / Video
+                # / Upload / Pipeline / Clip / Ntfy. TTTPoller (built
+                # further down) polls TTT and enqueues onto each one.
+                from video_grouper.task_processors.clip_request_processor import (
+                    ClipRequestProcessor,
+                )
+                from video_grouper.task_processors.reprocess_request_processor import (
+                    ReprocessRequestProcessor,
+                )
+
                 self.clip_request_processor = ClipRequestProcessor(
                     storage_path=self.storage_path,
                     config=self.config,
@@ -404,14 +426,10 @@ class VideoGrouperApp:
                     drive_uploader=drive_uploader,
                     ntfy_service=ntfy_service,
                     youtube_uploader=youtube_uploader,
-                    poll_interval=self.config.ttt.clip_request_poll_interval,
+                    resource_manager=self.resource_manager,
                 )
                 logger.info("TTT ClipRequestProcessor initialized")
 
-                # Highlight reel render+upload (Phase 2 — pairs with TTT's
-                # in-app preview). Same ttt_client + youtube_uploader; only
-                # initialized when the YouTube uploader is configured since
-                # the reel ships back as an uploaded video.
                 if youtube_uploader is not None:
                     from video_grouper.task_processors.highlight_reel_processor import (
                         HighlightReelProcessor,
@@ -422,11 +440,23 @@ class VideoGrouperApp:
                         config=self.config,
                         ttt_client=ttt_client,
                         youtube_uploader=youtube_uploader,
-                        poll_interval=self.config.ttt.clip_request_poll_interval,
+                        resource_manager=self.resource_manager,
                     )
                     logger.info("TTT HighlightReelProcessor initialized")
+
+                # Reprocess request bridge — cross-network reprocess flow
+                # from TTT. Light work, but same pattern.
+                self.reprocess_request_processor = ReprocessRequestProcessor(
+                    storage_path=self.storage_path,
+                    config=self.config,
+                    ttt_client=ttt_client,
+                    resource_manager=self.resource_manager,
+                )
+                logger.info("TTT ReprocessRequestProcessor initialized")
+
+                self._ttt_client = ttt_client
             except Exception as e:
-                logger.error(f"Failed to initialize TTT ClipRequestProcessor: {e}")
+                logger.error(f"Failed to initialize TTT processors: {e}")
 
         # Moment tagging — clip generation and highlight compilation
         self.clip_processor = None
@@ -476,14 +506,12 @@ class VideoGrouperApp:
                 poll_interval=self.poll_interval,
             )
 
-        # TTT Job Processor (optional)
+        # TTT job handler (optional) + single TTTPoller.
         self.ttt_job_processor = None
-        if self.config.ttt.enabled and self.config.ttt.job_polling_enabled:
+        self.ttt_poller = None
+        if self.config.ttt.enabled:
             try:
-                ttt_client = None
-                if self.clip_request_processor:
-                    ttt_client = self.clip_request_processor.ttt_client
-
+                ttt_client = getattr(self, "_ttt_client", None)
                 if not ttt_client:
                     from video_grouper.api_integrations.ttt_api import TTTApiClient
 
@@ -499,42 +527,68 @@ class VideoGrouperApp:
                                 self.config.ttt.email, self.config.ttt.password
                             )
                         except Exception as e:
-                            logger.error(f"TTT login failed for job processor: {e}")
+                            logger.error(f"TTT login failed: {e}")
                         else:
                             from video_grouper.web.auth_server import (
                                 auto_claim_camera_manager,
                             )
 
                             auto_claim_camera_manager(ttt_client)
+                    self._ttt_client = ttt_client
 
-                from video_grouper.task_processors.ttt_job_processor import (
-                    TTTJobProcessor,
-                )
+                # Job processor is only initialized when TTT job polling is on.
+                if self.config.ttt.job_polling_enabled:
+                    from video_grouper.task_processors.ttt_job_processor import (
+                        TTTJobProcessor,
+                    )
 
-                self.ttt_job_processor = TTTJobProcessor(
-                    storage_path=self.storage_path,
-                    config=self.config,
-                    ttt_client=ttt_client,
-                    camera=self.camera,
-                    download_processor=self.download_processor,
-                    video_processor=self.video_processor,
-                    upload_processor=self.upload_processor,
-                    poll_interval=self.config.ttt.job_poll_interval,
+                    self.ttt_job_processor = TTTJobProcessor(
+                        storage_path=self.storage_path,
+                        config=self.config,
+                        ttt_client=ttt_client,
+                        camera=self.camera,
+                        download_processor=self.download_processor,
+                        video_processor=self.video_processor,
+                        upload_processor=self.upload_processor,
+                        resource_manager=self.resource_manager,
+                    )
+                    logger.info("TTT JobProcessor initialized")
+
+                # Single TTTPoller polls TTT and enqueues onto each
+                # feature processor.
+                has_any = any(
+                    p is not None
+                    for p in (
+                        self.clip_request_processor,
+                        self.highlight_reel_processor,
+                        getattr(self, "reprocess_request_processor", None),
+                        self.ttt_job_processor,
+                    )
                 )
-                logger.info("TTT JobProcessor initialized")
+                if has_any:
+                    from video_grouper.task_processors.ttt_poller import TTTPoller
+
+                    self.ttt_poller = TTTPoller(
+                        storage_path=self.storage_path,
+                        config=self.config,
+                        ttt_client=ttt_client,
+                        clip_request_processor=self.clip_request_processor,
+                        highlight_reel_processor=self.highlight_reel_processor,
+                        ttt_job_processor=self.ttt_job_processor,
+                        reprocess_request_processor=getattr(
+                            self, "reprocess_request_processor", None
+                        ),
+                        poll_interval=self.config.ttt.clip_request_poll_interval,
+                    )
+                    logger.info("TTTPoller initialized")
             except Exception as e:
-                logger.error(f"Failed to initialize TTT JobProcessor: {e}")
+                logger.error(f"Failed to initialize TTTPoller: {e}")
 
         # TTT Reporter — optional, best-effort status reporting back to TTT
         # Works independently of the clip request processor: enabled when TTT
         # credentials are present, regardless of the full TTT enabled flag.
-        ttt_reporter_client = None
-        if self.config.ttt.enabled and self.clip_request_processor is not None:
-            # Re-use the client that was created for the clip request processor
-            try:
-                ttt_reporter_client = self.clip_request_processor.ttt_client
-            except AttributeError:
-                pass
+        # TTT reporter reuses the same TTT client the TTTPoller is using.
+        ttt_reporter_client = getattr(self, "_ttt_client", None)
         # Load machine ID for multi-computer awareness
         machine_id = None
         if self.config.ttt.enabled:
@@ -597,16 +651,24 @@ class VideoGrouperApp:
         )
         if self.ntfy_processor:
             self.processors.append(self.ntfy_processor)
-        if self.clip_request_processor:
-            self.processors.append(self.clip_request_processor)
-        if self.highlight_reel_processor:
-            self.processors.append(self.highlight_reel_processor)
+        # TTT feature processors are normal QueueProcessors — append
+        # them like any other so the app lifecycle drives their start/
+        # stop. TTTPoller is the single PollingProcessor that polls
+        # TTT and add_work's onto each one.
+        for proc in (
+            self.clip_request_processor,
+            self.highlight_reel_processor,
+            getattr(self, "reprocess_request_processor", None),
+            self.ttt_job_processor,
+        ):
+            if proc is not None:
+                self.processors.append(proc)
+        if self.ttt_poller is not None:
+            self.processors.append(self.ttt_poller)
         if self.clip_processor:
             self.processors.append(self.clip_processor)
         if self.clip_discovery_processor:
             self.processors.append(self.clip_discovery_processor)
-        if self.ttt_job_processor:
-            self.processors.append(self.ttt_job_processor)
         # Config-driven pipeline (only constructed in __init__ when active).
         if self.pipeline_processor:
             self.processors.append(self.pipeline_processor)
@@ -1167,10 +1229,10 @@ class VideoGrouperApp:
             "video": self.video_processor.get_queue_size(),
             "youtube": self.upload_processor.get_queue_size(),
             "ntfy": self.ntfy_processor.get_queue_size() if self.ntfy_processor else -1,
-            "clip_request": len(self.clip_request_processor._processing)
+            "clip_request": self.clip_request_processor.get_queue_size()
             if self.clip_request_processor
             else -1,
-            "ttt_jobs": len(self.ttt_job_processor._processing_jobs)
+            "ttt_jobs": self.ttt_job_processor.get_queue_size()
             if self.ttt_job_processor
             else -1,
         }
@@ -1186,9 +1248,10 @@ class VideoGrouperApp:
         QUEUE_STATUS log line can distinguish ``queue=0 + busy`` from
         ``truly idle``. Disabled processors are omitted from the dict.
 
-        For ``clip_request`` and ``ttt_jobs``, which use a set-of-active
-        model rather than a FIFO queue, ``queued`` is always 0 and the
-        active count is reported as an integer in ``in_progress``.
+        Every TTT-cloud processor (clip_request, highlight_reel, ttt_jobs,
+        reprocess_request) now inherits ``QueueProcessor`` and exposes the
+        same ``get_queue_size`` / ``get_in_progress_summary`` API as the
+        rest, so the per-processor summary is uniform.
         """
 
         def _summary(proc):
@@ -1215,39 +1278,35 @@ class VideoGrouperApp:
                 "in_progress": download_in_progress,
             },
         }
-        video_summary = _summary(self.video_processor)
-        if video_summary is not None:
-            summary["video"] = video_summary
-        youtube_summary = _summary(self.upload_processor)
-        if youtube_summary is not None:
-            summary["youtube"] = youtube_summary
-        ntfy_summary = _summary(self.ntfy_processor)
-        if ntfy_summary is not None:
-            summary["ntfy"] = ntfy_summary
-        if self.clip_request_processor:
-            active = len(self.clip_request_processor._processing)
-            summary["clip_request"] = {
-                "queued": 0,
-                "in_progress": active if active > 0 else None,
-            }
-        if self.ttt_job_processor:
-            active = len(self.ttt_job_processor._processing_jobs)
-            summary["ttt_jobs"] = {
-                "queued": 0,
-                "in_progress": active if active > 0 else None,
-            }
-        if self.clip_processor:
-            clips_summary = _summary(self.clip_processor)
-            if clips_summary is not None:
-                summary["clips"] = clips_summary
+        for key, proc in (
+            ("video", self.video_processor),
+            ("youtube", self.upload_processor),
+            ("ntfy", self.ntfy_processor),
+            ("clip_request", self.clip_request_processor),
+            ("highlight_reel", self.highlight_reel_processor),
+            ("ttt_jobs", self.ttt_job_processor),
+            (
+                "reprocess_request",
+                getattr(self, "reprocess_request_processor", None),
+            ),
+            ("clips", self.clip_processor),
+        ):
+            entry = _summary(proc)
+            if entry is not None:
+                summary[key] = entry
         return summary
 
     @staticmethod
     def _processor_status(processor) -> str:
-        """Return 'running', 'stopped', or 'disabled' for a processor."""
+        """Return 'running', 'stopped', or 'disabled' for a processor.
+
+        Every PollingProcessor / QueueProcessor exposes ``_processor_task``
+        after the TTT handler unification, so the lookup is uniform.
+        """
         if processor is None:
             return "disabled"
-        if processor._processor_task and not processor._processor_task.done():
+        task = getattr(processor, "_processor_task", None)
+        if task is not None and not task.done():
             return "running"
         return "stopped"
 

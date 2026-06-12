@@ -1,0 +1,169 @@
+"""ReprocessRequestProcessor — claims a TTT reprocess request, resolves
+the recording's local group dir, writes the marker the local
+pipeline_processor honors.
+
+QueueProcessor pattern. The "claim + write marker" work runs as
+``process_item`` (light enough that the ``ram_heavy`` acquire is
+mostly insurance for uniformity). Cancel propagation + progress
+reporting for in-flight requests stay in :class:`TTTPoller` because
+they're per-poll lifecycle checks, not discrete jobs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from pathlib import Path
+
+from ..utils.config import Config
+from .base_queue_processor import QueueProcessor
+from .queue_type import QueueType
+from .tasks.ttt.reprocess_request_task import ReprocessRequestTask
+
+logger = logging.getLogger(__name__)
+
+
+_LOCAL_TERMINAL_STATUSES = {
+    "pipeline_complete",
+    "pipeline_failed",
+    "pipeline_cancelled",
+    "complete",
+    "ball_tracking_complete",
+}
+
+
+class ReprocessRequestProcessor(QueueProcessor):
+    """Claims a pending reprocess request and writes the local marker
+    that the pipeline_processor re-entry mechanism picks up."""
+
+    def __init__(
+        self,
+        storage_path: str,
+        config: Config,
+        ttt_client=None,
+        resource_manager=None,
+    ):
+        super().__init__(storage_path, config)
+        self.ttt_client = ttt_client
+        self.resource_manager = resource_manager
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.TTT_REPROCESS_REQUEST
+
+    def get_item_key(self, item: ReprocessRequestTask) -> str:
+        # Dedup on the TTT request id so a re-poll of the same row
+        # doesn't double-claim.
+        return item.ttt_id
+
+    async def process_item(self, item: ReprocessRequestTask) -> None:
+        """Claim the TTT row, find the local group dir, write the
+        ``reprocess_request.json`` marker.
+
+        Wrapped in the shared ``ram_heavy`` gate even though the work
+        itself is light — the uniformity is the point. The pipeline
+        re-run that this triggers later DOES contend on ``ram_heavy``,
+        and serialising the claim against the gate avoids the very
+        narrow window where two reprocess marker writes for the same
+        recording could land back-to-back.
+        """
+        if self.ttt_client is None:
+            raise RuntimeError(
+                "ReprocessRequestProcessor needs a ttt_client; check TTT config"
+            )
+
+        async def _do_work() -> None:
+            ttt_id = item.ttt_id
+
+            try:
+                claimed = await asyncio.to_thread(
+                    self.ttt_client.claim_reprocess_request, ttt_id
+                )
+            except Exception as exc:
+                # Lost the race or the row is gone — quiet success.
+                logger.debug("reprocess: claim %s failed (%s)", ttt_id, exc)
+                return
+
+            group_dir = await self._resolve_group_dir(claimed)
+            if group_dir is None:
+                await self._report_failure(
+                    ttt_id,
+                    "Could not resolve local recording_group_dir for this "
+                    "recording. Make sure the camera-manager box has the "
+                    "source video.",
+                )
+                return
+
+            local_request = {
+                "stabilization_strength": claimed["stabilization_strength"],
+                "skip_detect": claimed["skip_detect"],
+                "requested_at": claimed.get("created_at"),
+                "requested_by": f"ttt:{claimed.get('requested_by', '')}",
+            }
+            (group_dir / "reprocess_request.json").write_text(
+                json.dumps(local_request), encoding="utf-8"
+            )
+            self._nudge_state(group_dir)
+            logger.info(
+                "reprocess: claimed %s -> %s (strength=%s, skip_detect=%s)",
+                ttt_id,
+                group_dir,
+                claimed["stabilization_strength"],
+                claimed["skip_detect"],
+            )
+
+        if self.resource_manager is not None:
+            async with self.resource_manager.acquire(("ram_heavy",)):
+                await _do_work()
+        else:
+            await _do_work()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _resolve_group_dir(self, claimed: dict) -> Path | None:
+        try:
+            recording = await asyncio.to_thread(
+                self.ttt_client.get_camera_recording, claimed["recording_id"]
+            )
+        except Exception as exc:
+            logger.warning(
+                "reprocess: could not fetch recording %s (%s)",
+                claimed["recording_id"],
+                exc,
+            )
+            return None
+        file_group = recording.get("file_group")
+        if not file_group:
+            return None
+        candidate = Path(self.storage_path) / file_group
+        return candidate if candidate.is_dir() else None
+
+    def _nudge_state(self, group_dir: Path) -> None:
+        state_path = group_dir / "state.json"
+        if not state_path.exists():
+            return
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if state.get("status") in _LOCAL_TERMINAL_STATUSES:
+                state["status"] = "pipeline_queued_reprocess"
+                state.pop("error_message", None)
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "reprocess: could not nudge state.json at %s (%s)", state_path, exc
+            )
+
+    async def _report_failure(self, ttt_id: str, message: str) -> None:
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_reprocess_status,
+                ttt_id,
+                "failed",
+                None,
+                message,
+            )
+        except Exception as exc:
+            logger.warning("reprocess: could not report failure (%s)", exc)

@@ -220,6 +220,200 @@ def test_dashboard_auto_refreshes(client):
 
 
 # ---------------------------------------------------------------------------
+# Per-recording reprocess UI + endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestReprocessEndpoint:
+    """The dashboard exposes a per-game reprocess form that writes
+    ``reprocess_request.json`` for the runner to pick up. Tests cover the
+    POST endpoint contract; the spec-list patching is unit-tested in
+    ``test_pipeline_reprocess.py``."""
+
+    GAME = "2026.05.20-14.30.00"
+
+    def test_each_game_row_has_a_reprocess_form(self, storage, client):
+        _write_game(storage, self.GAME, "pipeline_complete", files=3)
+        body = client.get("/").text
+        assert f'action="/recordings/{self.GAME}/reprocess"' in body
+        assert "stabilization_strength" in body
+        for s in ("light", "standard", "heavy", "extreme"):
+            assert f'value="{s}"' in body
+        assert "skip detect" in body.lower()
+
+    def test_post_writes_reprocess_request_json(self, storage, client):
+        _write_game(storage, self.GAME, "pipeline_complete", files=3)
+        r = client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "extreme", "skip_detect": "1"},
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/"
+        out = json.loads(
+            (storage / self.GAME / "reprocess_request.json").read_text(encoding="utf-8")
+        )
+        assert out["stabilization_strength"] == "extreme"
+        assert out["skip_detect"] is True
+        assert out["requested_by"] == "tray"
+        assert out["requested_at"]  # ISO 8601 string
+
+    def test_post_without_skip_detect_falls_back_to_false(self, storage, client):
+        _write_game(storage, self.GAME, "complete")
+        client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "light"},  # no skip_detect field
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        out = json.loads(
+            (storage / self.GAME / "reprocess_request.json").read_text(encoding="utf-8")
+        )
+        assert out["skip_detect"] is False
+
+    def test_post_rolls_terminal_state_back_to_queued(self, storage, client):
+        """A completed game must be re-queued for the pipeline_processor
+        to pick up; without this nudge the discovery loop would skip it."""
+        _write_game(storage, self.GAME, "pipeline_complete")
+        client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "heavy"},
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        state = json.loads(
+            (storage / self.GAME / "state.json").read_text(encoding="utf-8")
+        )
+        assert state["status"] == "pipeline_queued_reprocess"
+
+    def test_post_leaves_in_progress_state_alone(self, storage, client):
+        """Don't clobber state while the pipeline is mid-run."""
+        _write_game(storage, self.GAME, "downloading")
+        client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "heavy"},
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        state = json.loads(
+            (storage / self.GAME / "state.json").read_text(encoding="utf-8")
+        )
+        assert state["status"] == "downloading"
+
+    def test_post_rejects_invalid_strength(self, storage, client):
+        _write_game(storage, self.GAME, "complete")
+        r = client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "ridiculous"},
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 400
+
+    def test_post_rejects_path_traversal(self, storage, client):
+        r = client.post(
+            "/recordings/..%2F..%2Fetc/reprocess",
+            data={"stabilization_strength": "heavy"},
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code in (400, 404)
+
+    def test_post_rejects_unknown_recording(self, storage, client):
+        r = client.post(
+            "/recordings/2099.01.01-00.00.00/reprocess",
+            data={"stabilization_strength": "heavy"},
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 404
+
+    def _seed_running_state(self, storage):
+        """Make is_pipeline_running return True for the test game."""
+        (storage / self.GAME / "pipeline_state.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "input_path": "",
+                    "output_path": "",
+                    "artifacts": {},
+                    "steps": [
+                        {
+                            "step_id": "stabilize",
+                            "type": "stabilize",
+                            "status": "running",
+                        }
+                    ],
+                }
+            )
+        )
+
+    def test_post_rejected_with_409_when_pipeline_running(self, storage, client):
+        """Single in-flight reprocess: a POST while a run is in progress
+        must fail rather than overwriting the request file mid-run."""
+        _write_game(storage, self.GAME, "running", files=3)
+        self._seed_running_state(storage)
+        r = client.post(
+            f"/recordings/{self.GAME}/reprocess",
+            data={"stabilization_strength": "extreme", "skip_detect": "1"},
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 409
+        assert not (storage / self.GAME / "reprocess_request.json").exists()
+
+    def test_dashboard_shows_cancel_button_when_running(self, storage, client):
+        """Form is replaced by a Cancel button while the pipeline is
+        running — the user can't change settings without cancelling first."""
+        _write_game(storage, self.GAME, "running", files=3)
+        self._seed_running_state(storage)
+        body = client.get("/").text
+        assert f"/recordings/{self.GAME}/cancel" in body
+        assert "Cancel" in body
+        # The strength <select> should be gone for this row.
+        assert 'name="stabilization_strength"' not in body
+
+    def test_cancel_writes_marker(self, storage, client):
+        _write_game(storage, self.GAME, "running")
+        self._seed_running_state(storage)
+        r = client.post(
+            f"/recordings/{self.GAME}/cancel",
+            headers={"Origin": "http://localhost:8765"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        marker = storage / self.GAME / "cancel_request.json"
+        assert marker.exists()
+        # Marker carries a timestamp so post-mortem logs can see when it happened.
+        body = json.loads(marker.read_text())
+        assert "requested_at" in body
+
+    def test_cancel_rejected_when_not_running(self, storage, client):
+        """A cancel for a completed group is a user error — return 409
+        so the dashboard surfaces it instead of silently doing nothing."""
+        _write_game(storage, self.GAME, "pipeline_complete")
+        r = client.post(
+            f"/recordings/{self.GAME}/cancel",
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code == 409
+
+    def test_cancel_rejects_path_traversal(self, storage, client):
+        r = client.post(
+            "/recordings/..%2F..%2Fetc/cancel",
+            headers={"Origin": "http://localhost:8765"},
+        )
+        assert r.status_code in (400, 404)
+
+    def test_form_shows_current_strength_when_already_set(self, storage, client):
+        _write_game(storage, self.GAME, "pipeline_complete")
+        (storage / self.GAME / "reprocess_request.json").write_text(
+            json.dumps({"stabilization_strength": "extreme", "skip_detect": True})
+        )
+        body = client.get("/").text
+        # The select preselects 'extreme', and the row labels its current state.
+        assert 'value="extreme" selected' in body
+        assert "current: extreme" in body
+
+
+# ---------------------------------------------------------------------------
 # Dashboard redirect to /setup/welcome when onboarding isn't done
 # (Phase 2 done-criterion: a fresh shared_data with no config.ini boots
 # the service; the dashboard sends the user to the wizard.)

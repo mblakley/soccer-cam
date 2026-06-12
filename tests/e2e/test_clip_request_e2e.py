@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from video_grouper.task_processors.clip_request_processor import ClipRequestProcessor
+from video_grouper.task_processors.tasks.clip.clip_request_task import ClipRequestTask
 
 pytestmark = [pytest.mark.e2e]
 
@@ -141,17 +142,11 @@ class TestClipRequestEndToEnd:
                 side_effect=mock_async_client_factory,
             ),
         ):
-            # 7) Run one discovery pass. _process_request is scheduled as a task;
-            # await it by tracking the _processing set.
-            await proc.discover_work()
-
-            # Allow the scheduled task to run to completion
-            import asyncio
-
-            for _ in range(20):
-                if req_id not in proc._processing:
-                    break
-                await asyncio.sleep(0.05)
+            # 7) Drive the work directly: TTTPoller would have built a
+            # ClipRequestTask from this payload and enqueued it; we test
+            # the processor's per-item logic by calling process_item.
+            payload = ttt.get_pending_clip_requests.return_value[0]
+            await proc.process_item(ClipRequestTask(ttt_id=req_id, payload=payload))
 
         # 8) Verify the chain worked end-to-end:
 
@@ -201,14 +196,10 @@ class TestClipRequestEndToEnd:
             youtube_uploader=None,
         )
 
-        await proc.discover_work()
-
         import asyncio
 
-        for _ in range(10):
-            if "missing-req" not in proc._processing:
-                break
-            await asyncio.sleep(0.05)
+        payload = ttt.get_pending_clip_requests.return_value[0]
+        await proc.process_item(ClipRequestTask(ttt_id="missing-req", payload=payload))
         # Give the scheduled ntfy task a tick to run
         await asyncio.sleep(0)
 

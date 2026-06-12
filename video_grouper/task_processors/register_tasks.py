@@ -22,6 +22,9 @@ from .tasks.ntfy.game_end_task import GameEndTask
 from .tasks.ntfy.game_start_task import GameStartTask
 from .tasks.ntfy.team_info_task import TeamInfoTask
 from .tasks.pipeline.pipeline_task import PipelineTask
+from .tasks.ttt.highlight_reel_task import HighlightReelTask
+from .tasks.ttt.reprocess_request_task import ReprocessRequestTask
+from .tasks.ttt.ttt_job_task import TTTJobTask
 from .tasks.upload.youtube_upload_task import YoutubeUploadTask
 from .tasks.video.combine_task import CombineTask
 from .tasks.video.trim_task import TrimTask
@@ -42,6 +45,11 @@ def _register_common_tasks() -> None:
     # runner constructs steps lazily), so both the service and tray bundles
     # register it — the tray runs tray-runtime steps (e.g. autocam) from it.
     task_registry.register_task(PipelineTask)
+    # TTT-cloud feature tasks. All are just dict payloads + an id; the
+    # heavy work lives in the matching QueueProcessor.process_item.
+    task_registry.register_task(HighlightReelTask)
+    task_registry.register_task(TTTJobTask)
+    task_registry.register_task(ReprocessRequestTask)
 
 
 def register_service_tasks() -> None:
