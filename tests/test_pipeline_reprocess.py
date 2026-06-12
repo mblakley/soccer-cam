@@ -138,11 +138,14 @@ def test_read_returns_none_on_schema_violation(tmp_path: Path):
 
 
 def _base_specs() -> list[StepSpec]:
-    """A standard broadcast_stabilized-like spec list."""
+    """A standard broadcast_stabilized-like spec list. Mirrors the preset
+    in ``presets.py``: stitch → stabilize → detect (writes raw coords) →
+    transform_detections (lifts raw → stabilized) → track → render."""
     return [
         StepSpec("stitch_correct", "stitch_correct", {}),
         StepSpec("stabilize", "stabilize", {"stabilization_strength": "heavy"}),
         StepSpec("detect", "detect", {"detect_confidence": 0.45}),
+        StepSpec("transform_detections", "transform_detections", {}),
         StepSpec("track", "track", {}),
         StepSpec("render", "render", {"render_mode": "broadcast"}),
     ]
@@ -172,21 +175,20 @@ def test_strength_patch_replaces_stabilization_strength_only():
     assert preseed == []
 
 
-def test_skip_detect_replaces_detect_with_transform_detections():
-    """Cheap reprocess: detect spec swapped for transform_detections at
-    the same step_id slot. Preseed list names the old detect step_id so
-    its produced detections_path is replayed before the loop."""
+def test_skip_detect_drops_detect_and_preseeds_its_output():
+    """Cheap reprocess: detect spec is dropped; the existing
+    transform_detections step downstream re-runs with the new motion.
+    Preseed names the dropped detect step's id so its previously
+    produced ``detections_path`` is replayed into the manifest before
+    the loop, giving transform_detections its input."""
     specs = _base_specs()
     req = ReprocessRequest(skip_detect=True)
     new_specs, preseed = apply_overrides(specs, req)
     types = [s.type for s in new_specs]
-    # detect → transform_detections
+    # detect is gone; transform_detections (already in the preset) stays.
     assert "detect" not in types
     assert "transform_detections" in types
-    # Same step_id slot ("detect") so subsequent step lookups stay stable.
-    swapped = next(s for s in new_specs if s.type == "transform_detections")
-    assert swapped.step_id == "detect"
-    # Step order preserved.
+    # Step order preserved (minus detect).
     assert types == [
         "stitch_correct",
         "stabilize",
@@ -204,7 +206,10 @@ def test_both_overrides_compose():
     new_specs, preseed = apply_overrides(specs, req)
     stab = next(s for s in new_specs if s.type == "stabilize")
     assert stab.config["stabilization_strength"] == "extreme"
+    # transform_detections must remain (it was in the input preset and
+    # is the consumer of the preseeded detections_path).
     assert any(s.type == "transform_detections" for s in new_specs)
+    assert "detect" not in [s.type for s in new_specs]
     assert preseed == ["detect"]
 
 
