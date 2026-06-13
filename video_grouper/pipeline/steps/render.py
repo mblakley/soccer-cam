@@ -73,6 +73,14 @@ from video_grouper.pipeline.manifest import PipelineManifest
 
 logger = logging.getLogger(__name__)
 
+# Per-frame viewport log. One JSON line per rendered frame, in Once AutoCam's
+# format ({"xy": [cx, cy], "f": frame, "t": seconds}) so our broadcast camera
+# aim can be diffed against AutoCam's the same way. ``xy`` is the source-pixel
+# the centre of the output frame maps back to. On its own child logger so an
+# operator can route or silence the per-frame volume without touching the
+# step's normal logging.
+viewport_logger = logging.getLogger(__name__ + ".viewport")
+
 
 class RenderStepConfig(BaseModel):
     render_mode: str = "broadcast"  # "broadcast" | "coach"
@@ -1027,6 +1035,28 @@ def _render_video(
                             out_w,
                             out_h,
                         )
+                        # AutoCam-format per-frame viewport line: where the
+                        # centre of this output frame points in source pixels.
+                        cx, cy = yaw_pitch_to_pixel(
+                            view_yaw,
+                            params.view_pitch_deg + params.view_pitch_offset_deg,
+                            src_w,
+                            src_h,
+                            params.src_hfov_deg,
+                        )
+                        t = (
+                            float(frame.pts * in_video.time_base)
+                            if frame.pts is not None and in_video.time_base
+                            else frame_idx / state.fps
+                        )
+                        viewport_logger.info(
+                            '{"xy": [%d, %d], "f": %d, "t": %.2f}',
+                            round(cx),
+                            round(cy),
+                            frame_idx + 1,
+                            t,
+                        )
+
                         rgb = frame.to_ndarray(format="rgb24")
                         rendered = _warp_frame(rgb, geom, cfg, params, view_yaw, warper)
                         new_frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
@@ -1140,6 +1170,20 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
             self._sh,
             self._ow,
             self._oh,
+        )
+        cx, cy = yaw_pitch_to_pixel(
+            view_yaw,
+            params.view_pitch_deg + params.view_pitch_offset_deg,
+            self._sw,
+            self._sh,
+            params.src_hfov_deg,
+        )
+        viewport_logger.info(
+            '{"xy": [%d, %d], "f": %d, "t": %.2f}',
+            round(cx),
+            round(cy),
+            frame_idx + 1,
+            frame_idx / self._state.fps,
         )
         rendered = _warp_frame(
             rgb, self._geom, self.config, params, view_yaw, self._warper
