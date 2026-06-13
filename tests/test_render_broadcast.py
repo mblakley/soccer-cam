@@ -240,3 +240,62 @@ def test_long_missing_gap_holds_pan_bearing():
         _tick(state, None, SRC_W, SRC_H, geom, BROADCAST_MODE, cfg, -90.0, 90.0, None)
     # Pan stays on the last bearing (does not collapse toward 0 / mid-field).
     assert abs(state.smoothed_yaw - held_yaw) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Per-frame viewport log (Once AutoCam format)
+# ---------------------------------------------------------------------------
+
+
+def test_viewport_log_line_is_autocam_format_and_round_trips(caplog):
+    """The render loop emits one JSON line per frame, AutoCam-shaped
+    ({"xy":[cx,cy],"f":f,"t":t}), where xy is the source pixel the output
+    frame centre maps to. Verify the format and that the point round-trips
+    back to the view's (yaw, pitch)."""
+    import json
+    import logging
+
+    from video_grouper.inference.cylindrical_view import yaw_pitch_to_pixel
+    from video_grouper.pipeline.steps.render import _frame_view, viewport_logger
+
+    cfg = RenderStepConfig()
+    geom = _geom(cfg)
+    state = _CameraState()
+    state.fps = 20.0
+    # A ball on the far-right of the pano so yaw is clearly non-zero.
+    entry = (SRC_W * 0.8, SRC_H * 0.5, 0.0, 0.0)
+    params, view_yaw = _frame_view(
+        state,
+        entry,
+        geom,
+        BROADCAST_MODE,
+        cfg,
+        -geom.src_hfov_deg / 2,
+        geom.src_hfov_deg / 2,
+        None,
+        SRC_W,
+        SRC_H,
+        cfg.render_output_width,
+        cfg.render_output_height,
+    )
+    center_pitch = params.view_pitch_deg + params.view_pitch_offset_deg
+    cx, cy = yaw_pitch_to_pixel(
+        view_yaw, center_pitch, SRC_W, SRC_H, params.src_hfov_deg
+    )
+
+    # The exact line the step logs.
+    with caplog.at_level(logging.INFO, logger=viewport_logger.name):
+        viewport_logger.info(
+            '{"xy": [%d, %d], "f": %d, "t": %.2f}', round(cx), round(cy), 1, 0.0
+        )
+    rec = json.loads(caplog.records[-1].getMessage())
+    assert set(rec) == {"xy", "f", "t"}
+    assert rec["f"] == 1 and rec["t"] == 0.0
+    assert len(rec["xy"]) == 2
+
+    # Round-trip: the logged pixel maps back to the view's yaw/pitch.
+    back_yaw, back_pitch = pixel_to_yaw_pitch(
+        rec["xy"][0], rec["xy"][1], SRC_W, SRC_H, params.src_hfov_deg
+    )
+    assert abs(back_yaw - view_yaw) < 1.0
+    assert abs(back_pitch - center_pitch) < 1.0
