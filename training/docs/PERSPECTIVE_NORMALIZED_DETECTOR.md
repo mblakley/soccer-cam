@@ -168,3 +168,37 @@ gap mining (it adds the velocity-direction filter that *targets* far balls vs oc
 3. Pretrain (Dahua) → fine-tune (Reolink) → evaluate recall per game (target: beat v2's 0.29 substantially, and the
    reference tracker on far balls).
 4. Swap the production `ball_detect` step from tiled inference to the warped full-frame model.
+
+## Implementation status (2026-06-14)
+
+Three modules landed on this branch (built in parallel, fully unit-tested, 44 tests green together):
+
+- **`training/data_prep/far_ball_miner.py`** — the velocity-gap far-ball miner. `mine_far_ball_gaps(trajectory,
+  field_band, config)` finds detection gaps where the ball was moving toward the far touchline (`vy < 0`) and was
+  last seen in the far third, extrapolates the far-field search region across the gap, and emits a priority-ordered
+  labeling queue (`candidates_to_queue` / `write_queue_json`) compatible with `flywheel/priority_queue.py`. Additive
+  to the existing generic gap interpolation (which assumes the ball reappears nearby — far balls don't).
+- **`training/data_prep/field_warp.py`** — the perspective input transform. `build_field_warp(rows, sizes, W, H, TW)`
+  fits a monotone size(row) curve from a recall-independent ball-size gradient and precomputes the anisotropic
+  vertical remap + the **inverse LUT**. `warp_frame()` crops to the band and compresses the near field (far never
+  upscaled — information ceiling); `unwarp_points()` is the precise inverse used at inference to map detections back
+  to source pixels. Round-trips sub-2px. Production-shape sanity: 7680×2160 → ~0.08 MP single warped input vs 8.6 MP
+  for the 21-tile path (~114× fewer pixels/frame).
+- **v3 dataset/config** (`training/data_prep/manifest.py`, `training/train.py`) — `DEFAULT_EXCLUDE_ROWS` is now `set()`
+  (row 0 / far field included by default; explicit `exclude_rows={0}` still honored). New far-field positive
+  multiplier (`FAR_POSITIVE_MULTIPLIER=4.0`), camera-balanced sampling (`compute_camera_weights`, anchors Reolink and
+  scales Dahua so effective contributions balance despite the game-count skew), and the v3 hyperparameters
+  (`yolo26l`, `multi_scale=0.5`, `mosaic=0.5`, `cls=1.5`, `cos_lr`, `lr0=0.002`, `patience=15`, `freeze=8`,
+  `hsv_v=0.2`). Note: `organize_dataset.py` / `smart_sampler.py` carry their own `DEFAULT_EXCLUDE_ROWS={0}` copies and
+  `tasks/train.py` / `train_v3.py` are separate train paths — mirror these changes there if the production run uses
+  them.
+
+### Reolink inventory survey (2026-06-14) — the data is mostly *unregistered*, not missing
+
+`game_registry.json` lists **1** Reolink game, which framed the 81:1 Dahua:Reolink skew as a capture problem. The
+filesystem tells a different story: **~17 Reolink (`RecM09…`) games sit on `D:\soccer-cam-storage`**, each as a
+combined `…-raw.mp4` plus 13–25 raw segments, and **none of them are in the registry**. So the production-camera
+training data already exists — the gating step is *ingest/registration*, not collection. These ~17 games (date range
+2026.05.07 → 2026.06.10, mostly BU14 Guzzetta + a few Flash) are the far-resolution fine-tune set. Registering them
+(with `video_format = reolink_segments` so camera-balanced sampling picks them up) is the next concrete action and is
+what makes the v3 Reolink fine-tune + far-ball labeling loop possible.
