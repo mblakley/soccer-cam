@@ -88,6 +88,31 @@ Success → justifies the full retrain on warped, row-0-included, Reolink-inclus
 quantitative "beats the reference on far balls" check is run separately and archived to F: (it invokes a
 reverse-engineered reference detector and must not live in this repo).
 
+## Experiment v1 findings (2026-06-14) — refines the levers
+
+Ran `perspective_warp.py` on the Reolink 05-27 game. Key results:
+
+- **The perspective gradient is small.** True ball diameter measured ~12–13px across the mid-field band with only
+  ~1.1× far→near variation. The camera is a **high, wide, near-top-down center mount** (visible in the sample
+  frames), not a low sideline camera — so far and near balls are nearly the same (tiny) size. **The "downscale the
+  near field" half of the idea buys little here.**
+- **The field is a narrow band.** Only ~600px of the 2160 vertical is field; the rest is sky/trees/**spectators**.
+- **Far balls are tiny everywhere** (~5px at AutoCam's 3264 width; ~8px at 5120; ~12px at full 7680).
+- **No-tiles is overwhelmingly cheaper:** a single full-frame pass on the cropped band is **~4–35%** of the 21-tile
+  (8.6 MP) cost depending on target width.
+- **Measurement caveat:** only 74 mid-field balls could be measured — our detector produces *no far-ball detections
+  to measure* (the recall problem is self-reinforcing). A true far-gradient number needs ground-truth far positions
+  (archived to F:, RE) or a geometric derivation from the homography.
+
+**Revised lever priority (replaces the near-compression emphasis above):**
+1. **Crop to the field band** (~600–800px strip) — drops sky/trees/spectators → fraction of the compute AND removes
+   the #1 false-positive source (attacks the wrong-coords problem too).
+2. **Keep the band at higher horizontal resolution than the reference** (5120–7680 wide vs its ~3264) → far balls
+   carry 1.6–2.4× more pixels → the concrete path to beating it on far balls.
+3. **Single full-frame inference on the band — no tiles.**
+4. Vertical scale-normalization is now a minor refinement, not the headline.
+Plus (unchanged): include row 0, far-ball labels, Reolink fine-tune, Dahua pretrain.
+
 ## Rollout
 
 1. Land the warp module + the validation results (this branch).
