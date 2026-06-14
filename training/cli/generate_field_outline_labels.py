@@ -60,6 +60,30 @@ JPEG_QUALITY = 90
 _SKIP_VIDEO_PREFIXES = ("temp_", "thumb_")
 _SKIP_VIDEO_SUFFIXES = (".tmp",)
 
+# Per-camera distillation FRAME gate. The teacher keypoint model is well
+# calibrated on Reolink (>= 0.70 on field frames) but systematically
+# UNDER-confident on Dahua (~0.40-0.65) despite producing geometrically sound
+# polygons. A single 0.70 gate rejects every Dahua frame, so the student would
+# never learn Dahua. Gate per camera instead. (Secondary knob:
+# augment.COORD_SCORE_MIN=0.5 still drops the least-confident per-keypoint coords
+# inside a gated frame -- intentional, it keeps only keypoints the teacher is
+# sure about. Revisit if Dahua signal proves too sparse after the first retrain.)
+GATE_BY_CAMERA = {"reolink": GATE_THRESHOLD, "dahua": 0.45, "other": 0.55}
+
+
+def _camera_of(group_dir: Path) -> str:
+    """Classify the capture camera from the group's video files (for the gate).
+
+    Dahua panoramas use ``[F][0@0]`` segment names; Reolink uses ``RecM09``
+    segments / a ``combined.mp4``.
+    """
+    names = [p.name for p in group_dir.glob("*.mp4")]
+    if any("[F]" in n for n in names):
+        return "dahua"
+    if any(n.startswith("RecM09") for n in names) or "combined.mp4" in names:
+        return "reolink"
+    return "other"
+
 
 @dataclass
 class GameSpec:
@@ -72,6 +96,7 @@ class GameSpec:
     venue: str
     date: str
     my_team_name: str
+    camera: str = "other"
     videos: list[Path] = field(default_factory=list)
     unknown_reason: str | None = None
 
@@ -134,6 +159,7 @@ def discover_games(
             videos = _select_videos(group_dir, use_segments)
             if not videos:
                 continue  # not a footage group
+            camera = _camera_of(group_dir)
 
             mi_path = group_dir / "match_info.ini"
             mi = MatchInfo.from_file(str(mi_path)) if mi_path.exists() else None
@@ -165,6 +191,7 @@ def discover_games(
                         venue=venue,
                         date=date,
                         my_team_name=my_team,
+                        camera=camera,
                         videos=videos,
                         unknown_reason=(
                             "no_match_info"
@@ -190,6 +217,7 @@ def discover_games(
                     venue=venue,
                     date=date,
                     my_team_name=my_team,
+                    camera=camera,
                     videos=videos,
                 )
             )
@@ -386,7 +414,12 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
                         "keypoints_norm": kpts_norm,
                         "scores": scores,
                         "mean_score": round(mean_score, 4),
-                        "gate_pass": mean_score >= GATE_THRESHOLD,
+                        "camera": spec.camera,
+                        "gate_threshold": GATE_BY_CAMERA.get(
+                            spec.camera, GATE_THRESHOLD
+                        ),
+                        "gate_pass": mean_score
+                        >= GATE_BY_CAMERA.get(spec.camera, GATE_THRESHOLD),
                         "teacher_sha256": teacher_sha,
                         "created_at": time.time(),
                     }
