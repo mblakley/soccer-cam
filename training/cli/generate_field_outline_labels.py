@@ -105,9 +105,21 @@ def _select_videos(group_dir: Path, use_segments: bool) -> list[Path]:
 
 
 def discover_games(
-    roots: list[Path], groups_glob: str | None, use_segments: bool
+    roots: list[Path],
+    groups_glob: str | None,
+    use_segments: bool,
+    default_team: str | None = None,
 ) -> list[GameSpec]:
-    """Find recording groups under ``roots`` and resolve team/venue/videos."""
+    """Find recording groups under ``roots`` and resolve team/venue/videos.
+
+    ``default_team`` is a per-archive override (e.g. ``F:/Heat_2012s`` is all
+    heat): when set it labels every game under ``roots`` with that team,
+    bypassing ``match_info.ini``. This is what lets the Dahua archives — which
+    carry no ``match_info.ini`` — into the training set. When a game has no
+    match_info (Dahua) its venue/opponent fall back to the group dir name so
+    each game seeds its own placement cluster; ``build_clusters`` then merges
+    genuinely-identical fields by polygon IoU.
+    """
     games: list[GameSpec] = []
     seen_ids: dict[str, Path] = {}
 
@@ -129,7 +141,15 @@ def discover_games(
             opponent = mi.opponent_team_name if mi else ""
             venue = mi.location if mi else ""
             date = group_dir.name[:10]  # YYYY.MM.DD prefix of the group dir
-            team = team_from_name(my_team)
+            # --team is a per-archive override; else infer from match_info.
+            team = default_team or team_from_name(my_team)
+            # No match_info (Dahua) -> seed venue/opponent from the dir name so each
+            # game forms its own placement cluster (IoU-merge then consolidates real
+            # fields). With a real match_info venue, clustering works as before.
+            if not venue:
+                venue = group_dir.name
+            if not opponent:
+                opponent = group_dir.name[11:].strip() or group_dir.name
 
             if team is None:
                 games.append(
@@ -417,7 +437,14 @@ def main() -> None:
         type=Path,
         nargs="+",
         required=True,
-        help="Directories whose subdirs are recording groups (Reolink footage)",
+        help="Directories whose subdirs are recording groups (Reolink or Dahua)",
+    )
+    parser.add_argument(
+        "--team",
+        choices=["flash", "heat"],
+        default=None,
+        help="Per-archive team override (e.g. F:/Heat_2012s -> heat). Required for "
+        "Dahua archives, which carry no match_info.ini; harmless on Reolink archives.",
     )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
@@ -450,7 +477,9 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    games = discover_games(args.roots, args.groups, args.use_segments)
+    games = discover_games(
+        args.roots, args.groups, args.use_segments, default_team=args.team
+    )
     if not games:
         logger.error("No recording groups found under %s", args.roots)
         return
