@@ -61,15 +61,19 @@ JPEG_QUALITY = 90
 _SKIP_VIDEO_PREFIXES = ("temp_", "thumb_")
 _SKIP_VIDEO_SUFFIXES = (".tmp",)
 
-# Per-camera distillation FRAME gate. The teacher keypoint model is well
-# calibrated on Reolink (>= 0.70 on field frames) but systematically
-# UNDER-confident on Dahua (~0.40-0.65) despite producing geometrically sound
-# polygons. A single 0.70 gate rejects every Dahua frame, so the student would
-# never learn Dahua. Gate per camera instead. (Secondary knob:
-# augment.COORD_SCORE_MIN=0.5 still drops the least-confident per-keypoint coords
-# inside a gated frame -- intentional, it keeps only keypoints the teacher is
-# sure about. Revisit if Dahua signal proves too sparse after the first retrain.)
-GATE_BY_CAMERA = {"reolink": GATE_THRESHOLD, "dahua": 0.45, "other": 0.55}
+# Per-camera distillation FRAME gate. The teacher keypoint model is only
+# moderately confident everywhere -- ~0.55-0.70 mean on Reolink field frames and
+# ~0.40-0.65 on Dahua -- despite producing geometrically sound polygons. The
+# original 0.70 gate dropped EVERY Dahua frame and 13 of ~21 Reolink production
+# venues, so gate per camera at the level that keeps venue coverage. Quality is
+# protected downstream by the geometry sanity check (gate_pass also requires the
+# near sideline below the far) and augment.COORD_SCORE_MIN=0.5, which drops the
+# least-confident per-keypoint coords inside a gated frame (keeps only keypoints
+# the teacher is sure about). The Sonnet QA confirmed the <0.5 keypoints are
+# mostly wrong, so that per-keypoint floor is the real quality guard, not the
+# frame gate. gate_pass is recomputable from stored mean_score/camera/geometry_ok,
+# so these thresholds can be retuned without re-running label generation.
+GATE_BY_CAMERA = {"reolink": 0.50, "dahua": 0.45, "other": 0.55}
 
 
 def _camera_of(group_dir: Path) -> str:
