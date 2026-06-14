@@ -141,6 +141,26 @@ measure" had biased v1 flat.)
 Far balls top out at ~8.5px native (an information ceiling — can't upscale detail in); the warp + wide far field put
 more pixels on them than the reference's ~3.6px working size, which is the headroom to beat it.
 
+## Far-ball label mining (velocity-gap heuristic) — how we exceed the reference
+
+Critical realization: the reference tracker **also misses far balls**, so its detector cannot be our ground truth
+for the far field (the experiment-v2 gradient is biased to balls it could find; the true far gradient is steeper).
+The only way to get far-ball labels — and to train a model that sees *farther than the reference* — is to find the
+moments no detector fires and have a **human** label them.
+
+**The miner (validated on 05-27):** track the ball; for each detection **gap**, look at the pre-gap velocity. If the
+ball was **moving toward the far touchline** (upward, `vy < 0`) and was last seen in the **far field** (upper rows),
+the ball is almost certainly still out there — too small to detect. Those gap frames are far-ball examples.
+
+Validation on the 05-27 trajectory (gaps ≥10 frames): **173 far-moving-then-lost gaps** (vs 349 other), last seen at
+y≈537–644 (far third) — **21,235 frames ≈ 17.7 min of far-ball footage from one game**; far-gaps last median 2.5s
+(p90 17s, max 52s). Across the 16 Reolink games that's ~4–5 h of targeted far-ball labels.
+
+**Pipeline:** trajectory → far-gap miner (velocity-direction + far-field end) → extrapolate the ball's far-field
+region during the gap → seed the helper-app labeling queue, **prioritized by far-gap length during active play** →
+human labels the far ball → labels feed the warped, row-0-included training set. This is additive to the existing
+gap mining (it adds the velocity-direction filter that *targets* far balls vs occlusions/fast kicks).
+
 ## Rollout
 
 1. Land the warp module + the validation results (this branch).
