@@ -47,27 +47,51 @@ def _make_epoch_rotator(data_yaml: Path, n_variants: int):
     return rotate_dataset
 
 
+# --- v3 far-ball recall hyperparameters -----------------------------------
+# Carried over from the v2->v3 analysis. v2 far recall was ~0.29; these target
+# small bright-blob balls (esp. in the far field) and reject person false
+# positives. See training/ROADMAP.md and training/docs/EXPERIMENTS.md.
+V3_MODEL = "yolo26l.pt"  # large variant: STAL + ProgLoss help tiny objects
+V3_MULTI_SCALE = 0.5  # vary input scale +/-50%: balls span ~8px (far)..30px (near)
+V3_MOSAIC = 0.5  # was 1.0; lower mosaic keeps small far balls intact in tiles
+V3_COPY_PASTE = 0.3  # keep — pastes rare ball instances around the frame
+V3_CLS = 1.5  # was 0.5; push classification to reject false-positives-on-people
+V3_COS_LR = True  # cosine LR anneal (v2 flat decay overfit after warmup)
+V3_LR0 = 0.002  # midpoint of the 0.001-0.005 range
+V3_PATIENCE = 15  # was 30; cos_lr converges faster, stop overfitting sooner
+V3_FREEZE = 8  # freeze backbone for first ~5-10 epochs (midpoint), warm the head
+V3_HSV_V = 0.2  # was 0.4; lower value jitter preserves ball/grass brightness contrast
+
+
 def train(
     data_yaml: Path,
-    model_name: str = "yolo26n.pt",
+    model_name: str = V3_MODEL,
     epochs: int = 150,
     imgsz: int = 640,
     batch: int = 32,
-    patience: int = 30,
+    patience: int = V3_PATIENCE,
     device: str = "0",
     project: str = str(Path(__file__).resolve().parent / "runs"),
-    name: str = "ball_v1",
+    name: str = "ball_v3",
     epoch_rotation: int = 0,
     fraction: float = 1.0,
+    multi_scale: float = V3_MULTI_SCALE,
+    mosaic: float = V3_MOSAIC,
+    copy_paste: float = V3_COPY_PASTE,
+    cls: float = V3_CLS,
+    cos_lr: bool = V3_COS_LR,
+    lr0: float = V3_LR0,
+    freeze: int = V3_FREEZE,
+    hsv_v: float = V3_HSV_V,
 ):
-    """Train a YOLO26 model for ball detection.
+    """Train a YOLO26 model for ball detection (v3 far-ball recall config).
 
     Args:
         data_yaml: Path to dataset YAML config
-        model_name: Pretrained model to start from (yolo26n.pt or yolo26s.pt)
+        model_name: Pretrained model to start from (default yolo26l.pt)
         epochs: Maximum training epochs
         imgsz: Input image size
-        batch: Batch size (32 for nano on 3060 Ti, 16 for small)
+        batch: Batch size (32 for nano on 3060 Ti, 16 for small/large)
         patience: Early stopping patience
         device: Training device ("0" for GPU, "cpu" for CPU)
         project: Output directory for training runs
@@ -75,6 +99,14 @@ def train(
         epoch_rotation: Number of train.txt variants to rotate through (0=disabled).
             Expects train_0.txt, train_1.txt, ... in the dataset directory.
         fraction: Fraction of dataset to use (0.0-1.0). Useful for faster iteration.
+        multi_scale: Random input-scale jitter (helps balls at varied distances).
+        mosaic: Mosaic augmentation probability.
+        copy_paste: Copy-paste augmentation probability.
+        cls: Classification loss gain (higher rejects person false positives).
+        cos_lr: Use cosine LR annealing.
+        lr0: Initial learning rate.
+        freeze: Number of backbone layers to freeze for the first epochs.
+        hsv_v: HSV value (brightness) augmentation magnitude.
     """
     from ultralytics import YOLO
 
@@ -94,17 +126,24 @@ def train(
         device=device,
         project=project,
         name=name,
+        # Learning-rate schedule
+        cos_lr=cos_lr,
+        lr0=lr0,
+        freeze=freeze,  # freeze backbone for the first epochs (warm the head)
         # Small-object optimizations
-        mosaic=1.0,
+        multi_scale=multi_scale,
+        mosaic=mosaic,  # lowered 1.0 -> 0.5 to keep far balls intact
         mixup=0.1,
-        copy_paste=0.3,
+        copy_paste=copy_paste,
         scale=0.9,
+        # Loss gains
+        cls=cls,  # raised 0.5 -> 1.5 to reject person false positives
         # Augmentations
         flipud=0.0,  # no vertical flip (field has up/down orientation)
         fliplr=0.5,
         hsv_h=0.015,
         hsv_s=0.7,
-        hsv_v=0.4,
+        hsv_v=hsv_v,  # lowered 0.4 -> 0.2 to preserve ball/grass contrast
         # Training
         workers=0,
         fraction=fraction,
@@ -123,16 +162,32 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="yolo26n.pt",
-        help="Pretrained model (yolo26n.pt or yolo26s.pt)",
+        default=V3_MODEL,
+        help="Pretrained model (default: %(default)s)",
     )
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--patience", type=int, default=V3_PATIENCE)
     parser.add_argument(
         "--device", default="0", help="Device: '0' for GPU, 'cpu' for CPU"
     )
-    parser.add_argument("--name", default="ball_v1", help="Run name")
+    parser.add_argument("--name", default="ball_v3", help="Run name")
+    # v3 hyperparameters (overridable for run configs)
+    parser.add_argument("--multi-scale", type=float, default=V3_MULTI_SCALE)
+    parser.add_argument("--mosaic", type=float, default=V3_MOSAIC)
+    parser.add_argument("--copy-paste", type=float, default=V3_COPY_PASTE)
+    parser.add_argument("--cls", type=float, default=V3_CLS)
+    parser.add_argument(
+        "--no-cos-lr",
+        action="store_true",
+        help="Disable cosine LR annealing (on by default)",
+    )
+    parser.add_argument("--lr0", type=float, default=V3_LR0)
+    parser.add_argument(
+        "--freeze", type=int, default=V3_FREEZE, help="Backbone layers to freeze"
+    )
+    parser.add_argument("--hsv-v", type=float, default=V3_HSV_V)
     parser.add_argument(
         "--project",
         type=str,
@@ -160,11 +215,20 @@ def main():
         args.epochs,
         args.imgsz,
         args.batch,
+        patience=args.patience,
         device=args.device,
         name=args.name,
         project=args.project,
         epoch_rotation=args.epoch_rotation,
         fraction=args.fraction,
+        multi_scale=args.multi_scale,
+        mosaic=args.mosaic,
+        copy_paste=args.copy_paste,
+        cls=args.cls,
+        cos_lr=not args.no_cos_lr,
+        lr0=args.lr0,
+        freeze=args.freeze,
+        hsv_v=args.hsv_v,
     )
 
 
