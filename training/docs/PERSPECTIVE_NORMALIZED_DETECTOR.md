@@ -113,6 +113,34 @@ Ran `perspective_warp.py` on the Reolink 05-27 game. Key results:
 4. Vertical scale-normalization is now a minor refinement, not the headline.
 Plus (unchanged): include row 0, far-ball labels, Reolink fine-tune, Dahua pretrain.
 
+## Experiment v2 (2026-06-14) — the gradient IS real; v1 was measurement-biased
+
+v1 concluded the gradient was small (~1.1×). **That was wrong** — a self-reinforcing artifact: v1 measured ball
+size only where *our* detector finds balls (the mid-field), so it never sampled the far or near extremes. Re-measured
+with a **recall-independent reference detector** (finds far balls our model misses): 489 balls spanning the full
+field (rows 28–2082), true blob diameter by row:
+
+```
+row  462- 642 (far):   8.5px
+row  642-1182:        11.5–12.0px
+row 1182-1362:        21.0px
+row 1362-1542 (near): 33.2px
+```
+
+**Far ≈ 8.5px, near ≈ 33px → a 2–4× gradient** (1.7× on conservative 20% percentiles; ~3.9× across the extreme
+bands). So the **near-compression lever is restored**: the near field carries ~4× the ball pixels and can be
+downscaled heavily while the far field is preserved. (Credit: domain review caught that "no far detections to
+measure" had biased v1 flat.)
+
+**Corrected lever set — both are real:**
+1. **Crop to the field band** (drops sky/trees/spectators → compute + the #1 false-positive source). [v1, still valid]
+2. **Anisotropic vertical warp inside the band** — compress near rows ~3–4×, keep far rows near-native → uniform
+   ~10px ball everywhere → one training/inference scale, far preserved, compact input. [restored]
+3. **Keep far-field horizontal width above the reference's** (5120–7680) so far balls keep more pixels than it sees.
+4. **Single full-frame inference, no tiles.**
+Far balls top out at ~8.5px native (an information ceiling — can't upscale detail in); the warp + wide far field put
+more pixels on them than the reference's ~3.6px working size, which is the headroom to beat it.
+
 ## Rollout
 
 1. Land the warp module + the validation results (this branch).
