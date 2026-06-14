@@ -194,6 +194,22 @@ Three modules landed on this branch (built in parallel, fully unit-tested, 44 te
   `tasks/train.py` / `train_v3.py` are separate train paths — mirror these changes there if the production run uses
   them.
 
+### Field filter (always on, never full-frame)
+
+The far-ball trajectory, the warp band, and the detection location filter must **always** use the
+field-outline polygon — never the full-frame fallback. Source: our field_outline keypoint model
+(`video_grouper/inference/field_detector.py` — 10 keypoints, near sideline 0–4 + far sideline 5–9 →
+perimeter polygon). Applying it drops off-field false positives (spectators / scoreboard / background) —
+the #1 wrong-coords source in the divergence analysis — and gives the warp a correct field band (vs the
+ball-y-range or full frame). Far balls are **not** clipped: a ball stays at/below the far touchline, and
+the track step's `track_field_margin` (50px) covers balls right on the line.
+
+Per game the outline is validated against an independent reference field model (the comparison harness
+and results are archived to F:, not this repo). Where the two diverge materially (polygon IoU < ~0.85 or
+far-edge offset > ~100px) the outlines are visually adjudicated on real frames and **ours is preferred
+unless it is shown wrong** — on the first validated game (05-27) ours tracked the true far touchline
+while the reference over-extended ~234px into out-of-bounds background, so ours is the correct filter.
+
 ### Reolink inventory + registry rebuild (2026-06-14) — the registry was stale, not the data
 
 The saved `game_registry.json` listed **1** Reolink game, which made the skew look like 81:1 and the data look
