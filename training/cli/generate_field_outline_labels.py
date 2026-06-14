@@ -143,10 +143,14 @@ def discover_games(
             date = group_dir.name[:10]  # YYYY.MM.DD prefix of the group dir
             # --team is a per-archive override; else infer from match_info.
             team = default_team or team_from_name(my_team)
-            # No match_info (Dahua) -> seed venue/opponent from the dir name so each
-            # game forms its own placement cluster (IoU-merge then consolidates real
-            # fields). With a real match_info venue, clustering works as before.
-            if not venue:
+            # Seed venue/opponent from the dir name when match_info gives nothing
+            # specific. This covers both Dahua (no match_info at all) AND generic
+            # "home"/"away" locations, which would otherwise collapse every
+            # same-side game of a team into one leaky (team, "home") cluster. With
+            # a per-game venue, build_clusters' polygon-IoU merge — not a vague
+            # label — decides which games actually share a field. A real, specific
+            # venue (e.g. "Davis Park") is kept and clusters as before.
+            if venue.strip().lower() in ("", "home", "away"):
                 venue = group_dir.name
             if not opponent:
                 opponent = group_dir.name[11:].strip() or group_dir.name
