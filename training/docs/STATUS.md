@@ -2,12 +2,36 @@
 
 *Last updated: 2026-06-15*
 
-## Active focus: v3 ball detector (perspective-normalized, full-frame, no tiles)
+## Active focus: v4 ball detector (perspective-normalized, full-frame, no tiles)
 
-Branch: `feat/perspective-normalized-detector`. The full design + experiment findings
-are in **`training/docs/PERSPECTIVE_NORMALIZED_DETECTOR.md`** (read it first — it is the
-source of truth for the v3 architecture, the warp levers, the labeling plan, and the I/O
-design). This STATUS is the launchpad; that doc is the detail.
+**v4 is ADDITIVE — it does not replace v3.** The tile-based **v3** detector lineage
+(`train_v3.py`, `training/train.py` + its `V3_*` config, the shared `manifest.py` knobs, and
+their tests) is **fully maintained and unchanged**. v4 is the new perspective-normalized,
+warped-full-frame strategy, added as new files only (`train_v4.py`, `data_prep/warped_pack.py`,
+`experiments/io_benchmark.py`, `tests/test_warped_pack.py`). See DECISIONS.md (2026-06-15).
+
+Branch: `feat/perspective-normalized-detector`. The full design + experiment findings are in
+**`training/docs/PERSPECTIVE_NORMALIZED_DETECTOR.md`** (read it first — source of truth for the v4
+architecture, warp levers, labeling plan, I/O design). This STATUS is the launchpad.
+
+### v4 session progress (2026-06-15)
+- **I/O benchmark gate built** (the prerequisite — no long run before it passes):
+  `data_prep/warped_pack.py` (pre-decoded warped-frame shards: writer/reader + torch Dataset +
+  `ShardRotator`, two storage modes raw-memmap vs compressed) + `experiments/io_benchmark.py`
+  (nvidia-smi sampler; data-only/compute-only/end-to-end throughput; bottleneck + ms/iter +
+  time/epoch + 4070 extrapolation; sweeps `target_width`×workers×prefetch×storage). 11 unit tests.
+- **`train_v4.py` scaffold**: warped entry, persistent workers (the `workers=0` fix), v4 config.
+  Not run until the warped dataset writer (`data_prep/warped_dataset.py`) lands.
+- **`target_width` is a swept speed/accuracy knob** (DECISIONS 2026-06-15): the 1280 warp default
+  crushes far balls below AutoCam's resolution — sweep {3264,5120,7680}, pick the lowest that beats
+  AutoCam on far balls; match train+infer resolution.
+- **Benchmark sources confirmed** on F: — Reolink `heat__2026.05.27_vs_Chili_Vortex_away` (20 segs)
+  + Dahua `flash__2024.05.01_vs_RNYFC_away`. Registry: **23 trainable Reolink games, all
+  `labels=False`** (the labeling gate), + 42 dahua_segments + 8 dav_only.
+- **Hardware plan**: diagnose bottlenecks/timing on the server GTX 1060, then fan training-config
+  experiments across all 3 GPUs (server + jared-laptop RTX 4070 + FORTNITE-OP RTX 3060 Ti) via the
+  pull-based work queue. Remote workers see only D: via SMB → serve shards from D:, stage to local SSD.
+- **Next:** run the gate on the server, report GPU util.
 
 ### Done (field-outline filter — the prerequisite for v3)
 The in-house **field_outline v2** keypoint model (ResNet18, 10 kpts, resolution-agnostic,

@@ -4,6 +4,55 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-15: v4 (perspective-normalized, warped) added ALONGSIDE v3 (tile) — additive, not a rename
+
+**Context:** The perspective-normalized full-frame detector was drafted on this branch under the
+name "v3", but "v3" was already the tile-based detector lineage (`train_v3.py`, `train.py`'s
+`V3_*` config + their tests). Conflating them was confusing.
+
+**Decisions:**
+- **The new perspective-normalized, warped-full-frame strategy is designated v4.** The existing
+  tile-based detector keeps the v3 name. They are two coexisting strategies.
+- **Additive, not a rename.** The v3 path is **fully maintained** and left untouched —
+  `train_v3.py`, `training/train.py` (incl. its `V3_*` hyperparameters), the shared `manifest.py`
+  dataset knobs, and their tests are unchanged. v4 is added as **new files only**:
+  `training/train_v4.py` (warped entry scaffold), `training/data_prep/warped_pack.py`
+  (pre-decoded warped-frame shards), `training/experiments/io_benchmark.py` (the I/O gate),
+  `tests/test_warped_pack.py`. The perspective **design docs** (PERSPECTIVE_NORMALIZED_DETECTOR.md)
+  are relabeled v4 because they describe the v4 strategy — that is correct labeling, not removal of
+  any v3 content.
+- **train_v4 fixes the v3 starvation:** persistent-worker DataLoader (`workers` default 8, not 0)
+  + no train-time JPEG decode (warp once, offline, into shards).
+
+**Trade-off:** Two training entry points (tile v3 + warped v4) and some shared dataset knobs. Worth
+it: v3 stays a working fallback while v4 is validated, and the lineage is unambiguous.
+
+---
+
+## 2026-06-15: `target_width` is a swept speed/accuracy knob (the 1280 warp default is wrong for v4)
+
+**Context:** `field_warp.build_field_warp` resizes the warped band horizontally to `target_width`
+(vertical scaled by the same `target_width/src_w` ratio). The module default
+`DEFAULT_TARGET_WIDTH=1280` is a 6× horizontal downscale from 7680 → a ~0.08 MP image that crushes a
+far ball from ~8.5px to ~1.4px — **below AutoCam's ~3264 working width**, so it cannot beat AutoCam
+on far balls. The earlier "~0.08 MP / fits-on-G:" sizing came from this default and was wrong.
+
+**Decisions:**
+- **`target_width` is the central speed/accuracy trade-off, not a fixed value.** Ideal is high-res
+  (TW≈5120–7680 → ~1.2–2.7 MP warped frames; far field full-res, near field vertically compressed).
+  We **sweep** TW ∈ {3264, 5120, 7680} and pick the **lowest** that still **beats AutoCam on
+  far-ball recall** at acceptable speed (floor ≈ AutoCam's 3264).
+- **Match train + infer resolution.** Training at one TW and inferring at a lower one shrinks balls
+  below the learned scale → under-detection (train-test resolution discrepancy / FixRes). Compare
+  matched `(train@TW, infer@TW)` pairs; explore downscaling via a short FixRes fine-tune at the
+  target TW, not by inferring a high-res model low.
+- **Two halves:** the speed axis is measured now (I/O benchmark); the accuracy axis (far-ball recall
+  vs AutoCam at each TW) is the downstream resolution experiment that selects the production TW.
+- At ~2.7 MP/frame the pre-decoded set is hundreds of GB→>1 TB and does **not** fit on G:, so
+  shard-rotation streaming (`warped_pack.ShardRotator`) is required.
+
+---
+
 ## 2026-06-12: Field-outline wired into the plugin pipeline as a `field_detect` step
 
 **Context:** The distilled field-outline model (EXP-008) needed to actually drive homegrown ball tracking + rendering. The pipeline's track and render steps already consume a `field_polygon_path` manifest artifact (location filtering, mount-tilt/leveling derivation, off-field rejection, pan bounds) — but nothing produced it automatically.

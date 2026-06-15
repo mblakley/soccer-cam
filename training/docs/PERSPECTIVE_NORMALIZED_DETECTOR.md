@@ -1,7 +1,18 @@
-# Perspective-normalized, full-frame ball detector (v3 architecture)
+# Perspective-normalized, full-frame ball detector (v4 architecture)
 
-**Status:** Proposed + validation experiment in progress (branch `feat/perspective-normalized-detector`, 2026-06-14).
-Supersedes the fixed 7×3 native-resolution tiling approach for ball detection.
+**Status:** Validation done; I/O benchmark gate built (branch `feat/perspective-normalized-detector`).
+This is the **v4** strategy. It is **ADDITIVE** — it does not replace the tile-based **v3** detector,
+which stays fully maintained (`train_v3.py`, `training/train.py`, the shared `manifest.py` knobs).
+This doc was originally drafted calling the strategy "v3"; throughout, "the perspective/warped
+detector" = **v4**, and the older tiled detector = v3/v2. See DECISIONS.md (2026-06-15).
+
+> ⚠ **`target_width` correction (2026-06-15).** Earlier text here cited "~0.08 MP" warped frames and
+> "fits on G:". That was an artifact of `field_warp`'s `DEFAULT_TARGET_WIDTH=1280` (a 6× horizontal
+> downscale that crushes far balls to ~1.4px — below AutoCam's ~3264 working width). v4 sets
+> `target_width` ≈ **5120–7680** → warped frames are **~1.2–2.7 MP** (far field full-res; near field
+> vertically compressed). `target_width` is the swept speed/accuracy knob (pick the lowest TW that
+> still beats AutoCam on far balls; match train+infer resolution). The pre-decoded warped set is
+> hundreds of GB→>1 TB, so it does NOT fit on G: — shard-rotation streaming is required.
 
 ## Why
 
@@ -217,8 +228,10 @@ Three modules landed on this branch (built in parallel, fully unit-tested, 44 te
   fits a monotone size(row) curve from a recall-independent ball-size gradient and precomputes the anisotropic
   vertical remap + the **inverse LUT**. `warp_frame()` crops to the band and compresses the near field (far never
   upscaled — information ceiling); `unwarp_points()` is the precise inverse used at inference to map detections back
-  to source pixels. Round-trips sub-2px. Production-shape sanity: 7680×2160 → ~0.08 MP single warped input vs 8.6 MP
-  for the 21-tile path (~114× fewer pixels/frame).
+  to source pixels. Round-trips sub-2px. Production-shape sanity at the production `target_width`
+  (5120–7680, NOT the 1280 module default): 7680×2160 → a ~1.2–2.7 MP single warped input vs 8.6 MP
+  for the 21-tile path — one inference, not 21 (the 1280-default ~0.08 MP figure in earlier drafts is
+  wrong for v4; see the target_width correction at the top).
 - **v3 dataset/config** (`training/data_prep/manifest.py`, `training/train.py`) — `DEFAULT_EXCLUDE_ROWS` is now `set()`
   (row 0 / far field included by default; explicit `exclude_rows={0}` still honored). New far-field positive
   multiplier (`FAR_POSITIVE_MULTIPLIER=4.0`), camera-balanced sampling (`compute_camera_weights`, anchors Reolink and
