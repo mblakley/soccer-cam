@@ -92,8 +92,11 @@ init, which needs pydantic the bench venv lacks): input `input[1,3,384,768] fp16
 `keypoints[1,10,2]` + `scores[1,10]`. Per-game polygon = run on ~15 sampled frames, aggregate
 (median per keypoint where score≥0.5) → polygon. (The decrypted AutoCam teacher
 `detect_kpts_fp16.onnx` is an identical-I/O drop-in if ever needed, but ours is preferred.)
-Irondequoit polygon generated (7/10 kpts, traces the field) →
-`D:\detect_work\v4_test_clips\irondequoit_field_polygon.json`.
+Irondequoit polygon: **10/10 keypoints** → `D:\detect_work\v4_test_clips\irondequoit_field_polygon.json`.
+Get all 10 by sampling ~50 frames **across the game** (static camera) + falling back to each
+keypoint's best-scoring frame when none clear 0.5 (the near-sideline foreground keypoints are
+occlusion-prone). Cross-checked vs the AutoCam teacher: **polygon IoU 0.84**, far sideline tight
+(12–150 px), near sideline looser (up to ~380 px, both models least confident there).
 
 ## Log
 
