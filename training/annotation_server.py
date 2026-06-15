@@ -1669,6 +1669,106 @@ async def get_field_boundary_panoramic(
     return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
+# ------------------------------------------------------------------
+# Far-ball labeling API (v4)
+# ------------------------------------------------------------------
+# Self-contained click-to-locate labeler for FAR balls — the ones the reference
+# detector (AutoCam) misses, so it can't be ground truth there. Each "set" is a
+# directory under FAR_LABEL_DIR with a manifest.json (built by the far-label
+# builder from a raw clip + far_ball_miner) and pre-extracted far-field crop
+# strips. Labels are collected in SOURCE pixel coords and stored next to the set.
+# Independent of the tile-pack/manifest system (clips aren't tiled).
+
+FAR_LABEL_DIR = Path("D:/training_data/far_label")
+
+
+def _far_set_dir(set_id: str) -> Path:
+    d = FAR_LABEL_DIR / set_id
+    if not (d / "manifest.json").exists():
+        raise HTTPException(404, f"Far-label set not found: {set_id}")
+    return d
+
+
+def _load_far_manifest(set_id: str) -> dict:
+    with open(_far_set_dir(set_id) / "manifest.json") as f:
+        return json.load(f)
+
+
+def _load_far_labels(set_id: str) -> dict[int, dict]:
+    p = FAR_LABEL_DIR / set_id / "labels.json"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return {int(r["frame_idx"]): r for r in json.load(f)}
+
+
+def _save_far_labels(set_id: str, labels: dict[int, dict]) -> None:
+    p = FAR_LABEL_DIR / set_id / "labels.json"
+    with open(p, "w") as f:
+        json.dump([labels[k] for k in sorted(labels)], f, indent=2)
+
+
+@app.get("/api/far-label")
+async def list_far_sets():
+    """List far-ball labeling sets with progress."""
+    out = []
+    if not FAR_LABEL_DIR.exists():
+        return out
+    for d in sorted(FAR_LABEL_DIR.iterdir()):
+        if not (d / "manifest.json").exists():
+            continue
+        with open(d / "manifest.json") as f:
+            m = json.load(f)
+        labels = _load_far_labels(d.name)
+        out.append(
+            {
+                "set": d.name,
+                "n_frames": m.get("n_frames", len(m.get("frames", []))),
+                "labeled": len(labels),
+            }
+        )
+    return out
+
+
+@app.get("/api/far-label/{set_id}")
+async def get_far_set(set_id: str):
+    """Manifest + existing labels + progress for a far-label set."""
+    m = _load_far_manifest(set_id)
+    labels = _load_far_labels(set_id)
+    return {**m, "labels": [labels[k] for k in sorted(labels)], "labeled": len(labels)}
+
+
+@app.get("/api/far-label/{set_id}/strip/{frame_idx}")
+async def get_far_strip(set_id: str, frame_idx: int):
+    """Serve a pre-extracted far-field crop strip (native-res JPEG)."""
+    d = _far_set_dir(set_id)
+    strip = d / "strips" / f"f{frame_idx:06d}.jpg"
+    if not strip.exists():
+        raise HTTPException(404, f"Strip not found: {frame_idx}")
+    return FileResponse(strip, media_type="image/jpeg")
+
+
+@app.post("/api/far-label/{set_id}/result")
+async def submit_far_label(set_id: str, result: dict):
+    """Store one far-ball label.
+
+    Expected: {"frame_idx": int, "action": "ball"|"not_visible"|"out_of_play",
+    "x": float|null, "y": float|null}  — x/y are SOURCE pixels.
+    """
+    _load_far_manifest(set_id)  # validate set
+    labels = _load_far_labels(set_id)
+    fi = int(result["frame_idx"])
+    labels[fi] = {
+        "frame_idx": fi,
+        "action": result.get("action", "ball"),
+        "x": result.get("x"),
+        "y": result.get("y"),
+        "submitted_at": datetime.now(UTC).isoformat(),
+    }
+    _save_far_labels(set_id, labels)
+    return {"accepted": True, "labeled": len(labels)}
+
+
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
     "/static",
