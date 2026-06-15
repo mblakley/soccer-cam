@@ -76,10 +76,22 @@ evaluated on):
   in one clip). In-game 2nd-half play; golden-hour glare on the right.
 - Camera is the same **strongly barrel/fisheye** Reolink (field bows into a bowl) → off-axis ball
   shape is position-dependent; the warp should ideally correct it.
-- TODO before eval: get this game's **field polygon** (run `field_detect`), and run the **AutoCam
-  reference detector** on the clip to establish the baseline (where AutoCam detects/misses the far
-  ball) that v4 must beat. (Earlier seg13/seg00 detector-mined clips were a warmup + a faint
-  golden-hour moment — superseded by this clip.)
+- Field polygon: generated via the AutoCam keypoint model (below) →
+  `D:\detect_work\v4_test_clips\irondequoit_field_polygon.json` (aggregate over frames for a
+  complete polygon — single glare frame gave a partial 5-pt one).
+- TODO before eval: run the **AutoCam reference detector** (balldet) on the clip to establish the
+  baseline (where AutoCam detects/misses the far ball) that v4 must beat.
+
+## Field polygons — SOLVED (no TTT key needed)
+
+The field-outline model isn't on the server, but the **decrypted AutoCam field-keypoint model
+`F:\test\onnx_models\decrypted\detect_kpts_fp16.onnx`** is a perfect drop-in for our
+`video_grouper/inference/field_detector.py` (input `input[1,3,384,768] fp16` → `keypoints[1,10,2]` +
+`scores[1,10]`, exactly what `field_detector` expects — our field_outline v2 was distilled from this
+teacher). So per-game field polygons are **autonomous**: run `detect_kpts_fp16` via `field_detector`
+on sampled frames, aggregate the highest-confidence keypoints → polygon. (RE-adjacent: runs in
+F:/storage; only the polygon coords feed the pipeline. Load `field_detector.py` by file path to skip
+the `video_grouper` package init, which needs pydantic the bench venv lacks.)
 
 ## Log
 
@@ -102,3 +114,11 @@ evaluated on):
   jpg+txt) and a label bootstrap (field-masked reference dets for Reolink + Dahua's clean labels).
   Then fan training across the 4070/3060Ti and eval. Note: train_v4's custom-trainer scaffold is
   not needed for v1 — pre-warped jpg+txt trains with the stock ultralytics trainer.
+- **2026-06-15 (data pipeline unblocked)** — Built+validated `warped_dataset.py` (W0 crop+iso /
+  W1 aniso + YOLO generator + field-masked bootstrap). **seg00 (warmup) banned from all use.**
+  Resolved the field-polygon blocker via `detect_kpts_fp16` (AutoCam kpt model) + `field_detector`.
+  Now-autonomous path to a real train→eval cycle: (1) per-game field polygon via detect_kpts;
+  (2) in-game Reolink labels = balldet (have it) on in-game segments, field-masked; (3) Dahua labels
+  from manifests; (4) generate W0/W1×TW warped datasets; (5) train on 4070/3060Ti; (6) eval on the
+  Irondequoit clip vs the AutoCam baseline. No remaining hard external blocker except training-GPU
+  speed (1060 slow; 4070/3060Ti are the trainers).
