@@ -38,7 +38,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from training.data_prep.game_registry import UPSIDE_DOWN_GAMES
 from training.field_outline import (
     GATE_THRESHOLD,
     LABEL_SCHEMA_VERSION,
@@ -359,20 +358,39 @@ def _draw_overlay(
     return img
 
 
-def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
-    """Sample, run the teacher, and write labels for one game."""
+def _best_orientation(frame_bgr, sess):
+    """Auto-detect mount orientation; return the upright frame + teacher keypoints.
+
+    Runs the teacher on the frame AND its 180deg flip and keeps whichever yields
+    valid geometry (near sideline below far) with the higher mean confidence.
+    Replaces the brittle UPSIDE_DOWN_GAMES list: it self-corrects every
+    upside-down game (including ones not on any list) and never mis-flips a
+    right-side-up one. Returns ``(frame, kpts_norm, scores, mean_score, geom_ok)``.
+    """
     from video_grouper.inference.field_detector import detect_field_keypoints
 
+    best = None
+    for fr in (frame_bgr, cv2.flip(frame_bgr, -1)):
+        h, w = fr.shape[:2]
+        kpts = detect_field_keypoints(fr, sess, score_threshold=0.0)
+        kn = [[float(k[0]) / w, float(k[1]) / h] for k in kpts]
+        sc = [float(k[2]) for k in kpts]
+        ms = sum(sc) / len(sc)
+        near_y = sum(p[1] for p in kn[:5]) / 5
+        far_y = sum(p[1] for p in kn[5:]) / 5
+        geom_ok = near_y > far_y
+        rank = ms + (1.0 if geom_ok else 0.0)  # valid geometry wins, then confidence
+        if best is None or rank > best[0]:
+            best = (rank, fr, kn, sc, ms, geom_ok)
+    _, fr, kn, sc, ms, geom_ok = best
+    return fr, kn, sc, ms, geom_ok
+
+
+def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
+    """Sample, run the teacher, and write labels for one game."""
     frames_dir = args.output_root / "frames" / spec.game_id
     labels_dir = args.output_root / "labels" / spec.game_id
     overlays_dir = args.output_root / "overlays" / spec.game_id
-
-    # Some games are mounted upside-down (registry UPSIDE_DOWN_GAMES). The teacher
-    # only works right-side-up, so flip those frames 180deg before inference +
-    # storage; the student then trains on correctly-oriented images (matching how
-    # the game is processed downstream). Sonnet QA confirmed un-flipped upside-down
-    # games produce off-field / inverted keypoints.
-    is_flip = spec.group_dir.name in UPSIDE_DOWN_GAMES
 
     written = skipped = failed = 0
     score_sum = 0.0
@@ -400,23 +418,11 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
                     continue
 
                 try:
-                    if is_flip:
-                        frame_bgr = cv2.flip(frame_bgr, -1)  # 180deg -> upright
+                    # Auto-orient (self-corrects any upside-down mount) + teacher.
+                    frame_bgr, kpts_norm, scores, mean_score, geometry_ok = (
+                        _best_orientation(frame_bgr, sess)
+                    )
                     orig_h, orig_w = frame_bgr.shape[:2]
-                    kpts = detect_field_keypoints(frame_bgr, sess, score_threshold=0.0)
-                    # threshold 0.0 => every point returned with coords + score
-                    kpts_norm = [
-                        [float(kp[0]) / orig_w, float(kp[1]) / orig_h] for kp in kpts
-                    ]
-                    scores = [float(kp[2]) for kp in kpts]
-                    mean_score = sum(scores) / len(scores)
-                    # Geometry sanity: near sideline (kpts 0-4) must sit BELOW the
-                    # far sideline (kpts 5-9) in image-y. If not, the polygon is
-                    # impossible (flipped / garbage) -> not a usable label.
-                    near_y = sum(p[1] for p in kpts_norm[:5]) / 5
-                    far_y = sum(p[1] for p in kpts_norm[5:]) / 5
-                    geometry_ok = near_y > far_y
-
                     stored_w, stored_h = _store_frame(frame_bgr, jpg_path)
                     label = {
                         "schema_version": LABEL_SCHEMA_VERSION,
