@@ -55,8 +55,8 @@ megapixels (compute) + shard GB/frame (I/O).
 
 | ID | Hypothesis | Config | Metric | Status | Result |
 |----|-----------|--------|--------|--------|--------|
-| E1 | Establish real source-ball appearance (size/shape vs position, per camera) + clean eval tooling | reference-detector coords, field-polygon-masked, mid-game, motion-blur noted | size/aspect vs (depth,x), per camera | **in progress** | curved wide-angle projection confirmed (field polygon); first ball measure was noisy (detector FPs on sky/spectators) — needs field-mask + conf + blob filter |
-| E2 | Pick warp that maximizes far-pixels + uniformity + cross-camera alignment | W0/W1/W2 × TW{3264,5120,7680} | proxy metrics | todo | — |
+| E1 | Establish real source-ball appearance (size/shape vs position) | reference coords, field-masked, conf>0.6, blob-filtered, 3000 frames | size/aspect vs (depth,x) | **done (inconclusive)** | **80% of reference detections are OUT of field (4171/5240 = FPs on sky/trees/spectators).** In-field balls are 2-4px → too few-pixel to measure shape (aspect on 4px = noise); near-ball segmentation failed. ⇒ can't down-select warps by pixel proxy. Field mask is mandatory for any bootstrap labels. |
+| E2 | Pick best warp EMPIRICALLY (pixel proxy too noisy) | W0/W1[/W2] × TW, trained, recall vs AutoCam | recall vs AutoCam | **revised → train** | pivot: generate pre-warped standard YOLO datasets per warp×TW + bootstrap labels (field-masked reference dets + Dahua clean labels); train on fleet; compare. Simplest trainer path = standard ultralytics on pre-warped jpg+txt (no custom loader needed for v1). |
 | E3 | Confirm each survivor feeds the GPU >80% util + iter timing | io_benchmark per config | util, ms/iter, GB/frame | partial | 1060 too slow for yolo26l (smoke >18min); move compute to 4070/3060Ti |
 | E4 | Reolink far-ball ground truth (the gate) | run_ball_detector → far_ball_miner → warped web helper → human | far-ball labels | todo | Reolink = 0 labels |
 | E5 | Train v4 per surviving warp×TW; beat AutoCam far-recall | train_v4 on 4070 + 3060Ti (fan via queue) | far-recall vs AutoCam, per camera | todo | — |
@@ -75,3 +75,11 @@ megapixels (compute) + shard GB/frame (I/O).
     blob filter + mid-game frames.
   - I/O smoke: yolo26l fwd+bwd is **very slow on the GTX 1060** at these sizes → 1060 = data-prep/eval,
     train on the 4070/3060Ti.
+- **2026-06-15 (E1 done)** — Measured reference-detector balls on raw 05-27 (seg00, 3000 frames,
+  field-masked): **80% of detections are off-field FPs**; in-field balls are 2-4px so shape is
+  unmeasurable by pixel proxy. **Pivot: stop trying to pick the warp analytically — generate
+  pre-warped YOLO datasets per warp×TW and compare trained recall vs AutoCam.** Next build:
+  `warped_dataset.py` (warp variants W0 crop+iso / W1 aniso + map ball coords → standard YOLO
+  jpg+txt) and a label bootstrap (field-masked reference dets for Reolink + Dahua's clean labels).
+  Then fan training across the 4070/3060Ti and eval. Note: train_v4's custom-trainer scaffold is
+  not needed for v1 — pre-warped jpg+txt trains with the stock ultralytics trainer.
