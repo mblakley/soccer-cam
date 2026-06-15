@@ -62,10 +62,26 @@ Dahua's higher game count).
 
 ## Data + labeling
 
+**No tiles.** v3 trains on warped full frames, one image per sampled frame (not 21 tiles) — smaller, more sequential
+data than the v2 tile packs.
+
+**Reolink (no existing ball labels) — bootstrap + human gap-fill, the path to exceeding the reference:**
+1. Run the **reference ball detector** on each Reolink game → its raw per-frame detections are the **baseline labels**
+   (it nails the easy/near balls, so it does the bulk of labeling for free). Use raw detections, NOT the smoothed
+   camera-target sidecar — the detection *gaps* are the signal.
+2. Track + **far-ball-mine** (velocity-gap heuristic): flag the moments the ball went to the far touchline and the
+   reference lost it.
+3. The **web helper** presents those prioritized gaps; the human labels only the far balls the reference missed.
+4. Baseline (reference, where right) + human far-ball labels (where the reference is wrong) = a label set that
+   **exceeds the reference on far balls**. (The reference detector is RE-adjacent — it runs in the F:/storage
+   workspace, never the repo; only the resulting ball coordinates feed training.)
+
+**Dahua (already has human-verified labels):** map the existing verified ball positions into warped-frame coords via
+`field_warp.warp_points` — no re-labeling.
+
 - Include row 0 (drop `DEFAULT_EXCLUDE_ROWS = {0}`); weight far-field positives ~4×.
 - **Label far balls on the *warped* frames** in the helper app — far balls are bigger and uniform-sized there, so
-  they are much easier to spot and click than on the raw 7680 frame. Labeling effort goes straight at the weak spot.
-- Ingest the 16 Reolink games (register → warp → bootstrap-label → gap-mine → Sonnet-verify → human review).
+  they are much easier to spot and click than on the raw 7680 frame.
 
 ## Training config (carry over from the v2→v3 analysis)
 
