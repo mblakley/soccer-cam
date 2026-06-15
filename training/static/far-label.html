@@ -57,13 +57,15 @@
   <button id="bOut" class="warn">Out of play / off field <kbd>O</kbd></button>
   <button id="bPrev" class="ghost">◀ Prev <kbd>←</kbd></button>
   <button id="bNext" class="ghost">Next ▶ <kbd>→</kbd></button>
+  <button id="bFar" class="primary">▶ Next far to review <kbd>F</kbd></button>
   <button id="bUnlab" class="ghost">Next unlabeled <kbd>U</kbd></button>
   <button id="bReset" class="ghost">Reset zoom <kbd>0</kbd></button>
 </div>
 <p class="hint">
-  Full far-field width. <b>Scroll to zoom</b> toward the cursor, <b>drag to pan</b>, then <b>click the ball</b>
-  to mark it (auto-advances). The dashed circle is AutoCam's guess — it can be wrong (a shoe, a head), so trust
-  your eyes; press <kbd>C</kbd> only if it's truly on the ball. Orange = <b>GAP</b> (AutoCam missed it — these matter most).
+  Pre-seeded with AutoCam's labels — near balls are trusted as-is. Press <kbd>F</kbd> to jump to the next
+  <b>far ball to review</b>. Purple marker = AutoCam-seeded (unreviewed), pink = you confirmed.
+  <b>Click</b> the ball to fix it, or <kbd>C</kbd> to accept AutoCam's guess (both auto-advance to the next far ball).
+  <kbd>N</kbd> not visible, <kbd>O</kbd> out of play. Scroll = zoom, drag = pan.
 </p>
 
 <div id="done">
@@ -74,7 +76,7 @@
 <script>
 const SET = new URLSearchParams(location.search).get("set") || "irondequoit";
 const API = `/api/far-label/${SET}`;
-let M=null, frames=[], byIdx={}, labels={}, cur=0;
+let M=null, frames=[], byIdx={}, labels={}, cur=0, FARY=480;
 let z=1, tx=0, ty=0, baseScale=1;       // view transform (display px), baseScale = fit-to-width
 let dragging=false, moved=0, sx=0, sy=0, stx=0, sty=0;
 const view=document.getElementById("view"), wrap=document.getElementById("wrap");
@@ -84,7 +86,8 @@ async function load(){
   M = await (await fetch(API)).json();
   frames = M.frames; frames.forEach((f,i)=>byIdx[f.frame_idx]=i);
   (M.labels||[]).forEach(l=>labels[l.frame_idx]=l);
-  cur = firstUnlabeled(); show();
+  FARY = Math.min(480, M.far_cut||480);
+  cur = -1; gotoFar();
 }
 function firstUnlabeled(){ for(let i=0;i<frames.length;i++) if(!labels[frames[i].frame_idx]) return i; return 0; }
 function frame(){ return frames[cur]; }
@@ -138,7 +141,7 @@ function draw(){
   const lab=labels[f.frame_idx];
   if (lab&&lab.action==="ball"&&lab.x!=null){
     const lx=lab.x-f.crop_x0, ly=lab.y-f.crop_y0;
-    ctx.strokeStyle="#ff3b6b";
+    ctx.strokeStyle=(lab.source==="human")?"#ff3b6b":"#9b59ff";
     ctx.beginPath(); ctx.arc(lx,ly,r2,0,7); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(lx-r1,ly); ctx.lineTo(lx+r1,ly); ctx.moveTo(lx,ly-r1); ctx.lineTo(lx,ly+r1); ctx.stroke();
   }
@@ -183,14 +186,17 @@ view.addEventListener("pointerup",(e)=>{
 
 async function post(action,x,y){
   const f=frame();
-  labels[f.frame_idx]={frame_idx:f.frame_idx,action,x:x??null,y:y??null}; draw();
+  labels[f.frame_idx]={frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"}; draw();
   try{ await fetch(`${API}/result`,{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({frame_idx:f.frame_idx,action,x:x??null,y:y??null})}); }catch(err){ console.error(err); }
-  setTimeout(next,120);
+    body:JSON.stringify({frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"})}); }catch(err){ console.error(err); }
+  setTimeout(gotoFar,120);
 }
 function next(){ if(cur<frames.length-1){ cur++; show(); } else finish(); }
 function prev(){ if(cur>0){ cur--; show(); } }
 function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_idx]) finish(); else { cur=i; show(); } }
+function isFar(f){ return f.hint_y <= FARY; }
+function needsReview(f){ const l=labels[f.frame_idx]; return isFar(f) && (!l || l.source!=="human"); }
+function gotoFar(){ for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } } finish(); }
 function finish(){ document.getElementById("stage").style.display="none"; document.querySelector(".bar").style.display="none";
   document.getElementById("done").style.display="block"; document.getElementById("dlLink").href=`${API}`; }
 
@@ -199,6 +205,7 @@ document.getElementById("bNot").onclick=()=>post("not_visible",null,null);
 document.getElementById("bOut").onclick=()=>post("out_of_play",null,null);
 document.getElementById("bPrev").onclick=prev;
 document.getElementById("bNext").onclick=next;
+document.getElementById("bFar").onclick=gotoFar;
 document.getElementById("bUnlab").onclick=gotoUnlabeled;
 document.getElementById("bReset").onclick=fitView;
 addEventListener("keydown",(e)=>{
@@ -208,6 +215,7 @@ addEventListener("keydown",(e)=>{
   else if(e.key==="ArrowLeft") prev();
   else if(e.key==="ArrowRight") next();
   else if(e.key==="u"||e.key==="U") gotoUnlabeled();
+  else if(e.key==="f"||e.key==="F") gotoFar();
   else if(e.key==="0") fitView();
 });
 addEventListener("resize", ()=>{ fitView(); });
