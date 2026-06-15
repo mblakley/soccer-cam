@@ -45,35 +45,46 @@ def create_field_session(
     return ort.InferenceSession(str(model_path), providers=providers)
 
 
-def detect_field_keypoints(
-    frame_bgr: np.ndarray,
-    sess: ort.InferenceSession,
-    score_threshold: float = 0.5,
-) -> list[tuple[float | None, float | None, float]]:
-    """Detect field-boundary keypoints.
+def _infer_keypoints(
+    frame_bgr: np.ndarray, sess: ort.InferenceSession
+) -> tuple[np.ndarray, np.ndarray]:
+    """Raw model inference for one frame.
 
-    Returns a list of length 10. Each entry is ``(x, y, score)`` in input
-    pixel coords; missing keypoints (below threshold) are
-    ``(None, None, score)``.
+    Returns ``(kpts, scores)`` where ``kpts`` is ``(10, 2)`` in **source** pixel
+    coords and ``scores`` is ``(10,)`` — no thresholding (callers threshold).
     """
     orig_h, orig_w = frame_bgr.shape[:2]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (INPUT_W, INPUT_H))
     blob = (resized.astype(np.float16) / 255.0).transpose(2, 0, 1)[np.newaxis]
 
-    kpts, scores = sess.run(None, {"input": blob})
-    kpts = kpts[0]
-    scores = scores[0]
+    input_name = sess.get_inputs()[0].name
+    kpts, scores = sess.run(None, {input_name: blob})
+    kpts = np.asarray(kpts[0], dtype=np.float64).copy()
+    scores = np.asarray(scores[0], dtype=np.float64)
+    kpts[:, 0] *= orig_w / INPUT_W
+    kpts[:, 1] *= orig_h / INPUT_H
+    return kpts, scores
 
+
+def detect_field_keypoints(
+    frame_bgr: np.ndarray,
+    sess: ort.InferenceSession,
+    score_threshold: float = 0.5,
+) -> list[tuple[float | None, float | None, float]]:
+    """Detect field-boundary keypoints in one frame.
+
+    Returns a list of length 10. Each entry is ``(x, y, score)`` in source
+    pixel coords; missing keypoints (below threshold) are
+    ``(None, None, score)``.
+    """
+    kpts, scores = _infer_keypoints(frame_bgr, sess)
     results: list[tuple[float | None, float | None, float]] = []
     for i in range(10):
         if scores[i] >= score_threshold:
-            x = float(kpts[i, 0]) * (orig_w / INPUT_W)
-            y = float(kpts[i, 1]) * (orig_h / INPUT_H)
-            results.append((x, y, float(scores[i])))
+            results.append((float(kpts[i, 0]), float(kpts[i, 1]), float(scores[i])))
         else:
             results.append((None, None, float(scores[i])))
-
     return results
 
 
@@ -120,6 +131,82 @@ def detect_field_boundary(
     detected = sum(1 for kp in kpts if kp[0] is not None)
     logger.info("Field keypoints: %d/10 detected", detected)
     return build_field_polygon(kpts)
+
+
+def aggregate_keypoints(
+    per_frame: list[tuple[np.ndarray, np.ndarray]],
+    score_threshold: float = 0.5,
+    min_confident: int = 1,
+    fallback_to_best: bool = True,
+) -> list[tuple[float | None, float | None, float]]:
+    """Aggregate keypoints across frames of a **static camera** into 10 points.
+
+    The camera is fixed per game, so a keypoint that is occluded in some frames
+    (players, foreground spectators) is visible in others. For each of the 10
+    keypoints we take the **median** ``(x, y)`` over the frames where its score
+    clears ``score_threshold`` (requiring at least ``min_confident`` such frames).
+    A keypoint that never clears the threshold — common for the near-sideline
+    foreground under heavy barrel distortion — falls back to its single
+    highest-scoring frame when ``fallback_to_best`` so the polygon stays
+    complete (its returned score stays below threshold, so callers can still
+    tell it apart from a truly-confident point).
+
+    Args:
+        per_frame: list of ``(kpts (10,2), scores (10,))`` from
+            :func:`_infer_keypoints`, one per sampled frame.
+        score_threshold: per-keypoint confidence floor.
+        min_confident: min frames a keypoint must clear the floor to be medianed.
+        fallback_to_best: fill never-confident keypoints from their best frame.
+
+    Returns:
+        A length-10 list of ``(x, y, score)`` (``score`` = the keypoint's best
+        score across frames); never-detected keypoints are ``(None, None, score)``.
+    """
+    out: list[tuple[float | None, float | None, float]] = []
+    for k in range(10):
+        confident = [
+            (p[0][k, 0], p[0][k, 1]) for p in per_frame if p[1][k] >= score_threshold
+        ]
+        best_score = max((float(p[1][k]) for p in per_frame), default=0.0)
+        if len(confident) >= max(1, min_confident):
+            arr = np.asarray(confident, dtype=np.float64)
+            out.append(
+                (float(np.median(arr[:, 0])), float(np.median(arr[:, 1])), best_score)
+            )
+        elif fallback_to_best and per_frame:
+            bi = int(np.argmax([p[1][k] for p in per_frame]))
+            out.append(
+                (
+                    float(per_frame[bi][0][k, 0]),
+                    float(per_frame[bi][0][k, 1]),
+                    best_score,
+                )
+            )
+        else:
+            out.append((None, None, best_score))
+    return out
+
+
+def detect_field_boundary_multiframe(
+    frames_bgr: list[np.ndarray],
+    sess: ort.InferenceSession,
+    score_threshold: float = 0.5,
+    min_confident: int = 1,
+    fallback_to_best: bool = True,
+) -> tuple[np.ndarray | None, list[tuple[float | None, float | None, float]]]:
+    """Static-camera field polygon from several frames (robust to occlusion).
+
+    Runs the model on each frame, aggregates per keypoint (see
+    :func:`aggregate_keypoints`), and builds the polygon. Returns
+    ``(polygon, aggregated_keypoints)`` — far more likely to yield a complete
+    10-point polygon than any single frame. Callers use the per-keypoint scores
+    to gate (e.g. require N truly-confident points before trusting the polygon).
+    """
+    per_frame = [_infer_keypoints(f, sess) for f in frames_bgr]
+    agg = aggregate_keypoints(
+        per_frame, score_threshold, min_confident, fallback_to_best
+    )
+    return build_field_polygon(agg), agg
 
 
 def filter_detections(

@@ -37,9 +37,10 @@ from pydantic import BaseModel
 # stack importing this module fails and register_steps' try/except omits the
 # step — the intended behaviour (same as detect).
 from video_grouper.inference.field_detector import (
+    _infer_keypoints,
+    aggregate_keypoints,
     build_field_polygon,
     create_field_session,
-    detect_field_keypoints,
 )
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
@@ -58,12 +59,19 @@ class FieldDetectStepConfig(BaseModel):
     field_detect_channel: str | None = None  # canary / beta / stable
     field_detect_pipeline_version: str | None = None
     device: str = "cuda:0"
-    # Per-keypoint score floor; points below it don't count toward the polygon.
+    # Per-keypoint score floor; points below it don't count as "confident".
     field_score_threshold: float = 0.5
-    # A frame needs at least this many confident keypoints to be a candidate.
+    # Require at least this many truly-confident (>= floor) aggregated keypoints
+    # before trusting the polygon (else fall back to the full-frame default).
     field_min_keypoints: int = 6
-    # Frames sampled across the middle 80% of the video; best polygon wins.
-    field_sample_frames: int = 7
+    # Frames sampled across the middle 80% of the video, aggregated per-keypoint
+    # (static camera) — more frames => each keypoint is unoccluded in more of them.
+    field_sample_frames: int = 12
+    # Min frames a keypoint must clear the floor in to be medianed.
+    field_min_confident_frames: int = 1
+    # Fill never-confident keypoints (occluded near-sideline foreground) from
+    # their best frame so the polygon stays complete (10 points).
+    field_fallback_to_best: bool = True
 
 
 def _video_dims(video_path: str) -> tuple[int, int]:
@@ -89,16 +97,22 @@ def _detect_field_polygon(
     score_threshold: float,
     min_keypoints: int,
     sample_frames: int,
+    min_confident_frames: int = 1,
+    fallback_to_best: bool = True,
 ) -> tuple[list[list[float]], float] | None:
-    """Sample frames, run the field model, return the best (polygon, mean_score).
+    """Sample frames, aggregate keypoints per index, return (polygon, mean_score).
 
-    "Best" = the candidate with the highest mean keypoint score that has
-    enough keypoints and builds a valid polygon. Returns ``None`` if no
-    frame yields a usable polygon.
+    The camera is fixed per game, so instead of trusting one frame we run the
+    model on ``sample_frames`` frames and take each keypoint's **median** over
+    the frames where it's confident (:func:`aggregate_keypoints`). A keypoint
+    occluded in some frames (players / foreground spectators) is recovered from
+    others, so the polygon comes out **complete (10 points)** far more often
+    than any single frame. Returns ``None`` only when too few keypoints are
+    truly confident across all frames (the field wasn't found).
     """
     import av
 
-    best: tuple[list[list[float]], float] | None = None
+    per_frame: list[tuple[Any, Any]] = []
     container = av.open(video_path)
     try:
         stream = container.streams.video[0]
@@ -122,21 +136,38 @@ def _detect_field_polygon(
                 continue
             if frame is None:
                 continue
-
-            frame_bgr = frame.to_ndarray(format="bgr24")
-            kpts = detect_field_keypoints(frame_bgr, session, score_threshold)
-            detected = [kp for kp in kpts if kp[0] is not None]
-            if len(detected) < min_keypoints:
-                continue
-            polygon = build_field_polygon(kpts)
-            if polygon is None:
-                continue
-            mean_score = sum(kp[2] for kp in detected) / len(detected)
-            if best is None or mean_score > best[1]:
-                best = ([[float(x), float(y)] for x, y in polygon], mean_score)
+            per_frame.append(
+                _infer_keypoints(frame.to_ndarray(format="bgr24"), session)
+            )
     finally:
         container.close()
-    return best
+
+    if not per_frame:
+        return None
+    agg = aggregate_keypoints(
+        per_frame, score_threshold, min_confident_frames, fallback_to_best
+    )
+    confident = [kp for kp in agg if kp[2] >= score_threshold]
+    if len(confident) < min_keypoints:
+        logger.warning(
+            "field_detect: only %d/10 keypoints cleared the floor across %d frames "
+            "(< %d) — not trusting the polygon",
+            len(confident),
+            len(per_frame),
+            min_keypoints,
+        )
+        return None
+    polygon = build_field_polygon(agg)
+    if polygon is None:
+        return None
+    mean_score = sum(kp[2] for kp in confident) / len(confident)
+    logger.info(
+        "field_detect: aggregated %d-point polygon from %d frames (%d confident kpts)",
+        len(polygon),
+        len(per_frame),
+        len(confident),
+    )
+    return ([[float(x), float(y)] for x, y in polygon], mean_score)
 
 
 class FieldDetectStep(PipelineStep[FieldDetectStepConfig]):
@@ -185,6 +216,8 @@ class FieldDetectStep(PipelineStep[FieldDetectStepConfig]):
                 cfg.field_score_threshold,
                 cfg.field_min_keypoints,
                 cfg.field_sample_frames,
+                cfg.field_min_confident_frames,
+                cfg.field_fallback_to_best,
             )
             if result is None:
                 source = "full_frame"
