@@ -189,6 +189,11 @@ def _load_net(model_path: str, device: str):
     net = YOLO(model_path).model
     net = net.to(device)
     net.train()
+    # YOLO(path) loads for inference with requires_grad=False on all params, so a
+    # forward output has no grad graph and backward fails. Re-enable grad so the
+    # benchmark exercises a real forward+backward.
+    for p in net.parameters():
+        p.requires_grad_(True)
     return net
 
 
