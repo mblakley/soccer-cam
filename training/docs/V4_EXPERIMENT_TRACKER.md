@@ -62,6 +62,18 @@ megapixels (compute) + shard GB/frame (I/O).
 | E5 | Train v4 per surviving warp×TW; beat AutoCam far-recall | train_v4 on 4070 + 3060Ti (fan via queue) | far-recall vs AutoCam, per camera | todo | — |
 | E6 | Joint Dahua+Reolink generalizes (held-out camera) | camera-balanced joint train | per-camera recall, held-out | todo | — |
 
+## Test assets
+
+**Canonical far-field test clip** (the consistent footage every warp/model is evaluated on — the
+ball on the far side, opposite the near-sideline camera):
+- Source: `F:\Heat_2012s\2026.05.27 - vs Chili Vortex (away)\RecM09_DST20260527_182425_182924_0_9D288300000000_2E72363F.mp4` (seg00, raw 7680×2160).
+- Range: **frames 2209–2834** (~112–143 s in; 19.8 fps). Ball sustained in the far third
+  (median cy ~530–680; far touchline ≈ y 412). Window 2334–2584 = 87% far.
+- Extracted clip: `D:\detect_work\v4_test_clips\farclip_0527_seg00_2209-2834.mp4`.
+- Field polygon (this static camera): `G:\pipeline_work\test\2026.05.27-…\field_polygon.json`.
+- Note: this camera is **strongly barrel/fisheye-distorted** (field bows into a bowl) — confirmed
+  visually — so off-axis ball shape is position-dependent; the warp should ideally correct it.
+
 ## Log
 
 - **2026-06-15** — Tracker created. Findings so far:
