@@ -29,6 +29,38 @@ it: v3 stays a working fallback while v4 is validated, and the lineage is unambi
 
 ---
 
+## 2026-06-15: Reolink capture image profile tuned for on-field color differentiation
+
+**Context:** Far balls wash out against bright sky/sun-flared grass. The fix is capture-side
+(can't repair recorded footage). Tuned the "SoccerCam" Duo 3 PoE against a controlled paused scene
+and measured each setting objectively on the field region (Lab chroma spread = color separability,
+luminance contrast, and saturation/highlight clipping %).
+
+**Findings (measured, not eyeballed):**
+- **Color differentiation is near its ceiling at moderate saturation.** `chroma_spread` is ~flat
+  (~14) across all settings — more saturation raises vividness (chroma_mean 47→63) but NOT
+  separability, and **clips**: saturation 175 → 23% of field pixels saturation-clipped, 185 → 37%.
+  Clipping *merges* colors, so over-saturation actively hurts. ⇒ **cap saturation at 150.**
+- **WDR (`backLight=DynamicRangeControl`) on** keeps highlight detail in the high-dynamic-range
+  sun+field scene; `drc` 150 (110–200 barely moved the metric).
+- **`nr3d` (3D noise reduction) is the big un-baked lever:** OFF recovers ~16× more fine detail
+  (Laplacian variance 8→160), i.e. it currently smooths away the texture a 3–8px far ball lives in.
+  NOT flipped by default — it trades detail for noise that eats the 20 Mbps bitrate. **Open
+  experiment:** A/B nr3d on/off (likely with a bitrate bump) on real far-ball footage before
+  committing.
+- Window/highlight clipping itself is lens/sensor physics and is NOT a goal (per Mark).
+
+**Decision:** Baked the proven profile into `ReolinkCamera.apply_optimal_settings`
+(`OUTDOOR_ISP`/`OUTDOOR_IMAGE` in `video_grouper/cameras/reolink.py`): WDR on, drc 150,
+dayNight=Color (locked, no daytime IR flip), antiFlicker Off, saturation 150, contrast 140,
+bright 118, sharpen 145. `get_current_settings` now reports WDR/sat/contrast/nr3d.
+
+**Caveat:** Tuned on an emissive TV scene; saturation/contrast/WDR are scene-independent processing
+curves so this is a sound baseline, but validate on the next real game. `gain` is locked 40–40 and
+not settable via the HTTP API on this model, limiting direct exposure control.
+
+---
+
 ## 2026-06-15: `target_width` is a swept speed/accuracy knob (the 1280 warp default is wrong for v4)
 
 **Context:** `field_warp.build_field_warp` resizes the warped band horizontally to `target_width`

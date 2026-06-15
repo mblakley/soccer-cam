@@ -22,6 +22,24 @@ CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
 
 logger = logging.getLogger(__name__)
 
+# Outdoor-field image profile. Tuned 2026-06-15 against a controlled scene and
+# measured objectively (chroma spread / contrast / clipping per setting) — see
+# training/docs/DECISIONS.md. WDR on (DynamicRangeControl) keeps highlight detail
+# in the high-dynamic-range sun+field scene; a MODERATE saturation/contrast boost
+# improves on-field color differentiation (grass vs kits vs the white ball).
+# Saturation above ~160 measurably CLIPS (>20% of field pixels) and *merges*
+# colors, so it is deliberately capped at 150. Image values are 0-255 (128=default).
+# nr3d (3D noise reduction) is left at the camera default here: turning it OFF
+# recovers ~16x more fine detail (better for tiny far balls) but adds noise that
+# eats the bitrate — that is a separate experiment to validate on real footage.
+OUTDOOR_ISP = {
+    "backLight": "DynamicRangeControl",
+    "drc": 150,
+    "dayNight": "Color",
+    "antiFlicker": "Off",
+}
+OUTDOOR_IMAGE = {"saturation": 150, "contrast": 140, "bright": 118, "sharpen": 145}
+
 
 class ReolinkCamera(Camera):
     """ReoLink camera implementation using the ReoLink HTTP JSON API."""
@@ -898,6 +916,49 @@ class ReolinkCamera(Camera):
                         error="Failed to read GetLocalLink",
                     )
                 )
+
+            # Image quality (WDR + color profile)
+            isp = await self._api_call(
+                client,
+                "GetIsp",
+                {"channel": self.channel},
+                action=1,
+                log_name="get_settings_isp",
+            )
+            image = await self._api_call(
+                client,
+                "GetImage",
+                {"channel": self.channel},
+                action=1,
+                log_name="get_settings_image",
+            )
+            if isp and isp[0].get("code") == 0 and image and image[0].get("code") == 0:
+                i = isp[0].get("value", {}).get("Isp", {})
+                m = image[0].get("value", {}).get("Image", {})
+                wdr = "on" if i.get("backLight") == "DynamicRangeControl" else "off"
+                results.append(
+                    ConfigResult(
+                        setting="image",
+                        success=True,
+                        current_value=(
+                            f"WDR {wdr}, sat={m.get('saturation', '?')} "
+                            f"contrast={m.get('contrast', '?')} "
+                            f"bright={m.get('bright', '?')} nr3d={i.get('nr3d', '?')}"
+                        ),
+                        applied_value="",
+                        error="",
+                    )
+                )
+            else:
+                results.append(
+                    ConfigResult(
+                        setting="image",
+                        success=False,
+                        current_value="Unknown",
+                        applied_value="",
+                        error="Failed to read GetIsp/GetImage",
+                    )
+                )
         finally:
             if close_client:
                 await client.aclose()
@@ -1146,6 +1207,55 @@ class ReolinkCamera(Camera):
                         error="Failed to read network config",
                     )
                 )
+
+            # 6. Image quality: WDR + outdoor color profile (read-modify-write).
+            # Tuned + measured (see OUTDOOR_ISP/OUTDOOR_IMAGE and DECISIONS.md).
+            isp_ok = img_ok = False
+            data = await self._api_call(
+                client,
+                "GetIsp",
+                {"channel": self.channel},
+                action=1,
+                log_name="apply_settings_get_isp",
+            )
+            if data and data[0].get("code") == 0:
+                isp = data[0]["value"]["Isp"]
+                isp.update(OUTDOOR_ISP)
+                data = await self._api_call(
+                    client, "SetIsp", {"Isp": isp}, log_name="apply_settings_set_isp"
+                )
+                isp_ok = data is not None and data[0].get("code") == 0
+            data = await self._api_call(
+                client,
+                "GetImage",
+                {"channel": self.channel},
+                action=1,
+                log_name="apply_settings_get_image",
+            )
+            if data and data[0].get("code") == 0:
+                image = data[0]["value"]["Image"]
+                image.update(OUTDOOR_IMAGE)
+                data = await self._api_call(
+                    client,
+                    "SetImage",
+                    {"Image": image},
+                    log_name="apply_settings_set_image",
+                )
+                img_ok = data is not None and data[0].get("code") == 0
+            ok = isp_ok and img_ok
+            results.append(
+                ConfigResult(
+                    setting="image",
+                    success=ok,
+                    current_value="",
+                    applied_value=(
+                        f"WDR on, color profile (sat{OUTDOOR_IMAGE['saturation']}/"
+                        f"con{OUTDOOR_IMAGE['contrast']}/bri{OUTDOOR_IMAGE['bright']}/"
+                        f"sharpen{OUTDOOR_IMAGE['sharpen']})"
+                    ),
+                    error="" if ok else "SetIsp/SetImage failed",
+                )
+            )
         finally:
             if close_client:
                 await client.aclose()
