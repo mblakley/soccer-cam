@@ -98,11 +98,23 @@ init, which needs pydantic the bench venv lacks): input `input[1,3,384,768] fp16
 `keypoints[1,10,2]` + `scores[1,10]`. Per-game polygon = run on ~15 sampled frames, aggregate
 (median per keypoint where score≥0.5) → polygon. (The decrypted AutoCam teacher
 `detect_kpts_fp16.onnx` is an identical-I/O drop-in if ever needed, but ours is preferred.)
-Irondequoit polygon: **10/10 keypoints** → `D:\detect_work\v4_test_clips\irondequoit_field_polygon.json`.
-Get all 10 by sampling ~50 frames **across the game** (static camera) + falling back to each
-keypoint's best-scoring frame when none clear 0.5 (the near-sideline foreground keypoints are
-occlusion-prone). Cross-checked vs the AutoCam teacher: **polygon IoU 0.84**, far sideline tight
-(12–150 px), near sideline looser (up to ~380 px, both models least confident there).
+Irondequoit polygon: 10/10 keypoints, but **ACCURACY is poor** — see below.
+
+### ⚠ field_outline_v2 ACCURACY is the real problem (Mark review, 2026-06-15)
+Mark verified the Irondequoit polygon frame-by-frame: the model placed the **far line ~250–400px too
+low** (and near vertex 2/4 off). The aggregation fix gives a *complete* 10-pt polygon but **cannot fix
+mis-located keypoints**. Since the v4 **warp band derives from this polygon, a too-low far line would
+clip the far field** — directly hurting the far-ball goal. ⇒ **the field model needs accuracy work
+(retrain / better far-line labels), and/or per-game polygons need human verification.** This is a new,
+load-bearing item in the v4 plan. For the Irondequoit eval, the polygon is **hand-corrected** from
+Mark's annotation (5 far-line dots + vertex 2→frame bottom) → `irondequoit_field_polygon.json`
+(source `manual_corrected`); the AutoCam teacher (IoU 0.84 vs ours) is similarly off, so it's not a fix.
+
+### Product behavior (Mark): viewport holds on out-of-play → in-field detection only
+The camera viewport **holds position when the ball goes out of play**, so v4 only needs to
+detect/track the ball **inside the field polygon** (OOB balls are ignored unless following out-and-back).
+⇒ field-mask all labels + eval to the (correct) polygon: keep in-field, drop OOB + background. The
+earlier "field mask backfires" was an artifact of the wrong/too-low polygon.
 
 ## Log
 
