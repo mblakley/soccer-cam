@@ -82,16 +82,18 @@ evaluated on):
 - TODO before eval: run the **AutoCam reference detector** (balldet) on the clip to establish the
   baseline (where AutoCam detects/misses the far ball) that v4 must beat.
 
-## Field polygons — SOLVED (no TTT key needed)
+## Field polygons — SOLVED with OUR model
 
-The field-outline model isn't on the server, but the **decrypted AutoCam field-keypoint model
-`F:\test\onnx_models\decrypted\detect_kpts_fp16.onnx`** is a perfect drop-in for our
-`video_grouper/inference/field_detector.py` (input `input[1,3,384,768] fp16` → `keypoints[1,10,2]` +
-`scores[1,10]`, exactly what `field_detector` expects — our field_outline v2 was distilled from this
-teacher). So per-game field polygons are **autonomous**: run `detect_kpts_fp16` via `field_detector`
-on sampled frames, aggregate the highest-confidence keypoints → polygon. (RE-adjacent: runs in
-F:/storage; only the polygon coords feed the pipeline. Load `field_detector.py` by file path to skip
-the `video_grouper` package init, which needs pydantic the bench venv lacks.)
+**Use our own field_outline v2 model: `F:\training_checkpoints\field_outline\field_outline_v2.onnx`**
+(43 MB; the pre-encryption original of the published `field_outline-2.0.0.enc` — GitHub `.enc`
+sha256 `058b287a…` matches STATUS.md, confirming it). It's the published model, no TTT key / no RE
+concern. Drive it via `field_detector.py` (loaded by file path to skip the `video_grouper` package
+init, which needs pydantic the bench venv lacks): input `input[1,3,384,768] fp16` →
+`keypoints[1,10,2]` + `scores[1,10]`. Per-game polygon = run on ~15 sampled frames, aggregate
+(median per keypoint where score≥0.5) → polygon. (The decrypted AutoCam teacher
+`detect_kpts_fp16.onnx` is an identical-I/O drop-in if ever needed, but ours is preferred.)
+Irondequoit polygon generated (7/10 kpts, traces the field) →
+`D:\detect_work\v4_test_clips\irondequoit_field_polygon.json`.
 
 ## Log
 
