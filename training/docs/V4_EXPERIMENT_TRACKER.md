@@ -145,3 +145,21 @@ earlier "field mask backfires" was an artifact of the wrong/too-low polygon.
   from manifests; (4) generate W0/W1×TW warped datasets; (5) train on 4070/3060Ti; (6) eval on the
   Irondequoit clip vs the AutoCam baseline. No remaining hard external blocker except training-GPU
   speed (1060 slow; 4070/3060Ti are the trainers).
+- **2026-06-15 (E2 executing — baseline LOCKED, comparison build running)** —
+  - **Baseline debate closed.** Mark's frame-by-frame FP list (35 frames, above) is FINAL/ground
+    truth: AutoCam = 139 real / 174 → **73% coverage, 80% precision**; conf≥0.5 → 95% precision
+    (122/139). No further polygon/FP re-litigation — v4 must beat 73% far-coverage with fewer phantoms.
+  - **Field polygon (Mark-verified):** Irondequoit far line confirmed by Mark's blue-dot overlay
+    (`~/Documents/poly_verify_blue_dots.png`) — the 5 far-sideline vertices match within ~1px. Saved
+    `irondequoit_field_polygon.json` (`manual_corrected`). 05-27 train uses `field_polygon_autocam.json`
+    (autocam-kpt polygon; same Reolink camera family — good enough for a bootstrap; not re-derived).
+  - **Single-pass builder** `e2_build.py` (scratch on `G:\v4bench`, uses committed `warped_dataset.py`
+    helpers): decode each 7680×2160 HEVC frame **once** via PyAV (~13.6 fps; cv2.VideoCapture crashes
+    on 16.6 MP HEVC), run balldet (CUDA), keep in-field conf≥0.5 balls, warp+write **both** W0 and W1
+    YOLO datasets in the same pass. **Env fix (load-bearing):** onnxruntime-GPU needs the CUDA DLLs on
+    PATH — prepend `<venv>\Lib\site-packages\torch\lib` (bundles `cublasLt64_12.dll`+`cudnn64_9.dll`);
+    `G:\pipeline_work\fk\.venv` is the one env with CUDA-ORT + torch-CUDA + ultralytics + av + cv2.
+  - **E2 datasets (building):** TW=3264 (=AutoCam floor, fits the 1060), 2 in-game 05-27 segments →
+    train, Irondequoit clip → val (held out). Smoke: W0=3264×704, W1=3264×256, ~65 pos / 1200 frames.
+  - **Next:** train yolo26n on `ds_w0` + `ds_w1` (imgsz=3264 matched, rect, 1060), then center-distance
+    far-ball recall on the Irondequoit val vs the locked AutoCam baseline → pick the warp.

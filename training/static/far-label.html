@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Far-ball labeler</title>
+<style>
+  :root { --bg:#11151c; --panel:#1b212b; --fg:#e7edf3; --muted:#8b97a7; --acc:#2ecc71; --gap:#ff9f1a; --click:#ff3b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:8px 14px; background:var(--panel); position:sticky; top:0; z-index:5; }
+  header b { font-size:15px; }
+  .prog { flex:1; height:10px; background:#0c0f14; border-radius:6px; overflow:hidden; }
+  .prog > i { display:block; height:100%; background:var(--acc); width:0; transition:width .15s; }
+  .pill { padding:2px 8px; border-radius:10px; background:#0c0f14; color:var(--muted); }
+  .pill.gap { color:#111; background:var(--gap); font-weight:600; }
+  .pill.ac { color:#111; background:var(--acc); font-weight:600; }
+  #stage { position:relative; margin:10px auto; max-width:1500px; }
+  #wrap { position:relative; line-height:0; cursor:crosshair; }
+  #img { width:100%; display:block; border-radius:6px; }
+  #ov { position:absolute; inset:0; pointer-events:none; }
+  #lens { position:absolute; width:240px; height:240px; border:2px solid #fff; border-radius:50%;
+          box-shadow:0 0 0 2px #000, 0 6px 20px rgba(0,0,0,.6); pointer-events:none; display:none; z-index:10;
+          background-repeat:no-repeat; }
+  #lens .cross { position:absolute; left:50%; top:50%; width:18px; height:18px; transform:translate(-50%,-50%);
+                 border:1px solid var(--click); border-radius:50%; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px; max-width:1500px; margin:0 auto; }
+  button { background:#243042; color:var(--fg); border:1px solid #33414f; border-radius:8px; padding:9px 14px;
+           font-size:14px; cursor:pointer; }
+  button:hover { background:#2c3a4f; }
+  button.primary { background:var(--acc); color:#06210f; border-color:var(--acc); font-weight:700; }
+  button.warn { background:#3a2230; color:#ffb3c6; }
+  button.ghost { background:#1b212b; }
+  kbd { background:#0c0f14; border:1px solid #33414f; border-radius:4px; padding:0 5px; font-size:11px; color:var(--muted); }
+  .hint { text-align:center; color:var(--muted); padding:0 10px 12px; max-width:900px; margin:0 auto; }
+  #done { display:none; text-align:center; padding:40px; }
+  a.dl { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <b>Far-ball labeler</b>
+  <span id="frameLbl" class="pill">—</span>
+  <span id="kindLbl" class="pill">—</span>
+  <div class="prog"><i id="progBar"></i></div>
+  <span id="progLbl" class="pill">0 / 0</span>
+</header>
+
+<div id="stage">
+  <div id="wrap">
+    <img id="img" alt="" />
+    <canvas id="ov"></canvas>
+    <div id="lens"><div class="cross"></div></div>
+  </div>
+</div>
+
+<div class="bar">
+  <button id="bConfirm" class="primary" title="Accept the marked hint as the ball">✓ Hint is correct <kbd>C</kbd></button>
+  <button id="bNot" class="warn">Ball not visible <kbd>N</kbd></button>
+  <button id="bOut" class="warn">Out of play / off field <kbd>O</kbd></button>
+  <button id="bPrev" class="ghost">◀ Prev <kbd>←</kbd></button>
+  <button id="bNext" class="ghost">Next ▶ <kbd>→</kbd></button>
+  <button id="bUnlab" class="ghost">Next unlabeled <kbd>U</kbd></button>
+</div>
+<p class="hint">
+  Click the ball to mark its exact position (auto-advances). The dashed circle is AutoCam's guess —
+  if it's already on the ball, press <kbd>C</kbd>. Orange = <b>GAP</b> (AutoCam missed it — these matter most).
+  Hover for a magnifier.
+</p>
+
+<div id="done">
+  <h2>All frames labeled 🎉</h2>
+  <p>Labels are saved on the server. <a class="dl" id="dlLink" href="#">Download labels.json</a></p>
+</div>
+
+<script>
+const SET = new URLSearchParams(location.search).get("set") || "irondequoit";
+const API = `/api/far-label/${SET}`;
+let M = null, frames = [], byIdx = {}, labels = {}, cur = 0;
+const img = document.getElementById("img"), ov = document.getElementById("ov"), lens = document.getElementById("lens");
+const ctx = ov.getContext("2d");
+
+async function load() {
+  M = await (await fetch(API)).json();
+  frames = M.frames;
+  frames.forEach((f,i)=>byIdx[f.frame_idx]=i);
+  (M.labels||[]).forEach(l=>labels[l.frame_idx]=l);
+  cur = firstUnlabeled();
+  show();
+}
+function firstUnlabeled(){ for(let i=0;i<frames.length;i++) if(!labels[frames[i].frame_idx]) return i; return 0; }
+function frame(){ return frames[cur]; }
+
+function show(){
+  const f = frame();
+  document.getElementById("done").style.display = "none";
+  document.getElementById("stage").style.display = "";
+  document.querySelector(".bar").style.display = "flex";
+  document.getElementById("frameLbl").textContent = `frame ${f.frame_idx}`;
+  const kl = document.getElementById("kindLbl");
+  kl.textContent = f.autocam ? "AutoCam hint" : "GAP (missed)";
+  kl.className = "pill " + (f.autocam ? "ac" : "gap");
+  const n = frames.length, done = Object.keys(labels).length;
+  document.getElementById("progLbl").textContent = `${done} / ${n}`;
+  document.getElementById("progBar").style.width = (100*done/n)+"%";
+  img.onload = draw;
+  img.src = `${API}/strip/${f.frame_idx}?t=${Date.now()}`;
+  if (img.complete) draw();
+}
+
+function natToDisp(nx, ny){ const s = img.clientWidth / f0().crop_w; return [nx*s, ny*s]; }
+function f0(){ return frame(); }
+
+function draw(){
+  ov.width = img.clientWidth; ov.height = img.clientHeight;
+  ctx.clearRect(0,0,ov.width,ov.height);
+  const f = frame();
+  // hint marker (in crop-native coords)
+  const hnx = f.hint_x - f.crop_x0, hny = f.hint_y - f.crop_y0;
+  const [hx,hy] = natToDisp(hnx,hny);
+  ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+  ctx.strokeStyle = f.autocam ? "#2ecc71" : "#ff9f1a";
+  ctx.beginPath(); ctx.arc(hx,hy,16,0,7); ctx.stroke();
+  ctx.setLineDash([]);
+  // existing label
+  const lab = labels[f.frame_idx];
+  if (lab && lab.action==="ball" && lab.x!=null){
+    const [lx,ly] = natToDisp(lab.x - f.crop_x0, lab.y - f.crop_y0);
+    ctx.strokeStyle = "#ff3b6b"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(lx,ly,10,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx-14,ly); ctx.lineTo(lx+14,ly); ctx.moveTo(lx,ly-14); ctx.lineTo(lx,ly+14); ctx.stroke();
+  }
+}
+
+// click -> source coords
+img.parentElement.addEventListener("click", (e)=>{
+  const r = img.getBoundingClientRect();
+  const f = frame(), s = f.crop_w / img.clientWidth;
+  const nx = (e.clientX - r.left) * s, ny = (e.clientY - r.top) * s;
+  post("ball", f.crop_x0 + nx, f.crop_y0 + ny);
+});
+
+// magnifier
+img.parentElement.addEventListener("mousemove",(e)=>{
+  const r = img.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  if (x<0||y<0||x>r.width||y>r.height){ lens.style.display="none"; return; }
+  const Z = 3.5, LS = 240;
+  lens.style.display = "block";
+  lens.style.left = (x - LS/2) + "px"; lens.style.top = (y - LS/2) + "px";
+  // background-image from the strip, zoomed and positioned on the cursor's natural point
+  lens.style.backgroundImage = `url(${img.src})`;
+  const natW = img.naturalWidth, natH = img.naturalHeight;
+  const bw = natW * Z * (img.clientWidth/natW), bh = natH * Z * (img.clientHeight/natH);
+  lens.style.backgroundSize = `${bw}px ${bh}px`;
+  lens.style.backgroundPosition = `${-(x*Z - LS/2)}px ${-(y*Z - LS/2)}px`;
+});
+img.parentElement.addEventListener("mouseleave",()=>lens.style.display="none");
+
+async function post(action, x, y){
+  const f = frame();
+  labels[f.frame_idx] = {frame_idx:f.frame_idx, action, x:x??null, y:y??null};
+  draw();
+  try{
+    await fetch(`${API}/result`, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({frame_idx:f.frame_idx, action, x:x??null, y:y??null})});
+  }catch(err){ console.error(err); }
+  setTimeout(next, 120);
+}
+function next(){ if (cur < frames.length-1){ cur++; show(); } else finish(); }
+function prev(){ if (cur>0){ cur--; show(); } }
+function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_idx]){ finish(); } else { cur=i; show(); } }
+function finish(){
+  document.getElementById("stage").style.display="none";
+  document.querySelector(".bar").style.display="none";
+  document.getElementById("done").style.display="block";
+  document.getElementById("dlLink").href = `${API}`;
+}
+
+document.getElementById("bConfirm").onclick = ()=>{ const f=frame(); post("ball", f.hint_x, f.hint_y); };
+document.getElementById("bNot").onclick = ()=> post("not_visible", null, null);
+document.getElementById("bOut").onclick = ()=> post("out_of_play", null, null);
+document.getElementById("bPrev").onclick = prev;
+document.getElementById("bNext").onclick = next;
+document.getElementById("bUnlab").onclick = gotoUnlabeled;
+addEventListener("keydown",(e)=>{
+  if (e.key==="c"||e.key==="C") document.getElementById("bConfirm").click();
+  else if (e.key==="n"||e.key==="N") document.getElementById("bNot").click();
+  else if (e.key==="o"||e.key==="O") document.getElementById("bOut").click();
+  else if (e.key==="ArrowLeft") prev();
+  else if (e.key==="ArrowRight") next();
+  else if (e.key==="u"||e.key==="U") gotoUnlabeled();
+});
+addEventListener("resize", draw);
+load();
+</script>
+</body>
+</html>
