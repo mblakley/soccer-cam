@@ -1763,6 +1763,7 @@ async def submit_far_label(set_id: str, result: dict):
         "action": result.get("action", "ball"),
         "x": result.get("x"),
         "y": result.get("y"),
+        "source": result.get("source", "human"),
         "submitted_at": datetime.now(UTC).isoformat(),
     }
     _save_far_labels(set_id, labels)
