@@ -64,15 +64,22 @@ megapixels (compute) + shard GB/frame (I/O).
 
 ## Test assets
 
-**Canonical far-field test clip** (the consistent footage every warp/model is evaluated on — the
-ball on the far side, opposite the near-sideline camera):
-- Source: `F:\Heat_2012s\2026.05.27 - vs Chili Vortex (away)\RecM09_DST20260527_182425_182924_0_9D288300000000_2E72363F.mp4` (seg00, raw 7680×2160).
-- Range: **frames 2209–2834** (~112–143 s in; 19.8 fps). Ball sustained in the far third
-  (median cy ~530–680; far touchline ≈ y 412). Window 2334–2584 = 87% far.
-- Extracted clip: `D:\detect_work\v4_test_clips\farclip_0527_seg00_2209-2834.mp4`.
-- Field polygon (this static camera): `G:\pipeline_work\test\2026.05.27-…\field_polygon.json`.
-- Note: this camera is **strongly barrel/fisheye-distorted** (field bows into a bowl) — confirmed
-  visually — so off-axis ball shape is position-dependent; the warp should ideally correct it.
+**Canonical far-field test clip** (the consistent footage every warp/model is evaluated on — ball at
+the far touchline, opposite the near-sideline camera, during **in-game** play):
+- Clip: `D:\detect_work\v4_test_clips\farclip_0527_seg13_faredge.mp4` (~11 s, 7680×2160).
+- Source: `…\2026.05.27 - vs Chili Vortex (away)\RecM09_DST20260527_192925_…mp4` (**seg13**,
+  19:29 start = 2nd half, in-game), frames ~**5004–5036** (~252–254 s in, 19.9 fps).
+- Why: the AutoCam reference detector fired **6× over 1.6 s at the far-left touchline**
+  (cx≈2485–2954, cy≈465–571 = 16–76 px below the far edge, conf 0.50–0.71) — a real far-ball
+  signal even though the ball is faint in golden-hour glare. This is the hard case to beat AutoCam on.
+- Selection method (per Mark): use the existing reference detections — even sparse — and take the
+  ones nearest the **far edge of the field-outline polygon**. (seg00's denser "far" window was
+  **warmup**, rejected.)
+- Field polygon (static camera): `G:\pipeline_work\test\2026.05.27-…\field_polygon.json`.
+- Camera is **strongly barrel/fisheye-distorted** (field bows into a bowl, confirmed visually) →
+  off-axis ball shape is position-dependent; the warp should ideally correct it.
+- TODO: more far-edge moments — only seg00/09/13 have reference detections; run the detector on more
+  in-game segments to build a fuller far-ball eval set.
 
 ## Log
 
