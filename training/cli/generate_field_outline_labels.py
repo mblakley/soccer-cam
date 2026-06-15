@@ -101,6 +101,7 @@ class GameSpec:
     date: str
     my_team_name: str
     camera: str = "other"
+    orientation: str = "right_side_up"
     videos: list[Path] = field(default_factory=list)
     unknown_reason: str | None = None
 
@@ -151,6 +152,13 @@ def discover_games(
     """
     games: list[GameSpec] = []
     seen_ids: dict[str, Path] = {}
+    # Orientation is metadata, not detected: read it from the game registry
+    # (keyed by the game dir path). Default right_side_up if a game isn't listed.
+    from training.data_prep.game_registry import load_registry
+
+    reg_orient = {
+        g.get("path"): g.get("orientation", "right_side_up") for g in load_registry()
+    }
 
     for root in roots:
         if not root.exists():
@@ -164,6 +172,7 @@ def discover_games(
             if not videos:
                 continue  # not a footage group
             camera = _camera_of(group_dir)
+            orientation = reg_orient.get(str(group_dir), "right_side_up")
 
             mi_path = group_dir / "match_info.ini"
             mi = MatchInfo.from_file(str(mi_path)) if mi_path.exists() else None
@@ -196,6 +205,7 @@ def discover_games(
                         date=date,
                         my_team_name=my_team,
                         camera=camera,
+                        orientation=orientation,
                         videos=videos,
                         unknown_reason=(
                             "no_match_info"
@@ -222,6 +232,7 @@ def discover_games(
                     date=date,
                     my_team_name=my_team,
                     camera=camera,
+                    orientation=orientation,
                     videos=videos,
                 )
             )
@@ -358,36 +369,10 @@ def _draw_overlay(
     return img
 
 
-def _best_orientation(frame_bgr, sess):
-    """Auto-detect mount orientation; return the upright frame + teacher keypoints.
-
-    Runs the teacher on the frame AND its 180deg flip and keeps whichever yields
-    valid geometry (near sideline below far) with the higher mean confidence.
-    Replaces the brittle UPSIDE_DOWN_GAMES list: it self-corrects every
-    upside-down game (including ones not on any list) and never mis-flips a
-    right-side-up one. Returns ``(frame, kpts_norm, scores, mean_score, geom_ok)``.
-    """
-    from video_grouper.inference.field_detector import detect_field_keypoints
-
-    best = None
-    for fr in (frame_bgr, cv2.flip(frame_bgr, -1)):
-        h, w = fr.shape[:2]
-        kpts = detect_field_keypoints(fr, sess, score_threshold=0.0)
-        kn = [[float(k[0]) / w, float(k[1]) / h] for k in kpts]
-        sc = [float(k[2]) for k in kpts]
-        ms = sum(sc) / len(sc)
-        near_y = sum(p[1] for p in kn[:5]) / 5
-        far_y = sum(p[1] for p in kn[5:]) / 5
-        geom_ok = near_y > far_y
-        rank = ms + (1.0 if geom_ok else 0.0)  # valid geometry wins, then confidence
-        if best is None or rank > best[0]:
-            best = (rank, fr, kn, sc, ms, geom_ok)
-    _, fr, kn, sc, ms, geom_ok = best
-    return fr, kn, sc, ms, geom_ok
-
-
 def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
     """Sample, run the teacher, and write labels for one game."""
+    from video_grouper.inference.field_detector import detect_field_keypoints
+
     frames_dir = args.output_root / "frames" / spec.game_id
     labels_dir = args.output_root / "labels" / spec.game_id
     overlays_dir = args.output_root / "overlays" / spec.game_id
@@ -418,11 +403,23 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
                     continue
 
                 try:
-                    # Auto-orient (self-corrects any upside-down mount) + teacher.
-                    frame_bgr, kpts_norm, scores, mean_score, geometry_ok = (
-                        _best_orientation(frame_bgr, sess)
-                    )
+                    # Orientation comes from the registry metadata (reliable), not
+                    # detection: flip upside-down mounts 180deg so the student trains
+                    # on upright frames.
+                    if spec.orientation == "upside_down":
+                        frame_bgr = cv2.flip(frame_bgr, -1)
                     orig_h, orig_w = frame_bgr.shape[:2]
+                    kpts = detect_field_keypoints(frame_bgr, sess, score_threshold=0.0)
+                    kpts_norm = [
+                        [float(kp[0]) / orig_w, float(kp[1]) / orig_h] for kp in kpts
+                    ]
+                    scores = [float(kp[2]) for kp in kpts]
+                    mean_score = sum(scores) / len(scores)
+                    # Per-frame quality guard (not orientation): the near sideline
+                    # must sit below the far in image-y, else the polygon is broken.
+                    near_y = sum(p[1] for p in kpts_norm[:5]) / 5
+                    far_y = sum(p[1] for p in kpts_norm[5:]) / 5
+                    geometry_ok = near_y > far_y
                     stored_w, stored_h = _store_frame(frame_bgr, jpg_path)
                     label = {
                         "schema_version": LABEL_SCHEMA_VERSION,

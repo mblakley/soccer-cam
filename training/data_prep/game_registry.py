@@ -97,7 +97,6 @@ UPSIDE_DOWN_GAMES = {
     "05.28.2024 - vs Chili (home)": "heat-chili-05-28-2024-raw-fixed2.mp4",
     "05.31.2024 - vs Fairport (home)": "flash-fairport-home-05-31-2024-raw2.mp4",
     "06.04.2024 - vs Spencerport (home)": "heat-spencerport-home-06-04-2024-raw.mp4",
-    "06.27.2024 - vs Pittsford (away)": None,  # no corrected version, flip in code
     "2025.05.17 - vs NY Rush (away)": None,  # no corrected version, flip in code
     "2025.06.02 - vs Fairport (home)": None,  # no corrected version, flip in code (now in Heat_2012s)
 }
