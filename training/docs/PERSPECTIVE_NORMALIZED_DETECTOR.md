@@ -165,10 +165,28 @@ gap mining (it adds the velocity-direction filter that *targets* far balls vs oc
 ## Rollout
 
 1. Land the warp module + the validation results (this branch).
-2. Reolink ingest + far-ball labeling loop.
-3. Pretrain (Dahua) → fine-tune (Reolink) → evaluate recall per game (target: beat v2's 0.29 substantially, and the
-   reference tracker on far balls).
+2. Reolink ingest + far-ball labeling loop (Reolink currently has **zero** ball labels — this is the gate).
+3. **One joint, camera-balanced training run over all games (Dahua + Reolink)** — NOT pretrain→fine-tune. The warp
+   normalizes geometry and camera-balanced sampling balances the corpus, so a single run handles both camera types;
+   `field_outline_v2` already demonstrates joint cross-camera training works. A Dahua-only pass is at most a
+   pipeline/I-O benchmark, never a shipped model. Evaluate recall per game (target: beat v2's 0.29 substantially, and
+   the reference tracker on far balls) with a **per-camera breakdown** so Reolink (production) isn't diluted.
 4. Swap the production `ball_detect` step from tiled inference to the warped full-frame model.
+
+### I/O design (the SSD is the constraint, not the storage tier)
+
+G: SSD is ~271 GB; the corpus is 15 TB on F: — **the full training set does not fit on SSD**, so "stage everything to
+G:" is impossible. Benchmark finding: F: and G: read at ~the same speed for *random* small-file reads (~100 img/s) and
+the GPU sat at **0% util** (fully starved). The bottleneck was decode of oversized JPEGs + non-persistent DataLoader
+workers, NOT storage location. So the I/O design is:
+
+- **Sequential shards**, not random small files — sequential reads are fast even off the USB (`F:\...\training_shards`).
+- **Pre-decoded memmap packs** (no JPEG decode at train time) staged as a **bounded rolling working set** on G:.
+- **Double-buffer / prefetch** the next shard to G: while the GPU trains on the current one; rotate so the full corpus
+  is never resident.
+- **Persistent DataLoader workers + pin_memory + prefetch** (Windows re-spawns workers per epoch otherwise).
+- **Benchmark gate before any long run:** prove the GPU stays fed (>80% util) at a realistic, SSD-bounded working-set
+  size. No blind multi-hour runs.
 
 ## Implementation status (2026-06-14)
 
