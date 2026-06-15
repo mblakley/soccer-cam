@@ -61,6 +61,37 @@ not settable via the HTTP API on this model, limiting direct exposure control.
 
 ---
 
+## 2026-06-15: v4 detector pivots from bbox regression to a heatmap + multi-frame design
+
+**Context:** The first real eval killed the bbox approach. A nano bbox detector trained on the
+reference-detector bootstrap at TW=3264, evaluated center-distance vs Mark's human far-ball ground
+truth (162 balls): **far-recall 12% @ conf0.05 (precision 22%)**, vs the reference detector's
+**74% far-recall / 76% precision**. Two structural causes: (a) at TW=3264 the far ball is ~3.6px —
+at/below the detector's smallest stride (8px) and meaningless for IoU-mAP (a 2px miss → IoU≈0);
+(b) the bootstrap training labels (from the reference detector) miss far balls, so there's little
+far-ball signal to learn. Bbox regression is the wrong tool for a 3–8px ball.
+
+**Decision:** Adopt a **ball-center heatmap + multi-frame (temporal)** detector for v4 with a
+lightweight high-resolution-feature backbone; output a per-pixel center heatmap and peak-pick (x,y).
+Why it fits us: removes the tiny-box / anchor / stride / IoU failure mode entirely; **exploits motion**
+across consecutive frames (our **static camera** makes frame-differencing clean — a lever bbox
+regression ignored); center-distance is the native metric (already our eval); **our far-label clicks
+ARE heatmap targets** (Gaussian at the click — no bbox relabel); the perspective warp still helps
+(scale-normalize + field-band crop → fewer pixels, ball ~uniform size). Detailed survey of candidate
+architectures + the no-train baseline comparison are archived on **F:** (external research stays out
+of the OSS repo).
+
+**Edge constraint is non-binding:** requirement is 90 min @ 20 fps in <24 h = **~1.25 fps** (≈0.3 fps
+at every-4th-frame). Lightweight heatmap trackers run far faster than this on CPU (tens–hundreds of
+fps), so realtime is plausible while we optimize for ACCURACY (high input resolution, tiling) not
+speed. Hard requirement: stay CPU-executable + export to ONNX/CoreML/TFLite — **no required GPU**.
+
+**Next:** a no-training baseline of a pretrained heatmap model on the Irondequoit clip vs the 74%
+reference, then fine-tune on our warped frames + human far-ball labels. The nano bbox run (12%
+far-recall) stands as the recorded bbox baseline.
+
+---
+
 ## 2026-06-15: `target_width` is a swept speed/accuracy knob (the 1280 warp default is wrong for v4)
 
 **Context:** `field_warp.build_field_warp` resizes the warped band horizontally to `target_width`
