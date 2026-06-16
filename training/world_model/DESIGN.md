@@ -60,3 +60,27 @@ detector that already finds balls — self-reinforcing on the far field). For ze
 derive `size(location)` **purely geometrically** in `geometry.py`: project a real 0.22 m ball at each
 field location through the homography. Works on a brand-new game the instant the field is detected,
 and gives the size-consistency discriminator that geometrically rejects look-alikes.
+
+## Experiment log
+
+### EXP-1 (2026-06-16): decisive pre-GPU — world-model TBD over champion-J's heatmaps
+
+**Question:** does wrapping the *existing* champion-J heatmaps in the world-model (track-before-detect
++ physics) lift full-frame far-recall from the per-frame-argmax wall toward AutoCam's 0.74, with **no
+retraining**? If yes, the spine is proven before any GPU training.
+
+**Setup (isolated, on the idle GTX 1060 server `DESKTOP-5L867J8`):** `G:\ballresearch\dump_iron_peaks.py`
+reuses J's exact warp/mask/model (`hm_J.pt`, base24) READ-ONLY from `G:\v4bench`, but stores the **top-12
+peaks per frame** (not the global argmax) for every frame of the held-out Irondequoit clip (705 frames,
+~1.7 s/frame on the 1060). `iron_eval.py` then runs the per-frame-argmax baseline vs `run_tbd` over the
+consecutive-frame peaks and scores center-distance recall (R=20, splits all/veryfar/acmissed).
+
+**Baselines (from the session's `hm_fulleval_results.jsonl`, same 162/131/39 GT):**
+- AutoCam: all 0.76, **veryfar 0.74**, acmissed 0.0.
+- champion-J full-frame *search* (global argmax): veryfar **0.07–0.30** (settings-dependent), false-fire ~76%.
+- champion-J *track_oracle* (window anchored on the prev-frame GT — the greedy ceiling): **veryfar 0.473**.
+- champion-J *gated_track* (real causal tracker): veryfar **0.0** (locks onto the strongest distractor).
+
+The track_oracle 0.473 is the key number to beat: it's the ceiling a *greedy* per-frame window reaches.
+Track-before-detect optimizes the whole trajectory at once, so it can in principle exceed it. **Result:
+pending the full dump + eval (this run).**
