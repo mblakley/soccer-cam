@@ -132,3 +132,25 @@ def test_config_is_tunable():
     frames = [[Candidate(100 + 10 * t, 500.0, 0.6)] for t in range(5)]
     res = run_tbd(frames, NEUTRAL, cfg)
     assert len(res.points) == 5
+
+
+def test_occlusion_prediction_stays_in_frame_with_decay_and_clamp():
+    # Ball seen moving fast, then a long occlusion. Without decay+clamp the CV
+    # prediction would extrapolate off to infinity; with them it stays in-frame.
+    cfg = TBDConfig(
+        occlusion_decay=0.7,
+        frame_w=1000.0,
+        frame_h=600.0,
+        max_speed_px=2000.0,
+        teleport_px=2000.0,
+    )
+    frames = [[Candidate(100.0, 300.0, 0.9)], [Candidate(300.0, 300.0, 0.9)]]
+    frames += [[] for _ in range(30)]  # long occlusion
+    res = run_tbd(frames, NEUTRAL, cfg)
+    by = {p.frame_idx: p for p in res.points}
+    assert len(res.points) == 32
+    for p in res.points:  # every predicted position stays within the clamp box
+        assert -1.0 <= p.x <= 1001.0
+        assert -1.0 <= p.y <= 601.0
+    assert not by[31].detected  # deep in occlusion
+    assert by[31].x < 1000.0  # decayed to a stop, did not run away

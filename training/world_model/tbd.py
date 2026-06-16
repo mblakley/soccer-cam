@@ -86,6 +86,11 @@ class TBDConfig:
 
     # Occlusion.
     miss_logprob: float = -3.5  # invisibility penalty for a frame with no detection
+    occlusion_decay: float = (
+        1.0  # velocity *= this each missed frame (<1 = coast to a stop)
+    )
+    frame_w: float = 0.0  # if >0, clamp predicted (occlusion) positions to [0, frame_w]
+    frame_h: float = 0.0  # if >0, clamp predicted (occlusion) positions to [0, frame_h]
 
     # Search width.
     max_candidates_per_frame: int = 24  # top-K peaks kept per frame
@@ -216,8 +221,20 @@ def run_tbd(
             for pi, ps in enumerate(prev):
                 if ps is None:
                     continue
-                pred = ps.pos + ps.vel
-                npos = pos if (det and pos is not None) else pred
+                if det and pos is not None:
+                    npos = pos
+                else:
+                    # Occlusion: coast on a decaying velocity, clamped in-frame so a
+                    # long miss-run can't extrapolate off to infinity.
+                    pred = ps.pos + ps.vel * cfg.occlusion_decay
+                    if cfg.frame_w > 0.0:
+                        pred = np.array(
+                            [
+                                min(max(pred[0], 0.0), cfg.frame_w),
+                                min(max(pred[1], 0.0), cfg.frame_h),
+                            ]
+                        )
+                    npos = pred
                 disp = npos - ps.pos
                 speed = float(np.hypot(disp[0], disp[1]))
                 if speed > cfg.teleport_px:
