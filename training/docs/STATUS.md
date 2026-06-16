@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-06-16*
 
 ## Active focus: v4 ball detector (perspective-normalized, full-frame, no tiles)
 
@@ -34,9 +34,26 @@ IoU-mAP is meaningless. **v4 is now a ball-center HEATMAP + multi-frame detector
   (`/api/field-boundary` now serves the 7680×2160 v4 clips from `D:/training_data/v4_fields`).
 - Edge budget: 90 min @ 20 fps in <24 h = 1.25 fps; the heatmap net runs far faster on CPU
   (ONNX/CoreML/TFLite). Optimize for accuracy, not speed.
-- **Next:** Mark labels the gap frames → rebuild crops on real labels → train (the GPU venv with
-  CUDA-ORT+torch+ultralytics+av is `G:\pipeline_work\fk\.venv`, needs `torch\lib` on PATH) → eval
-  vs 74% → iterate (more games, motion-attention, native-resolution tuning).
+### OVERNIGHT 2026-06-16 — trained + evaluated; full record in `V4_HEATMAP_EXPERIMENTS.md`
+Mark labeled far balls on `heat_0527_segA` (62) + `_d` (8) + rejected 34 AutoCam FPs. Ran the heatmap
+training/eval program on the 1060 (venv `G:\pipeline_work\fk\.venv`, `torch\lib` on PATH). Key outcomes:
+- **Root-cause bug fixed (committed):** the field band was cropped at the ground far line with no upward
+  margin → ~33% of very-far GT balls were cropped out (uncountable). Fixed: band built from the
+  far-margin-expanded polygon (`heatmap_dataset.py`, default `far_margin=400`). Honest denominators now
+  match AutoCam (all=162, veryfar=131).
+- **Crop-eval (localization given a window): champion J (base24, aug2=blur+illum, wd5e-4) veryfar 0.78,
+  recovers 64% of balls AutoCam missed** — beats AutoCam's 0.74 *on that task*. Big levers: band fix,
+  human labels, photometric+blur augmentation.
+- **⚠ Full-frame SEARCH eval (the real task, = how AutoCam's 0.74 is measured): J only 0.29 veryfar,
+  false-fires on 76% of frames. We do NOT yet beat AutoCam on the real task.** The crop-eval overstated
+  ~2.7× (tight window hides distractors). Diagnosis (false-fire overlays): the model fires on the
+  player/line ADJACENT to the tiny far ball — fine ball-vs-distractor discrimination is the gap.
+- Tried + FAILED: heavy random negative mining (8:1 destabilized focal training, worse). Tracking-mode
+  eval (track_oracle 0.47) confirms it's discrimination, not search scope. Motion-channel test running.
+- **Next levers (untried, ranked):** hard-negative mining (train on the actual false-fire crops),
+  more training games (only 05-27 labeled), explicit motion, then the `target_width` SPEED sweep
+  (native band = 0.08 fps CPU, ~16× over the 1.25 fps budget — `target_width` knob added, deferred until
+  full-frame precision is real). Scratch engine/evals live on the server `G:\v4bench\` (not committed).
 - The YOLO / I/O-benchmark / warped-shard plan below is **superseded** (kept for history).
 
 ### v4 session progress (2026-06-15)
