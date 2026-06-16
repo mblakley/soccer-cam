@@ -61,6 +61,23 @@ derive `size(location)` **purely geometrically** in `geometry.py`: project a rea
 field location through the homography. Works on a brand-new game the instant the field is detected,
 and gives the size-consistency discriminator that geometrically rejects look-alikes.
 
+## Decision: viewport/area recall is the real metric, not pixel-exact (2026-06-16)
+
+**Context (Mark):** "I don't really care if we know exactly where the ball is — I just want the rendered
+viewport to be looking at the area the ball is in." The renderer crops a large window from the 7680-wide
+pano, so a prediction off by 50-150 px still shows the ball; only a jump to a *different area* (a sideline
+ball, a player cluster across the field) actually breaks the shot.
+
+**Decision.** The primary metric is **area recall** — is the ball within the rendered viewport (≈ a few
+hundred px) — plus **area stability** (a smooth track that doesn't jump areas). Pixel-exact recall
+(R=20, AutoCam's 0.74) is kept only as a precision *diagnostic*. `iron_eval.py` reports veryfar recall
+across a radius sweep (R = 20/50/100/200/400) so we read the area metric directly; R≈200-400 is the
+renderer-relevant target. Implication: J's *adjacent-player/line* false-fires (near the ball) are largely
+harmless at viewport scale — the world-model's job narrows to preventing **wrong-area** jumps and keeping
+the track smooth, which is exactly what continuity + support + TBD do. (A proper viewport simulation —
+the renderer's actual crop size + smoothing, scoring ball-in-crop % — is the eventual metric; the radius
+sweep is the first-cut proxy.)
+
 ## Decision: anti-overfitting experiment protocol (2026-06-16)
 
 **Context.** Training will be short/small (fast 4070 iteration, limited human-labeled games). The classic
