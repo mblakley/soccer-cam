@@ -281,16 +281,19 @@ no GPU**) and measured candidate-recall (is the ball anywhere in the candidate s
 | motion (MOG2) | 0.252 | 0.771 | 0.908 |
 | **fused J + motion** | **0.763** | **0.954** | **0.992** |
 
-Appearance and motion are **strongly complementary** — motion finds the moving ball where the dim
-heatmap misses it; appearance finds it when slow/occluded. **At viewport scale the ball is in the fused
-candidate set 99% of the time, with no detector training.** But the simple closest-gate causal tracker
-only *realizes* 0.74–0.77 @R400 of that: motion adds ~20 noisy blobs/frame, and after a J-gap the
-prediction drifts so "closest" grabs a player.
+**Important nuance:** filtering motion blobs to ball-sized (area ≤30 px²) leaves **zero** blobs — *all*
+MOG2 motion is **player-sized**. So motion is not detecting the tiny far *ball*; it is detecting
+**player action**, whose centroid sits near the ball at viewport scale. So the "motion candidate-recall"
+is really an **action-area** signal (the *"action clusters around the ball"* prior, R4): it bounds where
+the ball *is* (to ~200 px, 91% of the time) but does not localize it precisely. The fused 0.99 @R200 is
+therefore **area-level coverage**, not 99% precise detection — and exactly right for the *viewport* goal,
+while tight-R precision still needs the appearance peak (J 0.565 @R20).
 
-**Reframed conclusion (supersedes "detector is the bottleneck"): the bottleneck is the TRACKER /
-selection, not the detector.** The ball signal is present ~99% of the time from *cheap* candidate
-generation (appearance + motion); realizing it needs a better world-model tracker — multi-hypothesis /
-windowed trajectory association over the fused candidates (Phase 2, CPU-cheap). **Implication: beating
-AutoCam may not require expensive detector retraining at all** — the biggest win yet for the minimal-GPU
-goal. **Next experiment:** a windowed multi-hypothesis tracker over fused candidates to close the
-0.74 → 0.99 gap.
+**Reframed conclusion.** Two complementary signals, both cheap and training-free: **appearance (J) for
+precise ball position** (when present) and **motion/action for the ball's area** (almost always). The
+simple closest-gate tracker doesn't combine them well (motion's ~20 player blobs/frame add noise; after a
+J-gap "closest" grabs a player → 0.74–0.77 @R400). The lever is the **tracker + using action as an
+area prior** (R4), largely CPU-side — **not necessarily detector retraining.** **Next experiment (EXP-5):
+**use motion/action as a soft area *prior* that pulls the prediction toward the action centroid, with the
+appearance peak for precision — a windowed/multi-hypothesis tracker — to realize more of the area ceiling
+at viewport scale.
