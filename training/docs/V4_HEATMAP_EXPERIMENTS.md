@@ -47,6 +47,7 @@ Loss → ~0 while recall 0 — blank-heatmap minimum (~2–80 ball px in 65,536)
 | tag | crop | sigma | loss | lr | ep | aug | all | veryfar | acmissed | notes |
 |-----|------|-------|------|----|----|-----|-----|---------|----------|-------|
 | A | 128 | 6 | focal | 1e-3 | 60 | no | 0.29 | **0.38** | 0.00 | train-fit 84%; big train→val gap (domain/lighting) → augment next. acmissed 0 (only AutoCam labels) |
+| B | 128 | 6 | focal | 1e-3 | 80 | yes | 0.53 | **0.50** | **0.13** | photometric aug = big win: veryfar 38→50, **acmissed 0→13 (recovers balls AutoCam missed!)**. fp rising (watch precision) |
 
 _AutoCam baseline: all 76%, **veryfar 74%**, acmissed 0% (by definition). veryfar is the bar to beat._
 
