@@ -380,6 +380,15 @@ realises only ~0.41 of a ~1.0 ceiling: on this hard clip the bottleneck is the *
 the Phase-2 multi-hypothesis tracker. Validation pipeline (dump → far-label set → human GT → score vs
 AutoCam) is now turnkey for the rest of Mark's clips.
 
+**Fix from EXP-8 — motion-protected suppression (`measurements.suppress_static_candidates(..., motion=)`):**
+the diagnostics showed my static-suppression was *deleting the nearly-static deep-corner ball as
+background* (candidate-recall 0.93 → 0.82 @R400), and no single occupancy threshold worked across games
+(clip1 wants high, Fairport catastrophic at high). The principled fix uses Mark's "action clusters around
+the ball" prior: **only suppress a static cell if it has NO motion nearby** — a background line has no
+motion next to it; a static ball has players moving around it. Result: clip-1 candidate-recall restored to
+0.93, tracker **0.41 → 0.52 @R400**, and **no regression on Irondequoit (0.87) / Fairport (0.71)**.
+Remaining gap (0.52 vs 0.93 ceiling) is the greedy tracker's selection — the Phase-2 multi-hypothesis work.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the

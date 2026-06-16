@@ -47,5 +47,28 @@ def test_restart_static_ball_survives_but_background_suppressed():
     assert any(abs(c.x - 500) < 1 and abs(c.y - 500) < 1 for c in out[0])
 
 
+def test_motion_protects_a_static_ball_but_suppresses_a_static_line():
+    # A nearly-static ball at (500,500) with players (motion) moving around it, plus
+    # a static background "line" at (100,100) with NO motion. With motion given, the
+    # ball is protected (action nearby) while the line is still suppressed.
+    appearance = []
+    motion = []
+    for _ in range(40):
+        appearance.append([Candidate(500.0, 500.0, 0.7), Candidate(100.0, 100.0, 0.9)])
+        motion.append(
+            [Candidate(510.0, 520.0, 1.0), Candidate(490.0, 510.0, 1.0)]
+        )  # near the ball only
+    out, static = suppress_static_candidates(appearance, motion=motion)
+    assert any(
+        abs(c.x - 500) < 1 and abs(c.y - 500) < 1 for c in out[0]
+    )  # ball survives
+    assert all(
+        not (abs(c.x - 100) < 1 and abs(c.y - 100) < 1) for c in out[0]
+    )  # line gone
+    # Without motion, the static ball would be wrongly suppressed too:
+    out2, _ = suppress_static_candidates(appearance)
+    assert all(not (abs(c.x - 500) < 1 and abs(c.y - 500) < 1) for c in out2[0])
+
+
 def test_empty_input():
     assert suppress_static_candidates([]) == ([], set())

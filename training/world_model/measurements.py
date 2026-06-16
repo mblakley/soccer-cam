@@ -34,20 +34,29 @@ from training.world_model.tbd import Candidate
 
 def suppress_static_candidates(
     frame_lists: list[list[Candidate]],
+    motion: list[list[Candidate]] | None = None,
     cell_px: float = 40.0,
     occupancy_frac: float = 0.5,
+    motion_guard_frac: float = 0.1,
     dilate: bool = True,
 ) -> tuple[list[list[Candidate]], set[tuple[int, int]]]:
     """Drop candidates in grid cells that hold a peak in most of the clip.
 
     Args:
         frame_lists: per-frame candidate lists (consecutive frames).
+        motion: optional per-frame motion/action blobs (same length). When given,
+            a static cell is **protected** (NOT suppressed) if it has motion nearby
+            — a background line/marking has no motion next to it, but an in-play
+            ball (even a nearly-static one in a deep-corner play) has players moving
+            around it (the "action clusters around the ball" prior). This stops a
+            static *ball* being deleted as background (EXP-8: clip-1 candidate-recall
+            0.82 → 0.93 @R400, no Irondequoit/Fairport regression).
         cell_px: grid cell size in source pixels.
-        occupancy_frac: a cell is "static background" only if it contains a peak
-            in more than this fraction of the **whole clip** (default 0.5). A
-            background line/marking is present nearly every frame; a ball sitting
-            still at a restart (throw-in, free-kick, ...) is brief and stays well
-            under this, so it survives. Tune up for short, restart-dominated clips.
+        occupancy_frac: a cell is a "static" candidate only if it contains a peak in
+            more than this fraction of the **whole clip** (default 0.5). A brief
+            restart ball stays well under this; a whole-clip background line exceeds it.
+        motion_guard_frac: with ``motion``, a static cell is suppressed only if its
+            3x3 neighbourhood has motion in <= this fraction of frames (no action → background).
         dilate: also suppress the 8 neighbouring cells (covers peak jitter).
 
     Returns:
@@ -62,7 +71,24 @@ def suppress_static_candidates(
     for cands in frame_lists:
         for cell in {(int(c.x // cell_px), int(c.y // cell_px)) for c in cands}:
             occ[cell] += 1
-    static = {cell for cell, count in occ.items() if count > occupancy_frac * n}
+    candidates = {cell for cell, count in occ.items() if count > occupancy_frac * n}
+
+    if motion is not None:
+        mocc: dict[tuple[int, int], int] = defaultdict(int)
+        for cands in motion:
+            for cell in {(int(c.x // cell_px), int(c.y // cell_px)) for c in cands}:
+                mocc[cell] += 1
+        static = set()
+        for cx, cy in candidates:
+            near = sum(
+                mocc.get((cx + dx, cy + dy), 0)
+                for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)
+            )
+            if near <= motion_guard_frac * n:  # no action nearby → background, suppress
+                static.add((cx, cy))
+    else:
+        static = candidates
 
     blocked = set(static)
     if dilate:
