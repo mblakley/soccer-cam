@@ -14,6 +14,31 @@ Branch: `feat/perspective-normalized-detector`. The full design + experiment fin
 **`training/docs/PERSPECTIVE_NORMALIZED_DETECTOR.md`** (read it first — source of truth for the v4
 architecture, warp levers, labeling plan, I/O design). This STATUS is the launchpad.
 
+### CURRENT (2026-06-15 — HEATMAP pivot; supersedes the YOLO/I-O-gate plan below)
+The bbox/YOLO approach FAILED the first honest eval — **12% far-recall vs AutoCam's 74%**
+(center-distance vs Mark's human ground truth): a 3-8px ball is at/below the detector stride and
+IoU-mAP is meaningless. **v4 is now a ball-center HEATMAP + multi-frame detector** (see DECISIONS
+2026-06-15; external survey + the bbox & pretrained-zero-shot baselines archived on
+`F:\archive\v4_detector\`). Runtime + training pipeline =
+**dewarp (native-res field-band crop) → polygon-mask (human-verified polygon, far margin) →
+3 consecutive grayscale frames → compact U-Net → center heatmap → peak.**
+- Built + **smoke-verified end-to-end**: `training/models/heatmap_net.py`,
+  `training/data_prep/heatmap_dataset.py`, `training/train_v4_heatmap.py`, `tests/test_heatmap.py`.
+  Eval = center-distance far-recall vs AutoCam 74% (Irondequoit held out).
+- **Blocked on human far-ball labels.** Far-label tool (annotation server `:8650`, Tailscale
+  `trainer.goat-rattlesnake.ts.net`) was rebuilt **gap-centric** (conf≥0.5 trajectory → velocity-
+  extrapolated "ball went far and got lost" frames): sets `heat_0527_segA/b/c/d` (~362 gap frames)
+  await labels; `irondequoit` (162) = eval GT. Tool: pre-seeds AutoCam, `F` jumps gap-to-gap, arrow
+  marker, full-height strips.
+- Field polygons human-edited via the unified, **resolution-aware** `annotate.html` field editor
+  (`/api/field-boundary` now serves the 7680×2160 v4 clips from `D:/training_data/v4_fields`).
+- Edge budget: 90 min @ 20 fps in <24 h = 1.25 fps; the heatmap net runs far faster on CPU
+  (ONNX/CoreML/TFLite). Optimize for accuracy, not speed.
+- **Next:** Mark labels the gap frames → rebuild crops on real labels → train (the GPU venv with
+  CUDA-ORT+torch+ultralytics+av is `G:\pipeline_work\fk\.venv`, needs `torch\lib` on PATH) → eval
+  vs 74% → iterate (more games, motion-attention, native-resolution tuning).
+- The YOLO / I/O-benchmark / warped-shard plan below is **superseded** (kept for history).
+
 ### v4 session progress (2026-06-15)
 - **I/O benchmark gate built** (the prerequisite — no long run before it passes):
   `data_prep/warped_pack.py` (pre-decoded warped-frame shards: writer/reader + torch Dataset +
