@@ -3294,9 +3294,10 @@ async function viewFieldBoundary(gameId) {
       // The panoramic endpoint returns half-res, so canvas matches that
       canvas.width = img.width;
       canvas.height = img.height;
-      // Scale factor: the polygon is in full panoramic coords, image is half-res
-      const scaleX = img.width / 4096;
-      const scaleY = img.height / 1800;
+      // Scale factor: polygon is in the game's full source coords (src_w x src_h,
+      // e.g. 4096x1800 tiled-pano or 7680x2160 Reolink), image may be any res.
+      const scaleX = img.width / (detail.src_w || 4096);
+      const scaleY = img.height / (detail.src_h || 1800);
 
       // Initialize 10 points: resample existing polygon or use template
       let points = [];

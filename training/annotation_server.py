@@ -1512,12 +1512,40 @@ async def list_field_boundaries():
     except Exception:
         pass
 
+    # v4 field-store games (Reolink clips) — edited via this same editor
+    if FIELD_EDIT_DIR.exists():
+        for d in sorted(FIELD_EDIT_DIR.iterdir()):
+            mp = d / "meta.json"
+            if mp.exists():
+                gid = json.loads(mp.read_text()).get("game_id", d.name)
+                results.append(
+                    {
+                        "game_id": gid,
+                        "has_polygon": True,
+                        "source": "human_field_edit",
+                        "confidence": 1.0,
+                        "needs_human_review": False,
+                    }
+                )
     return {"games": results, "not_tiled": not_tiled}
 
 
 @app.get("/api/field-boundary/{game_id}")
 async def get_field_boundary(game_id: str):
     """Get field boundary polygon for a specific game."""
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        meta = json.loads((v4 / "meta.json").read_text())
+        poly = json.loads((v4 / "polygon.json").read_text()).get("polygon")
+        return {
+            "game_id": game_id,
+            "polygon": poly,
+            "source": "human_field_edit",
+            "confidence": 1.0,
+            "needs_human_review": False,
+            "src_w": meta.get("src_w", 7680),
+            "src_h": meta.get("src_h", 2160),
+        }
     from training.data_prep.game_manifest import GameManifest
 
     game_dir = GAMES_DIR / game_id
@@ -1549,10 +1577,14 @@ async def get_field_boundary(game_id: str):
             "source": "template",
             "confidence": 0,
             "needs_human_review": True,
+            "src_w": 4096,
+            "src_h": 1800,
         }
 
     fb = json.loads(fb_raw)
     fb["game_id"] = game_id
+    fb.setdefault("src_w", 4096)
+    fb.setdefault("src_h", 1800)
     return fb
 
 
@@ -1569,6 +1601,23 @@ async def save_field_boundary(game_id: str, request: Request):
 
     if not polygon or len(polygon) < 4:
         raise HTTPException(400, "Polygon must have at least 4 points")
+
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        meta = json.loads((v4 / "meta.json").read_text())
+        payload = {
+            "polygon": [[float(x), float(y)] for x, y in polygon],
+            "source": "human_field_edit",
+            "game": game_id,
+        }
+        (v4 / "polygon.json").write_text(json.dumps(payload))
+        for cp in meta.get("canonical_paths", []):
+            try:
+                Path(cp).write_text(json.dumps(payload))
+            except Exception as e:
+                logger.warning("v4 canonical polygon write failed %s: %s", cp, e)
+        logger.info("Saved v4 field polygon for %s: %d points", game_id, len(polygon))
+        return {"accepted": True, "point_count": len(polygon)}
 
     game_dir = GAMES_DIR / game_id
     if not game_dir.exists():
@@ -1596,6 +1645,12 @@ async def get_field_boundary_panoramic(
     game_id: str, overlay: bool = True, flip: bool = False
 ):
     """Serve a panoramic JPEG, optionally with the field boundary polygon overlaid."""
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        f = v4 / "frame.jpg"
+        if not f.exists():
+            raise HTTPException(404, "Frame not found")
+        return FileResponse(f, media_type="image/jpeg")
     from training.data_prep.game_manifest import GameManifest
     from training.tasks.field_boundary import reconstruct_panoramic
 
@@ -1781,68 +1836,20 @@ async def submit_far_label(set_id: str, result: dict):
 FIELD_EDIT_DIR = Path("D:/training_data/v4_fields")
 
 
-def _fe_dir(set_id: str) -> Path:
-    d = FIELD_EDIT_DIR / set_id
-    if not (d / "meta.json").exists():
-        raise HTTPException(404, f"Field-edit set not found: {set_id}")
-    return d
+def _v4_store_by_game(game_id: str) -> Path | None:
+    """v4 field-store dir whose meta.game_id matches game_id, else None.
 
-
-@app.get("/api/field-edit")
-async def list_field_edit():
-    out = []
+    v4 clips (7680x2160 Reolink) are edited THROUGH the existing
+    /api/field-boundary editor (annotate.html) — no separate editor — so those
+    endpoints branch to this store when the game_id is a v4 one.
+    """
     if not FIELD_EDIT_DIR.exists():
-        return out
+        return None
     for d in sorted(FIELD_EDIT_DIR.iterdir()):
-        if (d / "meta.json").exists():
-            meta = json.loads((d / "meta.json").read_text())
-            out.append({"set": d.name, "game_id": meta.get("game_id", d.name)})
-    return out
-
-
-@app.get("/api/field-edit/{set_id}")
-async def get_field_edit(set_id: str):
-    d = _fe_dir(set_id)
-    meta = json.loads((d / "meta.json").read_text())
-    poly = json.loads((d / "polygon.json").read_text()).get("polygon")
-    return {
-        "set": set_id,
-        "game_id": meta.get("game_id", set_id),
-        "src_w": meta.get("src_w", 7680),
-        "src_h": meta.get("src_h", 2160),
-        "polygon": poly,
-        "frame_url": f"/api/field-edit/{set_id}/frame",
-    }
-
-
-@app.get("/api/field-edit/{set_id}/frame")
-async def get_field_edit_frame(set_id: str):
-    f = _fe_dir(set_id) / "frame.jpg"
-    if not f.exists():
-        raise HTTPException(404, "Frame not found")
-    return FileResponse(f, media_type="image/jpeg")
-
-
-@app.post("/api/field-edit/{set_id}")
-async def save_field_edit(set_id: str, body: dict):
-    d = _fe_dir(set_id)
-    meta = json.loads((d / "meta.json").read_text())
-    poly = body.get("polygon")
-    if not poly or len(poly) < 4:
-        raise HTTPException(400, "Polygon needs >= 4 points")
-    payload = {
-        "polygon": [[float(x), float(y)] for x, y in poly],
-        "source": "human_field_edit",
-        "game": meta.get("game_id"),
-    }
-    (d / "polygon.json").write_text(json.dumps(payload))
-    # propagate to the canonical pipeline location(s) the warp + mask read
-    for cp in meta.get("canonical_paths", []):
-        try:
-            Path(cp).write_text(json.dumps(payload))
-        except Exception as e:
-            logger.warning("field-edit canonical write failed %s: %s", cp, e)
-    return {"accepted": True, "points": len(poly)}
+        mp = d / "meta.json"
+        if mp.exists() and json.loads(mp.read_text()).get("game_id") == game_id:
+            return d
+    return None
 
 
 # Static file mount must come AFTER all API routes (catch-all).
