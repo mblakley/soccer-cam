@@ -205,7 +205,7 @@ function next(){ if(cur<frames.length-1){ cur++; show(); } else finish(); }
 function prev(){ if(cur>0){ cur--; show(); } }
 function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_idx]) finish(); else { cur=i; show(); } }
 function isFar(f){ return f.hint_y <= FARY; }
-function needsReview(f){ const l=labels[f.frame_idx]; return isFar(f) && (!l || l.source!=="human"); }
+function needsReview(f){ const l=labels[f.frame_idx]; return (!l || l.source!=="human") && (isFar(f) || f.autocam===false); }
 function gotoFar(){ for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } } finish(); }
 function finish(){ document.getElementById("stage").style.display="none"; document.querySelector(".bar").style.display="none";
   document.getElementById("done").style.display="block"; document.getElementById("dlLink").href=`${API}`; }
