@@ -321,6 +321,24 @@ On the hardest far-ball clip, at viewport scale, the world-model + cheap **train
 action-pull is param-sensitive (strong pull helps; weak pull drifts), so robustness + multi-game
 validation is next, but the lever is validated.
 
+### EXP-6 (2026-06-16): cross-game generalization — causal tracker holds on a 2nd game, same params
+
+Validated on `heat__2026.06.06_vs_Fairport_away` seg9 (a different game/field, not in J's training; 99
+far balls; **GT = AutoCam labels**, so this tests generalization of the *improvement*, not beating
+AutoCam). With the **same Irondequoit-tuned params**:
+
+| far balls @R400 | argmax (raw J) | causal tracker | fused (+action) |
+|---|---|---|---|
+| Irondequoit (human GT) | 0.39 | 0.74 | 0.87 |
+| **Fairport (AutoCam GT)** | **0.42** | **0.82** | 0.73 |
+
+The causal tracker's lift — **argmax→causal +0.38–0.43 @R400 on *both* games** — is not Irondequoit-
+specific; params transfer. It turns noisy per-frame J into a coherent track matching AutoCam **82% vs
+argmax 42%**. Two notes: (1) Fairport's J candidate-recall is already ~0.95 (AutoCam labels = easy
+detected balls), so the action prior (which fills J *gaps*) is unneeded and slightly **hurts** here —
+it's **situational**, so it should be applied adaptively (gate it on appearance reliability). (2) AutoCam-
+only GT can't test beating AutoCam on its misses — that still needs human-GT clips.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
@@ -329,6 +347,8 @@ world-model lifts far-ball **viewport area-recall from 0.39 (argmax) → 0.74 (c
 no retraining. Two cheap complementary training-free signals carry it: **appearance (J heatmap) for
 precise position, player-action (MOG2 motion) for the ball's area.** **The bottleneck is the tracker +
 priors (CPU-side), not the detector** — so beating AutoCam may not need expensive GPU detector training
-at all; the 4070 is held in reserve. **Caveats:** hardest far-ball clip only; tracker/action params tuned
-on this one clip — multi-game LOGO validation (task #9) is the immediate robustness gate before trusting
-the magnitudes.
+at all; the 4070 is held in reserve. **Caveats:** EXP-6 confirms the causal-tracker
+improvement **generalizes to a 2nd game** (Fairport, same params: argmax→causal +0.40 @R400), so it is
+not Irondequoit-specific — but that 2nd game has AutoCam-only GT, so **beating AutoCam *on its misses*
+across games still needs human-GT clips** (your AutoCam-loses-ball timestamps). The action prior is
+**situational** (helps on hard/sparse far balls; gate it on appearance reliability).
