@@ -212,7 +212,12 @@ field (8 vs ~50 px) but not in the far field, which is exactly where the recall 
 (The geometry homography from the human polygon is directionally sane — expected ball px far 4.8 < near
 10.0 — but its magnitude is off vs the observed 8px ball, so the geometric size prior actively hurts.)
 
-## CONCLUSION OF EXP-1/2: the detector is the bottleneck; analytic post-processing cannot rescue it
+## Interim conclusion of EXP-1/2 — CORRECTED by EXP-3 (causal tracking DOES rescue J)
+
+> **Correction (see EXP-3 below).** This section concluded the world-model could not help on J. That was
+> specific to the *global-MAP Viterbi* inference + the size prior. A *causal continuity* tracker DOES
+> rescue J — far-ball viewport area-recall 0.39 → 0.84. The text below is kept as the honest record of
+> which levers failed (global-MAP, size prior) and the one that helped (static suppression).
 
 Across both experiments, on the hardest split (far balls — where AutoCam also fails), **no cheap analytic
 lever rescues recall**: motion-only TBD locks on static background (fixed by suppression) then coasts
@@ -231,3 +236,33 @@ ones that don't rely on size: (a) the session's high-res perspective-warped dete
 ballistically while far players move slowly/bipedally, a multi-frame signal a single-frame heatmap misses;
 (c) two-stage candidate→classifier. Scope caveat: this clip is a deliberately hard far-ball segment;
 normal near/mid play is far easier, so the world-model + suppression already give a usable viewport there.
+
+### EXP-3 (2026-06-16): causal continuity tracking DOES rescue J — strategy validated pre-GPU
+
+Two findings overturn the interim pessimism:
+
+1. **Candidate-recall ceiling.** The far ball is in J's top-12 candidates **0.565 @R20, 0.656 @R100,
+   0.779 @R200** (median rank 0 when present). The detector surfaces the ball *far* more than argmax's
+   0.29 uses — in ~36 far frames the ball is present but a distractor outscores it. Recoverable by
+   continuity.
+2. **Causal tracking recovers them.** Global-MAP Viterbi was the wrong inference for an *intermittent*
+   target (prefers a smooth distractor/coast path → ~0). A **causal continuity tracker** (predict → gate
+   → pick the candidate **closest to the prediction**; coast + re-acquire) on static-suppressed
+   candidates gives:
+
+   | metric (far balls, hardest split) | R20 | R200 | R400 (viewport) |
+   |---|---|---|---|
+   | argmax (raw J) | 0.290 | 0.359 | 0.389 |
+   | **causal tracker (tuned)** | **0.405** | **0.656** | **0.840** |
+
+At viewport scale the world-model lifts far-ball area-recall **0.39 → 0.84** — near the candidate-recall
+ceiling, i.e. it recovers nearly every frame where the ball is detectable at all, on J's existing heatmap
+with **no retraining**. **"Continuity beats appearance" confirmed:** `pick=closest` >> `pick=score`.
+
+**Corrected conclusion.** The world-model is the right architecture AND it materially helps on the
+current detector — the strategy is promising *before* any GPU training. The residual is the ~22% of
+frames (@R200) where the ball is not a candidate at all; raising that ceiling is the detector's job
+(motion candidates / Phase-1). **Anti-overfit caveat:** the tracker params (gate0=80, max_lost=8,
+alpha=0.5) are tuned on this one clip — multi-game LOGO validation is the immediate robustness step
+(even untuned configs beat argmax, e.g. gate0=100 → 0.52 @R400). Productionized as `tracker.py`
+(`causal_track` + `TrackerConfig`, 4 tests).
