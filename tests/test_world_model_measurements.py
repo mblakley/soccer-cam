@@ -28,5 +28,24 @@ def test_keeps_all_when_nothing_static():
     assert sum(len(c) for c in out) == 10
 
 
+def test_restart_static_ball_survives_but_background_suppressed():
+    # Whole-clip background line at (100,100); the ball sits still at (500,500)
+    # for the first 30 of 100 frames (a restart wait) then moves away. Background
+    # is suppressed; the briefly-static restart ball survives (it's <50% of clip).
+    fl = []
+    for t in range(100):
+        cands = [Candidate(100.0, 100.0, 0.9)]
+        if t < 30:
+            cands.append(Candidate(500.0, 500.0, 0.7))  # waiting at the restart
+        else:
+            cands.append(Candidate(500.0 + 20 * (t - 30), 500.0, 0.7))  # then moving
+        fl.append(cands)
+    out, _ = suppress_static_candidates(fl)  # default frac=0.5
+    for cands in out:  # background gone everywhere
+        assert all(not (abs(c.x - 100) < 1 and abs(c.y - 100) < 1) for c in cands)
+    # restart-static ball present in the early (waiting) frames
+    assert any(abs(c.x - 500) < 1 and abs(c.y - 500) < 1 for c in out[0])
+
+
 def test_empty_input():
     assert suppress_static_candidates([]) == ([], set())
