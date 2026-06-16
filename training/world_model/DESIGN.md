@@ -50,6 +50,13 @@ to whichever ball is in **active play**, and the role can **hand off** between p
   no switch; (B) a *different* ball is **sustainedly** played in (seconds) while the original stays out →
   transfer the role. Hysteresis on (B) avoids flicker. Net: a second ball appearing while the game ball
   is still in play never triggers a switch — only an out-of-play exit can.
+- **Intruder balls (brief in-field non-game balls).** A ball kicked onto the field from the sideline or
+  an adjacent field, then collected and removed quickly. Handled by the same two rules with no special
+  case: it never wins the role because (a) the real game ball is usually still in play (the gate stays
+  shut), and (b) the intrusion is brief (fails the sustained-in-play hysteresis). It's tracked as a
+  transient hypothesis that dies out. Its trajectory also *originates from outside* the field (enters
+  across the boundary and leaves), unlike the game ball's continuous in-field path — an extra
+  distinguishing cue.
 
 **Why it matters.** This is the principled form of "single object, no teleport": *within* a hypothesis,
 no teleport; *across* hypotheses, a sustained in-play handoff is allowed. It leans on the player/action
