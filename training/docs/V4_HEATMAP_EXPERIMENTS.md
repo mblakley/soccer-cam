@@ -30,6 +30,27 @@ recall vs AutoCam.
 Engine = `G:\v4bench\heatmap_exp.py` (cached dense labels + cached crops per size + train + far-split
 eval → appends `G:\v4bench\hm_results.jsonl`). `crop_diag2.py` = the crop/target visual check + train-fit.
 
+## Key finding (2026-06-16): THE BAND TOP WAS CROPPING OUT FAR BALLS (results A/B were on a soft subset)
+The field band (`field_band_from_polygon`) was cut at the **ground far line with no upward margin**, so
+every ball ABOVE it — airborne shots and the very-far balls we care about most — was cropped out of the
+band entirely and could never be detected OR counted. Measured impact:
+- **Irondequoit val: 53 of 162 GT balls (33%) were above the band top** → EXP-A/B `all` n=109, `veryfar`
+  n=78. **But the AutoCam baseline (74% = 97/131) is measured on all 131 veryfar GT** — so A/B's
+  "veryfar 38/50%" was on a softer 78-ball subset, NOT comparable to AutoCam.
+- Training data lost its hardest far balls too (segA 43/77, d 29/92 above band) → the net never saw the
+  y<far-line zone.
+
+**Fix (engine v2 = `heatmap_exp_v2.py`):** raise the polygon far edge by `--far_margin` (default 430) for
+BOTH band crop and mask, so far/airborne balls stay in-band. Verified 2026-06-16: val denominators are now
+`all` n=**162**, `veryfar` n=**131** (matches AutoCam exactly), `acmissed` n=**39**. **Recall is now an
+honest, apples-to-apples comparison vs AutoCam's 74% veryfar.** Numbers will look lower than B's inflated
+50% but are measured on the full, hard set including the 53 balls we were hiding.
+
+**Engine v2 also:** (2) `--labels combined` = dense AutoCam (near/mid bulk) + the user's 70 human-verified
+far balls (position overrides) − 34 user-rejected AutoCam FPs; (3) `--sigma` honored at runtime (was
+silently pinned to 4.0); (4) best epoch chosen by **veryfar** recall (the headline), not `all`; (5)
+`--aug 2` = gaussian blur + illumination gradient (domain-gap closers).
+
 ### (earlier) naive MSE AND focal COLLAPSE at crop=256/sigma=4
 Loss → ~0 while recall 0 — blank-heatmap minimum (~2–80 ball px in 65,536). Smaller crop + focal fixed it.
 
