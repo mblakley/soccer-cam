@@ -46,10 +46,14 @@ def _far_margin_polygon(polygon, far_margin: float) -> np.ndarray:
     return poly
 
 
-def _native_iso_warp(polygon, src_w: int, src_h: int):
-    """Isotropic field-band crop at native res (scale 1): the 'dewarp'."""
+def _native_iso_warp(polygon, src_w: int, src_h: int, target_width: int | None = None):
+    """Isotropic field-band crop: the 'dewarp'. ``target_width`` sets the warped width
+    (default = ``src_w`` → native scale 1). Lower values downscale the band isotropically
+    — the speed/accuracy knob: fewer pixels (cheaper inference) but a smaller ball."""
     yt, yb = field_band_from_polygon(polygon)
-    return CropIsoWarp(int(src_w), int(src_h), int(yt), int(yb), int(src_w))
+    return CropIsoWarp(
+        int(src_w), int(src_h), int(yt), int(yb), int(target_width or src_w)
+    )
 
 
 def _dewarp_mask_gray(frame_bgr, warp, mask):
@@ -69,9 +73,10 @@ def build_heatmap_crops(
     crop: int = 256,
     sigma: float = 4.0,
     jitter: int = 48,
-    far_margin: float = 120.0,
+    far_margin: float = 400.0,
     neg_ratio: float = 0.7,
     val_game_ids: set[str] | None = None,
+    target_width: int | None = None,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -104,10 +109,14 @@ def build_heatmap_crops(
         stream.thread_type = "AUTO"
         sw = stream.codec_context.width
         sh = stream.codec_context.height
-        warp = _native_iso_warp(polygon, sw, sh)
+        # Build BOTH the band crop and the mask from the far-margin-expanded polygon, so
+        # the band top includes the far margin — airborne/very-far balls above the ground
+        # far line stay in-band (cropping the band at the raw far line dropped ~1/3 of the
+        # very-far GT balls, capping far recall).
+        far_poly = _far_margin_polygon(polygon, far_margin)
+        warp = _native_iso_warp(far_poly, sw, sh, target_width)
         bh, bw = warp.shape
-        # band mask (with far margin), in dewarped/band coords
-        mpoly = warp.points(_far_margin_polygon(polygon, far_margin)).astype(np.int32)
+        mpoly = warp.points(far_poly).astype(np.int32)
         mask = np.zeros((bh, bw), np.uint8)
         cv2.fillPoly(mask, [mpoly], 255)
 

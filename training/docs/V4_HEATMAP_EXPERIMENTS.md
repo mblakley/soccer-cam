@@ -76,6 +76,22 @@ C onward use engine v2: fixed band (all=162, **veryfar=131 = AutoCam's set**), `
 
 _AutoCam baseline (honest, full set): all 0.76 (123/162), **veryfar 0.74 (97/131)**, acmissed 0 (by def)._
 
+## Full-frame eval (the airtight proof) — `hm_fulleval.py`
+Crop-eval centers a window on each GT ball (proves localization, not search). The full-frame eval runs
+the model fully-convolutionally over the WHOLE masked band (tiled for VRAM), global-peak-picks, maps
+band→source `(bx, by+y_top)`, and measures top-1 search recall + false-fire + per-frame inference cost.
+- **Visual confirmation (saved overlays):** on far/airborne balls (incl. tiny ones against the tree line —
+  exactly what the band fix recovered) the heatmap peak lands dead-on the GT, no spurious dominant peak.
+  Coordinate mapping verified correct.
+- **⚠ EDGE-COST FINDING:** at **native band resolution (2178×7680)** the base16 U-Net runs at **0.08 fps
+  on CPU (~13 s/frame)** → a 90-min/20fps video would take **~375 h, ~16× over the 24 h budget**. The
+  recall proof holds at native res; **edge-feasibility does NOT yet.** Reframes the goal: beat AutoCam
+  far-recall *at a deployable CPU speed*. Paths: (a) lower `target_width` (fewer px, smaller balls →
+  recall/speed sweep, next), (b) temporal ROI tracking (full-frame only to (re)acquire, cheap local
+  window otherwise — the realistic deployment mode AutoCam uses). Per-frame full-frame is the worst case.
+- (Smoke on first 12 frames gave veryfar top1 0.91 but is non-representative; full 131-set full-frame
+  recall is measured on the winning model next.)
+
 **Read so far (2026-06-16):** with the band fixed + the user's human far-labels + stronger augmentation,
 **E beats AutoCam on far balls in the crop-eval (veryfar 0.786 vs 0.74)** and recovers 18/39 balls AutoCam
 missed. Both C/E peak ~ep30-35 then overfit the single training game (05-27) → batch 2 adds capacity
