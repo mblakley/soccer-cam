@@ -67,14 +67,22 @@ Loss → ~0 while recall 0 — blank-heatmap minimum (~2–80 ball px in 65,536)
 ## Results
 **A/B (below) used the BROKEN band** (soft denominators all=109/veryfar=78) — NOT comparable to AutoCam.
 C onward use engine v2: fixed band (all=162, **veryfar=131 = AutoCam's set**), `combined` labels.
-| tag | engine | aug | wd | base | best-ep | all | veryfar | acmissed | notes |
-|-----|--------|-----|----|----|--------|-----|---------|----------|-------|
-| A | v1 broken-band | no | — | 16 | — | 0.29 | 0.38\* | 0.00 | \*soft 78-ball subset, not comparable |
-| B | v1 broken-band | aug1 | — | 16 | — | 0.53 | 0.50\* | 0.13\* | \*soft subset; photometric aug helped |
-| **C** | **v2 fixed-band** | aug1 | 0 | 16 | 35 | 0.722 | **0.718** | 0.513 | honest denom; combined labels; just under AutoCam |
-| **E** | **v2 fixed-band** | **aug2** | 0 | 16 | 30 | 0.753 | **0.786** | 0.462 | **BEATS AutoCam veryfar (103 vs 97/131)**; blur+illum-gradient aug = the unlock. fp 11/111 |
+| tag | aug | wd | base | best-ep | all | veryfar | acmissed | notes |
+|-----|-----|----|----|--------|-----|---------|----------|-------|
+| A | no | — | 16 | — | 0.29 | 0.38\* | 0.00 | v1 broken-band; \*soft 78-ball subset, not comparable |
+| B | aug1 | — | 16 | — | 0.53 | 0.50\* | 0.13\* | v1 broken-band; \*soft subset; photometric aug helped |
+| C | aug1 | 0 | 16 | 35 | 0.722 | 0.718 | 0.513 | honest denom; combined labels; just under AutoCam |
+| **E** | aug2 | 0 | 16 | 30 | 0.753 | **0.786** | 0.462 (18/39) | best veryfar; lowest fp (11/111) |
+| G | aug2 | 1e-4 | 24 | 40 | 0.735 | 0.71 | **0.641** (25/39) | base24 → acmissed jumps; veryfar lags; fp 22 |
+| H | aug2 | 1e-4 | 16 | — | 0.716 | 0.733 | 0.513 | sigma8 (bigger blob) — no gain |
+| I | aug3 | 1e-4 | 16 | — | 0.679 | 0.725 | 0.538 | +cutout — slightly hurt |
+| **J** | **aug2** | **5e-4** | **24** | — | 0.753 | **0.779** | **0.641** (25/39) | **CHAMPION: beats AutoCam veryfar AND best acmissed (recovers 25/39 balls AutoCam missed)**; fp 16 |
 
 _AutoCam baseline (honest, full set): all 0.76 (123/162), **veryfar 0.74 (97/131)**, acmissed 0 (by def)._
+
+**Champion = J** (base24, aug2 blur+illum, wd 5e-4, sigma6): veryfar 0.779 > AutoCam 0.74, and **acmissed
+0.641** — recovers 64% of the far balls AutoCam couldn't get. E edges veryfar (0.786) at much lower
+acmissed (0.46); J's capacity + weight-decay wins the *far-ball* goal. Cutout (I) and sigma8 (H) didn't help.
 
 ## Full-frame eval (the airtight proof) — `hm_fulleval.py`
 Crop-eval centers a window on each GT ball (proves localization, not search). The full-frame eval runs
@@ -92,9 +100,9 @@ band→source `(bx, by+y_top)`, and measures top-1 search recall + false-fire + 
 - (Smoke on first 12 frames gave veryfar top1 0.91 but is non-representative; full 131-set full-frame
   recall is measured on the winning model next.)
 
-**Read so far (2026-06-16):** with the band fixed + the user's human far-labels + stronger augmentation,
-**E beats AutoCam on far balls in the crop-eval (veryfar 0.786 vs 0.74)** and recovers 18/39 balls AutoCam
-missed. Both C/E peak ~ep30-35 then overfit the single training game (05-27) → batch 2 adds capacity
-(base 24), weight-decay, larger sigma, cutout. **Caveat:** crop-eval centers a window on each GT ball
-(±48px) — it proves *localization*, not full-frame *search*; the airtight proof needs the full-frame eval
-(global-peak recall + false-positive rate + inference cost) on the winning model — building it next.
+**Read so far (2026-06-16):** with the band fixed + the user's human far-labels + stronger augmentation +
+capacity/weight-decay, **J beats AutoCam on far balls (crop-eval veryfar 0.779 vs 0.74) and recovers
+25/39 (64%) of the balls AutoCam missed.** Remaining: (1) full-131 full-frame eval on J/E (running) for
+the honest search-recall + FP number; (2) the `target_width` speed sweep — native band is 0.08 fps CPU
+(16× over budget), so find the lowest TW that keeps veryfar > 0.74 at ≥1.25 fps CPU; (3) the `acmissed`
+ceiling (gap pseudo-labels / self-training) if time. Open levers that did NOT help: cutout, sigma8.
