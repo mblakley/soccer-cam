@@ -16,6 +16,7 @@ Status: `pending` (awaiting extraction) → `gt` (true ball positions verified) 
 | 2 | heat__2026.05.31_vs_Spencerport | 7:13 | 7:30 | ? | pending | |
 | 3 | heat__2026.05.31_vs_Spencerport | 7:43 | 8:05 | ? | pending | |
 | 4 | heat__2026.05.31_vs_Spencerport | 9:20 | 9:35 | ? | pending | |
+| 5 | heat__2026.05.31_vs_Spencerport | 14:45 | 14:57 | ? | pending | |
 
 ## Games still to source (held-out Reolink, field polygon on disk → turnkey)
 - `heat__2026.05.07 vs Pittsford`
