@@ -5,17 +5,17 @@ world-model recover the ball where AutoCam drops it." Provided by Mark (his eye 
 drifts). For each: extract the clip → human-verify the true ball position (the GT) → score whether the
 world-model track stays on the ball through the moment AutoCam fails.
 
-**Timestamps are in AutoCam's TRIMMED + CROPPED output** (1920×1080 follow-the-ball), NOT the panorama.
-To run our pipeline we use the **source panorama** and map the time:
+Timestamps map **directly** to the trimmed panorama (the `-raw.mp4` is already trimmed to the game —
+68:59, matching AutoCam's 68:55 output — so **no offset**):
 
-- **Source pano:** `D:\soccer-cam-storage\2026.05.31-09.42.44\...\combined.mp4` (7680×2160, the input to AutoCam).
-- **Trim offset:** `match_info.ini` `start_time_offset = 01:00` → **pano_time = 1:00 + clip_time**.
-  So clip 4:45–5:03 → pano **5:45–6:03**, 7:13 → 8:13, 7:43 → 8:43, 9:20 → 10:20, 14:45 → 15:45.
-- **Field polygon:** `D:\training_data\v4_fields\heat__2026.05.31_vs_Spencerport_gold_2_away\polygon.json` (human-edited).
-- **AutoCam reference:** the 1920×1080 `…05-31-2026.mp4` is AutoCam's output to compare against at these times.
+- **Source pano (trimmed, 7680×2160):** `D:\soccer-cam-storage\2026.05.31-09.42.44\2026.05.31 - BU14 -
+  Guzzetta vs Spencerport gold 2 (Total Sports Experience)\bu14---guzzetta-spencerport-gold-2-total-sports-experience-05-31-2026-raw.mp4`
+  (19.481 fps). Frame = clip_time × 19.481. Clip 1 (4:45–5:03) = frames **5552–5902**.
+- **Field polygon:** `D:\training_data\v4_fields\heat__2026.05.31_vs_Spencerport_gold_2_away\polygon.json`.
+- **AutoCam reference:** the 1920×1080 `…05-31-2026.mp4` — AutoCam's follow-the-ball output to compare at the same times.
 
-Validation run per clip: extract the pano window → J + motion dump (GPU) → world-model track → render
-follow-the-ball → vision-verify the true ball → compare to AutoCam's output at the same moment.
+Validation per clip: dump J+motion on the frame window (GPU) → world-model track → render follow-the-ball
+→ vision-verify the true ball → compare to AutoCam's output at the same moment.
 
 Tags: `far` (ball in far third), `distractor` (locked onto a sideline/adjacent-field ball), `restart`
 (throw-in/corner/goal-kick/PK), `handoff` (a different ball played in), `occlusion` (lost behind players).
