@@ -110,8 +110,16 @@ background more strongly than on a tiny far ball. Coordinate mapping verified co
 the peak on the ball on the frames it DOES hit). **Root cause: trained on ball-centered crops with ~0.7
 negatives/positive → poor specificity.** This is a precision/negative-mining problem, NOT the band or
 labels. **Honest status: band-fix + human-labels + aug are real gains on localization, but the v4 detector
-does not yet beat AutoCam on the full-frame task. Next: heavy negative mining + boundary-masked search,
-re-eval full-frame. Speed/TW sweep deferred — moot until full-frame precision is fixed.**
+does not yet beat AutoCam on the full-frame task.**
+
+### Negative-mining (Jn8, 8 neg/pos) — FAILED, made it worse
+8:1 negatives destabilized focal training (crop recall oscillates 0↔0.49 across epochs) and full-frame
+got *worse*: veryfar top1 **0.15** (vs J 0.29), false_fire 104. Extreme class imbalance + lr 1e-3 is
+unstable, and random in-field negatives (mostly easy grass) don't teach the hard discriminations (players,
+lines). **Simple negative count is not the fix.** Better levers: (a) explicit motion channel (ball moves,
+look-alikes don't), (b) hard-negative mining (use actual false-fire crops), (c) more training games, and
+crucially (d) **temporal tracking at inference** — AutoCam's 0.74 is a *tracker*; per-frame global-argmax
+is the worst-case benchmark. GT frames here are dense (median gap 4) → a causal-tracking eval is valid.
 
 **Read so far (2026-06-16) — corrected:** the crop-eval gains (J veryfar 0.779, acmissed 0.64) are REAL
 for *localization given a window*, and the band-fix + human-labels + aug were genuine unlocks for that.
