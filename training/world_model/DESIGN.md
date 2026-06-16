@@ -269,3 +269,28 @@ frames (@R200) where the ball is not a candidate at all; raising that ceiling is
 alpha=0.5) are tuned on this one clip — multi-game LOGO validation is the immediate robustness step
 (even untuned configs beat argmax, e.g. gate0=100 → 0.52 @R400). Productionized as `tracker.py`
 (`causal_track` + `TrackerConfig`, 4 tests).
+
+### EXP-4 (2026-06-16): motion candidates are complementary — fused candidate-recall 0.99@200; the lever is the TRACKER, not the detector
+
+Generated motion candidates via fixed-camera background subtraction (MOG2 on the far band — **no model,
+no GPU**) and measured candidate-recall (is the ball anywhere in the candidate set?):
+
+| ball present in candidate set (far GT) | R20 | R100 | R200 |
+|---|---|---|---|
+| J (appearance) | 0.565 | 0.656 | 0.779 |
+| motion (MOG2) | 0.252 | 0.771 | 0.908 |
+| **fused J + motion** | **0.763** | **0.954** | **0.992** |
+
+Appearance and motion are **strongly complementary** — motion finds the moving ball where the dim
+heatmap misses it; appearance finds it when slow/occluded. **At viewport scale the ball is in the fused
+candidate set 99% of the time, with no detector training.** But the simple closest-gate causal tracker
+only *realizes* 0.74–0.77 @R400 of that: motion adds ~20 noisy blobs/frame, and after a J-gap the
+prediction drifts so "closest" grabs a player.
+
+**Reframed conclusion (supersedes "detector is the bottleneck"): the bottleneck is the TRACKER /
+selection, not the detector.** The ball signal is present ~99% of the time from *cheap* candidate
+generation (appearance + motion); realizing it needs a better world-model tracker — multi-hypothesis /
+windowed trajectory association over the fused candidates (Phase 2, CPU-cheap). **Implication: beating
+AutoCam may not require expensive detector retraining at all** — the biggest win yet for the minimal-GPU
+goal. **Next experiment:** a windowed multi-hypothesis tracker over fused candidates to close the
+0.74 → 0.99 gap.
