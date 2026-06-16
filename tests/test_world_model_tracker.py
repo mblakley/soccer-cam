@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from training.world_model.geometry import build_field_geometry
 from training.world_model.tbd import Candidate
-from training.world_model.tracker import TrackerConfig, causal_track
+from training.world_model.tracker import (
+    TrackerConfig,
+    causal_track,
+    causal_track_fused,
+)
 
 NEUTRAL = build_field_geometry(None)
 
@@ -55,3 +59,39 @@ def test_empty_until_acquisition():
     res = causal_track(frames, NEUTRAL, TrackerConfig(acq_score=0.5))
     assert res.points[0].frame_idx == 2
     assert res.points[0].detected
+
+
+def test_action_prior_pulls_toward_action_during_appearance_gap():
+    # Appearance shows the ball moving RIGHT, then drops out. During the gap the
+    # ball actually turned DOWN; action (motion) clusters there. The action prior
+    # should pull the track down toward the action, where a blind coast drifts right.
+    appearance: list[list[Candidate]] = [
+        [Candidate(100.0, 300.0, 0.9)],
+        [Candidate(115.0, 300.0, 0.9)],
+        [Candidate(130.0, 300.0, 0.9)],
+    ]
+    action: list[list[Candidate]] = [[], [], []]
+    for t in range(3, 10):
+        appearance.append([])  # appearance gap
+        ay = 300.0 + 15 * (t - 2)  # the ball turned downward
+        action.append(
+            [
+                Candidate(130.0 + dx, ay + dy, 1.0)
+                for dx in (-20, 0, 20)
+                for dy in (-10, 10)
+            ]
+        )
+    common = {"gate0": 80.0, "max_lost": 20, "frame_w": 2000.0, "frame_h": 2000.0}
+    fused = causal_track_fused(
+        appearance, action, None, TrackerConfig(action_pull=0.6, **common)
+    )
+    blind = causal_track_fused(
+        appearance,
+        [[] for _ in appearance],
+        None,
+        TrackerConfig(action_pull=0.0, **common),
+    )
+    f9 = {p.frame_idx: p for p in fused.points}[9]
+    b9 = {p.frame_idx: p for p in blind.points}[9]
+    assert f9.y > b9.y + 50.0  # action pulled it down toward the play
+    assert f9.x < b9.x  # and it didn't drift as far right as the blind coast
