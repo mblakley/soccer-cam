@@ -127,5 +127,34 @@ consecutive-frame peaks and scores center-distance recall (R=20, splits all/very
 - champion-J *gated_track* (real causal tracker): veryfar **0.0** (locks onto the strongest distractor).
 
 The track_oracle 0.473 is the key number to beat: it's the ceiling a *greedy* per-frame window reaches.
-Track-before-detect optimizes the whole trajectory at once, so it can in principle exceed it. **Result:
-pending the full dump + eval (this run).**
+
+**Result (2026-06-16) — the world-model does NOT rescue J's raw heatmap; the per-frame evidence is the
+bottleneck.** Far recall (131 GT) at viewport radii R=20/200/400:
+- **per-frame argmax (reproduces J):** 0.290 / 0.359 / 0.389. (R20=0.290 matches J's search exactly →
+  the harness is faithful.)
+- **motion-only global-MAP TBD:** ~**0.0**. It locks onto a *static bright spot* (track pinned at y≈245
+  across all 705 frames) — a stationary point has zero acceleration penalty + a high score every frame,
+  so it beats the moving, intermittently-detected ball. (Also exposed an unbounded-CV-extrapolation bug,
+  now fixed.)
+- **+ static-feature suppression (fixed-camera background):** removes the static lock and **lifts the
+  argmax to 0.397 / 0.46 @200/@400** — the best result, and a real, cheap win. But TBD on the suppressed
+  set then *coasts through occlusion* (detected-fraction ~0.05) and stays ~0, because after suppression
+  the peaks are scattered across different objects each frame with **no coherent ball trajectory to lock
+  onto**.
+
+**Root cause:** champion-J's far ball is a *strong* peak only ~29% of far frames; the rest it is weak or
+absent while bright distractors (players/lines) dominate. There is no consistent ball signal for
+track-before-detect to integrate. This **rigorously confirms the session's "tracking can't rescue a
+low-precision detector"** — and pinpoints that the bottleneck is the **detector evidence**, not the
+tracker. The world-model is the right *architecture* (the 2025 keystone proves it works on a *decent*
+detector) but it is GIGO: it needs a measurement layer that produces consistent, ball-not-distractor
+candidates.
+
+**Strategic redirect:** the world-model is necessary but not sufficient on top of J. Phase-1 priority
+becomes the **measurement layer** — the cheapest lever being the **size prior** (the far ball is ~8 px;
+players/line-blobs are much bigger, so down-weight big candidates). Whether size-aware candidate
+selection lifts recall above the 0.46 argmax ceiling is the next test (re-dump with per-peak feature
+size, `iron_peaks_size.json`, in progress). If size alone is not enough, a better detector (high-res /
+hard-neg-mined / two-stage classifier) is the Phase-1 work — exactly what the GPU is for.
+
+### EXP-2 (pending): size-prior candidate selection over J's peaks (`iron_peaks_size.json`)
