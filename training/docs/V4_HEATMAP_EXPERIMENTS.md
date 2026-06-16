@@ -97,12 +97,26 @@ band→source `(bx, by+y_top)`, and measures top-1 search recall + false-fire + 
   far-recall *at a deployable CPU speed*. Paths: (a) lower `target_width` (fewer px, smaller balls →
   recall/speed sweep, next), (b) temporal ROI tracking (full-frame only to (re)acquire, cheap local
   window otherwise — the realistic deployment mode AutoCam uses). Per-frame full-frame is the worst case.
-- (Smoke on first 12 frames gave veryfar top1 0.91 but is non-representative; full 131-set full-frame
-  recall is measured on the winning model next.)
+### ⚠⚠ FULL-FRAME RESULT (2026-06-16) — the crop-eval was MISLEADING; we do NOT yet beat AutoCam
+Full 131-set, global-peak search, J (champion), thr 0.5:
+- **veryfar top1 0.29 (38/131)**, top3 0.42 (55/131) — vs AutoCam **0.74**. **We LOSE on the real task.**
+- **false_fire 123/162** — the model's top peak is confidently in the WRONG place on 76% of frames.
+- acmissed top1 0/39 — recovers none of AutoCam's misses under honest search.
+- inference 1576 ms/frame on the 1060 GPU (0.63 fps).
 
-**Read so far (2026-06-16):** with the band fixed + the user's human far-labels + stronger augmentation +
-capacity/weight-decay, **J beats AutoCam on far balls (crop-eval veryfar 0.779 vs 0.74) and recovers
-25/39 (64%) of the balls AutoCam missed.** Remaining: (1) full-131 full-frame eval on J/E (running) for
-the honest search-recall + FP number; (2) the `target_width` speed sweep — native band is 0.08 fps CPU
-(16× over budget), so find the lowest TW that keeps veryfar > 0.74 at ≥1.25 fps CPU; (3) the `acmissed`
-ceiling (gap pseudo-labels / self-training) if time. Open levers that did NOT help: cutout, sigma8.
+**The crop-eval (J veryfar 0.779) overstated real performance ~2.7×** because it handed the model a
+window centered on the ball. In true full-frame *search* the model fires on players / lines / bright
+background more strongly than on a tiny far ball. Coordinate mapping verified correct (overlay PNGs show
+the peak on the ball on the frames it DOES hit). **Root cause: trained on ball-centered crops with ~0.7
+negatives/positive → poor specificity.** This is a precision/negative-mining problem, NOT the band or
+labels. **Honest status: band-fix + human-labels + aug are real gains on localization, but the v4 detector
+does not yet beat AutoCam on the full-frame task. Next: heavy negative mining + boundary-masked search,
+re-eval full-frame. Speed/TW sweep deferred — moot until full-frame precision is fixed.**
+
+**Read so far (2026-06-16) — corrected:** the crop-eval gains (J veryfar 0.779, acmissed 0.64) are REAL
+for *localization given a window*, and the band-fix + human-labels + aug were genuine unlocks for that.
+BUT the airtight full-frame *search* eval shows **J at veryfar 0.29 / false_fire 123/162 — we do NOT beat
+AutoCam (0.74) on the real task yet.** The gap is precision: too few/easy negatives in crop training.
+**Next experiment (the real blocker): heavy negative mining** (many diverse in-field negatives/positive)
++ boundary-masked full-frame search, retrain champion, re-eval full-frame. The TW speed sweep and acmissed
+self-training are deferred until full-frame precision is real. Levers that did NOT help: cutout, sigma8.
