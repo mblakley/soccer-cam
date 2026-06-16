@@ -42,9 +42,14 @@ to whichever ball is in **active play**, and the role can **hand off** between p
 - **Role = in-play:** at each moment the game ball is the hypothesis best satisfying *active play* —
   in-bounds (field+dome support), engaged by players (R4 action/possession), moving with game dynamics —
   not merely "the continuous trajectory from before."
-- **Handoff with hysteresis:** transfer the role only when the current game ball has left play AND a
-  *different* hypothesis is **sustainedly** in play (seconds, not a frame). A brief throw-in / goal-kick
-  excursion (same ball returns) does NOT switch; a genuine ball swap does.
+- **Handoff requires the game ball to leave the field of play first (the gate).** A swap is only
+  *possible* once the current game ball is kicked **out of bounds** (outside the field+margin support)
+  and abandoned. While it stays on/at the field — including in-field restarts (free-kick, PK, goal-kick)
+  where the ball is static but in play — the **same ball continues**, no handoff. Once the ball is out of
+  play, two resolutions: (A) the same ball is returned to play (the usual case — throw-in, retrieved) →
+  no switch; (B) a *different* ball is **sustainedly** played in (seconds) while the original stays out →
+  transfer the role. Hysteresis on (B) avoids flicker. Net: a second ball appearing while the game ball
+  is still in play never triggers a switch — only an out-of-play exit can.
 
 **Why it matters.** This is the principled form of "single object, no teleport": *within* a hypothesis,
 no teleport; *across* hypotheses, a sustained in-play handoff is allowed. It leans on the player/action
