@@ -63,7 +63,8 @@
 </div>
 <p class="hint">
   Pre-seeded with AutoCam's labels — near balls are trusted as-is. Press <kbd>F</kbd> to jump to the next
-  <b>far ball to review</b>. Purple marker = AutoCam-seeded (unreviewed), pink = you confirmed.
+  <b>far ball to review</b>. The arrow points at the marked ball from below-left (tip stops short so the ball
+  stays visible): purple = AutoCam-seeded (unreviewed), pink = you confirmed.
   <b>Click</b> the ball to fix it, or <kbd>C</kbd> to accept AutoCam's guess (both auto-advance to the next far ball).
   <kbd>N</kbd> not visible, <kbd>O</kbd> out of play. Scroll = zoom, drag = pan.
 </p>
@@ -128,22 +129,31 @@ function clampPan(){
   if (w < vw) tx=0; if (h < vh) ty=0;
 }
 
-// draw markers in NATURAL image coords (canvas is natural-sized, transformed with wrap)
+// Arrow pointing IN at (nx,ny) from the lower-left; tip stops short so the ball
+// stays visible. Coords are NATURAL px (canvas is natural-sized, transformed with wrap).
+function arrowMark(nx,ny,color,dashed,k){
+  const gap=20*k, len=60*k, head=18*k;        // gap = clearance so the ball shows
+  const dx=0.6, dy=-0.8;                        // direction tail->ball (up-right)
+  const tipx=nx-dx*gap, tipy=ny-dy*gap;         // arrowhead apex, just outside the ball
+  const tailx=nx-dx*(gap+len), taily=ny-dy*(gap+len);
+  ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=Math.max(2,4*k);
+  ctx.setLineDash(dashed?[8*k,5*k]:[]);
+  ctx.beginPath(); ctx.moveTo(tailx,taily); ctx.lineTo(tipx,tipy); ctx.stroke();
+  ctx.setLineDash([]);
+  const a=Math.atan2(dy,dx);
+  ctx.beginPath(); ctx.moveTo(tipx,tipy);
+  ctx.lineTo(tipx-head*Math.cos(a-0.45), tipy-head*Math.sin(a-0.45));
+  ctx.lineTo(tipx-head*Math.cos(a+0.45), tipy-head*Math.sin(a+0.45));
+  ctx.closePath(); ctx.fill();
+}
 function draw(){
   ctx.clearRect(0,0,ov.width,ov.height);
-  const f=frame();
-  const lw = 2/ (z||1) * baseScale * 2;   // keep stroke ~visible at any zoom
-  const r1 = 18/(z/baseScale), r2 = 12/(z/baseScale);
-  ctx.lineWidth = Math.max(1.5, 14*baseScale/z);
-  const hnx=f.hint_x-f.crop_x0, hny=f.hint_y-f.crop_y0;
-  ctx.setLineDash([6,5]); ctx.strokeStyle=f.autocam?"#2ecc71":"#ff9f1a";
-  ctx.beginPath(); ctx.arc(hnx,hny,r1,0,7); ctx.stroke(); ctx.setLineDash([]);
+  const f=frame(); const k=baseScale/z;
   const lab=labels[f.frame_idx];
-  if (lab&&lab.action==="ball"&&lab.x!=null){
-    const lx=lab.x-f.crop_x0, ly=lab.y-f.crop_y0;
-    ctx.strokeStyle=(lab.source==="human")?"#ff3b6b":"#9b59ff";
-    ctx.beginPath(); ctx.arc(lx,ly,r2,0,7); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(lx-r1,ly); ctx.lineTo(lx+r1,ly); ctx.moveTo(lx,ly-r1); ctx.lineTo(lx,ly+r1); ctx.stroke();
+  if (lab && lab.action==="ball" && lab.x!=null){
+    arrowMark(lab.x-f.crop_x0, lab.y-f.crop_y0, lab.source==="human"?"#ff3b6b":"#9b59ff", false, k);
+  } else if (!lab || lab.action==="ball"){   // no label yet -> point at AutoCam's guess (dashed)
+    arrowMark(f.hint_x-f.crop_x0, f.hint_y-f.crop_y0, f.autocam?"#2ecc71":"#ff9f1a", true, k);
   }
 }
 
