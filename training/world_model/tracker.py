@@ -48,7 +48,12 @@ class TrackerConfig:
     frame_h: float = 0.0  # if >0, clamp coasting predictions to [0, frame_h]
     require_support_on_acquire: bool = False  # only acquire on-field (needs geom)
     action_radius: float = 300.0  # (fused) radius for the local action centroid
-    action_pull: float = 0.6  # (fused) blend toward action centroid during a gap
+    # Action pull during an appearance gap. 0 = pure causal (the robust default that
+    # generalises across games). Set >0 (e.g. 0.6) only for hard far-ball RECOVERY —
+    # it recovers undetected far balls (+0.13 on Irondequoit) but costs precision on
+    # well-detected balls (-0.10 on Fairport). A clean adaptive switch is open work
+    # (min-lost / reliability-scale / reliability-threshold all failed; see DESIGN).
+    action_pull: float = 0.0
 
 
 def _clamp(p: np.ndarray, cfg: TrackerConfig) -> np.ndarray:
@@ -187,7 +192,9 @@ def causal_track_fused(
             vel = vel * cfg.vel_decay
             lost += 1
             detected = False
-            # Action-area prior: pull toward the local action centroid in the gap.
+            # Action-area prior (opt-in, action_pull>0): pull toward the local
+            # player-action centroid during the gap. Recovers undetected far balls
+            # at a small precision cost — situational, see the action_pull docstring.
             if cfg.action_pull > 0.0 and mpts:
                 near = np.array(
                     [
