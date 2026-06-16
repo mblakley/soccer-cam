@@ -77,6 +77,7 @@ def build_heatmap_crops(
     neg_ratio: float = 0.7,
     val_game_ids: set[str] | None = None,
     target_width: int | None = None,
+    neg_per_pos: int = 1,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -172,15 +173,21 @@ def build_heatmap_crops(
                 jy = rng.integers(-jitter, jitter + 1)
                 _emit(dbx + jx, dby + jy, True, "pos")
                 if rng.random() < neg_ratio:
-                    for _ in range(8):
+                    # Emit several diverse in-field background negatives per positive.
+                    # Full-frame search is dominated by background, so the model needs
+                    # many negatives to learn ball-specific (not blob-like) responses.
+                    made = 0
+                    for _ in range(neg_per_pos * 12):
+                        if made >= neg_per_pos:
+                            break
                         nx = rng.integers(half, max(half + 1, bw - half))
                         ny = rng.integers(half, max(half + 1, bh - half))
                         if (
                             mask[int(ny), int(nx)]
-                            and (nx - dbx) ** 2 + (ny - dby) ** 2 > (crop * 0.75) ** 2
+                            and (nx - dbx) ** 2 + (ny - dby) ** 2 > (crop * 0.6) ** 2
                         ):
-                            _emit(nx, ny, False, "neg")
-                            break
+                            _emit(nx, ny, False, f"neg{made}")
+                            made += 1
             if idx > hi:
                 break
         container.close()
