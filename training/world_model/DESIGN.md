@@ -297,3 +297,32 @@ area prior** (R4), largely CPU-side — **not necessarily detector retraining.**
 **use motion/action as a soft area *prior* that pulls the prediction toward the action centroid, with the
 appearance peak for precision — a windowed/multi-hypothesis tracker — to realize more of the area ceiling
 at viewport scale.
+
+### EXP-5 (2026-06-16): action-area prior closes the gap — 0.87 viewport area-recall, all CPU / no training
+
+During J's detection gaps, pull the track toward the **local player-action centroid** (mean of motion
+blobs within ~300 px of the prediction) — the *"action clusters around the ball"* prior (R4) — instead of
+coasting blind or grabbing the closest player. Result (far balls, hardest split):
+
+| method | R200 | R400 (viewport) |
+|---|---|---|
+| argmax (raw J) | 0.359 | 0.389 |
+| causal tracker (J only) | 0.557 | 0.740 |
+| **+ action-area prior** | **0.672** | **0.870** |
+
+On the hardest far-ball clip, at viewport scale, the world-model + cheap **training-free** signals
+(appearance → position, action → area) lifts area-recall **0.39 → 0.87**, no detector retraining. The
+action-pull is param-sensitive (strong pull helps; weak pull drifts), so robustness + multi-game
+validation is next, but the lever is validated.
+
+## Bottom line of Phase-0 research (2026-06-16)
+
+The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
+world-model lifts far-ball **viewport area-recall from 0.39 (argmax) → 0.74 (causal tracker) → 0.87
+(+ action prior)** on the hardest clip, and recovers ~15% of the balls AutoCam misses — entirely CPU,
+no retraining. Two cheap complementary training-free signals carry it: **appearance (J heatmap) for
+precise position, player-action (MOG2 motion) for the ball's area.** **The bottleneck is the tracker +
+priors (CPU-side), not the detector** — so beating AutoCam may not need expensive GPU detector training
+at all; the 4070 is held in reserve. **Caveats:** hardest far-ball clip only; tracker/action params tuned
+on this one clip — multi-game LOGO validation (task #9) is the immediate robustness gate before trusting
+the magnitudes.
