@@ -255,9 +255,12 @@ Two findings overturn the interim pessimism:
    | argmax (raw J) | 0.290 | 0.359 | 0.389 |
    | **causal tracker (tuned)** | **0.405** | **0.656** | **0.840** |
 
-At viewport scale the world-model lifts far-ball area-recall **0.39 → 0.84** — near the candidate-recall
-ceiling, i.e. it recovers nearly every frame where the ball is detectable at all, on J's existing heatmap
-with **no retraining**. **"Continuity beats appearance" confirmed:** `pick=closest` >> `pick=score`.
+At viewport scale the world-model lifts far-ball area-recall **0.39 → 0.74–0.84** — near the
+candidate-recall ceiling, i.e. it recovers nearly every frame where the ball is detectable at all, on J's
+existing heatmap with **no retraining**, and recovers **15% of the balls AutoCam missed** (acmissed@20
+0.0 → 0.154). **"Continuity beats appearance" confirmed:** `pick=closest` >> `pick=score`. (The committed
+`iron_eval` uses the **restart-safe** suppression default → 0.305 / 0.557 / **0.740**; the 0.84 row uses
+more aggressive static suppression, safe only on no-restart clips.)
 
 **Corrected conclusion.** The world-model is the right architecture AND it materially helps on the
 current detector — the strategy is promising *before* any GPU training. The residual is the ~22% of

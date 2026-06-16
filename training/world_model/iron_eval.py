@@ -24,7 +24,9 @@ import json
 
 from training.world_model.eval import evaluate_recall
 from training.world_model.geometry import FieldGeometry, build_field_geometry
+from training.world_model.measurements import suppress_static_candidates
 from training.world_model.tbd import Candidate, TBDConfig, run_tbd
+from training.world_model.tracker import TrackerConfig, causal_track
 
 AUTOCAM = {"all": 0.76, "veryfar": 0.74, "acmissed": 0.0}
 
@@ -60,6 +62,23 @@ def _run_tbd_predictions(
 ):
     res = run_tbd(frame_lists, geom, cfg)
     # TBD frame_idx is the list index; map back to source frame = lo + idx.
+    return {lo + p.frame_idx: (p.x, p.y) for p in res.points}
+
+
+def _argmax_from_lists(frame_lists: list[list[Candidate]], lo: int):
+    """Per-frame highest-score candidate (argmax) from candidate lists."""
+    preds = {}
+    for i, cands in enumerate(frame_lists):
+        if cands:
+            best = max(cands, key=lambda c: c.score)
+            preds[lo + i] = (best.x, best.y)
+    return preds
+
+
+def _causal_predictions(
+    frame_lists: list[list[Candidate]], lo: int, geom: FieldGeometry, cfg: TrackerConfig
+):
+    res = causal_track(frame_lists, geom, cfg)
     return {lo + p.frame_idx: (p.x, p.y) for p in res.points}
 
 
@@ -124,22 +143,37 @@ def main() -> None:
             + f"  | acmissed@{int(r)}={base.recall_acmissed:.3f} ff={base.false_fire}"
         )
 
+    suppressed, static_cells = suppress_static_candidates(frame_lists)
     print(
-        f"\nbaseline AutoCam: veryfar 0.74 @R={int(r)} (exact). area recall (@200/@400) is the real target."
+        f"\nAutoCam ref: veryfar 0.74 @R={int(r)} (exact). Area recall @200/@400 is the real target. "
+        f"(suppressed {len(static_cells)} static background cells)"
     )
     print(f"results (veryfar recall at radius = {radii} px):")
-    report("per-frame argmax (J search)", _argmax_predictions(data["frames"], gt))
-
-    # World-model TBD: a small config sweep.
-    sweep = {
-        "tbd default": TBDConfig(),
-        "tbd miss=-2.5": TBDConfig(miss_logprob=-2.5),
-        "tbd accel=10": TBDConfig(accel_sigma_px=10.0),
-        "tbd maxspd=80": TBDConfig(max_speed_px=80.0, teleport_px=300.0),
-        "tbd k8 accel=12": TBDConfig(accel_sigma_px=12.0, max_candidates_per_frame=8),
-    }
-    for name, cfg in sweep.items():
-        report(name, _run_tbd_predictions(frame_lists, lo, geom, cfg))
+    report("per-frame argmax (raw J)", _argmax_predictions(data["frames"], gt))
+    report("argmax (static-suppressed)", _argmax_from_lists(suppressed, lo))
+    # Global-MAP TBD is the WRONG inference for an intermittent target (EXP-1) — it
+    # locks on a smooth distractor/coast path; kept here to show the contrast.
+    report(
+        "global-MAP TBD (fails)",
+        _run_tbd_predictions(
+            suppressed,
+            lo,
+            geom,
+            TBDConfig(occlusion_decay=0.7, frame_w=7680, frame_h=2160),
+        ),
+    )
+    # The world-model causal continuity tracker (EXP-3) — the winning inference.
+    report(
+        "CAUSAL tracker (world-model)",
+        _causal_predictions(
+            suppressed,
+            lo,
+            geom,
+            TrackerConfig(
+                gate0=80.0, max_lost=8, vel_alpha=0.5, frame_w=7680, frame_h=2160
+            ),
+        ),
+    )
 
 
 if __name__ == "__main__":
