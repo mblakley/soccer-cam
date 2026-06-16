@@ -61,6 +61,34 @@ derive `size(location)` **purely geometrically** in `geometry.py`: project a rea
 field location through the homography. Works on a brand-new game the instant the field is detected,
 and gives the size-consistency discriminator that geometrically rejects look-alikes.
 
+## Decision: anti-overfitting experiment protocol (2026-06-16)
+
+**Context.** Training will be short/small (fast 4070 iteration, limited human-labeled games). The classic
+trap: frames *within* a game are near-duplicates (same field/ball/lighting/teams, consecutive frames
+almost identical), so a frame-level train/test split leaks and inflates metrics; and small data + many
+epochs overfits to one game's specifics.
+
+**What protects us structurally:** the world-model spine (geometry + physics + TBD) is **analytic — zero
+trained parameters** (the homography/size-prior is derived per game from the polygon; physics is
+universal). Overfitting risk is confined to the *detector* (measurement layer). And because the
+world-model **amplifies a weak detector**, pipeline-level improvement shows up under *light* training —
+we don't need long runs to read signal.
+
+**Protocol (locked in):**
+1. **Split by game, never by frame. Leave-one-game-out (LOGO).** A frozen held-out game list — including
+   the AutoCam-loses-ball + distractor clips — that never appears in training. Report per-held-out-game.
+2. **Tiny trainable surface, short schedule.** Fine-tune a small/pretrained detector (DeepBall/WASB),
+   frozen backbone + small head, few epochs, **early-stop on a held-out game**, not held-out frames.
+3. **Iterate the analytic world-model on cached peaks (no GPU).** Precompute detector peaks once per
+   game; sweep world-model params offline. Retrain the detector only when the analytic side plateaus —
+   keeps GPU training rare and short.
+4. **Beat small-data overfit with synthetic + augmentation (R7).** Perspective-correct composited
+   far-balls + cross-game/camera domain randomization expand effective data without new labeled games.
+5. **Decorrelate within games.** Sample frames sparsely for training (consecutive frames are duplicates)
+   — more diversity per GPU-hour.
+6. **No single-game flukes.** Require a win on >=2-3 held-out games (a single held-out game is a starting
+   point, not proof) before believing an improvement.
+
 ## Experiment log
 
 ### EXP-1 (2026-06-16): decisive pre-GPU — world-model TBD over champion-J's heatmaps
