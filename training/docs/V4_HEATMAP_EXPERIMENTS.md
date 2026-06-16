@@ -65,14 +65,20 @@ Loss → ~0 while recall 0 — blank-heatmap minimum (~2–80 ball px in 65,536)
 5. **Edge check** — CPU fps on the winner (budget 1.25 fps; aim realtime).
 
 ## Results
-| tag | crop | sigma | loss | lr | ep | aug | all | veryfar | acmissed | notes |
-|-----|------|-------|------|----|----|-----|-----|---------|----------|-------|
-| A | 128 | 6 | focal | 1e-3 | 60 | no | 0.29 | **0.38** | 0.00 | train-fit 84%; big train→val gap (domain/lighting) → augment next. acmissed 0 (only AutoCam labels) |
-| B | 128 | 6 | focal | 1e-3 | 80 | yes | 0.53 | **0.50** | **0.13** | photometric aug = big win: veryfar 38→50, **acmissed 0→13 (recovers balls AutoCam missed!)**. fp rising (watch precision) |
+**A/B (below) used the BROKEN band** (soft denominators all=109/veryfar=78) — NOT comparable to AutoCam.
+C onward use engine v2: fixed band (all=162, **veryfar=131 = AutoCam's set**), `combined` labels.
+| tag | engine | aug | wd | base | best-ep | all | veryfar | acmissed | notes |
+|-----|--------|-----|----|----|--------|-----|---------|----------|-------|
+| A | v1 broken-band | no | — | 16 | — | 0.29 | 0.38\* | 0.00 | \*soft 78-ball subset, not comparable |
+| B | v1 broken-band | aug1 | — | 16 | — | 0.53 | 0.50\* | 0.13\* | \*soft subset; photometric aug helped |
+| **C** | **v2 fixed-band** | aug1 | 0 | 16 | 35 | 0.722 | **0.718** | 0.513 | honest denom; combined labels; just under AutoCam |
+| **E** | **v2 fixed-band** | **aug2** | 0 | 16 | 30 | 0.753 | **0.786** | 0.462 | **BEATS AutoCam veryfar (103 vs 97/131)**; blur+illum-gradient aug = the unlock. fp 11/111 |
 
-_AutoCam baseline: all 76%, **veryfar 74%**, acmissed 0% (by definition). veryfar is the bar to beat._
+_AutoCam baseline (honest, full set): all 0.76 (123/162), **veryfar 0.74 (97/131)**, acmissed 0 (by def)._
 
-**Read so far:** architecture works (84% train-fit); val 38% veryfar is generalization-limited. Levers,
-in order of expected impact: (B) photometric augmentation (close the 84→38 gap), (C) bigger net + more
-epochs, (D) more/lower-conf far labels, (E) motion channel, (F) gap pseudo-labels + self-training for
-`acmissed` (the only path past AutoCam on the balls it misses).
+**Read so far (2026-06-16):** with the band fixed + the user's human far-labels + stronger augmentation,
+**E beats AutoCam on far balls in the crop-eval (veryfar 0.786 vs 0.74)** and recovers 18/39 balls AutoCam
+missed. Both C/E peak ~ep30-35 then overfit the single training game (05-27) → batch 2 adds capacity
+(base 24), weight-decay, larger sigma, cutout. **Caveat:** crop-eval centers a window on each GT ball
+(±48px) — it proves *localization*, not full-frame *search*; the airtight proof needs the full-frame eval
+(global-peak recall + false-positive rate + inference cost) on the winning model — building it next.
