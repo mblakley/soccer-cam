@@ -339,6 +339,24 @@ detected balls), so the action prior (which fills J *gaps*) is unneeded and slig
 it's **situational**, so it should be applied adaptively (gate it on appearance reliability). (2) AutoCam-
 only GT can't test beating AutoCam on its misses — that still needs human-GT clips.
 
+### EXP-7 (2026-06-16): adaptive action-prior fusion is open work — causal is the robust default
+
+Tried to make ONE fused tracker optimal on both games by gating the action pull on appearance
+reliability. **All three schemes failed** (far-recall @R400):
+- `action_min_lost` (pull only after N gap-frames): Irondequoit collapses (0.87→0.20 at N=3 — its long
+  gaps need *immediate* pull; delaying lets CV drift), Fairport needs large N.
+- reliability-scaled pull (`pull *= 1-reliability`): under-pulls Irondequoit (0.65), still hurts Fairport (0.68).
+- reliability-threshold (pull only when EMA < τ): no τ wins both — Irondequoit wants always-pull, any
+  pull hurts Fairport.
+
+Root cause: the tracker's gated hit-rate isn't a clean "is the ball detected" proxy (it stays high while
+locked on a distractor; drops when the ball is just outside the gate). The action prior is a genuine
+**precision↔recovery tradeoff**: it recovers *undetected* far balls (Irondequoit +0.13) but costs
+precision on *detected* ones (Fairport −0.10). **Decision:** `action_pull=0` (pure causal) is the robust
+default that generalises; the action prior is an **explicit opt-in** for hard far-ball recovery. A clean
+adaptive switch (likely needing a real detector-confidence signal, not the tracker's own hit-rate) is
+deferred.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
