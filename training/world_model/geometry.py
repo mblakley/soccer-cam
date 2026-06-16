@@ -212,7 +212,7 @@ class FieldGeometry:
         ``(M, 2)`` or ``(2,)`` in; returns ``(M,)`` bool.
         """
         pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
-        if not self.valid or self.polygon is None:
+        if self.polygon is None:
             return np.ones(pts.shape[0], dtype=bool)
 
         poly = self.polygon.reshape(-1, 1, 2).astype(np.float32)
@@ -237,61 +237,53 @@ def build_field_geometry(
 ) -> FieldGeometry:
     """Build :class:`FieldGeometry` from an auto-detected 10-point polygon.
 
-    Returns a neutral (``valid=False``) geometry — never raises — when the
-    polygon is missing, the wrong shape, degenerate (tiny area), or the
-    homography fit is unreliable (high reprojection error). This is the
-    graceful-degradation path: callers get a working object whose priors are
-    simply uninformative.
+    Never raises. Degrades in two independent stages:
+
+    - **Support** (the field/dome region) is available whenever the polygon is a
+      finite ``(10, 2)`` of sufficient area — it only needs the polygon as a
+      perimeter, so it works even for a human-edited polygon whose point ordering
+      doesn't match the equal-spacing assumption.
+    - **Metric homography + size prior** additionally require a clean homography
+      fit (low reprojection error). If that fails, ``valid`` is False and the
+      size prior falls back to uniform, but support still works.
 
     Args:
         polygon: ``(10, 2)`` field polygon in source pixels, or ``None``.
         field_length_m: World X extent (touchline length).
         field_width_m: World Y extent (near->far distance).
         ball_diameter_m: Real ball diameter for the size prior.
-        fallback_ball_px: Uniform apparent ball size when neutral.
+        fallback_ball_px: Uniform apparent ball size when the homography is unfit.
     """
+    poly_support: np.ndarray | None = None
+    if polygon is not None:
+        poly = np.asarray(polygon, dtype=np.float64)
+        if (
+            poly.shape == (10, 2)
+            and np.all(np.isfinite(poly))
+            and abs(cv2.contourArea(poly.astype(np.float32))) >= MIN_POLYGON_AREA_PX
+        ):
+            poly_support = poly
 
-    def _neutral() -> FieldGeometry:
-        return FieldGeometry(
-            polygon=None,
-            h_img2world=None,
-            h_world2img=None,
-            field_length_m=field_length_m,
-            field_width_m=field_width_m,
-            ball_diameter_m=ball_diameter_m,
-            valid=False,
-            fallback_ball_px=fallback_ball_px,
-        )
-
-    if polygon is None:
-        return _neutral()
-    poly = np.asarray(polygon, dtype=np.float64)
-    if poly.shape != (10, 2) or not np.all(np.isfinite(poly)):
-        return _neutral()
-    if abs(cv2.contourArea(poly.astype(np.float32))) < MIN_POLYGON_AREA_PX:
-        return _neutral()
-
-    world = _touchline_world_points(field_length_m, field_width_m)
-    h_img2world, _ = cv2.findHomography(poly, world, 0)
-    if h_img2world is None:
-        return _neutral()
-    h_world2img = np.linalg.inv(h_img2world)
-
-    # Sanity: round-trip the boundary points and check reprojection error.
-    reproj = _apply_homography(h_world2img, _apply_homography(h_img2world, poly))
-    if not np.all(np.isfinite(reproj)):
-        return _neutral()
-    err = float(np.mean(np.linalg.norm(reproj - poly, axis=1)))
-    if err > MAX_REPROJ_ERROR_PX:
-        return _neutral()
+    h_img2world: np.ndarray | None = None
+    h_world2img: np.ndarray | None = None
+    if poly_support is not None:
+        world = _touchline_world_points(field_length_m, field_width_m)
+        h, _ = cv2.findHomography(poly_support, world, 0)
+        if h is not None:
+            h_inv = np.linalg.inv(h)
+            reproj = _apply_homography(h_inv, _apply_homography(h, poly_support))
+            if np.all(np.isfinite(reproj)):
+                err = float(np.mean(np.linalg.norm(reproj - poly_support, axis=1)))
+                if err <= MAX_REPROJ_ERROR_PX:
+                    h_img2world, h_world2img = h, h_inv
 
     return FieldGeometry(
-        polygon=poly.astype(np.float32),
+        polygon=None if poly_support is None else poly_support.astype(np.float32),
         h_img2world=h_img2world,
         h_world2img=h_world2img,
         field_length_m=field_length_m,
         field_width_m=field_width_m,
         ball_diameter_m=ball_diameter_m,
-        valid=True,
+        valid=h_img2world is not None,
         fallback_ball_px=fallback_ball_px,
     )

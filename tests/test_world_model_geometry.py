@@ -126,3 +126,31 @@ def test_image_to_world_raises_on_neutral():
     geom = build_field_geometry(None)
     with pytest.raises(ValueError):
         geom.image_to_world(np.array([[1.0, 2.0]]))
+
+
+# The real human-edited Irondequoit field outline (source coords, 7680x2160).
+IRON_POLYGON = [
+    [77.0, 1104.0],
+    [2290.0, 2157.0],
+    [3758.0, 2150.0],
+    [5417.0, 2148.0],
+    [7359.0, 1339.0],
+    [5421.0, 481.0],
+    [4423.0, 345.0],
+    [3745.0, 305.0],
+    [3099.0, 291.0],
+    [2132.0, 390.0],
+]
+
+
+def test_support_works_on_real_human_polygon_regardless_of_homography():
+    geom = build_field_geometry(np.array(IRON_POLYGON, dtype=float))
+    # Support is retained even if the metric homography can't be fit from this
+    # human-edited (non-equally-spaced) outline.
+    assert geom.polygon is not None
+    assert geom.is_in_support(np.array([[3800.0, 1100.0]]), margin_px=10.0)[0]
+    assert not geom.is_in_support(np.array([[100.0, 100.0]]), margin_px=10.0)[0]
+    # If the homography is unfit, the size prior degrades to the uniform fallback.
+    if not geom.valid:
+        px = geom.expected_ball_diameter_px(np.array([[3800.0, 1100.0]]))[0]
+        assert px == DEFAULT_FALLBACK_BALL_PX
