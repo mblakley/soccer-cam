@@ -139,6 +139,20 @@ dominate). **Most promising untried levers (in order): higher-resolution heatmap
 ball isn't swamped), hard-negative mining (train on the actual false-fire crops), more training games,
 explicit motion channel (testing now).**
 
+### Gated-tracker eval (all-frames causal, `hm_trackeval.py`) — tracking CANNOT rescue a low-precision detector
+Ran a real motion-gated tracker on every frame (ROI heatmap around the constant-velocity prediction,
+full-frame re-acquire when lost), scored at GT. J: **veryfar 0.0**, frames_locked 99.7%, only 2
+re-acquisitions. It acquires the global-max peak (= the strongest DISTRACTOR), then the ROI gate
+faithfully tracks that distractor for the whole clip — never the ball. So the deployment-mode number is
+NOT better than cold search; **a tracker is only as good as its acquisition + observation, both dominated
+by the detector's false positives.** The track_oracle (gate anchored on prev-GT) 0.47 is the ceiling a
+perfect gate gives. **Conclusion: detector precision is the hard bottleneck — hard-negative mining (train
+on the model's own false-fires) is the necessary next lever; tracking + static-peak rejection come after.**
+
+### Motion-channel (Jmot) — no help
+Explicit |t-t-1| 4th channel: full-frame veryfar 0.22 (≈J), false_fire 102. Frame-diff lights up moving
+players too, so it doesn't discriminate ball-from-player. Confirms the gap is appearance discrimination.
+
 **Read so far (2026-06-16) — corrected:** the crop-eval gains (J veryfar 0.779, acmissed 0.64) are REAL
 for *localization given a window*, and the band-fix + human-labels + aug were genuine unlocks for that.
 BUT the airtight full-frame *search* eval shows **J at veryfar 0.29 / false_fire 123/162 — we do NOT beat
