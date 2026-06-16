@@ -121,6 +121,24 @@ look-alikes don't), (b) hard-negative mining (use actual false-fire crops), (c) 
 crucially (d) **temporal tracking at inference** — AutoCam's 0.74 is a *tracker*; per-frame global-argmax
 is the worst-case benchmark. GT frames here are dense (median gap 4) → a causal-tracking eval is valid.
 
+### Tracking-mode full-frame eval (J) — the gap is FINE DISCRIMINATION, not search scope
+| mode | veryfar top1 | false_fire |
+|------|--------------|-----------|
+| search (global argmax) | 0.29 | 93 |
+| causal track (win 200px) | 0.30 | 92 |
+| **track_oracle** (window around *prev-frame GT*) | **0.47** | 69 |
+| crop-eval (tight ±48px window) | 0.78 | — |
+
+Even handed an oracle window around the ball's previous position, J only reaches 0.47 and false-fires on
+69/131. Causal tracking ≈ search (re-acquisition locks onto FPs). **Diagnosis (confirmed by false-fire
+overlays): the model fires in the right far-field region but picks an ADJACENT player/line/feature instead
+of the tiny ball — fine ball-vs-distractor discrimination is the failure.** The crop-eval's 0.78 was
+optimistic because a tight 128px window has almost no distractors. Likely contributor: the U-Net's /8
+downsampling merges an ~8px far ball with an adjacent ~50px player at the heatmap bottleneck (big objects
+dominate). **Most promising untried levers (in order): higher-resolution heatmap (/4 or /2, so the tiny
+ball isn't swamped), hard-negative mining (train on the actual false-fire crops), more training games,
+explicit motion channel (testing now).**
+
 **Read so far (2026-06-16) — corrected:** the crop-eval gains (J veryfar 0.779, acmissed 0.64) are REAL
 for *localization given a window*, and the band-fix + human-labels + aug were genuine unlocks for that.
 BUT the airtight full-frame *search* eval shows **J at veryfar 0.29 / false_fire 123/162 — we do NOT beat
