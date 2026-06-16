@@ -194,4 +194,40 @@ selection lifts recall above the 0.46 argmax ceiling is the next test (re-dump w
 size, `iron_peaks_size.json`, in progress). If size alone is not enough, a better detector (high-res /
 hard-neg-mined / two-stage classifier) is the Phase-1 work — exactly what the GPU is for.
 
-### EXP-2 (pending): size-prior candidate selection over J's peaks (`iron_peaks_size.json`)
+### EXP-2 (2026-06-16): size prior does NOT help — the far field collapses ball and distractors to one size
+
+Re-dumped J's peaks with each peak's observed feature size (`iron_peaks_size.json`) and tested
+size-aware candidate selection. **The size signal is too weak in the far field:** ball peaks median
+feat **8.0 px** vs distractor peaks median **10.0 px** — almost no separation, because far players,
+lines and the ball all collapse to ~8-10 px blobs. Size discriminates ball-from-player in the *near*
+field (8 vs ~50 px) but not in the far field, which is exactly where the recall gap is.
+
+| method (far balls, static-suppressed) | R20 | R200 | R400 |
+|---|---|---|---|
+| argmax, no size | 0.290 | 0.359 | **0.389** |
+| + size prior (geometry, expected far ~4.8px) | 0.244 | 0.252 | 0.305 (hurts) |
+| + size prior (absolute 8px target) | 0.290 | 0.359 | 0.389 (no change) |
+| TBD + size | ~0 | ~0 | ~0 |
+
+(The geometry homography from the human polygon is directionally sane — expected ball px far 4.8 < near
+10.0 — but its magnitude is off vs the observed 8px ball, so the geometric size prior actively hurts.)
+
+## CONCLUSION OF EXP-1/2: the detector is the bottleneck; analytic post-processing cannot rescue it
+
+Across both experiments, on the hardest split (far balls — where AutoCam also fails), **no cheap analytic
+lever rescues recall**: motion-only TBD locks on static background (fixed by suppression) then coasts
+(no coherent trajectory); the size prior is useless-to-harmful (far field size-collapse). The single
+real win is **fixed-camera static-suppression**, which lifts the *simple argmax* area-recall 0.39 → 0.46
+@400 — keep it. The far ball is a strong peak only ~29% of frames and, when present, is nearly
+indistinguishable from far distractors by size or score.
+
+**This definitively confirms "tracking can't rescue a low-precision detector" and locates the bottleneck
+in the measurement layer.** The world-model is the right architecture for the *whole-game* job
+(smoothness, distractor rejection, identity/handoff, restart modes) and works on a decent detector (the
+2025 keystone), but it is GIGO — it cannot manufacture far-ball signal that isn't in the per-frame
+evidence. **Phase 1 priority is therefore the far-ball detector**, and the promising directions are the
+ones that don't rely on size: (a) the session's high-res perspective-warped detector (more far pixels);
+(b) **motion-trajectory candidate generation** — the far ball, even when player-sized, *moves* fast and
+ballistically while far players move slowly/bipedally, a multi-frame signal a single-frame heatmap misses;
+(c) two-stage candidate→classifier. Scope caveat: this clip is a deliberately hard far-ball segment;
+normal near/mid play is far easier, so the world-model + suppression already give a usable viewport there.
