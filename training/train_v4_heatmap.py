@@ -77,7 +77,8 @@ def center_distance_eval(model, ds, device, radius=20, thr=0.5):
             px, py, score = peak_xy(logits)
             has_ball = float(tgt.max()) > 0.5
             if has_ball:
-                ty, tx = [int(v) for v in torch.where(tgt[0] == tgt[0].max())]
+                flat = int(torch.argmax(tgt[0]))
+                ty, tx = divmod(flat, tgt.shape[-1])
                 ok = score >= thr and ((px - tx) ** 2 + (py - ty) ** 2) ** 0.5 <= radius
                 hit += ok
                 miss += not ok
