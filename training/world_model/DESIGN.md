@@ -389,6 +389,54 @@ motion next to it; a static ball has players moving around it. Result: clip-1 ca
 0.93, tracker **0.41 → 0.52 @R400**, and **no regression on Irondequoit (0.87) / Fairport (0.71)**.
 Remaining gap (0.52 vs 0.93 ceiling) is the greedy tracker's selection — the Phase-2 multi-hypothesis work.
 
+### EXP-9 (2026-06-16): the 0.52 wall is detector FALSE-POSITIVES, not the tracker — static-aware selection wins; beam-MHT fails
+
+Closing the 0.52→0.93-ceiling gap on Spencerport clip-1. First built the turnkey clip-scoring harness
+(`clip_eval.py`, generalising `iron_eval` to the far-label format) and **reproduced EXP-8 exactly**
+(AutoCam 0.014, fused 0.521 @R400, ceiling 1.00@400/0.97@200). Then a per-frame miss audit found the
+selection failure is concrete:
+
+- **Detector false-positives, not tracker weakness.** champion-J fires **persistent high-score (0.81–0.96)
+  peaks at 6 fixed scene locations** (line corners, posts, far-side clutter) — occupied 51–77% of the clip.
+  The greedy/argmax trackers lock onto these because they outscore the dim (≤0.6) far ball. Two are the
+  exact failure anchors: a near-side **assistant-referee/linesman** at (6008,1186) the tracker acquires at
+  frame 0 and follows ~3000px off for 13 frames; a fixed corner feature at (2340,220) it parks on while
+  the ball drifts away. J nails the ball precisely (dist ≤5px) in ~15 frames — those exact peaks are just
+  never selected.
+- **Multi-hypothesis beam-MHT FAILS (documented negative).** Built a full beam tracker
+  (`multi_hypothesis_track`, backpointer beam search + merge/prune + re-acquire jumps + action/support
+  priors). Global-max-accumulated-score selection reintroduces the **EXP-1 global-MAP failure** — a long,
+  smooth, *bright distractor* path outscores the dim/intermittent/occluded ball under any
+  appearance-summing objective. Oracle-selecting the best path *in the final beam* (0.44 @R400) barely
+  beats global-max (0.41) → **the beam doesn't even contain a good ball path**: brightness-pruning kills
+  the dim ball hypothesis early. Neither global-MAP nor a pruned beam works here. (`MHTConfig` /
+  `multi_hypothesis_track` kept — useful tool + oracle diagnostic — but not the production tracker.)
+- **The action centroid does NOT anchor acquisition.** On this clip the ball is played *ahead* of the
+  play (a long ball): the global action centroid sits **1060px** from the ball (5% within 400). Action is
+  only a *local* gap-filler (fused tracker), never an acquisition anchor.
+
+**The win — static-aware selection (productionised, `TrackerConfig.static_thresh`).** The 6 FPs are
+*static* (same cell every frame); the ball *moves* (no-teleport physics). So the tracker **avoids
+acquiring or following** any candidate whose cell holds a peak in ≥30% of the clip — but keeps it as a
+fallback (the ball may pass through one) and **coasts past it** rather than parking. This is soft, at the
+*selection* level, where binary cell-removal failed (unconditional suppression drops @R400 0.52→0.41 by
+deleting ball candidates in FP cells). Cross-game (anti-overfit, same params):
+
+| game (far balls @R) | base @200 | **SA @200** | base @400 | **SA @400** |
+|---|---|---|---|---|
+| **Spencerport clip-1** (human GT) | 0.260 | **0.452** | 0.521 | **0.534** |
+| Fairport seg9 (AutoCam GT) | 0.707 | **0.758** | 0.707 | **0.768** |
+| Irondequoit (human GT) | 0.672 | 0.672 | 0.870 | 0.870 |
+
+**No regression anywhere, +0.05–0.19 on 2 of 3** (Irondequoit's J has no persistent-FP problem → correctly
+untouched). Median dist-to-ball on clip-1 **347→258px**. Decisively still beats AutoCam (0.534 vs 0.014).
+**Residual wall = detector discrimination** (dim ball vs bright linesman/players): the next real lever is
+candidate-level — the geometric **size prior** (far ball ~8px vs 50px person; needs the detector to emit
+size → re-dump) and the **two-stage candidate→classifier** (Phase-1 R3), NOT a smarter tracker over the
+same ambiguous candidates. Independently confirms the heatmap session's "it's fine appearance
+discrimination." Validation harness `clip_eval.py`; detections for clips 2–5 dumped and ready to score on
+Mark's labels.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
@@ -402,3 +450,10 @@ improvement **generalizes to a 2nd game** (Fairport, same params: argmax→causa
 not Irondequoit-specific — but that 2nd game has AutoCam-only GT, so **beating AutoCam *on its misses*
 across games still needs human-GT clips** (your AutoCam-loses-ball timestamps). The action prior is
 **situational** (helps on hard/sparse far balls; gate it on appearance reliability).
+
+**Refinement (EXP-9):** On the hardest *real* human-GT clip the residual gap (0.53 vs 1.0 ceiling) is
+**detector false-positives** (6 persistent static high-score peaks + dim ball), not tracker cleverness —
+a beam-MHT can't beat it and the dim ball loses any brightness-summing objective. The training-free
+**static-aware selection** (don't acquire/follow a persistent-static FP) is the validated tracker-side win
+(no cross-game regression); past it, the lever moves to **candidate discrimination** — the geometric size
+prior and a ball-vs-person classifier (Phase-1) — which is where the 4070 finally earns its keep.

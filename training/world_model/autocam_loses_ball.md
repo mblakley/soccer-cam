@@ -23,11 +23,15 @@ Status: `pending` (awaiting extraction) → `gt` (true ball positions verified) 
 
 | # | Game | Start | End | Tag | Status | Notes |
 |---|------|-------|-----|-----|--------|-------|
-| 1 | heat__2026.05.31_vs_Spencerport | 4:45 | 5:03 | far+occlusion | **scored — WIN** | 73 ball + 15 occluded. **AutoCam 0.01 vs WM-fused 0.52 @R400** (motion-protected suppression; was 0.41 before the fix). AutoCam ~2852px off (lost, centered). Ceiling: ball in fused cands 0.93@400 → tracker still has headroom (MHT). |
-| 2 | heat__2026.05.31_vs_Spencerport | 7:13 | 7:30 | ? | pending | |
-| 3 | heat__2026.05.31_vs_Spencerport | 7:43 | 8:05 | ? | pending | |
-| 4 | heat__2026.05.31_vs_Spencerport | 9:20 | 9:35 | ? | pending | |
-| 5 | heat__2026.05.31_vs_Spencerport | 14:45 | 14:57 | ? | pending | |
+| 1 | heat__2026.05.31_vs_Spencerport | 4:45 | 5:03 | far+occlusion+distractor | **scored — WIN** | 73 ball + 15 occluded. **AutoCam 0.014 vs WM 0.534 @R400, 0.452 @R200** (static-aware selection, EXP-9; was 0.521/0.260). AutoCam ~2852px off (lost, centered); WM median 258px. The bright distractor = a **linesman** the greedy tracker acquired at frame 0. Residual wall = detector FPs (6 persistent static peaks) + dim ball, not the tracker → size-prior / two-stage classifier (Phase-1). |
+| 2 | heat__2026.05.31_vs_Spencerport | 7:13 | 7:30 | ? | **dumped — awaiting label** | `spc_clip2.json` (83 frames, J+motion). Label at `…/far-label.html?set=spc_clip2`. |
+| 3 | heat__2026.05.31_vs_Spencerport | 7:43 | 8:05 | ? | **dumped — awaiting label** | `spc_clip3.json` (108 frames). `?set=spc_clip3`. |
+| 4 | heat__2026.05.31_vs_Spencerport | 9:20 | 9:35 | ? | **dumped — awaiting label** | `spc_clip4.json` (73 frames; 1-frame gap at hi). `?set=spc_clip4`. |
+| 5 | heat__2026.05.31_vs_Spencerport | 14:45 | 14:57 | ? | **dumped — awaiting label** | `spc_clip5.json` (59 frames). `?set=spc_clip5`. |
+
+Score a dumped+labelled clip with: `python -m training.world_model.clip_eval --peaks spc_clipN.json
+--labels labels.json --autocam autocam_clipN.json` (peaks + AutoCam sidecar on the box at `G:\ballresearch\`,
+labels at `D:\training_data\far_label\spc_clipN\labels.json`).
 
 ## Games still to source (held-out Reolink, field polygon on disk → turnkey)
 - `heat__2026.05.07 vs Pittsford`
