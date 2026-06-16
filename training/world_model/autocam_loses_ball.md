@@ -23,7 +23,7 @@ Status: `pending` (awaiting extraction) → `gt` (true ball positions verified) 
 
 | # | Game | Start | End | Tag | Status | Notes |
 |---|------|-------|-----|-----|--------|-------|
-| 1 | heat__2026.05.31_vs_Spencerport | 4:45 | 5:03 | ? | pending | |
+| 1 | heat__2026.05.31_vs_Spencerport | 4:45 | 5:03 | far+occlusion | **scored — WIN** | 73 ball + 15 occluded. **AutoCam 0.01 vs WM-fused 0.41 @R400**; AutoCam ~2852px off (lost, centered), WM 474px median. Ceiling: ball in fused cands 0.97@200 → tracker headroom. |
 | 2 | heat__2026.05.31_vs_Spencerport | 7:13 | 7:30 | ? | pending | |
 | 3 | heat__2026.05.31_vs_Spencerport | 7:43 | 8:05 | ? | pending | |
 | 4 | heat__2026.05.31_vs_Spencerport | 9:20 | 9:35 | ? | pending | |

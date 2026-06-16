@@ -357,6 +357,29 @@ default that generalises; the action prior is an **explicit opt-in** for hard fa
 adaptive switch (likely needing a real detector-confidence signal, not the tracker's own hit-rate) is
 deferred.
 
+### EXP-8 (2026-06-16): REAL AutoCam-loses-ball clip — decisive win vs AutoCam, on human GT
+
+First gold-standard validation on a real clip Mark flagged (Spencerport 4:45–5:03), with **human ground
+truth** he labelled via the far-label tool (88 frames: 73 visible ball + 15 player-occluded). The ball is
+ultra-far in the corner (y≈159–229) and frequently occluded — the worst case, which is why AutoCam lost
+it. Scored vs GT (R=400 viewport):
+
+| method | R200 | R400 | median dist-to-ball |
+|---|---|---|---|
+| **AutoCam** (its logged viewport xy) | 0.00 | **0.01** | **2852 px** (lost; sat at frame centre) |
+| world-model **fused** (causal + action) | 0.36 | **0.41** | **474 px** |
+| world-model causal-only | 0.08 | 0.15 | 749 px |
+| argmax raw J | 0.21 | 0.23 | 1192 px |
+
+**The world-model decisively beats AutoCam where AutoCam fails** — 0.41 vs 0.01 @R400, and 6× closer to
+the ball. AutoCam's viewport sat ~2850px off (defaulted to centre); the world-model held the ball's area
+41% of the time. The action prior is essential here (causal-only 0.15 → fused 0.41) — exactly the hard
+far-ball recovery it's for. **But the fused candidates contain the ball 97% @R200**, so the tracker
+realises only ~0.41 of a ~1.0 ceiling: on this hard clip the bottleneck is the **tracker's selection**
+(greedy acquisition locks on a brighter player distractor), not detection — large CPU-only headroom for
+the Phase-2 multi-hypothesis tracker. Validation pipeline (dump → far-label set → human GT → score vs
+AutoCam) is now turnkey for the rest of Mark's clips.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
