@@ -22,11 +22,17 @@ global trajectory, occlusion persistence, full-likelihood track-before-detect.
 
 | Component | File | Status |
 |---|---|---|
-| Zero-touch field geometry (homography + geometric size prior + support) | `geometry.py` | ✅ done, 9 tests |
-| World-model state estimator + track-before-detect (Viterbi MAP + switching PF) | `tbd.py` (planned) | next |
-| Measurement adapters (detector peaks, bg-sub motion, classical blobs, player prior) | `measurements.py` (planned) | — |
-| Virtual rectilinear "broadcast camera" views (see decision below) | reuse `dewarp_tiles.py` | planned |
-| Shared eval (full-frame far-recall, track coverage, AutoCam-loses-ball + distractor clips) | `eval.py` (planned) | — |
+| Zero-touch field geometry (homography + geometric size prior + support) | `geometry.py` | ✅ done |
+| Track-before-detect global-MAP (Viterbi) | `tbd.py` | ✅ done — wrong inference for an *intermittent* target (EXP-1) |
+| Causal continuity tracker + action-prior fused tracker | `tracker.py` | ✅ done — the winning inference (EXP-3/5) |
+| Fixed-camera static-background suppression | `measurements.py` | ✅ done |
+| Eval: peak extraction + center-distance/area recall + canonical comparison | `eval.py`, `iron_eval.py` | ✅ done |
+| Game-ball ROLE / handoff state machine | `game_ball.py` | ✅ done (Phase-2) |
+| Virtual rectilinear "broadcast camera" views | reuse `dewarp_tiles.py` | planned (needs GPU phase) |
+| Multi-game LOGO eval (held-out human GT) | — | blocked on 2nd-game GT / AutoCam-loses-ball clips |
+
+All CPU, no GPU, **36 tests** green. Inference chain: `suppress_static_candidates` →
+`causal_track_fused` (appearance + action) → `track_game_ball` (role/handoff).
 
 ## Decision: the game ball is a ROLE, not a fixed object — track the in-play ball with handoff (2026-06-16)
 
