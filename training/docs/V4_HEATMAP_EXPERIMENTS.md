@@ -16,11 +16,22 @@ detections on the four 05-27 segments (~1,100 balls) — near/mid + the far ball
 Irondequoit held out for eval. Far-ball signal beyond AutoCam comes from: motion (multi-frame),
 gap pseudo-labels (velocity-extrapolated), and self-training — the experiment axes below.
 
-## Key finding (2026-06-15 late): naive MSE AND focal both COLLAPSE at crop=256/sigma=4
-Loss drops to ~0 while recall stays 0 — the model predicts a blank heatmap because ~2–80 ball px in
-65,536 is too imbalanced. Fix = smaller crop (less background) + larger Gaussian. Engine =
-`G:\v4bench\heatmap_exp.py` (cached dense labels + cached crops per size + train + full-frame
-far-split eval → appends `G:\v4bench\hm_results.jsonl`).
+## Key finding (2026-06-16): THE ARCHITECTURE WORKS — train-fit recall = 84%
+EXP-A (crop128/sigma6/focal) fit its own 05-27 training crops at **84% (169/200)** — the heatmap +
+dewarp + mask + multi-frame net *does* learn to localize the ball. The earlier "collapse" (recall 0)
+was a **val-only data bug**, not architecture: `build_heatmap_crops` **seeked** to t-2 (exact on the
+raw GOP=1 05-27 segments, hence 84% train), but the **Irondequoit val clip is re-encoded/trimmed**, so
+the seek returned the WRONG frames → ball not at the target → val recall 0. (The naive-MSE/crop256
+collapse note below was also real, but smaller crop + focal fixed *trainability*; the val number was
+masked by this separate seek bug.) **Fix:** `build_heatmap_crops` now does frame-exact **sequential
+decode** (rolling 3-frame buffer), gop-agnostic. Rebuilding crops + re-running to get the real val
+recall vs AutoCam.
+
+Engine = `G:\v4bench\heatmap_exp.py` (cached dense labels + cached crops per size + train + far-split
+eval → appends `G:\v4bench\hm_results.jsonl`). `crop_diag2.py` = the crop/target visual check + train-fit.
+
+### (earlier) naive MSE AND focal COLLAPSE at crop=256/sigma=4
+Loss → ~0 while recall 0 — blank-heatmap minimum (~2–80 ball px in 65,536). Smaller crop + focal fixed it.
 
 ## Experiment queue (work top-down; keep the winner)
 1. **Break the collapse** — crop∈{96,128}, sigma∈{4,6,9}, loss∈{focal,wbce}, lr∈{1e-3,3e-3}. Gate:

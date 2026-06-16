@@ -104,7 +104,6 @@ def build_heatmap_crops(
         stream.thread_type = "AUTO"
         sw = stream.codec_context.width
         sh = stream.codec_context.height
-        fps = float(stream.average_rate) or 20.0
         warp = _native_iso_warp(polygon, sw, sh)
         bh, bw = warp.shape
         # band mask (with far margin), in dewarped/band coords
@@ -112,70 +111,69 @@ def build_heatmap_crops(
         mask = np.zeros((bh, bw), np.uint8)
         cv2.fillPoly(mask, [mpoly], 255)
 
-        for t in sorted(labels):
-            bx, by = labels[t]
-            # seek to t-2 and decode 3 consecutive frames (GOP=1 -> exact)
-            t0 = max(0, t - 2)
-            try:
-                container.seek(
-                    int((t0 / fps) / stream.time_base), stream=stream, backward=True
-                )
-            except Exception:
-                pass
-            frames = []
-            for fr in container.decode(stream):
-                frames.append(fr)
-                if len(frames) >= 3:
-                    break
-            if len(frames) < 3:
+        # Sequential decode with a rolling 3-frame buffer. Frame-EXACT and
+        # gop-agnostic; seeking is wrong on re-encoded clips (e.g. the trimmed
+        # Irondequoit val clip), which silently misaligns the ball from the target.
+        want = set(labels)
+        lo, hi = min(want) - 2, max(want)
+        grays: list = []
+        dbx = dby = 0.0
+        t = 0
+
+        def _emit(ccx, ccy, has_ball, tag):
+            x0 = int(np.clip(round(ccx) - half, 0, max(0, bw - crop)))
+            y0 = int(np.clip(round(ccy) - half, 0, max(0, bh - crop)))
+            stack = np.zeros((3, crop, crop), np.uint8)
+            for i, gr in enumerate(grays):
+                patch = gr[y0 : y0 + crop, x0 : x0 + crop]
+                stack[i, : patch.shape[0], : patch.shape[1]] = patch
+            if has_ball:
+                lx, ly = dbx - x0, dby - y0
+                if not (0 <= lx < crop and 0 <= ly < crop):
+                    return
+            else:
+                lx = ly = None
+            fname = f"{gid}_f{t:06d}_{tag}.npy"
+            np.save(out_dir / "crops" / fname, stack)
+            index.append(
+                {
+                    "file": fname,
+                    "x": None if lx is None else round(float(lx), 1),
+                    "y": None if ly is None else round(float(ly), 1),
+                    "split": split,
+                }
+            )
+
+        buf: list = []
+        idx = -1
+        for fr in container.decode(stream):
+            idx += 1
+            if idx < lo:
                 continue
-            grays = [
-                _dewarp_mask_gray(fr.to_ndarray(format="bgr24"), warp, mask)
-                for fr in frames[-3:]
-            ]
-            # ball in dewarped/band coords
-            dxy = warp.points([(bx, by)])[0]
-            dbx, dby = float(dxy[0]), float(dxy[1])
-
-            def _emit(ccx, ccy, has_ball, tag):
-                x0 = int(np.clip(round(ccx) - half, 0, max(0, bw - crop)))
-                y0 = int(np.clip(round(ccy) - half, 0, max(0, bh - crop)))
-                stack = np.zeros((3, crop, crop), np.uint8)
-                for i, gr in enumerate(grays):
-                    patch = gr[y0 : y0 + crop, x0 : x0 + crop]
-                    stack[i, : patch.shape[0], : patch.shape[1]] = patch
-                if has_ball:
-                    lx, ly = dbx - x0, dby - y0
-                    if not (0 <= lx < crop and 0 <= ly < crop):
-                        return
-                else:
-                    lx = ly = None
-                fname = f"{gid}_f{t:06d}_{tag}.npy"
-                np.save(out_dir / "crops" / fname, stack)
-                index.append(
-                    {
-                        "file": fname,
-                        "x": None if lx is None else round(float(lx), 1),
-                        "y": None if ly is None else round(float(ly), 1),
-                        "split": split,
-                    }
-                )
-
-            # positive: crop around ball (+jitter)
-            jx = rng.integers(-jitter, jitter + 1)
-            jy = rng.integers(-jitter, jitter + 1)
-            _emit(dbx + jx, dby + jy, True, "pos")
-            # negative: a random in-mask location away from the ball
-            if rng.random() < neg_ratio:
-                for _ in range(8):
-                    nx = rng.integers(half, max(half + 1, bw - half))
-                    ny = rng.integers(half, max(half + 1, bh - half))
-                    if (
-                        mask[int(ny), int(nx)]
-                        and (nx - dbx) ** 2 + (ny - dby) ** 2 > (crop * 0.75) ** 2
-                    ):
-                        _emit(nx, ny, False, "neg")
-                        break
+            buf.append(_dewarp_mask_gray(fr.to_ndarray(format="bgr24"), warp, mask))
+            if len(buf) > 3:
+                buf.pop(0)
+            if idx in want:
+                bx, by = labels[idx]
+                grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                dxy = warp.points([(bx, by)])[0]
+                dbx, dby = float(dxy[0]), float(dxy[1])
+                t = idx
+                jx = rng.integers(-jitter, jitter + 1)
+                jy = rng.integers(-jitter, jitter + 1)
+                _emit(dbx + jx, dby + jy, True, "pos")
+                if rng.random() < neg_ratio:
+                    for _ in range(8):
+                        nx = rng.integers(half, max(half + 1, bw - half))
+                        ny = rng.integers(half, max(half + 1, bh - half))
+                        if (
+                            mask[int(ny), int(nx)]
+                            and (nx - dbx) ** 2 + (ny - dby) ** 2 > (crop * 0.75) ** 2
+                        ):
+                            _emit(nx, ny, False, "neg")
+                            break
+            if idx > hi:
+                break
         container.close()
 
     n_train = sum(1 for r in index if r["split"] == "train")
