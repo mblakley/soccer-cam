@@ -1770,6 +1770,81 @@ async def submit_far_label(set_id: str, result: dict):
     return {"accepted": True, "labeled": len(labels)}
 
 
+# ------------------------------------------------------------------
+# Field polygon editor (v4) — drag the 10-point field outline on a full-res
+# frame from a v4 clip and save it back to the canonical polygon JSON the warp +
+# field-mask use. Independent of the tiled-pipeline field-boundary editor (which
+# is hardcoded to the legacy 4096x1800 Dahua panorama); v4 clips are 7680x2160.
+# Each set is a dir under FIELD_EDIT_DIR with frame.jpg + polygon.json + meta.json
+# ({game_id, src_w, src_h, canonical_paths:[...]}).
+
+FIELD_EDIT_DIR = Path("D:/training_data/v4_fields")
+
+
+def _fe_dir(set_id: str) -> Path:
+    d = FIELD_EDIT_DIR / set_id
+    if not (d / "meta.json").exists():
+        raise HTTPException(404, f"Field-edit set not found: {set_id}")
+    return d
+
+
+@app.get("/api/field-edit")
+async def list_field_edit():
+    out = []
+    if not FIELD_EDIT_DIR.exists():
+        return out
+    for d in sorted(FIELD_EDIT_DIR.iterdir()):
+        if (d / "meta.json").exists():
+            meta = json.loads((d / "meta.json").read_text())
+            out.append({"set": d.name, "game_id": meta.get("game_id", d.name)})
+    return out
+
+
+@app.get("/api/field-edit/{set_id}")
+async def get_field_edit(set_id: str):
+    d = _fe_dir(set_id)
+    meta = json.loads((d / "meta.json").read_text())
+    poly = json.loads((d / "polygon.json").read_text()).get("polygon")
+    return {
+        "set": set_id,
+        "game_id": meta.get("game_id", set_id),
+        "src_w": meta.get("src_w", 7680),
+        "src_h": meta.get("src_h", 2160),
+        "polygon": poly,
+        "frame_url": f"/api/field-edit/{set_id}/frame",
+    }
+
+
+@app.get("/api/field-edit/{set_id}/frame")
+async def get_field_edit_frame(set_id: str):
+    f = _fe_dir(set_id) / "frame.jpg"
+    if not f.exists():
+        raise HTTPException(404, "Frame not found")
+    return FileResponse(f, media_type="image/jpeg")
+
+
+@app.post("/api/field-edit/{set_id}")
+async def save_field_edit(set_id: str, body: dict):
+    d = _fe_dir(set_id)
+    meta = json.loads((d / "meta.json").read_text())
+    poly = body.get("polygon")
+    if not poly or len(poly) < 4:
+        raise HTTPException(400, "Polygon needs >= 4 points")
+    payload = {
+        "polygon": [[float(x), float(y)] for x, y in poly],
+        "source": "human_field_edit",
+        "game": meta.get("game_id"),
+    }
+    (d / "polygon.json").write_text(json.dumps(payload))
+    # propagate to the canonical pipeline location(s) the warp + mask read
+    for cp in meta.get("canonical_paths", []):
+        try:
+            Path(cp).write_text(json.dumps(payload))
+        except Exception as e:
+            logger.warning("field-edit canonical write failed %s: %s", cp, e)
+    return {"accepted": True, "points": len(poly)}
+
+
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
     "/static",
