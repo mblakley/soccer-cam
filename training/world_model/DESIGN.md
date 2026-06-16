@@ -437,6 +437,42 @@ same ambiguous candidates. Independently confirms the heatmap session's "it's fi
 discrimination." Validation harness `clip_eval.py`; detections for clips 2–5 dumped and ready to score on
 Mark's labels.
 
+### EXP-10 (2026-06-16): cheap classical SIZE prior does NOT reject the person distractor — needs a learned classifier (R3)
+
+EXP-9 named the residual wall as detector FPs, esp. the near-field **linesman** the tracker acquires at
+frame 0. Tested whether a **geometric size prior** can reject it. First confirmed the geometry's
+size(location) is correct and discriminative (expected ball Ø **4.8px far → 14.3px near**). Re-dumped
+clip-1's J peaks (`dump_size.py`, 351 frames) with three image-measured size features per peak, measured
+on the warped band (where the far ball is resolved): `char_sigma` (normalized-LoG bright-blob scale
+selection), `log_resp`, `brightdim` (bright connected-component max-dim). Per-class medians:
+
+| class | char_sigma | brightdim | dexp |
+|---|---|---|---|
+| ball (n=35) | 20.0 | **5** | 4.8 |
+| linesman (n=26) | 4.0 | **12** | 14.3 |
+| FP (n=1414) | 4.0 | 7 | 5.6 |
+| other (n=2737) | 4.0 | 5 | 4.9 |
+
+`char_sigma` is **inverted/noisy** (ball=20, the max scale — σ²-normalization over-weights large scales for
+faint blobs): useless. `brightdim` separates ball(5) from linesman(12) **in the median** but **every
+filtering mechanism regressed** the tracker vs the EXP-9 baseline (0.452/0.534):
+
+- hard ÷dexp ratio cap → 0.27/0.34 (near-field dexp is large, so the linesman's 12px never trips a ratio);
+- absolute brightdim cap (8–14) → 0.26–0.37 (a person's bright sub-patch — socks/highlight — is ≤8px, so
+  the linesman only partly filters: 26→8 surviving peaks; and ball candidate-recall drops 0.93→0.90);
+- soft size-preference (prefer ball-sized at acquire/select, à la static-aware) → best 0.47 @400, still < 0.534.
+
+**Why cheap size fails (measured, decisive):** (1) `brightdim` captures bright *sub-patches*, not object
+extent — overlaps the ball; (2) perspective makes a near person and a near ball similar-sized; (3) even
+when size removes the linesman it does **not help *find* the ball** — there are ~2700 ball-sized "other"
+candidates, so "pick the brightest *small* blob" still isn't the ball, and filtering costs continuity
+anchors. A human distinguishes the linesman crop from the ball crop instantly (rich appearance, not a size
+scalar) — so the lever is the plan's **R3 two-stage candidate→classifier** (a tiny ball-vs-person/-line CNN
+on candidate crops), a GPU-trained model — **this is where the 4070 finally earns its keep.** Caveat: the
+clip-1 acquisition failure is partly a **cold-start artifact** of an isolated 18s excerpt — mid-game the
+tracker enters already locked on the ball, so deployment recall is better than 0.534 implies; the classifier
+mainly hardens (re)acquisition. (`dump_size.py` lives in the box workspace, not the repo.)
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
@@ -455,5 +491,7 @@ across games still needs human-GT clips** (your AutoCam-loses-ball timestamps). 
 **detector false-positives** (6 persistent static high-score peaks + dim ball), not tracker cleverness —
 a beam-MHT can't beat it and the dim ball loses any brightness-summing objective. The training-free
 **static-aware selection** (don't acquire/follow a persistent-static FP) is the validated tracker-side win
-(no cross-game regression); past it, the lever moves to **candidate discrimination** — the geometric size
-prior and a ball-vs-person classifier (Phase-1) — which is where the 4070 finally earns its keep.
+(no cross-game regression); past it, the lever moves to **candidate discrimination**. EXP-10 then ruled out
+the *cheap* size prior (classical blob-size features can't separate a dim far ball from a near person), so
+the remaining lever is specifically a **learned ball-vs-person/-line classifier on candidate crops (R3)** —
+which is where the 4070 finally earns its keep.
