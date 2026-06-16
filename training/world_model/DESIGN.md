@@ -28,6 +28,31 @@ global trajectory, occlusion persistence, full-likelihood track-before-detect.
 | Virtual rectilinear "broadcast camera" views (see decision below) | reuse `dewarp_tiles.py` | planned |
 | Shared eval (full-frame far-recall, track coverage, AutoCam-loses-ball + distractor clips) | `eval.py` (planned) | — |
 
+## Decision: the game ball is a ROLE, not a fixed object — track the in-play ball with handoff (2026-06-16)
+
+**Context (Mark).** The strongest signal that the tracked ball is no longer the game ball is that
+*another* ball has been in play on the field for a significant time. Normal scenario: the game ball goes
+out of play (kicked out of bounds, shot over the goal); rather than retrieve it, a player puts a
+*different* ball into play (from a ball-boy, or one resting on a sideline cone); the original ball is
+abandoned out of play and the new ball is now the game ball.
+
+**Decision.** Relax the strict single-physical-object assumption. The "game ball" is a **role** assigned
+to whichever ball is in **active play**, and the role can **hand off** between physical balls:
+- **Multi-hypothesis:** maintain trajectories for all ball-like candidates, not just one.
+- **Role = in-play:** at each moment the game ball is the hypothesis best satisfying *active play* —
+  in-bounds (field+dome support), engaged by players (R4 action/possession), moving with game dynamics —
+  not merely "the continuous trajectory from before."
+- **Handoff with hysteresis:** transfer the role only when the current game ball has left play AND a
+  *different* hypothesis is **sustainedly** in play (seconds, not a frame). A brief throw-in / goal-kick
+  excursion (same ball returns) does NOT switch; a genuine ball swap does.
+
+**Why it matters.** This is the principled form of "single object, no teleport": *within* a hypothesis,
+no teleport; *across* hypotheses, a sustained in-play handoff is allowed. It leans on the player/action
+prior (R4), field support, and the restart/out-of-play modes. For the viewport goal it's exactly right —
+follow the *in-play* ball / developing action, never an abandoned ball sitting off-field. The current
+`tbd.py` is single-hypothesis (correct for a clip with no swap); multi-hypothesis + role assignment is a
+layer above it (Phase 2 — does not affect the current far-ball EXP-2).
+
 ## Decision: measurements need rectilinear "broadcast camera" views (2026-06-16)
 
 **Context.** The strong published detectors (WASB, TrackNet, DeepBall, the 2025 single-camera
