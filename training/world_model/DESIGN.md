@@ -727,3 +727,25 @@ field* to avoid the black cap. Mark's steer — "zoom in tight and use the zoom 
 far-touchline ball), 73/73 in-view. So the lever for a far ball is: aim up (high top-cap) + zoom in
 (small scale) + accept the cap, rather than widen to dodge it. These should become the far-ball framing
 defaults (with the cap shrinking automatically for near/mid plays); folded into render task #21.
+
+### EXP-22 (2026-06-17): meters re-baseline — selection is genuinely maxed; the detector is the only lever
+
+Re-ran the whole selection question scored in **meters** (`evaluate_recall_metric`), since the source-px
+metric hid the truth (at the far corner @R400 = 13 m, so an 11 m-off track counted as a "hit"). On clip-1
+(73 far balls):
+
+- **Candidate ceiling (meters):** nearest J peak median **3.4 m** (<5m 0.64); nearest fused (J+motion)
+  median **2.8 m** (<5m **0.86**). The ball IS detected within ~3 m most of the time.
+- **But the ball is DIM:** the **top-3 brightest** J peaks are **15.6 m** off — the ball is rank 4–12.
+- **Every tracker maxes ~0.26 within 5 m** (median 11.5 m): causal-fused 0.26, re-acquire-radius/acq-score
+  sweep no change, MHT 0.12 (worse), MHT **oracle** 0.12 (0/16 beam paths reach 0.4 within 5 m), and a
+  **coherence-pruned** beam (w_app→0, reward continuity/support/action) ≤0.16. So no selection method —
+  greedy, beam, brightness- or coherence-pruned, oracle — gets near the 0.86 ceiling.
+
+**Conclusion (now rigorous, in meters):** the dim ball is **indistinguishable from distractor tracks by any
+per-frame or trajectory-coherence signal**; the beam prunes it by brightness and a coherence beam can't
+single it out either. Selection is at its floor (~0.26 within 5 m). **The only lever is the detector making
+the ball discriminable** — score the ball *higher than the bright distractors* (more far-ball labels +
+person/line-awareness so it stops being out-shouted). This is the labels + retraining work. Tracker tuning
+is done; meters is the standard metric from here (EXP-20). Note the candidates are *precise* (~3 m) once the
+right one is picked — so making the ball top-1 immediately inherits ~3 m accuracy.
