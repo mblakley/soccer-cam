@@ -108,11 +108,27 @@ function show(){
   if (img.complete && img.naturalWidth) fitView();
 }
 
-function fitView(){
-  // size the img to natural; fit width into the view via baseScale; reset zoom
+function setupCanvas(){
   img.width = img.naturalWidth; img.height = img.naturalHeight;
   ov.width = img.naturalWidth; ov.height = img.naturalHeight;
   view.style.height = Math.round(view.clientWidth * img.naturalHeight / img.naturalWidth) + "px";
+}
+let viewInit=false, lastNW=0, lastNH=0;
+// Called on every frame load. PRESERVE the current zoom + pan across frames (so you
+// stay zoomed into the same region) — only fit-to-width on the very first frame or if
+// the strip dimensions change. Use resetView() ("Reset zoom" / key 0) to snap back.
+function fitView(){
+  setupCanvas();
+  const newBase = view.clientWidth / img.naturalWidth;
+  const sizeChanged = (img.naturalWidth!==lastNW || img.naturalHeight!==lastNH);
+  if (!viewInit || sizeChanged){ baseScale=newBase; z=newBase; tx=0; ty=0; viewInit=true; }
+  else { if (newBase!==baseScale){ const ratio=z/baseScale; baseScale=newBase; z=newBase*ratio; } clampPan(); }
+  lastNW=img.naturalWidth; lastNH=img.naturalHeight;
+  applyTransform(); draw();
+}
+// Explicit reset to fit-width (Reset zoom button / key 0).
+function resetView(){
+  setupCanvas();
   baseScale = view.clientWidth / img.naturalWidth;
   z = baseScale; tx = 0; ty = 0;
   applyTransform(); draw();
@@ -217,7 +233,7 @@ document.getElementById("bPrev").onclick=prev;
 document.getElementById("bNext").onclick=next;
 document.getElementById("bFar").onclick=gotoFar;
 document.getElementById("bUnlab").onclick=gotoUnlabeled;
-document.getElementById("bReset").onclick=fitView;
+document.getElementById("bReset").onclick=resetView;
 addEventListener("keydown",(e)=>{
   if(e.key==="c"||e.key==="C") document.getElementById("bConfirm").click();
   else if(e.key==="n"||e.key==="N") document.getElementById("bNot").click();
@@ -226,7 +242,7 @@ addEventListener("keydown",(e)=>{
   else if(e.key==="ArrowRight") next();
   else if(e.key==="u"||e.key==="U") gotoUnlabeled();
   else if(e.key==="f"||e.key==="F") gotoFar();
-  else if(e.key==="0") fitView();
+  else if(e.key==="0") resetView();
 });
 addEventListener("resize", ()=>{ fitView(); });
 load();
