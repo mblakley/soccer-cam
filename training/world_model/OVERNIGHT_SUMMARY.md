@@ -71,8 +71,9 @@ champion-J exports cleanly to ONNX (4.2 MB, dynamic H/W). **No accuracy was trad
    faithful to the 0.66 number: **f0** empty grass (the cold-start acquisition off-ball), **f180** locked
    on the far corner — goal, spectators, players (the viewport is *on the action*, where AutoCam sat
    2850px away at frame-center), **f300** end-phase drift as the ball runs the goal-line (the phase-3
-   misses). End-to-end proof the world-model can drive a real broadcast viewport. Next: a vertical-stack
-   **world-model vs AutoCam** comparison clip, and re-render after the detector improves.
+   misses). End-to-end proof the world-model can drive a real broadcast viewport. The side-by-side
+   **`clip1_compare.mp4` (sent) is the headline visual** — top: our viewport on the corner action; bottom:
+   AutoCam staring at empty mid-field grass, same instant. Re-render after the detector improves.
 3. **Label clips 2–5** (dumped, waiting) + I still owe a **cross-game person-mask validation** (person-mask
    is committed but only validated on clip-1; needs Iron/Fairport person boxes).
 
