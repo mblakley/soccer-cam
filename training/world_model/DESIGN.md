@@ -577,3 +577,29 @@ long as the viewport points the right way"). So the data favors Path 1; Path 2's
 if a future need for ball-on-player precision appears. Next: confirm Path 1 at its budget setting
 (yolo11n @1280) still kills the linesman / holds 0.658, then productionise it as a `mask_person_candidates`
 measurement step. (Speed measured on the 1060; absolute s/frame is a 4070 + Phase-3 ROI concern.)
+
+### EXP-13/14 (2026-06-16, overnight): tracker is candidate-limited, not tunable — accuracy lever is the detector
+
+With static-aware + person-mask in place (clip1 0.658 @R400), tried to close the residual
+0.658→1.0-ceiling gap from the tracker side. Diagnosis first: all **25/25 clip1 @R400 misses are
+recoverable** (the ball IS in the fused candidates ≤400 every missed frame) and the ball is **slow**
+(median 3.8 px/frame, max 21.5) — so it is pure *selection drift*, not gate size or detection.
+
+- **EXP-13 forward-backward (fixed-interval) smoothing — negative.** Bidirectional causal pass + merge
+  (staleness / prefer-detected / avg). Helps Fairport (0.77→0.83) but **hurts clip1 (0.66→0.55) and Iron
+  (0.87→0.85)** — the backward pass cold-starts wrong at the clip *end*, so the merge picks bad segments.
+  Net wash. Dropped.
+- **EXP-14 selection sweep — no config beats the current one.** Swept vel_decay × action_pull ×
+  re-acquire-radius across 3 games. `vel_decay` is very sensitive on the slow ball (0.85→0.18, **0.80→
+  0.658** clip1 — faster decay stops the coast drifting). A "local re-acquire" (nearest candidate to the
+  prediction vs global-best) made **no** difference (re-acquire rarely fires). The current config
+  (decay 0.8, action_pull 0.6, static 0.3, person-mask) is the cross-game optimum: clip1 0.66 / Iron 0.87
+  / Fair 0.77; nothing improves clip1 without regressing Iron or Fair.
+
+**Conclusion:** greedy causal + the validated cleaners (static-aware, person-mask) is **near-optimal for
+the current candidate quality**; the residual gap is data-association the tracker can't resolve without
+knowing *which* candidate is the ball. So the next accuracy lever is the **detector/measurements** (better
+candidates / a ball-vs-person-aware net — the GPU work for when more labels land), not more tracker
+tuning. The pipeline already beats AutoCam decisively (clip1 0.66 vs 0.014), so per Mark's steer the next
+focus is **speed** (EXP-16+). Note clip1 is the hardest excerpt (cold-start in an 18s window); mid-game,
+recall is higher (Iron 0.87 is more representative). All runs logged to `overnight_experiments.jsonl`.
