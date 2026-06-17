@@ -637,3 +637,24 @@ calibration — a retraining lever for later, not needed now (iGPU already meets
 window meets the overnight budget with 1.5–4× margin**, ball detector exported to ONNX. The 1060 server
 has 50×+ headroom. No accuracy was traded (ROI preserves the gate). Remaining speed upside (smaller model,
 static quant, ROI-size tuning) is available but unneeded for the floor.
+
+### EXP-19 (2026-06-17): ROI robustness to a fast ball + render zoom ↔ track-accuracy coupling
+
+Two questions from Mark on the speed/render work.
+
+**Q1 — does a fast ball escape the ROI?** No, because the ball's top speed is *physically bounded* (the
+world-model's drag constraint) and the ROI is centred on the **predicted** (pos+velocity) position, so it
+only absorbs the per-frame *acceleration* residual. Computed for the clip-1 geometry, a **30 m/s hard
+shot** = **34 px/frame far, 94 px/frame near** — a 512 px ROI (±256) covers the worst single-frame jump
+with margin. Layered backstops: (a) **velocity-adaptive ROI** size = base + k·|velocity| (bounded, since
+max speed is bounded); (b) **free full-band MOG2 motion every frame** — a fast ball in open space is a
+strong motion blob, so an escape is caught and the ROI re-centres; (c) **full-band J re-acquire** when
+lost (rare, amortized). To build into the ROI deployment path.
+
+**Q2 — render too zoomed out.** Default `render_zoom_scale=0.90` (AutoCam-matched) is ~42° HFOV — far too
+wide for a deep-corner ball. Lowering to 0.65 (~30°) / 0.50 (~24°) zooms in. Key coupling surfaced:
+**zoom tightness is limited by track accuracy** — at ~24° the current track's ~300 px wobble pushes the
+action to the frame edge. So a *cleaner, tighter* broadcast zoom is another thing the detector accuracy
+improvement buys. Also: clip-1's deep-corner ball is the **worst case for visibility** (tiny far speck in
+open grass ahead of the play); mid/near plays show the ball far larger at the same zoom. Shipped z65
+render + the z65 world-model-vs-AutoCam comparison to Mark.
