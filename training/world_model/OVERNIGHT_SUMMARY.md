@@ -66,9 +66,13 @@ champion-J exports cleanly to ONNX (4.2 MB, dynamic H/W). **No accuracy was trad
    stops firing on people, and better far-ball recall) is what moves the needle. The multi-task
    `HeatmapNet(out_ch=2)` foundation is already in. *Person info stays offline at train time (bootstrap),
    one model per frame at inference.*
-2. **Broadcast render of clip-1** — the visual proof of "viewport points the right way." The world-model
-   track is ready to feed the renderer (`render_adapter.py`); I deferred running it tonight (renderer
-   setup risk) — it's the first thing worth doing with fresh context.
+2. **Broadcast render of clip-1 — DONE (`clip1_render.mp4`, sent to you).** The world-model track →
+   `render_adapter` → broadcast renderer (default config) produced a 1920×1080 follow-view. Keyframes are
+   faithful to the 0.66 number: **f0** empty grass (the cold-start acquisition off-ball), **f180** locked
+   on the far corner — goal, spectators, players (the viewport is *on the action*, where AutoCam sat
+   2850px away at frame-center), **f300** end-phase drift as the ball runs the goal-line (the phase-3
+   misses). End-to-end proof the world-model can drive a real broadcast viewport. Next: a vertical-stack
+   **world-model vs AutoCam** comparison clip, and re-render after the detector improves.
 3. **Label clips 2–5** (dumped, waiting) + I still owe a **cross-game person-mask validation** (person-mask
    is committed but only validated on clip-1; needs Iron/Fairport person boxes).
 
