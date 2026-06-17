@@ -37,17 +37,33 @@ class _DoubleConv(nn.Module):
 
 
 class HeatmapNet(nn.Module):
-    """U-Net: (B, in_frames*in_ch, H, W) -> (B, 1, H, W) heatmap logits.
+    """U-Net: (B, in_frames*in_ch, H, W) -> (B, out_ch, H, W) heatmap logits.
 
     ``H`` and ``W`` must be multiples of 8 (three 2x downsamples). Output is the
     same spatial size as the input; apply ``sigmoid`` at loss/inference time.
+
+    ``out_ch`` is the number of center-heatmap channels (default 1 = ball only).
+    Set ``out_ch=2`` for a **multi-task ball+person head** on the shared backbone:
+    channel 0 = ball, channel 1 = person. Persons are supervised with their own
+    center-heatmap (bootstrapped offline from a pretrained person detector), so the
+    net learns ball-vs-person *appearance* on shared features — the ball head stops
+    firing on a player's body even when the ball is right on it (EXP-11: box masking
+    can't do this because it deletes the ball whenever it overlaps a player). No
+    bbox/stride, so persons (big) and the 3-8px ball (tiny) share one cheap net.
     """
 
-    def __init__(self, in_frames: int = 3, in_ch_per_frame: int = 1, base: int = 16):
+    def __init__(
+        self,
+        in_frames: int = 3,
+        in_ch_per_frame: int = 1,
+        base: int = 16,
+        out_ch: int = 1,
+    ):
         super().__init__()
         c = in_frames * in_ch_per_frame
         self.in_frames = in_frames
         self.in_ch_per_frame = in_ch_per_frame
+        self.out_ch = out_ch
         self.d1 = _DoubleConv(c, base)
         self.d2 = _DoubleConv(base, base * 2)
         self.d3 = _DoubleConv(base * 2, base * 4)
@@ -59,7 +75,7 @@ class HeatmapNet(nn.Module):
         self.u2 = _DoubleConv(base * 4, base * 2)
         self.up1 = nn.ConvTranspose2d(base * 2, base, 2, stride=2)
         self.u1 = _DoubleConv(base * 2, base)
-        self.head = nn.Conv2d(base, 1, 1)
+        self.head = nn.Conv2d(base, out_ch, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x1 = self.d1(x)

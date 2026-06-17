@@ -522,3 +522,35 @@ a beam-MHT can't beat it and the dim ball loses any brightness-summing objective
 the *cheap* size prior (classical blob-size features can't separate a dim far ball from a near person), so
 the remaining lever is specifically a **learned ball-vs-person/-line classifier on candidate crops (R3)** —
 which is where the 4070 finally earns its keep.
+
+## Phase-1 plan (2026-06-16): unified ball+person detector benchmark (A vs B)
+
+Decision (Mark): **benchmark both architectures, ship the winner on the data** (his experiment-driven
+preference). Scope is *ball detection only* — the team / per-player classifier he eventually wants is
+explicitly deferred (a later head on the same backbone, not needed to solve the ball now).
+
+**Why a person head at all (from EXP-9/10/11):** the residual wall is the ball detector firing on
+persons (the linesman) and being out-competed by them. Cheap size features (EXP-10) and person-box
+masking (EXP-11) both fail — masking deletes the ball whenever it's on a player (23–33% of frames even
+on a far clip; far higher in close play). The fix must be **appearance-level**: one model whose ball
+head fires on the ball *even on a player's body* while a person head claims the body. Person labels are
+bootstrapped **offline** by a pretrained detector (`bootstrap_persons.py`, YOLO) → never at inference →
+one model per frame.
+
+**A — HeatmapNet + person head (low risk).** `HeatmapNet(out_ch=2)` (done, backward-compatible): ch0
+ball, ch1 person, shared backbone, multi-task weighted-MSE. Persons get their own *center-heatmap* — no
+bbox/stride, so the tiny 3-8px ball and big persons coexist in one cheap net. Protects champion-J's
+proven far-ball recall; person head teaches "not a ball."
+
+**B — yolo26n/m multi-class (Mark's suggestion).** One YOLO, ball+person classes. Standard, easy team
+head later, clean ONNX. *Risk, stated by the repo itself:* "the ball is 3-8px, at/below a bbox stride,
+so IoU detection collapses" — so B must prove it can hold far-ball recall, the whole point. Benchmark
+honestly; if it can't see the far ball, A wins by default.
+
+**Protocol:** train both on the `far_label` crops (ball labels = Mark's GT; person labels = bootstrapped
+YOLO centers/boxes), **leave-one-game-out** (split by game, never frame — anti-overfit). Score on the
+shared metric: far-ball viewport recall @R200/R400 + the linesman-FP check (does the ball head stop
+firing on the linesman?) + fps on the base-hardware target. Append to the experiment tracker; ship the
+winner as the world-model's measurement source. Sync experiment code to the GPU box via the research
+git branch (not file-copy). Status: `HeatmapNet(out_ch=2)` landed; next = multi-task target builder
+(ball + person Gaussians) + the two training runs.
