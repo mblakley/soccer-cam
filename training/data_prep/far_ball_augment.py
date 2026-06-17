@@ -1,17 +1,41 @@
-"""Far-ball cut-paste augmentation for the heatmap detector (R7).
+"""Far-ball cut-paste augmentation for the heatmap detector (R7), physics/game-aware.
 
 **Key finding (EXP-23, 2026-06-17).** The real far ball, on the warped band, is a small
 **low-contrast, often dark blob** — NOT a bright white sphere. (Validated by cropping the
 human-labelled far balls and comparing to rendered spheres: the spheres looked nothing
-like the real thing.) This *explains* why the ball ranks 4–12 among detector candidates
+like the real thing.) This *explains* why the ball ranks 4-12 among detector candidates
 (it's genuinely low-contrast, so brightness-based scoring ranks it below bright lines /
 kit / tents). So fully-synthetic white-sphere balls are the wrong training signal.
 
 Instead, **cut-paste real labelled ball patches** onto new field locations and
 backgrounds, with scale / contrast / flip jitter (domain randomisation). This multiplies
 the scarce far-ball examples while preserving the realistic low-contrast appearance the
-detector must learn — the lever that makes the ball discriminable (EXP-22: selection is
-maxed; the detector making the ball not-dim is the only remaining accuracy lever).
+detector must learn.
+
+**The augmentation must obey the same world-model rules as the ball itself (EXP-25/26).**
+A first pass scattered the ball at a uniform-random pixel with iid per-frame jitter; a
+second added a *random* coherent velocity plus synthetic motion blur along it. Both broke
+**camera physics: the ball's velocity determines what it looks like.** Measurement (EXP-26)
+showed **54% of the real cut-paste source balls are already motion-blurred** (blob
+elongation > 1.5, up to 12x) — a real moving ball is smeared into a streak along *its*
+velocity. Bolting a *random* velocity (and an extra synthetic blur, and a random flip that
+reverses the streak) onto such a patch trains the detector on impossible balls: streaked
+one way, moving another. The detector reads the 3-frame stack precisely to tell a real
+*moving* ball from static bright distractors, so the paste must be physically self-consistent:
+
+- **Velocity FROM appearance (camera-physics rule).** Read the ball's velocity from its own
+  motion blur — streak *orientation* = direction, streak *excess length* over the disc width
+  = per-frame speed (:func:`estimate_ball_velocity`) — then translate the **real** patch
+  (real blur intact) along *that* axis at *that* speed. No synthetic blur, no contradiction.
+  A round/sharp source is a slow ball: near-static placement, direction-agnostic.
+- **Temporal continuity (no teleport).** The ball traces that straight path across the 3
+  frames. The stack is ``[t-2, t-1, t]`` and the target is frame ``t``, so the ball in the
+  LAST frame sits exactly on the label; earlier frames are offset *backwards* along velocity.
+- **Field support (on-field only).** The ball is pasted only where the whole motion path's
+  footprint lands inside the field mask (off-field is hard-zeroed in the crop) — no frame
+  off-field, no ball-on-black.
+- **Flip mirrors velocity.** A horizontal flip mirrors the streak, so it must mirror the
+  velocity too, or appearance and motion decouple again.
 
 Pure numpy + cv2. Operates on the grayscale warped band (the detector's input space).
 """
@@ -60,7 +84,7 @@ def paste_ball(
         patch, alpha: from :func:`crop_ball_patch`.
         bx, by: paste centre in band pixels.
         scale: resize factor (size jitter — the band roughly perspective-normalises
-            ball size, so keep this near 1, e.g. 0.8–1.4).
+            ball size, so keep this near 1, e.g. 0.8-1.4).
         contrast: local contrast jitter about the patch mean (lighting variation —
             sunny vs shadowed ball).
         flip: horizontal flip.
@@ -88,40 +112,216 @@ def paste_ball(
     return True
 
 
+def sample_velocity(
+    rng: np.random.Generator, max_speed: float = 22.0, slow_scale: float = 6.0
+) -> tuple[float, float]:
+    """Sample a coherent per-frame ball velocity ``(vx, vy)`` in band px/frame.
+
+    Models the real far-ball speed distribution: mostly slow (~3-4 px/frame median,
+    EXP overnight) with a fast tail (kicks), hard-capped at ``max_speed`` (air drag /
+    the no-teleport max-speed rule). Speed is a clipped half-normal; direction uniform.
+    """
+    speed = float(np.clip(abs(rng.normal(0.0, slow_scale)), 0.0, max_speed))
+    ang = float(rng.uniform(0.0, 2.0 * np.pi))
+    return (speed * np.cos(ang), speed * np.sin(ang))
+
+
+def onfield_mask(stack: np.ndarray) -> np.ndarray:
+    """On-field boolean mask from a masked crop.
+
+    ``heatmap_dataset`` hard-zeroes every off-field pixel, so on-field == strictly
+    positive in every frame. Used to keep the paste (and its whole motion path) on the
+    pitch — the field-support game rule.
+    """
+    return stack.min(axis=0) > 0
+
+
+def sample_onfield_location(
+    mask: np.ndarray, r: int, rng: np.random.Generator
+) -> tuple[float, float] | None:
+    """Sample ``(cx, cy)`` where a ball of footprint radius ``r`` fits fully on-field.
+
+    Erodes the on-field mask by ``r`` so the whole ball (not just its centre) lands on
+    grass. Returns ``None`` if no such location exists (caller then skips the paste and
+    keeps the crop as a negative rather than pasting a ball-on-black).
+    """
+    k = 2 * int(r) + 1
+    er = cv2.erode(mask.astype(np.uint8), np.ones((k, k), np.uint8))
+    ys, xs = np.where(er > 0)
+    if len(xs) == 0:
+        return None
+    i = int(rng.integers(len(xs)))
+    return float(xs[i]), float(ys[i])
+
+
+def path_onfield(
+    mask: np.ndarray,
+    cx: float,
+    cy: float,
+    vel: tuple[float, float],
+    n: int,
+    r: int,
+) -> bool:
+    """True iff the ball footprint stays on-field at all ``n`` positions of the path.
+
+    Frame ``i`` (0-based) sits ``(n-1-i)`` steps *before* the target frame, so the last
+    frame is exactly at ``(cx, cy)`` and earlier frames are offset back along ``vel``.
+    """
+    h, w = mask.shape
+    for i in range(n):
+        px = cx - (n - 1 - i) * vel[0]
+        py = cy - (n - 1 - i) * vel[1]
+        ix, iy = int(round(px)), int(round(py))
+        if ix - r < 0 or iy - r < 0 or ix + r >= w or iy + r >= h:
+            return False
+        if mask[iy, ix] == 0:
+            return False
+    return True
+
+
+def _motion_blur(
+    patch: np.ndarray, alpha: np.ndarray, vx: float, vy: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Directional blur of ~one frame of travel along ``(vx, vy)`` (capped).
+
+    A real moving ball smears by roughly its per-frame displacement; static / slow balls
+    are left sharp. Blurs alpha too so the feather matches the streaked ball.
+    """
+    speed = float(np.hypot(vx, vy))
+    if speed < 1.5:
+        return patch, alpha
+    L = int(np.clip(round(speed), 3, 9))
+    L |= 1  # odd
+    ang = float(np.arctan2(vy, vx))
+    k = np.zeros((L, L), np.float32)
+    c = (L - 1) / 2.0
+    for t in np.linspace(-(L // 2), L // 2, L * 3):
+        x = int(round(c + t * np.cos(ang)))
+        y = int(round(c + t * np.sin(ang)))
+        if 0 <= x < L and 0 <= y < L:
+            k[y, x] = 1.0
+    s = float(k.sum())
+    if s == 0:
+        return patch, alpha
+    k /= s
+    return cv2.filter2D(patch, -1, k), cv2.filter2D(alpha, -1, k)
+
+
+def estimate_ball_velocity(
+    patch: np.ndarray,
+    alpha: np.ndarray,
+    rng: np.random.Generator,
+    max_speed: float = 30.0,
+    jitter_deg: float = 12.0,
+) -> tuple[float, float]:
+    """Infer the ball's per-frame velocity FROM its own motion blur (camera-physics rule).
+
+    A moving ball is smeared into a streak along its velocity; a slow/static ball is a
+    round disc. So the dark blob's principal-axis *orientation* is the motion direction and
+    its *excess length* over the perpendicular (disc) width is the per-frame displacement.
+    Reading velocity from the real appearance keeps the pasted ball's motion consistent with
+    how it actually looks — instead of bolting a random velocity onto a real streak (which
+    trains the detector on impossible "streaked one way, moving another" balls; EXP-26).
+
+    Returns ``(vx, vy)`` in band px/frame. A round / undetectable blob -> a small slow
+    velocity in a random direction (a near-static ball reads the same from any direction).
+    The streak axis is 180°-ambiguous, so the sign is random; a small angular jitter is added.
+    """
+    border = patch[alpha < 0.1]
+    if border.size < 10:
+        return (0.0, 0.0)
+    thr = float(np.median(border)) - 0.6 * (float(border.std()) + 1.0)
+    ys, xs = np.where((patch < thr) & (alpha > 0.2))
+    if len(xs) < 6:
+        sp = float(abs(rng.normal(0.0, 2.0)))
+        a0 = float(rng.uniform(0, 2 * np.pi))
+        return (sp * np.cos(a0), sp * np.sin(a0))
+    pts = np.stack([xs, ys], 1).astype(np.float64)
+    pts -= pts.mean(0)
+    evals, evecs = np.linalg.eigh((pts.T @ pts) / len(pts))  # ascending
+    major = evecs[:, 1]
+    pj = pts @ major
+    pn = pts @ evecs[:, 0]
+    speed = float(
+        np.clip((pj.max() - pj.min()) - (pn.max() - pn.min()), 0.0, max_speed)
+    )
+    ang = float(np.arctan2(major[1], major[0]))
+    if rng.random() < 0.5:
+        ang += np.pi
+    ang += float(np.deg2rad(rng.normal(0.0, jitter_deg)))
+    return (speed * np.cos(ang), speed * np.sin(ang))
+
+
+def erase_ball(stack: np.ndarray, bx: float, by: float, r: float) -> np.ndarray:
+    """Inpaint a ball OUT of every frame of a substrate (modified in place).
+
+    An unerased real ball in a paste substrate is an **unlabelled positive** — a distractor
+    that teaches the detector to suppress real balls. Erasing the known game ball (a disc of
+    radius ``r`` at ``(bx, by)``, big enough to cover its small inter-frame motion) before
+    pasting the augmented ball guarantees the crop holds **exactly one** ball: the labelled
+    one. Grass texture is filled by Telea inpainting.
+    """
+    h, w = stack.shape[1:]
+    bx, by = int(round(bx)), int(round(by))
+    # Inpaint only a local window (the hole is small) — a full-frame Telea inpaint is ~150ms
+    # vs ~5ms here. ``inpaintRadius`` is the fill NEIGHBOURHOOD (small, ~3), NOT the hole size.
+    pad = int(r) + 4
+    x0, y0 = max(0, bx - pad), max(0, by - pad)
+    x1, y1 = min(w, bx + pad), min(h, by + pad)
+    if x1 <= x0 or y1 <= y0:
+        return stack
+    mask = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    cv2.circle(mask, (bx - x0, by - y0), int(r), 255, -1)
+    for i in range(stack.shape[0]):
+        roi = stack[i, y0:y1, x0:x1].copy()
+        stack[i, y0:y1, x0:x1] = cv2.inpaint(roi, mask, 3, cv2.INPAINT_TELEA)
+    return stack
+
+
 def augment_crop_with_ball(
     stack: np.ndarray,
     patch: np.ndarray,
     alpha: np.ndarray,
     cx: float,
     cy: float,
+    vel: tuple[float, float] = (0.0, 0.0),
     scale: float = 1.0,
     contrast: float = 1.0,
     flip: bool = False,
-    jitter: float = 0.0,
+    blur: bool = False,
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """Cut-paste a real ball onto a ``(3, H, W)`` gray training stack → a far-ball positive.
+    """Cut-paste a real ball onto a ``(n, H, W)`` gray training stack as a far-ball positive.
 
-    Pastes the ball into all 3 temporal frames at ``(cx, cy)`` (optionally with a small
-    per-frame ``jitter`` so it reads as a slow-moving ball, not a frozen sprite). Turns a
-    ball-free band crop (the abundant negatives) into a labelled far-ball positive — the
-    augmentation that multiplies the scarce, low-contrast far-ball examples the detector
-    needs so the ball stops scoring rank 4–12 (EXP-23/24: discriminability is the wall).
+    Places the ball along a **coherent straight path** at constant ``vel`` (band px/frame):
+    the LAST frame sits exactly on ``(cx, cy)`` (the label / frame ``t``), and each earlier
+    frame ``i`` is offset backwards by ``(n-1-i)·vel`` — continuous, no-teleport motion the
+    detector can read, instead of a frozen or jittered sprite. ``vel`` should come from
+    :func:`estimate_ball_velocity` so the motion matches the patch's real blur; the real
+    blur is left intact (``blur=False`` by default — synthetic blur on an already-streaked
+    patch double-blurs and contradicts the velocity, EXP-26). A horizontal ``flip`` mirrors
+    the patch **and** the x-velocity so appearance and motion stay aligned. The input stack
+    is not modified.
 
-    Returns a NEW ``(3, H, W)`` uint8 stack (the input is not modified). The caller uses
-    ``(cx, cy)`` as the ball-center target.
+    The caller samples ``(cx, cy)`` on-field with enough margin for the whole motion path
+    (:func:`sample_onfield_location`), and should :func:`erase_ball` any real ball from the
+    substrate first. The target for training is ``(cx, cy)``.
     """
     out = stack.copy()
-    j = (
-        (rng or np.random.default_rng()).normal(0, jitter, size=(out.shape[0], 2))
-        if jitter
-        else np.zeros((out.shape[0], 2))
-    )
-    for i in range(out.shape[0]):
-        frame = out[i]  # a view; paste_ball modifies in place
-        paste_ball(
-            frame, patch, alpha, cx + j[i, 0], cy + j[i, 1], scale, contrast, flip
-        )
+    n = out.shape[0]
+    p = patch.copy()
+    a = alpha.copy()
+    vx, vy = vel
+    if flip:
+        p = p[:, ::-1].copy()
+        a = a[:, ::-1].copy()
+        vx = -vx  # mirror motion with appearance
+    if blur:
+        p, a = _motion_blur(p, a, vx, vy)
+    for i in range(n):
+        px = cx - (n - 1 - i) * vx
+        py = cy - (n - 1 - i) * vy
+        paste_ball(out[i], p, a, px, py, scale=scale, contrast=contrast, flip=False)
     return out
 
 
