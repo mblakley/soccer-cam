@@ -658,3 +658,34 @@ action to the frame edge. So a *cleaner, tighter* broadcast zoom is another thin
 improvement buys. Also: clip-1's deep-corner ball is the **worst case for visibility** (tiny far speck in
 open grass ahead of the play); mid/near plays show the ball far larger at the same zoom. Shipped z65
 render + the z65 world-model-vs-AutoCam comparison to Mark.
+
+### EXP-20 (2026-06-17): metric (meters) eval — the source-px recall was FLATTERING the far field
+
+Mark's catch: the `@R200/@R400` recall is in **unwrapped source-panorama pixels**, not perspective-
+corrected. On the fixed 180° panorama the far corner is heavily compressed, so a fixed pixel radius is a
+wildly different real distance by location (verified via the homography):
+
+| location | 200 px = | 400 px = |
+|---|---|---|
+| **far corner (clip-1)** | **6.3 m** | **12.7 m** |
+| mid-field | 5.4 m | 10.9 m |
+| near touchline | 2.7 m | 5.4 m |
+
+So `@R400` at this far corner ≈ **within 13 m** — a third of the field. The 0.66/0.45 numbers were
+flattered. Honest recall, distance **in meters on the field plane** (`evaluate_recall_metric`, via the
+homography), clip-1 73 far balls:
+
+| within | world-model | AutoCam |
+|---|---|---|
+| 2 m | 0.19 | 0.00 |
+| 5 m | **0.26** | 0.00 |
+| 12 m | 0.55 | 0.00 |
+| **median miss** | **11.5 m** | **79.6 m** |
+
+**Two-sided truth:** the world-model still **crushes AutoCam** (never within 12 m; 79.6 m off median —
+fully lost), **but its own absolute accuracy at the far corner is loose** (~11.5 m median, within 5 m only
+26%). A few px of detector/geometry error at a deep corner blows up to ~10 m on the field — which is why
+the render doesn't look locked on. **Decision: meters is the metric we live by from now** (`@R*px`
+deprecated for cross-location comparison; `evaluate_recall_metric` added + tested). The far-corner
+precision is the real accuracy gap, and it's the detector lever (better far candidates) — now measured
+honestly. Note this is the *hardest* clip (deep corner); near/mid play is far better in meters.

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from training.world_model.eval import (
     evaluate_recall,
+    evaluate_recall_metric,
     extract_peaks,
     track_to_predictions,
 )
@@ -13,6 +15,51 @@ from training.world_model.geometry import build_field_geometry
 from training.world_model.tbd import Candidate, run_tbd
 
 NEUTRAL = build_field_geometry(None)
+
+# A real far-corner field polygon (Spencerport clip-1) — gives a valid homography.
+_POLY = [
+    [270.8, 1071.9],
+    [2674.9, 1460.6],
+    [3749.7, 1530.2],
+    [5468.7, 1481.1],
+    [7339.5, 1215.1],
+    [5337.4, 327.3],
+    [4397.9, 204.6],
+    [3803.1, 171.8],
+    [3277.9, 175.9],
+    [2227.7, 261.8],
+]
+
+
+def test_metric_recall_is_perspective_fair_far_vs_near():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    assert geom.valid
+    # A FAR ball and a prediction 400 px away in x.
+    far_gt = [(0, 2696.0, 198.0)]
+    far_pred = {0: (3096.0, 198.0)}  # 400 px off at the far corner
+    _, far_m, _ = evaluate_recall_metric(far_pred, far_gt, geom, radius_m=5.0)
+    # A NEAR ball, same 400 px pixel error.
+    near_gt = [(0, 3800.0, 1300.0)]
+    near_pred = {0: (4200.0, 1300.0)}
+    _, near_m, _ = evaluate_recall_metric(near_pred, near_gt, geom, radius_m=5.0)
+    # The SAME 400 px is many more meters at the far corner than near.
+    assert far_m > near_m * 1.8
+    assert far_m > 8.0  # ~13 m at the far corner
+
+
+def test_metric_recall_counts_and_misses():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    gt = [(0, 2696.0, 198.0), (4, 2700.0, 200.0)]
+    preds = {0: (2698.0, 199.0)}  # frame 0 ~on the ball; frame 4 absent (miss)
+    recall, median, n = evaluate_recall_metric(preds, gt, geom, radius_m=5.0)
+    assert n == 2
+    assert recall == 0.5  # one hit, one missing
+    assert median == float("inf")  # one inf miss -> median of {small, inf} is inf
+
+
+def test_metric_recall_requires_valid_homography():
+    with pytest.raises(ValueError):
+        evaluate_recall_metric({0: (1.0, 1.0)}, [(0, 1.0, 1.0)], NEUTRAL, radius_m=5.0)
 
 
 def _add_blob(hm: np.ndarray, cx: int, cy: int, amp: float, sigma: float = 3.0) -> None:

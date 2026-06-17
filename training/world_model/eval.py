@@ -154,3 +154,51 @@ def evaluate_recall(
         false_fire=false_fire,
         n_frames_with_gt=n_all,
     )
+
+
+def evaluate_recall_metric(
+    predictions: dict[int, tuple[float, float]],
+    gt: list[tuple[int, float, float]],
+    geom,
+    radius_m: float = 5.0,
+) -> tuple[float, float, int]:
+    """Perspective-FAIR recall: distance measured in **meters on the field plane**
+    (via the homography), not source pixels.
+
+    Source-pixel radii badly flatter the far field: on the fixed 180° panorama a
+    far corner is heavily compressed, so 400 px ≈ 13 m there vs ~5 m near the
+    touchline (the same px radius is a very different real distance). Meters are
+    uniform, so this is the honest viewport-accuracy metric. A few px of detector
+    error at a far corner becomes ~10 m on the field — which is why a "within
+    400px" far-corner track can still look badly off the ball.
+
+    Args:
+        predictions: ``{frame_idx: (x, y)}`` predicted ball position (source px).
+        gt: ground-truth ``(frame_idx, x, y)`` in source px.
+        geom: a :class:`FieldGeometry` with a **valid** homography.
+        radius_m: hit radius in meters (default 5 m ≈ a tight viewport).
+
+    Returns:
+        ``(recall, median_error_m, n)`` — fraction within ``radius_m``, the median
+        miss distance in meters (a miss/absent frame counts as ``inf``), and the
+        GT count.
+    """
+    if not getattr(geom, "valid", False):
+        raise ValueError(
+            "evaluate_recall_metric requires a valid (non-neutral) homography"
+        )
+    hits = 0
+    dists: list[float] = []
+    for frame_idx, gx, gy in gt:
+        pred = predictions.get(frame_idx)
+        if pred is None:
+            dists.append(float("inf"))
+            continue
+        gw = geom.image_to_world(np.array([[gx, gy]]))[0]
+        pw = geom.image_to_world(np.array([[pred[0], pred[1]]]))[0]
+        d = float(math.hypot(pw[0] - gw[0], pw[1] - gw[1]))
+        dists.append(d)
+        hits += int(d <= radius_m)
+    n = len(gt)
+    median = float(np.median(dists)) if dists else float("inf")
+    return (hits / n if n else 0.0, median, n)
