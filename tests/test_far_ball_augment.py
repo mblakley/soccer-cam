@@ -68,3 +68,22 @@ def test_patch_is_clean_accepts_ball_rejects_clutter():
     assert not patch_is_clean(clutter, alpha)
     # no ball: centre == grass (no contrast)
     assert not patch_is_clean(grass, alpha)
+
+
+def test_augment_crop_with_ball_pastes_into_all_frames():
+    from training.data_prep.far_ball_augment import (
+        augment_crop_with_ball,
+        crop_ball_patch,
+    )
+
+    # a real-ish ball patch (dark blob on grass)
+    band = np.full((60, 60), 120, np.uint8)
+    band[26:34, 26:34] = 80
+    patch, alpha = crop_ball_patch(band, 30, 30, r=14)
+    stack = np.full((3, 200, 200), 130, np.uint8)  # ball-free negative crop
+    out = augment_crop_with_ball(stack, patch, alpha, 100, 100)
+    assert out.shape == (3, 200, 200)
+    assert not np.array_equal(out, stack)  # input untouched, output changed
+    for i in range(3):
+        assert out[i, 100, 100] != 130  # ball pasted in every frame
+    assert stack[0, 100, 100] == 130  # original not modified

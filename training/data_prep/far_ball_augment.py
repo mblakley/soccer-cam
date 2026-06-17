@@ -88,6 +88,43 @@ def paste_ball(
     return True
 
 
+def augment_crop_with_ball(
+    stack: np.ndarray,
+    patch: np.ndarray,
+    alpha: np.ndarray,
+    cx: float,
+    cy: float,
+    scale: float = 1.0,
+    contrast: float = 1.0,
+    flip: bool = False,
+    jitter: float = 0.0,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Cut-paste a real ball onto a ``(3, H, W)`` gray training stack → a far-ball positive.
+
+    Pastes the ball into all 3 temporal frames at ``(cx, cy)`` (optionally with a small
+    per-frame ``jitter`` so it reads as a slow-moving ball, not a frozen sprite). Turns a
+    ball-free band crop (the abundant negatives) into a labelled far-ball positive — the
+    augmentation that multiplies the scarce, low-contrast far-ball examples the detector
+    needs so the ball stops scoring rank 4–12 (EXP-23/24: discriminability is the wall).
+
+    Returns a NEW ``(3, H, W)`` uint8 stack (the input is not modified). The caller uses
+    ``(cx, cy)`` as the ball-center target.
+    """
+    out = stack.copy()
+    j = (
+        (rng or np.random.default_rng()).normal(0, jitter, size=(out.shape[0], 2))
+        if jitter
+        else np.zeros((out.shape[0], 2))
+    )
+    for i in range(out.shape[0]):
+        frame = out[i]  # a view; paste_ball modifies in place
+        paste_ball(
+            frame, patch, alpha, cx + j[i, 0], cy + j[i, 1], scale, contrast, flip
+        )
+    return out
+
+
 def patch_is_clean(
     patch: np.ndarray,
     alpha: np.ndarray,
