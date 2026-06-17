@@ -771,3 +771,33 @@ far_ball_augment.py` (`crop_ball_patch` / `paste_ball` / `sample_field_locations
 candidate precision, EXP-22). Pairs with the distractor-suppression side (person/line head, EXP-11/21).
 Caveat: a few crops grab nearby clutter (player foot) — add a tightness/contrast filter on the source
 patch before pasting. Needs the user's new labels (more games) for variety; the pipeline is ready.
+
+### EXP-24 (2026-06-17): multi-clip validation — the tracker does NOT generalize; the detector is the only path
+
+Mark labelled Spencerport clips 2–5. Scored all 5 in **meters** (world-model vs AutoCam):
+
+| clip | world-model med | AutoCam med | candidate ceiling <5m |
+|---|---|---|---|
+| 1 | **10 m** | 80 m | 0.86 |
+| 2 | 31 m | **25 m** | 0.85 |
+| 3 | 81 m | **42 m** | 0.66 |
+| 4 | 50 m | **37 m** | 0.88 |
+| 5 | 104 m | **25 m** | 0.86 |
+
+**The world-model is WORSE than AutoCam on 4 of 5 clips.** Clip-1 only won because AutoCam *totally*
+failed there (the favorable case that earlier looked like a general win — it wasn't). The candidate ceiling
+is 0.66–0.88 everywhere (the ball IS detected within 5 m), so this is a pure **selection failure**.
+
+**Person-mask does not rescue them — it makes them worse** (clip2 31→40 m, clip4 50→68 m): on these
+mid-field plays the ball is on/near players far more than clip-1's far-corner ball, so masking deletes real
+ball candidates. And clip-4's cold-start distractor (oracle-seed fixed it 50→14 m) isn't even a person.
+So **every tracker-side lever — greedy/fused, static-aware, person-mask, MHT, coherence-beam, re-acquire
+and gate tuning, oracle-seed — fails to generalize.**
+
+**Decisive conclusion:** the world-model tracker, over the current champion-J candidates, is **not viable**
+— the dim ball (EXP-23: low-contrast, rank 4–12) is out-shouted by bright distractors and no selection can
+recover it once lost. The ONLY remaining lever is the **detector making the ball discriminable** (score it
+high) — cut-paste augmentation to boost the low-contrast ball + a person/line head to suppress distractors,
+retrained on Mark's growing multi-game labels. This is now the critical path, not a deferred option. The
+world-model spine remains correct *given good candidates* (the candidate ceiling proves the ball is there);
+it's the candidate *discriminability* that's the wall.
