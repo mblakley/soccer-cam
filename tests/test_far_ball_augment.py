@@ -48,3 +48,23 @@ def test_sample_field_locations_inside_mask():
     locs = sample_field_locations(mask, 20, np.random.default_rng(0))
     assert len(locs) == 20
     assert all(20 <= x < 30 and 20 <= y < 30 for x, y in locs)
+
+
+def test_patch_is_clean_accepts_ball_rejects_clutter():
+    from training.data_prep.far_ball_augment import patch_is_clean
+
+    r = 14
+    yy, xx = np.mgrid[0 : 2 * r, 0 : 2 * r].astype(np.float32)
+    alpha = np.clip((r * 0.6 - np.hypot(xx - r, yy - r)) / (r * 0.35), 0, 1)
+    rng = np.random.default_rng(0)
+    # clean: uniform grass (~120) + a small darker ball blob in the centre
+    grass = np.full((2 * r, 2 * r), 120.0) + rng.normal(0, 4, (2 * r, 2 * r))
+    ball = grass.copy()
+    ball[r - 4 : r + 4, r - 4 : r + 4] = 90.0
+    assert patch_is_clean(ball, alpha)
+    # clutter: a bright player-shirt block in the border -> high border std
+    clutter = grass.copy()
+    clutter[:r, :r] = 240.0
+    assert not patch_is_clean(clutter, alpha)
+    # no ball: centre == grass (no contrast)
+    assert not patch_is_clean(grass, alpha)

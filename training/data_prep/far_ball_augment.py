@@ -88,6 +88,32 @@ def paste_ball(
     return True
 
 
+def patch_is_clean(
+    patch: np.ndarray,
+    alpha: np.ndarray,
+    max_border_std: float = 22.0,
+    min_contrast: float = 4.0,
+    max_contrast: float = 90.0,
+) -> bool:
+    """True if a cropped patch is an ISOLATED ball (grass around it, modest contrast).
+
+    Filters cut-paste *source* patches so the augmenter pastes only clean balls, not
+    a ball stuck to a player's foot / a white shirt / a line. Heuristic: the feathered
+    border ring (``alpha < 0.1``) should be **uniform grass** (low std) and the ball
+    centre should differ from the grass by a *modest* amount — a big contrast means
+    bright clutter (kit, tent), near-zero means no ball. On clip-1 this kept 21/73 of
+    the labelled crops (EXP-23); the rest had a nearby player/marker in frame.
+    """
+    border = patch[alpha < 0.1]
+    centre = patch[alpha > 0.8]
+    if border.size < 20 or centre.size < 5:
+        return False
+    contrast = abs(float(centre.mean()) - float(border.mean()))
+    return (
+        float(border.std()) < max_border_std and min_contrast < contrast < max_contrast
+    )
+
+
 def sample_field_locations(
     field_mask: np.ndarray, n: int, rng: np.random.Generator
 ) -> list[tuple[int, int]]:
