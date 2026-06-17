@@ -554,3 +554,26 @@ firing on the linesman?) + fps on the base-hardware target. Append to the experi
 winner as the world-model's measurement source. Sync experiment code to the GPU box via the research
 git branch (not file-copy). Status: `HeatmapNet(out_ch=2)` landed; next = multi-task target builder
 (ball + person Gaussians) + the two training runs.
+
+### EXP-12 (2026-06-16): person-info is cheap either way — the ball detector is the cost; Path 1 (cheap nano + mask) favored
+
+Mark corrected the budget: a 90-min @20fps game (~108k frames) must process overnight ⇒ **~0.3 s/frame
+FLOOR, and even that is too slow** — so per-frame compute is precious. Two findings change the
+Path-1-vs-Path-2 picture:
+
+1. **Sparse person detection fails.** Holding person boxes between detections breaks at ≥16-frame cadence
+   (clip-1 @R400 0.658 → 0.27) — the linesman *moves*, so stale boxes mask the wrong place. Person info
+   must be **per-frame fresh**.
+2. **Per-frame person info is cheap either way (GTX 1060):** champion-J full band **1048 ms/frame**;
+   marginal cost of person = **+23 ms** (Path 2, person head, one pass) vs **+14 ms** (Path 1, yolo11n
+   @1280, a separate nano pass) / +36 ms @2560. The person addition is **1–3% of the ball pass** — the
+   ball detector is the real budget problem (needs the 4070 + ROI-tracking, not the 1060's 0.95 fps).
+
+**Implication:** the tiny person speed delta should not drive the choice. **Path 1** (separate nano person
+net, downscaled, + EXP-11 masking) is +14 ms, needs **no retraining**, and is **already validated at
+0.658**; a nano net catches the big near-field linesman fine. **Path 2**'s only edge (pixel-accurate
+ball-on-player) is exactly what the viewport goal does NOT need (Mark: "don't care about exact coords as
+long as the viewport points the right way"). So the data favors Path 1; Path 2's retrain is only worth it
+if a future need for ball-on-player precision appears. Next: confirm Path 1 at its budget setting
+(yolo11n @1280) still kills the linesman / holds 0.658, then productionise it as a `mask_person_candidates`
+measurement step. (Speed measured on the 1060; absolute s/frame is a 4070 + Phase-3 ROI concern.)
