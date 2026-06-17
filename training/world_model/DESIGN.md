@@ -689,3 +689,31 @@ the render doesn't look locked on. **Decision: meters is the metric we live by f
 deprecated for cross-location comparison; `evaluate_recall_metric` added + tested). The far-corner
 precision is the real accuracy gap, and it's the detector lever (better far candidates) — now measured
 honestly. Note this is the *hardest* clip (deep corner); near/mid play is far better in meters.
+
+### EXP-21 (2026-06-17): render framing fix — the viewport CAN lock on the ball
+
+Mark: "the render doesn't follow the ball." Built a framing experiment that drives the renderer with
+the **GT coords** (isolating framing from tracking error) and measures where the ball lands in the
+**output** via the renderer's own `_project_maps` (output→source) — offset from output centre, % in-view.
+
+**Root cause found:** with the **default** config the GT ball is **off-screen in 57/73 frames** even when
+the camera is handed the exact ball position. Two culprits:
+1. **`render_mask_offfield=True`** (the big one): the far-touchline ball sits just **above the strict
+   field polygon's top edge** (it lives in the detector's 430 px margin band), so the renderer flags it
+   off-field and *holds bearing instead of following it*. `render_mask_offfield=False` → in-view
+   **16/73 → 73/73**.
+2. **`render_target_ball_frac=0.58`** left the ball at the top edge (dy −0.46). Raising to **0.9** pulls
+   it to centre (dy −0.04), **100% within the centre 30%**.
+
+With `mask_offfield=False` + `target_ball_frac=0.9`, driving on GT the ball is **centred every frame** —
+the viewport CAN lock on. So the two problems are cleanly separated: **framing is solved**; the only
+remaining limiter is **track accuracy** (when the world-model track is off the ball, the ball is
+off-centre by exactly that error — the detector lever, EXP-20). Rendered GTfixed (locked) + WMfixed
+(real) for Mark.
+
+**Principled production fix (not just disabling the mask):** the off-field mask should use the **same
+margin-expanded field region the detector/world-model operate on** (polygon + ~430 px band), not the
+strict polygon — then real far balls in the margin aren't rejected while genuine off-field FPs still are.
+Disabling globally (this experiment) also follows sideline FPs. Tracked as a render task. The black top
+wedge at `frac=0.9` is the relaxed off-field cap (aiming up past the field for a far-touchline ball);
+`frac≈0.8` trades a touch of centring for less cap.
