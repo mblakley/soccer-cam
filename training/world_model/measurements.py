@@ -102,3 +102,61 @@ def suppress_static_candidates(
         for cands in frame_lists
     ]
     return filtered, static
+
+
+def mask_person_candidates(
+    frame_lists: list[list[Candidate]],
+    person_boxes: list[list[tuple[float, float, float, float]]],
+    expand: float = 0.3,
+) -> list[list[Candidate]]:
+    """Drop appearance candidates that fall inside a detected person box.
+
+    A pretrained person detector (run **offline** at training-data-prep / as a
+    cheap per-frame measurement, never a second heavy net at deploy) marks where
+    the people are; a ball candidate inside a person box is almost always a
+    detector firing on a body / kit, **not** the ball — most importantly the lone
+    sideline distractors (an assistant referee, bench, spectators) that out-score
+    the dim far ball and steal acquisition (EXP-9/11). Removing them lifts clip-1
+    viewport area-recall **0.534 → 0.658 @R400** and moves acquisition off the
+    linesman.
+
+    **Caveat (by design, accepted for the viewport goal).** The ball is genuinely
+    on a player ~25-35% of in-play frames (chesting / heading / at the feet); this
+    mask deletes the ball candidate there too. That is fine for *viewport-area*
+    recall — the player IS the action, so the tracker's action prior keeps the
+    viewport on the right area — but it is NOT a precise ball locator. Use accurate
+    per-frame boxes (EXP-12: a too-small/low-res detector under-detects people and
+    the mask goes net-negative). Person info must be **per-frame fresh** — held
+    stale boxes mask the wrong place once a person moves (EXP-12).
+
+    Args:
+        frame_lists: per-frame appearance candidate lists.
+        person_boxes: per-frame person boxes as ``(x0, y0, x1, y1)`` in the same
+            (source-pixel) coords as the candidates; same length as ``frame_lists``.
+        expand: fractional box expansion (each side) before testing containment —
+            0.3 (EXP-11 best) catches candidates at a person's edge / slight box
+            slack.
+
+    Returns:
+        The filtered per-frame candidate lists (motion/action blobs are kept
+        separately and are not masked — they ARE the action prior).
+    """
+    out: list[list[Candidate]] = []
+    for cands, boxes in zip(frame_lists, person_boxes, strict=True):
+        exp_boxes = []
+        for x0, y0, x1, y1 in (b[:4] for b in boxes):
+            w, h = x1 - x0, y1 - y0
+            exp_boxes.append(
+                (x0 - expand * w, y0 - expand * h, x1 + expand * w, y1 + expand * h)
+            )
+        out.append(
+            [
+                c
+                for c in cands
+                if not any(
+                    bx0 <= c.x <= bx1 and by0 <= c.y <= by1
+                    for bx0, by0, bx1, by1 in exp_boxes
+                )
+            ]
+        )
+    return out

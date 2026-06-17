@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from training.world_model.measurements import suppress_static_candidates
+from training.world_model.measurements import (
+    mask_person_candidates,
+    suppress_static_candidates,
+)
 from training.world_model.tbd import Candidate
 
 
@@ -72,3 +75,26 @@ def test_motion_protects_a_static_ball_but_suppresses_a_static_line():
 
 def test_empty_input():
     assert suppress_static_candidates([]) == ([], set())
+
+
+def test_mask_person_candidates_drops_candidate_on_a_person():
+    # A bright distractor at (600,500) sits inside a person box; the ball at
+    # (100,200) is in open space. The mask drops the distractor, keeps the ball.
+    frames = [[Candidate(100.0, 200.0, 0.6), Candidate(600.0, 500.0, 0.95)]]
+    boxes = [[(560.0, 440.0, 640.0, 600.0)]]  # person around the distractor
+    out = mask_person_candidates(frames, boxes)
+    assert any(abs(c.x - 100.0) < 1 for c in out[0])  # ball kept
+    assert all(not (abs(c.x - 600.0) < 1) for c in out[0])  # distractor dropped
+
+
+def test_mask_person_expand_catches_edge_candidate():
+    # A candidate just outside the raw box is caught with the 0.3 expand.
+    frames = [[Candidate(105.0, 100.0, 0.9)]]
+    boxes = [[(0.0, 0.0, 100.0, 100.0)]]  # raw box ends at x=100; expand adds 30
+    assert mask_person_candidates(frames, boxes, expand=0.3)[0] == []
+    assert len(mask_person_candidates(frames, boxes, expand=0.0)[0]) == 1
+
+
+def test_mask_person_no_boxes_keeps_all():
+    frames = [[Candidate(1.0, 1.0, 0.9), Candidate(2.0, 2.0, 0.8)]]
+    assert mask_person_candidates(frames, [[]]) == frames
