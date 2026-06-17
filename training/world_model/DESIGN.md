@@ -749,3 +749,25 @@ the ball discriminable** — score the ball *higher than the bright distractors*
 person/line-awareness so it stops being out-shouted). This is the labels + retraining work. Tracker tuning
 is done; meters is the standard metric from here (EXP-20). Note the candidates are *precise* (~3 m) once the
 right one is picked — so making the ball top-1 immediately inherits ~3 m accuracy.
+
+### EXP-23 (2026-06-17): the far ball is LOW-CONTRAST, not bright — cut-paste augmentation (R7)
+
+Built the synthetic far-ball generator (R7) to boost far-ball training data without waiting on labels.
+Rendering bright white spheres and comparing to the **real labelled ball cropped from the warped band**
+revealed the key thing: **the real far ball is a small low-contrast, often DARK blob on the sunlit grass —
+nothing like a bright sphere.** This directly explains EXP-22's "dim ball" (rank 4–12): the ball is
+genuinely low-contrast, so any brightness-based detector/candidate scoring ranks it below bright lines,
+white kit, and tents. *The detector isn't missing the ball for lack of resolution; it's ranking a real
+low-contrast blob below bright clutter.*
+
+So synthetic white spheres are the wrong signal. Pivoted to **cut-paste augmentation**: crop the 73
+real labelled ball patches (feathered radial alpha), paste them at new field locations on real band
+backgrounds with scale/contrast/flip jitter. Validated — the pastes look like real far balls (low-contrast
+blobs blending into grass), unlike the synthetic spheres. Productionised as `training/data_prep/
+far_ball_augment.py` (`crop_ball_patch` / `paste_ball` / `sample_field_locations`, 4 tests).
+
+**Use:** multiply scarce far-ball examples (across all games' labels) → retrain champion-J so it fires
+*strongly* on the low-contrast far ball (makes it not-dim → discriminable → the tracker inherits the ~3 m
+candidate precision, EXP-22). Pairs with the distractor-suppression side (person/line head, EXP-11/21).
+Caveat: a few crops grab nearby clutter (player foot) — add a tightness/contrast filter on the source
+patch before pasting. Needs the user's new labels (more games) for variety; the pipeline is ready.
