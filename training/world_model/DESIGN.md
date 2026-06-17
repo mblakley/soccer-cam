@@ -717,3 +717,13 @@ strict polygon — then real far balls in the margin aren't rejected while genui
 Disabling globally (this experiment) also follows sideline FPs. Tracked as a render task. The black top
 wedge at `frac=0.9` is the relaxed off-field cap (aiming up past the field for a far-touchline ball);
 `frac≈0.8` trades a touch of centring for less cap.
+
+**EXP-21 refinement (vertical centring + tightness):** the framing fix above (`mask_offfield=False`,
+`frac=0.9`) at default `top_cap=8` still left the ball high (dy −0.44) and auto-zoom *widened to the whole
+field* to avoid the black cap. Mark's steer — "zoom in tight and use the zoom to compensate for the cap"
+— is correct. Sweeping with `top_cap=45` (let the camera aim up): the winner is **`mask_offfield=False`,
+`top_cap_deg=45`, `target_ball_frac=0.85`, `zoom_scale=0.40`** → ball **dead-centre (dy −0.02)**, a **tight
+~27° view** (1142 src px, not the whole field), **11% black top-cap** (the accepted cost of aiming up at a
+far-touchline ball), 73/73 in-view. So the lever for a far ball is: aim up (high top-cap) + zoom in
+(small scale) + accept the cap, rather than widen to dodge it. These should become the far-ball framing
+defaults (with the cap shrinking automatically for near/mid plays); folded into render task #21.
