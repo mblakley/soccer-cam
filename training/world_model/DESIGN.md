@@ -603,3 +603,37 @@ candidates / a ball-vs-person-aware net — the GPU work for when more labels la
 tuning. The pipeline already beats AutoCam decisively (clip1 0.66 vs 0.014), so per Mark's steer the next
 focus is **speed** (EXP-16+). Note clip1 is the hardest excerpt (cold-start in an 18s window); mid-game,
 recall is higher (Iron 0.87 is more representative). All runs logged to `overnight_experiments.jsonl`.
+
+### EXP-16/17/18 (2026-06-16, overnight): SPEED — ROI-tracking + iGPU meets the budget on real base hardware
+
+Budget (Mark): ~0.3 s/frame floor (90-min @20fps overnight ≈ 3.3 fps), faster preferred. The ball
+detector is the cost; the world-model/tracker is ~free.
+
+**EXP-16 ROI-tracking (the lever), champion-J base24, GTX 1060:** full band (1552×7680, tiled) **1047
+ms/frame**; a small square ROI around the world-model's predicted ball is 30–54× faster:
+
+| ROI | 1060 | Iris Xe iGPU (DirectML) | laptop CPU (16-core) |
+|---|---|---|---|
+| 320×320 | 8 ms (125 fps) | **75 ms (13.3 fps)** | 293–490 ms (2–3.4 fps) |
+| 448×448 | 15 ms (66 fps) | **210 ms (4.8 fps)** | ~720 ms (1.4 fps) |
+| 512×512 | 20 ms (52 fps) | 297 ms (3.4 fps) | ~900 ms (1.1 fps) |
+| full band | 1047 ms | (n/a) | **36,300 ms** |
+
+ROI **preserves recall by construction**: the tracker already only selects candidates within its gate
+(≤320 px radius), so any ROI ≥ the gate picks the identical candidate; full-band runs only on the rare
+re-acquire (amortized). The ball is slow (≤21.5 px/frame), so a 320–448 px window has large margin.
+
+**EXP-17 iGPU is the real deployment target — and it clears the floor.** `onnxruntime-directml` sees the
+Intel Iris Xe **even over this remote session** (the RDP-hides-GPU gotcha that kills AutoCam's GL path
+does NOT block DirectML). ROI 320–448 px = **4.8–13.3 fps**, comfortably above the 3.3 fps floor. champion-J
+exports cleanly to ONNX (4.2 MB, dynamic H/W, opset 17).
+
+**EXP-18 int8 dynamic quant — no help (negative).** Conv-heavy net; onnxruntime's CPU int8 conv path is
+weak, so dynamic quant is *slower* (320: int8 430 ms vs fp32 293 ms) despite 3× smaller weights (1.4 vs
+4.2 MB). Further speed (esp. CPU-only) comes from a **smaller base** (base16/8) or static QDQ with
+calibration — a retraining lever for later, not needed now (iGPU already meets the budget).
+
+**Bottom line:** the speed path is proven on real base hardware — **iGPU + ROI-tracking at a 320–448 px
+window meets the overnight budget with 1.5–4× margin**, ball detector exported to ONNX. The 1060 server
+has 50×+ headroom. No accuracy was traded (ROI preserves the gate). Remaining speed upside (smaller model,
+static quant, ROI-size tuning) is available but unneeded for the floor.
