@@ -473,6 +473,33 @@ clip-1 acquisition failure is partly a **cold-start artifact** of an isolated 18
 tracker enters already locked on the ball, so deployment recall is better than 0.534 implies; the classifier
 mainly hardens (re)acquisition. (`dump_size.py` lives in the box workspace, not the repo.)
 
+### EXP-11 (2026-06-16): person-box MASKING is the wrong mechanism (ball-on-player) — mandates a unified ball+person *appearance* detector
+
+PoC: ran pretrained YOLO (yolo11m, COCO person) offline on clip-1's 351 frames → person
+boxes in source coords; tested masking ball candidates that fall in a person box. Three findings:
+
+1. **Person-appearance is separable.** YOLO boxes the linesman at the acquisition frame
+   (5552: (6008,1186) inside a person box) → a learned detector can tell person from ball.
+2. **Ball-on-player is common — masking is destructive.** The true ball is inside a person box
+   **17/73 (23%)** of GT frames (33% with a 15% box expand) — and this is a *far* ball usually
+   ahead of play; close play (chesting/heading/feet — Mark's point) is far higher. A box mask
+   deletes the ball whenever it is on a player, i.e. most of in-play time.
+3. **Masking nets +0.12 here but for the wrong reason.** static-aware + person-mask (0.3 expand):
+   **0.521 @200 / 0.658 @400** vs EXP-9 0.452/0.534, and acquisition moves off the linesman
+   (6008,1186)→(4414,139). The gain is purely *removing person-distractors*; it is paid for by
+   sacrificing the 23–33% ball-on-player frames, a trade that flips negative in close play.
+
+**Decision:** do NOT mask. The person signal must be **appearance-level**, not a box gate — a
+**single multi-class detector** (champion-J backbone + a **person head**; ball-vs-person is an easy
+discrimination so it stays small, ~yolo-nano scale, fits the base-hardware budget). The ball head fires
+on the ball *even on a player's chest/head*; the person head marks the body; they coexist with no
+masking. This captures EXP-11's +0.12 distractor-removal upside **without** the ball-on-player loss, so
+its ceiling is above the 0.658 masking number. Fully-occluded-behind-body → no detection → the
+world-model coasts (physics + action prior), as today. YOLO is used **only at training-data-prep** to
+bootstrap person labels (`bootstrap_persons.py` already does this), never at inference — one model per
+frame. This is also the shared backbone for Mark's eventual 2-team player tracker (add a team head). PoC
+scripts (`yolo_persons.py`) live in the box workspace, not the repo.
+
 ## Bottom line of Phase-0 research (2026-06-16)
 
 The strategy is **proven promising before any GPU training.** On champion-J's existing detector, the
