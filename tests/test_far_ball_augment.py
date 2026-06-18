@@ -19,6 +19,7 @@ from training.data_prep.far_ball_augment import (
     sample_onfield_location,
     sample_realistic_contrast,
     sample_velocity,
+    track_shift,
 )
 
 
@@ -199,6 +200,30 @@ def test_dim_ball_reduces_contrast_toward_grass():
     assert 120 < after < 210
     assert abs(after - 120) < abs(before - 120)
     assert all(stack[i, 40, 40] == after for i in range(3))
+
+
+def test_track_shift_moves_ball_and_clears_original():
+    # a bright ball on darker grass (a real-ish positive crop)
+    stack = np.full((3, 200, 200), 120, np.uint8)
+    for i in range(3):
+        __import__("cv2").circle(stack[i], (100, 100), 6, 210, -1)
+    rng = np.random.default_rng(0)
+    out = track_shift(stack, 100, 100, rng, offset=(0.0, 50.0), scale=1.0)
+    assert out is not None
+    new_stack, nx, ny = out
+    assert (nx, ny) == (100.0, 150.0)  # label shifted down 50px
+    # the shifted location is now bright (ball pasted there) in frame t
+    assert new_stack[2, 150, 100] > 160
+    # the original location is cleared back toward grass (ball erased), not still bright
+    assert new_stack[2, 100, 100] < 170
+    assert stack[2, 100, 100] == 210  # input not modified
+
+
+def test_track_shift_none_when_ball_too_near_edge():
+    stack = np.full((3, 200, 200), 120, np.uint8)
+    assert (
+        track_shift(stack, 5, 5, np.random.default_rng(0), offset=(0.0, 30.0)) is None
+    )
 
 
 def test_sample_realistic_contrast_matches_distribution():

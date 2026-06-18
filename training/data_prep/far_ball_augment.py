@@ -421,6 +421,49 @@ def dim_ball(
     return stack
 
 
+def track_shift(
+    stack: np.ndarray,
+    x: float,
+    y: float,
+    rng: np.random.Generator,
+    offset: tuple[float, float],
+    scale: float = 1.0,
+    contrast: float = 1.0,
+    patch_r: int = 14,
+) -> tuple[np.ndarray, float, float] | None:
+    """Shift the real ball's whole track by a constant offset (erase original, paste shifted).
+
+    The most realistic augmentation: take a REAL positive crop, recover the ball's per-frame
+    motion from its blur (:func:`estimate_ball_velocity`), **erase the real ball's whole
+    track** across the frames, and re-paste the *same real ball* translated by ``offset`` (and
+    optionally scaled) along the *same* velocity. The result keeps the **real action
+    background** — players exactly where the ball was — but moves the ball to a nearby spot
+    (e.g. off the foot it was on, onto grass), with real motion, real appearance, and exactly
+    one ball. This is the "down 50px, slightly larger, across contiguous frames" augmentation.
+
+    Returns ``(new_stack, new_x, new_y)`` (the shifted label) or ``None`` if the ball patch
+    can't be cropped (too near the crop edge).
+    """
+    out = stack.copy()
+    n = out.shape[0]
+    crop = crop_ball_patch(out[n - 1], x, y, r=patch_r)
+    if crop is None:
+        return None
+    patch, alpha = crop
+    vx, vy = estimate_ball_velocity(patch, alpha, rng)
+    sp = float(np.hypot(vx, vy))
+    # erase the real ball's whole track: a disc covering all n positions, centred mid-track
+    cx = x - (n - 1) / 2.0 * vx
+    cy = y - (n - 1) / 2.0 * vy
+    erase_ball(out, cx, cy, patch_r + int(np.ceil((n - 1) / 2.0 * sp)) + 4)
+    ox, oy = offset
+    for i in range(n):
+        px = x - (n - 1 - i) * vx + ox
+        py = y - (n - 1 - i) * vy + oy
+        paste_ball(out[i], patch, alpha, px, py, scale=scale, contrast=contrast)
+    return out, float(x + ox), float(y + oy)
+
+
 def patch_is_clean(
     patch: np.ndarray,
     alpha: np.ndarray,
