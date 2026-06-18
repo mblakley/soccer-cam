@@ -1,0 +1,195 @@
+"""Motion-consistency re-ranker: pick the ball from per-frame candidates by CONTEXT.
+
+The detector finds the ball (candidate ceiling ~0.72 in meters on held-out Spencerport)
+but ranks it #1 only ~16% of the time — it is genuinely dim, so per-frame brightness-argmax
+picks a brighter distractor (EXP-27). This re-ranks the *same* candidates by physics/context
+instead of brightness, nearly doubling top-1 (0.163 -> 0.307 @ R=5m, EXP-28) with no extra
+model — pure CPU post-processing on the candidate dumps.
+
+Three context terms, all from the ball's hard constraints:
+
+- **Static-persistence penalty (the dominant lever).** A bright *static* distractor (a
+  painted line, a tent, a bench, a coach's ball) sits in the same field cell every frame;
+  the game ball passes through a cell only briefly. So a candidate is penalised by how
+  often *some* candidate occupies its ~2 m world cell across the clip. **This is the key
+  fix smoothness alone gets backwards** — a zero-motion track is maximally "smooth", so a
+  pure smoothness/acceleration prior (e.g. plain track-before-detect) *rewards* static
+  distractors and locks onto them; the persistence penalty is what repels them.
+- **Motion-blob support.** The ball is a *moving* object, so it tends to coincide with a
+  background-subtraction motion blob; static clutter does not. A small bonus for candidates
+  near a motion blob.
+- **Meters-smooth, physics-bounded trajectory.** A Viterbi/DP over the frame lattice favours
+  a path that is smooth *in meters on the field plane* (perspective-fair) and forbids
+  teleports (> max ball speed). A ``miss`` state lets the track coast an occlusion.
+
+Operates in **world coordinates** (via the homography) so distances are perspective-fair —
+a few px of error at a far corner is ~10 m and must be penalised like 10 m, not like a few
+px. Returns predictions in source pixels for the renderer / scoring. Pure numpy.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+from training.world_model.geometry import FieldGeometry
+from training.world_model.tbd import Candidate
+
+
+@dataclass(frozen=True)
+class RerankConfig:
+    """Re-ranker weights. Defaults are the EXP-28 cross-clip optimum (broad plateau)."""
+
+    vmax_m_per_frame: float = 2.5  # smoothness budget (scaled by the frame gap)
+    max_jump_m_per_frame: float = 6.0  # hard teleport ceiling
+    alpha: float = 0.3  # detector-score weight (low: trust context over brightness)
+    static_w: float = 2.0  # static-persistence penalty weight (the dominant lever)
+    motion_w: float = 0.5  # motion-blob support bonus weight
+    miss_cost: float = 0.9  # cost of the occlusion/miss state
+    cell_m: float = 2.0  # world-cell size for the persistence map
+    motion_radius_m: float = 3.0  # how near a motion blob counts as support
+
+
+def static_persistence(
+    frames_world: list[np.ndarray], cell_m: float
+) -> list[np.ndarray]:
+    """Per-candidate persistence in ``[0, 1]``: fraction of frames with a candidate in the
+    same ~``cell_m`` world cell. ~1.0 for a fixed distractor, small for the moving ball."""
+    n = len(frames_world)
+    occ: dict[tuple[int, int], int] = {}
+    for w in frames_world:
+        for c in {(round(p[0] / cell_m), round(p[1] / cell_m)) for p in w}:
+            occ[c] = occ.get(c, 0) + 1
+    out = []
+    for w in frames_world:
+        out.append(
+            np.array([occ[(round(p[0] / cell_m), round(p[1] / cell_m))] / n for p in w])
+        )
+    return out
+
+
+def _motion_support(
+    frames_world: list[np.ndarray],
+    motion_world: list[np.ndarray],
+    radius_m: float,
+) -> list[np.ndarray]:
+    out = []
+    for w, m in zip(frames_world, motion_world, strict=True):
+        if len(w) == 0 or len(m) == 0:
+            out.append(np.zeros(len(w)))
+            continue
+        out.append(
+            np.array(
+                [1.0 if np.min(np.hypot(*(m - wi).T)) <= radius_m else 0.0 for wi in w]
+            )
+        )
+    return out
+
+
+def rerank(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = None,
+    frame_gaps: list[int] | None = None,
+    config: RerankConfig | None = None,
+) -> dict[int, tuple[float, float]]:
+    """Re-rank per-frame ball candidates by physics/context (see module docstring).
+
+    Args:
+        frames: detector candidates per frame (``frames[t]`` = list of :class:`Candidate`,
+            source-pixel ``x, y`` + ``score``). Empty frames are allowed (-> a miss).
+        geom: a :class:`FieldGeometry` with a **valid** homography (meters are required for
+            the perspective-fair smoothness and the static-cell map).
+        motion: optional per-frame motion blobs (e.g. MOG2), same shape as ``frames``; gives
+            the motion-support bonus.
+        frame_gaps: optional per-frame source-frame gap to the previous frame (for stride-N
+            dumps the smoothness budget scales by the gap). Defaults to all 1s.
+        config: :class:`RerankConfig`.
+
+    Returns:
+        ``{frame_idx: (x, y)}`` selected ball position in source pixels (frames the track
+        coasts as a miss are omitted). ``frame_idx`` is the index into ``frames``.
+    """
+    if not getattr(geom, "valid", False):
+        raise ValueError("rerank requires a valid (non-neutral) homography")
+    cfg = config or RerankConfig()
+    n = len(frames)
+    if n == 0:
+        return {}
+    gaps = frame_gaps or [1] * n
+
+    fw, fs, fsrc = [], [], []
+    for cands in frames:
+        xy = np.array([[c.x, c.y] for c in cands], float).reshape(-1, 2)
+        fsrc.append(xy)
+        fw.append(geom.image_to_world(xy) if len(xy) else np.zeros((0, 2)))
+        sc = np.array([c.score for c in cands], float)
+        fs.append(sc / (sc.max() + 1e-9) if len(sc) else sc)
+
+    if motion is not None:
+        mw = [
+            geom.image_to_world(np.array([[c.x, c.y] for c in m], float).reshape(-1, 2))
+            if m
+            else np.zeros((0, 2))
+            for m in motion
+        ]
+        fmot = _motion_support(fw, mw, cfg.motion_radius_m)
+    else:
+        fmot = [np.zeros(len(w)) for w in fw]
+
+    pers = static_persistence(fw, cfg.cell_m)
+
+    def emis(t: int, i: int) -> float:
+        return (
+            -cfg.alpha * fs[t][i]
+            + cfg.static_w * pers[t][i]
+            - cfg.motion_w * fmot[t][i]
+        )
+
+    # Viterbi: state K = miss. cost[t][j], back[t][j].
+    cost: list[np.ndarray] = []
+    back: list[np.ndarray] = []
+    k0 = len(frames[0])
+    cost.append(np.array([emis(0, i) for i in range(k0)] + [cfg.miss_cost]))
+    back.append(np.full(k0 + 1, -1, int))
+    for t in range(1, n):
+        k = len(frames[t])
+        kp = len(frames[t - 1])
+        ct = np.full(k + 1, np.inf)
+        bt = np.full(k + 1, -1, int)
+        gap = max(1, gaps[t])
+        budget = cfg.vmax_m_per_frame * gap
+        for j in range(k + 1):
+            e = cfg.miss_cost if j == k else emis(t, j)
+            best, bi = np.inf, -1
+            for i in range(kp + 1):
+                if not np.isfinite(cost[t - 1][i]):
+                    continue
+                if j == k or i == kp:
+                    trans = 0.6  # to/from miss: allow coasting an occlusion
+                else:
+                    d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
+                    if d > cfg.max_jump_m_per_frame * gap:
+                        continue  # teleport forbidden
+                    trans = (d / budget) ** 2
+                v = cost[t - 1][i] + trans
+                if v < best:
+                    best, bi = v, i
+            ct[j] = e + best
+            bt[j] = bi
+        cost.append(ct)
+        back.append(bt)
+
+    path = [int(np.argmin(cost[-1]))]
+    for t in range(n - 1, 0, -1):
+        path.append(int(back[t][path[-1]]))
+    path.reverse()
+
+    preds: dict[int, tuple[float, float]] = {}
+    for t, p in enumerate(path):
+        if p < len(frames[t]) and len(fsrc[t]):
+            preds[t] = (float(fsrc[t][p][0]), float(fsrc[t][p][1]))
+    return preds
