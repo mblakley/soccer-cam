@@ -163,6 +163,72 @@ def coast_occlusions(
     return out
 
 
+def kalman_smooth(
+    preds: dict[int, tuple[float, float]],
+    geom: FieldGeometry,
+    *,
+    q_accel: float = 1.5,
+    r_meas_m: float = 2.5,
+) -> dict[int, tuple[float, float]]:
+    """Constant-velocity Kalman RTS smoother over the selected ball track (world meters).
+
+    The principled replacement for the linear :func:`coast_occlusions`. The re-ranker's
+    per-frame selections hop between candidates near the ball (measurement noise); a kicked
+    ball also accelerates (process noise). A constant-velocity Kalman forward filter +
+    backward RTS pass, run in **world meters** (perspective-fair physics), both **de-jitters**
+    the track (steadier viewport) and **coasts occlusions** by the motion model — predict-only
+    on the missing frames, uncertainty growing through the gap, then optimally interpolated by
+    the smoother. Returns a smoothed position at EVERY frame index in the track span (occluded
+    frames included), in source pixels.
+
+    Args:
+        preds: ``{frame_idx: (x, y)}`` selected positions (source px) from :func:`rerank`.
+        geom: field geometry with a valid homography (the filter runs in meters).
+        q_accel: process-noise acceleration std (m per step^2) — how hard the ball can change
+            velocity. Larger = trust the measurements more (less smoothing).
+        r_meas_m: measurement-noise std (m) — how far a selected candidate sits from the true
+            ball. Larger = smooth harder.
+    """
+    if len(preds) < 2 or not getattr(geom, "valid", False):
+        return dict(preds)
+    keys = sorted(preds)
+    t0, t1 = keys[0], keys[-1]
+    zs = {t: geom.image_to_world(np.array([[x, y]]))[0] for t, (x, y) in preds.items()}
+    f = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], float)
+    h = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
+    q = q_accel**2
+    qm = q * np.array(
+        [[0.25, 0, 0.5, 0], [0, 0.25, 0, 0.5], [0.5, 0, 1, 0], [0, 0.5, 0, 1]], float
+    )
+    rm = (r_meas_m**2) * np.eye(2)
+    n = t1 - t0 + 1
+    z0 = zs[t0]
+    x = np.array([z0[0], z0[1], 0.0, 0.0])
+    p = np.diag([r_meas_m**2, r_meas_m**2, 25.0, 25.0])
+    xf = np.zeros((n, 4))
+    pf = np.zeros((n, 4, 4))
+    xp = np.zeros((n, 4))
+    pp = np.zeros((n, 4, 4))
+    xf[0] = xp[0] = x
+    pf[0] = pp[0] = p
+    for i in range(1, n):
+        x = f @ x
+        p = f @ p @ f.T + qm
+        xp[i], pp[i] = x, p
+        if (t0 + i) in zs:
+            z = zs[t0 + i]
+            k = p @ h.T @ np.linalg.inv(h @ p @ h.T + rm)
+            x = x + k @ (z - h @ x)
+            p = (np.eye(4) - k @ h) @ p
+        xf[i], pf[i] = x, p
+    xs = xf.copy()
+    for i in range(n - 2, -1, -1):
+        c = pf[i] @ f.T @ np.linalg.inv(pp[i + 1])
+        xs[i] = xf[i] + c @ (xs[i + 1] - xp[i + 1])
+    img = geom.world_to_image(xs[:, :2])
+    return {t0 + i: (float(img[i, 0]), float(img[i, 1])) for i in range(n)}
+
+
 def rerank(
     frames: list[list[Candidate]],
     geom: FieldGeometry,

@@ -7,6 +7,8 @@ exact failure mode (lines/tents/benches) that a plain smoothness prior gets back
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -16,6 +18,7 @@ from training.world_model.reranker import (
     RerankConfig,
     action_density_prior,
     coast_occlusions,
+    kalman_smooth,
     rerank,
     static_persistence,
 )
@@ -138,6 +141,43 @@ def test_coast_occlusions_leaves_trailing_miss_empty():
     preds = {0: (100.0, 200.0), 1: (110.0, 200.0)}  # no later anchor
     out = coast_occlusions(preds)
     assert set(out) == {0, 1}  # nothing to coast toward -> unchanged
+
+
+def test_kalman_smooth_reduces_jitter_toward_truth():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    rng = np.random.default_rng(0)
+    true = {t: (3000.0 + 30.0 * t, 1000.0) for t in range(20)}  # straight CV track
+    noisy = {
+        t: (x + rng.normal(0, 18), y + rng.normal(0, 18)) for t, (x, y) in true.items()
+    }
+    sm = kalman_smooth(noisy, geom, q_accel=1.0, r_meas_m=2.5)
+
+    def err(d):
+        return float(
+            np.mean(
+                [math.hypot(d[t][0] - true[t][0], d[t][1] - true[t][1]) for t in true]
+            )
+        )
+
+    assert err(sm) < err(
+        noisy
+    )  # smoother is closer to the true line than the raw picks
+
+
+def test_kalman_smooth_coasts_occlusion_gap_on_motion_model():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    preds = {t: (3000.0 + 30.0 * t, 1000.0) for t in (0, 1, 2, 6, 7, 8)}  # gap 3,4,5
+    sm = kalman_smooth(preds, geom)
+    assert set(sm) == set(range(9))  # occluded frames filled by the motion model
+    for t in (3, 4, 5):  # filled positions follow the constant-velocity path
+        assert abs(sm[t][0] - (3000.0 + 30.0 * t)) < 80
+
+
+def test_kalman_smooth_passthrough_short_or_invalid():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    assert kalman_smooth({0: (1.0, 1.0)}, geom) == {0: (1.0, 1.0)}  # < 2 points
+    two = {0: (1.0, 1.0), 1: (2.0, 2.0)}
+    assert kalman_smooth(two, NEUTRAL) == two  # invalid homography -> passthrough
 
 
 def test_action_density_prior_zero_when_no_players():
