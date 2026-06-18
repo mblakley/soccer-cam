@@ -7,8 +7,10 @@ import numpy as np
 from training.data_prep.far_ball_augment import (
     augment_crop_with_ball,
     crop_ball_patch,
+    dim_ball,
     erase_ball,
     estimate_ball_velocity,
+    occlude_ball,
     onfield_mask,
     paste_ball,
     path_onfield,
@@ -160,6 +162,41 @@ def test_flip_mirrors_velocity():
     cx0, _ = _ball_center(out[0], (int(cx + 16), int(cy)))
     assert abs(cx2 - cx) <= 2
     assert abs(cx0 - (cx + 16)) <= 2
+
+
+def test_occlude_ball_covers_part_keeps_rest():
+    # bright ball on darker grass
+    stack = np.full((3, 80, 80), 120, np.uint8)
+    for i in range(3):
+        __import__("cv2").circle(stack[i], (40, 40), 7, 200, -1)
+    rng = np.random.default_rng(0)
+    occlude_ball(stack, 40, 40, r=7, frac=0.5, rng=rng, level=30)
+    ball = stack[0]
+    disc = [
+        (x, y)
+        for y in range(33, 48)
+        for x in range(33, 48)
+        if (x - 40) ** 2 + (y - 40) ** 2 <= 49
+    ]
+    occluded = sum(ball[y, x] < 60 for x, y in disc)
+    visible = sum(ball[y, x] > 150 for x, y in disc)
+    assert (
+        occluded > 0 and visible > 0
+    )  # partial: some covered, some ball still showing
+
+
+def test_dim_ball_reduces_contrast_toward_grass():
+    stack = np.full((3, 80, 80), 120, np.uint8)
+    for i in range(3):
+        __import__("cv2").circle(stack[i], (40, 40), 6, 210, -1)  # bright ball
+    before = int(stack[0, 40, 40])
+    dim_ball(stack, 40, 40, r=6, factor=0.3)
+    after = int(stack[0, 40, 40])
+    assert before == 210
+    # ball centre pulled toward grass (~120) in every frame, but not erased
+    assert 120 < after < 210
+    assert abs(after - 120) < abs(before - 120)
+    assert all(stack[i, 40, 40] == after for i in range(3))
 
 
 def test_sample_velocity_is_bounded():

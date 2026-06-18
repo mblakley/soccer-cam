@@ -325,6 +325,76 @@ def augment_crop_with_ball(
     return out
 
 
+def occlude_ball(
+    stack: np.ndarray,
+    bx: float,
+    by: float,
+    r: float,
+    frac: float = 0.5,
+    rng: np.random.Generator | None = None,
+    level: float | None = None,
+) -> np.ndarray:
+    """Cover ~``frac`` of the ball with a foreground occluder (modified in place).
+
+    A RECALL/temporal-continuity hard positive: track DROPOUTS — the gaps that break the
+    re-ranker's trajectory — happen mostly when a player passes in front of the ball. Pasting
+    a foreground occluder (a dark limb/foot/shadow) over part of the still-labelled ball
+    teaches the detector to keep firing through partial occlusion, so the ball stays in the
+    candidate set across consecutive frames. The label stays at ``(bx, by)``.
+    """
+    rng = rng or np.random.default_rng()
+    bx, by = int(round(bx)), int(round(by))
+    rr = max(2, int(round(r)))
+    lvl = (
+        float(rng.uniform(25, 70)) if level is None else float(level)
+    )  # dark foreground
+    ang = float(rng.uniform(0, 2 * np.pi))
+    nx, ny = float(np.cos(ang)), float(np.sin(ang))
+    d = (1.0 - 2.0 * float(frac)) * rr  # chord offset: frac=0.5 -> half the disc
+    h, w = stack.shape[1:]
+    y0, y1 = max(0, by - rr), min(h, by + rr + 1)
+    x0, x1 = max(0, bx - rr), min(w, bx + rr + 1)
+    if y1 <= y0 or x1 <= x0:
+        return stack
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    cover = (((xs - bx) ** 2 + (ys - by) ** 2) <= rr * rr) & (
+        ((xs - bx) * nx + (ys - by) * ny) >= d
+    )
+    for i in range(stack.shape[0]):
+        sub = stack[i, y0:y1, x0:x1]
+        sub[cover] = int(lvl)
+    return stack
+
+
+def dim_ball(
+    stack: np.ndarray, bx: float, by: float, r: float, factor: float = 0.5
+) -> np.ndarray:
+    """Reduce the ball's contrast toward the surrounding grass (modified in place).
+
+    A RECALL hard positive: 72% of real far balls are *fainter than the local grass texture*
+    (EXP-29). Pushing a pasted/real ball's contrast toward the grass level (``factor`` < 1)
+    manufactures the faintest balls the detector keeps missing, teaching it to fire on them
+    so the track does not drop out on dim frames. The label stays at ``(bx, by)``.
+    """
+    bx, by = int(round(bx)), int(round(by))
+    rr = max(2, int(round(r)))
+    h, w = stack.shape[1:]
+    y0, y1 = max(0, by - rr), min(h, by + rr + 1)
+    x0, x1 = max(0, bx - rr), min(w, bx + rr + 1)
+    if y1 <= y0 or x1 <= x0:
+        return stack
+    gy0, gy1 = max(0, by - 2 * rr), min(h, by + 2 * rr)
+    gx0, gx1 = max(0, bx - 2 * rr), min(w, bx + 2 * rr)
+    grass = float(np.median(stack[0, gy0:gy1, gx0:gx1]))
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    disc = ((xs - bx) ** 2 + (ys - by) ** 2) <= rr * rr
+    for i in range(stack.shape[0]):
+        sub = stack[i, y0:y1, x0:x1].astype(np.float32)
+        sub = np.where(disc, (sub - grass) * factor + grass, sub)
+        stack[i, y0:y1, x0:x1] = np.clip(sub, 0, 255).astype(np.uint8)
+    return stack
+
+
 def patch_is_clean(
     patch: np.ndarray,
     alpha: np.ndarray,
