@@ -343,3 +343,45 @@ def rerank(
         if p < len(frames[t]) and len(fsrc[t]):
             preds[t] = (float(fsrc[t][p][0]), float(fsrc[t][p][1]))
     return preds
+
+
+def track_ball(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = None,
+    player_boxes: list[list[tuple[float, float]]] | None = None,
+    frame_gaps: list[int] | None = None,
+    action_weight: float = 0.5,
+    config: RerankConfig | None = None,
+) -> dict[int, tuple[float, float]]:
+    """The full production ball-tracking pipeline (the verified-best config).
+
+    Runs, in order: the player-density :func:`action_density_prior` (if ``player_boxes``
+    given) -> the context :func:`rerank` (static-persistence + motion-support + meters-smooth
+    Viterbi) -> the :func:`kalman_smooth` RTS smoother / occlusion-coast. Returns a smoothed
+    ball position at EVERY frame index in the track span (occluded frames coasted), in source
+    pixels — the stable per-frame signal the broadcast renderer's "follow the ball" needs.
+
+    Held-out Spencerport (AutoCam-loses-ball clips, viewport scale R=15 m): **0.58** (leave-
+    one-clip-out CV 0.56), vs AutoCam ~0. This is the ceiling of the single-camera context
+    tracker — detection augmentation and learned appearance discrimination were both shown not
+    to help (see DECISIONS.md D1/D4); the intelligence is here, in context.
+
+    Args:
+        frames: per-frame detector candidates (``frames[t]`` = list of :class:`Candidate`).
+            Use the **no-aug** detector (highest recall; D1).
+        geom: field geometry with a valid homography.
+        motion: optional per-frame MOG2 motion blobs (motion-support term).
+        player_boxes: optional per-frame YOLO player-box CENTRES in source px (action prior).
+        frame_gaps: optional per-frame source-frame gaps (stride-N dumps).
+        action_weight: action-prior strength (0.5 optimum; 0 to disable).
+        config: :class:`RerankConfig`.
+    """
+    priors = None
+    if player_boxes is not None and action_weight:
+        priors = action_density_prior(frames, player_boxes, geom, weight=action_weight)
+    sel = rerank(
+        frames, geom, motion=motion, frame_gaps=frame_gaps, priors=priors, config=config
+    )
+    return kalman_smooth(sel, geom)

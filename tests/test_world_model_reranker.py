@@ -21,6 +21,7 @@ from training.world_model.reranker import (
     kalman_smooth,
     rerank,
     static_persistence,
+    track_ball,
 )
 from training.world_model.tbd import Candidate
 
@@ -171,6 +172,27 @@ def test_kalman_smooth_coasts_occlusion_gap_on_motion_model():
     assert set(sm) == set(range(9))  # occluded frames filled by the motion model
     for t in (3, 4, 5):  # filled positions follow the constant-velocity path
         assert abs(sm[t][0] - (3000.0 + 30.0 * t)) < 80
+
+
+def test_track_ball_full_pipeline_follows_the_ball():
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    # dim ball drifting through a player cluster; a bright static distractor parked nearby
+    frames, motion, boxes, gt = [], [], [], []
+    for t in range(14):
+        bx, by = 3200.0 + 24.0 * t, 1000.0
+        frames.append(
+            [Candidate(4200.0, 1300.0, 0.9), Candidate(bx, by, 0.4)]
+        )  # distractor brighter
+        motion.append([Candidate(bx, by, 1.0)])  # ball is the moving blob
+        boxes.append(
+            [(bx - 40, by), (bx + 40, by), (bx, by + 50)]
+        )  # players around the ball
+        gt.append((t, bx, by))
+    preds = track_ball(frames, geom, motion=motion, player_boxes=boxes)
+    # smoothed track exists at every frame and follows the ball, not the static distractor
+    assert len(preds) >= 12
+    res = evaluate_recall({t: preds[t] for t in preds}, gt, radius_px=120.0)
+    assert res.recall_all > 0.8
 
 
 def test_kalman_smooth_passthrough_short_or_invalid():
