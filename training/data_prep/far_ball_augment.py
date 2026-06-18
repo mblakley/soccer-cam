@@ -421,6 +421,66 @@ def dim_ball(
     return stack
 
 
+def paste_grass(frame: np.ndarray, bx: float, by: float, r: float) -> bool:
+    """Erase a disc at ``(bx, by)`` by copying a clean nearby same-context patch over it.
+
+    "Just paste grass": instead of inpainting (which smooths the hole into a low-texture
+    smudge the detector can key on), copy a real nearby background patch — same lighting,
+    real grass texture — over the ball. The donor is chosen from a ring of nearby on-field
+    offsets, picking the one whose median best matches the ball's surroundings (so the ball
+    was on grass -> grass; at a player's edge -> that texture). Feathered blend. Returns
+    ``False`` (caller falls back to inpaint) if no clean donor fits — e.g. ball mid-crowd.
+    """
+    h, w = frame.shape
+    bx, by, rr = int(round(bx)), int(round(by)), int(r)
+    if bx - rr < 0 or by - rr < 0 or bx + rr >= w or by + rr >= h:
+        return False
+    ring = frame[by - rr : by + rr, bx - rr : bx + rr]
+    ring_med = float(np.median(ring[ring > 0])) if (ring > 0).any() else 128.0
+    best, best_d = None, 1e9
+    for dx, dy in (
+        (3 * rr, 0),
+        (-3 * rr, 0),
+        (0, 3 * rr),
+        (0, -3 * rr),
+        (2 * rr, 2 * rr),
+        (-2 * rr, 2 * rr),
+        (2 * rr, -2 * rr),
+        (-2 * rr, -2 * rr),
+    ):
+        cx, cy = bx + dx, by + dy
+        if cx - rr < 0 or cy - rr < 0 or cx + rr >= w or cy + rr >= h:
+            continue
+        donor = frame[cy - rr : cy + rr, cx - rr : cx + rr]
+        if (donor == 0).mean() > 0.1:  # donor is off-field
+            continue
+        dm = float(np.median(donor[donor > 0])) if (donor > 0).any() else 1e9
+        if abs(dm - ring_med) < best_d:
+            best_d, best = abs(dm - ring_med), (cx, cy)
+    if best is None:
+        return False
+    cx, cy = best
+    yy, xx = np.mgrid[0 : 2 * rr, 0 : 2 * rr].astype(np.float32)
+    a = np.clip((rr - 1 - np.hypot(xx - rr, yy - rr)) / 2.5, 0.0, 1.0)
+    donor = frame[cy - rr : cy + rr, cx - rr : cx + rr].astype(np.float32)
+    roi = frame[by - rr : by + rr, bx - rr : bx + rr].astype(np.float32)
+    frame[by - rr : by + rr, bx - rr : bx + rr] = (a * donor + (1 - a) * roi).astype(
+        np.uint8
+    )
+    return True
+
+
+def erase_ball_grass(stack: np.ndarray, bx: float, by: float, r: float) -> np.ndarray:
+    """Erase a ball from every frame by :func:`paste_grass` (real texture), inpaint fallback.
+
+    Preferred over :func:`erase_ball` for cosmetic erasure (no inpaint smudge). If any frame
+    has no clean grass donor (ball mid-crowd), the whole stack falls back to Telea inpaint.
+    """
+    if not all(paste_grass(stack[i], bx, by, r) for i in range(stack.shape[0])):
+        erase_ball(stack, bx, by, r)
+    return stack
+
+
 def track_shift(
     stack: np.ndarray,
     x: float,
@@ -452,10 +512,11 @@ def track_shift(
     patch, alpha = crop
     vx, vy = estimate_ball_velocity(patch, alpha, rng)
     sp = float(np.hypot(vx, vy))
-    # erase the real ball's whole track: a disc covering all n positions, centred mid-track
+    # erase the real ball's whole track by pasting clean nearby grass (inpaint fallback):
+    # a disc covering all n positions, centred mid-track.
     cx = x - (n - 1) / 2.0 * vx
     cy = y - (n - 1) / 2.0 * vy
-    erase_ball(out, cx, cy, patch_r + int(np.ceil((n - 1) / 2.0 * sp)) + 4)
+    erase_ball_grass(out, cx, cy, patch_r + int(np.ceil((n - 1) / 2.0 * sp)) + 4)
     ox, oy = offset
     for i in range(n):
         px = x - (n - 1 - i) * vx + ox

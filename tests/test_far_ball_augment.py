@@ -9,11 +9,13 @@ from training.data_prep.far_ball_augment import (
     crop_ball_patch,
     dim_ball,
     erase_ball,
+    erase_ball_grass,
     estimate_ball_velocity,
     match_contrast_to_background,
     occlude_ball,
     onfield_mask,
     paste_ball,
+    paste_grass,
     path_onfield,
     sample_field_locations,
     sample_onfield_location,
@@ -200,6 +202,36 @@ def test_dim_ball_reduces_contrast_toward_grass():
     assert 120 < after < 210
     assert abs(after - 120) < abs(before - 120)
     assert all(stack[i, 40, 40] == after for i in range(3))
+
+
+def test_paste_grass_replaces_ball_and_keeps_texture():
+    cv2 = __import__("cv2")
+    rng = np.random.default_rng(0)
+    frame = np.clip(130 + rng.normal(0, 8, (100, 100)), 0, 255).astype(
+        np.uint8
+    )  # grass
+    cv2.circle(frame, (50, 50), 6, 220, -1)  # bright ball
+    assert frame[50, 50] > 180
+    assert paste_grass(frame, 50, 50, 10)
+    assert frame[50, 50] < 175  # ball replaced by grass-ish texture
+    assert (
+        frame[44:56, 44:56].std() > 2
+    )  # real texture preserved (not a flat inpaint smudge)
+
+
+def test_erase_ball_grass_clears_all_frames():
+    cv2 = __import__("cv2")
+    rng = np.random.default_rng(1)
+    stack = np.stack(
+        [
+            np.clip(140 + rng.normal(0, 7, (90, 90)), 0, 255).astype(np.uint8)
+            for _ in range(3)
+        ]
+    )
+    for i in range(3):
+        cv2.circle(stack[i], (45, 45), 6, 230, -1)
+    erase_ball_grass(stack, 45, 45, 10)
+    assert all(stack[i, 45, 45] < 180 for i in range(3))  # ball gone from every frame
 
 
 def test_track_shift_moves_ball_and_clears_original():
