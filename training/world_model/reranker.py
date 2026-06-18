@@ -88,12 +88,60 @@ def _motion_support(
     return out
 
 
+def action_density_prior(
+    frames: list[list[Candidate]],
+    player_boxes: list[list[tuple[float, float]]],
+    geom: FieldGeometry,
+    sigma_m: float = 10.0,
+    weight: float = 0.5,
+) -> list[np.ndarray]:
+    """Player-density (action-region) prior for :func:`rerank` ``priors``.
+
+    The game ball sits where players cluster; a *far lone-player* distractor track is in low
+    player density. So this favours candidates in dense action and discounts the far players
+    that the re-ranker would otherwise follow as a smooth track — while KEEPING ball-on-player
+    picks (the ball is in the dense action ~35% of the time, so blanket player-masking is
+    wrong). EXP-31: +5 pts viewport recall (R15 0.491 -> 0.543) at ``weight=0.5``; over-
+    weighting hurts (the ball isn't *always* in the densest cluster — clearances).
+
+    Args:
+        frames: same per-frame candidates passed to :func:`rerank`.
+        player_boxes: per-frame list of player ``(cx, cy)`` centres in SOURCE pixels (e.g.
+            YOLO box centres). Empty when no detections that frame.
+        geom: the field geometry (density is measured in meters).
+        sigma_m: action-region scale (Gaussian kernel std, meters).
+        weight: prior strength (the additive emission bonus = ``-weight * density_norm``).
+
+    Returns:
+        A ``priors`` list aligned with ``frames`` (negative cost = favoured).
+    """
+    out: list[np.ndarray] = []
+    for cands, boxes in zip(frames, player_boxes, strict=True):
+        if not cands:
+            out.append(np.zeros(0))
+            continue
+        cw = geom.image_to_world(np.array([[c.x, c.y] for c in cands], float))
+        if not boxes:
+            out.append(np.zeros(len(cands)))
+            continue
+        pw = geom.image_to_world(np.array(boxes, float))
+        d = np.array(
+            [
+                np.exp(-((cw[i] - pw) ** 2).sum(1) / (2 * sigma_m**2)).sum()
+                for i in range(len(cw))
+            ]
+        )
+        out.append(-weight * d / (d.max() + 1e-9))
+    return out
+
+
 def rerank(
     frames: list[list[Candidate]],
     geom: FieldGeometry,
     *,
     motion: list[list[Candidate]] | None = None,
     frame_gaps: list[int] | None = None,
+    priors: list[np.ndarray] | None = None,
     config: RerankConfig | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Re-rank per-frame ball candidates by physics/context (see module docstring).
@@ -107,6 +155,11 @@ def rerank(
             the motion-support bonus.
         frame_gaps: optional per-frame source-frame gap to the previous frame (for stride-N
             dumps the smoothness budget scales by the gap). Defaults to all 1s.
+        priors: optional additive per-candidate emission COST (``priors[t]`` aligns with
+            ``frames[t]``): negative favours a candidate, positive penalises it. Used to fold
+            in extra context the re-ranker doesn't model itself — e.g. an action/player-density
+            prior (the ball sits where players cluster; a far lone-player track is in low
+            density) or a size prior. ``None`` for no prior.
         config: :class:`RerankConfig`.
 
     Returns:
@@ -143,11 +196,14 @@ def rerank(
     pers = static_persistence(fw, cfg.cell_m)
 
     def emis(t: int, i: int) -> float:
-        return (
+        e = (
             -cfg.alpha * fs[t][i]
             + cfg.static_w * pers[t][i]
             - cfg.motion_w * fmot[t][i]
         )
+        if priors is not None and len(priors[t]):
+            e += float(priors[t][i])
+        return e
 
     # Viterbi: state K = miss. cost[t][j], back[t][j].
     cost: list[np.ndarray] = []
