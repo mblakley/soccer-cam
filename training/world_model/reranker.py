@@ -135,6 +135,34 @@ def action_density_prior(
     return out
 
 
+def coast_occlusions(
+    preds: dict[int, tuple[float, float]],
+) -> dict[int, tuple[float, float]]:
+    """Fill the re-ranker's miss-gaps by constant-velocity coast (occlusion persistence).
+
+    When the ball goes behind a player it is INVISIBLE — the detector cannot and should not
+    "see" it (training detection through occlusion just teaches hallucination). It is the
+    *tracker's* job to carry the ball through the gap by physics. This interpolates the ball's
+    path across each bracketed miss-run (the ball moved roughly straight from where it entered
+    the occlusion to where it re-emerged), so the viewport stays on its predicted path instead
+    of dropping it. Offline (uses both endpoints); a real-time variant would extrapolate the
+    last velocity. EXP-32: +2 pts viewport recall. Leading/trailing misses are left empty
+    (no bracket to coast between).
+    """
+    if not preds:
+        return preds
+    keys = sorted(preds)
+    out = dict(preds)
+    for a, b in zip(keys, keys[1:], strict=False):
+        if b - a <= 1:
+            continue
+        (xa, ya), (xb, yb) = preds[a], preds[b]
+        for t in range(a + 1, b):
+            w = (t - a) / (b - a)
+            out[t] = (xa + w * (xb - xa), ya + w * (yb - ya))
+    return out
+
+
 def rerank(
     frames: list[list[Candidate]],
     geom: FieldGeometry,

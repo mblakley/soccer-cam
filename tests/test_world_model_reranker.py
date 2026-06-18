@@ -15,6 +15,7 @@ from training.world_model.geometry import build_field_geometry
 from training.world_model.reranker import (
     RerankConfig,
     action_density_prior,
+    coast_occlusions,
     rerank,
     static_persistence,
 )
@@ -120,6 +121,23 @@ def test_action_density_prior_favours_the_player_cluster():
     preds = rerank(frames, geom, priors=priors)
     res = evaluate_recall({f: preds[f] for f in preds}, gt, radius_px=80.0)
     assert res.recall_all > 0.8  # tracks the action cluster, not the far lone player
+
+
+def test_coast_occlusions_fills_gap_on_straight_path():
+    # ball tracked at t=0 and t=4; occluded (missing) at t=1,2,3
+    preds = {0: (100.0, 200.0), 4: (140.0, 200.0)}
+    out = coast_occlusions(preds)
+    assert set(out) == {0, 1, 2, 3, 4}  # gap filled
+    assert out[2] == (120.0, 200.0)  # midpoint of the straight coast
+    assert out[1][0] == 110.0 and out[3][0] == 130.0  # linear across the gap
+    # endpoints unchanged
+    assert out[0] == (100.0, 200.0) and out[4] == (140.0, 200.0)
+
+
+def test_coast_occlusions_leaves_trailing_miss_empty():
+    preds = {0: (100.0, 200.0), 1: (110.0, 200.0)}  # no later anchor
+    out = coast_occlusions(preds)
+    assert set(out) == {0, 1}  # nothing to coast toward -> unchanged
 
 
 def test_action_density_prior_zero_when_no_players():
