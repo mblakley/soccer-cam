@@ -325,6 +325,32 @@ def augment_crop_with_ball(
     return out
 
 
+def sample_realistic_contrast(rng: np.random.Generator) -> float:
+    """Sample a signed ball-vs-grass contrast (gray levels) from the real distribution
+    measured on 1296 GT balls (EXP-29): median ~+11, ~71% brighter than grass, a 27% darker
+    (in-shade) tail. Models lighting variation — sun vs shadow — when pasting a ball."""
+    return float(np.clip(rng.normal(13.0, 26.0), -45.0, 95.0))
+
+
+def match_contrast_to_background(
+    patch: np.ndarray, alpha: np.ndarray, bg_level: float, target_contrast: float
+) -> np.ndarray:
+    """Shift a ball patch so its centre sits at ``bg_level + target_contrast``.
+
+    Makes a pasted ball respect the LOCAL lighting and the real contrast distribution:
+    a ball cut from sunny grass, pasted onto a shadowed patch, would otherwise be too bright
+    (it carries its source absolute level). Re-leveling to the local grass + a realistic
+    signed contrast (:func:`sample_realistic_contrast`) fixes shadows/lighting/background so
+    the synthetic ball is as subtle as the real ones (often below the grass-texture floor).
+    Preserves internal ball structure (a pure shift). Returns a new patch.
+    """
+    core = patch[alpha > 0.8]
+    centre = float(core.mean()) if core.size >= 3 else float(patch.mean())
+    return np.clip(patch + (bg_level + target_contrast - centre), 0, 255).astype(
+        patch.dtype
+    )
+
+
 def occlude_ball(
     stack: np.ndarray,
     bx: float,

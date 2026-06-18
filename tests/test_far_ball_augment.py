@@ -10,12 +10,14 @@ from training.data_prep.far_ball_augment import (
     dim_ball,
     erase_ball,
     estimate_ball_velocity,
+    match_contrast_to_background,
     occlude_ball,
     onfield_mask,
     paste_ball,
     path_onfield,
     sample_field_locations,
     sample_onfield_location,
+    sample_realistic_contrast,
     sample_velocity,
 )
 
@@ -197,6 +199,32 @@ def test_dim_ball_reduces_contrast_toward_grass():
     assert 120 < after < 210
     assert abs(after - 120) < abs(before - 120)
     assert all(stack[i, 40, 40] == after for i in range(3))
+
+
+def test_sample_realistic_contrast_matches_distribution():
+    rng = np.random.default_rng(0)
+    cs = np.array([sample_realistic_contrast(rng) for _ in range(2000)])
+    assert (cs > 0).mean() > 0.6  # ~71% brighter than grass (EXP-29)
+    assert 5 < np.median(cs) < 25  # median ~+11
+    assert (cs < 0).any()  # the in-shade darker tail exists
+    assert cs.min() >= -45 and cs.max() <= 95
+
+
+def test_match_contrast_sets_centre_relative_to_local_grass():
+    # a ball patch whose centre is far brighter than its source grass
+    band = np.full((60, 60), 200, np.uint8)
+    __import__("cv2").circle(band, (30, 30), 5, 255, -1)
+    patch, alpha = crop_ball_patch(band, 30, 30, r=14)
+    out = match_contrast_to_background(
+        patch, alpha, bg_level=120.0, target_contrast=10.0
+    )
+    centre = float(out[alpha > 0.8].mean())
+    assert abs(centre - 130.0) < 3.0  # centre sits at local grass(120) + contrast(10)
+    # a darker (in-shade) target pulls the ball below the local grass
+    dark = match_contrast_to_background(
+        patch, alpha, bg_level=120.0, target_contrast=-15.0
+    )
+    assert float(dark[alpha > 0.8].mean()) < 120.0
 
 
 def test_sample_velocity_is_bounded():
