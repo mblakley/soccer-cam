@@ -9,6 +9,38 @@ runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: n
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
 
+### 2026-06-24 — Rebuilt 6/15 FAR set `heat_0615_gaps1` GAME-WIDE from complete dets — Mark's 51 labels preserved
+- **`heat_0615_gaps1` was only the early game** (53 frames, built from a *partial* detection snapshot at
+  ~frames 0–15980). Now that `detect_0615.py` is **DONE (5408/5408, `det0615\ball_dets_0615.json`)**, rebuilt
+  it GAME-WIDE: far (cy≤700) + gap/lost-far + low-conf-far across the WHOLE active-play game.
+- **191 frames total** (was 53): **142 newly-added** game-wide candidate frames (reason mix: 88 lowconf+far,
+  28 lowconf+far+gap, 15 far, 7 far+gap, 4 lowconf±gap) + **49 force-included** Mark-labeled frames not already
+  candidates (2 of his 51 were already selected). **108 AutoCam-seeded** (pre-seeded top-1 as the hint;
+  gap-only frames center-seeded). Selection: Mark's canonical `play_windows.json` window gate
+  `[1902,49459)∪[58117,105714)` + the human-tightened polygon (`field_polygon_0615.json`, `human_field_edit`)
+  + detection-density active refine + temporal-spread (best-score per bin, span 320–98440).
+- **MARK'S 51 LABELS PRESERVED (the critical constraint).** `labels.json` is owned by the SERVER (keyed by
+  `frame_idx`, written only by the `/result` POST), NOT the builder — the builder clears ONLY `strips/` and
+  rewrites `manifest.json`, never `labels.json`. **All 51 of Mark's labeled `frame_idx` are force-included in
+  the new manifest** (read from `labels.json` at build time and forced into the selection so each labeled
+  frame's strip is re-decoded and shows as done, not orphaned). New builder
+  `G:\ballresearch\distill\build_0615_set_gamewide.py` (copy; reads a `ball_dets_0615_gapsfull_snap.json`
+  snapshot; **seek-based PyAV decode** ~3 min vs ~15 min sequential; existing `build_0615_set*.py` +
+  `heat_0615_normlowconf1` untouched). Defensive `labels.json` backup kept at
+  `det0615\heat_0615_gaps1_labels.bak_*.json`.
+- **Verified live (no restart):** `labels.json` byte-identical (51 labels, 9851 B, LastWrite unchanged).
+  `GET /api/far-label/heat_0615_gaps1` → 200, **n_frames=191, labeled=51, n_mark_labeled=51**; list shows
+  191/51 (and `heat_0615_normlowconf1` still 116/4, untouched). **All 51 Mark `frame_idx` present in the new
+  manifest, 0 orphaned labels.** `/strip/{i}` → 200 ~5.5 MB for new far frames (16300, 18680, 98440) + Mark
+  frames (320, 10000). **Vision-checked NEW far frame 18680** (lowconf+far, autocam=true): small far ball
+  high on the field near the far touchline, AutoCam hint crosshair on it, inside the green polygon — exactly
+  the AutoCam-weak far case the set targets.
+- **Ready-to-click URL:** `https://trainer.goat-rattlesnake.ts.net/static/far-label.html?set=heat_0615_gaps1`
+  (140 frames still unlabeled; F far-sweep / click ball / N not-visible / O out-of-play).
+- **All protected jobs alive + undisturbed afterward** (CPU-only build): orchestrator (3620, running N=4),
+  iter_run (280, N=4 worker), `detect_0610.py` (6900, advancing 300/5736), annotation 8642 (9688) — no
+  restart; `curve.jsonl` unchanged (2 rows N=1,N=2). See EXP-DIST-05.
+
 ### 2026-06-24 — Built 6/15 hard-NORMAL low-conf active-learning set `heat_0615_normlowconf1` (EXP-DIST-05)
 - **The detector's bottleneck is NORMAL play, not far balls** — the corrected curve's own rows prove it:
   NORMAL R15 = 0.155 (N=1) / 0.081 (N=2) vs AutoCam 0.958/0.748; HARD R15 = 0.386/0.22 vs AutoCam 0.11. So
