@@ -27,6 +27,23 @@ focus below is still the architecture — the distill curve is its data-scaling 
 - **ACTION to make it trainable:** post-curve AutoCam distill run (`balldet_fp16_dec.onnx` @ mw 1600 →
   `F:\archive\ball_distill\<game>\`) **or** human far-labels — do NOT contend with the curve's CUDA job.
 
+### 2026-06-24 — Built 6/15 far-label CONFIRM set `heat_0615_gaps1` from PARTIAL CPU detections (curve untouched)
+- **Built a 53-frame high-value far-label set from the in-progress CPU AutoCam detection job**
+  (`detect_0615.py`, stride-20, still running — covered ~frames 0–15980 / 800 sampled at build time).
+  Set: `D:\training_data\far_label\heat_0615_gaps1\` (53 strips + `manifest.json`), served at
+  `https://trainer.goat-rattlesnake.ts.net/static/far-label.html?set=heat_0615_gaps1`
+  (`GET /api/far-label/heat_0615_gaps1` → 200, 53 frames; `/strip/{i}` ~5.6 MB full-frame JPEGs).
+  Reason mix: 40 far, plus lowconf/gap; **43 AutoCam-seeded (Mark confirms hint), 10 gap (Mark labels)**.
+  Confirmations persist by `frame_idx` in the server's `labels`, so the later game-wide rebuild loses nothing.
+- **Field polygon was NOT empty** — `det0615\field_polygon_0615.json` already held a valid 10-pt human
+  field edit (`source: human_field_edit`); vision-checked against a 6/15 frame, traces the field tightly.
+  No ONNX/approx polygon needed.
+- **Builder:** `build_0615_set_partial.py` (copy of `build_0615_set.py`, TARGET 160→60, reads a snapshot
+  `ball_dets_0615_snap.json` not the live file, and **seek-based decode** instead of sequential — 56 s vs
+  ~15 min for the full clip). All CPU (`G:\v4bench\wt\.venv`); **GPU curve never touched.**
+- **Verified after the work:** `orchestrator.py` (3620), `iter_run.py` (15576), and `detect_0615.py` (3628)
+  all still alive; `detect_progress.json` advanced 700→900 across the session; `curve_gpu.flag=2` unchanged.
+
 ### 2026-06-24 — Curve was silently broken; FIXED and re-launched. GPU running. (the headline)
 - **The data-scaling / venue-diversity curve has NOT honestly run yet.** The prior `curve.jsonl`
   (N=1,2,4,5,8,16, dated 6/19–6/23) is **INVALID**: it was produced by a stale `iter_run.py` that
