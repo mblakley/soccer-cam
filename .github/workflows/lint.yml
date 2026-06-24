@@ -16,7 +16,7 @@ jobs:
     name: ruff + mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # uv handles its own Python install and bundles the project venv;
       # matches how scripts/smoke_real_service.py runs locally.
