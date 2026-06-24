@@ -4,6 +4,97 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-11: WHY the tracker does nothing on far play — the meters-smoothness/teleport prior traps it (2026-06-24)
+
+**Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
+3620/17348 + iter_run PID 19452/20432 alive before AND after; curve.jsonl byte-unchanged at 14:59:02 / 1384 B
+/ 3 rows N=1/2/4 throughout; `curve_gpu.flag=8`, GPU 70–76% on the curve's N=8 training, untouched). Scratch on
+the server (`G:\ballresearch\distill\exp_dist_11.py` diagnosis + `exp_dist_11_ab.py` prototype,
+`exp_dist_11*.json`); only this doc is repo-resident. `CUDA_VISIBLE_DEVICES=-1` — zero GPU compute, cached
+candidate stream only, no video decode. The reference selection mechanism RE → F: archive (not OSS).
+
+**Question (the open thread from EXP-DIST-08/09):** EXP-DIST-09 showed the `track_ball` temporal tracker adds
+almost nothing on continuous far play (argmax R15 0.135 → tracked 0.153 vs candidate ceiling 0.81) and the
+Kalman step HURTS recall (bare rerank 0.180 → +Kalman 0.153). WHY? **Hypothesis:** the reranker's
+smoothness/Viterbi cost is computed in METERS; in the far field a tiny pixel error = a huge meters error, so the
+meters-smoothness prior treats the CORRECT far candidate as an implausible "jump" and suppresses it.
+
+**Method (instrument the real run, exactly the EXP-DIST-09 harness):** replayed the production
+`reranker.track_ball` on the cached continuous far stream `spc_stretch_s1.json` (3600 consecutive frames, top-12
+candidate peaks + MOG2 motion/frame) scored on the clean human `spc_normal1` GT (111 far balls, meters, via
+`spc_poly.json` geometry). Re-ran the reranker's Viterbi verbatim while keeping the cost/back tables (SANITY:
+reproduces the production numbers exactly — bare-rerank 0.180, track_ball 0.153, argmax 0.135). For each GT frame
+where the ball IS in the top-12 but the pick is wrong (the recoverable-miss set), logged, for the correct-far
+candidate (closest top-12 cand to GT, ≤15 m) vs the chosen candidate: the emission terms (score / static-
+persistence / motion) AND the **incoming Viterbi transition cost** (the meters-smoothness term) from the chosen-
+path predecessor, plus whether the correct candidate was **teleport-forbidden** (`d_m > max_jump·gap`).
+
+**Reranker cost recap (the thing under test):** emission `−α·score + static_w·persistence − motion_w·motion`;
+**transition `(d_meters / (vmax·gap))²`** with `vmax=2.5 m/frame`, and a **hard teleport gate that REMOVES any
+candidate with `d_meters > 6 m/frame` from the lattice** (`continue`).
+
+**DIAGNOSIS (n=111 GT; 83 recoverable = ball in top-12; 63 of those picked wrong = the analyzed misses):**
+
+| measure (of the 63 recoverable misses) | count | frac |
+|---|---|---|
+| **correct far candidate TELEPORT-FORBIDDEN from the chosen predecessor** (`d_m > 6 m`) | **52** | **0.825** |
+| correct candidate's meters-displacement to the chosen predecessor | median **67 m**, p75 92 m, max 116 m | — |
+| of those forbidden, displacement >30 m (predecessor already wildly off the ball) | 42 / 52 | 0.81 |
+| of those forbidden, displacement just over the 6 m ceiling (≤15 m) | 3 / 52 | 0.06 |
+| meters-per-pixel over the far stream (median / p90 / max) | 0.088 / 0.10 / 0.19 | — |
+
+**HYPOTHESIS CONFIRMED — with a sharper mechanism than first stated.** It is not merely that the smoothness
+*cost* is high for the correct far candidate; the **hard teleport gate hard-EXCLUDES it** in 82.5% of misses.
+And the displacement that trips the gate is median **67 m** — far over the 6 m ceiling — because the chosen
+meters-smooth track has **already locked onto a low-meters-velocity DISTRACTOR and drifted ~67 m off the ball**;
+when the real far ball reappears in the candidates, the 6 m gate forbids "jumping back" to it. So the meters
+prior does two compounding things in the far field: (1) it prefers a smooth-in-meters distractor path over the
+real far ball (whose apparent meters-velocity is high/jumpy because meters-per-pixel is ~0.09–0.19 there), and
+(2) its teleport gate then traps the track on that distractor and blocks far re-acquisition. Only 6% of the
+forbidden cases are "ball genuinely moved a bit, a few px tipped it just over 6 m" — the dominant failure is the
+distractor-trap cascade, which is the meters-displacement problem at root.
+
+**PROTOTYPE A/B (diagnosis cleanly indicated a fix → built it; server scratch, behind a flag, shipped
+`reranker.py` default UNTOUCHED). Same cached far stream, clean `spc_normal1` GT, meters, n=111:**
+
+| variant | R10 | R15 | med_m | hits/111 |
+|---|---|---|---|---|
+| argmax (reference) | 0.099 | 0.135 | 25.6 | 15 |
+| **V0 `track_ball` (production)** | 0.135 | **0.153** | 47.3 | 17 |
+| V0r bare rerank (meters, 6 m gate) | 0.153 | 0.180 | 67.5 | 20 |
+| **Va perspective-scaled budget+teleport (bare)** | **0.189** | **0.216** | 67.0 | **24** |
+| **Va perspective-scaled + Kalman** | 0.189 | **0.216** | **46.5** | 24 |
+| Vc loosen-only (max(scale,1)) + Kalman | 0.162 | 0.180 | 46.8 | 20 |
+| Vb pixel-space association (bare) | 0.108 | 0.153 | 72.1 | 17 |
+| Vb pixel-space + Kalman | 0.126 | 0.162 | 51.2 | 18 |
+
+The fix that wins: scale the smoothness budget AND teleport ceiling **per-candidate by the local meters-per-
+pixel** (a far candidate gets a proportionally larger meters budget), so a correct far association is no longer
+an "impossible teleport." **R15 0.153 → 0.216 (+0.063, +41% relative; 24 vs 17 hits)**; Kalman then helps here
+(cuts median 67→46 m without losing recall — unlike on the meters baseline where it hurt, EXP-DIST-09).
+Pixel-space association (Vb) did NOT beat it (0.153) → the fix is "scale the meters budget by perspective," not
+"abandon meters." Loosen-only (Vc) underperforms full scaling.
+
+**CONCLUSION / honest read:** the hypothesis is CONFIRMED and points cleanly to a perspective-variance-weighted
+association fix that gives a real but **modest** far gain (0.153→0.216). It is NOT a solution: 0.216 is still
+~3.5× below the strong reference viewport (0.748) and well below the candidate ceiling (~0.81). Loosening the
+association recovers a fraction of the recoverable far misses but **selection remains the dominant unsolved far
+bottleneck**, and the reference system's real far edge is higher detector RECALL feeding a trivial pixel-space
+time-average (no clever selector at all — see the F: archive RE). **Recommended next experiments, ranked:**
+(1) **detector far-recall** is lever #1 (raise the ceiling, not just selection) — the venue-diversity curve +
+the new far-label sets target exactly this; (2) ship the perspective-scaled association as a far-band flag and
+re-A/B once a distill (not champion-J) continuous far stream exists; (3) revisit the static-persistence /
+distractor-trap directly (the meters-smooth Viterbi *prefers* the static distractor before the teleport gate
+ever fires — a stronger distractor repellent may matter more than the gate). **Caveats (unchanged from
+EXP-DIST-09):** champion-J continuous stream (not the N-curve distill checkpoint — no continuous distill far
+stream exists without GPU/decode); `spc_normal1` is geometrically far-third GT (this is a far-play head-to-head).
+
+**Curve-alive confirmation:** orchestrator 3620/17348 + iter_run 19452/20432 alive before AND after;
+curve.jsonl byte-unchanged (14:59:02, 1384 B, 3 rows N=1/2/4); `curve_gpu.flag=8` — N=8 trained on the GPU
+throughout (70–76% util) and was not touched; all analysis ran on CPU from the cached candidate stream.
+
+---
+
 ## EXP-DIST-10: is the selection collapse FAR-ONLY or WHOLE-GAME? — mid/near GT `heat_0615_normlowconf1` (2026-06-24)
 
 **Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
