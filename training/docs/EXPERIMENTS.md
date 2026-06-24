@@ -4,6 +4,60 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-03: Make the curve's NORMAL eval honest — human normal-play GT (2026-06-24)
+
+**Status:** investigation DONE + fix wired + new human-label set built and served (awaiting Mark's clicks).
+Scratch lives in `G:\ballresearch\distill\` (NOT in repo). Does NOT disturb the running corrected curve.
+
+**Problem (carried from EXP-DIST-02):** the curve's NORMAL split is confounded. NORMAL GT =
+AutoCam-detector dets (conf≥0.40, viewport-x±500, **no Y, no on-field test**); of 283 such "normal" balls
+only **120 (42%) fall inside the field polygon** → the detector is structurally unable to fire on ~45% of
+"normal" targets and the NORMAL ceiling is capped ~0.55 regardless of model quality. So the NORMAL number
+is partly an artifact, not a real weakness. (HARD/far split is clean — 236 human far-label frames, ≈92%
+in-mask — and trustworthy: detector R15 ≈ 0.39 vs AutoCam 0.11.)
+
+**Question for this session:** can Mark's EXISTING hand-labels stand in as honest continuous NORMAL-play GT,
+or is a NEW label set needed?
+
+**Method:**
+1. Inspected all `spc_clip1..5` + `spc_diverge` labels.json/manifests. They ARE dense + continuous
+   (1 label every 4 source frames = ~5 fps, `ball` + `not_visible` actions, human-clicked), so they look
+   like good GT — BUT the ball positions are all in the **far third** (y 104–604 of a 2160-tall frame;
+   the far-label tool targets the balls AutoCam loses). Vision-verified (saved+Read PNGs with the
+   labeled ball + polygon drawn) 3/3 sampled frames — spc_clip2 f8435, spc_clip3 f9019, spc_clip4 f10909
+   — every one is a small **far ball** near the far touchline / far goal, NOT a near/mid-field normal ball.
+   The curve already ingests these as the HARD split (236 in-window frames, all from spc_clip2/3/4 +
+   spc_diverge). **There is NO human GT for near/normal-play balls anywhere.**
+2. Therefore: **a genuinely new normal-play set IS needed** (fork B). The existing labels correctly serve
+   HARD; the NORMAL split has no honest human GT to use.
+
+**Action taken:**
+- **Built a new human-label set `spc_normal1`** with the SAME canonical tool that made `spc_clip*`
+  (`G:\ballresearch\farlabel_clip.py`, full-frame strips + manifest the running annotation server serves
+  from `D:\training_data\far_label\`). Stretch = **Spencerport frames 9460–10020** (sample=4 → 141 frames)
+  — a continuous active-play segment INSIDE the curve's eval window [7900,11500], in the clean gap between
+  spc_clip3 (ends 9447) and spc_clip4 (starts 10909), full AutoCam viewport coverage (camera pans the
+  whole field, vp_x 2134–7024), so the ball travels through near/mid field = normal play. URL for Mark:
+  `https://trainer.goat-rattlesnake.ts.net/static/far-label.html?set=spc_normal1`. Verified
+  `GET /api/far-label/spc_normal1` → 200 with 141 frames on the live server (PID 7520, jared clone).
+- **Wired the NORMAL split to prefer human `spc_normal*` labels** in `iter_run.py` AND `reeval_clean.py`
+  (server scratch): HARD ingestion now excludes `spc_normal*`; NORMAL GT uses human `spc_normal*` labels
+  when present, else falls back to the old AutoCam-derived proxy (so the running curve is NOT broken before
+  Mark labels). The orchestrator launches a fresh `iter_run.py` per N, so the moment `spc_normal1` is
+  labeled, the next N (and any `reeval_clean.py` re-run) reports an HONEST NORMAL number with no further
+  code change.
+
+**Result:** Fork = **B (new labels needed)**. New normal-play eval set `spc_normal1` (141 frames) built and
+served; NORMAL eval wiring made human-GT-first with graceful fallback. Once Mark labels the 141 frames the
+curve's NORMAL R15 becomes interpretable for the first time and the venue-diversity question (does NORMAL
+R15 rise with N?) can be answered honestly.
+
+**Conclusion:** The `spc_clip*` "Spencerport human labels" are FAR-ball GT (correctly HARD), not normal-play
+GT — confirmed by vision + the y-distribution. The honest NORMAL fix is one new ~141-frame human pass on a
+near/mid-field stretch, not re-using existing labels. NORMAL numbers stay non-interpretable until then.
+
+---
+
 ## EXP-DIST-02: Corrected data-scaling / venue-diversity curve (2026-06-24)
 
 **Status:** corrected curve RE-LAUNCHED and running (server GTX 1060). Prior `curve.jsonl` (N=1..16,

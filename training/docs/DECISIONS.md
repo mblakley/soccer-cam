@@ -44,6 +44,34 @@ known circularity to audit (human-sample a few normal frames) before any "matche
 fair head-to-head. Measure each side only where the task is winnable, and keep the off-field/masked count
 in the report.
 
+## 2026-06-24: NORMAL GT is HUMAN labels, not a filtered AutoCam proxy (supersedes the filter-only fix)
+
+**Context:** The prior entry (same day) proposed making NORMAL honest by *filtering* the AutoCam-derived
+GT to on-field + in-band. Investigating further (EXP-DIST-03): filtering still inherits AutoCam's
+**circularity** — the proxy only contains balls AutoCam already detected at conf≥0.40, so it can't include
+the balls AutoCam misses, which is precisely where the distilled detector is supposed to win. A filtered
+proxy raises the ceiling but still can't measure the detector's real edge. Separately, I confirmed (vision
++ y-distribution) that the existing Spencerport human labels (`spc_clip1..5`) are **far-ball** GT — they
+correctly feed HARD and are NOT usable as normal-play GT. So no existing human normal-play GT existed.
+
+**Decision:** The honest NORMAL split uses **human normal-play labels**, collected with the same far-label
+tool that produced `spc_clip*`. Concretely:
+- New set **`spc_normal1`** = Spencerport frames 9460–10020 (141 frames, every-4th) — a continuous
+  near/mid-field active-play stretch inside the eval window [7900,11500], in the gap between spc_clip3 and
+  spc_clip4. Built by the canonical `G:\ballresearch\farlabel_clip.py`; served by the running annotation
+  server from `D:\training_data\far_label\spc_normal1\`.
+- **Naming convention:** `spc_normal*` = human NORMAL-play GT; `spc_clip*` / `spc_diverge` /
+  `spc_hard_review` = human FAR GT (HARD). The eval split routes by this prefix.
+- **Wiring (server scratch `iter_run.py` + `reeval_clean.py`):** HARD ingestion excludes `spc_normal*`;
+  NORMAL prefers human `spc_normal*` labels and falls back to the (filtered) AutoCam proxy ONLY while no
+  `spc_normal*` labels exist — so the in-flight curve is not disturbed and self-corrects once labeled.
+- The filter-only approach from the prior entry is retained solely as the labeled-yet fallback, not the
+  target metric.
+
+**Why:** A detector whose whole value proposition is "finds balls AutoCam loses" cannot be honestly graded
+against "balls AutoCam found." Human GT is the only non-circular NORMAL reference. The cost is one ~141-
+click human pass; the payoff is the first interpretable NORMAL number for the venue-diversity question.
+
 ## 2026-06-15: v4 (perspective-normalized, warped) added ALONGSIDE v3 (tile) — additive, not a rename
 
 **Context:** The perspective-normalized full-frame detector was drafted on this branch under the

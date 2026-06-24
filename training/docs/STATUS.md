@@ -31,8 +31,22 @@ focus below is still the architecture — the distill curve is its data-scaling 
 - **NORMAL eval is confounded (must fix before believing any normal number):** the curve's NORMAL GT =
   AutoCam dets conf≥0.40 + viewport-x within 500 px, with **no Y / no on-field test** → **45% (128/283)
   off-field or outside the eroded eval band-mask**, capping the ceiling ~0.55 regardless of the model.
-  A CPU-only `clean_eval.py` (server scratch) re-scores with an on-field + in-band NORMAL GT
-  (clean_normal = 155) to separate artifact from real weakness.
+  A CPU-only `reeval_clean.py` (server scratch) re-scores with an on-field + in-band NORMAL GT
+  to separate artifact from real weakness.
+- **NORMAL-eval honesty FIX (2026-06-24, EXP-DIST-03):** confirmed the existing Spencerport human labels
+  (`spc_clip1..5`, dense + continuous) are **FAR-ball GT**, not normal-play GT — vision-verified (every
+  sampled label is a small far ball near the far touchline; y 104–604 of 2160). They already (correctly)
+  feed the HARD split; there was NO human normal-play GT, so the NORMAL split had to fall back to the
+  confounded AutoCam-derived proxy. Fix = **one new human pass**: built far-label set **`spc_normal1`
+  (141 frames, Spencerport 9460–10020 — a near/mid-field active-play stretch in the eval window, in the
+  clean gap between spc_clip3 and spc_clip4)** with the canonical `farlabel_clip.py`; served live at
+  `https://trainer.goat-rattlesnake.ts.net/static/far-label.html?set=spc_normal1` (GET /api/far-label/
+  spc_normal1 → 200, 141 frames). Wired `iter_run.py` + `reeval_clean.py` so the NORMAL split prefers
+  human `spc_normal*` labels (HARD excludes `spc_normal*`), falling back to the AutoCam proxy only until
+  labeled — so the running curve is NOT broken, and the moment Mark labels `spc_normal1` the next N (and
+  any `reeval_clean.py` re-run) reports an honest NORMAL R15 with zero further code changes.
+  **ACTION FOR MARK: label the 141 frames at the URL above** (click the ball / `N` not-visible / `O`
+  out-of-play; ~141 clicks) to make the venue-diversity NORMAL number interpretable for the first time.
 
 ### What to check next (for the next session / Mark)
 1. **Curve progress:** `Get-Content G:\ballresearch\distill\curve.jsonl` (rows append as each N finishes;
