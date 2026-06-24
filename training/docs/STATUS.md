@@ -9,6 +9,31 @@ runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: n
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
 
+### 2026-06-24 — Built 6/15 hard-NORMAL low-conf active-learning set `heat_0615_normlowconf1` (EXP-DIST-05)
+- **The detector's bottleneck is NORMAL play, not far balls** — the corrected curve's own rows prove it:
+  NORMAL R15 = 0.155 (N=1) / 0.081 (N=2) vs AutoCam 0.958/0.748; HARD R15 = 0.386/0.22 vs AutoCam 0.11. So
+  the highest-value human GT now is **hard-NORMAL** frames: ball in the mid/near field where AutoCam is
+  genuinely uncertain (low-conf) — the normal-field discrimination cases (true ball vs players/shadows/
+  corner flags/goalmouth clusters) the model keeps failing.
+- **Built `heat_0615_normlowconf1` (116 frames)** from the now-COMPLETE game-wide CPU AutoCam dets
+  (`det0615\ball_dets_0615.json`, snapshotted first). Selection: **NORMAL band cy>700** (excludes the far
+  third the existing FAR sets cover at cy≤~480-700) + **low conf [0.08,0.40)** (above the 0.05 floor, below
+  AutoCam's ~0.40 confident threshold) + ambiguous (close 2nd candidate); gated to Mark's active-play
+  windows; **excluded the 53 `heat_0615_gaps1` frames** to avoid dup labeling; temporal-spread for game-wide
+  diversity (span 1980-102120). Yields: 1073 NORMAL-band → 464 NORMAL&low-conf → 116 selected. AutoCam top-1
+  pre-seeded as the hint (`autocam:true`, `hint_conf` recorded). New builder
+  `G:\ballresearch\distill\build_0615_normlowconf.py` (copy; existing builders + `heat_0615_gaps1` untouched).
+- **Manifest `band:"normal"`, `far_cut:0`** so the labeler classifies NO frame as "far" — these are reached
+  via the **Next-unlabeled (U)** sweep / the pending auto-advance fix, NOT the far (F) sweep (every frame is
+  reachable today via `gotoUnlabeled`, which has no far/autocam gate; the AutoCam hint still renders).
+- **Ready-to-click URL:** `https://trainer.goat-rattlesnake.ts.net/static/far-label.html?set=heat_0615_normlowconf1`
+  (use **U / "Next unlabeled"**; C accept AutoCam guess, click to correct, N not-visible, O out-of-play).
+- **Verified live (no restart):** `GET /api/far-label/heat_0615_normlowconf1` → 200, 116 frames, band=normal;
+  listed in `/api/far-label`; `/strip/{i}` → 200 ~5.4 MB. **Vision-checked 4 strips** (hint+polygon overlay):
+  all NORMAL mid/near band, on-field, genuinely uncertain (conf 0.10-0.31; FP-on-player / at-feet / goalmouth
+  — exactly the discrimination bottleneck). **All protected jobs stayed alive** (orchestrator 3620, iter_run
+  280); `detect_0615.py` finished cleanly on its own (DONE, 5408/5408); curve.jsonl unchanged. See EXP-DIST-05.
+
 ### 2026-06-24 — 6/15 Irondequoit field polygon wired into the v4 field editor for human tightening
 - **Goal:** let Mark drag-tighten the auto-detected 6/15 field polygon instead of redrawing it.
 - **Created v4-field-store entry** `D:\training_data\v4_fields\heat__2026.06.15_vs_Irondequoit_away\`
