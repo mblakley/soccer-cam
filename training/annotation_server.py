@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
+from training.game_windows_api import register_game_windows
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ REVIEW_PACKETS_DIR = Path("D:/training_data/review_packets")
 LABELS_OUTPUT_DIR = Path("training_data/labels/annotations")
 
 app = FastAPI(title="Ball Tracking Annotation Server", version="0.1.0")
+
+# Game active-play window labeler (scrub embedded YouTube -> play_windows.json):
+#   page at /static/game-windows.html
+register_game_windows(app)
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
