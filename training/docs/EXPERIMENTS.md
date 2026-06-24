@@ -4,6 +4,115 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-07: SAME-VENUE far-ball visibility — 6/10 vs 6/15, both at Parma Town Hall Park (2026-06-24)
+
+**Status:** DONE. CPU-only, read-only w.r.t. the curve/labels. Did NOT disturb the running curve (orchestrator
+PID 3620, iter_run PID 19452 both alive before+after; curve advanced N=2→N=4 written, training N=8; GPU 13% /
+520 MiB — untouched). Scratch on the server (`G:\ballresearch\distill\contrast_cmp_parma\`); only this doc is
+repo-resident. Snapshotted `det0610\ball_dets_0610.json` → `ball_dets_0610_contrast_snap.json` before reading.
+
+**Why:** EXP-DIST-06 answered "did the 6/15 contrast calibration help far-ball visibility?" by comparing PRE-cal
+6/04 (Irondequoit, **Camp Eastman Way**) vs POST-cal 6/15 (Irondequoit, **Parma**) — but the venues, sun, and
+grass all differed, so the gain was NOT attributable to the calibration. This experiment removes the venue
+confound: **PRE-cal 6/10 vs Lakefront** and **POST-cal 6/15 vs Irondequoit are BOTH at Parma Town Hall Park,
+same Reolink camera, both evening kickoffs** (dir-name capture starts 18:31:10 vs 18:27:13 — ~4 min apart in
+clock time and only 5 days apart in the season, so sun elevation is ~identical → sun-angle is a weak confound
+here, unlike 6/04). The 6/10 detections that EXP-DIST-06 said didn't exist now do
+(`det0610\ball_dets_0610.json`, 5733 frames, completed 6/24 15:50).
+
+**Method:** CPU venv `G:\v4bench\wt\.venv`, PyAV decode. PRE far balls from confident 6/10 AutoCam dets
+(`ball_dets_0610_contrast_snap.json`, `{frame:[[cx,cy,conf]]}`, source 7680x2160); POST far balls from Mark's
+**HUMAN** far labels (`D:\training_data\far_label\heat_0615_gaps1\labels.json`, action=="ball"). 360x360
+ball-centred crops + 1200x600 context crops. Quantitative proxies = EXP-DIST-06's: Rec.601 luma on a tight ball
+patch (r≤9) vs a close grass annulus (r 16-42) → `lum_delta` (ball−grass mean), `grass_std`, `cnr`
+(lum_delta/grass_std), `peak_delta` (brightest ball px − grass mean). **Every crop vision-checked with a magenta
+ball-centre marker overlay before its metric was trusted.**
+
+**Key finding 1 — the PRE side is data-starved (honest blocker):** of **30** confident (conf≥0.55) 6/10 far
+detections vision-screened across cy 200-680, only **~3 were genuine ball-on-grass**. The rest are FALSE
+POSITIVES on white field lines / the centre-circle arc, players, the referee, spectators, or empty grass — the
+exact FP-attractor classes from the distill-label-filtering finding. So a clean 6-pair matched set could not be
+built from 6/10 dets; this in itself confirms far-third AutoCam is weak at this venue.
+
+**Key finding 2 — metrics on the verified-clean (quality-A) ball-on-grass crops:**
+
+| cy | game | dLum | grassStd | cnr | peakD | vision |
+|----|------|------|----------|-----|-------|--------|
+| 462 | PRE 6/10 | +6.0 | 22.5 | 0.27 | 77.5 | white ball on sunlit grass |
+| 497 | PRE 6/10 | +0.6 |  9.6 | 0.07 | 85.1 | white ball on grass (ball luma ≈ bright grass) |
+| 334 | POST 6/15 | +27.0 | 60.9 | 0.44 | 136.4 | crisp white ball, bright grass |
+| 348 | POST 6/15 | +14.3 | 15.9 | 0.89 | 111.8 | isolated white ball on sunlit grass |
+| 497 | POST 6/15 | −11.5 | 18.6 | −0.62 | 84.9 | white ball but on very-bright sunlit grass; ball's shadowed underside reads darker |
+
+A-only means: **PRE** dLum +3.3, peakD 81.3, cnr 0.2, grassStd 16.1 / **POST** dLum +9.9, peakD 111.0, cnr 0.2,
+grassStd 31.8. (One PRE crop cy337 is quality-B — ball adjacent to a player, snap unreliable — excluded from
+means.) The directly-matched **cy497 pair** (both clean, same cy): PRE dLum +0.6 / peakD 85.1 vs POST dLum −11.5
+/ peakD 84.9 — essentially a wash.
+
+**Interpretation (be honest about the proxy):** the far ball is only ~5-8 px, so the patch-MEAN proxies
+(lum_delta, cnr) are unstable to ±3 px centring error and to whether the local grass is sun-lit or shadowed —
+they do NOT robustly separate PRE from POST. The more centring-robust `peak_delta` is consistently higher POST
+(111 vs 81), and by eye the POST balls are crisper bright-white spheres on lighter green turf. BUT POST's grass
+is also brighter and ~2x more textured/striped (grassStd 32 vs 16), so CNR is flat (0.2 both) and the one clean
+same-cy pair (cy497) is a wash. So the quantitative signal is mixed/weak, not a clean POST win.
+
+**Confounds remaining even with venue controlled:** (1) **Auto-exposure / auto-gain + weather** — the camera's
+AE and the evening's cloud/haze differ between the two dates; POST grass being brighter+more textured is as
+consistent with a brighter/clearer evening (or AE) as with the calibration. (2) **Asymmetric label sources** —
+POST uses precise HUMAN labels; PRE uses AutoCam dets that are mostly FPs in the far third, so the PRE sample is
+both smaller and selected by a detector that struggles exactly here (survivorship: the few PRE balls that ARE
+real may be the easier/brighter ones). (3) cy497 PRE happens to sit on very bright sunlit grass, dragging its
+dLum to ~0 — small-N sensitivity to grass illumination. N is tiny (3 PRE / 3 POST clean).
+
+**Conclusion / verdict:** **Even with the venue confound removed (both Parma, same camera, near-identical sun),
+the data do NOT cleanly show the far ball is more visible against grass post-calibration. LOW confidence in a
+real calibration effect.** Directionally POST balls look a bit crisper and peak brighter (peakD 111 vs 81), but
+patch-mean contrast/CNR is flat, the one clean same-cy pair is a wash, and the gain is fully confoundable by
+auto-exposure / evening-light / brighter-grass differences plus the asymmetric (human-vs-FP-laden-detector) label
+sources. This is a more honest NULL-ish result than EXP-DIST-06's "directionally helps": controlling venue
+*shrank* the apparent effect. To actually isolate the calibration we'd need PRE+POST frames with matched
+auto-exposure / identical lighting (e.g. two halves of the SAME game, or locked-exposure test footage) — visibility
+alone, eyeballed off two different evenings, can't carry the claim.
+
+**Artifacts (`G:\ballresearch\distill\contrast_cmp_parma\`):** 6 ball crops (`{PRE,POST}cal_*_cy*.png`, 3 each),
+6 context crops (`*_CONTEXT_*.png`), `COMPARISON_pre_vs_post_parma.png` (labelled side-by-side w/ metrics),
+`crop_index.json` (per-crop verified centres + metrics), `picks.json`.
+
+## EXP-DIST-06: Did the 6/15 camera contrast calibration make the far ball more visible? (2026-06-24)
+
+**Hypothesis:** Mark's 2026-06-15 Reolink contrast calibration improves far-ball-vs-grass separability vs a
+pre-calibration game (same opponent Irondequoit, same camera).
+**Method:** CPU-only, read-only. Matched far-ball crops (small cy = far third, near far touchline) from PRE-cal
+6/04 (`guzzetta__2026.06.04_vs_Irondequoit`, archived detections `F:/archive/ball_distill/.../ball_track.json`)
+and POST-cal 6/15 (`heat__2026.06.15_vs_Irondequoit_away`, Mark's HUMAN far labels
+`D:/training_data/far_label/heat_0615_gaps1/labels.json`). 6 pairs matched by cy
+(113/230/334/462/563/623). Full-res 360×360 ball-centered PNG crops + one 1200×600 context crop per game →
+`G:/ballresearch/distill/contrast_cmp/`. Vision-checked each; quantitative proxy = ball-patch vs surrounding-grass
+annulus on Rec.601 luma (lum_delta, grass_std, CNR, peak_delta).
+**Result:** Mean over 6 matched crops — PRE 6/04: CNR 0.34, dLum +7.8, peakD 54.8, grassStd 24.8;
+POST 6/15: CNR 1.42, dLum +21.8, peakD 89.2, grassStd 52.1. POST ball is brighter relative to grass on every
+grass-backed crop; its higher grassStd (textured/striped sunlit Parma turf) depresses the CNR ratio but the raw
+ball-vs-grass luminance gap is clearly larger. Vision: on the clean ball-on-grass crops (cy230, cy334) the POST
+ball is a crisp white sphere popping off bright light-green turf; the matched PRE crops sit on darker/shadowed
+grass where ball luma ≈ grass luma (the ball reads mainly by shape, not brightness).
+**Confounds (state plainly):** (1) DIFFERENT VENUE — 6/04 at "21 Camp Eastman Way" (dimmer evening sun, darker
+deep-green grass, dark tree-line) vs 6/15 at "Parma Town Hall Park" (brighter low sun, lighter striped turf). So
+lighting+grass differ, NOT just the calibration. (2) Top-row crops (cy113) are ball-airborne-against-trees in BOTH
+games — background is dark foliage, not grass, so their high CNR is a background artifact, exclude from the
+ball-vs-grass read. (3) Two PRE picks (cy230, cy623) and one PRE (cy563, ball-in-keeper's-hands) are
+tracker-derived conf-0.05 detections that look imprecise/possibly-false on inspection; PRE far labels are noisier
+than 6/15's human labels. (4) One POST crop (cy462) is a goalmouth — ball partly against the white net, the only
+POST crop where it's harder to isolate (net confound, not grass). No clean same-venue pre-cal reference exists
+with ball detections (6/10 vs Lakefront at Parma has none; not pursued).
+**Conclusion:** The POST-cal 6/15 far ball IS more visible against grass on matched crops — both by eye and by
+ball-vs-grass luminance gap (dLum +22 vs +8, peakD 89 vs 55). LOW-TO-MODERATE confidence that this is the
+*calibration*: the venue/lighting difference (brighter sun + lighter turf at Parma) plausibly accounts for much or
+all of the gain, and 6/04 is not a same-venue control. Directionally consistent with the calibration helping, but
+NOT cleanly attributable. A same-venue (Parma) pre-cal game with ball detections would be needed to isolate the
+calibration effect.
+**Artifacts:** `G:/ballresearch/distill/contrast_cmp/` — 12 ball crops (`{PRE,POST}cal_*_cy*.png`), 2 context
+crops (`*_CONTEXT_*.png`), `picks.json`, `crop_index.json` (per-crop metrics).
+
 ## EXP-DIST-05: 6/15 hard-NORMAL low-conf active-learning label set `heat_0615_normlowconf1` (2026-06-24)
 
 **Status:** DONE — set built + served + vision-verified. Additive, CPU-only; did NOT disturb the running
