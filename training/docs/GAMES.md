@@ -168,3 +168,30 @@ Per-game observations about quality, orientation, and quirks. Machine-readable m
 ### heat__2025.05.13_182605
 - **Orientation:** Right-side up
 - **Tiled:** No | **Labeled:** No
+
+## Heat 2012s — 2026 (Reolink)
+
+### heat__2026.06.15_vs_Irondequoit_away
+- **Orientation:** Right-side up | **Camera:** Reolink 7680×2160 (`reolink_segments`, 19 segments)
+- **Tiled:** No | **Labeled:** No | **Detections:** **None yet (pending)**
+- **Archive:** `F:\Heat_2012s\2026.06.15 - vs Irondequoit (away)\` — raw full-field (trimmed game-window)
+  video at `…\2026.06.15 - BU14 - Guzzetta vs Irondequoit (Parma Town Hall Park)\bu14---guzzetta-irondequoit-parma-town-hall-park-06-15-2026-raw.mp4` (13.25 GB); 19 `RecM09_*.mp4`
+  segments + `combined.mp4` alongside. Registered in `game_registry.json` (`trainable=false`,
+  `detections_status=pending`). Venue is Parma Town Hall Park (a neutral pitch) but named `away` to
+  match the sibling `heat__2026.06.04_vs_Irondequoit_away` and the 2026 Heat-Reolink `home`/`away`
+  convention. "Guzzetta" in the source filenames is the legacy mislabel for team **heat**.
+- **Significance — FIRST game after the 2026-06-15 Reolink contrast/visibility calibration**
+  (DECISIONS 2026-06-15: WDR on, drc 150, dayNight=Color locked, saturation 150, contrast 140,
+  sharpen 145, baked into `ReolinkCamera.apply_optimal_settings`). This is the first real-game footage
+  shot with that profile, so it is **high-value for the ball detector if the calibration improved
+  far-ball contrast** — exactly the far-field separability the v4/distill detector is bottlenecked on.
+  Worth prioritising for detections + a side-by-side far-ball-contrast comparison vs a pre-calibration
+  Reolink game (e.g. 06-04 Irondequoit, same opponent/camera) once labels exist.
+- **Why no detections:** AutoCam ball-detection **crashed on 2026-06-15** (RDP-GPU contention — see the
+  AutoCam RDP/RAM-thrash notes); the per-segment `.mp4.jsonl` sidecar is empty (0 bytes). No ball
+  detections were produced, so the game is **not yet trainable**.
+- **Next step to make it trainable:** generate ball detections via a post-curve AutoCam distill run
+  (decrypted `balldet_fp16_dec.onnx` @ max_width 1600, the standard
+  `F:\archive\ball_distill\<game>\{ball_track.json,detections\segNN.json}` pipeline), **or** human
+  far-labels with the canonical far-label tool. Do NOT run that on the shared GPU while the distill
+  curve is using CUDA.

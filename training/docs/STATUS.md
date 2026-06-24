@@ -9,6 +9,24 @@ runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: n
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
 
+### 2026-06-24 — Added 6/15 Irondequoit game to the archive (pending detections; additive, curve untouched)
+- **New game archived + registered: `heat__2026.06.15_vs_Irondequoit_away`** (Reolink, 19 segments).
+  Raw full-field + segments + combined copied to `F:\Heat_2012s\2026.06.15 - vs Irondequoit (away)\`
+  (size-verified: raw 14,225,519,643 B, combined 14,380,725,627 B, 19 segs 14,389,654,529 B — all match
+  source `D:\soccer-cam-storage\2026.06.15-18.27.13\`). Added to `F:\training_data\game_registry.json`
+  (now 103 games; backups `game_registry.json.bak_*` kept) with `trainable=false`, `has_labels=false`,
+  and a new `detections_status` note = **pending**.
+- **NOT yet trainable — no detections.** AutoCam ball-detection **crashed on 6/15** (RDP-GPU contention);
+  the `.mp4.jsonl` sidecar is empty. So there is **no ball_distill entry** and **no `F:\gamedata`
+  labels** for this game — it is invisible to the running curve (`iter_run.py`/`orchestrator.py` select
+  from `F:\archive\ball_distill\` + `gamedata.py has_labels`). **Verified the orchestrator + iter_run
+  were still running and curve.jsonl unchanged after this work** — purely additive.
+- **Why it matters (see GAMES.md):** 6/15 is the **FIRST game shot after the 2026-06-15 Reolink contrast
+  calibration** (DECISIONS 2026-06-15) — high-value for far-ball detection IF the calibration helped.
+  Prioritise it for detections + a pre/post-calibration far-ball-contrast comparison once labeled.
+- **ACTION to make it trainable:** post-curve AutoCam distill run (`balldet_fp16_dec.onnx` @ mw 1600 →
+  `F:\archive\ball_distill\<game>\`) **or** human far-labels — do NOT contend with the curve's CUDA job.
+
 ### 2026-06-24 — Curve was silently broken; FIXED and re-launched. GPU running. (the headline)
 - **The data-scaling / venue-diversity curve has NOT honestly run yet.** The prior `curve.jsonl`
   (N=1,2,4,5,8,16, dated 6/19–6/23) is **INVALID**: it was produced by a stale `iter_run.py` that
