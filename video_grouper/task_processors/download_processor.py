@@ -199,6 +199,30 @@ class DownloadProcessor(QueueProcessor):
 
             if download_successful:
                 await dir_state.update_file_state(file_path, status="downloaded")
+
+                # "downloaded" must mean FULLY downloaded. download_file can
+                # report success on a short read — it received all the bytes the
+                # server offered, but the camera may serve a truncated file (the
+                # boot-time first-segment race). Verify the bytes on disk match
+                # the camera-reported size; if not, the file is not actually
+                # downloaded — leave it pending and re-queue so it is fetched
+                # again, and never let it reach the combine step.
+                file_obj = dir_state.get_file_by_path(file_path)
+                if file_obj is not None and not dir_state.is_file_fully_downloaded(
+                    file_obj
+                ):
+                    actual = (
+                        os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                    )
+                    logger.warning(
+                        f"DOWNLOAD: {file_name} incomplete — {actual} bytes on disk, "
+                        f"camera reports {dir_state.expected_size(file_obj)}; "
+                        f"re-queueing for download."
+                    )
+                    await dir_state.update_file_state(file_path, status="pending")
+                    await self.add_work(item)
+                    return
+
                 if self.ttt_reporter:
                     await self.ttt_reporter.update_recording_status(
                         dir_state.ttt_recording_id, "download", "downloaded"
@@ -206,6 +230,19 @@ class DownloadProcessor(QueueProcessor):
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
                 )
+
+                # Re-queue any sibling already marked 'downloaded' whose bytes
+                # don't match the camera size (e.g. truncated before this guard
+                # existed) so the group waits for a clean copy before combining.
+                for incomplete in dir_state.get_incomplete_downloads():
+                    logger.warning(
+                        f"DOWNLOAD: re-queueing incomplete "
+                        f"{os.path.basename(incomplete.file_path)} (size mismatch)"
+                    )
+                    await dir_state.update_file_state(
+                        incomplete.file_path, status="pending"
+                    )
+                    await self.add_work(incomplete)
 
                 # Check if all files in the group are downloaded and ready for combining
                 if dir_state.is_ready_for_combining():
