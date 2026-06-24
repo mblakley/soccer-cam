@@ -4,6 +4,36 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-24: 6/15 active-play windows go in the canonical `play_windows.json` at TRUE fps, keyed by archive id
+
+**Context:** Mark gave exact active-play windows for `heat__2026.06.15_vs_Irondequoit_away`. Two ambiguities
+had to be resolved when persisting them: (a) **which store/key**, and (b) **which fps** to convert
+seconds→frames with.
+
+**Decision:**
+- **Store = the existing `G:\ballresearch\play_windows.json`** — the canonical active-play store for 2026
+  games (which have no per-game `manifest.db`; 2024/25 games carry their phases in `manifest.db`
+  `game_phases`). It is read by the standard accessor `gamedata_sources.play_windows()` and directly by the
+  distill pipeline (`iter_run.py` crop gate, `orchestrator.py` curve eligibility). No new side-file was
+  created — that would have violated the "one canonical store, never invent side-files" rule.
+- **Key = `guzzetta__2026.06.15_vs_Irondequoit`** (the `ball_distill` archive-dir name), NOT the registry id
+  `heat__…`. Every existing entry is keyed by the archive-dir name, and `iter_run.py`/`orchestrator.py` do an
+  **exact-key** lookup on that name. Heat archives carry the legacy `guzzetta__` prefix. The registry-id
+  fallback in `gamedata_sources.play_windows()` (token-overlap ≥4) still resolves `heat__…away` to this entry
+  unambiguously (overlap 5; the 6/04 sibling is overlap 3 and has `windows:null`).
+- **fps = the video's TRUE 19.815** (measured `average_rate=19.8149`, 108160 frames / 5458.5 s), NOT the
+  integer `FPS=20` proxy `add_play_windows.py` uses for the other 2026 entries. At 91 minutes the proxy drifts
+  ~1% (~50 frames by game-end) — fine as a coarse warmup/halftime cut, but Mark supplied precise frames so we
+  store them precisely. These raw-frame indices equal the archive global-frame space (concat of the 19
+  segments), so they need no conversion for the `iter_run.py` `base+f` consumer.
+
+**Why:** Match the existing mechanism exactly (so the running filter picks it up with zero new code), keep a
+single source of truth, and prefer the precise frames Mark measured over a 20-fps approximation now that we
+have them. The `FPS=20` proxy entries are left untouched (reversing them is a separate cleanup, not in scope).
+
+**Trade-off:** Mild inconsistency — 6/15 uses true fps while sibling 2026 entries use the 20-fps proxy. Worth
+it: the proxy is an acknowledged approximation, and active-play gating is robust to the ~1% it would cost.
+
 ## 2026-06-24: Invalid data-scaling curve is quarantined + regenerated, not trusted
 
 **Context:** The distill data-scaling curve (`G:\ballresearch\distill\curve.jsonl`, N=1..16) was produced

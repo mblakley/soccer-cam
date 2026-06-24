@@ -9,6 +9,28 @@ runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: n
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
 
+### 2026-06-24 — 6/15 Irondequoit active-play windows persisted + wired into the active-play filter (EXP-DIST-04)
+- **Persisted Mark's exact active-play windows** for `heat__2026.06.15_vs_Irondequoit_away` in the EXISTING
+  canonical store **`G:\ballresearch\play_windows.json`** (the 2026 active-play store consumed by
+  `gamedata_sources.play_windows()` / `iter_run.py` / `orchestrator.py`; 2024-25 games use `manifest.db`
+  `game_phases`). Keyed **`guzzetta__2026.06.15_vs_Irondequoit`** (the `ball_distill` archive-dir convention
+  every existing entry uses; Heat archives carry the legacy `guzzetta__` prefix). Frames computed at the
+  raw video's **true 19.815 fps** (verified `average_rate=19.8149`, 108160 frames) — NOT the `FPS=20` proxy
+  the other 2026 entries use: kickoff f1902, halftime [49459,58117), game-end f105714 → ACTIVE PLAY
+  `[1902,49459) ∪ [58117,105714)` (88% kept). Backup `play_windows.json.bak_0615_*`.
+- **Wired into the far-label builders** `build_0615_set.py` (full) + `build_0615_set_partial.py`: added an
+  AUTHORITATIVE window gate (`active &= {f: inplay(f)}`, reading the canonical windows) right after the
+  detection-density `active` set, so the density/motion proxy only refines within Mark's windows and warmup/
+  halftime/post-game is hard-excluded. **NOT re-run** — the full rebuild waits for `detect_0615.py`; the
+  partial set Mark is labeling is untouched. Backups `build_0615_set*.py.bak_winsgate_*`.
+- **Training-data path needs NO code change:** `iter_run.py` already gates crops with `inplay(base+f)` from
+  this same JSON, so once 6/15 archives to `F:\archive\ball_distill\guzzetta__2026.06.15_vs_Irondequoit\`
+  the curve selection + crop builder arm automatically.
+- **Verified (read-only):** dry-run mask f1000✗ f5000✓ f52000✗ f70000✓ f106000✗ all PASS (half-open
+  boundaries); the builder's active-set on the LIVE partial detections dropped exactly the 96 pre-kickoff
+  warmup frames (0–1900). **All three protected jobs still alive** afterward (orchestrator 3620, iter_run
+  15576, detect_0615 3628; detect advanced 25980→27980; `curve_gpu.flag=2` unchanged).
+
 ### 2026-06-24 — Added 6/15 Irondequoit game to the archive (pending detections; additive, curve untouched)
 - **New game archived + registered: `heat__2026.06.15_vs_Irondequoit_away`** (Reolink, 19 segments).
   Raw full-field + segments + combined copied to `F:\Heat_2012s\2026.06.15 - vs Irondequoit (away)\`

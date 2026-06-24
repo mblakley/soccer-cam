@@ -4,6 +4,61 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-04: 6/15 Irondequoit active-play windows persisted + wired into the far-label/distill path (2026-06-24)
+
+**Status:** DONE. Additive; did NOT disturb the running curve, `detect_0615.py`, or Mark's `heat_0615_gaps1`
+labeling. Scratch lives on the server (`G:\ballresearch\`); only docs are repo-resident.
+
+**Goal:** persist Mark's exact active-play windows for `heat__2026.06.15_vs_Irondequoit_away` in the
+canonical per-game store and wire them into the active-play filter so the full far-label rebuild and 6/15's
+training data exclude warmup/halftime/post-game.
+
+**Windows (Mark's YouTube timestamps; raw `…-raw.mp4`, 108160 frames @ a *measured* 19.815 fps):**
+kickoff 1:36→f1902, halftime 41:36→f49459, half-end 48:53→f58117, game-end 1:28:55→f105714.
+ACTIVE PLAY = `[1902,49459) ∪ [58117,105714)` (88.0% of the recording). Recomputed and confirmed against the
+container (`av`: `average_rate=19.8149`, `frames=108160`, `duration=5458.5 s`) — matches Mark's frames.
+
+**Where persisted (the EXISTING mechanism — no new format invented):** `G:\ballresearch\play_windows.json`,
+the canonical active-play store for 2026 games (which have no `manifest.db`). It is consumed by
+`gamedata_sources.play_windows()` (the standard per-game accessor: `manifest.db` human `game_phases` for
+2024/25 → falls back to this JSON for 2026), by `iter_run.py` (the distill training builder, exact-key
+window gate `inplay(base+f)`), and by `orchestrator.py` (a game is only curve-eligible if its key is in this
+file). Entry keyed **`guzzetta__2026.06.15_vs_Irondequoit`** — the `ball_distill` archive-dir convention all
+existing entries use (Heat archives carry the legacy `guzzetta__` prefix; the registry id is
+`heat__…`). Schema matches existing GT entries: `{fps, start, half_start, half_end, end, windows:[[a,b],…]}`.
+
+**fps deviation (documented, intentional):** existing 2026 entries store frames as `seconds × 20` (an integer
+`FPS=20` proxy in `add_play_windows.py`). 6/15's raw video is genuinely 19.815 fps, so its windows are stored
+at the **true fps** (verified above). These raw-frame indices equal the archive global-frame space (concat of
+the 19 segments), so they line up with the `iter_run.py` consumer's `base+f` global index without conversion.
+
+**Wiring:**
+1. **Far-label builders** `build_0615_set.py` (full) + `build_0615_set_partial.py` (partial): added an
+   AUTHORITATIVE window gate right after the detection-density `active` set — `active &= {f : inplay(f)}`,
+   reading the windows from the canonical `play_windows.json`. The density/motion proxy now only *refines*
+   within Mark's windows; any frame outside them is hard-excluded. Builders compile clean; NOT re-run (Mark
+   is labeling the partial set — the full rebuild waits for `detect_0615.py` to finish).
+2. **Training-data path** `iter_run.py`: NO code change needed — it already reads `play_windows.json` by exact
+   key and gates crops with `inplay(base+f)`. With the entry present, once 6/15 is archived to
+   `F:\archive\ball_distill\guzzetta__2026.06.15_vs_Irondequoit\`, both the curve selection
+   (`orchestrator.py`) and the crop builder arm automatically.
+
+**Verification (read-only; nothing perturbed):**
+- Dry-run `inplay()` on the requested indices: f1000 excluded, f5000 included, f52000 (halftime) excluded,
+  f70000 included, f106000 excluded — all PASS. Boundaries half-open as specified (1902 in / 49459 out /
+  58117 in / 105714 out).
+- Ran the builder's active-set logic against the LIVE partial detections (frames 0–27980): density-only
+  active=1156 → after window gate=1060, the 96 dropped frames were exactly the pre-kickoff warmup (0–1900,
+  all < 1902); min surviving frame 1920 ≥ kickoff. Proves the gate removes warmup the proxy alone admits.
+- All three protected processes alive after the work: orchestrator (PID 3620), iter_run/curve (15576),
+  detect_0615 (3628); detect_progress advanced 25980→27980; `curve_gpu.flag=2` unchanged.
+
+**Conclusion:** 6/15's active play is now canonical and consumed by the existing filter with one source of
+truth. The full `heat_0615_gaps1` rebuild and 6/15-as-distill-game will both exclude non-active frames with
+no further changes. Backups: `play_windows.json.bak_0615_*`, `build_0615_set*.py.bak_winsgate_*`.
+
+---
+
 ## EXP-DIST-03: Make the curve's NORMAL eval honest — human normal-play GT (2026-06-24)
 
 **Status:** investigation DONE + fix wired + new human-label set built and served (awaiting Mark's clicks).
