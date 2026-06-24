@@ -4,10 +4,36 @@
 
 ## Active focus: AutoCam-distillation data-scaling curve (RE-RUNNING — prior curve was invalid)
 
-Branch: `feat/autocam-distill-detector` (worktree `../soccer-cam-autocam-distill`). All curve/distill
+Branch: `feat/homegrown-ball-detector` (worktree `../soccer-cam-autocam-distill`). All curve/distill
 runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: no RE/one-off scripts in
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
+
+### 2026-06-24 — SYNTHESIS: the gap is FAR-ONLY and DETECTOR-bound; selection thread closed (EXP-DIST-08..12)
+- **The whole "5× worse than AutoCam" was a far-third measurement artifact.** Re-scoring on clean human GT
+  with the circular AutoCam baseline removed (EXP-DIST-08): honest AutoCam = **0.748** viewport (not 0.958).
+  Per-band selection success climbs **0.27 far → 0.57 mid → 0.71 near** (EXP-DIST-10); near/mid argmax is
+  already ≈ AutoCam *before any tracking*. The only hole is the **far third**.
+- **Far is NOT a tracker problem.** Our shipped meters-Viterbi/Kalman `track_ball` adds nothing on far
+  (0.153→0.153) and Kalman *hurts* — its 6 m/frame teleport gate hard-forbids the correct far candidate as an
+  "impossible jump" (82.5% of recoverable misses; median forbidden displacement 67 m, because far m/px is
+  0.09–0.19) (EXP-DIST-11). The reference's far-follow has **no selection intelligence** — per-frame argmax →
+  ~3 s recency-weighted *pixel*-space moving average, no candidate set, no outlier rejection (RE in F: archive).
+- **Decisive test (EXP-DIST-12):** the dumb pixel-smoother **more than doubles** our shipped tracker on far
+  (0.153 → 0.342) and beats both Viterbi variants — but caps there. Oracle decomp: a *perfect* per-frame
+  selector = **0.811** with no smoothing, collapses to **0.369** through the same 2.5 s smoother (smoothing is
+  a ~16–19 m floor by construction); our smoother (0.342) already sits on it. Our detector's far argmax is only
+  **13.5 % ball-centered** (median 25.6 m off).
+- **Verdict / where work goes now:** (1) **Detector far-RECALL is the dominant remaining wall** — the venue-
+  diversity curve + new far-label sets are the *only* path to AutoCam-class far; **no more selection
+  engineering is warranted.** (2) **Banked, not yet shipped:** simplify the far-band selector to the dumb
+  pixel-smoother (or at minimum drop the teleport gate behind a far-band flag) for a cheap ~2.2× far win —
+  **gated on a near/mid no-regression check** that needs a continuous near/mid candidate stream (GPU/decode →
+  post-curve). (3) **Flagged for a post-curve detector experiment:** does running our detector at the
+  reference's operating input width raise far argmax? (Conflicting RE notes on that width; resolve against
+  the F: archive RE doc before trusting either.)
+- All five experiments CPU-only; the data-scaling **curve (N=8) was confirmed byte-undisturbed** throughout.
+  Committed EXP-DIST-08..12 to EXPERIMENTS.md (`7b17f52`→`fef63c5`), branch not pushed.
 
 ### 2026-06-24 — Rebuilt 6/15 FAR set `heat_0615_gaps1` GAME-WIDE from complete dets — Mark's 51 labels preserved
 - **`heat_0615_gaps1` was only the early game** (53 frames, built from a *partial* detection snapshot at

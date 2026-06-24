@@ -4,6 +4,43 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-24: Stop selection engineering — the far-ball gap is detector-recall-bound, not tracker-bound
+
+**Context:** A focused 5-experiment chain (EXP-DIST-08..12, all CPU-only, curve undisturbed) re-scored the
+distill detector + `track_ball` against AutoCam on clean human GT and decomposed the loss. Findings: the
+"~5× worse than AutoCam" headline was a **far-third measurement artifact** (the held-out GT was entirely the
+far sliver, and the AutoCam baseline was circular). On clean GT the honest AutoCam viewport is 0.748, and
+per-band selection success is 0.27 far / 0.57 mid / 0.71 near — **near/mid argmax is already ≈ AutoCam before
+any tracking**. The only hole is the far third. Far is *not* a tracker problem: our shipped meters-Viterbi/
+Kalman adds nothing on far (0.153→0.153) and its teleport gate hard-forbids the correct far candidate 82.5%
+of the time (far m/px is 0.09–0.19, so a correct far move looks like a 67 m teleport). The reference tool's
+far-follow has **no selection intelligence** — argmax → ~3 s recency-weighted pixel-space moving average, no
+rejection. Replicating that dumb smoother **doubles** our far recall (0.153→0.342) but caps there: an oracle
+*perfect* per-frame selector = 0.811 un-smoothed but collapses to 0.369 through the same smoother (smoothing
+is a ~16–19 m floor), and our detector's far argmax is only 13.5% ball-centered.
+
+**Decision:**
+- **No more selection/tracker engineering as the path to the far gap.** It is characterized and near its
+  ceiling. The dominant remaining wall is **detector far-RECALL** — getting the ball to be the argmax — which
+  the venue-diversity data-scaling curve and the new far-label sets directly target. That is the primary lever.
+- **Bank, but do not yet ship, the far-band simplification:** replace the far-band selector with the dumb
+  pixel-smoother (or minimally drop the teleport gate behind a far-band flag) for a cheap ~2.2× far win. It is
+  **gated on a near/mid no-regression A/B**, which needs a continuous near/mid candidate stream (GPU/decode →
+  post-curve). The shipped `reranker.py` default stays untouched until that check passes. Geometric evidence
+  (the fix scales the budget by local m/px, which collapses 4–15× from far to near with a `max(scale,1)`
+  guard) says it cannot loosen near/mid association — but we verify empirically before shipping.
+- **Open a post-curve detector experiment:** test whether matching the reference detector's operating input
+  width raises our far argmax (resolve the conflicting RE width notes in the F: archive first).
+
+**Why:** The decomposition is unambiguous — every downstream selector/smoother is capped by how often the ball
+is the per-frame argmax, and ours is 13.5% on far. Spending more on selection chases a ~0.06–0.19 residual
+while the detector caps the whole system. This also corrects the prior session's framing that "the tracker
+beats AutoCam" (that 0.58 was 5 cherry-picked clips; on continuous far play the same tracker is 0.153).
+
+**Trade-off:** We leave a real ~2.2× far-selection win on the bench until the near/mid regression check is
+possible. Acceptable: shipping an unverified change to the live broadcast selector risks regressing the 70%
+of play (near/mid) that already works, and the detector lever dwarfs it anyway.
+
 ## 2026-06-24: 6/15 active-play windows go in the canonical `play_windows.json` at TRUE fps, keyed by archive id
 
 **Context:** Mark gave exact active-play windows for `heat__2026.06.15_vs_Irondequoit_away`. Two ambiguities
