@@ -4,6 +4,90 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-09: full system = detector + `track_ball` temporal tracker on the CLEAN `spc_normal1` GT, head-to-head vs AutoCam (2026-06-24)
+
+**Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
+3620/17348 + iter_run PID 19452/20432 alive before AND after; curve.jsonl byte-unchanged at 14:59:02 / 1384 B
+/ 3 rows N=1/2/4 throughout; `curve_gpu.flag=8`, GPU on the curve's N=8 training, untouched). Scratch on the
+server (`G:\ballresearch\distill\exp_dist_09.py` + `exp_dist_09.json`, diagnostic `diag_09.py`); only this doc
+is repo-resident. `CUDA_VISIBLE_DEVICES="-1"` — zero GPU compute, candidate stream only, no video decode.
+
+**Question (Mark's standing one, carried from EXP-DIST-08):** EXP-DIST-08 pinned the detector's clean-GT loss
+on **selection** (per-frame top-1 R15 0.153 vs candidate ceiling 0.658, vs AutoCam viewport 0.748). What does
+the FULL system — detector + the `track_ball` temporal selector (`world_model/reranker.py`:
+action_density_prior → rerank[static-persistence + motion-support + meters-smooth Viterbi] → kalman RTS +
+occlusion-coast) — deliver on this SAME clean human `spc_normal1` GT (111 far-third balls, Spencerport,
+meters), head-to-head vs AutoCam's 0.748? track_ball caps ~0.58 on the 5 cherry-picked AutoCam-loses clips;
+it had never been scored on this continuous clean GT.
+
+**Continuity path taken (path 2 — tracker over continuous stream, score on labeled frames):** the
+`spc_normal1` GT frames are sparse (113 ball labels @ ~every-4th, frames 9464–10016), but the candidate stream
+`G:\ballresearch\spc_stretch_s1.json` is **fully CONTINUOUS** — 3600 consecutive source frames [7900,11499],
+gap=1 everywhere, **12 detector J-peaks (x,y,score) + 20 MOG2 motion blobs per frame**, all 113 GT frames
+present. So track_ball ran over the full continuous stream (it needs the temporal continuity) and was scored
+ONLY on the 111 clean `spc_normal1` GT frames (deduped vs HARD far human labels — same n=111 as EXP-DIST-08).
+Reused the EXISTING `tracked_eval.py` harness logic verbatim (suppress_static_candidates →
+`reranker.track_ball(suppressed, geom, motion=action)` → `evaluate_recall_metric` in meters) and the SAME
+field polygon/geometry EXP-DIST-08 used (`spc_poly.json` → `build_field_geometry`). No detector re-run.
+
+**CANDIDATE-SET CAVEAT (stated plainly, it bounds the read):** the only CONTINUOUS candidate dump that exists
+is `spc_stretch_s1.json`, dated 2026-06-18 — its J-peaks are the **v4 champion-J heatmap detector**, NOT the
+curve's N=4 distill checkpoint. (`iter_run.py` only consumes this file's `video`+`polygon`+`lo/hi` and
+re-infers the curve model at labeled frames; EXP-DIST-08 re-inferred N=4 on the sparse memmap cache, which is
+NOT continuous, so it cannot feed a tracker.) On this champion-J stream the detector's own argmax top-1 R15 =
+0.135 and candidate ceiling R15 = 0.811 — close to but not identical to N=4's 0.153 / 0.658. So the
+tracking-gain question is answered **internally consistently on one stream** (argmax → tracked → ceiling all
+from the same champion-J candidates); the N=4 row is carried as the reference anchor. The verdict is robust to
+this: the gap is enormous on either detector.
+
+**Results — comparison on clean `spc_normal1` GT (meters, n=111):**
+
+| system | R10 | R15 | median_m |
+|---|---|---|---|
+| detector top-1 (EXP-DIST-08, **N=4** distill) | 0.072 | 0.153 | 26.9 |
+| detector argmax (THIS stream, champion-J) | 0.099 | 0.135 | 25.6 |
+| **detector + track_ball (THIS, champion-J stream)** | **0.135** | **0.153** | **47.3** |
+| detector candidate ceiling (N=4, EXP-DIST-08) | 0.604 | 0.658 | — |
+| detector candidate ceiling (THIS stream, top-12) | 0.595 | 0.811 | — |
+| AutoCam viewport | 0.694 | 0.748 | 6.9 |
+
+**Diagnostic (`diag_09.py`) — WHY tracking barely moves:**
+- bare `rerank` (pre-Kalman) R15 = **0.180**; adding `kalman_smooth` RTS/coast → R15 **0.153** (and median
+  67.5 m → 47.3 m). So the Kalman step de-jitters (lower median) but on this dim far-ball play it averages a
+  mostly-wrong track and does NOT add recall — it slightly LOWERS R15. The peak of the full pipeline here is
+  the bare reranker at 0.18, still nowhere near the ceiling.
+- **Selection-recovery rate = 0.222.** The true ball is within 15 m of some top-12 candidate in **90/111**
+  frames (≈ the 0.811 ceiling), but the reranker's pick is also within 15 m in only **20/90** of those. The
+  temporal context (static-persistence + motion + smoothness) recovers the right candidate only ~1 in 5 times.
+- The tracked path is NOT degenerate/stuck — picks span x 2154–7381, y 120–1479 (the whole field band); it is
+  genuinely roaming among distractors, just rarely landing on the dim far ball. (Nearest-candidate-to-ball
+  median = 8.0 m, p25 0.2 m — detection is fine; selection is the wall.)
+- Note: `track_ball`'s action-density prior was **OFF** (no per-frame player boxes are dumped for this
+  stretch). That term gave +5 pts viewport recall in EXP-31 — a possible (small) future lever, not run here.
+
+**VERDICT — does temporal tracking close the selection gap / reach AutoCam / exceed the ceiling? NO on all
+three.** On the clean continuous `spc_normal1` far GT, detector + `track_ball` delivers **R15 = 0.153**
+(R10 0.135, median 47 m). It does **not** close the selection gap — it improves on per-frame argmax by only
+~0.02 R15 (argmax 0.135 → tracked 0.153) and stays far below the candidate ceiling (0.811 this stream / 0.658
+N=4): the tracker is leaving ≥0.5 of recoverable recall on the table, the SAME selection failure EXP-DIST-08
+named. It does **not** approach AutoCam's viewport 0.748 (it is ~5× worse; AutoCam median 6.9 m vs tracked
+47 m). It does **not** exceed the per-frame ceiling (tracking across no-candidate frames does not net-recover
+here — bare rerank 0.18 is the high-water mark and Kalman coast slightly hurts recall). And it is **consistent
+with — actually well BELOW — the prior "track_ball maxed ~0.58" claim**: that 0.58 was on 5 hand-picked
+AutoCam-loses clips at the **viewport R=15 m** scale; on this continuous clean far-play GT the same tracker
+scores 0.153. So the "0.58 ceiling" does not generalize to continuous normal/far play — it was clip-selected,
+exactly the "track_ball's 0.58 was cherry-picked" caveat from the tracker/selection finding. **Bottom line:
+the full system (detector + track_ball) does NOT beat AutoCam on this clean GT — selection remains the
+unsolved bottleneck, and the temporal tracker as configured recovers only ~22% of the candidates the ball is
+actually in.** Caveat unchanged from EXP-DIST-08: `spc_normal1` is geometrically far-third GT, so this is a
+far-play head-to-head; true near/mid discrimination still needs the labeled `heat_0615_normlowconf1` set.
+
+**Curve-alive confirmation:** orchestrator 3620/17348 + iter_run 19452/20432 alive before AND after;
+curve.jsonl byte-unchanged (14:59:02, 1384 B, 3 rows N=1/2/4); `curve_gpu.flag=8` — N=8 trained on the GPU
+throughout and was not touched; this re-score ran entirely on CPU from the cached candidate stream.
+
+---
+
 ## EXP-DIST-08: HONEST normal-play number — re-score the distill detector on Mark's CLEAN human `spc_normal1` GT (2026-06-24)
 
 **Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
