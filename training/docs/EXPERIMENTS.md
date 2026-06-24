@@ -4,6 +4,129 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-12: the reference "dumb pixel-smoother" far-follow on OUR detector — selection-algo vs detector-is-the-wall (2026-06-24)
+
+**Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
+3620/17348 + iter_run PID 19452/20432 alive before AND after; curve.jsonl byte-unchanged at 14:59:02 / 1384 B
+/ 3 rows N=1/2/4 throughout). Scratch on the server (`G:\ballresearch\distill\exp_dist_12.py` faithful replica +
+`exp_dist_12_diag.py` decomposition + `exp_dist_12_mpp.py` geometry, `exp_dist_12.json`); only this doc is
+repo-resident. `CUDA_VISIBLE_DEVICES=-1` — zero GPU compute, cached continuous candidate stream only, NO video
+decode. The reference far-follow mechanism RE → F: archive (not OSS).
+
+**Question (the decisive test EXP-DIST-08→11 set up):** every selector we tried is Viterbi-family (track_ball
+0.153, perspective-scaled Viterbi 0.216) — all far below the reference viewport (0.748) and the candidate
+ceiling (~0.81). We had NOT tried the reference's ACTUAL far-follow algorithm. Per the F: archive RE, the
+reference far-follow is **NOT a tracker**: it is the per-frame **TOP-1 (argmax)** detection fed into a recency-
+weighted **~3 s moving average in PIXEL space** + a heavy single-pole EMA, with **NO candidate set, NO
+association, NO outlier/teleport gate** (far jumps are chased, not gated). Replicate it faithfully on OUR
+detector's far argmax and find its ceiling: is selection the wall (→ jumps toward 0.748) or is our detector's
+far argmax the wall (→ stays ~0.15–0.22)?
+
+**Method (faithful replica + EXP-DIST-09 harness verbatim):** continuous champion-J far stream
+`spc_stretch_s1.json` (3600 consecutive source frames [7900,11499], gap=1, 3600/3601 with a detection),
+clean human `spc_normal1` GT (n=111, deduped vs HARD far), meters via `spc_poly.json` →
+`build_field_geometry` → `evaluate_recall_metric` (identical to EXP-DIST-08/09/11). Per frame: input =
+the **single highest-score J-peak** (argmax — NO top-12 set, NO association). Maintain a rolling buffer of the
+last `buffsecs·fps` frames' argmax points; target = `np.average(points, weights=arange)` (newest weighted
+most) in **source pixels**; single-pole EMA `current ← ms·current + (1−ms)·target`. Stale drop out of the
+window; `lastBox` carry-forward on detection gaps. **fps = 19.481** (Spencerport container `average_rate`,
+metadata only, no decode) → `buffsecs=3.0 s` ≈ 58 frames. Knobs swept (window `buffsecs`, EMA `movesmooth`) on
+a **DEV half** of the GT only (frames <9712, n=55); the single best config is frozen and re-scored on the held-
+out TEST half (n=56) and on FULL (n=111).
+
+**Frozen config (chosen on DEV, then frozen):** `buffsecs=2.5 s` (≈49 frames), `movesmooth=0.95`. DEV R15
+0.382; the faithful reference default (3.0 s / 0.975) gives DEV 0.291 / FULL 0.279 — i.e. the reference's own
+constants are *not* optimal for our argmax (our argmax is noisier than the reference detector's, so it wants a
+slightly shorter window + lighter EMA). **Sensitivity is benign:** over the 3×3 grid neighbourhood of the
+frozen config, FULL R15 ranges only 0.279–0.351 (spread 0.072) — a broad, flat optimum, not a knife-edge tune.
+An optional faithful **adaptive-gain** term (the reference's `vf`: buffer scatter loosens the EMA) adds a
+little more (FULL R15 0.342 → 0.369).
+
+**COMPARISON TABLE (spc far stream, clean human `spc_normal1` GT, meters, hits/N):**
+
+| selector | R10 | R15 | median_m | hits/N (R15) |
+|---|---|---|---|---|
+| per-frame argmax (top-1) | 0.099 | 0.135 | 25.6 | 15/111 |
+| track_ball (shipped) | 0.135 | 0.153 | 47.3 | 17/111 |
+| perspective-scaled Viterbi (EXP-DIST-11) | 0.189 | 0.216 | 46.5 | 24/111 |
+| **reference dumb pixel-smoother (frozen 2.5 s / 0.95)** | **0.117** | **0.342** | **19.1** | **38/111** |
+| reference dumb pixel-smoother + adaptive gain | 0.189 | 0.369 | 19.6 | 41/111 |
+| AutoCam viewport (reference) | 0.694 | 0.748 | 6.9 | 83/111 |
+
+**DECOMPOSITION (`exp_dist_12_diag.py`) — feed the SAME dumb smoother three inputs (isolates smoother vs detector):**
+
+| input → dumb smoother (frozen) | R10 | R15 | median_m |
+|---|---|---|---|
+| (C) raw argmax, NO smoothing (anchor) | 0.099 | 0.135 | 25.6 |
+| (A) OUR detector top-1 argmax | 0.117 | **0.342** | 19.1 |
+| (B) ORACLE per-frame pick (best top-12 cand), through the SAME smoother | 0.108 | 0.369 | 16.8 |
+| (B′) ORACLE per-frame pick, NO smoothing (= candidate ceiling) | 0.595 | **0.811** | 8.0 |
+
+Detector argmax meters-err to GT: median **25.6 m**, p25 17, p75 33; only **13.5 %** within 15 m.
+
+**KEY READ — BOTH knobs move, but neither reaches AutoCam; the decomposition explains why.**
+1. **The selection ALGORITHM was genuinely hurting us on far.** Replacing the meters-Viterbi + teleport gate
+   with a dumb pixel time-average **more than doubles R15: 0.153 → 0.342** (and beats the EXP-DIST-11
+   perspective-scaled fix 0.216). The Viterbi/teleport machinery was actively *suppressing* recoverable far
+   recall (it traps on a distractor and forbids re-acquiring the ball — EXP-DIST-11). So a chunk of the far
+   collapse was a selection-algorithm artifact, recoverable by simplifying. Median err also drops 47→19 m.
+2. **But the dumb smoother is itself a ~16–19 m-error floor — it CANNOT reach 0.748.** The oracle decomposition
+   is decisive: a **perfect** per-frame selector scores R15 **0.811** with NO smoothing (the candidate
+   ceiling), yet pushing that same perfect selection **through the dumb smoother collapses it to 0.369**. The
+   recency-weighted-average + heavy EMA *lags and averages away* the ball's true far position (it is built for
+   a smooth viewport, not a precise point), so even given perfect detections it lands ~16 m off. Our argmax-fed
+   smoother (0.342) is already near that smoother-imposed ceiling (~0.37–0.41). The smoother is not a path to a
+   precise far point; AutoCam's 0.748 is its **viewport** (camera centre within ~15 m = "ball on screen"), a
+   much looser target than a point estimate, fed by a detector whose far **recall** is far higher than ours
+   (its argmax-err median ≫ better; ours is 25.6 m / 13.5 % in-15 m).
+
+**THE EXPLICIT DECISION — it is BOTH, but the dominant remaining wall is the DETECTOR, not the selector.** The
+dumb smoother did NOT "jump toward 0.748" (it reached 0.342, ~2.2× below) and did NOT merely "stay ~0.15–0.22"
+(it cleanly beat both Viterbi variants). The honest read is two-part: **(a)** the shipped meters-Viterbi/
+teleport selector was over-engineered for far play and a radically simpler pixel-space recency-average roughly
+DOUBLES far recall — so **simplify the shipped tracker on the far band** (ship the dumb pixel-smoother, or at
+minimum drop the teleport gate, behind a far-band flag); but **(b)** that only buys ~0.15→0.34, and the oracle
+proves the wall to 0.748 is **NOT more selection work** — even a perfect selector through this (or any) smoother
+plateaus far below, because our detector's far argmax is only 13.5 % ball-centred (median 25.6 m off). **The
+only path to AutoCam-class far performance is detector far-RECALL** (raise the per-frame argmax/ceiling
+quality), which is exactly what the venue-diversity curve + the new far-label sets target — NOT additional
+selection engineering. Selection simplification is a real, cheap, modest win to bank; detector far-recall is
+the lever that actually closes the gap.
+
+**Near/mid regression check (does the EXP-DIST-11 perspective-scaled fix regress near/mid?) — geometric, cheap;
+empirical A/B deferred (no GPU/decode).** A direct near/mid A/B of perspective-scaled-Viterbi vs shipped
+`track_ball` is **NOT cheaply available**: the only near/mid GT venue (6/15 `heat_0615_normlowconf1`, 84 balls,
+y median 686 — genuinely mid/near) has only the `det0615` stream, which is **stride-20 (not the gap=1 continuity
+the tracker's transition/motion terms require) and carries NO MOG2 motion blobs**. A continuous gap=1
+candidate+motion dump over a near/mid range would need a GPU/decode pass (forbidden — curve owns the GPU) →
+**marked a FOLLOW-UP.** The cheap available evidence is geometric and is reassuring: the fix scales the
+smoothness budget + teleport ceiling by **local meters-per-pixel**, and m/px falls steeply with field depth —
+measured on both venue geometries: FAR ≈ 0.15 m/px, MID ≈ 0.04–0.07, NEAR ≈ 0.01–0.02 (4–15× smaller than far).
+So near/mid the per-candidate scale factor is small (and with EXP-DIST-11's `max(scale,1)` guard, effectively
+unchanged) — the fix does NOT loosen association near/mid, where the far-only "correct candidate looks like an
+impossible teleport" pathology cannot arise (a few px of motion = tenths of a metre, far under any gate). By
+construction the fix is far-band-only and cannot manufacture far-style distractor jumps near/mid; an empirical
+confirmation awaits a continuous near/mid candidate stream.
+
+**BONUS hypothesis (flagged, NOT tested — no GPU inference run):** the reference detector's strong far recall
+may partly depend on its **operating input scale** — it runs the ball detector full-frame at a *specific reduced
+width* (≈3264-wide single inference per the F: archive RE), a different input resolution than OUR detector's.
+Our far argmax centring (13.5 % in-15 m, median 25.6 m) is the binding wall; whether matching that operating
+input scale would raise OUR detector's far argmax is a plausible **detector-side experiment for a future
+session** (it would need GPU inference, so it is only a hypothesis here, not a result).
+
+**Caveats (unchanged from EXP-DIST-08/09/11):** candidate stream is champion-J (the only CONTINUOUS far dump;
+no continuous distill far stream exists without GPU/decode), so this measures the dumb smoother on champion-J's
+far argmax; `spc_normal1` is geometrically far-third GT (this is a far-play head-to-head); meters is the fair
+metric (px-radius flatters/penalises by far-corner geometry). The verdict is robust to the stream choice: the
+gap to 0.748 and the oracle-through-smoother collapse hold on any argmax of this far-recall quality.
+
+**Curve-alive confirmation:** orchestrator 3620/17348 + iter_run 19452/20432 alive before AND after;
+curve.jsonl byte-unchanged (14:59:02, 1384 B, 3 rows N=1/2/4); all analysis ran on CPU from the cached
+candidate stream + container metadata only (no decode, no GPU).
+
+---
+
 ## EXP-DIST-11: WHY the tracker does nothing on far play — the meters-smoothness/teleport prior traps it (2026-06-24)
 
 **Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID
