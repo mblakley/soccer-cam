@@ -4,6 +4,54 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-02: Corrected data-scaling / venue-diversity curve (2026-06-24)
+
+**Status:** corrected curve RE-LAUNCHED and running (server GTX 1060). Prior `curve.jsonl` (N=1..16,
+6/19–6/23) is **INVALID** — see method. Scratch: `G:\ballresearch\distill\` (NOT in repo).
+
+**Hypothesis (carried from the distill plan + the prior "normal-play gap" finding):** the distilled
+detector wins big on far/hard balls but collapses on normal play; the open question is whether the
+normal-play bottleneck is **venue diversity** (more games/venues) vs capacity/quantity. The curve
+trains HeatmapNet (base24, no-aug, fixed 30k-step budget so only DATA DIVERSITY varies) on N = 1,2,4,8,16
+archived AutoCam-distilled games and evals in **meters** on the held-out Spencerport stretch (frames
+7900–11500), split HARD (human far labels) vs NORMAL, vs the AutoCam baseline.
+
+**Method / what was found this session:**
+1. **Verified the *previous* session's polygon fix is real:** `resolve_polygon()` (canonical
+   `gamedata.polygon(gd.resolve(gid))` → v4_fields date+opp → manifest.db) resolves **16/16** archived
+   games (15 via gamedata, 1 via v4_fields). The old fuzzy date+opp resolver matched only ~4 (archive
+   games are named `guzzetta__*`/`flash__*`; polygon dirs are `heat__*`).
+2. **BUT discovered a SECOND, independent bug that invalidated the entire `curve.jsonl`:** the curve
+   rows N=1..16 were produced by an **older `iter_run.py`** (run 6/23 06:44, before the fix finished at
+   6/23 21:24). Its run logs show 12/16 games hit `"NO polygon … skip"` and **N=16 actually trained on
+   only 4 games** (`train roots (4 games)`, 44 segment-games, 20,303 labels). So every "data-scaling"
+   point trained on ~4 games regardless of N — the curve was flat **by construction**, not because
+   venue diversity doesn't help. `"NO polygon … skip"` does not even exist in the current code.
+3. **DRYRUN of the CURRENT `iter_run.py` on all 16 games → resolves 16/16, 140 segment-games, 52,367
+   labels** (+992 human overrides, 94,215 hard-negative false-fires). Confirmed the fix end-to-end
+   before relaunch.
+4. **Found the NORMAL-split eval is confounded** (the headline metric was partly an artifact): the
+   curve's NORMAL GT = AutoCam-detector dets conf≥0.40 corroborated only by viewport-x within 500px —
+   **no Y constraint, no on-field test.** Of 283 normal GT balls, **128 (45%) are off-field and/or fall
+   outside the eroded eval band-mask** (cluster at the far-right sideline corner, x 6826–7430). So the
+   detector is structurally unable to fire on ~45% of "normal" targets → ceiling capped at ~0.55,
+   independent of model quality. HARD (human) GT is clean (92% in-mask) and trustworthy.
+
+**Result:** Prior curve quarantined to `curve.jsonl.buggy4games_20260624_081941`. Corrected curve
+relaunched 2026-06-24 08:19 via the detached orchestrator; N=1 confirmed training (GPU 27–72% util,
+loss 0.012 @ step 2k). HARD numbers from the buggy curve already show the **real, trustworthy** signal:
+detector R15 ≈ 0.39 vs **AutoCam 0.11** on hard/far balls — the distill beats AutoCam there. NORMAL
+numbers from the buggy curve are NOT interpretable (4-game training + confounded GT).
+
+**Conclusion:** The venue-diversity question is **still open** — it was never honestly tested (curve
+trained on 4 games). The corrected 16-game curve will answer it. Separately, the NORMAL eval must use a
+**clean on-field + in-band GT** before its numbers mean anything (a CPU re-eval harness, `clean_eval.py`,
+quantifies the artifact: raw_normal vs clean_normal=155). Two distinct bugs (fuzzy resolver; stale
+binary) silently gutted the curve — re-verify game-count from the run log (`train roots (N games)`),
+never trust the curve row alone.
+
+---
+
 ## EXP-008: Field-boundary distillation pipeline (2026-06-11)
 
 **Hypothesis:** A small in-house CNN can reproduce the teacher's 10-point field polygon closely enough — IoU ≥ 0.90 vs teacher, gate agreement ≥ 90%, per-point error ≤ ~8px in 768×384 — to replace it as a drop-in ONNX.

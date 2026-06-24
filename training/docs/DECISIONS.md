@@ -4,6 +4,46 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-24: Invalid data-scaling curve is quarantined + regenerated, not trusted
+
+**Context:** The distill data-scaling curve (`G:\ballresearch\distill\curve.jsonl`, N=1..16) was produced
+by a stale `iter_run.py` that silently trained on only ~4 games at every N (12/16 games hit a now-deleted
+`"NO polygon … skip"` path). The metric was flat — but because of the bug, not because venue diversity
+fails to help. A previous session believed the polygon fix had de-risked the curve; the fix was real but
+landed *after* the curve ran.
+
+**Decision:** Treat the curve row as untrustworthy on its own. Concretely:
+- **Quarantine, never delete:** the bad curve is preserved as `curve.jsonl.buggy4games_<ts>` (history),
+  and the curve regenerated from N=1 with the fixed binary.
+- **Verify game-count from the run log, not the curve row:** every `iter_N{N}.log` prints
+  `train roots (K games)` — `K` must equal the resolved game count, else the point is invalid. The curve
+  row's `games` list is the *requested* set, not what trained.
+- **One orchestrator owns the curve** (single GPU job; it writes a `curve_gpu.flag` so the variant filler
+  yields). Re-running with the fixed code is cheap relative to trusting a silently-broken result.
+
+**Why:** This is the second time a silent data-selection bug (first the fuzzy resolver, now a stale
+binary) gutted the curve. The lesson (per "verify before reporting", "verify tracks before videos"):
+a green-looking metric file is not evidence the intended data trained — confirm the denominator.
+
+## 2026-06-24: NORMAL-play eval requires a clean on-field + in-band ground truth
+
+**Context:** The curve's NORMAL split scored the detector against AutoCam-detector dets (conf≥0.40)
+corroborated only by viewport-x within 500 px — with **no Y constraint and no field-polygon test**.
+45% of that "normal" GT lands off-field or outside the eroded eval band-mask (far-sideline corner),
+where the detector structurally cannot fire. That caps the NORMAL ceiling well below 1.0 regardless of
+model quality, making the "normal-play collapse" partly an eval artifact.
+
+**Decision:** The honest NORMAL metric filters GT to **on-field (inside the raw field polygon, ≤40 px
+margin) AND inside the eroded eval band-mask** — i.e. only frames the detector can win. HARD (human far
+labels) stays as-is (already 92% in-mask). A standalone `clean_eval.py` (CPU-only, reuses the
+`spc_eval_cache` buffers; lives in `G:\ballresearch` scratch, not the repo) reports raw_normal vs
+clean_normal side by side so the artifact magnitude stays visible. AutoCam-as-GT in NORMAL remains a
+known circularity to audit (human-sample a few normal frames) before any "matches AutoCam" claim.
+
+**Why:** Comparing AutoCam (0.96 normal R15) to a detector scored on targets it's masked out of is not a
+fair head-to-head. Measure each side only where the task is winnable, and keep the off-field/masked count
+in the report.
+
 ## 2026-06-15: v4 (perspective-normalized, warped) added ALONGSIDE v3 (tile) — additive, not a rename
 
 **Context:** The perspective-normalized full-frame detector was drafted on this branch under the

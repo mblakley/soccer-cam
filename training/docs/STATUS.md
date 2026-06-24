@@ -1,8 +1,53 @@
 # Current Status
 
-*Last updated: 2026-06-16*
+*Last updated: 2026-06-24*
 
-## Active focus: v4 ball detector (perspective-normalized, full-frame, no tiles)
+## Active focus: AutoCam-distillation data-scaling curve (RE-RUNNING — prior curve was invalid)
+
+Branch: `feat/autocam-distill-detector` (worktree `../soccer-cam-autocam-distill`). All curve/distill
+runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: no RE/one-off scripts in
+the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
+focus below is still the architecture — the distill curve is its data-scaling study.
+
+### 2026-06-24 — Curve was silently broken; FIXED and re-launched. GPU running. (the headline)
+- **The data-scaling / venue-diversity curve has NOT honestly run yet.** The prior `curve.jsonl`
+  (N=1,2,4,5,8,16, dated 6/19–6/23) is **INVALID**: it was produced by a stale `iter_run.py` that
+  silently trained on **only ~4 games at every N** (12/16 games hit a now-deleted `"NO polygon … skip"`
+  path; N=16's own log says `train roots (4 games)`). The curve was flat *by construction*. Quarantined
+  to `curve.jsonl.buggy4games_20260624_081941`. See EXPERIMENTS.md EXP-DIST-02 + DECISIONS 2026-06-24.
+- **Polygon fix VERIFIED (this session):** the current `iter_run.py`'s `resolve_polygon()` (canonical
+  `gamedata.polygon(gd.resolve(gid))` → v4_fields date+opp → manifest.db) resolves **16/16** archived
+  games. A DRYRUN of the current code on all 16 → **140 segment-games / 52,367 labels** (vs the buggy
+  44 / 20,303). The polygon fix the previous session made is real; it just landed *after* the curve ran.
+- **CORRECTED CURVE RE-LAUNCHED + CONFIRMED TRAINING** (2026-06-24 08:19): detached orchestrator
+  (`G:\ballresearch\distill\orchestrator.py`, console log `orchestrator.console.log`) advancing N=1,2,4,
+  8,16. N=1 verified: GPU 27–72% util, 1.7 GB VRAM, loss 0.012 @ step 2k. It reuses 4 cached crop dirs
+  and decodes the other 12 games (~35 min/game) → a multi-hour autonomous job. **GPU was idle (4%) and
+  AutoCam was NOT running** when launched — no contention; 10 GB/16 GB RAM free.
+- **Trustworthy result so far (HARD/far split, human GT):** detector R15 ≈ **0.39 vs AutoCam 0.11** —
+  the distill **beats AutoCam on hard/far balls** (this held across the buggy curve too; HARD GT is clean,
+  92% in eval mask). The NORMAL collapse number from the old curve is **not interpretable** (4-game train
+  + confounded GT).
+- **NORMAL eval is confounded (must fix before believing any normal number):** the curve's NORMAL GT =
+  AutoCam dets conf≥0.40 + viewport-x within 500 px, with **no Y / no on-field test** → **45% (128/283)
+  off-field or outside the eroded eval band-mask**, capping the ceiling ~0.55 regardless of the model.
+  A CPU-only `clean_eval.py` (server scratch) re-scores with an on-field + in-band NORMAL GT
+  (clean_normal = 155) to separate artifact from real weakness.
+
+### What to check next (for the next session / Mark)
+1. **Curve progress:** `Get-Content G:\ballresearch\distill\curve.jsonl` (rows append as each N finishes;
+   N=2/4/8/16 build crops first so they take longer). Confirm each `iter_N{N}.log` shows
+   `train roots (N games)` = the full count (NOT 4) — that's the bug's signature.
+2. **Orchestrator alive:** `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` | grep
+   `orchestrator.py`. If dead, relaunch detached (see orchestrator.py header).
+3. **Then answer the venue-diversity question honestly** (does NORMAL R15 rise with N on the *corrected*
+   curve?) using `clean_eval.py`'s clean_normal split, and update EXP-DIST-02.
+4. **GPU coordination:** the box is shared with AutoCam (DirectML/iGPU) + the pipeline. Curve uses CUDA;
+   verify headroom before adding fleet jobs (16 GB RAM box has thrashed before).
+
+---
+
+## Prior focus: v4 ball detector (perspective-normalized, full-frame, no tiles)
 
 **v4 is ADDITIVE — it does not replace v3.** The tile-based **v3** detector lineage
 (`train_v3.py`, `training/train.py` + its `V3_*` config, the shared `manifest.py` knobs, and
