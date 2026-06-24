@@ -9,6 +9,38 @@ runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: n
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
 
+### 2026-06-24 — 6/15 Irondequoit field polygon wired into the v4 field editor for human tightening
+- **Goal:** let Mark drag-tighten the auto-detected 6/15 field polygon instead of redrawing it.
+- **Created v4-field-store entry** `D:\training_data\v4_fields\heat__2026.06.15_vs_Irondequoit_away\`
+  (3 files, matching the existing siblings' schema exactly):
+  - `frame.jpg` — full-res 7680x2160 active-play frame (frame ~50000, t=2523.4s, mid first-half),
+    extracted CPU-only via **PyAV** (no GPU; curve untouched).
+  - `polygon.json` — the auto polygon pre-loaded as the draggable starting shape (10 pts), copied from
+    scratch `G:\ballresearch\distill\det0615\field_polygon_0615.json`, **source kept
+    `auto_field_detection_unverified`** so Mark's first Save flips it to `human_field_edit`.
+  - `meta.json` — `{game_id, src_w:7680, src_h:2160, canonical_paths:[the scratch polygon JSON]}`.
+- **Editor (the SAME annotate.html field editor, v4 branch on port 8650, served live by uvicorn from
+  `G:\v4bench\wt`):** the server's `_v4_store_by_game()` resolves a game by `meta.json["game_id"]`
+  (NOT dir name) and the GET/POST `/api/field-boundary/{game}` endpoints branch to this store when the id
+  matches. **No restart needed** — the resolver re-scans the dir on every request; verified the new game
+  appears live.
+- **Ready-to-click URL:**
+  `http://trainer.goat-rattlesnake.ts.net:8650/static/annotate.html#field/heat__2026.06.15_vs_Irondequoit_away`
+  (the Tailscale **root `https://...` maps to port 8642**, the OLD checkout WITHOUT v4 support — must use
+  **`:8650` over http**, the v4 editor's direct tailnet bind).
+- **Verified end-to-end (live, read-only):** list shows 6/15; GET polygon → 200, 10 pts, src_w/h 7680/2160,
+  endpoints match the source polygon; panoramic frame → 200 image/jpeg (6.70 MB full-res frame); browser
+  render shows the frame + green polygon overlay with draggable corner handles (polygon is geometrically
+  loose on far/right edges — the intended tightening target). All protected jobs still alive afterward.
+- **PROPAGATION after Mark saves (automatic + manual):** the v4 POST handler writes the tightened polygon
+  to BOTH `polygon.json` (source→`human_field_edit`) AND every `meta.canonical_paths` entry — so the
+  scratch `det0615\field_polygon_0615.json` is updated **automatically on Save** (that's why it's the
+  canonical path). The far-label builders (`build_0615_set*.py`) read that scratch file at build time, so a
+  rebuild picks it up with no extra sync. **Still manual:** if 6/15 has already archived to
+  `F:\archive\ball_distill\guzzetta__2026.06.15_vs_Irondequoit\` with a baked-in field polygon, re-copy the
+  tightened polygon there too (the curve's crop builder reads the archived copy). Until then, nothing else
+  to sync — the v4_fields store is itself on the resolver path.
+
 ### 2026-06-24 — 6/15 Irondequoit active-play windows persisted + wired into the active-play filter (EXP-DIST-04)
 - **Persisted Mark's exact active-play windows** for `heat__2026.06.15_vs_Irondequoit_away` in the EXISTING
   canonical store **`G:\ballresearch\play_windows.json`** (the 2026 active-play store consumed by
