@@ -23,6 +23,27 @@ from .video_processor import VideoProcessor
 
 logger = logging.getLogger(__name__)
 
+# Group statuses that are past the download phase. Once a group reaches any of
+# these, StateAuditor must never re-queue its files for download. A segment the
+# camera finalized under a new name (e.g. an in-progress "..._000000_..."
+# listing the camera later re-lists as "..._<endtime>_...") lingers in the
+# group's state at a non-terminal file status and 404s on every fetch.
+# Re-queuing it on each audit spins forever AND keeps the download queue
+# non-idle, which starves the camera poller's reconcile pass — exactly what
+# blocked the 2026-06-15 game from being re-ingested (a stale 2026-06-23
+# "_000000_" zombie in a not_a_game group monopolized the queue). Mirrors
+# DownloadProcessor.process_item's skip_statuses, plus not_a_game.
+_DOWNLOAD_DONE_STATUSES = frozenset(
+    {
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        "not_a_game",
+    }
+)
+
 
 class StateAuditor(PollingProcessor):
     """
@@ -182,25 +203,33 @@ class StateAuditor(PollingProcessor):
                 )
                 await dir_state.update_group_status("pipeline_complete")
 
-            # Audit individual files
-            for file_obj in dir_state.files.values():
-                if file_obj.skip:
-                    continue
+            # Audit individual files. Only (re-)queue downloads while the group
+            # is still in the download phase; a group past download
+            # (combined/.../not_a_game) must never have its files re-fetched
+            # (see _DOWNLOAD_DONE_STATUSES for why — the 2026-06-15 starvation).
+            if dir_state.status not in _DOWNLOAD_DONE_STATUSES:
+                for file_obj in dir_state.files.values():
+                    if file_obj.skip:
+                        continue
 
-                # Queue download tasks for pending/failed/interrupted downloads.
-                # "downloading" status means the app crashed mid-download, so
-                # treat it the same as a failure and re-queue.
-                if file_obj.status in ["pending", "download_failed", "downloading"]:
-                    if self.download_processor:
-                        recording_file = RecordingFile(
-                            start_time=file_obj.start_time,
-                            end_time=file_obj.end_time,
-                            file_path=file_obj.file_path,
-                            metadata=file_obj.metadata,
-                            status=file_obj.status,
-                            skip=file_obj.skip,
-                        )
-                        await self.download_processor.add_work(recording_file)
+                    # Queue download tasks for pending/failed/interrupted
+                    # downloads. "downloading" status means the app crashed
+                    # mid-download, so treat it as a failure and re-queue.
+                    if file_obj.status in [
+                        "pending",
+                        "download_failed",
+                        "downloading",
+                    ]:
+                        if self.download_processor:
+                            recording_file = RecordingFile(
+                                start_time=file_obj.start_time,
+                                end_time=file_obj.end_time,
+                                file_path=file_obj.file_path,
+                                metadata=file_obj.metadata,
+                                status=file_obj.status,
+                                skip=file_obj.skip,
+                            )
+                            await self.download_processor.add_work(recording_file)
 
             # Check if ready for combining
             if dir_state.is_ready_for_combining():

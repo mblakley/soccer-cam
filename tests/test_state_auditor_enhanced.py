@@ -768,5 +768,103 @@ class TestStateAuditorPolling:
         auditor.match_info_service.shutdown.assert_called_once()
 
 
+class TestStateAuditorTerminalGroupDownloads:
+    """A group past the download phase must never have its files re-queued for
+    download. Regression guard for the 2026-06-15 reconcile starvation: a stale
+    ``_000000_`` segment (the camera's in-progress listing, later re-listed
+    under its finalized name) lingered at status ``downloading`` inside a
+    ``not_a_game`` group; StateAuditor re-queued it every audit, it 404'd
+    forever, and the never-idle download queue starved the camera poller's
+    reconcile pass so the real 6/15 game was never re-ingested.
+    """
+
+    def _make_state(self, status, file_status):
+        file_obj = Mock()
+        file_obj.skip = False
+        file_obj.status = file_status
+        file_obj.start_time = None
+        file_obj.end_time = None
+        file_obj.file_path = "RecM09_DST20260623_204345_000000_x.mp4"
+        file_obj.metadata = {"size": 1, "path": "/mnt/sda/x.mp4"}
+
+        state = Mock()
+        state.status = status
+        state.files = {file_obj.file_path: file_obj}
+        state.is_ready_for_combining.return_value = False
+        return state
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @patch("video_grouper.task_processors.state_auditor.DirectoryState")
+    @pytest.mark.asyncio
+    async def test_not_a_game_group_does_not_requeue_downloads(
+        self,
+        mock_dir_state,
+        mock_ntfy,
+        mock_playmetrics,
+        mock_teamsnap,
+        mock_config,
+        tmp_path,
+    ):
+        mock_ntfy.return_value.enabled = True
+        mock_ntfy.return_value.initialize = AsyncMock()
+
+        group_dir = tmp_path / "2026.06.23-20.43.45"
+        group_dir.mkdir()
+        (group_dir / "state.json").write_text('{"status": "not_a_game"}')
+
+        mock_dir_state.return_value = self._make_state(
+            status="not_a_game", file_status="downloading"
+        )
+
+        download_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path), mock_config, download_processor, AsyncMock()
+        )
+        auditor.cleanup_service = AsyncMock()
+
+        await auditor._audit_directory(str(group_dir))
+
+        # The zombie file must NOT be re-queued: its group is terminal.
+        download_processor.add_work.assert_not_called()
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @patch("video_grouper.task_processors.state_auditor.DirectoryState")
+    @pytest.mark.asyncio
+    async def test_active_group_requeues_pending_downloads(
+        self,
+        mock_dir_state,
+        mock_ntfy,
+        mock_playmetrics,
+        mock_teamsnap,
+        mock_config,
+        tmp_path,
+    ):
+        mock_ntfy.return_value.enabled = True
+        mock_ntfy.return_value.initialize = AsyncMock()
+
+        group_dir = tmp_path / "2026.06.15-18.27.13"
+        group_dir.mkdir()
+        (group_dir / "state.json").write_text('{"status": "pending"}')
+
+        mock_dir_state.return_value = self._make_state(
+            status="pending", file_status="pending"
+        )
+
+        download_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path), mock_config, download_processor, AsyncMock()
+        )
+        auditor.cleanup_service = AsyncMock()
+
+        await auditor._audit_directory(str(group_dir))
+
+        # A group still in the download phase keeps re-queuing its pending files.
+        download_processor.add_work.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
