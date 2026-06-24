@@ -205,6 +205,52 @@ class DirectoryState:
         """Check if a file is already in the directory state."""
         return file_path in self.files
 
+    # A file within this fraction of the camera-reported size counts as
+    # complete. The HTTP fast path is byte-identical to the camera file; the
+    # Baichuan path remuxes, shifting the size slightly — 1% absorbs that while
+    # still catching truncated downloads (a partial first segment is far smaller
+    # than its real ~780MB).
+    _SIZE_TOLERANCE = 0.01
+
+    def expected_size(self, file_obj: RecordingFile) -> int | None:
+        """Camera-reported recorded size for a file, if known (Search metadata)."""
+        try:
+            size = (file_obj.metadata or {}).get("size")
+            return int(size) if size else None
+        except (TypeError, ValueError):
+            return None
+
+    def is_file_fully_downloaded(self, file_obj: RecordingFile) -> bool:
+        """A file is fully downloaded only if its status is 'downloaded' AND the
+        bytes on disk match the camera-reported size (within tolerance).
+
+        ``download_file`` can report success after a short read (it received all
+        the bytes the server offered — e.g. the boot-time first-segment race
+        serves a truncated file), so status alone is not proof of a complete
+        file. If the camera never reported a size, fall back to trusting status.
+        """
+        if file_obj.status != "downloaded":
+            return False
+        expected = self.expected_size(file_obj)
+        if not expected:
+            return True
+        try:
+            actual = os.path.getsize(file_obj.file_path)
+        except OSError:
+            return False
+        return actual > 0 and abs(actual - expected) / expected < self._SIZE_TOLERANCE
+
+    def get_incomplete_downloads(self) -> list[RecordingFile]:
+        """Non-skipped files marked 'downloaded' whose on-disk size does not match
+        the camera-reported size — truncated/partial, must be re-downloaded."""
+        return [
+            f
+            for f in self.files.values()
+            if not f.skip
+            and f.status == "downloaded"
+            and not self.is_file_fully_downloaded(f)
+        ]
+
     def is_ready_for_combining(self) -> bool:
         """Check if all non-skipped files are downloaded and ready for combining."""
         if not self.files:
@@ -217,8 +263,10 @@ class DirectoryState:
         if not files_to_consider:
             return False
 
-        # All of the remaining files must be in the 'downloaded' state.
-        return all(f.status == "downloaded" for f in files_to_consider)
+        # Every remaining file must be FULLY downloaded — status 'downloaded'
+        # AND its bytes on disk match the camera-reported size. A truncated
+        # file must never reach the combine step.
+        return all(self.is_file_fully_downloaded(f) for f in files_to_consider)
 
     async def mark_file_as_skipped(self, file_path: str) -> None:
         """Marks a file to be skipped in future processing, without changing its status."""
