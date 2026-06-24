@@ -9,6 +9,7 @@ from video_grouper.cameras.base import Camera
 from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
+from video_grouper.utils.locking import FileLock
 from video_grouper.utils.paths import get_camera_state_path, get_home_cleanup_state_path
 
 from .base_polling_processor import PollingProcessor
@@ -26,6 +27,14 @@ GROUP_GAP_SECONDS = 5
 # A recording shorter than this is only meaningful as a runt when it also
 # has no neighbors — see _identify_runt_recordings.
 MIN_SEGMENT_SECONDS = 5
+# How far past its start a still-open (never-closed) "connected" session is
+# allowed to extend when classifying home footage in the skip block below.
+# A trailing `connected` event with no matching `disconnected` used to be
+# treated as open-ended (frame_end or now), so one stale connect event
+# blanketed every recording made since as "recorded at home" and the poller
+# skipped real game footage forever — the 2026-06-15 loss. Bound the open
+# session to this horizon past its start instead of letting it run to now.
+OPEN_CONNECTED_SESSION_HORIZON_HOURS = 12
 
 
 def create_directory(path):
@@ -206,6 +215,17 @@ class CameraPoller(PollingProcessor):
         self.ntfy_service = None
         self.ttt_reporter = None
         self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
+        # Reconciliation pass: a full re-scan of a much larger window than the
+        # incremental sync, run when the download queue is idle. The
+        # incremental sync only moves forward (HWM .. now, clamped to
+        # max_lookback_hours), so any game that ages past that window before
+        # it was fully captured is never re-queried. The reconcile pass
+        # re-discovers anything still on the camera that is missing or
+        # incomplete on disk, regardless of the HWM. Tracked so we don't issue
+        # a wide camera search on every single poll while the queue happens to
+        # be idle.
+        self._last_reconcile_time: datetime | None = None
+        self._reconcile_min_interval_seconds = 3600
 
     async def discover_work(self) -> None:
         """
@@ -233,11 +253,45 @@ class CameraPoller(PollingProcessor):
 
             await self._sync_files_from_camera()
 
+            # Self-healing reconciliation. When the download queue is idle,
+            # re-scan a much larger window than the incremental sync and
+            # re-queue anything still on the camera that is missing or
+            # incomplete on disk — regardless of the high-water mark. This is
+            # the safety net for games that aged past max_lookback_hours
+            # before they were fully captured (the 2026-06-15 loss).
+            if self._should_reconcile():
+                await self._reconcile_files_from_camera()
+
             # Check if all downloads are complete and notify to unplug
             await self._check_downloads_complete()
 
         except Exception as e:
             logger.error(f"CAMERA_POLLER: Error during camera polling: {e}")
+
+    def _should_reconcile(self) -> bool:
+        """Whether to run a full reconcile pass on this poll.
+
+        Gate: the download queue must be idle (nothing queued, nothing in
+        progress) so we don't fight the incremental sync for camera bandwidth,
+        AND at least ``_reconcile_min_interval_seconds`` must have elapsed
+        since the last reconcile so an idle queue doesn't trigger a wide
+        camera search on every single poll.
+        """
+        dp = self.download_processor
+        if dp is None:
+            return False
+        try:
+            if dp.get_queue_size() > 0:
+                return False
+            if getattr(dp, "_in_progress_item", None) is not None:
+                return False
+        except Exception:
+            return False
+
+        if self._last_reconcile_time is None:
+            return True
+        elapsed = (datetime.now() - self._last_reconcile_time).total_seconds()
+        return elapsed >= self._reconcile_min_interval_seconds
 
     async def _sync_files_from_camera(self) -> None:
         """Sync files from camera and group them."""
@@ -369,7 +423,20 @@ class CameraPoller(PollingProcessor):
                     file_end_utc = file_end_local.astimezone(pytz.utc)
 
                     for frame_start, frame_end in connected_timeframes:
-                        frame_end_or_now = frame_end or datetime.now(pytz.utc)
+                        # Bound an open-ended (never-closed) connected session
+                        # to a short horizon past its start rather than letting
+                        # it run to "now" and blanket every later recording as
+                        # home footage. A session still within its horizon is
+                        # genuinely current, so it extends to now; a stale one
+                        # (horizon already past) closes at its horizon.
+                        if frame_end is not None:
+                            frame_end_or_now = frame_end
+                        else:
+                            now_utc = datetime.now(pytz.utc)
+                            horizon = frame_start + timedelta(
+                                hours=OPEN_CONNECTED_SESSION_HORIZON_HOURS
+                            )
+                            frame_end_or_now = now_utc if horizon > now_utc else horizon
 
                         # Check for overlap: if file starts before frame ends AND file ends after frame starts
                         logger.info(
@@ -506,14 +573,186 @@ class CameraPoller(PollingProcessor):
                 total_seen,
             )
 
+    async def _file_needs_download(
+        self, local_path: str, dir_state: DirectoryState, expected_size: int | None
+    ) -> bool:
+        """Decide whether a reconcile-discovered file must be (re)queued.
+
+        Returns True when the on-disk reality does NOT match a completed
+        download, REGARDLESS of whether the file is already known in state.
+        Treating "known in state" as "done" is exactly the bug that lost the
+        2026-06-15 game — a file can be in state as ``pending``/
+        ``download_failed`` (or its bytes can be missing/short) yet never get
+        re-queued. We check the actual disk instead:
+
+          - the local file is missing -> needs download
+          - the local file is present but its size doesn't match the
+            camera-reported size (within 1%, to tolerate remux container
+            framing differences) -> needs download
+          - the file's recorded state is not a terminal "have the bytes"
+            state (downloaded/combined/trimmed/complete/...) -> needs download
+        """
+        if not os.path.exists(local_path):
+            return True
+
+        if expected_size and expected_size > 0:
+            try:
+                actual_size = os.path.getsize(local_path)
+            except OSError:
+                actual_size = 0
+            if actual_size <= 0:
+                return True
+            if abs(actual_size - expected_size) / expected_size >= 0.01:
+                return True
+
+        done_statuses = {
+            "downloaded",
+            "combined",
+            "trimmed",
+            "ball_tracking_complete",
+            "pipeline_complete",
+            "complete",
+            "skipped",
+        }
+        existing = dir_state.get_file_by_path(local_path)
+        if existing is not None and existing.status not in done_statuses:
+            return True
+
+        return False
+
+    async def _reconcile_files_from_camera(self) -> None:
+        """Full reconcile pass: re-queue anything on the camera missing on disk.
+
+        Unlike the incremental sync (which only queries a forward-moving
+        window and trusts the high-water mark + ``is_file_in_state``), this
+        walks a much larger window and decides purely on on-disk
+        completeness. It never advances the HWM. Self-healing: a game that
+        aged past ``max_lookback_hours`` before it was fully downloaded gets
+        rediscovered here.
+        """
+        self._last_reconcile_time = datetime.now()
+
+        reconcile_days = getattr(self.config.app, "reconcile_lookback_days", 14)
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=reconcile_days)
+
+        logger.info(
+            "CAMERA_POLLER: Reconcile pass scanning %s to %s (%d days)",
+            start_time,
+            end_time,
+            reconcile_days,
+        )
+
+        files = await self.camera.get_file_list(
+            start_time=start_time, end_time=end_time
+        )
+        if not files:
+            logger.debug("CAMERA_POLLER: Reconcile found no files on the camera.")
+            return
+
+        existing_dirs = [
+            os.path.join(self.storage_path, d)
+            for d in os.listdir(self.storage_path)
+            if os.path.isdir(os.path.join(self.storage_path, d))
+        ]
+
+        # Reuse the runt filter so the reconcile pass doesn't re-queue lone
+        # startup stubs the incremental sync already (correctly) drops.
+        runt_paths = _identify_runt_recordings(files, existing_dirs)
+
+        requeued = 0
+        for file_info in files:
+            try:
+                if file_info["path"] in runt_paths:
+                    continue
+
+                file_start_time, file_end_time = _parse_recording_times(file_info)
+                if file_start_time is None:
+                    continue
+                if file_end_time is None or file_end_time <= file_start_time:
+                    file_end_time = file_start_time
+
+                filename = os.path.basename(file_info["path"])
+                group_dir = find_group_directory(
+                    file_start_time, self.storage_path, existing_dirs
+                )
+                if group_dir not in existing_dirs:
+                    existing_dirs.append(group_dir)
+                local_path = os.path.join(group_dir, filename)
+
+                # Prefer the camera-reported size from search metadata; fall
+                # back to an explicit size probe so a short/partial local file
+                # is detected even when the search result omitted size.
+                expected_size = file_info.get("size")
+                if not expected_size:
+                    try:
+                        expected_size = await self.camera.get_file_size(
+                            file_info["path"]
+                        )
+                    except Exception:
+                        expected_size = None
+
+                dir_state = DirectoryState(group_dir)
+                if not await self._file_needs_download(
+                    local_path, dir_state, expected_size
+                ):
+                    continue
+
+                file_info["camera_name"] = self.camera.name
+                file_info["camera_type"] = self.camera.config.type
+                if expected_size:
+                    file_info["size"] = expected_size
+
+                recording_file = RecordingFile(
+                    start_time=file_start_time,
+                    end_time=file_end_time,
+                    file_path=local_path,
+                    metadata=file_info,
+                )
+
+                existing_file_obj = dir_state.get_file_by_path(local_path)
+                if existing_file_obj:
+                    recording_file.skip = existing_file_obj.skip
+
+                await dir_state.add_file(local_path, recording_file)
+
+                if not recording_file.skip and self.download_processor:
+                    await self.download_processor.add_work(recording_file)
+                    requeued += 1
+                    logger.info(
+                        "CAMERA_POLLER: Reconcile re-queued %s (missing/incomplete "
+                        "on disk)",
+                        filename,
+                    )
+            except Exception as e:
+                logger.error(
+                    "CAMERA_POLLER: Reconcile error on file %s: %s", file_info, e
+                )
+
+        logger.info(
+            "CAMERA_POLLER: Reconcile pass complete -- %d file(s) re-queued of "
+            "%d scanned.",
+            requeued,
+            len(files),
+        )
+
     async def _get_latest_processed_time(self) -> datetime | None:
-        """Get the timestamp of the last processed video file for this camera."""
+        """Get the timestamp of the last processed video file for this camera.
+
+        Reads camera_state.json under the same FileLock the writers use, so it
+        can never observe a half-written/truncated file. Writers now write
+        atomically (temp + os.replace), so even a brief lock contention can't
+        surface a partial document. Returning None here resets the HWM to the
+        max_lookback window, which is exactly how the 2026-06-15 game got lost,
+        so we read defensively.
+        """
         state_path = get_camera_state_path(self.storage_path)
         if not os.path.exists(state_path):
             return None
         try:
-            with open(state_path) as f:
-                all_state = json.load(f)
+            with FileLock(state_path):
+                with open(state_path) as f:
+                    all_state = json.load(f)
             cam_state = all_state.get(self.camera.name, {})
             timestamp_str = cam_state.get("latest_video_time")
             if not timestamp_str:
@@ -696,17 +935,33 @@ class CameraPoller(PollingProcessor):
             self.ntfy_service.unregister_response_handler("keep home recordings")
 
     async def _update_latest_processed_time(self, timestamp: datetime):
-        """Update the high-water mark for this camera in camera_state.json."""
+        """Update the high-water mark for this camera in camera_state.json.
+
+        Atomic, read-merge write under FileLock. ReolinkCamera._save_state
+        writes connection_events/is_connected into the SAME file from a
+        different code path; a plain truncate-then-write here could race that
+        writer (or the reader) and leave camera_state.json empty/half-written,
+        which resets the HWM and silently re-downloads or drops files. Read
+        the current state under the lock, merge our field, write to a temp
+        file, then os.replace so the on-disk file is always complete.
+        """
         try:
             state_path = get_camera_state_path(self.storage_path)
-            all_state = {}
-            if os.path.exists(state_path):
-                with open(state_path) as f:
-                    all_state = json.load(f)
-            cam_state = all_state.setdefault(self.camera.name, {})
-            cam_state["latest_video_time"] = timestamp.strftime(default_date_format)
-            with open(state_path, "w") as f:
-                json.dump(all_state, f, indent=4)
+            os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+            with FileLock(state_path):
+                all_state = {}
+                if os.path.exists(state_path):
+                    try:
+                        with open(state_path) as f:
+                            all_state = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        all_state = {}
+                cam_state = all_state.setdefault(self.camera.name, {})
+                cam_state["latest_video_time"] = timestamp.strftime(default_date_format)
+                temp_path = state_path + ".tmp"
+                with open(temp_path, "w") as f:
+                    json.dump(all_state, f, indent=4)
+                os.replace(temp_path, state_path)
             logger.debug(
                 f"CAMERA_POLLER: Updated latest processed time to: {timestamp}"
             )
