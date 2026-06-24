@@ -3,7 +3,7 @@
 import logging
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -81,6 +81,7 @@ def mock_camera():
     camera = Mock()
     camera.check_availability = AsyncMock(return_value=True)
     camera.get_file_list = AsyncMock(return_value=[])
+    camera.get_file_size = AsyncMock(return_value=0)
     camera.get_connected_timeframes = Mock(return_value=[])
     camera.download_file = AsyncMock(return_value=True)
     camera.stop_recording = AsyncMock(return_value=True)
@@ -90,6 +91,7 @@ def mock_camera():
     camera.supports_file_deletion = True
     camera.is_connected = True
     camera.close = AsyncMock()
+    camera.name = "default"
     cam_config = Mock()
     cam_config.type = "dahua"
     cam_config.name = "default"
@@ -770,17 +772,26 @@ class TestUnplugNotification:
         """Notification sent when camera connected, no new files, download queue empty."""
         mock_config.ntfy.enabled = True
 
-        # Simulate: first poll finds files, second poll finds none
-        mock_camera.get_file_list.side_effect = [
+        # Simulate: first poll finds files, second poll finds none. The first
+        # poll's queue is idle, so the reconcile pass also queries the camera
+        # (returns []); the second poll's reconcile is rate-limited, so its
+        # sync needs one more []. Use a function so any extra call returns [].
+        _responses = iter(
             [
-                {
-                    "path": "/test1.dav",
-                    "startTime": "2023-01-01 10:00:00",
-                    "endTime": "2023-01-01 10:05:00",
-                }
-            ],
-            [],
-        ]
+                [
+                    {
+                        "path": "/test1.dav",
+                        "startTime": "2023-01-01 10:00:00",
+                        "endTime": "2023-01-01 10:05:00",
+                    }
+                ],
+            ]
+        )
+
+        async def _get_file_list(*_a, **_k):
+            return next(_responses, [])
+
+        mock_camera.get_file_list.side_effect = _get_file_list
         mock_download_processor = Mock()
         mock_download_processor.get_queue_size = Mock(return_value=0)
         mock_download_processor._in_progress_item = None
@@ -1041,3 +1052,383 @@ class TestRuntDetection:
             return_value="/storage/2026.05.28-10.00.00",
         ):
             assert _identify_runt_recordings(files, ["/storage/x"]) == set()
+
+
+def _idle_download_processor():
+    """A download processor mock that reports an idle queue (reconcile fires)."""
+    dp = Mock()
+    dp.add_work = AsyncMock()
+    dp.get_queue_size = Mock(return_value=0)
+    dp._in_progress_item = None
+    return dp
+
+
+class TestReconciliationPass:
+    """The reconcile pass re-queues camera files missing/incomplete on disk,
+    regardless of the high-water mark or whether they're known in state."""
+
+    @pytest.mark.asyncio
+    async def test_old_missing_game_requeued_by_reconcile(
+        self, temp_storage, mock_config, mock_camera, mock_file_system
+    ):
+        """A game older than max_lookback_hours, missing on disk, is re-queued
+        by the reconcile pass even though the incremental sync would never
+        look back that far. Regression guard for the 2026-06-15 loss."""
+        old_file = {
+            "path": "/old_game.dav",
+            # ~10 days ago: far outside the 48h incremental lookback window.
+            "startTime": (datetime.now() - timedelta(days=10)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "endTime": (
+                datetime.now() - timedelta(days=10) + timedelta(minutes=30)
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "size": 5_000_000,
+        }
+
+        # The local .mp4 is MISSING on disk. os.path.exists is globally mocked
+        # True by the autouse fixture, so return False for the .dav local path
+        # while keeping every other path (state.json, dirs) as-is.
+        def _exists(path):
+            return not str(path).endswith("old_game.dav")
+
+        mock_file_system["exists"].side_effect = _exists
+
+        # Incremental sync returns nothing (HWM is recent); reconcile returns
+        # the old file. get_file_list is called by both passes.
+        mock_camera.get_file_list = AsyncMock(side_effect=[[], [old_file]])
+
+        dp = _idle_download_processor()
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+
+        await poller.discover_work()
+
+        dp.add_work.assert_called_once()
+        queued = dp.add_work.call_args[0][0]
+        assert queued.file_path.endswith("old_game.dav")
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.task_processors.camera_poller.DirectoryState")
+    @patch("video_grouper.task_processors.camera_poller.find_group_directory")
+    @patch("video_grouper.task_processors.camera_poller._identify_runt_recordings")
+    async def test_file_present_at_correct_size_not_requeued(
+        self,
+        mock_runts,
+        mock_find_group,
+        mock_dir_state_cls,
+        temp_storage,
+        mock_config,
+        mock_camera,
+        mock_file_system,
+    ):
+        """A file already on disk at the camera-reported size is NOT re-queued
+        by the reconcile pass."""
+        mock_runts.return_value = set()
+        mock_find_group.return_value = os.path.join(temp_storage, "2026.06.18-10.00.00")
+        size = 4_000_000
+        cam_file = {
+            "path": "/present.dav",
+            "startTime": (datetime.now() - timedelta(days=5)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "endTime": (
+                datetime.now() - timedelta(days=5) + timedelta(minutes=20)
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "size": size,
+        }
+
+        # File present on disk at the exact camera-reported size.
+        mock_file_system["exists"].return_value = True
+        mock_file_system["getsize"].return_value = size
+
+        # No prior state entry for the file.
+        ds = Mock()
+        ds.get_file_by_path = Mock(return_value=None)
+        mock_dir_state_cls.return_value = ds
+
+        mock_camera.get_file_list = AsyncMock(side_effect=[[], [cam_file]])
+
+        dp = _idle_download_processor()
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+
+        await poller.discover_work()
+
+        dp.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("video_grouper.task_processors.camera_poller.DirectoryState")
+    @patch("video_grouper.task_processors.camera_poller.find_group_directory")
+    @patch("video_grouper.task_processors.camera_poller._identify_runt_recordings")
+    async def test_known_in_state_but_short_on_disk_requeued(
+        self,
+        mock_runts,
+        mock_find_group,
+        mock_dir_state_cls,
+        temp_storage,
+        mock_config,
+        mock_camera,
+        mock_file_system,
+    ):
+        """A file already known in state but SHORT on disk (partial download)
+        is re-queued — 'known in state' is not treated as 'done'."""
+        mock_runts.return_value = set()
+        mock_find_group.return_value = os.path.join(temp_storage, "2026.06.19-10.00.00")
+        size = 6_000_000
+        cam_file = {
+            "path": "/partial.dav",
+            "startTime": (datetime.now() - timedelta(days=4)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "endTime": (
+                datetime.now() - timedelta(days=4) + timedelta(minutes=15)
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "size": size,
+        }
+
+        # File present but only HALF the expected size on disk -> incomplete.
+        mock_file_system["exists"].return_value = True
+        mock_file_system["getsize"].return_value = size // 2
+
+        # Known in state as 'pending' (not a terminal "have the bytes" state).
+        known = RecordingFile(
+            start_time=datetime.now() - timedelta(days=4),
+            end_time=datetime.now() - timedelta(days=4) + timedelta(minutes=15),
+            file_path=os.path.join(mock_find_group.return_value, "partial.dav"),
+            status="pending",
+            metadata={"path": "/partial.dav", "size": size},
+        )
+        ds = Mock()
+        ds.get_file_by_path = Mock(return_value=known)
+        ds.add_file = AsyncMock()
+        mock_dir_state_cls.return_value = ds
+
+        mock_camera.get_file_list = AsyncMock(side_effect=[[], [cam_file]])
+
+        dp = _idle_download_processor()
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+
+        await poller.discover_work()
+
+        dp.add_work.assert_called_once()
+        queued = dp.add_work.call_args[0][0]
+        assert queued.file_path.endswith("partial.dav")
+
+    @pytest.mark.asyncio
+    async def test_reconcile_skipped_when_queue_busy(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Reconcile does not run while the download queue is busy."""
+        mock_camera.get_file_list = AsyncMock(return_value=[])
+
+        dp = Mock()
+        dp.add_work = AsyncMock()
+        dp.get_queue_size = Mock(return_value=3)  # busy
+        dp._in_progress_item = None
+
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+        await poller.discover_work()
+
+        # Only the incremental sync should have queried the camera.
+        assert mock_camera.get_file_list.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_reconcile_rate_limited(self, temp_storage, mock_config, mock_camera):
+        """A second idle poll within the min interval does not re-run reconcile."""
+        mock_camera.get_file_list = AsyncMock(return_value=[])
+
+        dp = _idle_download_processor()
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+
+        await poller.discover_work()  # sync + reconcile (2 calls)
+        first_count = mock_camera.get_file_list.await_count
+        assert first_count == 2
+
+        await poller.discover_work()  # sync only; reconcile rate-limited
+        assert mock_camera.get_file_list.await_count == first_count + 1
+
+
+class TestOpenConnectedSession:
+    """An open-ended (never-closed) connected session must not blanket-skip
+    historical recordings as home footage."""
+
+    @pytest.mark.asyncio
+    async def test_stale_open_session_does_not_skip_recent_game(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A connected session that opened long ago and never closed must not
+        skip a game recorded days later."""
+        # Open connect event 30 days ago, no matching disconnect: an open
+        # session that a forward-to-now bound would stretch over everything.
+        stale_connect = datetime.now(pytz.utc) - timedelta(days=30)
+        mock_camera.get_connected_timeframes.return_value = [(stale_connect, None)]
+
+        # A real game recorded yesterday (local time).
+        game_start = datetime.now() - timedelta(days=1)
+        mock_camera.get_file_list.return_value = [
+            {
+                "path": "/real_game.dav",
+                "startTime": game_start.strftime("%Y-%m-%d %H:%M:%S"),
+                "endTime": (game_start + timedelta(minutes=30)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            }
+        ]
+
+        dp = Mock()
+        dp.add_work = AsyncMock()
+        dp.get_queue_size = Mock(return_value=1)  # keep reconcile from firing
+        dp._in_progress_item = None
+
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+        await poller._sync_files_from_camera()
+
+        dp.add_work.assert_called_once()
+        queued = dp.add_work.call_args[0][0]
+        assert queued.file_path.endswith("real_game.dav")
+
+
+class TestReolinkOpenSessionHorizon:
+    """ReolinkCamera.get_connected_timeframes bounds an open session."""
+
+    def _make_reolink(self, temp_storage, events):
+        from video_grouper.cameras.reolink import ReolinkCamera
+        from video_grouper.utils.config import CameraConfig
+
+        cam = ReolinkCamera(
+            CameraConfig(
+                name="reo",
+                type="reolink",
+                device_ip="127.0.0.1",
+                username="u",
+                password="p",
+            ),
+            temp_storage,
+        )
+        cam._connection_events = events
+        return cam
+
+    def test_stale_open_session_bounded_not_ongoing(self, temp_storage):
+        """An open session whose horizon is already in the past is reported
+        as a closed [start, horizon] window, not ongoing (end is not None)."""
+        stale = (datetime.now(pytz.utc) - timedelta(days=30)).isoformat()
+        cam = self._make_reolink(
+            temp_storage,
+            [{"event_datetime": stale, "event_type": "connected", "message": ""}],
+        )
+        frames = cam.get_connected_timeframes()
+        assert len(frames) == 1
+        start, end = frames[0]
+        assert end is not None  # bounded, not ongoing
+        expected = start + timedelta(hours=cam.OPEN_CONNECTED_SESSION_HORIZON_HOURS)
+        assert end == expected
+
+    def test_recent_open_session_still_ongoing(self, temp_storage):
+        """A session that opened just now is still reported as ongoing so a
+        genuinely-current home recording is still filtered."""
+        recent = datetime.now(pytz.utc).isoformat()
+        cam = self._make_reolink(
+            temp_storage,
+            [{"event_datetime": recent, "event_type": "connected", "message": ""}],
+        )
+        frames = cam.get_connected_timeframes()
+        assert len(frames) == 1
+        _, end = frames[0]
+        assert end is None  # still ongoing
+
+
+class TestAtomicStateWrites:
+    """camera_state.json writes are atomic (temp + os.replace) and never leave
+    a truncated/empty file the reader can catch."""
+
+    @pytest.mark.asyncio
+    async def test_update_latest_processed_time_uses_atomic_replace(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """_update_latest_processed_time writes via os.replace (atomic)."""
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        ts = datetime(2026, 6, 15, 14, 30, 0)
+
+        # Capture the real os.replace BEFORE patching: patching reolink/poller
+        # os.replace patches it on the shared os module, so wrap the real one.
+        real_replace = os.replace
+        with patch(
+            "video_grouper.task_processors.camera_poller.os.replace",
+            wraps=real_replace,
+        ) as mock_replace:
+            await poller._update_latest_processed_time(ts)
+            # Wrote via a temp file then os.replace (atomic), not a direct
+            # truncating open() of the live file.
+            assert mock_replace.called
+            tmp_arg, dest_arg = mock_replace.call_args[0]
+            assert str(tmp_arg).endswith(".tmp")
+            assert str(dest_arg).endswith("camera_state.json")
+
+        # Value round-trips back through the reader.
+        got = await poller._get_latest_processed_time()
+        assert got == ts
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_other_camera_fields(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Writing the HWM read-merges, preserving connection_events written by
+        the camera's own _save_state into the same file."""
+        import json
+
+        state_path = os.path.join(temp_storage, "camera_state.json")
+        with open(state_path, "w") as f:
+            json.dump(
+                {"default": {"connection_events": [{"x": 1}], "is_connected": True}},
+                f,
+            )
+
+        poller = _make_poller(temp_storage, mock_config, mock_camera)
+        await poller._update_latest_processed_time(datetime(2026, 6, 15, 12, 0, 0))
+
+        with open(state_path) as f:
+            state = json.load(f)
+        assert state["default"]["connection_events"] == [{"x": 1}]
+        assert state["default"]["is_connected"] is True
+        assert state["default"]["latest_video_time"] == "2026-06-15 12:00:00"
+
+    def test_reolink_save_state_atomic_and_merges_hwm(self, temp_storage):
+        """ReolinkCamera._save_state writes atomically and preserves a HWM
+        field written by the poller into the same camera entry."""
+        import json
+
+        from video_grouper.cameras.reolink import ReolinkCamera
+        from video_grouper.utils.config import CameraConfig
+
+        state_path = os.path.join(temp_storage, "camera_state.json")
+        # Poller wrote a HWM first.
+        with open(state_path, "w") as f:
+            json.dump({"reo": {"latest_video_time": "2026-06-15 10:00:00"}}, f)
+
+        cam = ReolinkCamera(
+            CameraConfig(
+                name="reo",
+                type="reolink",
+                device_ip="127.0.0.1",
+                username="u",
+                password="p",
+            ),
+            temp_storage,
+        )
+        cam._connection_events = [
+            {"event_datetime": "2026-06-15T09:00:00", "event_type": "connected"}
+        ]
+        cam._is_connected = True
+
+        real_replace = os.replace
+        with patch(
+            "video_grouper.cameras.reolink.os.replace", wraps=real_replace
+        ) as mock_replace:
+            cam._save_state()
+            assert mock_replace.called
+
+        with open(state_path) as f:
+            state = json.load(f)
+        # HWM preserved by the read-merge.
+        assert state["reo"]["latest_video_time"] == "2026-06-15 10:00:00"
+        assert state["reo"]["is_connected"] is True
+        assert state["reo"]["connection_events"]

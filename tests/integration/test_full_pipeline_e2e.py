@@ -124,9 +124,19 @@ def mock_camera():
     camera = Mock()
     camera.check_availability = AsyncMock(return_value=True)
     camera.get_file_list = AsyncMock(return_value=[])
+    camera.get_file_size = AsyncMock(return_value=0)
     camera.get_connected_timeframes = Mock(return_value=[])
     camera.download_file = AsyncMock(return_value=True)
     camera.close = AsyncMock()
+    # Real string identity so camera_name/camera_type metadata stays
+    # JSON-serializable when the poller writes state.json (a Mock here makes
+    # every per-group save fail, so find_existing_group_for can't match prior
+    # files and each file lands in its own group).
+    camera.name = "default"
+    cam_config = Mock()
+    cam_config.type = "dahua"
+    cam_config.name = "default"
+    camera.config = cam_config
     return camera
 
 

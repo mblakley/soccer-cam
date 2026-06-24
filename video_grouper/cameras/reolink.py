@@ -11,6 +11,7 @@ import pytz
 
 from video_grouper.models import ConnectionEvent
 from video_grouper.utils.config import CameraConfig
+from video_grouper.utils.locking import FileLock
 from video_grouper.utils.paths import get_camera_state_path
 
 from . import register_camera
@@ -247,18 +248,30 @@ class ReolinkCamera(Camera):
             logger.error(f"Error loading camera state: {e}")
 
     def _save_state(self):
+        # Atomic write under a shared FileLock. CameraPoller writes the
+        # high-water mark into the SAME camera_state.json file from a
+        # different code path; a plain truncate-then-write here can leave the
+        # reader (CameraPoller._get_latest_processed_time) catching an empty
+        # or half-written file and silently resetting the HWM. Read-merge,
+        # write to a temp file, then os.replace so the on-disk file is always
+        # a complete, valid JSON document.
         try:
-            all_state = {}
-            if os.path.exists(self._state_file):
-                with open(self._state_file) as f:
-                    all_state = json.load(f)
-            all_state[self.config.name] = {
-                "connection_events": self._connection_events,
-                "is_connected": self._is_connected,
-            }
             os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
-            with open(self._state_file, "w") as f:
-                json.dump(all_state, f, indent=4)
+            with FileLock(self._state_file):
+                all_state = {}
+                if os.path.exists(self._state_file):
+                    try:
+                        with open(self._state_file) as f:
+                            all_state = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        all_state = {}
+                cam_state = all_state.setdefault(self.config.name, {})
+                cam_state["connection_events"] = self._connection_events
+                cam_state["is_connected"] = self._is_connected
+                temp_path = self._state_file + ".tmp"
+                with open(temp_path, "w") as f:
+                    json.dump(all_state, f, indent=4)
+                os.replace(temp_path, self._state_file)
         except Exception as e:
             logger.error(f"Error saving camera state: {e}")
 
@@ -284,6 +297,16 @@ class ReolinkCamera(Camera):
         self._connection_events.append(event)
         self._save_state()
 
+    # How far past its start a still-open (never-closed) "connected" session
+    # is allowed to extend when classifying home footage. A trailing
+    # `connected` event with no matching `disconnected` used to be treated as
+    # open-ended (end=None -> "now"), so a single stale connect event
+    # blanketed every recording made since as "recorded at home" and the
+    # poller skipped real game footage forever. The camera is plugged in at
+    # home for at most a few hours before it goes to a field, so we bound the
+    # open session to this horizon instead of letting it run to now.
+    OPEN_CONNECTED_SESSION_HORIZON_HOURS = 12
+
     def get_connected_timeframes(self) -> list[tuple[datetime, datetime | None]]:
         timeframes = []
         start_time = None
@@ -307,7 +330,23 @@ class ReolinkCamera(Camera):
                     start_time = None
 
         if start_time is not None:
-            timeframes.append((start_time, None))
+            # Open-ended session: never let it stretch to "now" and blanket
+            # historical recordings as home footage. Bound it to a short
+            # horizon past its start. If that horizon is already in the past
+            # the session is treated as closed at the horizon; only a session
+            # whose horizon is still in the future is reported as ongoing
+            # (end=None) so genuinely-current home recordings are still
+            # filtered.
+            from datetime import timedelta
+
+            horizon = start_time + timedelta(
+                hours=self.OPEN_CONNECTED_SESSION_HORIZON_HOURS
+            )
+            now = datetime.now(pytz.utc)
+            if horizon <= now:
+                timeframes.append((start_time, horizon))
+            else:
+                timeframes.append((start_time, None))
 
         return timeframes
 
