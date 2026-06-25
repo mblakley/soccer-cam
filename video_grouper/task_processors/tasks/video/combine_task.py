@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from video_grouper.models import DirectoryState
-from video_grouper.utils.ffmpeg_utils import combine_videos, detect_audio_video_gaps
+from video_grouper.utils.ffmpeg_utils import (
+    combine_videos,
+    detect_audio_video_gaps,
+    detect_video_decode_corruption,
+)
 from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
@@ -95,6 +99,11 @@ class CombineTask(BaseFfmpegTask):
         # before combining. The combine itself pads each gap with silence (see
         # _combine_copy); VideoProcessor reads this list to warn the user.
         self.audio_gaps: list[dict] = []
+        # Segments with an undecodable video region (byte-complete but corrupt
+        # on the camera's SD card — unrecoverable, see detect_video_decode_
+        # corruption). The combine cuts the dead span; VideoProcessor reads this
+        # list to warn the user and flag the game as shipped-with-loss.
+        self.video_corruption: list[dict] = []
 
         dav_files = self.get_dav_files()
         if not dav_files:
@@ -114,6 +123,27 @@ class CombineTask(BaseFfmpegTask):
                 ),
             )
 
+        # Decode-probe each segment for in-file corruption a size check can't
+        # see. PR #88 already guarantees byte-complete downloads, so anything
+        # this finds is camera-side and unrecoverable — degrade (cut the dead
+        # region in combine), don't re-download.
+        self.video_corruption = detect_video_decode_corruption(dav_files)
+        corrupt_starts = {
+            c["path"]: c["corrupt_start_seconds"] for c in self.video_corruption
+        }
+        if self.video_corruption:
+            logger.error(
+                "COMBINE: %d segment(s) in %s have an undecodable video region; "
+                "cutting the dead span (camera recording error, unrecoverable): %s",
+                len(self.video_corruption),
+                os.path.basename(self.group_dir),
+                ", ".join(
+                    f"{os.path.basename(c['path'])} "
+                    f"(~{c['lost_seconds']:.0f}s lost from {c['corrupt_start_seconds']:.0f}s)"
+                    for c in self.video_corruption
+                ),
+            )
+
         output_path = self.get_output_path()
 
         # Extract camera metadata from the group's state.json
@@ -129,9 +159,15 @@ class CombineTask(BaseFfmpegTask):
             pass  # Non-critical: metadata is optional
 
         try:
-            # Pass file paths directly to combine_videos (PyAV-based)
+            # Pass file paths directly to combine_videos (PyAV-based).
+            # corrupt_starts tells combine where to cut each segment's
+            # undecodable video region so the dead span is dropped, not muxed.
             success = await combine_videos(
-                dav_files, output_path, camera_name=camera_name, camera_type=camera_type
+                dav_files,
+                output_path,
+                camera_name=camera_name,
+                camera_type=camera_type,
+                corrupt_starts=corrupt_starts,
             )
 
             if success:
@@ -153,6 +189,18 @@ class CombineTask(BaseFfmpegTask):
 
             logger.info(f"COMBINE: Successfully combined videos in {self.group_dir}")
             await dir_state.update_group_status("combined")
+
+            # If combine had to cut a corrupt (unrecoverable) video region,
+            # durably flag the game so it isn't shipped as if perfect. This is a
+            # marker, not a status change — the trim/upload flow continues.
+            if self.video_corruption:
+                total_lost = sum(c["lost_seconds"] for c in self.video_corruption)
+                detail = "; ".join(
+                    f"{os.path.basename(c['path'])} "
+                    f"~{c['lost_seconds']:.0f}s@{c['corrupt_start_seconds']:.0f}s"
+                    for c in self.video_corruption
+                )
+                dir_state.set_video_loss(total_lost, detail)
 
             # Match info gathering is triggered by VideoProcessor._on_combine_complete()
             # which fires async API lookups and NTFY questions after this task completes.

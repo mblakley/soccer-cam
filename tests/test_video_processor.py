@@ -147,6 +147,71 @@ class TestVideoProcessor:
         key = processor.get_item_key(combine_task)
         assert key == "combine:/test/group"
 
+    @pytest.mark.asyncio
+    async def test_combine_with_video_corruption_sends_ntfy(
+        self, temp_storage, mock_config
+    ):
+        """A completed combine that cut a corrupt video region sends an NTFY
+        warning so the game isn't shipped as if perfect."""
+        mock_upload_processor = Mock()
+        ntfy_api = Mock()
+        ntfy_api.send_notification = AsyncMock()
+        ntfy_processor = Mock()
+        ntfy_processor.ntfy_service = Mock(ntfy_api=ntfy_api)
+
+        processor = VideoProcessor(
+            temp_storage,
+            mock_config,
+            mock_upload_processor,
+            ntfy_processor=ntfy_processor,
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+        combine_task.video_corruption = [
+            {
+                "path": "/test/group/seg2.mp4",
+                "corrupt_start_seconds": 287.0,
+                "video_seconds": 300.0,
+                "lost_seconds": 13.0,
+            }
+        ]
+
+        with (
+            patch.object(combine_task, "execute", new_callable=AsyncMock) as mock_exec,
+            patch.object(processor, "_on_combine_complete", new_callable=AsyncMock),
+        ):
+            mock_exec.return_value = True
+            await processor.process_item(combine_task)
+
+        ntfy_api.send_notification.assert_awaited_once()
+        kwargs = ntfy_api.send_notification.await_args.kwargs
+        assert "13" in kwargs["message"]  # ~13s lost
+        assert "warning" in kwargs.get("tags", [])
+
+    @pytest.mark.asyncio
+    async def test_combine_no_corruption_no_ntfy(self, temp_storage, mock_config):
+        """A clean combine sends no corruption warning."""
+        ntfy_api = Mock()
+        ntfy_api.send_notification = AsyncMock()
+        ntfy_processor = Mock()
+        ntfy_processor.ntfy_service = Mock(ntfy_api=ntfy_api)
+
+        processor = VideoProcessor(
+            temp_storage, mock_config, Mock(), ntfy_processor=ntfy_processor
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+        combine_task.video_corruption = []
+
+        with (
+            patch.object(combine_task, "execute", new_callable=AsyncMock) as mock_exec,
+            patch.object(processor, "_on_combine_complete", new_callable=AsyncMock),
+        ):
+            mock_exec.return_value = True
+            await processor.process_item(combine_task)
+
+        ntfy_api.send_notification.assert_not_awaited()
+
         # Test trim task with new constructor
         trim_task = TrimTask(
             group_dir="/test/group", start_time="00:05:00", end_time="01:35:00"

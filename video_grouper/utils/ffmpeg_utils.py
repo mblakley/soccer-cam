@@ -52,6 +52,25 @@ _AUDIO_PAD_EPSILON_SECONDS = 0.5
 # encoder framing. Padding still happens regardless; this only gates the alert.
 AUDIO_GAP_WARN_THRESHOLD_SECONDS = 3.0
 
+# Decode-probe tuning. PR #88 guarantees every downloaded segment is
+# byte-complete (size == camera-reported), but a byte-complete file can still
+# carry a corrupt HEVC region the camera wrote to its own SD card: it decodes
+# fine for minutes, then avcodec_send_packet raises InvalidDataError and the
+# rest of the segment is undecodable. A size check can't see this and a
+# stream-copy combine can't either (a pure mux never calls the decoder, so the
+# garbage packets get muxed straight through). Only forcing a real decode trips
+# on it — see decode_probe / detect_video_decode_corruption below.
+#
+# DECODE_PROBE_WINDOW_SECONDS: how many seconds to actually decode per sampled
+# window. Big enough to force avcodec_send_packet over a meaningful run of
+# packets, small enough that probing a multi-hour recording stays a few seconds.
+DECODE_PROBE_WINDOW_SECONDS = 3.0
+# DECODE_PROBE_STEP_SECONDS: spacing between sampled windows when scanning a
+# whole segment for the first decode failure. The 06.08 corruption sat ~287s
+# into a 300s file, so a coarse sweep across the segment (not just first/mid/
+# last) is what localizes the dead region cheaply.
+DECODE_PROBE_STEP_SECONDS = 30.0
+
 # numpy dtype (as a string) to allocate silence for each libav sample format.
 _SILENCE_DTYPE = {
     "dbl": "float64",
@@ -178,6 +197,159 @@ async def get_video_duration(file_path: str) -> float | None:
         return await asyncio.to_thread(_get_video_duration_sync, file_path)
     except Exception as e:
         logger.error(f"Error getting video duration: {e}")
+        return None
+
+
+def _decode_window_sync(
+    container, video_stream, start_sec: float, window_seconds: float
+) -> None:
+    """Decode ~``window_seconds`` of *video_stream* starting at *start_sec*.
+
+    Seeks to the window start and decodes packets, which is where libav calls
+    ``avcodec_send_packet`` — the exact call that raises on a corrupt HEVC
+    packet that size-only validation can't see (demux alone never decodes, so
+    it never trips). Raises ``av.error.FFmpegError`` / ``av.error.Invalid
+    DataError`` on corruption; returns normally when the window decodes clean.
+    """
+    time_base = video_stream.time_base
+    if start_sec > 0 and time_base:
+        container.seek(int(start_sec / time_base), stream=video_stream)
+
+    first_pts_sec = None
+    for packet in container.demux(video_stream):
+        for frame in packet.decode():
+            if frame.pts is not None and time_base:
+                frame_sec = float(frame.pts * time_base)
+                if first_pts_sec is None:
+                    first_pts_sec = frame_sec
+                elif frame_sec - first_pts_sec >= window_seconds:
+                    return
+
+
+def _window_decodes_clean(
+    container, video_stream, start_sec: float, window_seconds: float
+) -> bool:
+    """True if a ``window_seconds`` window from *start_sec* decodes without error."""
+    try:
+        _decode_window_sync(container, video_stream, start_sec, window_seconds)
+        return True
+    except (av.error.InvalidDataError, av.error.FFmpegError):
+        return False
+
+
+def _decode_probe_sync(file_path: str, window_seconds: float) -> float | None:
+    """Synchronous implementation of :func:`decode_probe`.
+
+    Two passes, so the whole file isn't re-decoded yet the cut point is precise:
+
+    1. *Coarse sweep* — decode a window at 0, then every
+       ``DECODE_PROBE_STEP_SECONDS``, then the tail, until one fails.
+    2. *Refine* — walk forward in ``window_seconds`` steps from the last clean
+       window to the failing one to localize the FIRST undecodable second.
+
+    Returns ``None`` if every sampled window decodes cleanly, else the refined
+    second where decoding first fails — the start of the undecodable region, so
+    the combine cuts there and drops the dead tail (not a window-rounded
+    over-cut that would leave bad packets straddling the join).
+    """
+    with av_open_read(file_path) as container:
+        if not container.streams.video:
+            logger.warning("DECODE_PROBE: no video stream in %s", file_path)
+            return 0.0
+        video_stream = container.streams.video[0]
+
+        duration = None
+        time_base = video_stream.time_base
+        if video_stream.duration is not None and time_base:
+            duration = float(video_stream.duration * time_base)
+        elif container.duration is not None:
+            duration = container.duration / av.time_base
+
+        # Coarse sweep: 0, body @ STEP spacing, then the tail.
+        window_starts = [0.0]
+        if duration is not None and duration > window_seconds:
+            t = DECODE_PROBE_STEP_SECONDS
+            while t < duration - window_seconds:
+                window_starts.append(t)
+                t += DECODE_PROBE_STEP_SECONDS
+            window_starts.append(max(0.0, duration - window_seconds))
+        window_starts = sorted(set(window_starts))
+
+        last_clean = 0.0
+        coarse_fail = None
+        for start_sec in window_starts:
+            if _window_decodes_clean(
+                container, video_stream, start_sec, window_seconds
+            ):
+                last_clean = start_sec + window_seconds
+            else:
+                coarse_fail = start_sec
+                break
+
+        if coarse_fail is None:
+            return None
+
+        # Refine: walk window-by-window from the last clean point up to the
+        # coarse failure to find the first failing second precisely.
+        refine = last_clean
+        while refine < coarse_fail:
+            if _window_decodes_clean(container, video_stream, refine, window_seconds):
+                refine += window_seconds
+            else:
+                break
+
+        first_bad = refine if refine <= coarse_fail else coarse_fail
+        logger.warning(
+            "DECODE_PROBE: %s first undecodable region near %.1fs",
+            os.path.basename(file_path),
+            first_bad,
+        )
+        return first_bad
+
+
+async def decode_probe(
+    file_path: str, window_seconds: float = DECODE_PROBE_WINDOW_SECONDS
+) -> float | None:
+    """Probe *file_path* for an undecodable region by forcing a real decode.
+
+    Size checks can't see in-file corruption: a camera segment can download at
+    EXACTLY the reported byte count (so PR #88's completeness check passes) yet
+    carry a corrupt HEVC packet the camera wrote to its SD card, which explodes
+    the decoder (``InvalidDataError`` from ``avcodec_send_packet``) only when
+    something actually decodes the stream — combine/trim stream-copy never does,
+    so the garbage rides straight through into the shipped video.
+
+    This samples windows across the file and forces a decode over each, which is
+    cheap (no full re-decode) but reliably trips on the bad packet.
+
+    Returns ``None`` when every sampled window decodes cleanly, or the
+    approximate second where the first decode failure starts (so the combine can
+    cut from there). A missing-file / missing-stream case returns ``0.0`` (whole
+    segment is unusable).
+    """
+    if not os.path.exists(file_path):
+        logger.error("DECODE_PROBE: file not found: %s", file_path)
+        return 0.0
+    try:
+        return await _run_in_thread_with_timeout(
+            _decode_probe_sync, file_path, window_seconds, timeout=120
+        )
+    except (av.error.InvalidDataError, av.error.FFmpegError) as e:
+        logger.warning(
+            "DECODE_PROBE: %s failed decode probe: %s",
+            os.path.basename(file_path),
+            e,
+        )
+        return 0.0
+    except TimeoutError:
+        logger.error("DECODE_PROBE: timed out probing %s", os.path.basename(file_path))
+        return None
+    except Exception as e:
+        logger.error(
+            "DECODE_PROBE: unexpected error probing %s: %s",
+            os.path.basename(file_path),
+            e,
+        )
         return None
 
 
@@ -651,17 +823,73 @@ def detect_audio_video_gaps(
     return gaps
 
 
+def detect_video_decode_corruption(
+    file_paths: list[str],
+    window_seconds: float = DECODE_PROBE_WINDOW_SECONDS,
+) -> list[dict]:
+    """Return source segments that decode partway then hit a corrupt region.
+
+    The sibling of :func:`detect_audio_video_gaps` for the case audio/video
+    *duration* matching can't catch: the 06.08 segment decoded fine to 287.07s,
+    then ``avcodec_send_packet`` raised and ~13s was undecodable, yet the
+    container's *duration* still read the full 300s (the corrupt packets carry
+    PTS), so the audio-gap detector saw nothing wrong. Only a decode probe trips
+    on it.
+
+    Each entry is ``{"path", "corrupt_start_seconds", "video_seconds",
+    "lost_seconds"}`` where ``corrupt_start_seconds`` is where decoding first
+    failed (the cut point), ``video_seconds`` the segment's container duration,
+    and ``lost_seconds`` the trailing span that gets removed by the combine
+    degrade path. ``_combine_copy`` consumes ``corrupt_start_seconds`` to drop
+    the dead video region; ``VideoProcessor`` surfaces the list as an NTFY
+    warning and flags the game so it isn't shipped as if perfect.
+    """
+    corruptions: list[dict] = []
+    for path in file_paths:
+        try:
+            corrupt_start = _decode_probe_sync(path, window_seconds)
+        except Exception as exc:
+            logger.warning(f"COMBINE: decode probe failed for {path}: {exc}")
+            continue
+        if corrupt_start is None:
+            continue
+        video_seconds = corrupt_start
+        try:
+            dur = _get_video_duration_sync(path)
+            if dur is not None:
+                video_seconds = dur
+        except Exception:
+            pass
+        lost_seconds = max(0.0, video_seconds - corrupt_start)
+        corruptions.append(
+            {
+                "path": path,
+                "corrupt_start_seconds": corrupt_start,
+                "video_seconds": video_seconds,
+                "lost_seconds": lost_seconds,
+            }
+        )
+    return corruptions
+
+
 def _combine_videos_sync(
     file_paths: list[str],
     output_path: str,
     camera_name: str | None = None,
     camera_type: str | None = None,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Synchronous implementation: concatenate multiple video files (video copy, AAC re-encode).
 
     Uses stream copy for video regardless of codec (H.264, HEVC, etc.) for speed.
     HEVC-to-H.264 transcoding is deferred to later pipeline stages (trim/autocam)
     where the video is shorter and transcoding is practical.
+
+    ``corrupt_starts`` maps a segment path to the second where its video becomes
+    undecodable (from :func:`detect_video_decode_corruption`). The combine cuts
+    each such segment's video at that point so the dead region is dropped instead
+    of muxed as garbage; the audio-align step then trims that segment's audio to
+    the shortened video, keeping A/V in sync with the corrupt span removed.
     """
     if not file_paths:
         raise ValueError("No files to combine")
@@ -697,12 +925,20 @@ def _combine_videos_sync(
             raise ValueError("No video stream found in first input file")
 
         return _combine_copy(
-            file_paths, output_container, out_video_stream, out_audio_stream
+            file_paths,
+            output_container,
+            out_video_stream,
+            out_audio_stream,
+            corrupt_starts or {},
         )
 
 
 def _combine_copy(
-    file_paths: list[str], output_container, out_video_stream, out_audio_stream
+    file_paths: list[str],
+    output_container,
+    out_video_stream,
+    out_audio_stream,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Concatenate files using stream copy (fast path for H.264 input).
 
@@ -720,13 +956,25 @@ def _combine_copy(
     (audio longer than video), the excess audio is trimmed so it can't push
     later segments' audio ahead of their video. ``detect_audio_video_gaps``
     surfaces either condition to the user as an NTFY warning.
+
+    ``corrupt_starts`` (path -> second) marks segments with an undecodable
+    region (from :func:`detect_video_decode_corruption`). For such a segment we
+    DEGRADE rather than mux garbage: video packets at/after the corrupt second
+    are dropped, so the dead span is cut. The per-segment audio target is
+    shrunk to the cut point too, so the existing audio-trim/pad logic re-aligns
+    that segment's audio to its now-shorter video — A/V stays in sync with the
+    corrupt region removed.
     """
+    corrupt_starts = corrupt_starts or {}
     video_pts_offset = 0
     # A decoded real frame, reused as the format/layout/rate template for any
     # silence we synthesize. Captured from the first segment that has audio.
     audio_template = None
 
     for file_path in file_paths:
+        # If this segment was flagged corrupt, cut its video at the first
+        # undecodable second instead of muxing the garbage that follows.
+        seg_cut_s = corrupt_starts.get(file_path)
         with av_open_read(file_path) as input_container:
             in_video = None
             in_audio = None
@@ -752,6 +1000,21 @@ def _combine_copy(
             seg_video_target_s = None
             if in_video is not None and in_video.duration:
                 seg_video_target_s = float(in_video.duration * in_video.time_base)
+            # A corrupt segment's metadata duration still reads the full length
+            # (the bad packets carry PTS), so clamp the audio target to the cut
+            # point — otherwise audio would be trimmed/padded to dead video.
+            if seg_cut_s is not None:
+                seg_video_target_s = (
+                    seg_cut_s
+                    if seg_video_target_s is None
+                    else min(seg_video_target_s, seg_cut_s)
+                )
+                logger.warning(
+                    "COMBINE: cutting corrupt video region in %s at %.1fs "
+                    "(dropping the undecodable tail)",
+                    os.path.basename(file_path),
+                    seg_cut_s,
+                )
 
             for packet in input_container.demux(streams_to_demux):
                 if packet.dts is None:
@@ -765,6 +1028,17 @@ def _combine_copy(
                         packet.dts -= first_dts[in_video.index]
                         packet.pts -= first_dts[in_video.index]
                         if packet.dts < 0:
+                            continue
+
+                        # Cut the dead region: once this corrupt segment reaches
+                        # the undecodable second, stop muxing its video so the
+                        # garbage tail never lands in the output.
+                        if (
+                            seg_cut_s is not None
+                            and in_video.time_base
+                            and packet.pts is not None
+                            and float(packet.pts * in_video.time_base) >= seg_cut_s
+                        ):
                             continue
 
                         # Track max pts for offset calculation
@@ -838,6 +1112,7 @@ async def combine_videos(
     output_path: str,
     camera_name: str | None = None,
     camera_type: str | None = None,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Combines multiple video files into a single MP4 using PyAV.
 
@@ -849,6 +1124,10 @@ async def combine_videos(
         output_path: Path for the combined output file.
         camera_name: Optional camera name to embed in MP4 metadata.
         camera_type: Optional camera type to embed in MP4 metadata.
+        corrupt_starts: Optional map of segment path -> second where its video
+            becomes undecodable (from :func:`detect_video_decode_corruption`).
+            Each such segment's video is cut at that point so the dead region is
+            dropped rather than muxed as garbage.
     """
     logger.info(
         f"Combining {len(file_paths)} videos to {os.path.basename(output_path)}"
@@ -862,6 +1141,7 @@ async def combine_videos(
             temp_output,
             camera_name,
             camera_type,
+            corrupt_starts,
             timeout=timeout,
         )
         if result:

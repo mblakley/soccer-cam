@@ -101,6 +101,14 @@ class VideoProcessor(QueueProcessor):
                         await self._send_audio_gap_warning(
                             item.get_item_path(), audio_gaps
                         )
+                    # Warn separately if combine had to cut an undecodable video
+                    # region (camera SD-card corruption, unrecoverable — the
+                    # game shipped with that span removed, not as if perfect).
+                    video_corruption = getattr(item, "video_corruption", None)
+                    if video_corruption:
+                        await self._send_video_corruption_warning(
+                            item.get_item_path(), video_corruption
+                        )
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
                 elif (
                     item.task_type == "trim"
@@ -248,6 +256,55 @@ class VideoProcessor(QueueProcessor):
             )
         except Exception as e:
             logger.error(f"VIDEO: Failed to send audio-gap NTFY for {group_dir}: {e}")
+
+    async def _send_video_corruption_warning(
+        self, group_dir: str, corruptions: list[dict]
+    ) -> None:
+        """Notify the camera manager (via NTFY) that footage was lost to camera
+        recording corruption.
+
+        Reuses the same NTFY plumbing as ``_send_audio_gap_warning``. Unlike an
+        audio gap (auto-corrected, no footage lost), this is a genuine loss: the
+        segment was byte-complete but had an undecodable region the camera wrote
+        to its SD card, which is unrecoverable (re-downloading returns identical
+        bytes). Combine cut the dead span so the rest of the game stays in sync;
+        this tells the user roughly how much video the camera lost.
+        Best-effort: never let a notification failure affect video processing.
+        """
+        try:
+            ntfy_api = None
+            ntfy_service = getattr(self.ntfy_processor, "ntfy_service", None)
+            if ntfy_service is not None:
+                ntfy_api = getattr(ntfy_service, "ntfy_api", None)
+            if ntfy_api is None:
+                return
+
+            total_lost = sum(c["lost_seconds"] for c in corruptions)
+            game = os.path.basename(group_dir.rstrip("/\\"))
+            message = (
+                f"~{total_lost:.0f}s of {game} was lost to a camera recording "
+                f"error ({len(corruptions)} segment(s) had an undecodable video "
+                f"region). The dead span was cut so the rest stays in sync. This "
+                f"is unrecoverable — the camera's own recording is corrupt, "
+                f"re-downloading would return the same bad bytes."
+            )
+            await ntfy_api.send_notification(
+                message=message,
+                title=f"Video lost in {game}",
+                tags=["warning"],
+                priority=4,
+            )
+            logger.warning(
+                "VIDEO: %.0fs of video lost to camera corruption in %s across "
+                "%d segment(s); cut the dead region and notified user",
+                total_lost,
+                group_dir,
+                len(corruptions),
+            )
+        except Exception as e:
+            logger.error(
+                f"VIDEO: Failed to send video-corruption NTFY for {group_dir}: {e}"
+            )
 
     async def _on_trim_complete(self, group_dir: str) -> None:
         """Skip post-trim processing and transition directly to upload.

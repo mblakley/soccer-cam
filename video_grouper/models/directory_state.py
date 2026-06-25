@@ -313,6 +313,60 @@ class DirectoryState:
             f"Set youtube_playlist_name to '{playlist_name}' in {self.state_file_path}"
         )
 
+    def set_video_loss(self, lost_seconds: float, detail: str) -> None:
+        """Durably flag that combine dropped an undecodable region from this game.
+
+        Byte-complete-but-corrupt camera segments are unrecoverable (re-download
+        returns identical bytes), so combine cuts the dead span and the game
+        still ships — but it must NOT be shipped as if perfect. This persists a
+        ``video_loss`` marker on state.json (total seconds lost + a per-segment
+        detail string) so the dashboard, state auditor, and the camera manager
+        can see the game lost footage to a camera recording error. It's a flag,
+        not a status change: the trim/upload flow continues normally.
+        """
+        try:
+            with FileLock(self.state_file_path):
+                state_data = {"files": {}, "status": "pending", "error_message": None}
+                if os.path.exists(self.state_file_path):
+                    try:
+                        with open(self.state_file_path) as f:
+                            state_data = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        pass
+
+                state_data["video_loss"] = {
+                    "lost_seconds": round(lost_seconds, 1),
+                    "detail": detail,
+                }
+
+                os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
+                temp_path = self.state_file_path + ".tmp"
+                with open(temp_path, "w") as f:
+                    json.dump(state_data, f, indent=4)
+                os.replace(temp_path, self.state_file_path)
+        except TimeoutError as e:
+            logger.error(f"Timeout setting video_loss for {self.directory_path}: {e}")
+        logger.warning(
+            "Flagged %.1fs of video loss in %s (%s)",
+            lost_seconds,
+            self.state_file_path,
+            detail,
+        )
+
+    def get_video_loss(self) -> dict | None:
+        """Return the ``video_loss`` marker (lost_seconds + detail) if any."""
+        try:
+            with FileLock(self.state_file_path):
+                if os.path.exists(self.state_file_path):
+                    try:
+                        with open(self.state_file_path) as f:
+                            return json.load(f).get("video_loss")
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        return None
+        except TimeoutError as e:
+            logger.error(f"Timeout reading video_loss for {self.directory_path}: {e}")
+        return None
+
     async def set_ttt_recording_id(self, recording_id: str) -> None:
         """Persist the TTT recording ID for this group to state.json."""
         async with self._lock:
