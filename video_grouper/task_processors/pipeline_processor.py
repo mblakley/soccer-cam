@@ -50,10 +50,15 @@ class PipelineProcessor(QueueProcessor):
         upload_processor=None,
         runtime: str = "service",
         resource_manager=None,
+        ntfy_processor=None,
     ):
         super().__init__(storage_path, config)
         self.upload_processor = upload_processor
         self.runtime = runtime
+        # Used by the reactive corruption-recovery path to warn the camera
+        # manager when a game lost footage to a camera SD-card recording error.
+        # Set post-construction by the app (ntfy is built after this processor).
+        self.ntfy_processor = ntfy_processor
         # One ResourceManager shared by every run this processor drives. Built
         # from config when not supplied so a standalone processor still gates
         # GPU/RAM-heavy/UI steps correctly.
@@ -148,6 +153,20 @@ class PipelineProcessor(QueueProcessor):
             )
             result = await runner.run(item.input_path, item.output_path, ctx)
 
+            # Reactive corruption recovery: a decode step rode into an undecodable
+            # region a camera wrote to its SD card (combine/trim stream-copied it
+            # through). Localize + keyframe-cut re-combine the source, then re-run
+            # the pipeline ONCE on the repaired input. Bounded to a single attempt
+            # per game (persisted marker) so a cut that can't fix it fails
+            # terminally instead of looping.
+            if result.status == "failed" and result.error_kind == "decode_corruption":
+                if await self._attempt_corruption_recovery(item):
+                    logger.info(
+                        "PIPELINE: re-running %s after corruption recovery",
+                        item.group_dir.name,
+                    )
+                    result = await runner.run(item.input_path, item.output_path, ctx)
+
             if result.status == "complete":
                 logger.info("PIPELINE: task completed: %s", item)
                 await self._handle_successful_completion(item)
@@ -175,6 +194,86 @@ class PipelineProcessor(QueueProcessor):
                 await self._mark_failed(item, result.error)
         except Exception as e:
             logger.error("PIPELINE: error processing task %s: %s", item, e)
+
+    async def _attempt_corruption_recovery(self, item: PipelineTask) -> bool:
+        """Try to repair a game whose pipeline failed on an undecodable region.
+
+        Returns True when the source corruption was localized and the
+        combined/trimmed input was rebuilt clean (caller re-runs the pipeline),
+        False otherwise (caller fails the game terminally).
+
+        BOUNDED: a ``corrupt_recovery_attempted`` marker is written to state.json
+        BEFORE recovery runs, and a game that already carries it is refused. So a
+        corruption the keyframe cut can't resolve (or a crash mid-recovery) fails
+        terminally on the next pass instead of looping forever — the N=16 symptom.
+        """
+        name = item.group_dir.name
+        if self._recovery_already_attempted(item.group_dir):
+            logger.error(
+                "PIPELINE: corruption persisted after recovery for %s; "
+                "failing terminally (recovery already attempted)",
+                name,
+            )
+            return False
+        # Persist the attempt FIRST: even if recovery crashes, the next pass must
+        # not retry it.
+        self._mark_recovery_attempted(item.group_dir)
+
+        from video_grouper.task_processors.corrupt_recovery import (
+            recover_pipeline_input,
+        )
+
+        try:
+            outcome = await recover_pipeline_input(
+                str(item.group_dir),
+                self.storage_path,
+                item.input_path,
+                config=self.config,
+                ntfy_processor=self.ntfy_processor,
+            )
+        except Exception as e:  # noqa: BLE001 — recovery is best-effort
+            logger.error("PIPELINE: corruption recovery raised for %s: %s", name, e)
+            return False
+
+        if outcome.repaired:
+            logger.warning(
+                "PIPELINE: recovered %s (~%.0fs lost to camera corruption); "
+                "re-running pipeline on the repaired input",
+                name,
+                outcome.lost_seconds,
+            )
+            return True
+        logger.error(
+            "PIPELINE: could not recover %s from corruption: %s", name, outcome.reason
+        )
+        return False
+
+    @staticmethod
+    def _recovery_already_attempted(group_dir: Path) -> bool:
+        state_file = group_dir / "state.json"
+        try:
+            with open(state_file) as f:
+                return bool(json.load(f).get("corrupt_recovery_attempted"))
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    @staticmethod
+    def _mark_recovery_attempted(group_dir: Path) -> None:
+        state_file = group_dir / "state.json"
+        try:
+            state_data: dict = {}
+            if state_file.exists():
+                with open(state_file) as f:
+                    state_data = json.load(f)
+            state_data["corrupt_recovery_attempted"] = True
+            with open(state_file, "w") as f:
+                json.dump(state_data, f, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(
+                "PIPELINE: could not mark recovery attempt for %s: %s",
+                group_dir.name,
+                e,
+            )
 
     @staticmethod
     def _read_team_name(group_dir: Path) -> str | None:

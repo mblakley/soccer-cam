@@ -132,6 +132,22 @@ def av_open_write(
     return av.open(path, "w", format=format, timeout=timeout, **kwargs)
 
 
+def is_decode_corruption_error(exc: BaseException) -> bool:
+    """True if *exc* is a libav decode error (corrupt / undecodable bitstream).
+
+    PyAV raises ``av.error.InvalidDataError`` (a subclass of ``FFmpegError``) from
+    ``avcodec_send_packet`` when a stream-copied segment carries a region the camera
+    wrote corrupt to its own SD card — a fault a size check and a stream-copy mux both
+    ride straight through, and which only a real decode trips. The pipeline's decode
+    steps (stitch/field/render/fanout) let it propagate; this classifier lets the
+    runner tag the failure so the *reactive* recovery path (localize → keyframe-cut
+    re-combine) fires ONLY when a decode step actually hit one, never proactively.
+    """
+    # InvalidDataError is a subclass of FFmpegError, so the base catches both; the
+    # union spells out the headline case for the reader.
+    return isinstance(exc, av.error.InvalidDataError | av.error.FFmpegError)
+
+
 def _scaled_timeout(file_paths: list[str], base_timeout: int = FFMPEG_TIMEOUT) -> int:
     """Scale the FFmpeg timeout based on total input file size.
 
@@ -880,9 +896,14 @@ def detect_video_decode_corruption(
     segment's container duration, and ``lost_seconds`` the trailing span removed
     by the combine degrade path (measured from ``cut_seconds`` so it reflects the
     real, keyframe-aligned cut). ``_combine_copy`` consumes ``corrupt_start_seconds``
-    to locate the same keyframe and drop the dead video region on a GOP boundary;
-    ``VideoProcessor`` surfaces the list as an NTFY warning and flags the game so
-    it isn't shipped as if perfect.
+    to locate the same keyframe and drop the dead video region on a GOP boundary.
+
+    This is an EXPENSIVE full decode-and-discard of every segment, so it is NOT run
+    proactively. It is the *localize* half of the reactive recovery
+    (:mod:`video_grouper.task_processors.corrupt_recovery`): it runs only after a
+    pipeline decode step has already failed on a game, i.e. one already known to be
+    corrupt. The recovery then re-combines with these cuts, flags ``video_loss``, and
+    sends the NTFY warning, so a corrupt game isn't shipped as if perfect.
     """
     corruptions: list[dict] = []
     for path in file_paths:

@@ -1,10 +1,14 @@
-"""Tests that combine durably flags video lost to camera-recording corruption.
+"""Tests for the ``video_loss`` flag and the (reactive-only) decode cost of combine.
 
-A byte-complete-but-corrupt segment (PR #88's size check passes, yet a region is
-undecodable) is unrecoverable — re-downloading returns identical bytes — so the
-combine cuts the dead span and the game still ships. The requirement these tests
-guard is that it is NOT shipped as if perfect: combine persists a ``video_loss``
-marker on state.json so the dashboard / auditor / camera manager can see it.
+Two guarantees here:
+
+1. ``DirectoryState.set_video_loss`` round-trips the marker that records a game
+   lost footage to a camera SD-card recording error (set by the reactive recovery,
+   not by combine — see tests/test_corrupt_recovery.py).
+2. Combine pays ZERO decode cost: it is a fast stream-copy and must NOT decode the
+   video to hunt for in-file corruption (that ~realtime probe is reserved for the
+   reactive recovery, which only runs on a game already known to be corrupt). A
+   clean game therefore never decodes during combine.
 
 Real PyAV + real filesystem are required end-to-end (a mocked av.open can't fail
 mid-stream, and the flag is real file I/O), so this module overrides conftest's
@@ -17,6 +21,7 @@ import pytest
 
 from video_grouper.models import DirectoryState
 from video_grouper.task_processors.tasks.video import CombineTask
+from video_grouper.utils import ffmpeg_utils
 
 
 # --- Override conftest's autouse mocks for this module (use real PyAV/IO) ---
@@ -95,12 +100,16 @@ def test_directory_state_video_loss_roundtrip(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_combine_task_flags_corruption_end_to_end(tmp_path):
-    """CombineTask probes, cuts the corrupt region, and flags the loss.
+async def test_combine_does_not_proactively_decode(tmp_path, monkeypatch):
+    """Combine is a fast stream-copy: it must NOT decode the video to look for
+    in-file corruption — even when a segment IS corrupt.
 
-    Drives the real execute() path: it must detect the corrupt segment, populate
-    self.video_corruption (which VideoProcessor turns into the NTFY warning),
-    produce a combined.mp4 that decodes cleanly, and persist the video_loss flag.
+    This is the heart of the proactive->reactive rework: decoding every segment at
+    combine time costs ~realtime and would punish every clean game. We spy on the
+    decode-probe primitive (``_decode_probe_sync``, which every corruption-decode
+    path goes through) and assert combine never calls it. The combine still
+    succeeds via stream-copy; the corruption is left to be caught reactively by a
+    downstream decode step.
     """
     group_dir = tmp_path / "flash__2024.06.08_vs_Test_home"
     group_dir.mkdir()
@@ -110,6 +119,15 @@ async def test_combine_task_flags_corruption_end_to_end(tmp_path):
     _write_decodable_clip(bad, video_seconds=20.0)
     _corrupt_mid_file(bad)
 
+    probe_calls = {"n": 0}
+    real_probe = ffmpeg_utils._decode_probe_sync
+
+    def _spy(*args, **kwargs):
+        probe_calls["n"] += 1
+        return real_probe(*args, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_utils, "_decode_probe_sync", _spy)
+
     task = CombineTask(group_dir=str(group_dir))
     # CombineTask resolves output via storage_path; point it at the group's parent.
     task.storage_path = str(tmp_path)
@@ -117,19 +135,13 @@ async def test_combine_task_flags_corruption_end_to_end(tmp_path):
     ok = await task.execute()
     assert ok is True
 
-    # The corruption was detected and recorded for the NTFY warning path.
-    assert len(task.video_corruption) == 1
-    assert os.path.basename(task.video_corruption[0]["path"]) == bad.name
-    assert task.video_corruption[0]["lost_seconds"] > 0
+    # ZERO decode cost: combine never decode-probed a single segment.
+    assert probe_calls["n"] == 0
+    # Combine no longer surfaces a corruption list (that moved to recovery).
+    assert not hasattr(task, "video_corruption")
 
-    # The combined output exists and decodes cleanly end-to-end (no garbage tail).
-    from video_grouper.utils.ffmpeg_utils import decode_probe
+    # The combined output still exists (stream-copied through, corruption and all).
+    assert os.path.exists(task.get_output_path())
 
-    out = task.get_output_path()
-    assert os.path.exists(out)
-    assert await decode_probe(out) is None
-
-    # The game is flagged — not silently shipped as if perfect.
-    marker = DirectoryState(str(group_dir)).get_video_loss()
-    assert marker is not None
-    assert marker["lost_seconds"] > 0
+    # And combine did NOT flag video_loss — the game is not yet known corrupt.
+    assert DirectoryState(str(group_dir)).get_video_loss() is None

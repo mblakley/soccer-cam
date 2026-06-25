@@ -310,6 +310,11 @@ class VideoGrouperApp:
             self.video_processor.match_info_service = match_info_service
             self.video_processor.ntfy_processor = self.ntfy_processor
 
+            # Wire ntfy into the PipelineProcessor so reactive corruption
+            # recovery can warn the camera manager about lost footage.
+            if self.pipeline_processor is not None:
+                self.pipeline_processor.ntfy_processor = self.ntfy_processor
+
             # Wire ntfy_service into UploadProcessor for auth failure notifications
             # and playlist name requests
             self.upload_processor.ntfy_service = ntfy_service
