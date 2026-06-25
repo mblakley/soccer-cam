@@ -25,6 +25,29 @@ from pathlib import Path
 DEFAULT_POLY_0527 = "D:/detect_work/field_polygon_autocam.json"
 DEFAULT_POLY_IRON = "D:/detect_work/v4_test_clips/irondequoit_field_polygon.json"
 
+# The held-out eval set — NEVER allowed into training. Any far-label set whose
+# name/clip is Spencerport is the evaluation ground truth (spc_normal* = NORMAL
+# split, spc_clip*/spc_diverge = HARD far split); training on it would leak the
+# eval and silently inflate every recall number. Enforced by assert below.
+HELD_OUT_TOKENS = ("spc", "spencerport")
+
+# Per-far-label-set field polygons keyed by a token in the set's dir name. A set
+# whose name contains one of these keys uses the mapped human-verified polygon;
+# anything else falls back to DEFAULT_POLY_0527. This is the generic "wire a new
+# game in as a training set" hook — add a (token, polygon_path) pair to onboard a
+# game. ``heat_0615_*`` (6/15 Irondequoit @ Parma) uses the human-tightened
+# polygon Mark edited in the v4 field editor.
+SET_POLYGONS = {
+    "heat_0615": "G:/ballresearch/distill/det0615/field_polygon_0615.json",
+    "irondequoit": DEFAULT_POLY_IRON,
+}
+
+
+def _is_held_out(name: str, clip: str = "") -> bool:
+    n = name.lower()
+    c = (clip or "").lower()
+    return any(t in n or t in c for t in HELD_OUT_TOKENS)
+
 
 def _ball_labels(labels_path: Path) -> dict[int, tuple[float, float]]:
     if not labels_path.exists():
@@ -36,29 +59,54 @@ def _ball_labels(labels_path: Path) -> dict[int, tuple[float, float]]:
     return out
 
 
-def assemble_games(far_label_dir: str) -> list[dict]:
-    """Build game specs from the far-label sets (heat_0527_* train, irondequoit val)."""
+def _set_polygon(name: str) -> list:
+    n = name.lower()
+    for key, path in SET_POLYGONS.items():
+        if key in n:
+            return json.loads(Path(path).read_text())["polygon"]
+    return json.loads(Path(DEFAULT_POLY_0527).read_text())["polygon"]
+
+
+def assemble_games(
+    far_label_dir: str, include_sets: list[str] | None = None
+) -> list[dict]:
+    """Build game specs from the far-label sets.
+
+    Each set directory becomes a training game: its human ``labels.json`` ball
+    clicks (global frame_idx on the set's raw ``clip``) are the labels, and the
+    set's field polygon comes from :data:`SET_POLYGONS`. ``include_sets`` (set-dir
+    names) restricts to those sets; ``None`` = every set with labels. The held-out
+    Spencerport eval is ALWAYS excluded from training (hard assert) — it is the GT.
+    """
     root = Path(far_label_dir)
+    want = set(include_sets) if include_sets else None
     games = []
     for d in sorted(root.iterdir()):
         man = d / "manifest.json"
         if not man.exists():
             continue
+        if want is not None and d.name not in want:
+            continue
         m = json.loads(man.read_text())
+        if _is_held_out(d.name, m.get("clip", "")):
+            # CRITICAL eval-leak guard: spc_normal1 (+ any Spencerport set) is the
+            # held-out evaluation GT and must never be trained on.
+            continue
         labels = _ball_labels(d / "labels.json")
         if not labels:
             continue
-        is_iron = "irondequoit" in d.name
-        poly_path = DEFAULT_POLY_IRON if is_iron else DEFAULT_POLY_0527
         games.append(
             {
                 "game_id": d.name,
                 "video": m["clip"],
-                "polygon": json.loads(Path(poly_path).read_text())["polygon"],
+                "polygon": _set_polygon(d.name),
                 "labels": labels,
-                "split": "val" if is_iron else "train",
+                "split": "train",
             }
         )
+    assert not any(_is_held_out(g["game_id"], g["video"]) for g in games), (
+        "held-out Spencerport set leaked into training games"
+    )
     return games
 
 
@@ -103,6 +151,21 @@ def main():
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--rebuild", action="store_true", help="re-render crops")
+    ap.add_argument(
+        "--far-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Far-band positive-loss up-weighting strength K (default 0 = OFF = the "
+            "current uniform w=1+30*tgt EXACTLY). When K>0, a positive crop's ball "
+            "pixels are additionally scaled by (1 + K*(1-depth)), where depth in "
+            "[0,1] is the ball's normalized field depth (0=far touchline, 1=near). "
+            "So a far ball weighs up to (1+K)x a near ball, pushing the loss to make "
+            "the far ball the strongest peak. Requires a crop store built with "
+            "record_depth=True (auto-enabled here when K>0); background/negative "
+            "crops are unaffected. K=0 leaves training byte-identical to the curve."
+        ),
+    )
     args = ap.parse_args()
 
     import torch
@@ -111,8 +174,11 @@ def main():
     from training.data_prep.heatmap_dataset import (
         HeatmapCropDataset,
         build_heatmap_crops,
+        gaussian_heatmap,
     )
     from training.models.heatmap_net import HeatmapNet
+
+    far_on = args.far_weight > 0.0
 
     out = Path(args.out)
     if args.rebuild or not (out / "index.json").exists():
@@ -120,13 +186,49 @@ def main():
         val_ids = {g["game_id"] for g in games if g["split"] == "val"}
         print(f"assembled {len(games)} games; val={val_ids}", flush=True)
         summary = build_heatmap_crops(
-            games, out, crop=args.crop, sigma=args.sigma, val_game_ids=val_ids
+            games,
+            out,
+            crop=args.crop,
+            sigma=args.sigma,
+            val_game_ids=val_ids,
+            record_depth=far_on,
         )
         print("dataset:", summary, flush=True)
 
-    tr = HeatmapCropDataset(out, "train", args.crop, args.sigma)
+    class _DepthDataset(HeatmapCropDataset):
+        """Adds per-sample field depth (positives) so the loss can far-band weight.
+
+        Returns ``(stack, tgt, far_factor)`` where ``far_factor = 1-depth`` for
+        positives (1 at the far touchline, 0 near) and 0 for negatives. Only used
+        when ``--far-weight > 0``; the default path uses the unchanged
+        ``HeatmapCropDataset`` (byte-identical to the curve)."""
+
+        def __getitem__(self, i):
+            import numpy as _np
+
+            r = self.items[i]
+            stack = (
+                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+            )
+            if r["x"] is None:
+                tgt = _np.zeros((self.crop, self.crop), _np.float32)
+                far = 0.0
+            else:
+                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+                far = float(1.0 - r.get("depth", 0.0))  # far touchline -> 1.0
+            return (
+                torch.from_numpy(stack),
+                torch.from_numpy(tgt[None]),
+                torch.tensor(far, dtype=torch.float32),
+            )
+
+    ds_cls = _DepthDataset if far_on else HeatmapCropDataset
+    tr = ds_cls(out, "train", args.crop, args.sigma)
     va = HeatmapCropDataset(out, "val", args.crop, args.sigma)
-    print(f"train crops={len(tr)} val crops={len(va)}", flush=True)
+    print(
+        f"train crops={len(tr)} val crops={len(va)} far_weight={args.far_weight}",
+        flush=True,
+    )
     if len(tr) == 0:
         raise SystemExit("no training crops — label some far balls first")
 
@@ -142,11 +244,22 @@ def main():
     for ep in range(args.epochs):
         model.train()
         tot = 0.0
-        for x, tgt in dl:
+        for batch in dl:
+            if far_on:
+                x, tgt, far = batch
+                far = far.to(dev).view(-1, 1, 1, 1)
+            else:
+                x, tgt = batch
             x, tgt = x.to(dev), tgt.to(dev)
             pred = torch.sigmoid(model(x))
-            # emphasize the (rare) ball pixels: weighted MSE
+            # emphasize the (rare) ball pixels: weighted MSE.
             w = 1.0 + 30.0 * tgt
+            if far_on:
+                # Far-band up-weighting: scale ONLY the positive (ball-pixel) weight
+                # by (1 + K*far_factor) so far balls dominate the loss. tgt acts as
+                # the positive mask, so background weight (the leading 1.0) is
+                # untouched. K=0 collapses this to exactly w=1+30*tgt.
+                w = 1.0 + 30.0 * tgt * (1.0 + args.far_weight * far)
             loss = (w * (pred - tgt) ** 2).mean()
             opt.zero_grad()
             loss.backward()

@@ -4,6 +4,95 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-13: targeted far-ball RECALL recipe — human labels + far-band loss + multi-seed (2026-06-24)
+
+**Status: STAGED, NOT RUN.** Design + code complete and committed; the GPU launch is deferred until the
+N=16 data-scaling curve finishes (Mark's decision: finish N=16 first, THEN run recall — one GPU on this box).
+This entry is the design of record; it will be updated with RESULTS after the run. Nothing in this entry has
+been executed on the GPU. The curve was confirmed byte-undisturbed at staging (orchestrator PID 3620 +
+iter_run PID 21412 alive; `curve.jsonl` 4 rows N=1/2/4/8, N=16 mid-run).
+
+**Why (what the curve proved, and what it did NOT):** the corrected data-scaling curve (EXP-DIST-02) shows
+that adding games on the CURRENT recipe does NOT lift recall — held-out HARD R15 bounces
+0.386 / 0.22 / 0.356 / 0.331 across N=1/2/4/8 and NORMAL R15 is flat-to-crashed 0.155 / 0.081 / 0.153 / 0.009
+(N=8 collapsed on seed variance). The decomposition (EXP-DIST-08..12) localizes the wall precisely: on far
+play the ball is in the detector's top-12 candidate set ~0.66–0.81 of the time, but is the per-frame ARGMAX
+only ~13.5 % of the time (median 25.6 m off). DECISIONS 2026-06-24 ("stop selection engineering") concluded
+the only path to AutoCam-class far is **detector far-RECALL** — make the far ball the strongest peak. The
+lever is the RECIPE, not data volume. This experiment changes the recipe along three opt-in axes.
+
+**Hypothesis:** at least one of {fresh human labels on the failure cases, far-band loss up-weighting, reading
+signal over seed variance} raises held-out far/normal R15 above the best curve row (HARD ~0.33–0.39,
+NORMAL ~0.155) on the SAME held-out Spencerport eval the curve uses.
+
+**Levers (all opt-in flags; the running curve is byte-unaffected because they default OFF and live in a NEW
+runner, not the live `iter_run.py`):**
+1. **Merge Mark's fresh human-override labels.** Two 6/15-game (`guzzetta__2026.06.15_vs_Irondequoit`) sets,
+   verified counts (`action=="ball" and x is not None`): `heat_0615_normlowconf1` = **84 ball** (mid/near hard
+   discrimination, the normal-field FP-on-player/shadow/goalmouth cases), `heat_0615_gaps1` = **153 ball**
+   (far, game-wide). 6/15 is wired as a TRAINING game from its raw clip + the human-tightened polygon
+   `det0615/field_polygon_0615.json` (`source: human_field_edit`) gated to Mark's active-play windows. NOTE:
+   6/15 is NOT in `F:\archive\ball_distill\` (no `ball_track.json` / per-seg detections — its detector run is a
+   flat game-wide dump), so it canNOT be wired the auto-label `iter_run.py` way; it is wired as a **human-label
+   game** (labels = the two sets' clicks on the raw `…-raw.mp4`, decoded by global frame_idx — exactly the
+   `build_heatmap_crops` game spec). Optional far auto-labels from `det0615/ball_dets_0615.json` are available
+   but off by default (human clicks are the high-value signal).
+2. **Far-band loss up-weighting** — NEW opt-in flag `--far-weight K` on `training/train_v4_heatmap.py`
+   (default `0` = the current uniform `w = 1 + 30·tgt` EXACTLY, so the curve is unaffected even if it
+   re-imports). When `K>0`, the POSITIVE (ball-pixel) weight is scaled by `(1 + K·(1−depth))`, where
+   `depth ∈ [0,1]` is the ball's normalized field depth (0 = far touchline / band top, 1 = near touchline);
+   a far ball weighs up to `(1+K)×` a near ball, pushing the loss to make the far ball the strongest peak.
+   `depth` is recorded per positive at crop-build time (`build_heatmap_crops(record_depth=True)`, additive
+   index field, never gates which crops are written). Background weight (the leading `1.0`) is untouched.
+3. **Multi-seed (2–3 seeds)** so the signal is read over the variance that crashed N=8 NORMAL to 0.009. The
+   runner trains each {far-weight} config across seeds and reports mean ± spread on both splits.
+
+**Eval = identical to the curve (apples-to-apples).** Same held-out Spencerport stretch `spc_stretch_s1.json`
++ `spc_poly.json`, frames 7900–11500, HARD = human far labels, NORMAL = human `spc_normal*`, metric =
+`world_model.eval.evaluate_recall_metric` in METERS at R10/R15, AutoCam baseline from `autocam_stretch.json` —
+reused VERBATIM from `iter_run.py`/`variant_train.py` (the recall runner shares the eval block). **CRITICAL:
+`spc_normal1` (Spencerport) is the HELD-OUT eval and is asserted OUT of training** in both the repo entry
+(`assemble_games` Spencerport-token guard + post-build assert) and the server runner (explicit exclusion +
+assert), so no eval frame can leak into training.
+
+**Baseline to beat (same eval):** best curve row HARD R15 ~0.33–0.39, NORMAL R15 ~0.155, AutoCam viewport
+HARD 0.11 / NORMAL 0.748.
+
+**D1/D4 clearance (does this re-tread a failed experiment? NO — checked against the V4 heatmap failures):**
+- **Failed AUGMENTATION (the "D1" augmentation entries — V4_HEATMAP_EXPERIMENTS variants I `aug3`+cutout
+  "slightly hurt", H `sigma8` "no gain", and Jmot motion-channel "no help"):** those altered the INPUT
+  pixels / channels / target blob. Far-band loss up-weighting touches **only the per-pixel loss weight by
+  field position** and adds **human GT** — no augmentation, no new input channel, no sigma/blob change, no
+  photometric/cutout transform. **NOT the failed augmentation experiment.**
+- **Failed LEARNED-APPEARANCE-DISCRIMINATION (the "D4" entries — heavy random negative mining Jn8 8:1
+  "destabilized focal training, made it worse"; the motion channel; the multi-task person-head concept):**
+  those tried to teach ball-vs-distractor APPEARANCE via architecture/extra-negatives/extra-heads. This
+  experiment changes **neither the architecture nor the negative-mining ratio** (HeatmapNet base24,
+  `neg_ratio`/`neg_per_pos` unchanged from the curve) and adds **no person head**. Far-band weighting is a
+  loss-reweighting by GEOMETRY (depth), and the human labels are GT, not mined hard-negatives.
+  **NOT the failed appearance-discrimination experiment.** (The existing SAFE hard-negative cells in
+  `iter_run.py` are also untouched and not extended.)
+  Conclusion: both levers are distinct from D1 and D4; no overlap, no design change needed.
+
+**Repo deliverables (this commit, branch `feat/homegrown-ball-detector` — generic detector-training features):**
+- `training/train_v4_heatmap.py`: the `--far-weight K` flag (default 0 = byte-identical to the curve), the
+  6/15 label-set wiring + 6/15-as-training-game (raw clip + human-tightened polygon, via `SET_POLYGONS`), and
+  the held-out Spencerport training-exclusion guard + assert.
+- `training/data_prep/heatmap_dataset.py`: `build_heatmap_crops(record_depth=...)` — additive per-positive
+  field-depth metadata (default off → legacy index schema, curve unaffected).
+
+**Server-scratch deliverable (NOT in the OSS repo, NOT executed):** `G:\ballresearch\distill\recall_train.py`
+— a recall variant of `iter_run.py` (a NEW file; the live `iter_run.py` is untouched). It builds the recall
+dataset (the N=8 curve games' cached per-game crops + the two 6/15 human-label sets as a new
+depth-recorded game), trains 2–3 seeds at the chosen `--far-weight`, and evals on the SAME held-out sets,
+appending rows to `G:\ballresearch\distill\recall.jsonl`. Staged; launches only after the curve frees the GPU.
+
+**LAUNCH (deferred — run only after the curve's N=16 row appends and no curve process is alive):** see the
+session report / `recall_train.py` header for the exact git-pull-on-server + launch commands (a SEPARATE
+checkout `G:\ballresearch\recall_wt`, never the curve's `G:\v4bench\wt`).
+
+---
+
 ## EXP-DIST-12: the reference "dumb pixel-smoother" far-follow on OUR detector — selection-algo vs detector-is-the-wall (2026-06-24)
 
 **Status:** DONE. CPU-only, read-only w.r.t. the curve. Did NOT disturb the running curve (orchestrator PID

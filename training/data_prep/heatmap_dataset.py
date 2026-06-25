@@ -78,6 +78,8 @@ def build_heatmap_crops(
     val_game_ids: set[str] | None = None,
     target_width: int | None = None,
     neg_per_pos: int = 1,
+    hard_neg_crops: dict[str, list] | None = None,
+    record_depth: bool = False,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -86,6 +88,20 @@ def build_heatmap_crops(
     detections). Writes ``crops/*.npy`` (uint8 [3, crop, crop]) and an
     ``index.json`` with per-sample ``{file, x, y|null, split}`` (x/y in crop px;
     null = background/negative). Returns a summary.
+
+    ``hard_neg_crops`` (default ``None``) maps ``"{game_id}|{frame_idx}"`` →
+    a list of ``(x, y)`` band-coord distractor locations the model false-fired on;
+    up to 2 per frame are emitted as extra **negative** crops, teaching it to
+    suppress the actual players/lines it confused for the ball. ``None`` → no
+    hard-negative crops (legacy behaviour).
+
+    ``record_depth`` (default ``False`` → index byte-identical to the legacy
+    schema) additionally records each POSITIVE sample's normalized **field depth**
+    as ``"depth"`` ∈ [0, 1] (0 = far touchline / band top, 1 = near touchline /
+    band bottom), derived from the ball's warped band-y. This is the per-sample
+    signal a far-band loss up-weighting term consumes; it is purely additive
+    metadata and never alters which crops are written, so a depth-recorded crop
+    store trains identically to a legacy store under the default (uniform) loss.
     """
     import av
     import cv2
@@ -145,14 +161,18 @@ def build_heatmap_crops(
                 lx = ly = None
             fname = f"{gid}_f{t:06d}_{tag}.npy"
             np.save(out_dir / "crops" / fname, stack)
-            index.append(
-                {
-                    "file": fname,
-                    "x": None if lx is None else round(float(lx), 1),
-                    "y": None if ly is None else round(float(ly), 1),
-                    "split": split,
-                }
-            )
+            rec = {
+                "file": fname,
+                "x": None if lx is None else round(float(lx), 1),
+                "y": None if ly is None else round(float(ly), 1),
+                "split": split,
+            }
+            if record_depth and has_ball:
+                # Normalized field depth from the ball's warped band-y: 0 = far
+                # touchline (band top), 1 = near touchline (band bottom). bh is the
+                # warped band height. Additive metadata only — never gates emission.
+                rec["depth"] = round(float(np.clip(dby / max(bh, 1), 0.0, 1.0)), 4)
+            index.append(rec)
 
         buf: list = []
         idx = -1
@@ -188,6 +208,15 @@ def build_heatmap_crops(
                         ):
                             _emit(nx, ny, False, f"neg{made}")
                             made += 1
+                # Hard negatives: the model's own false-fire locations (band coords)
+                # for this (game, frame) — teaches it to suppress the actual
+                # distractors (players/lines) it confused for the ball. Capped per
+                # frame to stay near a stable neg:pos ratio.
+                if hard_neg_crops:
+                    for hi_, (hx, hy) in enumerate(
+                        hard_neg_crops.get(f"{gid}|{idx}", [])[:2]
+                    ):
+                        _emit(float(hx), float(hy), False, f"hard{hi_}")
             if idx > hi:
                 break
         container.close()
