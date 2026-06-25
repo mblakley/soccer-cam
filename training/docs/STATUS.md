@@ -1,13 +1,28 @@
 # Current Status
 
-*Last updated: 2026-06-24*
+*Last updated: 2026-06-25*
 
-## Active focus: AutoCam-distillation data-scaling curve (RE-RUNNING — prior curve was invalid)
+## Active focus: targeted far-RECALL training experiment (EXP-DIST-13); data-scaling curve halted at 4 rows
 
 Branch: `feat/homegrown-ball-detector` (worktree `../soccer-cam-autocam-distill`). All curve/distill
 runtime lives in **server scratch `G:\ballresearch\distill\`** (per CLAUDE.md: no RE/one-off scripts in
 the OSS repo); only the generic `training/data_prep/distill_dataset.py` is repo-resident. The v4-heatmap
 focus below is still the architecture — the distill curve is its data-scaling study.
+
+### 2026-06-25 — Curve HALTED at 4 rows (N=16 native crash); pivot to recall experiment; N=16 deferred
+- **Data-scaling curve is DONE-ENOUGH at N=1/2/4/8.** Those 4 rows already answer its only question: more games on
+  the current recipe does NOT improve recall (HARD R15 0.39/0.22/0.36/0.33; NORMAL R15 0.155/0.081/0.153/0.009 —
+  flat/noisy, N=8 regressed). The lever is the RECIPE, not data volume.
+- **N=16 was crash-looping, not slow.** The orchestrator relaunched iter_run ~25× over 2h (every ~5 min, GPU idle),
+  each FAILED rc=1 with **no Python traceback**, dying deterministically while building crops for game
+  `guzzetta__2026.06.08_vs_Hilton_Heat_Flaitz` (its crop dir never gets an `index.json`). No-traceback + native =
+  a PyAV decode segfault (the known `0xC0000005` on this box) or a 16 GB-RAM OOM on that one game's video — an
+  environmental crash, NOT a code bug. G: had 20 GB free (not disk). **Halted the orchestrator** (PID 3620/17348);
+  `curve.jsonl` preserved at 4 rows.
+- **Decision (Mark, 2026-06-25): pivot to the recall experiment now; defer N=16.** A 5th point on a flat line,
+  gated behind debugging one game's native crash, is near-zero value. Plan: (1) launch EXP-DIST-13 recall on the
+  freed GPU; (2) a CPU sub-agent debugs/re-encodes the 06.08 video in parallel; (3) run N=16 AFTER recall finishes,
+  with the fixed video. The recall run does NOT use 06.08, so it sidesteps the crash entirely.
 
 ### 2026-06-24 — SYNTHESIS: the gap is FAR-ONLY and DETECTOR-bound; selection thread closed (EXP-DIST-08..12)
 - **The whole "5× worse than AutoCam" was a far-third measurement artifact.** Re-scoring on clean human GT

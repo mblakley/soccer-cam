@@ -4,6 +4,33 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-25: Halt the data-scaling curve at 4 rows; pivot to the recall experiment; defer N=16
+
+**Context:** The distill data-scaling curve completed N=1/2/4/8 (4 rows) and those already answer its question —
+more games on the current recipe does not improve recall (HARD R15 bounces 0.39/0.22/0.36/0.33; NORMAL R15
+flat-to-regressed 0.155/0.081/0.153/0.009). The final N=16 row then entered a crash-loop: the orchestrator
+relaunched `iter_run` ~25× over 2h, each failing rc=1 with **no Python traceback**, dying deterministically while
+building crops for one game (`guzzetta__2026.06.08_vs_Hilton_Heat_Flaitz`). No-traceback + native = a PyAV decode
+segfault (`0xC0000005`, the known issue on this box) or a 16 GB-RAM OOM on that video — environmental, not a code
+bug. G: had 20 GB free, so not disk.
+
+**Decision (Mark, 2026-06-25):**
+- **Accept the 4-row curve as the scaling answer and halt the orchestrator** (done; `curve.jsonl` preserved).
+- **Pivot the GPU to the staged recall experiment (EXP-DIST-13) immediately.** A 5th point on an already-flat line,
+  gated behind debugging one game's native decode crash, is near-zero value; the recall recipe-change is the lever.
+- **Debug the 06.08 video in a parallel CPU sub-agent** (decode triage / re-encode), and **run N=16 AFTER the
+  recall experiment finishes**, with the fixed video — not before. The recall run does not include 06.08, so it is
+  unaffected by the crash.
+
+**Why:** This is the second time the curve-vs-recall GPU question arose; the first answer ("finish curve first")
+was premised on the curve being able to finish cheaply, which the native crash falsified. The curve's purpose
+(measure whether data scaling fixes recall) is fulfilled by the 4 rows; chasing the 5th costs hours for no new
+signal. Deferring rather than abandoning N=16 keeps the curve completable once the video is fixed.
+
+**Trade-off:** The curve headline is 4 points not 5 until N=16 reruns; acceptable since the trend is unambiguous
+and N=16 is queued, not dropped. crops_game (the curve's 14 built games) is **retained** specifically so the
+deferred N=16 reuses it rather than rebuilding 2h of crops.
+
 ## 2026-06-24: Stop selection engineering — the far-ball gap is detector-recall-bound, not tracker-bound
 
 **Context:** A focused 5-experiment chain (EXP-DIST-08..12, all CPU-only, curve undisturbed) re-scored the
