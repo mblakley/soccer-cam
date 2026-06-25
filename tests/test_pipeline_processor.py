@@ -154,6 +154,108 @@ class TestProcessItemPrecheck:
         runner_factory.assert_called_once()
 
 
+class TestCorruptionRecovery:
+    """Reactive recovery when a pipeline decode step fails on a corrupt input.
+
+    Covers the trigger (decode_corruption failure -> recover -> re-run), and the
+    BOUND that stops the N=16 retry-storm: recovery is attempted at most once per
+    game, and a corruption it can't repair fails terminally instead of looping.
+    """
+
+    def _failed_corruption(self):
+        return PipelineResult(
+            "failed",
+            failed_step="render",
+            error="exception: Invalid data found",
+            error_kind="decode_corruption",
+        )
+
+    def _patch_runner_seq(self, results):
+        runner = MagicMock()
+        runner.run = AsyncMock(side_effect=list(results))
+        return (
+            patch("video_grouper.pipeline.runner.PipelineRunner", return_value=runner),
+            runner,
+        )
+
+    @pytest.mark.asyncio
+    async def test_decode_corruption_recovers_and_reruns(self, processor, group_dir):
+        from video_grouper.task_processors.corrupt_recovery import RecoveryOutcome
+
+        task = _make_task(group_dir)
+        runner_patch, runner = self._patch_runner_seq(
+            [self._failed_corruption(), PipelineResult("complete")]
+        )
+        recover = AsyncMock(
+            return_value=RecoveryOutcome(repaired=True, lost_seconds=13.0)
+        )
+        with (
+            runner_patch,
+            patch(
+                "video_grouper.task_processors.corrupt_recovery.recover_pipeline_input",
+                new=recover,
+            ),
+        ):
+            await processor.process_item(task)
+
+        recover.assert_awaited_once()
+        assert runner.run.await_count == 2  # original run + one re-run on repair
+        state = json.loads((group_dir / "state.json").read_text())
+        assert state["status"] == "pipeline_complete"
+        assert state["corrupt_recovery_attempted"] is True
+
+    @pytest.mark.asyncio
+    async def test_recovery_not_retried_when_already_attempted(
+        self, processor, group_dir
+    ):
+        # The bound: a game already marked recovered must NOT recover again — it
+        # fails terminally instead of looping.
+        (group_dir / "state.json").write_text(
+            json.dumps({"status": "trimmed", "corrupt_recovery_attempted": True})
+        )
+        task = _make_task(group_dir)
+        runner_patch, runner = self._patch_runner_seq([self._failed_corruption()])
+        recover = AsyncMock()
+        with (
+            runner_patch,
+            patch(
+                "video_grouper.task_processors.corrupt_recovery.recover_pipeline_input",
+                new=recover,
+            ),
+        ):
+            await processor.process_item(task)
+
+        recover.assert_not_awaited()
+        assert runner.run.await_count == 1  # no re-run
+        state = json.loads((group_dir / "state.json").read_text())
+        assert state["status"] == "pipeline_failed"
+
+    @pytest.mark.asyncio
+    async def test_unrepairable_corruption_fails_terminally(self, processor, group_dir):
+        from video_grouper.task_processors.corrupt_recovery import RecoveryOutcome
+
+        task = _make_task(group_dir)
+        runner_patch, runner = self._patch_runner_seq([self._failed_corruption()])
+        recover = AsyncMock(
+            return_value=RecoveryOutcome(repaired=False, reason="no corruption found")
+        )
+        with (
+            runner_patch,
+            patch(
+                "video_grouper.task_processors.corrupt_recovery.recover_pipeline_input",
+                new=recover,
+            ),
+        ):
+            await processor.process_item(task)
+
+        recover.assert_awaited_once()
+        assert runner.run.await_count == 1  # not repaired -> no re-run
+        state = json.loads((group_dir / "state.json").read_text())
+        assert state["status"] == "pipeline_failed"
+        # Marked attempted (written before recovery) so it can't loop next pass.
+        assert state["corrupt_recovery_attempted"] is True
+
+
 class TestGetItemKey:
     def test_keys_equal_for_identical_tasks(self, processor, group_dir):
         a = _make_task(group_dir)

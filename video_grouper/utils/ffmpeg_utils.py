@@ -52,6 +52,25 @@ _AUDIO_PAD_EPSILON_SECONDS = 0.5
 # encoder framing. Padding still happens regardless; this only gates the alert.
 AUDIO_GAP_WARN_THRESHOLD_SECONDS = 3.0
 
+# Decode-probe tuning. PR #88 guarantees every downloaded segment is
+# byte-complete (size == camera-reported), but a byte-complete file can still
+# carry a corrupt HEVC region the camera wrote to its own SD card: it decodes
+# fine for minutes, then avcodec_send_packet raises InvalidDataError and the
+# rest of the segment is undecodable. A size check can't see this and a
+# stream-copy combine can't either (a pure mux never calls the decoder, so the
+# garbage packets get muxed straight through). Only forcing a real decode trips
+# on it — see decode_probe / detect_video_decode_corruption below.
+#
+# DECODE_PROBE_WINDOW_SECONDS: how many seconds to actually decode per sampled
+# window. Big enough to force avcodec_send_packet over a meaningful run of
+# packets, small enough that probing a multi-hour recording stays a few seconds.
+DECODE_PROBE_WINDOW_SECONDS = 3.0
+# DECODE_PROBE_STEP_SECONDS: spacing between sampled windows when scanning a
+# whole segment for the first decode failure. The 06.08 corruption sat ~287s
+# into a 300s file, so a coarse sweep across the segment (not just first/mid/
+# last) is what localizes the dead region cheaply.
+DECODE_PROBE_STEP_SECONDS = 30.0
+
 # numpy dtype (as a string) to allocate silence for each libav sample format.
 _SILENCE_DTYPE = {
     "dbl": "float64",
@@ -111,6 +130,22 @@ def av_open_write(
     one explicitly (defaults to mp4, which covers every current call site).
     """
     return av.open(path, "w", format=format, timeout=timeout, **kwargs)
+
+
+def is_decode_corruption_error(exc: BaseException) -> bool:
+    """True if *exc* is a libav decode error (corrupt / undecodable bitstream).
+
+    PyAV raises ``av.error.InvalidDataError`` (a subclass of ``FFmpegError``) from
+    ``avcodec_send_packet`` when a stream-copied segment carries a region the camera
+    wrote corrupt to its own SD card — a fault a size check and a stream-copy mux both
+    ride straight through, and which only a real decode trips. The pipeline's decode
+    steps (stitch/field/render/fanout) let it propagate; this classifier lets the
+    runner tag the failure so the *reactive* recovery path (localize → keyframe-cut
+    re-combine) fires ONLY when a decode step actually hit one, never proactively.
+    """
+    # InvalidDataError is a subclass of FFmpegError, so the base catches both; the
+    # union spells out the headline case for the reader.
+    return isinstance(exc, av.error.InvalidDataError | av.error.FFmpegError)
 
 
 def _scaled_timeout(file_paths: list[str], base_timeout: int = FFMPEG_TIMEOUT) -> int:
@@ -178,6 +213,159 @@ async def get_video_duration(file_path: str) -> float | None:
         return await asyncio.to_thread(_get_video_duration_sync, file_path)
     except Exception as e:
         logger.error(f"Error getting video duration: {e}")
+        return None
+
+
+def _decode_window_sync(
+    container, video_stream, start_sec: float, window_seconds: float
+) -> None:
+    """Decode ~``window_seconds`` of *video_stream* starting at *start_sec*.
+
+    Seeks to the window start and decodes packets, which is where libav calls
+    ``avcodec_send_packet`` — the exact call that raises on a corrupt HEVC
+    packet that size-only validation can't see (demux alone never decodes, so
+    it never trips). Raises ``av.error.FFmpegError`` / ``av.error.Invalid
+    DataError`` on corruption; returns normally when the window decodes clean.
+    """
+    time_base = video_stream.time_base
+    if start_sec > 0 and time_base:
+        container.seek(int(start_sec / time_base), stream=video_stream)
+
+    first_pts_sec = None
+    for packet in container.demux(video_stream):
+        for frame in packet.decode():
+            if frame.pts is not None and time_base:
+                frame_sec = float(frame.pts * time_base)
+                if first_pts_sec is None:
+                    first_pts_sec = frame_sec
+                elif frame_sec - first_pts_sec >= window_seconds:
+                    return
+
+
+def _window_decodes_clean(
+    container, video_stream, start_sec: float, window_seconds: float
+) -> bool:
+    """True if a ``window_seconds`` window from *start_sec* decodes without error."""
+    try:
+        _decode_window_sync(container, video_stream, start_sec, window_seconds)
+        return True
+    except (av.error.InvalidDataError, av.error.FFmpegError):
+        return False
+
+
+def _decode_probe_sync(file_path: str, window_seconds: float) -> float | None:
+    """Synchronous implementation of :func:`decode_probe`.
+
+    Two passes, so the whole file isn't re-decoded yet the cut point is precise:
+
+    1. *Coarse sweep* — decode a window at 0, then every
+       ``DECODE_PROBE_STEP_SECONDS``, then the tail, until one fails.
+    2. *Refine* — walk forward in ``window_seconds`` steps from the last clean
+       window to the failing one to localize the FIRST undecodable second.
+
+    Returns ``None`` if every sampled window decodes cleanly, else the refined
+    second where decoding first fails — the start of the undecodable region, so
+    the combine cuts there and drops the dead tail (not a window-rounded
+    over-cut that would leave bad packets straddling the join).
+    """
+    with av_open_read(file_path) as container:
+        if not container.streams.video:
+            logger.warning("DECODE_PROBE: no video stream in %s", file_path)
+            return 0.0
+        video_stream = container.streams.video[0]
+
+        duration = None
+        time_base = video_stream.time_base
+        if video_stream.duration is not None and time_base:
+            duration = float(video_stream.duration * time_base)
+        elif container.duration is not None:
+            duration = container.duration / av.time_base
+
+        # Coarse sweep: 0, body @ STEP spacing, then the tail.
+        window_starts = [0.0]
+        if duration is not None and duration > window_seconds:
+            t = DECODE_PROBE_STEP_SECONDS
+            while t < duration - window_seconds:
+                window_starts.append(t)
+                t += DECODE_PROBE_STEP_SECONDS
+            window_starts.append(max(0.0, duration - window_seconds))
+        window_starts = sorted(set(window_starts))
+
+        last_clean = 0.0
+        coarse_fail = None
+        for start_sec in window_starts:
+            if _window_decodes_clean(
+                container, video_stream, start_sec, window_seconds
+            ):
+                last_clean = start_sec + window_seconds
+            else:
+                coarse_fail = start_sec
+                break
+
+        if coarse_fail is None:
+            return None
+
+        # Refine: walk window-by-window from the last clean point up to the
+        # coarse failure to find the first failing second precisely.
+        refine = last_clean
+        while refine < coarse_fail:
+            if _window_decodes_clean(container, video_stream, refine, window_seconds):
+                refine += window_seconds
+            else:
+                break
+
+        first_bad = refine if refine <= coarse_fail else coarse_fail
+        logger.warning(
+            "DECODE_PROBE: %s first undecodable region near %.1fs",
+            os.path.basename(file_path),
+            first_bad,
+        )
+        return first_bad
+
+
+async def decode_probe(
+    file_path: str, window_seconds: float = DECODE_PROBE_WINDOW_SECONDS
+) -> float | None:
+    """Probe *file_path* for an undecodable region by forcing a real decode.
+
+    Size checks can't see in-file corruption: a camera segment can download at
+    EXACTLY the reported byte count (so PR #88's completeness check passes) yet
+    carry a corrupt HEVC packet the camera wrote to its SD card, which explodes
+    the decoder (``InvalidDataError`` from ``avcodec_send_packet``) only when
+    something actually decodes the stream — combine/trim stream-copy never does,
+    so the garbage rides straight through into the shipped video.
+
+    This samples windows across the file and forces a decode over each, which is
+    cheap (no full re-decode) but reliably trips on the bad packet.
+
+    Returns ``None`` when every sampled window decodes cleanly, or the
+    approximate second where the first decode failure starts (so the combine can
+    cut from there). A missing-file / missing-stream case returns ``0.0`` (whole
+    segment is unusable).
+    """
+    if not os.path.exists(file_path):
+        logger.error("DECODE_PROBE: file not found: %s", file_path)
+        return 0.0
+    try:
+        return await _run_in_thread_with_timeout(
+            _decode_probe_sync, file_path, window_seconds, timeout=120
+        )
+    except (av.error.InvalidDataError, av.error.FFmpegError) as e:
+        logger.warning(
+            "DECODE_PROBE: %s failed decode probe: %s",
+            os.path.basename(file_path),
+            e,
+        )
+        return 0.0
+    except TimeoutError:
+        logger.error("DECODE_PROBE: timed out probing %s", os.path.basename(file_path))
+        return None
+    except Exception as e:
+        logger.error(
+            "DECODE_PROBE: unexpected error probing %s: %s",
+            os.path.basename(file_path),
+            e,
+        )
         return None
 
 
@@ -651,17 +839,130 @@ def detect_audio_video_gaps(
     return gaps
 
 
+def _last_keyframe_pts_seconds(file_path: str, before_seconds: float) -> float | None:
+    """Return the largest keyframe pts (in seconds) at or before *before_seconds*.
+
+    A cheap metadata-only pass: demux the video stream without decoding and track
+    the latest keyframe whose pts is <= *before_seconds*. The cut for a corrupt
+    segment must land here so the muxed stream ends on a complete I-frame with no
+    dangling P/B references — cutting at the raw corrupt second lands mid-GOP and
+    leaves an incomplete access unit that ``avcodec_send_packet`` later rejects.
+
+    Returns ``None`` if no keyframe exists at/before *before_seconds* (corruption
+    in the very first GOP), in which case the caller must drop the segment's video
+    entirely rather than emit a broken stream.
+    """
+    with av_open_read(file_path) as container:
+        if not container.streams.video:
+            return None
+        video_stream = container.streams.video[0]
+        time_base = video_stream.time_base
+        if time_base is None:
+            return None
+        last_kf_pts: float | None = None
+        for packet in container.demux(video_stream):
+            if packet.pts is None or not packet.is_keyframe:
+                continue
+            pts_s = float(packet.pts * time_base)
+            if pts_s <= before_seconds:
+                if last_kf_pts is None or pts_s > last_kf_pts:
+                    last_kf_pts = pts_s
+            else:
+                # Packets are demuxed in dts order; once a keyframe's pts passes
+                # the threshold we could still see an earlier-pts keyframe (open
+                # GOP reordering), so don't break — but the common case stops here.
+                continue
+        return last_kf_pts
+
+
+def detect_video_decode_corruption(
+    file_paths: list[str],
+    window_seconds: float = DECODE_PROBE_WINDOW_SECONDS,
+) -> list[dict]:
+    """Return source segments that decode partway then hit a corrupt region.
+
+    The sibling of :func:`detect_audio_video_gaps` for the case audio/video
+    *duration* matching can't catch: the 06.08 segment decoded fine to 287.07s,
+    then ``avcodec_send_packet`` raised and ~13s was undecodable, yet the
+    container's *duration* still read the full 300s (the corrupt packets carry
+    PTS), so the audio-gap detector saw nothing wrong. Only a decode probe trips
+    on it.
+
+    Each entry is ``{"path", "corrupt_start_seconds", "cut_seconds",
+    "video_seconds", "lost_seconds"}`` where ``corrupt_start_seconds`` is where
+    decoding first failed, ``cut_seconds`` is the keyframe-aligned point where the
+    combine actually cuts the segment's video (the last GOP boundary at/before the
+    corrupt second — ``None`` if no keyframe precedes it), ``video_seconds`` the
+    segment's container duration, and ``lost_seconds`` the trailing span removed
+    by the combine degrade path (measured from ``cut_seconds`` so it reflects the
+    real, keyframe-aligned cut). ``_combine_copy`` consumes ``corrupt_start_seconds``
+    to locate the same keyframe and drop the dead video region on a GOP boundary.
+
+    This is an EXPENSIVE full decode-and-discard of every segment, so it is NOT run
+    proactively. It is the *localize* half of the reactive recovery
+    (:mod:`video_grouper.task_processors.corrupt_recovery`): it runs only after a
+    pipeline decode step has already failed on a game, i.e. one already known to be
+    corrupt. The recovery then re-combines with these cuts, flags ``video_loss``, and
+    sends the NTFY warning, so a corrupt game isn't shipped as if perfect.
+    """
+    corruptions: list[dict] = []
+    for path in file_paths:
+        try:
+            corrupt_start = _decode_probe_sync(path, window_seconds)
+        except Exception as exc:
+            logger.warning(f"COMBINE: decode probe failed for {path}: {exc}")
+            continue
+        if corrupt_start is None:
+            continue
+        video_seconds = corrupt_start
+        try:
+            dur = _get_video_duration_sync(path)
+            if dur is not None:
+                video_seconds = dur
+        except Exception:
+            pass
+        # Keyframe-align the cut so lost_seconds reflects the real GOP-boundary
+        # cut the combine will make, not the raw corrupt second.
+        cut_seconds: float | None
+        try:
+            cut_seconds = _last_keyframe_pts_seconds(path, corrupt_start)
+        except Exception as exc:
+            logger.warning(f"COMBINE: keyframe scan failed for {path}: {exc}")
+            cut_seconds = None
+        # No keyframe at/before the corrupt point => first-GOP corruption; the
+        # combine drops the whole segment's video, so the entire span is lost.
+        effective_cut = cut_seconds if cut_seconds is not None else 0.0
+        lost_seconds = max(0.0, video_seconds - effective_cut)
+        corruptions.append(
+            {
+                "path": path,
+                "corrupt_start_seconds": corrupt_start,
+                "cut_seconds": cut_seconds,
+                "video_seconds": video_seconds,
+                "lost_seconds": lost_seconds,
+            }
+        )
+    return corruptions
+
+
 def _combine_videos_sync(
     file_paths: list[str],
     output_path: str,
     camera_name: str | None = None,
     camera_type: str | None = None,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Synchronous implementation: concatenate multiple video files (video copy, AAC re-encode).
 
     Uses stream copy for video regardless of codec (H.264, HEVC, etc.) for speed.
     HEVC-to-H.264 transcoding is deferred to later pipeline stages (trim/autocam)
     where the video is shorter and transcoding is practical.
+
+    ``corrupt_starts`` maps a segment path to the second where its video becomes
+    undecodable (from :func:`detect_video_decode_corruption`). The combine cuts
+    each such segment's video at that point so the dead region is dropped instead
+    of muxed as garbage; the audio-align step then trims that segment's audio to
+    the shortened video, keeping A/V in sync with the corrupt span removed.
     """
     if not file_paths:
         raise ValueError("No files to combine")
@@ -697,12 +998,20 @@ def _combine_videos_sync(
             raise ValueError("No video stream found in first input file")
 
         return _combine_copy(
-            file_paths, output_container, out_video_stream, out_audio_stream
+            file_paths,
+            output_container,
+            out_video_stream,
+            out_audio_stream,
+            corrupt_starts or {},
         )
 
 
 def _combine_copy(
-    file_paths: list[str], output_container, out_video_stream, out_audio_stream
+    file_paths: list[str],
+    output_container,
+    out_video_stream,
+    out_audio_stream,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Concatenate files using stream copy (fast path for H.264 input).
 
@@ -720,13 +1029,55 @@ def _combine_copy(
     (audio longer than video), the excess audio is trimmed so it can't push
     later segments' audio ahead of their video. ``detect_audio_video_gaps``
     surfaces either condition to the user as an NTFY warning.
+
+    ``corrupt_starts`` (path -> second) marks segments with an undecodable
+    region (from :func:`detect_video_decode_corruption`). For such a segment we
+    DEGRADE rather than mux garbage, and the cut is KEYFRAME-AWARE: we first scan
+    the segment's video packets for the last keyframe (``packet.is_keyframe``)
+    whose pts is at/before the corrupt second, then mux only video packets up to
+    and including that keyframe's GOP. Cutting at the raw corrupt second would
+    land mid-GOP and leave dangling P/B frames whose access unit is incomplete,
+    so the muxed stream would still explode ``avcodec_send_packet`` on decode —
+    the exact defect this guards against. Ending on a GOP boundary keeps the
+    output fully decodable. If no keyframe precedes the corrupt second (corruption
+    in the first GOP), the segment's video is dropped entirely rather than emit a
+    broken stream. The per-segment audio target is shrunk to the keyframe cut too,
+    so the existing audio-trim/pad logic re-aligns that segment's audio to its
+    now-shorter video — A/V stays in sync with the corrupt region removed.
     """
+    corrupt_starts = corrupt_starts or {}
     video_pts_offset = 0
     # A decoded real frame, reused as the format/layout/rate template for any
     # silence we synthesize. Captured from the first segment that has audio.
     audio_template = None
 
     for file_path in file_paths:
+        # If this segment was flagged corrupt, cut its video on a GOP boundary
+        # (the last keyframe at/before the corrupt second) instead of muxing the
+        # garbage that follows. A raw mid-GOP cut leaves an incomplete access
+        # unit the decoder later rejects, so first resolve the keyframe pts.
+        seg_corrupt_s = corrupt_starts.get(file_path)
+        # Keyframe-aligned cut point (raw pts seconds) for a corrupt segment;
+        # 0.0 when its video is dropped wholesale. Only meaningful when
+        # ``seg_corrupt_s`` is not None.
+        seg_cut_s: float = 0.0
+        drop_segment_video = False
+        if seg_corrupt_s is not None:
+            last_kf_pts = _last_keyframe_pts_seconds(file_path, seg_corrupt_s)
+            if last_kf_pts is None:
+                # Corruption in the very first GOP: there is no clean keyframe to
+                # end on, so dropping the whole segment's video is the only way to
+                # avoid emitting a broken stream.
+                drop_segment_video = True
+                seg_cut_s = 0.0
+                logger.error(
+                    "COMBINE: %s is corrupt within its first GOP (no keyframe "
+                    "at/before %.1fs); dropping this segment's video entirely",
+                    os.path.basename(file_path),
+                    seg_corrupt_s,
+                )
+            else:
+                seg_cut_s = last_kf_pts
         with av_open_read(file_path) as input_container:
             in_video = None
             in_audio = None
@@ -752,6 +1103,25 @@ def _combine_copy(
             seg_video_target_s = None
             if in_video is not None and in_video.duration:
                 seg_video_target_s = float(in_video.duration * in_video.time_base)
+            # A corrupt segment's metadata duration still reads the full length
+            # (the bad packets carry PTS), so clamp the audio target to the
+            # keyframe cut point — otherwise audio would be trimmed/padded to dead
+            # video.
+            if seg_corrupt_s is not None:
+                seg_video_target_s = (
+                    seg_cut_s
+                    if seg_video_target_s is None
+                    else min(seg_video_target_s, seg_cut_s)
+                )
+                if not drop_segment_video:
+                    logger.warning(
+                        "COMBINE: cutting corrupt video region in %s at GOP "
+                        "boundary %.3fs (corruption first seen ~%.1fs; dropping "
+                        "the undecodable tail)",
+                        os.path.basename(file_path),
+                        seg_cut_s,
+                        seg_corrupt_s,
+                    )
 
             for packet in input_container.demux(streams_to_demux):
                 if packet.dts is None:
@@ -759,6 +1129,26 @@ def _combine_copy(
 
                 try:
                     if packet.stream == in_video:
+                        # Cut the dead region on a GOP boundary BEFORE normalizing:
+                        # ``seg_cut_s`` is the keyframe pts in *raw* seconds (same
+                        # frame of reference as :func:`_last_keyframe_pts_seconds`),
+                        # so compare the raw pts here. Drop this corrupt segment's
+                        # video once its pts passes the keyframe cut, so the muxed
+                        # stream ends on a complete I-frame (no dangling P/B
+                        # references) and the garbage tail never lands in the
+                        # output. ``drop_segment_video`` drops it wholesale when no
+                        # clean keyframe precedes the corruption.
+                        if drop_segment_video:
+                            continue
+                        if (
+                            seg_corrupt_s is not None
+                            and seg_cut_s is not None
+                            and in_video.time_base
+                            and packet.pts is not None
+                            and float(packet.pts * in_video.time_base) > seg_cut_s
+                        ):
+                            continue
+
                         # Normalize and offset
                         if in_video.index not in first_dts:
                             first_dts[in_video.index] = packet.dts
@@ -838,6 +1228,7 @@ async def combine_videos(
     output_path: str,
     camera_name: str | None = None,
     camera_type: str | None = None,
+    corrupt_starts: dict[str, float] | None = None,
 ) -> bool:
     """Combines multiple video files into a single MP4 using PyAV.
 
@@ -849,6 +1240,10 @@ async def combine_videos(
         output_path: Path for the combined output file.
         camera_name: Optional camera name to embed in MP4 metadata.
         camera_type: Optional camera type to embed in MP4 metadata.
+        corrupt_starts: Optional map of segment path -> second where its video
+            becomes undecodable (from :func:`detect_video_decode_corruption`).
+            Each such segment's video is cut at that point so the dead region is
+            dropped rather than muxed as garbage.
     """
     logger.info(
         f"Combining {len(file_paths)} videos to {os.path.basename(output_path)}"
@@ -862,6 +1257,7 @@ async def combine_videos(
             temp_output,
             camera_name,
             camera_type,
+            corrupt_starts,
             timeout=timeout,
         )
         if result:

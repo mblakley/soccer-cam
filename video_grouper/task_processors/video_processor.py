@@ -101,6 +101,12 @@ class VideoProcessor(QueueProcessor):
                         await self._send_audio_gap_warning(
                             item.get_item_path(), audio_gaps
                         )
+                    # NOTE: combine no longer hunts for undecodable video regions
+                    # (that would mean decoding every clean game). In-file camera
+                    # corruption is caught + surfaced REACTIVELY when a pipeline
+                    # decode step first fails — see corrupt_recovery, which sends
+                    # the video-corruption NTFY via _send_video_corruption_warning's
+                    # shared notifier at that point.
                     asyncio.create_task(self._on_combine_complete(item.get_item_path()))
                 elif (
                     item.task_type == "trim"
@@ -248,6 +254,25 @@ class VideoProcessor(QueueProcessor):
             )
         except Exception as e:
             logger.error(f"VIDEO: Failed to send audio-gap NTFY for {group_dir}: {e}")
+
+    async def _send_video_corruption_warning(
+        self, group_dir: str, corruptions: list[dict]
+    ) -> None:
+        """Notify the camera manager (via NTFY) that footage was lost to camera
+        recording corruption.
+
+        Thin wrapper over the shared
+        :func:`~video_grouper.task_processors.corrupt_recovery.notify_video_corruption`
+        notifier, which the reactive recovery path also uses. Kept here so the
+        same NTFY plumbing (``ntfy_processor.ntfy_service.ntfy_api``) has one
+        home and one message format. Best-effort: never let a notification
+        failure affect video processing.
+        """
+        from video_grouper.task_processors.corrupt_recovery import (
+            notify_video_corruption,
+        )
+
+        await notify_video_corruption(self.ntfy_processor, group_dir, corruptions)
 
     async def _on_trim_complete(self, group_dir: str) -> None:
         """Skip post-trim processing and transition directly to upload.

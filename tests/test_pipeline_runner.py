@@ -132,6 +132,30 @@ class StepReader(PipelineStep):
         return True
 
 
+class StepDecodeError(PipelineStep):
+    """Raises a libav decode error, as the real decode steps do on a corrupt input."""
+
+    name = "t_decode_err"
+    config_model = _Cfg
+    runtime = "service"
+
+    async def run(self, manifest, ctx):
+        import av.error
+
+        raise av.error.InvalidDataError(1094995529, "Invalid data found")
+
+
+class StepOtherError(PipelineStep):
+    """Raises a non-decode error (must NOT be classified as decode_corruption)."""
+
+    name = "t_other_err"
+    config_model = _Cfg
+    runtime = "service"
+
+    async def run(self, manifest, ctx):
+        raise ValueError("not a decode problem")
+
+
 class StepUnavail(PipelineStep):
     name = "t_unavail"
     config_model = _Cfg
@@ -174,6 +198,8 @@ for _s in (
     StepRebind,
     StepReader,
     StepUnavail,
+    StepDecodeError,
+    StepOtherError,
 ):
     register_step(_s.name, _s, _Cfg)
 
@@ -318,6 +344,27 @@ async def test_rebind_step_reruns_after_output_deleted(tmp_path):
     assert r2.ok  # recovered, not stuck
     assert RUN_COUNTS == {"t_rebind": 2, "t_reader": 2}
     assert (tmp_path / "corrected.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_decode_corruption_error_is_classified(tmp_path):
+    # A step raising a libav decode error must be tagged error_kind=
+    # "decode_corruption" so the pipeline_processor can fire reactive recovery.
+    result = await PipelineRunner([_spec("d", "t_decode_err")]).run(
+        str(tmp_path / "g.mp4"), str(tmp_path / "o.mp4"), _ctx(tmp_path)
+    )
+    assert result.status == "failed"
+    assert result.error_kind == "decode_corruption"
+
+
+@pytest.mark.asyncio
+async def test_non_decode_exception_not_classified(tmp_path):
+    # A non-decode exception must NOT be tagged as corruption (no recovery fired).
+    result = await PipelineRunner([_spec("o", "t_other_err")]).run(
+        str(tmp_path / "g.mp4"), str(tmp_path / "o.mp4"), _ctx(tmp_path)
+    )
+    assert result.status == "failed"
+    assert result.error_kind is None
 
 
 @pytest.mark.asyncio

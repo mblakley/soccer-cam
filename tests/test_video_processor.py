@@ -151,8 +151,37 @@ class TestVideoProcessor:
         trim_task = TrimTask(
             group_dir="/test/group", start_time="00:05:00", end_time="01:35:00"
         )
-        key = processor.get_item_key(trim_task)
-        assert key == "trim:/test/group"
+        assert processor.get_item_key(trim_task) == "trim:/test/group"
+
+    @pytest.mark.asyncio
+    async def test_combine_no_longer_sends_corruption_ntfy(
+        self, temp_storage, mock_config
+    ):
+        """Combine no longer hunts for / warns about video corruption.
+
+        That moved to the reactive recovery path (a pipeline decode step failing),
+        so a completed combine — even one whose output happens to carry corruption
+        — fires no corruption NTFY from the combine-complete transition.
+        """
+        ntfy_api = Mock()
+        ntfy_api.send_notification = AsyncMock()
+        ntfy_processor = Mock()
+        ntfy_processor.ntfy_service = Mock(ntfy_api=ntfy_api)
+
+        processor = VideoProcessor(
+            temp_storage, mock_config, Mock(), ntfy_processor=ntfy_processor
+        )
+
+        combine_task = CombineTask(group_dir="/test/group")
+
+        with (
+            patch.object(combine_task, "execute", new_callable=AsyncMock) as mock_exec,
+            patch.object(processor, "_on_combine_complete", new_callable=AsyncMock),
+        ):
+            mock_exec.return_value = True
+            await processor.process_item(combine_task)
+
+        ntfy_api.send_notification.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_init_with_optional_services(self, temp_storage, mock_config):

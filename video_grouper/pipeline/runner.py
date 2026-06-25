@@ -57,6 +57,12 @@ class PipelineResult:
     awaiting_runtime: str | None = None
     failed_step: str | None = None
     error: str | None = None
+    # Set to ``"decode_corruption"`` when the step failed because libav couldn't
+    # decode the (stream-copied) input — an undecodable region a camera wrote to
+    # its SD card that combine/trim rode straight through. The pipeline_processor
+    # keys on this to fire reactive recovery (localize → keyframe-cut re-combine)
+    # instead of failing the game outright. ``None`` for every other failure.
+    error_kind: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -208,7 +214,18 @@ class PipelineRunner:
                 ok = await self._run_step(step, manifest, ctx)
             except Exception as e:  # noqa: BLE001 — surface as a failed step
                 logger.exception("pipeline: step %s raised", spec.step_id)
-                return self._fail(manifest, spec.step_id, f"exception: {e}", spec.type)
+                # Classify a libav decode failure so the pipeline_processor can
+                # fire reactive corruption recovery instead of a terminal fail.
+                from video_grouper.utils.ffmpeg_utils import is_decode_corruption_error
+
+                kind = "decode_corruption" if is_decode_corruption_error(e) else None
+                return self._fail(
+                    manifest,
+                    spec.step_id,
+                    f"exception: {e}",
+                    spec.type,
+                    error_kind=kind,
+                )
 
             if not ok:
                 return self._fail(
@@ -276,7 +293,10 @@ class PipelineRunner:
         step_id: str,
         error: str,
         step_type: str | None = None,
+        error_kind: str | None = None,
     ) -> PipelineResult:
         logger.error("pipeline: step %s failed: %s", step_id, error)
         manifest.mark_failed(step_id, error, step_type=step_type)
-        return PipelineResult("failed", failed_step=step_id, error=error)
+        return PipelineResult(
+            "failed", failed_step=step_id, error=error, error_kind=error_kind
+        )

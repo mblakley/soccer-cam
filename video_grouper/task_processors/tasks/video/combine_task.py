@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from video_grouper.models import DirectoryState
-from video_grouper.utils.ffmpeg_utils import combine_videos, detect_audio_video_gaps
+from video_grouper.utils.ffmpeg_utils import (
+    combine_videos,
+    detect_audio_video_gaps,
+)
 from video_grouper.utils.paths import (
     get_combined_video_path,
     resolve_path,
@@ -93,7 +96,8 @@ class CombineTask(BaseFfmpegTask):
         """
         # Segments whose audio is materially shorter than their video, detected
         # before combining. The combine itself pads each gap with silence (see
-        # _combine_copy); VideoProcessor reads this list to warn the user.
+        # _combine_copy); VideoProcessor reads this list to warn the user. This is
+        # a CHEAP metadata-only probe (container durations), not a decode.
         self.audio_gaps: list[dict] = []
 
         dav_files = self.get_dav_files()
@@ -114,6 +118,16 @@ class CombineTask(BaseFfmpegTask):
                 ),
             )
 
+        # NOTE: combine is a fast stream-copy and deliberately does NOT decode the
+        # video to hunt for in-file (byte-complete-but-corrupt) HEVC corruption.
+        # A full decode-probe of every segment costs ~realtime (90-150 min on a
+        # 90-min game) and clean games would pay it for nothing. Instead the
+        # corruption rides through the stream-copy and is caught REACTIVELY when a
+        # downstream pipeline step first actually decodes the video and fails —
+        # see video_grouper.task_processors.corrupt_recovery, which only then
+        # localizes (decode-probe) and re-combines this segment list with the
+        # corrupt region keyframe-cut via combine_videos(corrupt_starts=...).
+
         output_path = self.get_output_path()
 
         # Extract camera metadata from the group's state.json
@@ -129,9 +143,15 @@ class CombineTask(BaseFfmpegTask):
             pass  # Non-critical: metadata is optional
 
         try:
-            # Pass file paths directly to combine_videos (PyAV-based)
+            # Pass file paths directly to combine_videos (PyAV-based). No
+            # corrupt_starts here: combine never decodes, so it can't (and
+            # shouldn't) localize corruption — that's the reactive recovery's job
+            # if a downstream decode step fails.
             success = await combine_videos(
-                dav_files, output_path, camera_name=camera_name, camera_type=camera_type
+                dav_files,
+                output_path,
+                camera_name=camera_name,
+                camera_type=camera_type,
             )
 
             if success:
