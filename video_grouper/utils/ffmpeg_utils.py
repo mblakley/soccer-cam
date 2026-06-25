@@ -823,6 +823,42 @@ def detect_audio_video_gaps(
     return gaps
 
 
+def _last_keyframe_pts_seconds(file_path: str, before_seconds: float) -> float | None:
+    """Return the largest keyframe pts (in seconds) at or before *before_seconds*.
+
+    A cheap metadata-only pass: demux the video stream without decoding and track
+    the latest keyframe whose pts is <= *before_seconds*. The cut for a corrupt
+    segment must land here so the muxed stream ends on a complete I-frame with no
+    dangling P/B references — cutting at the raw corrupt second lands mid-GOP and
+    leaves an incomplete access unit that ``avcodec_send_packet`` later rejects.
+
+    Returns ``None`` if no keyframe exists at/before *before_seconds* (corruption
+    in the very first GOP), in which case the caller must drop the segment's video
+    entirely rather than emit a broken stream.
+    """
+    with av_open_read(file_path) as container:
+        if not container.streams.video:
+            return None
+        video_stream = container.streams.video[0]
+        time_base = video_stream.time_base
+        if time_base is None:
+            return None
+        last_kf_pts: float | None = None
+        for packet in container.demux(video_stream):
+            if packet.pts is None or not packet.is_keyframe:
+                continue
+            pts_s = float(packet.pts * time_base)
+            if pts_s <= before_seconds:
+                if last_kf_pts is None or pts_s > last_kf_pts:
+                    last_kf_pts = pts_s
+            else:
+                # Packets are demuxed in dts order; once a keyframe's pts passes
+                # the threshold we could still see an earlier-pts keyframe (open
+                # GOP reordering), so don't break — but the common case stops here.
+                continue
+        return last_kf_pts
+
+
 def detect_video_decode_corruption(
     file_paths: list[str],
     window_seconds: float = DECODE_PROBE_WINDOW_SECONDS,
@@ -836,13 +872,17 @@ def detect_video_decode_corruption(
     PTS), so the audio-gap detector saw nothing wrong. Only a decode probe trips
     on it.
 
-    Each entry is ``{"path", "corrupt_start_seconds", "video_seconds",
-    "lost_seconds"}`` where ``corrupt_start_seconds`` is where decoding first
-    failed (the cut point), ``video_seconds`` the segment's container duration,
-    and ``lost_seconds`` the trailing span that gets removed by the combine
-    degrade path. ``_combine_copy`` consumes ``corrupt_start_seconds`` to drop
-    the dead video region; ``VideoProcessor`` surfaces the list as an NTFY
-    warning and flags the game so it isn't shipped as if perfect.
+    Each entry is ``{"path", "corrupt_start_seconds", "cut_seconds",
+    "video_seconds", "lost_seconds"}`` where ``corrupt_start_seconds`` is where
+    decoding first failed, ``cut_seconds`` is the keyframe-aligned point where the
+    combine actually cuts the segment's video (the last GOP boundary at/before the
+    corrupt second — ``None`` if no keyframe precedes it), ``video_seconds`` the
+    segment's container duration, and ``lost_seconds`` the trailing span removed
+    by the combine degrade path (measured from ``cut_seconds`` so it reflects the
+    real, keyframe-aligned cut). ``_combine_copy`` consumes ``corrupt_start_seconds``
+    to locate the same keyframe and drop the dead video region on a GOP boundary;
+    ``VideoProcessor`` surfaces the list as an NTFY warning and flags the game so
+    it isn't shipped as if perfect.
     """
     corruptions: list[dict] = []
     for path in file_paths:
@@ -860,11 +900,23 @@ def detect_video_decode_corruption(
                 video_seconds = dur
         except Exception:
             pass
-        lost_seconds = max(0.0, video_seconds - corrupt_start)
+        # Keyframe-align the cut so lost_seconds reflects the real GOP-boundary
+        # cut the combine will make, not the raw corrupt second.
+        cut_seconds: float | None
+        try:
+            cut_seconds = _last_keyframe_pts_seconds(path, corrupt_start)
+        except Exception as exc:
+            logger.warning(f"COMBINE: keyframe scan failed for {path}: {exc}")
+            cut_seconds = None
+        # No keyframe at/before the corrupt point => first-GOP corruption; the
+        # combine drops the whole segment's video, so the entire span is lost.
+        effective_cut = cut_seconds if cut_seconds is not None else 0.0
+        lost_seconds = max(0.0, video_seconds - effective_cut)
         corruptions.append(
             {
                 "path": path,
                 "corrupt_start_seconds": corrupt_start,
+                "cut_seconds": cut_seconds,
                 "video_seconds": video_seconds,
                 "lost_seconds": lost_seconds,
             }
@@ -959,11 +1011,18 @@ def _combine_copy(
 
     ``corrupt_starts`` (path -> second) marks segments with an undecodable
     region (from :func:`detect_video_decode_corruption`). For such a segment we
-    DEGRADE rather than mux garbage: video packets at/after the corrupt second
-    are dropped, so the dead span is cut. The per-segment audio target is
-    shrunk to the cut point too, so the existing audio-trim/pad logic re-aligns
-    that segment's audio to its now-shorter video — A/V stays in sync with the
-    corrupt region removed.
+    DEGRADE rather than mux garbage, and the cut is KEYFRAME-AWARE: we first scan
+    the segment's video packets for the last keyframe (``packet.is_keyframe``)
+    whose pts is at/before the corrupt second, then mux only video packets up to
+    and including that keyframe's GOP. Cutting at the raw corrupt second would
+    land mid-GOP and leave dangling P/B frames whose access unit is incomplete,
+    so the muxed stream would still explode ``avcodec_send_packet`` on decode —
+    the exact defect this guards against. Ending on a GOP boundary keeps the
+    output fully decodable. If no keyframe precedes the corrupt second (corruption
+    in the first GOP), the segment's video is dropped entirely rather than emit a
+    broken stream. The per-segment audio target is shrunk to the keyframe cut too,
+    so the existing audio-trim/pad logic re-aligns that segment's audio to its
+    now-shorter video — A/V stays in sync with the corrupt region removed.
     """
     corrupt_starts = corrupt_starts or {}
     video_pts_offset = 0
@@ -972,9 +1031,32 @@ def _combine_copy(
     audio_template = None
 
     for file_path in file_paths:
-        # If this segment was flagged corrupt, cut its video at the first
-        # undecodable second instead of muxing the garbage that follows.
-        seg_cut_s = corrupt_starts.get(file_path)
+        # If this segment was flagged corrupt, cut its video on a GOP boundary
+        # (the last keyframe at/before the corrupt second) instead of muxing the
+        # garbage that follows. A raw mid-GOP cut leaves an incomplete access
+        # unit the decoder later rejects, so first resolve the keyframe pts.
+        seg_corrupt_s = corrupt_starts.get(file_path)
+        # Keyframe-aligned cut point (raw pts seconds) for a corrupt segment;
+        # 0.0 when its video is dropped wholesale. Only meaningful when
+        # ``seg_corrupt_s`` is not None.
+        seg_cut_s: float = 0.0
+        drop_segment_video = False
+        if seg_corrupt_s is not None:
+            last_kf_pts = _last_keyframe_pts_seconds(file_path, seg_corrupt_s)
+            if last_kf_pts is None:
+                # Corruption in the very first GOP: there is no clean keyframe to
+                # end on, so dropping the whole segment's video is the only way to
+                # avoid emitting a broken stream.
+                drop_segment_video = True
+                seg_cut_s = 0.0
+                logger.error(
+                    "COMBINE: %s is corrupt within its first GOP (no keyframe "
+                    "at/before %.1fs); dropping this segment's video entirely",
+                    os.path.basename(file_path),
+                    seg_corrupt_s,
+                )
+            else:
+                seg_cut_s = last_kf_pts
         with av_open_read(file_path) as input_container:
             in_video = None
             in_audio = None
@@ -1001,20 +1083,24 @@ def _combine_copy(
             if in_video is not None and in_video.duration:
                 seg_video_target_s = float(in_video.duration * in_video.time_base)
             # A corrupt segment's metadata duration still reads the full length
-            # (the bad packets carry PTS), so clamp the audio target to the cut
-            # point — otherwise audio would be trimmed/padded to dead video.
-            if seg_cut_s is not None:
+            # (the bad packets carry PTS), so clamp the audio target to the
+            # keyframe cut point — otherwise audio would be trimmed/padded to dead
+            # video.
+            if seg_corrupt_s is not None:
                 seg_video_target_s = (
                     seg_cut_s
                     if seg_video_target_s is None
                     else min(seg_video_target_s, seg_cut_s)
                 )
-                logger.warning(
-                    "COMBINE: cutting corrupt video region in %s at %.1fs "
-                    "(dropping the undecodable tail)",
-                    os.path.basename(file_path),
-                    seg_cut_s,
-                )
+                if not drop_segment_video:
+                    logger.warning(
+                        "COMBINE: cutting corrupt video region in %s at GOP "
+                        "boundary %.3fs (corruption first seen ~%.1fs; dropping "
+                        "the undecodable tail)",
+                        os.path.basename(file_path),
+                        seg_cut_s,
+                        seg_corrupt_s,
+                    )
 
             for packet in input_container.demux(streams_to_demux):
                 if packet.dts is None:
@@ -1022,23 +1108,32 @@ def _combine_copy(
 
                 try:
                     if packet.stream == in_video:
+                        # Cut the dead region on a GOP boundary BEFORE normalizing:
+                        # ``seg_cut_s`` is the keyframe pts in *raw* seconds (same
+                        # frame of reference as :func:`_last_keyframe_pts_seconds`),
+                        # so compare the raw pts here. Drop this corrupt segment's
+                        # video once its pts passes the keyframe cut, so the muxed
+                        # stream ends on a complete I-frame (no dangling P/B
+                        # references) and the garbage tail never lands in the
+                        # output. ``drop_segment_video`` drops it wholesale when no
+                        # clean keyframe precedes the corruption.
+                        if drop_segment_video:
+                            continue
+                        if (
+                            seg_corrupt_s is not None
+                            and seg_cut_s is not None
+                            and in_video.time_base
+                            and packet.pts is not None
+                            and float(packet.pts * in_video.time_base) > seg_cut_s
+                        ):
+                            continue
+
                         # Normalize and offset
                         if in_video.index not in first_dts:
                             first_dts[in_video.index] = packet.dts
                         packet.dts -= first_dts[in_video.index]
                         packet.pts -= first_dts[in_video.index]
                         if packet.dts < 0:
-                            continue
-
-                        # Cut the dead region: once this corrupt segment reaches
-                        # the undecodable second, stop muxing its video so the
-                        # garbage tail never lands in the output.
-                        if (
-                            seg_cut_s is not None
-                            and in_video.time_base
-                            and packet.pts is not None
-                            and float(packet.pts * in_video.time_base) >= seg_cut_s
-                        ):
                             continue
 
                         # Track max pts for offset calculation
