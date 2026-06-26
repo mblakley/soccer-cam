@@ -2,6 +2,34 @@
 
 *Last updated: 2026-06-26*
 
+## IMPLEMENTATION ROADMAP — JSONL measurement store (approved 2026-06-26, autonomous build)
+
+Design locked in DECISIONS.md (3 entries: store-next-to-video / split-preprocessing / frame-indexing+corruption).
+Mark: "start with implementation … just run this marathon until it completes." Marathon is NOT relaunched again —
+it finishes writing its current correct-geometry `detections.json`; we **convert** to the new format post-hoc.
+
+Build order (precious/at-risk data first; verify each on a sample game before bulk):
+1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
+   packet count = canonical, verified == decoded on 06.08) + `corrupt[]`; **field_polygon** (rescued from manifest.db
+   `field_boundary` → fallback v4_fields/gamedata) + `game_state` phase timestamps (rescued from manifest.db
+   `game_phases` source=human). **This rescues the 11 unique polygons + 36 unique human phase-sets before any DB drop.**
+2. **`ball_labels.jsonl` consolidator** — `D:\training_data\far_label\*\labels.json` (27 sets) → per-game next to video,
+   `{seg,f,a,p,src,set,ts}`, provenance preserved. Gets the precious human labels off transient D:. Merge gamedata
+   `labels.jsonl`.
+3. **`autocam_viewport.jsonl`** — convert the 61 `F:\autocam_data\<gid>\viewport.json` → next to video `{seg,f,v}`.
+4. **`autocam_detections.jsonl`** — convert marathon `detections.json` → next to video `{seg,f,d:[[x,y,conf]]}` (run on
+   completed games; finalize when marathon hits 72/72).
+5. **`ball_track.jsonl`** — migrate gamedata `track.jsonl` → next to video.
+6. **Repoint `gamedata.py` (`gd`)** to read the per-game video dir; update `F:\DATA_INVENTORY.md`. Stop writing measurements
+   to manifest.db (legacy DBs droppable AFTER the full audit verifies extraction).
+7. **FULL METADATA AUDIT (Mark-requested):** iterate ALL ~103 games, assert each has a complete sidecar set —
+   `game.json` (polygon + game_state + offset table + corrupt[]) and every available stream (autocam det/viewport,
+   ball_labels, ball_track) — emit a per-game completeness report (what's present / missing / rescued-from-where).
+   Only after this passes are the manifest.db files safe to retire.
+
+Primitives (locked): point `[x,y]` · detection `[x,y,conf]` · viewport `[cx,cy,w,h]` · polygon `[[x,y]]`. Tooling
+developed in-repo (generic data plumbing — `training/data_prep/`), synced to the box via git branch to run on F:/D:.
+
 ## OVERNIGHT AUTONOMOUS RUN — persistent tracker (2026-06-26, ~8h, Mark asleep, no feedback)
 
 **This is the durable todo so nothing is lost across context compaction.** Update it as work advances.
