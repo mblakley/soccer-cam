@@ -31,6 +31,13 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   (not done autonomously — would risk disrupting the stable run): (a) NVDEC hardware decode (cv2.cudacodec /
   PyAV cuvid) → potentially <1 day; (b) 2 parallel instances on disjoint `--games` halves → ~2x (watch 16 GB
   RAM). Left the single stable run going; reliable > fast-but-disrupted.**
+  **QA GATE PASSED (2026-06-26 02:20, game 1 `flash__2024.05.01_vs_RNYFC_away`, 9.2 MB detections.json,
+  18375/30960 frames with top-conf>0.5):** vision-checked 3 high-conf frames — detections are structurally
+  CORRECT (valid source-px coords, on-field, clustered near players, right scale, det0615 schema). The top-1
+  is occasionally a high-conf FP on grass — EXPECTED (AutoCam raw-balldet argmax is often a FP; that's the
+  selection problem). Capturing the full per-frame [x,y,conf]×20 candidate set is the deliverable. Orientation
+  verified: orchestrator uses `corrected_video` with `needs_flip=False` → no flip mismatch. Marathon data is
+  GOOD; let it run. Downstream consumers: top-1 ≠ ball; use the candidate set + selection/tracking.
 - **nulldecode_scan_v2.py — PAUSED at 50/360 (resumable).** Paused 2026-06-26 00:42 because it competes with
   the marathon for CPU decode AND its results are UNRELIABLE under sustained marathon load: it flagged 2 Upper90
   (2026.05.10) segments (100259@101.9s, 100759@92.1s) as CORRUPT, but the marathon's heavy 8K decode is the
