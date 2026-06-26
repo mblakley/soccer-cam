@@ -9,6 +9,32 @@ Discipline every step: recall is the untouched GPU priority; all aux work CPU-on
 before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state lives here in committed docs.
 
 ### DONE since this tracker started (2026-06-26)
+- **DML inference SPED UP — root cause found, FIXED, marathon SWITCHED (2026-06-26 ~09:00).** The earlier
+  "DML is ~155 ms/frame, GPU-inference lever is closed" verdict (CUDA bullet below) had the WRONG root cause.
+  ORT profiling of OUR path showed only **~16 ms of real GPU kernel time per inference vs ~135 ms wall — ~89%
+  was NON-kernel overhead**, not fp16 compute (the convs are ~9-16 ms total). **Root cause:** the balldet model
+  has a **dynamic input** (`['batch',3,'height','width']`) and an **in-graph YOLO decode that rebuilds its anchor
+  grid at runtime** (Range/Expand/ConstantOfShape/Reshape/Gather). ORT can't constant-fold that subgraph
+  (symbolic shapes + the ops are fp16 with no CPU fp16 kernel → the "Could not find a CPU kernel … can't
+  constant fold" warnings), so the **DML EP splits the net into many partitions with a CPU↔GPU sync on every
+  boundary** — that's the 130 ms. Session-options levers (free-dim override alone, `ORT_ENABLE_ALL`, IoBinding)
+  did NOT help (138→130 ms) — it had to be a **graph-level rewrite**. **FIX:** derive a **fixed-shape
+  (1×3×448×1600) fp32 copy** of the model (`ensure_fixed_fp32_model()` in `gen_detections_all.py`, cached at
+  `D:\detect_work\balldet_fp16_dec.onnx.fp32s_1600x448.onnx`) → ORT constant-folds the grid and **FUSES the whole
+  net into ONE `DmlFusedNode`** (one dispatch, zero per-op sync; 445 nodes → fused). Pascal runs fp32 fine and
+  its fp16 path isn't faster here, so fp32 costs nothing. **Measured (equal-contention A/B, identical frames):**
+  pure detect **134→71 ms** synthetic (~1.9×); end-to-end **Dahua 215→149 ms, Reolink/processed 153→111 ms**.
+  **Live, post-switch, uncontended:** the resumed decode-heavy Dahua game runs **8.88 infps / 112.6 ms vs 7.18
+  infps / 139 ms before = 1.24× on this DECODE-bound game** (detect ≈1.9×; **decode is now the floor** on Dahua —
+  see NVDEC lever). Detect-bound games (cheap-decode) gain more. **Correctness gate PASSED** (same model+provider,
+  fp32 vs fp16 numerics only): top-1 detection matches the fp16 marathon **97.5% (Dahua) / 100% (Reolink)** within
+  3 px + 0.03 conf, median dx **0.78 / 0.32 px**, conf delta <0.013 everywhere; only marginal sub-0.05-floor tail
+  candidates churn (filtered downstream anyway). **SWITCHED:** stopped the fp16 marathon (parent PID 10120),
+  deployed the updated script, relaunched detached (**new parent PID 12124**, worker IDLE prio, `DmlExecutionProvider`
+  active — no CPU fallback), which **RESUMED the in-flight Dahua game from its checkpoint** (no recompute; that one
+  game's `detections.json` is fp16 up to the resume frame + fp32 after, within tolerance). fp16 run log archived
+  `marathon_fp16_20260626_085109.log`; prior code `gen_detections_all.py.bak_fp16_20260626_085109`. `run_marathon.cmd`
+  unchanged (the fix is internal to `gen_detections_all.py`).
 - **recall_train.py — FINISHED.** EXP-DIST-14 documented: **far-band loss weighting is NEGATIVE** — K0 control
   (no far-weight) beats K4 on both splits (hard 0.348 vs 0.239, normal 0.069 vs 0.039) + lower variance.
   Abandon loss-weighting; the lever is venue DIVERSITY (→ the detection marathon). GPU now free.
@@ -43,8 +69,10 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
 
 ### In-flight background jobs
 - **DETECTION MARATHON (#27) — RUNNING.** `run_marathon.cmd` → `gen_detections_all.py --provider dml --stride 4
-  --trainable-only`, BelowNormal, detached. Work-list **72 trainable games**, ~**7.2 infps** (DML; DECODE-bound
-  on CPU, not inference). Writes `F:\autocam_data\<gid>\detections.json` + `README.detections.md` (avoids the
+  --trainable-only`, detached, worker IDLE prio. Work-list **65 trainable games remaining**. **As of 2026-06-26
+  ~09:00 running the DML fp32-static FUSED model (new parent PID 12124, ~1.9× faster detect)** — **8.9 infps on
+  the decode-bound Dahua game** (was 7.18), more on detect-bound games; **decode is now the floor** (see the
+  DML-speedup DONE bullet above + NVDEC lever below). Writes `F:\autocam_data\<gid>\detections.json` + `README.detections.md` (avoids the
   indexer's README.md). Log: `G:\ballresearch\distill\marathon.log`. Resumable: `.done` + `.progress.json`.
   **After trainable-only completes (.done=72), re-run WITHOUT `--trainable-only`** for the remaining ~29 games.
   **REAL ETA (measured 2026-06-26 01:15): ~75 min/game for Dahua 4096x1800; the 16 Reolink 8K games ~3-4x
@@ -75,10 +103,13 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
 - **SPEEDUP LEVER (investigate, don't block):** ~7 infps. NOT purely decode-bound as previously thought —
   measured decode ceilings are Dahua **23 infps** (inference-bound) and Reolink 8K **6.4 infps** (decode-bound);
   DML inference is ~155 ms/frame (~6.5 fps). **CUDA was TESTED 2026-06-26 and is ~20% SLOWER than DML** (Pascal
-  fp16 penalty — see DONE bullet above), so the GPU-inference lever is closed on this card/model. Remaining real
-  levers: **(a) NVDEC hardware decode** (cv2.cudacodec / PyAV cuvid) helps the decode-bound 8K Reolink games;
-  **(b) 2 parallel marathon instances on disjoint `--games` halves** (~2x, watch 16 GB RAM). Marathon is
-  resumable so switching decode mid-run loses nothing.
+  fp16 penalty — see CUDA DONE bullet). The GPU-inference lever was **NOT actually closed**: the real bottleneck
+  was the dynamic-shape in-graph YOLO-decode subgraph forcing per-op CPU↔GPU sync (only ~16 ms of ~135 ms was
+  kernel time), **now FIXED 2026-06-26 ~09:00 via DML fixed-shape fp32 graph fusion (~1.9× faster detect; detect
+  134→71 ms; see the DML-speedup DONE bullet)**. With detect ~halved, **decode is now the floor**, so the
+  remaining levers are decode-side: **(a) NVDEC hardware decode** (cv2.cudacodec / PyAV cuvid) for the
+  decode-bound 8K Reolink games; **(b) 2 parallel marathon instances on disjoint `--games` halves** (~2×, watch
+  16 GB RAM). Marathon is resumable so switching decode mid-run loses nothing.
 
 ### As-they-land (event-driven)
 - **Recall done** → analyze K4-vs-K0, write **EXP-DIST-14** to EXPERIMENTS.md (committed, not pushed), decide next.
