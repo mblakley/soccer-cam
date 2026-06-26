@@ -4,6 +4,58 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-26: Per-game measurement store = JSONL sidecars next to the video on F: (retire manifest.db)
+
+**Context (Mark):** "I only want to maintain the jsonl file, not the manifest db — the sqlite DBs were
+fragile, and were only necessary when we were using the tiling approach." + "The F drive archive is the most
+important — the sidecars 100% need to end up there." + "write these sidecar files next to the video files, not
+in some other random directory where they will get lost." We had accumulated 4+ parallel stores for the same
+measurements (`F:\autocam_data\<gid>\detections.json`+`viewport.json` whole-file JSON; `F:\gamedata\<gid>\`
+keyed-dir `labels.jsonl`/`track.jsonl`; `D:\training_data\far_label\…\labels.json` human labels on the
+**transient** D: tier; `manifest.db` ball tables) — fragmented, some off the F: archive, easy to orphan.
+
+**Verified facts:** all 103 registry games have their `path` (video dir) **on F:** and present on disk
+(`F:\Flash_2013s\<game>\`, `F:\Heat_2012s\<game>\`). AutoCam already writes its sidecar next to the video as
+`<processed>.mp4.jsonl`. The existing `gamedata` store already uses a clean per-segment jsonl schema
+`{"seg","f","x","y","qa"}` (`labels.jsonl`) / `{"seg","f","x","y"}` (`track.jsonl`) read by `gamedata.py` (`gd`).
+
+**Decision:** ONE canonical store — **append-only JSONL sidecars written into each game's own video dir on F:**
+(`<registry path>`), beside the segment `.mp4`s. **No SQLite/manifest.db going forward** (legacy DBs become
+derived/droppable; they existed only for the retired tiling pipeline). Per-game files:
+
+| file | content | schema (one record per line) |
+|---|---|---|
+| `game.json` | meta (NOT jsonl) | game_id, team, camera, segments[], w/h/fps, field polygon, play_windows, schema_version |
+| `ball_labels.jsonl` | human GT + visibility (**precious**) | `{"seg","f","x","y","a","src","set","ts"}`  a∈ball\|not_visible\|out_of_play |
+| `ball_track.jsonl` | canonical selected ball path | `{"seg","f","x","y"}` |
+| `autocam_detections.jsonl` | AutoCam raw balldet candidates | `{"seg","f","x","y","conf"}` (1 row/candidate) |
+| `autocam_viewport.jsonl` | AutoCam camera center | `{"seg","f","x","y"}` |
+| `homegrown_detections.jsonl` | (future) our detector | `{"seg","f","x","y","conf","model"}` |
+| `homegrown_viewport.jsonl` | (future) our camera center | `{"seg","f","x","y","model"}` |
+
+Naming pattern: `<producer>_<measurement>.jsonl` (producer ∈ autocam\|homegrown, measurement ∈ detections\|viewport)
++ producer-neutral ground-truth (`ball_labels`=human, `ball_track`=canonical). Adding a producer/measurement later
+= a new file, zero migration. Keep the existing `{seg,f,x,y}` **per-segment** frame indexing (matches the
+multi-segment reality; no fragile global-frame mapping). Coords = that segment's native source px (declared in
+`game.json`). Each `.jsonl` opens with a `{"_meta":{schema_version,units,frame_base}}` header line so it is
+self-describing standalone.
+
+**Why:** consistent (same files/schema every game) · resilient/safe (append-only — a crash loses ≤1 line, no
+SQLite corruption, no whole-file rewrites like `detections.json`) · easy-read (one JSON/line, grep/tail) ·
+easy-parse (`for line in f: json.loads`, or `gd`) · future-proof. Co-located with the video so a measurement can
+never be orphaned from its source; 100% on the F: permanent archive.
+
+**Migration (incremental, additive-first):** (1) switch the running #27 marathon to append
+`autocam_detections.jsonl` into each video dir (also removes the whole-file-rewrite risk for the 3-4 day run);
+(2) convert the 61 `viewport.json` → `autocam_viewport.jsonl`; (3) consolidate the 27 `D:\far_label` sets →
+per-game `ball_labels.jsonl` (carry `src`/`set`/`ts` provenance — gets the precious human labels off transient D:);
+(4) migrate `F:\gamedata\` `labels`/`track` jsonl next to the video and **repoint `gamedata.py` + DATA_INVENTORY.md**;
+(5) stop writing measurements to manifest.db. Do additive writes first; defer deletions/repointing until verified.
+
+**Trade-off / open:** layout is **flat files in the video dir** (matches the AutoCam `.mp4.jsonl` precedent) rather
+than a `measurements\` subdir. Retiring manifest.db is a go-forward stance for the *measurement streams*; a full
+sweep of all manifest.db readers/writers (field_boundary, game_phases) is a separate follow-up, not this change.
+
 ## 2026-06-26: Split preprocessing — AutoCam geometry for the teacher labels, our dewarp for the student, meters for eval
 
 **Context:** This session proved AutoCam's exact balldet input recipe (full-frame, isotropic-to-`max_width=1600`
