@@ -4,6 +4,41 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-26: Frame indexing = canonical (seg,f) + derived global_offset; corruption handled via corrupt[] ranges + one decode policy
+
+**Context:** Producers currently disagree on frame keys — the #27 marathon keys detections by a running **global**
+frame; `gamedata` `labels.jsonl`/`track.jsonl` key by **(seg, f)** per-segment; AutoCam's sidecar + `viewport.json`
+are global. Mark: store an overall frame offset so it's consistent, and handle the corrupt-frame case (the
+`heat__2026.06.08_vs_Hilton_Heat_Flaitz_away` reolink game that crash-looped the curve's crop builder).
+
+**Minimal investigation (06.08, the one confirmed-corrupt game):** 25 raw reolink segments + a 18.9 GB `combined.mp4`.
+Demux packet count == header frame count **exactly on all 25 segments AND the combined (143,800), with zero demux
+errors**. So: no truncation, no missing packets, and `combined = Σ segments` holds precisely. **The corruption does
+NOT drop frames from the stream** — it is decode-level (a concealable bad frame) or, more likely per the prior note,
+an OOM in the crop builder (pixel accumulation on the 16 GB box), i.e. NOT data loss. (Stopped the full triple-decode
+classification as non-essential — it does not change the schema.)
+
+**Decision:**
+1. **Canonical key = `(seg, f)`** — `seg` = segment filename stem, `f` = 0-based decode index within that segment.
+   Per-segment indexing isolates corruption (a bad frame in segment k cannot shift indices in k+1..N) and works with
+   or without a physical `combined.mp4`. Matches the existing `gamedata` schema.
+2. **Global frame is DERIVED, not stored per record:** `game.json` `segments[]` carries `frames` (actual decoded
+   count) + `global_offset` (cumulative prior decoded frames, in registry segment order). `global_frame =
+   global_offset[seg] + f`. Recomputable from one corrected count without rewriting any measurement record. (06.08
+   shows header==packets==offset, so offsets are trustworthy; build them from the canonical decode, never header alone.)
+3. **Corruption handling = `corrupt` ranges per segment** in `game.json` (`"corrupt":[[f_start,f_end],...]`, empty
+   when clean), populated by the canonical decode pass (ffmpeg `-v error` / PyAV error-scan). Consumers skip those
+   frame ranges for labels/training. No PTS/`t` field needed **because frame count is preserved through concealment**
+   — if a future game ever shows decoders disagreeing on COUNT (mid-stream frame *drops*, not just bad pixels), revisit
+   by adding a `t` (PTS seconds) anchor.
+4. **One canonical, error-tolerant, count-preserving decode policy** for ALL producers (marathon/cv2, crop-builder/PyAV,
+   viewport indexer) so `(seg, f)` denotes the same frame everywhere even through a corrupt spot. The 06.08 curve crash
+   was a crop-builder OOM, fixed by streaming/memory limits — separate from indexing.
+
+**Data-shape primitives (locked):** point `[x,y]` · detection `[x,y,conf]` · **viewport `[cx,cy,w,h]`** (center+size:
+pan=cx,cy, zoom=w,h — matches how the broadcast crop is parameterized) · polygon `[[x,y],…]`. All source px in the
+segment's native resolution (declared in `game.json`). Per-frame record envelope: `{"seg","f", …}` (+ `p`/`d`/`v`).
+
 ## 2026-06-26: Per-game measurement store = JSONL sidecars next to the video on F: (retire manifest.db)
 
 **Context (Mark):** "I only want to maintain the jsonl file, not the manifest db — the sqlite DBs were
