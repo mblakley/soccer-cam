@@ -27,7 +27,13 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   `README.detections.md` (avoids the indexer's README.md). Log: `G:\ballresearch\distill\marathon.log`.
   Resumable: `.done` + `.progress.json` per game. **After trainable-only completes, run again WITHOUT
   `--trainable-only`** for the remaining ~29 games.
-- **nulldecode_scan_v2.py** (PID 20052) — corrected corruption scan, idle. Watcher bvuzhm2cg. Expect 06.08 ONLY.
+- **nulldecode_scan_v2.py — PAUSED at 50/360 (resumable).** Paused 2026-06-26 00:42 because it competes with
+  the marathon for CPU decode AND its results are UNRELIABLE under sustained marathon load: it flagged 2 Upper90
+  (2026.05.10) segments (100259@101.9s, 100759@92.1s) as CORRUPT, but the marathon's heavy 8K decode is the
+  exact load that caused the ORIGINAL false positives — and Upper90's 092759 segment was already proven clean by
+  3 idle decodes. The re-verify-×2 defense is defeated by *sustained* load. **These 2 flags are SUSPECT, not
+  confirmed — re-run the scan on an IDLE box (post-marathon) to trust it.** 06.08 remains the only CONFIRMED
+  corruption. (jsonl preserved; resume: relaunch nulldecode_scan_v2.py on an idle box — it skips done files.)
 
 ### REMAINING POST-RECALL GPU QUEUE (after / alongside the marathon)
 - **N=16 curve rerun (#24)** — reuse `crops_game` + 06.08 decode-skip; 5th curve row. NOTE: marathon uses the
