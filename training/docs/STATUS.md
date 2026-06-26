@@ -29,6 +29,13 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   704 model, 7.1 infps).** Box-scratch script backed up `.bak_448squish`; F: doc corrected (the prior
   "~0.4%, most games fine" was Reolink-only and wrong for the Dahua majority). 704 is ~25% slower/frame than the
   wrong 448 — correctness over speed; ETA ~3-4 days.
+  **Audited the STUDENT side too (per the new isotropic-everywhere rule):** `build_heatmap_crops` →
+  `_native_iso_warp` → `CropIsoWarp` scales height by the SAME factor as width (`final_h = band_h*target_width/src_w`,
+  `points()` applies one `scale` to x AND y) → balls stay round. The `AnisoWarp`/`FieldWarp` option is the
+  *intentional* perspective dewarp (depth normalization), applied identically at train + inference (no mismatch),
+  not a uniform squish. **So our trained models never inherited the squish-class bug — it was unique to feeding
+  AutoCam's fixed pretrained YOLO a distorted input (a train/inference geometry mismatch on an external model).**
+  Only the teacher/label-gen path needed the fix.
 - **DML inference SPED UP — root cause found, FIXED, marathon SWITCHED (2026-06-26 ~09:00).** The earlier
   "DML is ~155 ms/frame, GPU-inference lever is closed" verdict (CUDA bullet below) had the WRONG root cause.
   ORT profiling of OUR path showed only **~16 ms of real GPU kernel time per inference vs ~135 ms wall — ~89%
