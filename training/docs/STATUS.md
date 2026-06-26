@@ -9,6 +9,26 @@ Discipline every step: recall is the untouched GPU priority; all aux work CPU-on
 before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state lives here in committed docs.
 
 ### DONE since this tracker started (2026-06-26)
+- **MARATHON PREPROCESSING BUG — Dahua 36% vertical squish — FOUND, FIXED, FULL RERUN LAUNCHED (2026-06-26 ~11:30).**
+  Verifying the just-completed AutoCam-input ground truth (input `[1,3,480,1600]`, isotropic-to-1600-wide +
+  ceil-pad-to-32, RGB/255/fp32 — proven by live Frida capture; F:`DETECTION_PIPELINE.md`) against the actual
+  marathon code revealed a serious defect the capture-pass missed. **Channel order was fine** (`gen_detections_all.py:242`
+  does `COLOR_BGR2RGB` + `/255` + fp32 — the earlier "make-or-break unknown" is resolved OK). **But the marathon
+  hardcoded `AC_H=448` anisotropic for ALL games**, while AutoCam's height is source-AR-dependent
+  (`H=ceil(srcH*1600/srcW/32)*32`). Probing every trainable source video: **two resolutions** — 7680x2160 Reolink
+  (23 games, AutoCam feeds 1600x**480**; 448 ≈ 0.4% off, fine) and **4096x1800 Dahua (50 games, AutoCam feeds
+  1600x704; 448 = a 36% vertical squish)**. All 10 already-generated games were Dahua → all squished. **A/B on 300
+  real Dahua frames (same fp32 model, only geometry differs): 84% of confident top-1s agree (median 1.1 px) but
+  ~16% lock onto a DIFFERENT object (p90 144 px, max 1501 px) + a systematic -8 px bias — confident-wrong labels
+  the off-field/static/jump filters can't catch (~1-in-6 Dahua labels).** **FIX:** `run_worker` now computes
+  per-game `ISO_H=round(srcH*1600/srcW)` + `AC_H=((ISO_H+31)//32)*32`, isotropic-resizes to `1600xISO_H` +
+  **bottom-zero-pads** to `AC_H`, de-scales `sx==sy==srcW/1600`, and builds a fixed-shape fp32 model per height
+  (`...fp32s_1600x704.onnx` Dahua / `...fp32s_1600x480.onnx` Reolink — both pre-built + DML-fused). Validated
+  end-to-end (Dahua→704, Reolink→480, sane dets). **Stopped the marathon, wiped the 10 squished Dahua outputs
+  (viewport.json preserved), relaunched against all 72 trainable from scratch (new parent, DML, first game on the
+  704 model, 7.1 infps).** Box-scratch script backed up `.bak_448squish`; F: doc corrected (the prior
+  "~0.4%, most games fine" was Reolink-only and wrong for the Dahua majority). 704 is ~25% slower/frame than the
+  wrong 448 — correctness over speed; ETA ~3-4 days.
 - **DML inference SPED UP — root cause found, FIXED, marathon SWITCHED (2026-06-26 ~09:00).** The earlier
   "DML is ~155 ms/frame, GPU-inference lever is closed" verdict (CUDA bullet below) had the WRONG root cause.
   ORT profiling of OUR path showed only **~16 ms of real GPU kernel time per inference vs ~135 ms wall — ~89%

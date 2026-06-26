@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-15: does the marathon's 448-anisotropic squish actually corrupt Dahua labels? — YES, ~16% (2026-06-26)
+
+**Hypothesis:** `gen_detections_all.py` fed AutoCam's balldet a hardcoded `1600x448` anisotropic resize for
+every game. AutoCam's proven recipe is isotropic-to-1600-wide + ceil-pad-to-32 → **480** for 7680x2160 (Reolink)
+but **704** for 4096x1800 (Dahua, 50 of 73 trainable games). If the resulting 36% vertical squish on Dahua
+materially moves the detected ball, the distill labels for the majority of games are systematically wrong and the
+marathon must be re-run; if the detector is squish-robust, keep the running data.
+
+**Method:** 300 real frames from a done Dahua game (`flash__2024.05.10_vs_NY_Rush_away`, 4096x1800). Ran the SAME
+decrypted fp32 balldet model two ways — (A) marathon `1600x448` anisotropic, de-scale `sx=W/1600, sy=H/448`;
+(B) AutoCam-correct `1600x703` isotropic + bottom-zero-pad to `704`, de-scale `sx=sy=W/1600`. Identical decode/NMS;
+**only the input geometry differs.** Compared top-1 in source px. (CPU EP, to not perturb the live DML marathon.)
+
+**Result:**
+| metric (both ≥0.3 conf, n=271/300) | value |
+|---|---|
+| top-1 agree ≤15 px | **0.84** |
+| top-1 agree ≤30 px | 0.84 (→ disagreements are big jumps, not 15–30 px drift) |
+| median distance | 1.1 px |
+| mean / p90 / max distance | 48 / 144 / 1501 px |
+| signed Δy mean | **−8.1 px** (systematic vertical bias) |
+| only-marathon-strong / only-correct-strong | 15 / 3 of 300 |
+
+**Conclusion:** the squish is harmless on 84% of frames but flips the top-1 onto a **different object on ~16%**
+(confident on both sides, so off-field/static/jump filters miss them → ~1-in-6 confident-wrong Dahua labels),
+plus a −8 px bias that vanishes at correct geometry. **Channel order was NOT the problem** (file does
+`COLOR_BGR2RGB`+`/255`+fp32). Fixed `gen_detections_all.py` to per-game isotropic+ceil-pad (480 Reolink / 704
+Dahua, `sx==sy`), wiped the 10 squished Dahua outputs (viewports kept), relaunched all 72 trainable. See STATUS.md
+and F:`broadcast_camera_render_docs/DETECTION_PIPELINE.md` (CORRECTION 2026-06-26).
+
+---
+
 ## EXP-DIST-14: far-band loss up-weighting (K4) vs control (K0) — NEGATIVE, far-weight HURTS (2026-06-26)
 
 **Hypothesis:** Up-weighting the far ball's heatmap loss (`--far-weight 4`) makes the detector rank the far
