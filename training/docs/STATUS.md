@@ -8,6 +8,21 @@ Design locked in DECISIONS.md (3 entries: store-next-to-video / split-preprocess
 Mark: "start with implementation … just run this marathon until it completes." Marathon is NOT relaunched again —
 it finishes writing its current correct-geometry `detections.json`; we **convert** to the new format post-hoc.
 
+### PROGRESS (2026-06-26)
+- **Step 1 (`game.json` builder) — DONE across all 103 games.** Tool: box-scratch `G:\ballresearch\measurement_store.py`
+  (server paths + manifest.db internals → NOT in OSS repo). Wrote game.json next to each video on F:: `segments[]`
+  with demux-canonical `frames`+`global_offset`+`corrupt[]`, `field_polygon` (**65 games**, rescued from manifest.db
+  `field_boundary` → v4_fields/gamedata fallback), `game_state` phases (**27 games**, manifest.db human rows, contiguity-
+  enforced). seg basis = registry `segments` on disk, else `resolve_source()` (the marathon's resolver, `:combined` for
+  the 5 tournament umbrellas). **Trainable coverage: 73 → 60 polygon, 27 human phases.**
+- **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
+  (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
+  (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
+  reaches them (they're later in its queue).
+- **Known residual gaps (for the final audit, not blockers):** 13 trainable games lack a field polygon; 46 lack human
+  phases (some are in `play_windows.json` — builder doesn't pull that yet); `heat__2025.07.22_vs_Fairport_away` has 1
+  corrupt segment (demux→None, flagged). NEXT: builder `play_windows.json` phase fallback; Step 2 `ball_labels`.
+
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
    packet count = canonical, verified == decoded on 06.08) + `corrupt[]`; **field_polygon** (rescued from manifest.db
