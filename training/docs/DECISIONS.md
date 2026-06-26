@@ -4,6 +4,46 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-26: Split preprocessing — AutoCam geometry for the teacher labels, our dewarp for the student, meters for eval
+
+**Context:** This session proved AutoCam's exact balldet input recipe (full-frame, isotropic-to-`max_width=1600`
++ ceil-pad-to-32, RGB/255/fp32, **no crop / no ROI / no tracking gate**) and, separately, that anisotropic
+distortion silently corrupts labels (the marathon's hardcoded `1600x448` squished 4096x1800 Dahua ~36% vertically
+→ ~16% of confident top-1 detections locked onto the WRONG object; EXP-DIST-15). Two preprocessing goals are in
+tension: (a) **match AutoCam exactly** for a clean apples-to-apples comparison and a faithful distill teacher, vs
+(b) **use our own perspective-normalized dewarp** to give the detector a more consistent/larger ball than
+AutoCam's raw global downscale (~4.7px Dahua ball at 1600-wide) — which is exactly where we already beat AutoCam
+on far balls (0.37 vs 0.11).
+
+**Decision (Mark, 2026-06-26):** Do not pick one preprocessing; **split the three stages so each uses the right
+one:**
+1. **Teacher-label generation** (the AutoCam distill source) runs at **AutoCam's EXACT geometry** — per-game
+   isotropic-resize-to-1600-wide + ceil-pad-height-to-32 + bottom-zero-pad + RGB/255/fp32 (480 @ 7680x2160,
+   704 @ 4096x1800). This makes the distilled labels a faithful reproduction of AutoCam's own ball decisions and
+   keeps the head-to-head honest. (Now implemented in `gen_detections_all.py`.)
+2. **Student training** runs on **our own perspective-normalized / dewarped crops** with **isotropic** per-camera
+   ball-scale normalization — NOT AutoCam's raw downscale. The student may see a better-conditioned ball than the
+   teacher did; that's the point (it's how we beat AutoCam on far/lost balls). Map teacher labels into the
+   student's space carefully; never reuse a non-isotropic resize anywhere in this path.
+3. **Evaluation** is scored **in meters on the field plane** (`geom.image_to_world`), which is invariant to either
+   side's pixel preprocessing — so preprocessing differences cannot bias the AutoCam-vs-ours comparison. Divergence
+   frames get human labels; AutoCam is never GT where we disagree with it.
+
+**Why:** Matching AutoCam's geometry and using our own better geometry pull in opposite directions only if you
+force one preprocessing across all three stages. Separating them gets both: a faithful, low-noise teacher AND a
+stronger student, with a comparison that can't be gamed by preprocessing. The squish bug is the concrete proof
+that label-gen fidelity (stage 1) and student conditioning (stage 2) are distinct concerns that must be handled
+separately — a single shared resize silently broke 16% of Dahua labels.
+
+**Trade-offs / guardrails:**
+- **Isotropic everywhere is a hard rule now** — any aspect-distorting resize is banned in all three stages
+  (validated by EXP-DIST-15). Per-camera normalization must scale, never squish.
+- Distillation gets us to **parity** in normal play (the part we were failing); we only **beat** AutoCam by
+  grafting human far-ball labels onto the frames it loses — distill-alone ≠ winning. The split does not change
+  that; it just stops preprocessing from being a confound.
+- Shipped-model export stays **fixed-shape fp32** (ORT graph-fusion / DML-iGPU efficiency; Pascal fp16 is crippled)
+  — orthogonal to the training-preprocessing split but part of the same "geometry/shape discipline" lesson.
+
 ## 2026-06-25: Halt the data-scaling curve at 4 rows; pivot to the recall experiment; defer N=16
 
 **Context:** The distill data-scaling curve completed N=1/2/4/8 (4 rows) and those already answer its question —
