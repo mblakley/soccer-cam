@@ -19,6 +19,27 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   sidecars written to per-sidecar subdirs (Hershey/GUFC/Clarence/Saratoga/lancers). README per game.
 - **detection orchestrator — BUILT + LAUNCHED (agent ad4bf2d).** `gen_detections_all.py` (idempotent/resumable,
   per-game child procs for crash isolation, det0615 schema). **MARATHON RUNNING** (see below).
+- **CUDA-vs-DML inference bench — DONE; verdict STAY ON DML (2026-06-26 ~08:10).** Tested switching the
+  marathon's balldet inference from DirectML to `onnxruntime-gpu` / `CUDAExecutionProvider` on the GTX 1060.
+  **CUDA setup SUCCEEDED** (separate venv `G:\ballresearch\ort_cuda\.venv`: onnxruntime-gpu==1.24.4 — same
+  ORT version as the marathon's DML build — + opencv-python/numpy/av; CUDA12/cuDNN9 DLLs reused from the
+  proven torch cu124 stack `G:\v4bench\wt\.venv\Lib\site-packages\torch\lib` via `os.add_dll_directory`).
+  `CUDAExecutionProvider` initializes + creates a real InferenceSession on `balldet_fp16_dec.onnx`. **BUT CUDA
+  is ~20% SLOWER, not faster:** pure inference (sess.run) **CUDA 177 ms vs DML 147 ms**; full detect()
+  **CUDA 188 ms (5.3 fps) vs DML 155 ms (6.5 fps)**, identical on Dahua 4K and Reolink 8K (preprocess ~2 ms,
+  so it's pure GPU compute). **Root cause: Pascal GP106 (cc 6.1) has crippled FP16 throughput (~1/64 of FP32);
+  ORT-CUDA runs the fp16 model's kernels in fp16 and eats that penalty, while DirectML handles the fp16 model
+  more favorably.** The premise "CUDA 3-6x faster" does NOT hold on this hardware+model. Decode ceilings
+  measured: **Dahua 23 infps (inference-bound), Reolink 8K 6.4 infps (decode-bound)** — so a slower inference
+  would actively slow the inference-bound Dahua games. **Correctness gate PASSED** (CUDA path is correct, just
+  slow): CUDA-vs-DML on the same frames match within fp16 tolerance — TOP-1 candidate within ~5 source-px
+  (~2px in 1600-wide model space) and conf delta <=0.012; NN-matched bulk candidates mean |dxy| 1.7px (Dahua)
+  / 2.3px (Reolink); only a ~3% low-conf tail near the 0.05 floor churns on NMS tie-breaks (inherent to any
+  provider swap). **DECISION: marathon stays on DML — NOT switched. `run_marathon.cmd` unchanged, marathon venv
+  untouched, F:\autocam_data not polluted (test artifacts isolated in `G:\ballresearch\ort_cuda\`).** The DML
+  marathon ran undisturbed throughout (advanced 6 -> 7 .done games during the bench; infps dipped transiently
+  to ~6.4 under brief shared-GPU test load, recovering to ~6.8). Bench harness kept at
+  `G:\ballresearch\ort_cuda\cuda_bench.py` for re-test if an fp32 model or a non-Pascal GPU appears.
 
 ### In-flight background jobs
 - **DETECTION MARATHON (#27) — RUNNING.** `run_marathon.cmd` → `gen_detections_all.py --provider dml --stride 4
@@ -51,9 +72,13 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   GPU (DML, light) + CPU decode (heavy); N=16 (CUDA training) could co-run since GPU is mostly idle during the
   decode-bound marathon — but watch CPU/RAM contention. LOW value (flat curve) — defer unless idle.
 - **6/15 AutoCam broadcast (#21)** — needs `bEnumerateHWBeforeSW=1` + GPU. Deferred.
-- **SPEEDUP LEVER (investigate, don't block):** marathon is CPU-DECODE-bound (~7 infps). NVDEC hardware decode
-  (cv2.cudacodec / PyAV cuda hwaccel) could cut it to <1 day. Worth a calibration bench; marathon is resumable
-  so switching decode mid-run loses nothing. onnxruntime-gpu (CUDA) is NOT installed (DML works now).
+- **SPEEDUP LEVER (investigate, don't block):** ~7 infps. NOT purely decode-bound as previously thought —
+  measured decode ceilings are Dahua **23 infps** (inference-bound) and Reolink 8K **6.4 infps** (decode-bound);
+  DML inference is ~155 ms/frame (~6.5 fps). **CUDA was TESTED 2026-06-26 and is ~20% SLOWER than DML** (Pascal
+  fp16 penalty — see DONE bullet above), so the GPU-inference lever is closed on this card/model. Remaining real
+  levers: **(a) NVDEC hardware decode** (cv2.cudacodec / PyAV cuvid) helps the decode-bound 8K Reolink games;
+  **(b) 2 parallel marathon instances on disjoint `--games` halves** (~2x, watch 16 GB RAM). Marathon is
+  resumable so switching decode mid-run loses nothing.
 
 ### As-they-land (event-driven)
 - **Recall done** → analyze K4-vs-K0, write **EXP-DIST-14** to EXPERIMENTS.md (committed, not pushed), decide next.
