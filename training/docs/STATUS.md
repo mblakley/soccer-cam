@@ -21,7 +21,16 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   reaches them (they're later in its queue).
 - **Known residual gaps (for the final audit, not blockers):** 13 trainable games lack a field polygon; 46 lack human
   phases (some are in `play_windows.json` — builder doesn't pull that yet); `heat__2025.07.22_vs_Fairport_away` has 1
-  corrupt segment (demux→None, flagged). NEXT: builder `play_windows.json` phase fallback; Step 2 `ball_labels`.
+  corrupt segment (demux→None, flagged).
+- **Step 2 (`ball_labels.jsonl` consolidator) — PARTIAL.** `G:\ballresearch\build_ball_labels.py`. **1,592 human labels
+  across 6 games written to F:** next to video (`{seg,f,a,p,src,set,ts}`, off transient D:). Game-match: dir → date+opponent
+  (handles `guzzetta`==heat, `D:\soccer-cam-storage` clips). **846 combined-basis labels QUARANTINED** (spc_* 545 on
+  Spencerport_gold_2 + heat_0615 301 on a 2026.06.15 Irondequoit game): their clips are `D:\soccer-cam-storage` **raws
+  whose frame count != the F: segment concat** (Spencerport raw=80640 vs game.json 81800 = **1160-frame misalignment**).
+  **Vision-confirmed:** markers render ON the ball in the raw but on empty grass via my offset-table map → the raw↔segment
+  frame mapping is wrong; quarantined rather than ship bad precious labels. **2 sets unmatched** (Pittsford `__queue` 60;
+  a re-indexed `irondequoit` test clip 177). NEXT: resolve raw↔segment alignment to recover the 846 (the 1160-frame
+  offset — likely a start trim); `play_windows.json` phase fallback; viewport/detections/track converters.
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
