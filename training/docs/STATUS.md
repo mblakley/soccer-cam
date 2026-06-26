@@ -14,8 +14,11 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
   has 1 row. Frees the GPU when done (watcher b8tj7dvbl).
 - **nulldecode_scan_v2.py** (PID 20052) — corrected corruption scan (ffmpeg fast-pass + PyAV re-verify ×2),
   ~40/360, idle priority. Watcher bvuzhm2cg. Expect: 06.08 ONLY (Upper90 was a false positive, now proven clean).
-- **coverage map** build_map2.py → `G:\ballresearch\data_coverage_map.json` (registry is a LIST of 103; first
-  map mis-keyed it → rebuilt). Verify ~90 with_viewport / 2 with_detections / ~100 need_detection_gen.
+- **coverage map** DONE → `G:\ballresearch\data_coverage_map.json` (registry is a LIST of 103; first map
+  mis-keyed it as a dict → rebuilt correctly). RESULT: **103 games, 63 with viewport, 2 with detections,
+  101 need detection-gen (72 trainable), 95 real sidecars, 10 scratch, 36 UNMATCHED.** The 36 unmatched are
+  tournament sub-games (Hershey/GUFC/Baltimore/Saratoga game2-4) + non-registry games (lancers futsal, mcc) —
+  real viewports; indexer archives them by sidecar; FLAG list for Mark to reconcile into the registry.
 - **viewport indexer agent a158bf6** — building+running per-game viewport extraction → `F:\autocam_data\<gid>\viewport.json`.
 - **detection orchestrator agent ad4bf2d** — building `gen_detections_all.py` (idempotent/resumable, stride-4,
   decrypted balldet fp16@1600) + tiny CPU smoke test; ready to launch on GPU post-recall.
