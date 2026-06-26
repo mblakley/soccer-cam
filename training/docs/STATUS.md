@@ -22,11 +22,15 @@ before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state li
 
 ### In-flight background jobs
 - **DETECTION MARATHON (#27) — RUNNING.** `run_marathon.cmd` → `gen_detections_all.py --provider dml --stride 4
-  --trainable-only`, BelowNormal, detached. Work-list **72 trainable games**, ~**7 infps** (DML; DECODE-bound
-  on CPU, not inference). ETA ~3 days trainable-only. Writes `F:\autocam_data\<gid>\detections.json` +
-  `README.detections.md` (avoids the indexer's README.md). Log: `G:\ballresearch\distill\marathon.log`.
-  Resumable: `.done` + `.progress.json` per game. **After trainable-only completes, run again WITHOUT
-  `--trainable-only`** for the remaining ~29 games.
+  --trainable-only`, BelowNormal, detached. Work-list **72 trainable games**, ~**7.2 infps** (DML; DECODE-bound
+  on CPU, not inference). Writes `F:\autocam_data\<gid>\detections.json` + `README.detections.md` (avoids the
+  indexer's README.md). Log: `G:\ballresearch\distill\marathon.log`. Resumable: `.done` + `.progress.json`.
+  **After trainable-only completes (.done=72), re-run WITHOUT `--trainable-only`** for the remaining ~29 games.
+  **REAL ETA (measured 2026-06-26 01:15): ~75 min/game for Dahua 4096x1800; the 16 Reolink 8K games ~3-4x
+  slower → trainable run ≈ 4-6 DAYS** (decode-bound, not the 3 I first estimated). **SPEEDUP LEVERS FOR MARK
+  (not done autonomously — would risk disrupting the stable run): (a) NVDEC hardware decode (cv2.cudacodec /
+  PyAV cuvid) → potentially <1 day; (b) 2 parallel instances on disjoint `--games` halves → ~2x (watch 16 GB
+  RAM). Left the single stable run going; reliable > fast-but-disrupted.**
 - **nulldecode_scan_v2.py — PAUSED at 50/360 (resumable).** Paused 2026-06-26 00:42 because it competes with
   the marathon for CPU decode AND its results are UNRELIABLE under sustained marathon load: it flagged 2 Upper90
   (2026.05.10) segments (100259@101.9s, 100759@92.1s) as CORRUPT, but the marathon's heavy 8K decode is the
