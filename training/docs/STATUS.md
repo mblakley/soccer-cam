@@ -1,6 +1,54 @@
 # Current Status
 
-*Last updated: 2026-06-25*
+*Last updated: 2026-06-26*
+
+## OVERNIGHT AUTONOMOUS RUN — persistent tracker (2026-06-26, ~8h, Mark asleep, no feedback)
+
+**This is the durable todo so nothing is lost across context compaction.** Update it as work advances.
+Discipline every step: recall is the untouched GPU priority; all aux work CPU-only/low-priority; verify
+before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state lives here in committed docs.
+
+### In-flight background jobs (each re-invokes on completion)
+- **recall_train.py** (PID 5932/13484) — PRIMARY. K4 far-weight seeds done (seed0 hard .339/normal .099,
+  seed1 .263/.018, seed2 trained); 3× K0 control seeds remain → far-weight-vs-control verdict. recall.jsonl
+  has 1 row. Frees the GPU when done (watcher b8tj7dvbl).
+- **nulldecode_scan_v2.py** (PID 20052) — corrected corruption scan (ffmpeg fast-pass + PyAV re-verify ×2),
+  ~40/360, idle priority. Watcher bvuzhm2cg. Expect: 06.08 ONLY (Upper90 was a false positive, now proven clean).
+- **coverage map** build_map2.py → `G:\ballresearch\data_coverage_map.json` (registry is a LIST of 103; first
+  map mis-keyed it → rebuilt). Verify ~90 with_viewport / 2 with_detections / ~100 need_detection_gen.
+- **viewport indexer agent a158bf6** — building+running per-game viewport extraction → `F:\autocam_data\<gid>\viewport.json`.
+- **detection orchestrator agent ad4bf2d** — building `gen_detections_all.py` (idempotent/resumable, stride-4,
+  decrypted balldet fp16@1600) + tiny CPU smoke test; ready to launch on GPU post-recall.
+
+### POST-RECALL GPU QUEUE (launch in this order the moment recall frees the card)
+1. **AutoCam stride-4 detection marathon (#27)** — `gen_detections_all.py` over all ~100 games (CUDA). The big
+   overnight win; runs ~1.5–3 days. Idempotent/resumable. Archive per-game to `F:\autocam_data\<gid>\`.
+2. **N=16 curve rerun (#24)** — reuse `crops_game` + the 06.08 decode-skip; append the 5th curve row.
+3. **6/15 AutoCam broadcast (#21)** — needs `bEnumerateHWBeforeSW=1` (RDP-GPU fix) + GPU free → viewport+sidecar.
+   (NOTE: detection-gen is more valuable + runs for days, so it goes first; N=16 + 6/15 are shorter, slot after
+   or interleave if detection-gen checkpoints allow.)
+
+### As-they-land (event-driven)
+- **Recall done** → analyze K4-vs-K0, write **EXP-DIST-14** to EXPERIMENTS.md (committed, not pushed), decide next.
+- **Scan done** → report clean inventory; document.
+- Both verdicts → fold into this STATUS.
+
+### Gap-filler (no GPU; some gated)
+- **#23 reconcile uncommitted research on `G:\v4bench\wt`** — GATED: recall imports world_model from there;
+  do NOT modify until recall finishes. Then commit/push or confirm superseded.
+- **Branch content scrub PREP** (AutoCam/distill refs → F: archive) — review only, execute at PR-prep.
+- Label sets ready for Mark (no action needed, just don't break): heat_0615_lowconf_visible (124),
+  spc_tracker_uncertain1 (118), heat_0527_c (93), Cleveland…seg12 (77).
+
+### Open forks PARKED (need Mark; do NOT block on them)
+- #26 faithful AutoCam-viewport-vs-tracker divergence set — needs a 2024 viewport game's balldet stream
+  (rides on #27's output), post-recall.
+
+### Done earlier this session (do not redo)
+v0.5.3 merged+tagged+deployed (corrupt-segment reactive recovery, PR #92); zombie download cleared; Upper90
+proven clean (scan false-positive); 06.08 = only real corruption; disk reclaimed to ~85GB G:.
+
+---
 
 ## Active focus: targeted far-RECALL training experiment (EXP-DIST-13); data-scaling curve halted at 4 rows
 
