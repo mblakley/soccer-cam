@@ -4,6 +4,41 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-14: far-band loss up-weighting (K4) vs control (K0) — NEGATIVE, far-weight HURTS (2026-06-26)
+
+**Hypothesis:** Up-weighting the far ball's heatmap loss (`--far-weight 4`) makes the detector rank the far
+ball as its argmax more often → higher far-recall. (The EXP-DIST-13 recipe, run to completion.)
+
+**Method:** `G:\ballresearch\distill\recall_train.py` on the GPU box. base=24 HeatmapNet, 58 training games
+(N=8 curve games + the 6/15 human-label game, 232 ball labels), 30k steps, **3 seeds × {K4 far-weight=4, K0
+control far-weight=0}** = 6 runs. Eval on the clean held-out Spencerport `spc_normal1` (normal/far-third) +
+the hard split, meters R10/R15, vs AutoCam viewport 0.748. Results in `recall.jsonl` (2 rows: K4, K0).
+
+**Result (mean ± std over 3 seeds):**
+| split | K4 far-weight | K0 control | AutoCam |
+|---|---|---|---|
+| hard R15 | 0.239 ± 0.093 | **0.348 ± 0.018** | 0.11 |
+| hard R10 | 0.163 | **0.277** | — |
+| normal R15 | 0.039 ± 0.043 | **0.069 ± 0.052** | 0.748 |
+| normal R10 | 0.015 | **0.030** | — |
+| hard ceil15 | 0.723 | 0.749 | — |
+
+**Conclusion: NEGATIVE — far-weight HURTS.** The K0 control (same data, no far-weight) **beats** K4 on BOTH
+splits AND has far lower variance (hard std 0.018 vs 0.093; the K4 seeds swing 0.114–0.339). So far-band loss
+up-weighting is harmful, not helpful — it destabilizes training without improving far-recall. The candidate
+ceiling is unchanged (~0.72–0.75), confirming (again, per EXP-DIST-08..12) the bottleneck is **selection /
+detector-recall**, not the loss shaping. K0's hard 0.348 ≈ the prior curve baseline (~0.39); normal 0.069
+remains ~10× below AutoCam's 0.748 → the far/normal gap is NOT closable by a loss tweak.
+
+**Implication / next:** abandon far-band loss weighting. The lever is **data — venue diversity** (more games),
+which is exactly what the new all-games AutoCam-detection dataset (`gen_detections_all.py`, #27, launched
+2026-06-26) generates. This negative result re-justifies that effort. Do NOT re-try loss-weighting variants
+(this + D1 augmentation + D4 appearance-discrimination are all negative).
+
+**Data:** `G:\ballresearch\distill\recall.jsonl`, `recall_fw4.log` (`=== RECALL POINT K4/K0 ===`).
+
+---
+
 ## EXP-DIST-13: targeted far-ball RECALL recipe — human labels + far-band loss + multi-seed (2026-06-24)
 
 **Status: STAGED, NOT RUN.** Design + code complete and committed; the GPU launch is deferred until the

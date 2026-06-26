@@ -8,28 +8,35 @@
 Discipline every step: recall is the untouched GPU priority; all aux work CPU-only/low-priority; verify
 before reporting; CHECK don't assume (projects-root CLAUDE.md rule #7); state lives here in committed docs.
 
-### In-flight background jobs (each re-invokes on completion)
-- **recall_train.py** (PID 5932/13484) — PRIMARY. K4 far-weight seeds done (seed0 hard .339/normal .099,
-  seed1 .263/.018, seed2 trained); 3× K0 control seeds remain → far-weight-vs-control verdict. recall.jsonl
-  has 1 row. Frees the GPU when done (watcher b8tj7dvbl).
-- **nulldecode_scan_v2.py** (PID 20052) — corrected corruption scan (ffmpeg fast-pass + PyAV re-verify ×2),
-  ~40/360, idle priority. Watcher bvuzhm2cg. Expect: 06.08 ONLY (Upper90 was a false positive, now proven clean).
-- **coverage map** DONE → `G:\ballresearch\data_coverage_map.json` (registry is a LIST of 103; first map
-  mis-keyed it as a dict → rebuilt correctly). RESULT: **103 games, 63 with viewport, 2 with detections,
-  101 need detection-gen (72 trainable), 95 real sidecars, 10 scratch, 36 UNMATCHED.** The 36 unmatched are
-  tournament sub-games (Hershey/GUFC/Baltimore/Saratoga game2-4) + non-registry games (lancers futsal, mcc) —
-  real viewports; indexer archives them by sidecar; FLAG list for Mark to reconcile into the registry.
-- **viewport indexer agent a158bf6** — building+running per-game viewport extraction → `F:\autocam_data\<gid>\viewport.json`.
-- **detection orchestrator agent ad4bf2d** — building `gen_detections_all.py` (idempotent/resumable, stride-4,
-  decrypted balldet fp16@1600) + tiny CPU smoke test; ready to launch on GPU post-recall.
+### DONE since this tracker started (2026-06-26)
+- **recall_train.py — FINISHED.** EXP-DIST-14 documented: **far-band loss weighting is NEGATIVE** — K0 control
+  (no far-weight) beats K4 on both splits (hard 0.348 vs 0.239, normal 0.069 vs 0.039) + lower variance.
+  Abandon loss-weighting; the lever is venue DIVERSITY (→ the detection marathon). GPU now free.
+- **viewport indexer — DONE (agent a158bf6).** `index_viewports.py` extracted **61 registry games / 7.23M
+  viewport frames** → `F:\autocam_data\<gid>\viewport.json` (schema `autocam_viewport_v1`; `xy`=smoothed camera
+  center; **frame_base=1**, 0-based decode = f-1). Vision-verified Dahua + Reolink. 0 parse failures.
+  UNMATCHED/flag-for-Mark: Baltimore Mania g1-3 + MCC tournament (no registry entry); tournament multi-game
+  sidecars written to per-sidecar subdirs (Hershey/GUFC/Clarence/Saratoga/lancers). README per game.
+- **detection orchestrator — BUILT + LAUNCHED (agent ad4bf2d).** `gen_detections_all.py` (idempotent/resumable,
+  per-game child procs for crash isolation, det0615 schema). **MARATHON RUNNING** (see below).
 
-### POST-RECALL GPU QUEUE (launch in this order the moment recall frees the card)
-1. **AutoCam stride-4 detection marathon (#27)** — `gen_detections_all.py` over all ~100 games (CUDA). The big
-   overnight win; runs ~1.5–3 days. Idempotent/resumable. Archive per-game to `F:\autocam_data\<gid>\`.
-2. **N=16 curve rerun (#24)** — reuse `crops_game` + the 06.08 decode-skip; append the 5th curve row.
-3. **6/15 AutoCam broadcast (#21)** — needs `bEnumerateHWBeforeSW=1` (RDP-GPU fix) + GPU free → viewport+sidecar.
-   (NOTE: detection-gen is more valuable + runs for days, so it goes first; N=16 + 6/15 are shorter, slot after
-   or interleave if detection-gen checkpoints allow.)
+### In-flight background jobs
+- **DETECTION MARATHON (#27) — RUNNING.** `run_marathon.cmd` → `gen_detections_all.py --provider dml --stride 4
+  --trainable-only`, BelowNormal, detached. Work-list **72 trainable games**, ~**7 infps** (DML; DECODE-bound
+  on CPU, not inference). ETA ~3 days trainable-only. Writes `F:\autocam_data\<gid>\detections.json` +
+  `README.detections.md` (avoids the indexer's README.md). Log: `G:\ballresearch\distill\marathon.log`.
+  Resumable: `.done` + `.progress.json` per game. **After trainable-only completes, run again WITHOUT
+  `--trainable-only`** for the remaining ~29 games.
+- **nulldecode_scan_v2.py** (PID 20052) — corrected corruption scan, idle. Watcher bvuzhm2cg. Expect 06.08 ONLY.
+
+### REMAINING POST-RECALL GPU QUEUE (after / alongside the marathon)
+- **N=16 curve rerun (#24)** — reuse `crops_game` + 06.08 decode-skip; 5th curve row. NOTE: marathon uses the
+  GPU (DML, light) + CPU decode (heavy); N=16 (CUDA training) could co-run since GPU is mostly idle during the
+  decode-bound marathon — but watch CPU/RAM contention. LOW value (flat curve) — defer unless idle.
+- **6/15 AutoCam broadcast (#21)** — needs `bEnumerateHWBeforeSW=1` + GPU. Deferred.
+- **SPEEDUP LEVER (investigate, don't block):** marathon is CPU-DECODE-bound (~7 infps). NVDEC hardware decode
+  (cv2.cudacodec / PyAV cuda hwaccel) could cut it to <1 day. Worth a calibration bench; marathon is resumable
+  so switching decode mid-run loses nothing. onnxruntime-gpu (CUDA) is NOT installed (DML works now).
 
 ### As-they-land (event-driven)
 - **Recall done** → analyze K4-vs-K0, write **EXP-DIST-14** to EXPERIMENTS.md (committed, not pushed), decide next.
