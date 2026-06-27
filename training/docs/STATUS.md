@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-06-26*
+*Last updated: 2026-06-27*
 
 ## IMPLEMENTATION ROADMAP — JSONL measurement store (approved 2026-06-26, autonomous build)
 
@@ -58,6 +58,34 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   **2 sets still unmatched** (Pittsford `__queue` 60 — date-only clip; re-indexed `irondequoit` test clip 177). The vision HARD
   GATE caught the misalignment before shipping bad labels — see [[feedback_verify_label_semantics_with_vision]].
   NEXT: fix Pittsford `__queue` match (`18.28` token); `play_windows.json` phase fallback; viewport/detections/track converters → full audit.
+- **Steps 3–5 (viewport/detections/track converters) — DONE + validated (2026-06-27).** Tool: box-scratch
+  `G:\ballresearch\build_sidecars.py` (idempotent, mtime-gated, `--require-done` so only marathon-complete detections
+  convert; writes sidecars + `README.measurements.md` provenance next to each video on F:). **Format follows the locked
+  DECISIONS.md table** (flat fields), NOT the older `{seg,f,v}`/`{seg,f,d}` sketch in the build-order list below:
+  `autocam_viewport.jsonl {seg,f,x,y}` (camera center), `autocam_detections.jsonl {seg,f,x,y,conf}` **one row per
+  candidate**, `ball_track.jsonl {seg,f,x,y}` (gamedata `track.jsonl` was already this shape). Global→(seg,f) via
+  `game.json segments[].global_offset` (viewport keys 1-based → `g0=k-1`; detections keys 0-based global → `g0=k`).
+  **Coverage: viewport 55, detections 28 (= marathon-`.done`; tail auto-finalizes as the marathon completes — re-run is
+  idempotent), ball_track 27; READMEs 69.** Validated on `flash__2024.05.01_vs_RNYFC_away`: viewport 125,127 rows =
+  `total_frames`, per-seg counts exact, **0 out-of-range, 0 value-mismatch vs raw source** (200 sampled); detections
+  436,703 candidates / 31,280 frames, candidate counts+values match the raw frame; ball_track 232 = source, 0 invalid.
+- **Step 7 FULL METADATA AUDIT — first pass DONE (2026-06-27).** Tools: box-scratch `G:\ballresearch\{audit_store,coverage}.py`.
+  `game.json` present **103/103**; `field_polygon` **65/103** (60 trainable); `game_state` **27/103** (the gap = games whose
+  phases live only in `play_windows.json`, not yet pulled). **Anomalies (root-caused, not conversion bugs):**
+  - `heat__2025.07.22_vs_Fairport_away` (**trainable**) — `game.json` INCOMPLETE: segment 6/22 has `frames=None` (builder's
+    ffprobe packet-count failed on that one seg; file present at normal size), so `total_frames` is under-counted ~5,900 and
+    the next seg inherited its offset. **Fix: rebuild this game's `game.json`** (re-ffprobe seg 6). 7 `camera__*` non-trainable
+    junk recordings are likewise incomplete (don't care).
+  - `flash__2026.05.10_vs_Upper_90_FC_home_11.19` — genuine **32-second fragment** (640 frames, single seg `11:19:10–11:19:42`);
+    marathon ran it (inferred 160) but the ball model fired once → `det_frames=1`. **Curation call: exclude or merge** into the
+    main `...Upper_90_FC_home` game (it's in the DATA_INVENTORY held-out list — should not be).
+  - Thin viewports — `heat__2024.05.31_vs_Fairport_home` (82) + `flash__2025.06.14_vs_Vestal_home` (841): the AutoCam
+    `-once-processed.mp4.jsonl` sidecars were **truncated** (only 82/841 per-frame lines). Conversion is faithful; viewport
+    needs an **AutoCam GUI re-run**. Detections are unaffected (marathon regenerates them; heat__2024.05.31 in progress now).
+  - Marathon: **28/72 `.done`** (Python `os.listdir` authoritative; the live probe's `Get-ChildItem` had under-counted to 19),
+    in-progress `heat__2024.05.31_vs_Fairport_home`, prefetch active.
+  NEXT: rebuild incomplete `game.json`s (re-ffprobe); `play_windows.json` phase fallback; repoint `gamedata.py` +
+  `DATA_INVENTORY.md` to the per-video sidecars; re-run `build_sidecars.py` as the marathon finishes (idempotent).
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
