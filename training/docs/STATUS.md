@@ -102,6 +102,21 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   `training/static/`). NOTE: the in-browser Field/Phases **editors in `annotate.html` are legacy-store-bound**
   (`manifest.db` on D: + `v4_fields`, need tiles for the canvas) so they don't show the new sidecar-store games — for
   drag-edit verification they'd need repointing to `game.json` (follow-up). For now the gallery is view+approve.
+- **(2026-06-27) Multi-segment rescue + `game.json`-backed field editor.** (1) Upgraded `fill_field_polygons.py` to
+  sample across ALL segments (confidence-median auto-skips warmup/indoor segs) + resolve tournament/raw + nested-dir
+  files -> **rescued Saratoga / Hershey / GUFC** (10/10 kpts). Net **10 good auto-seeds**; **3 short Niagara/forfeit games**
+  (07.11_FF, 07.12, 07.13_19.10) have **no field footage in any segment** -> polygons removed, `field_polygon_note` set
+  (exclude candidates). All vision-verified. (2) Built a **`game.json`-backed field editor** (`training/field_edit_v2.py`
+  router + `training/static/field-edit.html`): in-browser drag-edit of the 10-pt polygon for ANY registry game, reading/
+  writing the canonical sidecars (background frame decoded from the video; save -> `source=human_field_edit`,
+  `verified=true`). Lists all 103 (65 verified / 10 auto-unverified / none / exclude). Live at
+  **`https://trainer.goat-rattlesnake.ts.net/static/field-edit.html`** (`/api/fieldv2/*`). Deployed additively into the
+  jared annotation checkout (new router file + one `include_router` line, backup `.bak_fieldv2`).
+  **INCIDENT (resolved):** first deploy imported `cv2` at module load, but the annotation venv has **av+PIL, no opencv** ->
+  crashed the server import -> ~5 min outage. Recovered (reverted append + restart); refixed to **PyAV (`frame.to_image`) +
+  PIL** (applies `video_rotation` 180 since PyAV ignores the display tag cv2 honors), re-deployed with **import-tests gating
+  the restart** so it can't recur. **Durability caveat:** editor lives as copied files + an untracked append in jared's
+  checkout (matches existing pattern there); a git-reset of that checkout would drop it.
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
