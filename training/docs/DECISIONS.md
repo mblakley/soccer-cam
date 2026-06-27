@@ -4,6 +4,41 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-26: Human far-labels were made on DIFFERENT source videos than the detections — align by frame-matched offset
+
+**The trap (so no future session re-derives it):** the 27 `D:\training_data\far_label\<set>\` sets were NOT all
+labeled on the same video the marathon/detections use. Their `manifest.json` `clip` field points at whatever the
+annotator opened, which is one of FOUR source kinds — each needs different handling to land on the canonical `(seg,f)`:
+
+| clip kind | example | how `frame_idx` maps to `(seg,f)` |
+|---|---|---|
+| **per-segment** | a single `RecM09_*.mp4` in the F: game dir | `seg` = clip stem, `f` = `frame_idx` (no offset) |
+| **full combined** | `D:\soccer-cam-storage\<date>\combined.mp4` (== F: `combined.mp4`, same frame count) | `frame_idx` → offset table directly (offset 0). e.g. Pittsford `__queue` |
+| **start-TRIMMED raw** | `D:\soccer-cam-storage\<date>\...raw.mp4` (FEWER frames than F: combined) | `frame_idx + OFFSET` → offset table. **constant per-game start-trim** |
+| **derived test-clip** | `D:\detect_work\v4_test_clips\*.mp4` (small contiguous extract) | frame-match the extract into the combined → source start; `frame_idx + start` |
+
+**Canonical frame basis = the registry-resolved `F:\...\<game>\combined.mp4`** (== concat of the RecM09 segments;
+`game.json` `segments[].global_offset` is built from it). The marathon (`resolve_source` → `kind=combined`) and all
+detections use it. **A label clip's frame numbering must be aligned to THIS before trusting `(seg,f)`.**
+
+**Alignment method (proven, automated in `build_ball_labels.py:raw_to_combined_offset`):** frame-match the label clip
+against the combined — downscaled (160×90) grayscale mean-abs-diff, swept over candidate offsets; a true match reads
+**diff ≈ 0.0 (pixel-identical)** and the offset is **constant across the whole game (no drift)** → a single integer
+recovers every label. **Vision-verify** at least one recovered label lands on the ball (HARD GATE — this caught the
+original mis-map: markers on grass via the wrong basis vs on the ball via the right one). See
+[[feedback_verify_label_semantics_with_vision]].
+
+**Per-game offsets computed (raw `frame_idx` → combined frame):**
+| game | label source | offset | source frames | combined frames |
+|---|---|---|---|---|
+| `heat__2026.05.31_vs_Spencerport_gold_2_away` | `...spencerport-gold-2...-raw.mp4` (trimmed) | **+1162** | 80,640 | 81,800 |
+| `heat__2026.06.15_vs_Irondequoit_away` (`heat_0615_*` sets) | trimmed raw | **+1181** | — | 109,340 |
+| `heat__2026.05.07_vs_Pittsford_Mustangs_away_18.28` (`__queue`) | full `combined.mp4` | **~0** | 113,460 | 113,460 |
+| `irondequoit` test-clip set | `v4_test_clips\irondequoit_far_*.mp4` (762-frame extract) | frame-matched start (pending) | 762 | 109,340 |
+
+These offsets are also written into each game's `ball_labels.jsonl` `_meta` header (per-set provenance: `source_clip`,
+`basis`, `offset`) so the data is self-describing. Recompute via the frame-match if a video is ever re-encoded.
+
 ## 2026-06-26: Frame indexing = canonical (seg,f) + derived global_offset; corruption handled via corrupt[] ranges + one decode policy
 
 **Context:** Producers currently disagree on frame keys — the #27 marathon keys detections by a running **global**
