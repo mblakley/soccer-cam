@@ -86,6 +86,22 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
     in-progress `heat__2024.05.31_vs_Fairport_home`, prefetch active.
   NEXT: rebuild incomplete `game.json`s (re-ffprobe); `play_windows.json` phase fallback; repoint `gamedata.py` +
   `DATA_INVENTORY.md` to the per-video sidecars; re-run `build_sidecars.py` as the marathon finishes (idempotent).
+- **Auto field_polygon fill (2026-06-27) — 7 of 13 missing trainable games seeded + staged for review.** Tool:
+  box-scratch `G:\ballresearch\fill_field_polygons.py` (CPU only — zero marathon GPU contention; self-contained
+  inference, fp16 NCHW 768x384). **Finding: `field_outline_v2.onnx` is Reolink-domain** — confident on Reolink
+  (max ~0.80) but weak on Dahua (even a known-good human-polygon Dahua game maxes ~0.70 with only 1 kpt ≥0.5). So the
+  existing 61 Dahua polygons were **human-drawn** (`human_field_edit`), not auto. At **thr 0.3** the model yields usable
+  outlines on Dahua too. Wrote `field_polygon` + `field_polygon_source=auto_field_outline_v2` +
+  **`field_polygon_verified=false`** + `field_polygon_thr=0.3` + `mean_score`. **`--force` guarded to NEVER overwrite a
+  human polygon.** Vision-checked all: **7 good** (flash 05.10/05.12, flash 03.21 indoor turf, heat 06.24/07.07/07.09,
+  heat 07.13_G3), **3 bad** = sampled indoor-wall/non-field footage (heat 07.11_FF forfeit, 07.12 Niagara, 07.13_19.10) →
+  polygons removed, `field_polygon_note` set, flagged needs-manual; **3 failed** = tournament/raw-basis games whose
+  game.json middle segment is a synthetic `combined`/raw stem the resolver can't map to a file (Saratoga, Hershey, GUFC).
+  **Verification page (live, Tailscale-served):** overlay gallery at
+  `https://trainer.goat-rattlesnake.ts.net/static/field_review/index.html` (staged into the running annotation server's
+  `training/static/`). NOTE: the in-browser Field/Phases **editors in `annotate.html` are legacy-store-bound**
+  (`manifest.db` on D: + `v4_fields`, need tiles for the canvas) so they don't show the new sidecar-store games — for
+  drag-edit verification they'd need repointing to `game.json` (follow-up). For now the gallery is view+approve.
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
