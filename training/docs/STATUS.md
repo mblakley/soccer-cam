@@ -15,6 +15,12 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   `field_boundary` → v4_fields/gamedata fallback), `game_state` phases (**27 games**, manifest.db human rows, contiguity-
   enforced). seg basis = registry `segments` on disk, else `resolve_source()` (the marathon's resolver, `:combined` for
   the 5 tournament umbrellas). **Trainable coverage: 73 → 60 polygon, 27 human phases.**
+- **Registry curation metadata now in game.json** (backfilled all 103 + builder updated): `name`, `orientation`
+  (**12 upside_down**, 91 right-side-up), **`needs_flip`** (**2 True**: `flash__2025.05.17_vs_NY_Rush_away`,
+  `heat__2025.06.02_vs_Fairport_home`), `game_type`, `trainable`, `exclude`/`exclude_reason`, `video_source`.
+  **FLIP CORRECTNESS FLAG:** both needs_flip=True games are trainable AND have `combined_video=None` -> the marathon
+  resolves their UPSIDE-DOWN raw and would emit upside-down detections. Decide before the marathon reaches them (at
+  ~8/72 on 2024 games; these are 2025): flip-before-detect vs accept-and-flip-downstream.
 - **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
   (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
   (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
