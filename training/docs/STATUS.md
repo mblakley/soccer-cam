@@ -34,6 +34,13 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   registry (backup `.bak_promote_irondequoit`) + game.json. **Trainable = 74.** NOT in the running marathon's work-list
   (fixed at launch=72) → **must be processed in the post-marathon all-games detection pass** (#27) along with the
   non-trainable completeness games. Its labels are already in `ball_labels.jsonl` (heat_0615 sets, +1181 offset).
+- **Marathon PREFETCH speedup (2026-06-27).** Added `--prefetch` to `gen_detections_all.py`: a producer thread does the
+  `grab()`/`retrieve()` decode into a bounded queue while the consumer runs DML `detect()` — overlapping CPU decode with
+  GPU inference (both release the GIL during their C work). **Verified byte-identical detections** vs serial (CPU 300 +
+  DML 500 frames, 0 diffs) AND refactored-serial == old-serial (0 diffs, so resume is safe). **DML A/B (uncontended):
+  7.25 → 8.54 infps = ~18% faster on Dahua** (Reolink should gain more, being decode-bound). Deployed + relaunched
+  (resumes from `.done`=17; `--prefetch` forwarded to workers via run_parent; `run_marathon.cmd` updated). Backup
+  `.bak_preprefetch`. **Revised ETA ~2.1 days** (from 2.5). Memory note: bounded queue (maxsize=4) ~200MB on Reolink.
 - **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
   (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
   (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
