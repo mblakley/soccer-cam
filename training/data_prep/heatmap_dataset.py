@@ -27,7 +27,12 @@ from pathlib import Path
 
 import numpy as np
 
-from training.data_prep.warped_dataset import CropIsoWarp, field_band_from_polygon
+from training.data_prep.warped_dataset import (
+    CropIsoWarp,
+    apply_display_rotation,
+    field_band_from_polygon,
+    resolve_video_rotation,
+)
 
 
 def gaussian_heatmap(h: int, w: int, cx: float, cy: float, sigma: float) -> np.ndarray:
@@ -121,6 +126,8 @@ def build_heatmap_crops(
         labels = {int(k): v for k, v in g["labels"].items()}
         if not labels:
             continue
+        # PyAV ignores the container's display-rotation; resolve it (explicit else game.json) and apply per frame
+        vrot = resolve_video_rotation(str(g["video"]), g.get("video_rotation"))
         container = av.open(str(g["video"]))
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
@@ -180,7 +187,8 @@ def build_heatmap_crops(
             idx += 1
             if idx < lo:
                 continue
-            buf.append(_dewarp_mask_gray(fr.to_ndarray(format="bgr24"), warp, mask))
+            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
+            buf.append(_dewarp_mask_gray(img, warp, mask))
             if len(buf) > 3:
                 buf.pop(0)
             if idx in want:

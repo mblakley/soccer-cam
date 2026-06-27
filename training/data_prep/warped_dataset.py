@@ -187,6 +187,45 @@ def warped_box(
 # ---------------------------------------------------------------------------
 
 
+def apply_display_rotation(img, video_rotation):
+    """Apply the resolved video's display-rotation in memory after a PyAV decode.
+
+    PyAV returns the *stored* pixels and ignores the container's display-matrix tag, whereas
+    cv2.VideoCapture auto-applies it. For the upside-down-mounted-camera games (``video_rotation``
+    == ±180) we flip 180° so PyAV-decoded frames match cv2 and the right-side-up labels/polygon —
+    otherwise those games' crops train upside-down. Driven by ``game.json``'s ``video_rotation``
+    (0 for 95 games, -180 for 8 tag-corrected games). Only 0/±180 occur in this corpus; a 180°
+    flip preserves W×H so no downstream shape change.
+    """
+    if video_rotation in (180, -180):
+        import cv2
+
+        return cv2.flip(img, -1)  # flip both axes == 180° rotation
+    return img
+
+
+def resolve_video_rotation(video_path, explicit=None):
+    """Resolve a video's display-rotation: the ``explicit`` value if non-zero, else the
+    ``video_rotation`` recorded in the per-game ``game.json`` beside the video, else 0.
+
+    The game.json fallback makes the crop builders foolproof — they get the right rotation even
+    if an assembler forgot to thread ``video_rotation`` through, since game.json lives next to the
+    video in the canonical store. (Explicit non-zero wins so callers can still override.)
+    """
+    if explicit:
+        return int(explicit)
+    try:
+        import json
+        from pathlib import Path
+
+        gj = Path(video_path).parent / "game.json"
+        if gj.exists():
+            return int(json.loads(gj.read_text()).get("video_rotation", 0) or 0)
+    except Exception:
+        pass
+    return 0
+
+
 @dataclass
 class GameSpec:
     game_id: str
@@ -194,6 +233,7 @@ class GameSpec:
     polygon: list  # field-outline polygon, source coords
     labels: dict  # {frame_idx: [(cx,cy), ...]} in source coords
     camera: str  # 'reolink' | 'dahua'
+    video_rotation: int = 0  # resolved video's display tag; PyAV decode must apply it (see apply_display_rotation)
 
 
 def generate_yolo_dataset(
@@ -252,11 +292,12 @@ def generate_yolo_dataset(
         container = av.open(str(g.video_path))
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
+        vrot = resolve_video_rotation(g.video_path, g.video_rotation)
         written = 0
         for idx, frame in enumerate(container.decode(stream)):
             if idx not in g.labels:
                 continue
-            img = frame.to_ndarray(format="bgr24")
+            img = apply_display_rotation(frame.to_ndarray(format="bgr24"), vrot)
             wimg = warp.frame(img)
             if pad_to_stride and wimg.shape[:2] != (oh, ow):
                 canvas = np.zeros((oh, ow, 3), np.uint8)

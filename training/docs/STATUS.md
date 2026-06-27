@@ -24,8 +24,11 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   - **RESOLVED 2026-06-26 (vision):** both `needs_flip` games are ALREADY right-side-up in their mp4 (flip **baked into
     pixels**, no tag) — Mark confirmed; flipping would invert them. `orientation` is raw-camera provenance only.
     **Replaced needs_flip with `video_rotation`** in game.json (resolved video's display tag: **8 games `-180`**
-    tag-corrected, **95 `0`**). cv2 auto-applies it; **PyAV (crop builder) MUST apply it** or the 8 tag-corrected
-    games' crops come out upside-down vs their labels — load-bearing follow-up. See DECISIONS.md.
+    tag-corrected, **95 `0`**). cv2 auto-applies it; PyAV ignores it. **FIXED:** `warped_dataset.apply_display_rotation`
+    + `resolve_video_rotation` (explicit → game.json-beside-video → 0); both crop builders (`heatmap_dataset`,
+    `warped_dataset`) apply `cv2.flip(img,-1)` per frame when `video_rotation==±180`. Self-sufficient (reads game.json,
+    no assembler dependency). Unit-tested (`tests/test_video_rotation.py`), ruff+pytest green. So the 8 tag-corrected
+    games no longer train upside-down.
 - **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
   (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
   (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
