@@ -117,6 +117,23 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   PIL** (applies `video_rotation` 180 since PyAV ignores the display tag cv2 honors), re-deployed with **import-tests gating
   the restart** so it can't recur. **Durability caveat:** editor lives as copied files + an untracked append in jared's
   checkout (matches existing pattern there); a git-reset of that checkout would drop it.
+- **(2026-06-27) Editor made durable** — committed `field_edit_v2.py` + `field-edit.html` + the `annotation_server.py`
+  include on jared's branch in the running checkout (`b1c3f9e`, now git-tracked; generated `field_review/` PNGs left
+  untracked; jared's 8 WIP commits not pushed).
+- **(2026-06-27) Corrupt-seg `game.json` rebuilt — `heat__2025.07.22_vs_Fairport_away`.** Segment 6/22
+  (`...183315_183814..._1B93EE35.mp4`) is **genuinely unreadable** (full-size 459 MB but **no moov atom**; cv2 AND
+  ffmpeg-7.0.1 both fail to open it, `-c copy` remux fails — unrecoverable without untrunc-class tooling, not worth it for
+  ~4 min of a 21-good-segment game). Set `frames=0` + `note` (dead), recomputed offsets continuous,
+  `total_frames=119820` over the 21 readable segments. Marathon-aligned (cv2 grab also yields 0). **Watch:** when the
+  marathon reaches this game the dead segment could trip its decode if #25's recovery doesn't catch the moov-less-at-open
+  case (monitor will flag a crash/stall). Tool: box-scratch `fix_corrupt_seg.py`.
+- **(2026-06-27) play_windows phases — NOT bulk-filled (investigated, unsafe).** `play_windows.json` has 18 entries but
+  only **7 carry real GT timestamps** (11 are empty `continue_curve` placeholders). Blocking issues for a bulk
+  `game_state` fill: (1) timestamps stored at `fps=20` but real fps ~19.7 -> must remap on actual per-game fps; (2) name
+  mapping hits **fragment game.jsons** (pw "Pittsford 5/07" -> `heat__2026.05.07_..._away` = 1,740 frames vs 88-min
+  timestamps); (3) ~5 s end drift; (4) no new-store phases editor to verify. Recommendation: handle `game_state`
+  **on-demand per trained game** (auto-derive from ball-track + verify), and build a new-store **phases editor**
+  (analogous to `field-edit.html`) if we want to verify play_windows seeds. Left the store untouched to avoid bad phases.
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
