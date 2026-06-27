@@ -29,6 +29,11 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
     `warped_dataset`) apply `cv2.flip(img,-1)` per frame when `video_rotation==±180`. Self-sufficient (reads game.json,
     no assembler dependency). Unit-tested (`tests/test_video_rotation.py`), ruff+pytest green. So the 8 tag-corrected
     games no longer train upside-down.
+- **Promoted `heat__2026.06.15_vs_Irondequoit_away` to trainable (2026-06-27)** — was `trainable=False` only because
+  `has_labels=False` (set before we consolidated its 301 human far-labels). Now `trainable=True`+`has_labels=True` in
+  registry (backup `.bak_promote_irondequoit`) + game.json. **Trainable = 74.** NOT in the running marathon's work-list
+  (fixed at launch=72) → **must be processed in the post-marathon all-games detection pass** (#27) along with the
+  non-trainable completeness games. Its labels are already in `ball_labels.jsonl` (heat_0615 sets, +1181 offset).
 - **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
   (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
   (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
