@@ -4,6 +4,31 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-26: `orientation` is RAW-camera provenance, NOT a flip instruction — derive flip from the resolved video's rotation tag
+
+**The trap:** the registry/`game.json` `orientation` field (12 `upside_down`, 91 right-side-up) describes how the
+**raw camera was mounted** — it does NOT mean "the video you'll decode is upside-down." Two different corrections exist
+in the corpus, both yielding right-side-up frames when read correctly:
+- **Tag method (7-10 of the upside_down games):** upside-down pixels + a **`rotation=-180` displaymatrix tag**, as a
+  stream-COPY `<slug>-raw.mp4` (no re-encode). **cv2 auto-applies** the tag → right-side-up. **PyAV/libav IGNORE
+  display-rotation by default** → upside-down unless the reader applies it.
+- **Baked method (e.g. `flash__2025.05.17_vs_NY_Rush_away`, `heat__2025.06.02_vs_Fairport_home`):** the flip is baked
+  into the **pixels**, NO tag. Every reader gets right-side-up. **These were vision-confirmed right-side-up — flipping
+  them (adding a -180 tag) would INVERT them.** (Their `needs_flip=True` registry flag was stale-for-processing.)
+
+**RULE (so no session naively flips on the `orientation` field):**
+1. **Never flip based on `orientation` alone.** Derive the action from the **resolved video's actual rotation tag**.
+2. `game.json.video_rotation` = the resolved (`resolve_source`) video's display-rotation (`-180` for tag-corrected
+   games, `0` otherwise incl. baked + natively-upright). **cv2 consumers: do nothing** (auto-applied). **PyAV / any
+   non-cv2 reader: apply `video_rotation`** (rotate 180° if `-180`), or its frames will be upside-down vs the
+   right-side-up labels/polygon.
+3. `needs_flip` is DROPPED (was `upside_down ∧ no corrected_video`, stale-prone, and described the raw not the
+   processed video). `orientation` stays as provenance only.
+
+**Load-bearing follow-up:** the crop/dewarp builder (PyAV) MUST honor `video_rotation` — otherwise its crops for the
+~10 tag-corrected games come out upside-down vs their right-side-up labels (silent train-data corruption). Verify before
+the next training run. See [[feedback_verify_label_semantics_with_vision]].
+
 ## 2026-06-26: Human far-labels were made on DIFFERENT source videos than the detections — align by frame-matched offset
 
 **The trap (so no future session re-derives it):** the 27 `D:\training_data\far_label\<set>\` sets were NOT all

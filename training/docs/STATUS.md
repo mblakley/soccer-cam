@@ -21,6 +21,11 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   **FLIP CORRECTNESS FLAG:** both needs_flip=True games are trainable AND have `combined_video=None` -> the marathon
   resolves their UPSIDE-DOWN raw and would emit upside-down detections. Decide before the marathon reaches them (at
   ~8/72 on 2024 games; these are 2025): flip-before-detect vs accept-and-flip-downstream.
+  - **RESOLVED 2026-06-26 (vision):** both `needs_flip` games are ALREADY right-side-up in their mp4 (flip **baked into
+    pixels**, no tag) — Mark confirmed; flipping would invert them. `orientation` is raw-camera provenance only.
+    **Replaced needs_flip with `video_rotation`** in game.json (resolved video's display tag: **8 games `-180`**
+    tag-corrected, **95 `0`**). cv2 auto-applies it; **PyAV (crop builder) MUST apply it** or the 8 tag-corrected
+    games' crops come out upside-down vs their labels — load-bearing follow-up. See DECISIONS.md.
 - **dav_only → mp4 conversion — DONE (8 games, 30 segs, 0 fail).** `G:\ballresearch\dav_convert.py`: lossless remux
   (`-c:v copy -c:a copy`, AAC audio **byte-identical** to source — MD5-verified), in place on F: as `<dav-stem>.mp4`
   (matches the registry segment stems). Now resolvable + offset-tabled; the running marathon will pick them up when it
