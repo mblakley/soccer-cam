@@ -9,11 +9,13 @@ Mounted into the annotation server via ``app.include_router(field_edit_v2.router
 """
 
 import glob
+import io
 import json
 import os
 
-import cv2
+import av
 from fastapi import APIRouter, HTTPException, Request, Response
+from PIL import Image
 
 router = APIRouter()
 
@@ -56,6 +58,28 @@ def _any_footage(vd):
         if any(k in b for k in ("[f]", "_ch", "recm09", "raw", "combined")):
             return cand
     return None
+
+
+def _decode_mid(path):
+    """Decode a ~mid-game frame as a PIL image via PyAV (the annotation venv has no cv2)."""
+    container = av.open(path)
+    try:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        if stream.duration and stream.time_base:
+            dur = float(stream.duration * stream.time_base)
+        elif container.duration:
+            dur = container.duration / av.time_base
+        else:
+            dur = 0.0
+        t = dur * 0.5
+        if stream.time_base and t > 0:
+            container.seek(int(t / stream.time_base), stream=stream, backward=True)
+        for frame in container.decode(stream):
+            return frame.to_image()  # PIL RGB
+        return None
+    finally:
+        container.close()
 
 
 @router.get("/api/fieldv2/games")
@@ -120,18 +144,18 @@ def background(gid: str):
         f = _any_footage(vd)
     if not f:
         raise HTTPException(404, "no video for %s" % gid)
-    cap = cv2.VideoCapture(f)
-    tot = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 100
-    cap.set(cv2.CAP_PROP_POS_FRAMES, int(tot * 0.5))
-    ok, fr = cap.read()
-    cap.release()
-    if not ok or fr is None:
+    img = _decode_mid(f)
+    if img is None:
         raise HTTPException(404, "decode failed")
-    h, w = fr.shape[:2]
-    disp = cv2.resize(fr, (DISP_W, int(h * DISP_W / w)))
-    ok, buf = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # PyAV ignores the display-rotation tag (unlike cv2, which the polygon coords assume) -> apply it
+    if gj.get("video_rotation") in (180, -180):
+        img = img.transpose(Image.ROTATE_180)
+    w, h = img.size
+    disp = img.resize((DISP_W, max(1, int(h * DISP_W / w))))
+    buf = io.BytesIO()
+    disp.save(buf, format="JPEG", quality=85)
     return Response(
-        content=buf.tobytes(),
+        content=buf.getvalue(),
         media_type="image/jpeg",
         headers={"X-Src-W": str(w), "X-Src-H": str(h), "Cache-Control": "no-store"},
     )
