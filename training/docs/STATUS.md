@@ -1,6 +1,29 @@
 # Current Status
 
-*Last updated: 2026-06-27*
+*Last updated: 2026-06-28*
+
+## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
+
+`training/data_prep/phase_detect.py` — fuses **player-on-field curve** (yolo26n persons in the field
+polygon; halftime = field empties) + **ball restart** (AutoCam `<video>.mp4.jsonl`: ball static at
+center circle then moves = kickoff → precise KO/2H) + **whistle multi-blast** (HT/END). Picks the
+most precise signal per boundary, cross-checks by relative timing; half-length range is only a
+sanity gate (no fixed-40 assumption — handles weekday-league 40min, weekend-tournament/youth
+30-38min, indoor dome). Per-game compute cached (`phase_cache/<gid>.json`, ~2min/game then instant).
+Sanity gate rejects implausible fits — never writes garbage.
+
+- **Validated 6/04 (frame GT): KO 2:37.02 (±0.02s, ball), HT 42:34, 2H 50:21, END 90:09** — all <10s.
+- **Reolink coverage: 12/24 game_state.** 6 whistle-40 (EXP-PHASE-02) + 3 manual play_windows + **3
+  new fused & vision-verified: heat 5/28 (40min), heat 6/06 Sullivan (36min), flash 3/21 (34min,
+  indoor dome).**
+- **Known gap — halftime warm-up on field:** when teams warm up on the pitch during halftime, the
+  player dip is short and the ball 2H can latch a warm-up center-kick → rejected (5/31_14.40, 6/07
+  Lakefront) or asymmetric (5/30 Fairport, 6/08 football-field). Fix = require KO/2H corroboration
+  across ball+player-formation+whistle (relative timing), pending. no-dip games (5/30 WNYF, 6/06
+  Fairport, 6/07 BU15) need halftime from the ball's idle gap. Aborted false-starts + 2025 raw-only
+  games are not real gaps. Details in EXPERIMENTS.md EXP-PHASE-03.
+- **Next:** corroboration refinement for warm-up/no-dip games; then pipeline integration (training
+  game_state annotation; optional production auto game-start to assist the NTFY prompt).
 
 ## IMPLEMENTATION ROADMAP — JSONL measurement store (approved 2026-06-26, autonomous build)
 
