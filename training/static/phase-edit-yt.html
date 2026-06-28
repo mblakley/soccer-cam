@@ -31,6 +31,8 @@
   <button onclick="loadGame()">Load</button>
   <label style="margin-left:6px"><input type="checkbox" id="showAll" onchange="fillGames()"> show verified/all</label>
   <span id="count" class="src"></span>
+  <span style="margin-left:8px">video:</span>
+  <select id="version" onchange="switchVersion()" title="switch version if one has no audio"></select>
   <span id="meta" class="src"></span>
 </header>
 <div id="wrap">
@@ -84,6 +86,17 @@ function fillGames(){
     games.length + (showAll ? " games" : " to verify") + " (" + ALLGAMES.filter(g=>g.has_youtube).length + " with video)";
 }
 function onYouTubeIframeAPIReady(){ /* player created on Load */ }
+function loadVid(id){
+  if(player && player.loadVideoById){ player.loadVideoById(id); }
+  else { player = new YT.Player('player', {videoId:id, playerVars:{rel:0, modestbranding:1},
+      events:{onReady:()=>{ready=true;}}}); }
+}
+function switchVersion(){
+  const id = document.getElementById("version").value;
+  const t = (player&&player.getCurrentTime)?player.getCurrentTime():0;  // keep position across versions
+  loadVid(id);
+  const seekOnce = setInterval(()=>{ if(player&&player.seekTo){ player.seekTo(t,true); clearInterval(seekOnce); } }, 200);
+}
 
 async function loadGame(){
   const gid = document.getElementById("game").value;
@@ -95,11 +108,13 @@ async function loadGame(){
   cur = {};
   for(const [k] of TRANS){ const g=info.boundaries[k]; cur[k] = (g!=null)? globalToYt(g) : null; }
   renderRows();
+  // version dropdown: primary + alternates (use a regular version if Full Field is silent)
+  const vsel = document.getElementById("version"); vsel.innerHTML = "";
+  const versions = info.youtube_id ? [{id:info.youtube_id, title:info.youtube_title||"primary"}, ...(info.youtube_alts||[])] : [];
+  versions.forEach((v,i)=>{ const o=document.createElement("option"); o.value=v.id;
+    o.textContent=(/full field/i.test(v.title)?"Full Field":"crop")+" — "+v.id; vsel.appendChild(o); });
   if(!info.youtube_id){ return; }
-  if(player){ player.loadVideoById(info.youtube_id); }
-  else { player = new YT.Player('player', {videoId: info.youtube_id,
-      playerVars:{rel:0, modestbranding:1},
-      events:{onReady:()=>{ready=true;}}}); }
+  loadVid(info.youtube_id);
   if(tick) clearInterval(tick);
   tick = setInterval(()=>{ if(player&&player.getCurrentTime){ const t=player.getCurrentTime();
     document.getElementById("now").textContent=fmt(t);

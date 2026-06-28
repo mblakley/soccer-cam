@@ -314,6 +314,8 @@ def phases_get(gid: str):
         "source": (ps[0]["source"] if ps else None),
         "youtube_id": gj.get("youtube_id"),
         "youtube_title": gj.get("youtube_title"),
+        "youtube_alts": gj.get("youtube_alts")
+        or [],  # other embeddable versions (FF/regular)
         "offset_sec": _trim_offset(
             vd
         ),  # global_frame = (yt_seconds + offset_sec) * fps
