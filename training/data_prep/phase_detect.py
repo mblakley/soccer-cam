@@ -350,11 +350,13 @@ for g in games:
         continue
     gj = json.load(open(gjp, encoding="utf-8"))
     existing = gj.get("game_state") or []
+    esrcs = sorted({p.get("source", "?") for p in existing})
+    # human-verified GT is sacred: never overwrite it, even with --force/--game.
+    if existing and "human" in esrcs:
+        print("  [%s] SKIP (human-verified GT)" % gid)
+        continue
     if existing and not (FORCE or ONLY):
-        print(
-            "  [%s] SKIP (game_state source=%s)"
-            % (gid, ",".join(sorted({p.get("source", "?") for p in existing})))
-        )
+        print("  [%s] SKIP (game_state source=%s)" % (gid, ",".join(esrcs)))
         continue
     trim, raw, comb, off = files_offsets(d)  # d = F: archive folder (game.json's dir)
     vid = trim or raw or comb
