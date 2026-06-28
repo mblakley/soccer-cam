@@ -267,6 +267,8 @@ def phases_games():
                 "trainable": bool(g.get("trainable")),
                 "has_phases": len(ps) > 0,
                 "verified": len(ps) > 0 and srcs <= {"human", "whistle"},
+                "human": "human" in srcs,  # already human-verified game_state
+                "has_youtube": bool(gj.get("youtube_id")),  # has an embeddable video
                 "source": ",".join(sorted(s for s in srcs if s)) or None,
             }
         )

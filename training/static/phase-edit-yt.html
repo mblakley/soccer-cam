@@ -29,6 +29,8 @@
   <b>Phase Verify</b>
   <select id="game"></select>
   <button onclick="loadGame()">Load</button>
+  <label style="margin-left:6px"><input type="checkbox" id="showAll" onchange="fillGames()"> show verified/all</label>
+  <span id="count" class="src"></span>
   <span id="meta" class="src"></span>
 </header>
 <div id="wrap">
@@ -64,12 +66,22 @@ function fmt(s){ s=Math.max(0,s); const m=Math.floor(s/60); return m+":"+(s-m*60
 function ytToGlobal(yt){ return Math.round((yt+offset)*fps); }
 function globalToYt(g){ return g/fps - offset; }
 
+let ALLGAMES = [];
 async function listGames(){
-  const r = await fetch("/api/phasesv2/games"); const gs = await r.json();
-  const sel = document.getElementById("game");
-  gs.filter(g=>g.game_id.includes("2026")||g.has_phases).sort((a,b)=>a.game_id<b.game_id?-1:1)
-    .forEach(g=>{ const o=document.createElement("option"); o.value=g.game_id;
-      o.textContent=(g.verified?"✓ ":g.has_phases?"• ":"  ")+g.game_id+(g.source?" ["+g.source+"]":""); sel.appendChild(o); });
+  const r = await fetch("/api/phasesv2/games"); ALLGAMES = await r.json();
+  fillGames();
+}
+function fillGames(){
+  const showAll = document.getElementById("showAll").checked;
+  const sel = document.getElementById("game"); sel.innerHTML = "";
+  // requirements: must have an embeddable YouTube video; hide already-human-verified unless showAll
+  const games = ALLGAMES
+    .filter(g => g.has_youtube && (showAll || !g.human))
+    .sort((a,b)=>a.game_id<b.game_id?-1:1);
+  games.forEach(g=>{ const o=document.createElement("option"); o.value=g.game_id;
+    o.textContent=(g.human?"✓ ":g.has_phases?"• ":"  ")+g.game_id+(g.source?" ["+g.source+"]":""); sel.appendChild(o); });
+  document.getElementById("count").textContent =
+    games.length + (showAll ? " games" : " to verify") + " (" + ALLGAMES.filter(g=>g.has_youtube).length + " with video)";
 }
 function onYouTubeIframeAPIReady(){ /* player created on Load */ }
 
@@ -118,7 +130,11 @@ async function save(){
     half_end:ytToGlobal(cur.half_end), end:ytToGlobal(cur.end)}};
   const r=await fetch("/api/phasesv2/"+encodeURIComponent(info.game_id),{method:"POST",
     headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-  st.innerHTML = r.ok ? "<span class='src'>saved ✓ (human-verified)</span>" : "<span class='warn'>save failed</span>";
+  if(r.ok){
+    st.innerHTML = "<span class='src'>saved ✓ (human-verified)</span>";
+    const g = ALLGAMES.find(x=>x.game_id===info.game_id); if(g){ g.human=true; g.has_phases=true; g.source="human"; }
+    fillGames();  // drop it from the to-verify list
+  } else { st.innerHTML = "<span class='warn'>save failed</span>"; }
 }
 listGames();
 </script>
