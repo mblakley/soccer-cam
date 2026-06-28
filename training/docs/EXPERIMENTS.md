@@ -24,6 +24,12 @@ the structure locks.
 detector for the 40-min-half games. Generalize/batch across Guzzetta 2026; for games where the kickoff/2H whistle is
 missing, sharpen the derived restart with the ball-at-center cue in the tight post-derivation window (Mark's hint).
 Supersedes EXP-PHASE-01 (density model) and the play_windows seeds for these games.
+**Audio-rate scoping (important):** the whistle (~4350Hz) needs Nyquist > 4.4kHz. **2024-25 Dahua games have 8000Hz
+audio (Nyquist 4kHz) -> the whistle band is CUT OFF**, so the whistle detector CANNOT work on them (this is exactly why
+EXP-012 found whistles unreliable — it was run on 8kHz Dahua). **2026 Reolink: trimmed/upload audio 44.1kHz, combined.mp4
+16kHz (Nyquist 8kHz) — whistle intact.** So: whistle+40min detector applies to **2026+ Reolink games**; the 2024-25
+Dahua games keep their human game_state (they have it) or need the density/ball method. The batch runs on combined.mp4
+(16kHz, fine).
 
 ---
 
