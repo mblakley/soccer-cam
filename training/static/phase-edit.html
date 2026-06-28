@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phase editor (game.json)</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #111; color: #eee; display: flex; height: 100vh; }
+  #side { width: 320px; overflow-y: auto; border-right: 1px solid #333; padding: 8px; font-size: 13px; }
+  #side .g { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+  #side .g:hover { background: #1c2536; } #side .g.sel { background: #1f3a2a; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+  .b-ver { background: #1a7f37; } .b-pw { background: #9a6700; color: #000; } .b-none { background: #7a1f1f; }
+  #main { flex: 1; display: flex; flex-direction: column; padding: 10px; overflow-y: auto; }
+  h2 { margin: 4px 0; font-size: 15px; } .hint { color: #9ab; font-size: 12px; }
+  .row { display: flex; gap: 14px; align-items: flex-start; margin: 10px 0; border-bottom: 1px solid #222; padding-bottom: 10px; }
+  .row img { width: 480px; border: 1px solid #444; background: #000; }
+  .ctl { display: flex; flex-direction: column; gap: 6px; }
+  .ctl .lab { font-weight: bold; font-size: 14px; } .ctl .t { color: #6cf; font-variant-numeric: tabular-nums; }
+  button { background: #243; color: #eee; border: 1px solid #456; padding: 6px 10px; cursor: pointer; border-radius: 4px; }
+  button:hover { background: #365; } .nav button { margin: 2px; }
+  #save { background: #1a5; padding: 9px 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="side"><h2>Games</h2><div id="list">loading…</div></div>
+<div id="main">
+  <h2 id="title">Pick a game</h2>
+  <div class="hint">Scrub each boundary to the true frame (kickoff = ball at center / teams set; half boundaries = whistle). play_windows seeds are offset (upload-time), so expect to nudge. Save writes verified phases.</div>
+  <div id="rows"></div>
+  <div style="margin:12px 0"><button id="save" onclick="save()">Save &amp; mark verified</button> <span id="msg"></span></div>
+</div>
+<script>
+const BNDS = [["kickoff", "Kickoff (1st-half start)"], ["half_start", "Halftime start"], ["half_end", "2nd-half start"], ["end", "Game end"]];
+let GID = null, FPS = 25, TOTAL = 0, B = {};
+
+function fmt(g) { const s = g / FPS; const m = Math.floor(s / 60), sec = Math.floor(s % 60); return m + ":" + String(sec).padStart(2, "0") + " (f" + g + ")"; }
+
+async function loadList() {
+  const gs = await (await fetch('/api/phasesv2/games')).json();
+  gs.sort((a, b) => (a.verified - b.verified) || a.game_id.localeCompare(b.game_id));
+  const el = document.getElementById('list'); el.innerHTML = '';
+  for (const g of gs) {
+    let cls = 'b-none', txt = 'none';
+    if (g.verified) { cls = 'b-ver'; txt = 'verified'; }
+    else if (g.has_phases) { cls = 'b-pw'; txt = g.source || 'seed'; }
+    const d = document.createElement('div'); d.className = 'g'; d.dataset.gid = g.game_id;
+    d.innerHTML = '<span>' + g.game_id + '</span><span class="badge ' + cls + '">' + txt + '</span>';
+    d.onclick = () => load(g.game_id);
+    el.appendChild(d);
+  }
+}
+
+async function load(gid) {
+  GID = gid; document.getElementById('title').textContent = gid;
+  document.querySelectorAll('#side .g').forEach(e => e.classList.toggle('sel', e.dataset.gid === gid));
+  const m = await (await fetch('/api/phasesv2/' + encodeURIComponent(gid))).json();
+  FPS = m.fps || 25; TOTAL = m.total_frames || 0; B = {};
+  const rows = document.getElementById('rows'); rows.innerHTML = '';
+  for (const [key, label] of BNDS) {
+    B[key] = m.boundaries[key] != null ? m.boundaries[key] : 0;
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML =
+      '<img id="img_' + key + '">' +
+      '<div class="ctl"><div class="lab">' + label + '</div><div class="t" id="t_' + key + '"></div>' +
+      '<div class="nav">' +
+      [-300, -30, -5, -1].map(d => '<button onclick="nudge(\'' + key + '\',' + d + ')">' + d + 's</button>').join('') +
+      '</div><div class="nav">' +
+      [1, 5, 30, 300].map(d => '<button onclick="nudge(\'' + key + '\',' + d + ')">+' + d + 's</button>').join('') +
+      '</div></div>';
+    rows.appendChild(row);
+    refresh(key);
+  }
+  document.getElementById('msg').textContent = m.source ? ('loaded: ' + m.source) : 'no phases yet';
+}
+
+function refresh(key) {
+  document.getElementById('t_' + key).textContent = fmt(B[key]);
+  document.getElementById('img_' + key).src = '/api/phasesv2/' + encodeURIComponent(GID) + '/frame?g=' + B[key];
+}
+function nudge(key, secs) {
+  B[key] = Math.max(0, Math.min(TOTAL - 1, B[key] + Math.round(secs * FPS)));
+  refresh(key);
+}
+
+async function save() {
+  if (!GID) return;
+  const r = await fetch('/api/phasesv2/' + encodeURIComponent(GID), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ boundaries: B })
+  });
+  const j = await r.json();
+  document.getElementById('msg').textContent = r.ok ? ('✓ saved verified (' + j.phases + ' phases)') : 'save failed';
+  if (r.ok) loadList();
+}
+loadList();
+</script>
+</body>
+</html>
