@@ -33,8 +33,15 @@ both vision-verified (kickoff = teams in formation, mid-halftime = empty field).
 half-agnostic claim. Sanity gate correctly REJECTED 3 fits whose "halftime" was a 1.3-1.8min stoppage (5/30 Fairport,
 5/31 West_Seneca_14.40, 6/07 Lakefront_home) and flagged 6/08 Hilton_Flaitz (American-football-marked field, sparse
 kickoff, 45-min/99-min — same game removed in EXP-PHASE-02). 3 games had no detectable halftime dip
-(no-play-plateau: 5/30 Western_NY_Flash, 6/06 Fairport, 6/07 BU15); 6 games had no local trimmed file / no recording
-dir (need combined.mp4 fallback or file location).
+(no-play-plateau: 5/30 Western_NY_Flash, 6/06 Fairport, 6/07 BU15).
+**File-location fix (2026-06-28):** the detector first globbed `D:\soccer-cam-storage` and reported 6 "missing file"
+games — WRONG. The canonical source is the **F: archive folder** (`F:\Heat_2012s\<date>...`, `F:\Flash_2013s\...`,
+where game.json lives): named-subdir trimmed upload + `-raw` sibling + combined.mp4 + match_info.ini. Fixed
+`files_offsets` to read the F: archive folder. After the fix: flash 3/21 processes (indoor-dome game, no whistle ->
+player-curve-only, asymmetric -> rejected, manual). The rest were NOT real missing files: heat 5/07-16:12, flash
+5/10-11:19, 5/30 Spencerport-19:43, 5/31 WSeneca-12:40 are **aborted false-starts** (combined.mp4 is 32-87s; each has
+a real-game sibling or no game); heat 7/22 is a 2025 raw-segments-only recording (no trimmed/combined). So no real
+2026 game is missing its file on F:.
 **Conclusion:** the multi-signal detector clears the 10s bar without any half-length assumption, generalizes to
 shorter-half games, and works on 16kHz games via the player curve alone (whistle-cut audio no longer fatal). It is
 the general phase detector; EXP-PHASE-02's whistle+40min stays valid for the 6 heat-40 games already anchored.
