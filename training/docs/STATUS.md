@@ -134,6 +134,16 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   timestamps); (3) ~5 s end drift; (4) no new-store phases editor to verify. Recommendation: handle `game_state`
   **on-demand per trained game** (auto-derive from ball-track + verify), and build a new-store **phases editor**
   (analogous to `field-edit.html`) if we want to verify play_windows seeds. Left the store untouched to avoid bad phases.
+- **(2026-06-27) Phase editor built + 6 play_windows games seeded (option A).** VISION-CONFIRMED play_windows
+  timestamps are **upload-time, not recording-time**: mapping `flash 05.10` "kickoff" 4:05 lands on an **empty field**
+  (timestamp 08:57:03 = exactly 4:05 into the recording, but no players) -> a per-game trim offset exists (same class as
+  far-label alignment). So a direct fps map is wrong. Seeded the **6 GT games** (Upper_90, Spencerport, Fairport 5/28,
+  Chili, Cleveland, Irondequoit 6/15) into `game_state` with `source=play_windows` as **starting scrub positions only**
+  (skipped Pittsford 5/07 -- registry target is a 1,740-frame fragment vs 88-min GT). Built a `game.json`-backed
+  **phase editor** (`/api/phasesv2/*` in `field_edit_v2.py` + `training/static/phase-edit.html`): scrub the 5 boundaries
+  against decoded frames (`/frame?g=`), save -> `source=human`. Live at
+  **`https://trainer.goat-rattlesnake.ts.net/static/phase-edit.html`**; lists 103 (27 manifest-verified, 6 pw seeds, rest
+  none). Durable on jared branch (`c5db752`). Tools: box-scratch `map_pw_phases.py`.
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
