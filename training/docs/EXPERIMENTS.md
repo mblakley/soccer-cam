@@ -4,6 +4,60 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-03: multi-signal phase detector (player-curve + whistle), half-length AGNOSTIC (2026-06-28)
+
+**Hypothesis (Mark):** the fixed-40-min assumption (EXP-PHASE-02) doesn't generalize — younger ages play 30-min
+halves, tournaments are shorter, flash halves vary. Instead combine signals that don't assume a half length:
+the WHISTLE (multi-blast = halftime/end) AND a PLAYER detector inside the field mask (the ~20 field players are
+OFF the field during the halftime break). Add ball-at-center for kickoffs.
+**Method (`G:\ballresearch\phase_detect.py`):** backbone = **player-on-field count curve**. Sample ~1 frame / 10s,
+run `yolo26n.onnx` (COCO, person class, 1280px) and count persons whose foot-point is inside the field polygon.
+Curve goes low -> high(1H) -> **low(halftime, field empties)** -> high(2H) -> low, with NO half-length assumption.
+Segment: halftime = the longest SUSTAINED low-player run in the middle 20-80% of the game; 1H = first-play->halftime,
+2H = halftime->last-play. **Whistle refinement** (when 44.1kHz trimmed audio exists): HT = multi-blast at the dip,
+2H = first whistle once the field refills, END = largest late multi-blast with KO>=0 (the KO>=0 cap excludes
+post-game whistles), KO = HT-(END-2H) [measured half] snapped to a kickoff whistle if one is right there. Curve +
+whistle cached per game (`phase_cache/<gid>.json`) so the expensive pass runs once; idempotent. Sanity gate rejects
+implausible fits (KO<0, break not 2.5-18min, half not 15-50min, |h1-h2|>3min) — never writes garbage. Writes
+game_state source=`phase_video_whistle` + `_phase_meta`.
+**Gotchas found + fixed:** (1) trimmed uploads are **1920x1080 anamorphically squeezed** from the 7680x2160 source
+-> scale the field polygon by (0.25, 0.5), NOT uniform. (2) full-frame yolo@1280 over a 7680-wide panorama misses
+small field players (catches only big sideline people); the 1920-wide trimmed file needs no tiling. (3) symmetry-only
+half selection is fragile (EXP-PHASE-02's lesson); the player halftime-dip removes the half-length guess entirely.
+(4) post-game whistles fooled END until the KO>=0 cap. (5) detached `python > log` is block-buffered -> use `-u`.
+**Result — 6/04 Irondequoit (frame GT KO=2:37 HT=42:37 2H=50:16 END=90:09):** KO 2:41 (+4s), HT 42:34 (-3s),
+2H 50:16 (0s), END 90:09 (0s); h1=h2=39.9. **All four within ~4s — never assuming 40min.** Batch over all 24
+reolink: **2 new clean auto-phased games** beyond EXP-PHASE-02's 6 — heat 5/28 Fairport (40-min: KO 4:09/HT 44:17/
+2H 48:06/END 88:13) and heat 6/06 Lakefront_Sullivan (**36-min** halves: KO 4:25/HT 41:05/2H 44:51/END 81:03) —
+both vision-verified (kickoff = teams in formation, mid-halftime = empty field). The 36-min game proves the
+half-agnostic claim. Sanity gate correctly REJECTED 3 fits whose "halftime" was a 1.3-1.8min stoppage (5/30 Fairport,
+5/31 West_Seneca_14.40, 6/07 Lakefront_home) and flagged 6/08 Hilton_Flaitz (American-football-marked field, sparse
+kickoff, 45-min/99-min — same game removed in EXP-PHASE-02). 3 games had no detectable halftime dip
+(no-play-plateau: 5/30 Western_NY_Flash, 6/06 Fairport, 6/07 BU15); 6 games had no local trimmed file / no recording
+dir (need combined.mp4 fallback or file location).
+**Conclusion:** the multi-signal detector clears the 10s bar without any half-length assumption, generalizes to
+shorter-half games, and works on 16kHz games via the player curve alone (whistle-cut audio no longer fatal). It is
+the general phase detector; EXP-PHASE-02's whistle+40min stays valid for the 6 heat-40 games already anchored.
+**Failure mode found — HALFTIME WARM-UP ON FIELD (2026-06-28):** cross-checked the detector (--force, no write)
+against the 3 manually-set `play_windows` games. The manuals confirm Mark's variable-half point: flash 5/09 ~34min,
+flash 5/10 ~38min, heat 5/31 Spencerport ~30min halves (a fixed-40 detector misses all 3). The detector gets HT
+(halftime START) RIGHT on all 3 (flash 5/10 42:09 vs PW 42.2min; Spencerport 31:50 vs 31.9min) but UNDER-estimates
+2H and END because these teams **warm up on the field during halftime** -> the player-count dip is short (just the
+initial clear-off), the "field refills" signal fires on the warm-up, so the 2nd half comes out too short. The sanity
+gate REJECTED 2 of 3 (break <2.5min) but flash 5/10 slipped through as a symmetric-but-wrong "OK" (32min half vs real
+38; END 12min early). **Lesson: the numeric gate is necessary but NOT sufficient — vision-verification (kickoff
+formation + empty-halftime frame) is the real gate; only write what's been eyeballed.** The 2 written games (5/28,
+6/06 Sullivan) were vision-verified; the 3 play_windows manuals are kept (better than the warm-up-shortened auto fit).
+**Fix (needs ball signal):** distinguish halftime warm-up from real 2nd-half play via ball-in-play (ball moving /
+ball-at-center kickoff), which separates scattered warm-up from coordinated play — pending the marathon's ball
+detections reaching 2026 games. Until then, warm-up-on-field games stay manual.
+**Next:** combined.mp4 fallback for the no-trimmed-file games (player curve works on 16kHz video; warmup at file
+start needs handling); ball-at-center kickoff to fix the warm-up 2H/END + rescue the no-dip / rejected games
+(post-marathon-on-2026); locate recordings for the 2 no-rec-dir games. Player counts could also be cached as a
+per-game signal for the active-play training filter.
+
+---
+
 ## EXP-PHASE-02: whistle template + 40-min-structure phase detector — <1s on all boundaries (2026-06-28)
 
 **Hypothesis (Mark):** the referee whistle marks halftime/end; combined with the fixed half length (40 min for
