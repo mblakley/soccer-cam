@@ -4,6 +4,26 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-01: train a game-phase detector on human phases (detection features) — ~4m MAE, marginal (2026-06-27)
+
+**Hypothesis:** Mark's 27 human `game_state` sets (now in `game.json`, aligned (seg,f) space) can supervise a phase
+detector using `autocam_detections` features (no upload offset / fps drift, unlike play_windows).
+**Method:** box-scratch `G:\ballresearch\train_phase_model.py`. 19 games with human phases + detections. Per 10s window:
+top-1 conf, #high-conf candidates/frame, x-spread of high-conf (multi-ball), in-field ratio, top-1 motion, temporal
+position. numpy multinomial logistic-regression emission + **duration-constrained segmental DP** (learned per-phase
+min/max + Gaussian length prior). Leave-one-game-out. (Whistle dropped — corrupt-audio decode + EXP-012 already showed
+it's noisy.)
+**Result (LOO MAE, minutes):** kickoff 5.2 · HT-start 4.8 · 2H-start 5.2 · **game-end 2.3** · overall **4.4** (4.1 with
+per-boundary calibration). game-end within-2m 12/19; kickoff/HT/2H ~5/19. Stable across feature/DP/calibration variants.
+**Conclusion:** Confirms EXP-012 — detection signal is **not sharp** at warmup→1st-half and the halftime edges (ball
+activity looks similar across them); **game-end is reliable** (activity stops). A trained density model alone plateaus
+~4m. EXP-012's better 2.1m needed whistle + asymmetric density + crowd-energy + calibration, and still only 10/29 games
+within 2m on all boundaries. **Practical use:** model is a recording-time SEED for the phase editor (better than the
+offset play_windows seeds; game-end trustworthy), NOT accurate enough to auto-fill phases unverified. Phase editor
+(`/static/phase-edit.html`) remains the reliable path.
+
+---
+
 ## EXP-DIST-15: does the marathon's 448-anisotropic squish actually corrupt Dahua labels? — YES, ~16% (2026-06-26)
 
 **Hypothesis:** `gen_detections_all.py` fed AutoCam's balldet a hardcoded `1600x448` anisotropic resize for
