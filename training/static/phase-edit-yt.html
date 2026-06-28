@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phase Verify (YouTube)</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 8px 12px; background: #1b1b1b; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, button { font: inherit; padding: 5px 9px; background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 5px; cursor: pointer; }
+  button:hover { background: #383838; }
+  #wrap { display: flex; gap: 14px; padding: 12px; align-items: flex-start; flex-wrap: wrap; }
+  #player { width: 960px; max-width: 100%; aspect-ratio: 16/9; background: #000; }
+  #panel { width: 360px; }
+  .now { font-size: 22px; font-variant-numeric: tabular-nums; margin: 6px 0; }
+  .nudge button { min-width: 46px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  td { padding: 5px 4px; border-bottom: 1px solid #2a2a2a; }
+  .t { font-variant-numeric: tabular-nums; font-size: 16px; min-width: 78px; display: inline-block; }
+  .set { background: #245; } .seek { background: #333; }
+  #save { background: #2a5; color: #021; font-weight: 600; padding: 8px 16px; margin-top: 12px; }
+  .src { color: #9c9; } .warn { color: #e96; }
+  .lbl { color: #9bd; font-weight: 600; }
+  small { color: #888; }
+</style>
+</head>
+<body>
+<header>
+  <b>Phase Verify</b>
+  <select id="game"></select>
+  <button onclick="loadGame()">Load</button>
+  <span id="meta" class="src"></span>
+</header>
+<div id="wrap">
+  <div>
+    <div id="player"></div>
+    <div class="now"><span id="now">0:00.0</span> <small id="dur"></small></div>
+    <div class="nudge">
+      <button onclick="nudge(-5)">⏪ 5s</button>
+      <button onclick="nudge(-1)">◀ 1s</button>
+      <button onclick="nudge(-0.2)">◀ .2s</button>
+      <button onclick="pp()">⏯</button>
+      <button onclick="nudge(0.2)">.2s ▶</button>
+      <button onclick="nudge(1)">1s ▶</button>
+      <button onclick="nudge(5)">5s ⏩</button>
+    </div>
+  </div>
+  <div id="panel">
+    <div><b>Set each transition to the whistle/kickoff, within 10s.</b></div>
+    <table id="rows"></table>
+    <button id="save" onclick="save()">Save as verified (human)</button>
+    <div id="status" style="margin-top:8px"></div>
+    <p><small>The player plays the Full Field upload (with audio — listen for the whistle).
+      Buttons capture the current playback time. Saved as game_state source=human; the detector
+      never overwrites it.</small></p>
+  </div>
+</div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const TRANS = [["kickoff","Kickoff"],["half_start","Halftime"],["half_end","2nd-half kickoff"],["end","Game end"]];
+let player, ready=false, cur={}, fps=25, offset=0, info=null, tick=null;
+
+function fmt(s){ s=Math.max(0,s); const m=Math.floor(s/60); return m+":"+(s-m*60).toFixed(1).padStart(4,"0"); }
+function ytToGlobal(yt){ return Math.round((yt+offset)*fps); }
+function globalToYt(g){ return g/fps - offset; }
+
+async function listGames(){
+  const r = await fetch("/api/phasesv2/games"); const gs = await r.json();
+  const sel = document.getElementById("game");
+  gs.filter(g=>g.game_id.includes("2026")||g.has_phases).sort((a,b)=>a.game_id<b.game_id?-1:1)
+    .forEach(g=>{ const o=document.createElement("option"); o.value=g.game_id;
+      o.textContent=(g.verified?"✓ ":g.has_phases?"• ":"  ")+g.game_id+(g.source?" ["+g.source+"]":""); sel.appendChild(o); });
+}
+function onYouTubeIframeAPIReady(){ /* player created on Load */ }
+
+async function loadGame(){
+  const gid = document.getElementById("game").value;
+  const r = await fetch("/api/phasesv2/"+encodeURIComponent(gid)); info = await r.json();
+  fps = info.fps; offset = info.offset_sec||0;
+  document.getElementById("meta").innerHTML = info.youtube_id
+    ? ("source: "+(info.source||"none")+" | offset "+offset+"s | "+(info.youtube_title||""))
+    : "<span class='warn'>no youtube_id for this game — can't embed</span>";
+  cur = {};
+  for(const [k] of TRANS){ const g=info.boundaries[k]; cur[k] = (g!=null)? globalToYt(g) : null; }
+  renderRows();
+  if(!info.youtube_id){ return; }
+  if(player){ player.loadVideoById(info.youtube_id); }
+  else { player = new YT.Player('player', {videoId: info.youtube_id,
+      playerVars:{rel:0, modestbranding:1},
+      events:{onReady:()=>{ready=true;}}}); }
+  if(tick) clearInterval(tick);
+  tick = setInterval(()=>{ if(player&&player.getCurrentTime){ const t=player.getCurrentTime();
+    document.getElementById("now").textContent=fmt(t);
+    if(player.getDuration) document.getElementById("dur").textContent="/ "+fmt(player.getDuration()); }}, 100);
+}
+function renderRows(){
+  const tb=document.getElementById("rows"); tb.innerHTML="";
+  for(const [k,label] of TRANS){
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td class="lbl">${label}</td>
+      <td class="t" id="t_${k}">${cur[k]!=null?fmt(cur[k]):"—"}</td>
+      <td><button class="set" onclick="setT('${k}')">⤓ set</button>
+          <button class="seek" onclick="seekT('${k}')">▶ go</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+function setT(k){ if(!player) return; cur[k]=player.getCurrentTime(); document.getElementById("t_"+k).textContent=fmt(cur[k]); }
+function seekT(k){ if(player&&cur[k]!=null){ player.seekTo(cur[k],true); player.playVideo(); } }
+function nudge(d){ if(player){ player.seekTo(Math.max(0,player.getCurrentTime()+d),true); } }
+function pp(){ if(!player) return; const st=player.getPlayerState(); st===1?player.pauseVideo():player.playVideo(); }
+
+async function save(){
+  const st=document.getElementById("status");
+  for(const [k,label] of TRANS){ if(cur[k]==null){ st.innerHTML="<span class='warn'>set "+label+" first</span>"; return; } }
+  if(!(cur.kickoff<cur.half_start && cur.half_start<cur.half_end && cur.half_end<cur.end)){
+    st.innerHTML="<span class='warn'>transitions must be in order (KO < HT < 2H < End)</span>"; return; }
+  const body={boundaries:{kickoff:ytToGlobal(cur.kickoff), half_start:ytToGlobal(cur.half_start),
+    half_end:ytToGlobal(cur.half_end), end:ytToGlobal(cur.end)}};
+  const r=await fetch("/api/phasesv2/"+encodeURIComponent(info.game_id),{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  st.innerHTML = r.ok ? "<span class='src'>saved ✓ (human-verified)</span>" : "<span class='warn'>save failed</span>";
+}
+listGames();
+</script>
+</body>
+</html>
