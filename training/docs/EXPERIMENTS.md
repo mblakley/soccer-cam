@@ -21,6 +21,14 @@ activity looks similar across them); **game-end is reliable** (activity stops). 
 within 2m on all boundaries. **Practical use:** model is a recording-time SEED for the phase editor (better than the
 offset play_windows seeds; game-end trustworthy), NOT accurate enough to auto-fill phases unverified. Phase editor
 (`/static/phase-edit.html`) remains the reliable path.
+**Follow-up (10s-precision attempt):** to hit a 10-second bar, tested a coarse-to-fine **kickoff fine-localizer** —
+"ball at field-center, still, then burst of motion" from `autocam_detections` top-1, in an ORACLE +/-5min window around
+the human kickoff (`G:\ballresearch\kickoff_localize.py`). **FAILED: 172s MAE, 1/19 within 10s.** Raw top-1 detections
+are too noisy to catch the placed-then-struck ball, and center-restarts (every goal kickoff) are ambiguous even in the
+window. **Conclusion: 10s automated precision is NOT reachable from the ball-detection signal.** The only plausible
+automated path is a trained **visual** kickoff/whistle model (big build, GPU, uncertain it reaches 10s — EXP-012 already
+put sub-1m as hard). For true 10s precision, **human scrubbing in the phase editor is the reliable answer**
+(frame-precise); auto-detection can only pre-seed game-end (~2m).
 
 ---
 
