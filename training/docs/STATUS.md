@@ -144,6 +144,15 @@ it finishes writing its current correct-geometry `detections.json`; we **convert
   against decoded frames (`/frame?g=`), save -> `source=human`. Live at
   **`https://trainer.goat-rattlesnake.ts.net/static/phase-edit.html`**; lists 103 (27 manifest-verified, 6 pw seeds, rest
   none). Durable on jared branch (`c5db752`). Tools: box-scratch `map_pw_phases.py`.
+- **(2026-06-28) WHISTLE + 40-min phase detector — the 10s-precision solution (EXP-PHASE-02).** Mark's idea: ref whistle
+  marks HT/end; halves are 40 min (Guzzetta/heat 2026). Self-calibrating detector (`G:\ballresearch\whistle_phases2.py`):
+  detect by whistle PITCH (the ref uses one pitch all game), pick the pitch+structure via the 40-min lock, derive
+  kickoff=HT-40 / end=2H+40 snapped to whistles. **Validated <1s on all 4 boundaries of 6/04 Irondequoit vs Mark's
+  frame-precise GT** (2:37/42:37/50:16/1:30:09). Scope: **2026 Reolink only** (whistle ~4350Hz needs Nyquist>4.4kHz;
+  2024-25 Dahua audio is 8kHz -> whistle cut, which is why EXP-012 failed there). Batch (`whistle_batch2.py`) runs on the
+  **trimmed 44.1kHz upload files** (combined.mp4@16kHz is unreliable), maps trimmed->（seg,f) via match_info
+  `start_time_offset` (per-game), writes `game_state` source=whistle_40min + `_whistle_meta`. Batch over heat-2026 in
+  progress. Next: ball-at-center kickoff refinement for no-whistle-lock games; flash-2026 (auto half-length).
 
 Build order (precious/at-risk data first; verify each on a sample game before bulk):
 1. **`game.json` builder** — per game, next to the video on F:. Segments[] with `frames`+`global_offset` (from demux
