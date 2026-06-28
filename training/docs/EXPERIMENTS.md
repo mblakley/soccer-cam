@@ -29,6 +29,15 @@ window. **Conclusion: 10s automated precision is NOT reachable from the ball-det
 automated path is a trained **visual** kickoff/whistle model (big build, GPU, uncertain it reaches 10s — EXP-012 already
 put sub-1m as hard). For true 10s precision, **human scrubbing in the phase editor is the reliable answer**
 (frame-precise); auto-detection can only pre-seed game-end (~2m).
+**Follow-up 2 (multi-blast-whistle hypothesis, 6 games):** tested "multi-blast = halftime/end" + temporal window
+(`G:\ballresearch\whistle_test.py`, FFT whistle clusters w/ blast counts vs human HT/end). **Hypothesis NOT confirmed:**
+the nearest **3+ multi-blast** cluster is **18-21 min** from the true HT/end (median 1125s/1295s) — i.e. 3+ clusters are
+NOISE bursts in the 2-4.5kHz band (crowd/coaches/wind), they do NOT mark periods. BUT the nearest whistle cluster of
+**any** count IS near the boundary: HT median 33s (4/6 within 60s, most ~23-33s), END median 43s (4/6 within 60s). So
+whistle = a **coarse ~30-60s anchor**, not a 10s one, and blast-count doesn't discriminate (matches EXP-012's noise
+finding). **Caveat:** the ~30s "error" may be partly human-label imprecision (manifest.db phases scrubbed to ~thumbnail
+granularity) — if human GT is only ~30s-precise, 10s is unmeasurable against it and the whistle may already be at GT
+precision. Untested refinement: isolate the period-end whistle by **duration/loudness** (long ref blast) not blast-count.
 
 ---
 
