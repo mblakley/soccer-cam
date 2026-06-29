@@ -36,7 +36,9 @@ Build: `builds/build_soccercam_v2.sh` (driven by `/tmp` wrapper that carries cre
 ## "Comprehensive" firmware — ready to flash
 | File | sha256 | Notes |
 |---|---|---|
-| **`IPC_NT15NA416MP.4901_…REOLINK_soccercam_comprehensive.pak`** | `acf0ce7e…` | **CURRENT / recommended.** Audio recovery + netstate hardening (`INIT_GRACE=5`, fail-enabled retry) + **build manifest** (`/etc/soccercam_build` → `/downloadfile/soccercam/build.txt`), now surfaced *after* the SD card mounts. CRC `0x1354234d`, commit `4f5c97f`. |
+| **`IPC_NT15NA416MP.4903_…REOLINK_soccercam_comprehensive.pak`** | `6bfc9555…` | **CURRENT / recommended.** 4901 **+ mmap power-cut recovery** — the camera has only ~240 MB RAM (no swap) vs ~790 MB segments, so the load-everything `recover_mp4` OOM'd on a full-size orphan; mmap fixes it. **On-camera validated:** a real 790 MB orphan recovers cleanly (5993 video + 4691 audio, valid moov). commit `4ec2e28`. |
+| `IPC_…4901…` | `acf0ce7e…` | superseded — netstate/manifest fixes are good, but `recover_mp4` was still load-based (OOMs on a full ~790 MB orphan; only recovers the small ~15–20 MB clips). CRC `0x1354234d`. |
+| `IPC_…4902…_debug` | (throwaway) | **debug build, not for daily use** — 4901 + a passwordless root shell on tcp/9999 (`S26_DebugShell` + `/usr/bin/debug_shell`), used to RE the camera's RAM and validate the mmap fix on-device. Reflash 4903 to remove. |
 | `IPC_…4900…` | `9f245cf8…` | superseded. **Flash-verified on camera 2026-06-29** (netstate v2 + fail-enabled fixes confirmed working), but the manifest surfaced too early at boot so `build.txt` didn't appear — fixed in 4901. CRC `0x086a57e2`. |
 | `IPC_…4899…` (= `BUILT/soccercam_COMPREHENSIVE_4899.pak`) | `52ed6ac5…` | prior — audio recovery; pre-manifest, `INIT_GRACE=45`, old (latching) netstate loop. CRC `0x70ef529f`. |
 | `IPC_…4898…` (= `BUILT/soccercam_COMPREHENSIVE_4898.pak`) | `6e96223d…` | video-only recovery @ fixed 20 fps. **Flash-verified on the camera 2026-06-29.** |
