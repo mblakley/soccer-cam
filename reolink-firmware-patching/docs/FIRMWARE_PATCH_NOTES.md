@@ -636,6 +636,24 @@ renamed to the recovered duration so the camera's own duration check passes)
 means the clip re-indexes as a normal `/downloadfile/` recording and flows
 through the existing pipeline unchanged.
 
+### Memory: mmap, not load — the camera has ~240 MB RAM
+
+RE'd from the running camera (`/proc/meminfo` over a temporary debug shell):
+**`MemTotal` ≈ 240 MB, no swap**, while a main-stream segment is **~790 MB**. The
+first cut of `recover_mp4` `malloc`+`fread`-ed the *whole* orphan **and** the
+*whole* reference (~790 MB–1.6 GB) — guaranteed OOM on a full-size clip; it only
+ever "worked" on the small ~15–20 MB clips. So it now **`mmap`s** both files
+(demand-paged; clean, file-backed pages the kernel reclaims under pressure) and
+reads only the reference's `moov`. Peak resident drops from ~1.6 GB to a small
+sliding window.
+
+**On-camera validation** (the 240 MB box, via the debug shell): the mmap binary
+run on a real 790 MB recording moved `MemFree` by ~184 KB (vs. the old code's
+OOM); and a real 790 MB moov-less orphan recovered cleanly — `5993 video + 4691
+audio frames`, 50 KB `moov` appended, "recovery OK", and the result re-indexes
+with a valid `moov`. The qemu gate still passes byte-exact, so the mmap change is
+correctness-neutral.
+
 ---
 
 ## 5d. Recording control & the home-boot "stub" (netstate)

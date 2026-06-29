@@ -27,6 +27,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>   /* ftruncate */
+#include <sys/mman.h> /* mmap -- the camera has ~240 MB RAM (no swap) vs ~790 MB segments */
+#include <fcntl.h>    /* open */
 #ifndef NO_AUDIO
 #include "aacdec.h"
 #endif
@@ -134,10 +136,14 @@ static long ac_off[MAXGAP]; static uint32_t ac_n[MAXGAP];
 int main(int argc,char**argv){
     if(argc<3){ fprintf(stderr,"usage: %s <orphan.mp4> <reference.mp4>\n",argv[0]); return 1; }
     int g_dbg = getenv("REC_DEBUG")!=NULL;
-    /* load orphan */
-    FILE*f=fopen(argv[1],"rb"); if(!f){perror("orphan");return 1;}
-    fseek(f,0,SEEK_END); DLEN=ftell(f); fseek(f,0,SEEK_SET);
-    D=malloc(DLEN); if(fread(D,1,DLEN,f)!=(size_t)DLEN){fclose(f);return 1;} fclose(f);
+    /* mmap the orphan (demand-paged). Segments are ~790 MB but the camera has
+     * ~240 MB RAM and no swap, so malloc+fread would OOM; mmap keeps only the
+     * pages the NAL walk touches resident (clean, file-backed, reclaimable). */
+    int fd=open(argv[1],O_RDONLY); if(fd<0){perror("orphan");return 1;}
+    DLEN=lseek(fd,0,SEEK_END);
+    D=mmap(NULL,(size_t)DLEN,PROT_READ,MAP_PRIVATE,fd,0); close(fd);
+    if(D==MAP_FAILED){perror("mmap orphan");return 1;}
+    FILE*f=NULL;   /* reused for the in-place write at the end */
 
     long bsz,bhdr;
     /* already valid? if a moov exists, nothing to do */
@@ -182,9 +188,10 @@ int main(int argc,char**argv){
     fprintf(stderr,"recovered %ld video samples in %ld chunks, %ld keyframes, %ld audio gaps\n",N,NC,NK,NG);
 
     /* ---- reference templates ---- */
-    FILE*rf=fopen(argv[2],"rb"); if(!rf){perror("reference");return 1;}
-    fseek(rf,0,SEEK_END); long RLEN=ftell(rf); fseek(rf,0,SEEK_SET);
-    uint8_t*R=malloc(RLEN); if(fread(R,1,RLEN,rf)!=(size_t)RLEN){fclose(rf);return 1;} fclose(rf);
+    int rfd=open(argv[2],O_RDONLY); if(rfd<0){perror("reference");return 1;}
+    long RLEN=lseek(rfd,0,SEEK_END);
+    uint8_t*R=mmap(NULL,(size_t)RLEN,PROT_READ,MAP_PRIVATE,rfd,0); close(rfd);
+    if(R==MAP_FAILED){perror("mmap reference");return 1;}  /* only the moov pages fault in */
     long rmoov=box_in(R,0,RLEN,"moov",&bsz,&bhdr); if(rmoov<0){fprintf(stderr,"ref no moov\n");return 1;}
     long rms=rmoov+bhdr, rme=rmoov+bsz;
     long sz,hd;
@@ -372,6 +379,7 @@ int main(int argc,char**argv){
      * data and report "moov atom not found". The mdat bytes don't move, so stco stays
      * valid. ---- */
     long mdat_content = md1 - mdat;
+    munmap(D,(size_t)DLEN); D=NULL; munmap(R,(size_t)RLEN);  /* done reading; release before the in-place write */
     f=fopen(argv[1],"r+b"); if(!f){perror("finalize");return 1;}
     if(bhdr==8){
         uint8_t hb[4]={(uint8_t)(mdat_content>>24),(uint8_t)(mdat_content>>16),(uint8_t)(mdat_content>>8),(uint8_t)mdat_content};
