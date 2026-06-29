@@ -667,14 +667,24 @@ The home/away signal (the gateway MAC) does not exist until `device` runs
 to flip `Rec.enable` isn't up until later still. So any API-driven daemon can
 only disable recording *after* it has already begun → the home-boot stub.
 
-Mitigations shipped here:
+### Plan A (shipped): record-then-delete — effectively stub-free
+
+We don't stop the stub from being *written*; we remove it right after, which is
+sufficient for the soccer-cam use case:
 - `INIT_GRACE` is short (5 s): the daemon leans on `wait_for_api` for readiness
   instead of a fixed pre-sleep, so it disables as soon as the API answers — the
   single biggest cut to the stub window.
-- `S99_NetState` **v2** deletes the residual home-boot stub (`clean_home_stubs`,
-  files newer than this boot only — never older game footage).
+- `S99_NetState` **v2** deletes the residual stub (`clean_home_stubs`: any
+  `Mp4Record` file with mtime ≥ this boot while confirmed home; today's and,
+  across midnight, yesterday's dir only — never older game footage).
 - The daemon latches state only on a *successful* `SetRecV20`, and retries
   otherwise, so a transient API failure can never strand a field camera disabled.
+
+Net effect: nothing lingers on the card or reaches the pipeline (the soccer-cam
+runt filter is a second backstop). Costs vs. never-writing-it: a few seconds of
+wasted SD write per home boot, a brief window where the stub exists, and reliance
+on the daemon running — but if it fails, recording stays on (the safe direction).
+**This is the shipped default.**
 
 ### Recording-config facts (constrain any deeper fix)
 
@@ -689,18 +699,64 @@ Mitigations shipped here:
   go via `telnet` (`telnetd` is left running by `S25_Net`) or by pulling the
   card; config is otherwise baked at build time.
 
-### Deferred: a firmware-level record-at-home gate (zero stub)
+### Plan B (deferred, riskier): firmware record-at-home gate — *never writes* the stub
 
-Eliminating the stub *entirely* (while staying fail-enabled) requires deciding
-home/away **before** `recorder` starts — i.e. inside `start_app`, between
-`./device &` and `./recorder &`: bounded-wait for the home gateway MAC and launch
-`recorder` only if NOT home (a rootfs text edit, no binary patch), or byte-patch
-`recorder` to honor an `access("/mnt/para/no_record")` flag at record-start. Both
-are fail-enabled (home-only suppression; any error records). This is designed but
-**not yet hardware-validated**, and it edits the boot-critical launch path, so it
-is deliberately kept out of the shipping builds until proven on a spare camera.
-Approaches that *fail-disabled* — e.g. patching `router`'s boot notify to
-`enable=0`, which has no re-enabler — were considered and rejected.
+The only way to make the stub never exist (not "written then deleted") is to
+decide home/away **before** `recorder` starts and skip launching it at home,
+while staying fail-enabled. It's higher-risk: it edits the boot-critical
+`start_app` launch path (soft-brick if botched; the Duo 3 PoE UART recovery path
+is uncharacterized), so it must be bench-validated on a spare camera before any
+field use. A working draft exists on the (unmerged) `firmware/reolink-record-at-home-gate`
+branch — `builds/build_recordgate.sh` + `runtime/recordgate/start_app_gate.template`
+— but is **pre-hardware-validation** and intentionally NOT in the shipping builds.
+
+**Route A — recommended (deterministic, no binary patch).** Replace `start_app`'s
+`./recorder &` with a backgrounded gate that bounded-waits (~15 s) for the
+default-gateway MAC and starts `recorder` *only if not home*:
+
+```
+home MAC confirmed                              -> recorder never starts -> ZERO segment
+no link / field / unresolved / timeout / error  -> ./recorder &          -> records
+```
+
+Home MAC(s) are baked at build time (auto-detected from the build host's own
+gateway — the build PC is on the home LAN). `router` (the watchdog feeder) starts
+before the gate and the gate is backgrounded, so the wait can't trip the watchdog.
+
+**Required refinement before shipping Route A:** add a carrier/link short-circuit
+— if `eth0` has no carrier, start `recorder` immediately (no network to classify,
+so no reason to wait). Without it, a field boot with no cable eats the full ~15 s
+timeout before recording (missed-kickoff risk). With it, the wait only applies
+when a link is up but the gateway isn't resolved yet (fast at home and at a field
+router alike). Also tune the timeout to the *measured* home DHCP/ARP-ready latency.
+
+**Route B — alternative (lower brick-risk, NOT deterministic).** Leave `recorder`
+running but byte-patch it to honor an `access("/mnt/para/no_record")` flag at
+record-start (app squashfs only; a bad patch just records normally). Keeps in-app
+playback at home, but the flag-arm vs. record-start race means a
+home-boot-after-field can still write one short segment (dropped by the runt
+filter) — so it does *not* fully close the gap on its own.
+
+**Rejected (fail-DISABLED — do not use):** patching `router`'s boot `Rec.enable`
+notify to 0 (no boot-time re-enabler exists, so a failure leaves the camera not
+recording). Shell-editing `rec.cfg` is also a no-op (enable arrives via IPC and
+`rec.cfg` is AES-encrypted — see "Recording-config facts" above).
+
+**Known limitation (acceptable for a PoE camera).** Route A means no `recorder`
+process at home → no in-app playback / Baichuan replay there (HTTP
+`/downloadfile/` downloads still work). A home→field move *without a reboot*
+wouldn't auto-start recording — but a PoE camera loses power when moved and
+reboots, so the gate re-evaluates at the field.
+
+**Hardware-validation checklist** (Plan B ships only when all pass on a spare camera):
+- no cable / power-only injector (no DHCP) → records
+- foreign gateway (phone hotspot / 2nd router) → records
+- home gateway MAC → no `Mp4Record` segment
+- gate script disabled / errored → records
+- home cold-boot → box stays up >10 min (no watchdog reboot)
+- field cold-boot → records with full pre-roll (no clipped kickoff)
+- HTTP `/downloadfile/` of an existing clip works with `recorder` suppressed
+- re-flash stock `.pak` → clean revert
 
 ---
 
