@@ -14,6 +14,10 @@ files from Reolink's portal yourself (see "Acquiring stock firmware" below).
 | HTTP download speed | broken / 1 Mbps throttle | **~86 Mbps** | `builds/build_http_unlock.sh` |
 | Max main bitrate | 12288 kbps | **20480 kbps** | `builds/build_bitrate_cap.sh` |
 | Auto-toggle recording by network | manual UI toggling | **off at home, on at field** | `builds/build_netstate.sh` |
+| Mid-game truncation on a full card | last 8K segment lost when the card fills | **free-space reserve 500 MiB → 20 GiB** so the segment always fits | `builds/build_soccercam_v2.sh` |
+| Home power-on stub recordings | a junk clip every home boot | **auto-deleted** (netstate v2 stub cleanup) | `builds/build_soccercam_v2.sh` |
+| Proactive SD headroom | just-in-time overwrite races | **S98_SdKeep** keeps a target amount free | `builds/build_soccercam_v2.sh` |
+| Power-cut recording recovery | orphaned (moov-less) clip discarded | **rebuilt in place** — video + best-effort audio — at next boot | `builds/build_soccercam_comprehensive.sh` |
 | FPS dropdown cap (web UI) | 20 | 25 (encoder still ceilings ~20) | `builds/build_fps_cap.sh` |
 | Shutter / exposure mode | AE only | full Auto / LowNoise / Anti-Smearing / Manual | runtime API only — `runtime/set_exposure.sh` |
 
@@ -22,8 +26,16 @@ so you can pick the highest-tier build for your needs:
 
 - **`build_http_unlock.sh`** = HTTP unlock only.
 - **`build_bitrate_cap.sh`** = HTTP unlock + bitrate cap. **Recommended for most users.**
-- **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon. **Recommended for the soccer-cam use case.**
+- **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon.
+- **`build_soccercam_v2.sh`** = the above **+ netstate v2 (stub cleanup) + free-space reserve + SD-headroom daemon**. Fixes the full-card mid-game truncation.
+- **`build_soccercam_comprehensive.sh`** = `v2` **+ boot-time power-cut recovery** (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC audio). **Recommended for the soccer-cam use case.** Audio recovery needs the Helix AAC source fetched locally (see `recover/helix/README.md`); without it the build falls back to video-only recovery automatically.
 - **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended (the h.265 ASIC drops ~20% of frames at 16MP@25fps so recorded output stays around 20 fps anyway, with added jitter).
+
+The recovery binary has its own repeatable correctness gate:
+`bash verify/test_recover_mp4.sh <a_good_recording.mp4>` builds `recover_mp4`,
+strips/​truncates the recording to simulate both failure modes, recovers each, and
+asserts the rebuilt video+audio decode cleanly and (for the intact case) match the
+original byte-for-byte.
 
 **Step-by-step patching procedure**: see `docs/PATCHING_GUIDE.md` —
 walks a fresh user from a stock-firmware camera through to a flashed,
@@ -43,7 +55,8 @@ reolink-firmware-patching/
 ├── _camera_env.sh                   # sourced by runtime/verify scripts
 ├── .gitignore                       # excludes *.pak, secrets, artifacts
 ├── docs/
-│   └── FIRMWARE_PATCH_NOTES.md      # complete reference
+│   ├── FIRMWARE_PATCH_NOTES.md      # complete reference (RE recipes + byte offsets)
+│   └── PATCHING_GUIDE.md            # step-by-step stock -> flashed -> verified
 ├── pak/                             # .pak container toolchain (Python)
 │   ├── pak.py                       # parse / inspect
 │   ├── extract.py                   # split into sections
@@ -53,18 +66,33 @@ reolink-firmware-patching/
 │   ├── build_http_unlock.sh
 │   ├── build_bitrate_cap.sh
 │   ├── build_fps_cap.sh
-│   └── build_netstate.sh
-├── runtime/                         # settings via live API (no flash needed)
-│   ├── set_exposure.sh              # exposure mode / shutter / gain
+│   ├── build_netstate.sh
+│   ├── build_soccercam_v2.sh        # + reserve + netstate v2 + SD-headroom daemon
+│   ├── build_soccercam_comprehensive.sh  # + power-cut recovery (video+audio)
+│   └── BUILD_LOG.md                 # artifact tracker (sha256 / CRC / contents)
+├── recover/                         # power-cut recovery (compiled into the comprehensive build)
+│   ├── recover_mp4.c                # static aarch64 reindexer (rebuilds a moov-less mdat)
+│   └── helix/                       # AAC audio recovery (Helix decoder, fetched locally)
+│       ├── README.md                # how to fetch + build Helix (RPSL, gitignored)
+│       ├── compat/                  # flat-memory stubs so Helix cross-compiles
+│       └── aac_split_test.c         # validates the frame splitter vs ground-truth stsz
+├── runtime/                         # files installed into rootfs / live-API settings
+│   ├── set_exposure.sh              # exposure mode / shutter / gain (no flash)
 │   ├── check_isp.sh                 # verify current ISP state
 │   ├── probe_isp.sh                 # dump state + allowed ranges
-│   └── netstate/
-│       └── S99_NetState.template    # daemon installed by build_netstate.sh
-└── verify/                          # empirical post-flash checks
+│   ├── netstate/
+│   │   ├── S99_NetState.template    # v1 daemon (build_netstate.sh)
+│   │   └── S99_NetState_v2.template # v2: home/away + power-on stub cleanup
+│   ├── sdkeep/
+│   │   └── S98_SdKeep.template      # proactive SD-headroom daemon
+│   └── recover/
+│       └── S35_RecRecover           # boot-time recovery init script
+└── verify/                          # empirical checks
     ├── dump_encoder_config.sh       # GetEnc action=0 + action=1
     ├── test_setenc.sh               # probe SetEnc at a target bitrate
     ├── get_performance.sh           # poll GetPerformance (live rate)
-    └── fetch_and_analyze.sh         # download latest recording + ffprobe
+    ├── fetch_and_analyze.sh         # download latest recording + ffprobe
+    └── test_recover_mp4.sh          # build + round-trip-validate the recovery binary
 ```
 
 ## Prerequisites (one-time, on the build host)
@@ -76,10 +104,22 @@ on Windows works fine. From WSL:
 sudo apt update && sudo apt install -y squashfs-tools python3
 ```
 
+The **comprehensive build** (power-cut recovery) additionally cross-compiles a
+small aarch64 binary, so it also needs:
+
+```bash
+sudo apt install -y gcc-aarch64-linux-gnu        # cross-compiler for recover_mp4
+sudo apt install -y qemu-user-static ffmpeg       # only to RUN verify/test_recover_mp4.sh
+```
+
+and the Helix AAC source for **audio** recovery — fetch it once per
+`recover/helix/README.md` (the build silently falls back to video-only recovery
+if it's absent). Helix is RPSL-licensed third-party code and is **not committed**.
+
 You also need:
 - A stock Reolink Duo 3 PoE `.pak` file (see below).
 - Your camera's IP, admin username, admin password.
-- For the netstate build: your home router's gateway MAC address.
+- For the netstate / soccer-cam builds: your home router's gateway MAC address.
 
 ## Acquiring stock firmware
 
@@ -159,6 +199,40 @@ After flashing:
   `/mnt/sda/netstate/home_macs.txt` (one MAC per line). Both files can
   be created/edited via the camera's SD-card management web UI.
 
+## Quickstart — comprehensive soccer-cam build (recommended)
+
+Everything in the netstate build, **plus** the full-card truncation fix and
+boot-time recovery of power-cut recordings (video + best-effort audio).
+
+```bash
+# one-time, for the cross-compiled recovery binary:
+sudo apt install -y gcc-aarch64-linux-gnu
+# one-time, for AAC audio recovery (optional — video-only without it):
+git clone --depth 1 https://github.com/earlephilhower/ESP8266Audio.git \
+    recover/helix/ESP8266Audio
+
+# build (args: stock out kbps user pass reserve_gb home_mac [more_macs...])
+bash builds/build_soccercam_comprehensive.sh \
+    /path/to/stock.pak \
+    /path/to/soccercam_comprehensive.pak \
+    20480 admin YOUR_CAMERA_PASSWORD 20 \
+    aa:bb:cc:dd:ee:ff
+```
+
+The build prints `match: True` after recomputing the Reolink CRC. Before
+flashing, you can prove the recovery binary is correct against any good
+recording from the camera:
+
+```bash
+bash verify/test_recover_mp4.sh /path/to/a_good_recording.mp4
+# => byte-exact video+audio tables, bit-identical audio PCM, both
+#    failure modes decode clean -> "PASS"
+```
+
+After flashing, the recovery runs automatically at boot before the camera's
+own scan; its log is fetchable over the unlocked HTTP path:
+`curl -u admin:PASS http://CAMERA_IP/downloadfile/recover/log`.
+
 ## Quickstart — motion-blur reduction (no flash, any firmware)
 
 Soccer / fast-motion footage benefits from `Anti-Smearing` exposure mode:
@@ -177,11 +251,14 @@ almost always recoverable via the same web-UI Local Upgrade path —
 re-flash stock and you're back where you started.
 
 The `build_http_unlock.sh` and `build_bitrate_cap.sh` builds modify only
-the `app` squashfs section. The `build_netstate.sh` build additionally
-modifies the `rootfs` squashfs section to install
-`/etc/init.d/S99_NetState`. **No build touches** `loader`, `fdt`, `atf`,
-`uboot`, `kernel`, or `ai` — the stock boot chain stays intact, which
-keeps any secure-boot question moot.
+the `app` squashfs section. The `build_netstate.sh`, `build_soccercam_v2.sh`,
+and `build_soccercam_comprehensive.sh` builds additionally modify the `rootfs`
+squashfs section (init scripts + `recover_mp4`) and patch a one-instruction
+free-space constant in `libStorageFileManager.so` (inside `app`). **No build
+touches** `loader`, `fdt`, `atf`, `uboot`, `kernel`, or `ai` — the stock boot
+chain stays intact, which keeps any secure-boot question moot. The recovery
+init script (`S35_RecRecover`) **never deletes** a recoverable orphan; it only
+rebuilds the moov in place, so a recovery bug can't lose footage.
 
 Harder failure modes (one that survives reboot but breaks the web UI)
 would require UART recovery; the Duo 3 PoE UART pinout is not publicly

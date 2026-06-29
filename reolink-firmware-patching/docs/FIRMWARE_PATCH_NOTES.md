@@ -431,6 +431,38 @@ dropdown without delivering frames.
 
 The bitrate-only patch (build 4879) is the recommended daily build.
 
+### Patch v20 — free-space reserve (mid-game truncation fix)
+
+**Symptom.** On a full SD card the camera lost the *last* segment of a game.
+The sub-stream (`RecS09`, ~42 MB) kept writing while the main stream (`RecM09`,
+~780 MB per 8K segment) stopped — proving it was a free-space starvation, not a
+power or motion-trigger issue.
+
+**Root cause.** `libStorageFileManager.so :: Get_storage_space` reserves a fixed
+**500 MiB** of headroom. When the just-in-time overwrite logic runs in the async
+`Overlap_thread`, it frees space only down to that 500 MiB floor — which is
+smaller than one 8K main segment (~780 MB). So `Create file` for the main
+segment fails on `ENOSPC`, the write path has no free-then-retry, and the
+segment is dropped. The 42 MB sub segment still fits under the floor, so it
+continues — exactly the asymmetry observed.
+
+**Patch.** Lift the reserve to comfortably exceed a segment. Single AArch64
+instruction at file offset `0x44788` in `libStorageFileManager.so`:
+
+```
+before: 00 e8 a3 d2   ; movz x0, #0x1f40, lsl #16   = 0x1f400000 =  500 MiB
+after:  a0 00 c0 d2   ; movz x0, #0x5,    lsl #32   = 0x500000000 = 20 GiB
+```
+
+`builds/build_soccercam_v2.sh` parameterizes the reserve: it encodes
+`<reserve_gb> * 2^30` as a single `movz x0, #imm, lsl #sh` (so the value must be
+a clean `movz` immediate — 16/20/32 GiB all work) and `assert`s the stock
+`d2a3e800` bytes before patching. A companion `S98_SdKeep` daemon keeps headroom
+proactively so the overwrite never has to free a full segment under deadline.
+
+Note the byte order: the instruction word is little-endian in the file, so the
+stock `movz x0,#0x1f40,lsl#16` (`0xd2a3e800`) appears as `00 e8 a3 d2`.
+
 ---
 
 ## 5b. The encoder cap architecture (PROVEN)
@@ -513,6 +545,90 @@ Key facts established by static analysis:
 
 ---
 
+## 5c. Power-cut recording recovery (`recover_mp4` + Helix AAC)
+
+The camera is PoE-powered with no battery, so pulling power mid-game leaves the
+in-progress clip **without a `moov`** — and stock firmware discards any clip it
+can't index. `recover_mp4` (a static aarch64 binary added to the comprehensive
+build, run at boot by `S35_RecRecover`) rebuilds the index in place so the clip
+becomes a normal, downloadable recording.
+
+### Container layout (RE'd from a good recording)
+
+The camera writes fragmented-on-close MP4: `ftyp` + a `skip` placeholder (a
+~257 KB hole reserved at the front for the `moov`) + `mdat`. The `moov` is
+written into that front hole only at clean close — so a power-cut file has the
+`skip` hole still empty and no `moov` anywhere. Video is `hvc1` with
+out-of-band `hvcC` (VPS/SPS/PPS live in the `moov`'s `stsd`, not the mdat).
+Inside `mdat` the stream is strictly interleaved **V-A-V-A…**: a video chunk
+(length-prefixed HEVC NALs) then an audio chunk (raw AAC-LC frames, **no** ADTS
+syncword and **no** length prefix), each audio chunk starting exactly where the
+preceding video chunk ends (verified: 35/35 chunks, zero slack). A small
+unreferenced padding hole trails each audio chunk before the next video chunk.
+
+### Video recovery
+
+A conservative NAL-chaining walk reconstructs the video sample table from the
+mdat alone: it only accepts a position as a video sample if a 4-byte length
+prefix points to a valid NAL whose successors also chain, so interleaved audio
+bytes can never be mislabeled as video (the walk *resyncs* past them — and those
+skipped ranges are exactly the audio chunks, reused below). Codec config and box
+templates (`mvhd/tkhd/mdhd/hdlr/vmhd/dinf/stsd`) are copied verbatim from a
+reference good recording on the card; the rebuilt `stts/stsz/stsc/stco/stss`
+plus those templates are appended as a fresh `moov`. The mdat bytes never move,
+so `stco` offsets stay valid. **Validation:** on a moov-stripped good clip the
+recovered video sample table is byte-identical to the original (432/432 samples,
+0 size mismatches) and decodes with zero ffmpeg errors.
+
+### Audio recovery (Helix AAC)
+
+Raw AAC-LC has no frame delimiter, so to rebuild the audio `stsz` you must find
+each frame boundary — which means actually parsing each frame. We link the
+**Helix AAC decoder** (RPSL; the Arduino fork's pure-C `-DARDUINO` math path
+cross-compiles cleanly for aarch64 with three flat-memory compat stubs). For
+each audio chunk (the V-A walk's resync gaps), `AACSetRawBlockParams(1ch,
+16000, LC)` then a loop of `AACDecode`; the bytes consumed per call **is** that
+frame's size. The padding hole trailing each chunk decodes to a degenerate
+1-byte element (which Helix still reports as `outputSamps=1024`), so frames are
+filtered by plausible size (a real 1024-sample frame here is 218–315 B; spec cap
+768 B) + stream params; the first failing frame ends the chunk (raw AAC can't
+resync). A second `soun` trak (mp4a+esds copied from the reference) carries the
+rebuilt audio. **Validation gate** (`recover/helix/aac_split_test.c` +
+`verify/test_recover_mp4.sh`): the splitter reproduces a reference clip's audio
+`stsz` byte-for-byte (539/539 frames) and the recovered audio PCM is
+**bit-identical** to the original.
+
+### Timing — derive from the audio clock, not a fixed FPS
+
+The lost `moov` held the exact per-frame deltas. The camera's *recorded* rate
+varies with exposure (a test clip measured **12.5 fps**, not the configured 20),
+so a fixed-FPS guess desyncs A/V. Instead, when audio is recovered, video frame
+spacing is set to `audio_duration / N_video_frames` — self-calibrating, A/V
+stays in sync, and it matches the original wall-clock duration. Falls back to
+20 fps only when no audio was recovered (video-only build / corrupt audio).
+
+### Power-cut truncation
+
+A power-cut file's `mdat` box header still declares its original (pre-cut) size,
+so a player looks for `moov` past the real data ("moov atom not found").
+`recover_mp4` rewrites the `mdat` size to the actual content length and
+`ftruncate`s before appending the `moov`. Best-effort throughout: a partial
+trailing frame is dropped (decoder underflow), a corrupt audio chunk loses only
+that chunk's sound, and an unparseable clip is **left in place, never deleted**.
+**Validation:** a clip with 1.3 MB chopped off the tail recovers to 412 video +
+510 audio frames, video duration == audio duration, zero decode errors.
+
+### Why on-camera (not on the PC)
+
+The PC pipeline already detects+repairs corrupt-but-complete segments after
+download, but a power-cut clip the *camera* discards never reaches the PC. Doing
+the rebuild at boot, in place, under the original `RecM09…` name (end-time
+renamed to the recovered duration so the camera's own duration check passes)
+means the clip re-indexes as a normal `/downloadfile/` recording and flows
+through the existing pipeline unchanged.
+
+---
+
 ## 6. Toolchain (committed under `reolink-firmware-patching/`)
 
 All scripts run from WSL Ubuntu when they need Linux utilities
@@ -534,10 +650,24 @@ picks these up.
 |---|---|
 | `builds/build_http_unlock.sh` | HTTP `/downloadfile/` unlock. `sudo bash builds/build_http_unlock.sh <stock.pak> <out.pak>`. |
 | `builds/build_bitrate_cap.sh` | Parameterized bitrate-cap lift (includes HTTP unlock). `sudo bash builds/build_bitrate_cap.sh <stock.pak> <out.pak> <kbps>`. Recommended `<kbps>`: 20480. |
+| `builds/build_netstate.sh` | + auto-toggle recording daemon (v1). `… <kbps> <user> <pass> <home_mac> [more]`. |
+| `builds/build_soccercam_v2.sh` | + free-space reserve (§5c truncation fix) + `S98_SdKeep` + netstate **v2** (stub cleanup). `… <kbps> <user> <pass> <min_free_gb> <target_gb> <home_mac> [more]`. |
+| `builds/build_soccercam_comprehensive.sh` | + boot-time power-cut recovery (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC). `… <kbps> <user> <pass> <reserve_gb> <home_mac> [more]`. |
+| `builds/BUILD_LOG.md` | Artifact tracker: each built `.pak`'s sha256, CRC, and exact contents. |
+
+Each builder `assert`s the stock byte fingerprint at every patch site before
+writing, so a wrong firmware version fails loudly with the offending offset.
 
 The fps-dropdown patch was investigated and rejected as non-functional (it
 only lies in the dropdown — the encoder clamps to 20 fps at 16MP regardless).
 See section 11 for why. No fps patch builder is committed.
+
+### Power-cut recovery (`recover/`)
+| File | Purpose |
+|---|---|
+| `recover/recover_mp4.c` | Static aarch64 reindexer (§5c). Rebuilds video + best-effort audio `moov` from a moov-less mdat; no runtime deps. Build: `aarch64-linux-gnu-gcc -O2 -DNDEBUG -static` (`-DARDUINO` + Helix for audio, or `-DNO_AUDIO`). |
+| `runtime/recover/S35_RecRecover` | Boot init script: runs `recover_mp4` on each orphan before the camera's scan; **never deletes** a recoverable clip. |
+| `recover/helix/` | Helix AAC decoder integration — compat stubs + `aac_split_test.c`; the RPSL source is fetched locally, not committed (see `recover/helix/README.md`). |
 
 ### Runtime API scripts (`runtime/`) — no firmware flash needed
 | Script | What it does |
@@ -553,9 +683,15 @@ See section 11 for why. No fps patch builder is committed.
 | `verify/test_setenc.sh <kbps>` | Fire SetEnc at a specific bitrate. Use to find the encoder ceiling via binary search. |
 | `verify/get_performance.sh` | Poll GetPerformance to watch live codec bitrate, CPU, net throughput. |
 | `verify/fetch_and_analyze.sh [tag]` | Download latest recording via the unlocked HTTP path + ffprobe analysis. **The end-to-end validator** — proves what the encoder actually emits. |
+| `verify/test_recover_mp4.sh <good_recording.mp4> [chop_bytes]` | Build `recover_mp4` + round-trip a recording through clean-orphan and power-cut-orphan recovery; asserts byte-exact tables, bit-identical audio PCM, and clean decode. **The recovery correctness gate** — run before trusting a comprehensive build. |
 
 ### External dependencies
 - **WSL Ubuntu** 24.04 with `squashfs-tools` (`sudo apt install squashfs-tools`).
+- For the **comprehensive build**: `gcc-aarch64-linux-gnu` (cross-compiles
+  `recover_mp4`), plus `qemu-user-static` + native `ffmpeg` to run
+  `verify/test_recover_mp4.sh`. AAC audio recovery additionally needs the Helix
+  source fetched per `recover/helix/README.md` (RPSL; not committed — the build
+  falls back to `-DNO_AUDIO` video-only if absent).
 - `aarch64-linux-gnu-binutils` for objdump/readelf when investigating
   binaries (not needed for the committed builders).
 - **ffmpeg/ffprobe** for `verify/fetch_and_analyze.sh`. On Windows, a
@@ -585,6 +721,10 @@ sudo bash builds/build_http_unlock.sh stock.pak out.pak
 
 # HTTP unlock + bitrate cap lift (daily driver):
 sudo bash builds/build_bitrate_cap.sh stock.pak out.pak 20480
+
+# Full soccer-cam build (truncation fix + power-cut recovery + audio):
+#   needs gcc-aarch64-linux-gnu, and recover/helix/ESP8266Audio for audio.
+bash builds/build_soccercam_comprehensive.sh stock.pak out.pak 20480 admin PASS 20 aa:bb:cc:dd:ee:ff
 ```
 
 Each builder asserts that the expected stock byte sequence is present

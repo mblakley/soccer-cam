@@ -80,7 +80,7 @@ if [[ -d "$HELIX_SRC" && -f "$HELIX_COMPAT/Arduino.h" ]]; then
   echo "   building libhelix-aac -> recover_mp4 WITH best-effort audio recovery"
   HXB="$WORK/hx"; mkdir -p "$HXB"
   for c in "$HELIX_SRC"/*.c; do
-    aarch64-linux-gnu-gcc -O2 -DNDEBUG -DARDUINO -ffunction-sections -fdata-sections \
+    aarch64-linux-gnu-gcc -O2 -DNDEBUG -DARDUINO -Wno-format -ffunction-sections -fdata-sections \
       -I"$HELIX_COMPAT" -I"$HELIX_SRC" -c "$c" -o "$HXB/$(basename "$c" .c).o"
   done
   aarch64-linux-gnu-ar rcs "$HXB/libhelixaac.a" "$HXB"/*.o
