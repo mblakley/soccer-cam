@@ -68,9 +68,9 @@ static int chain(long q,int need){                /* are there >=need chained va
 static long box_in(uint8_t *b, long s, long e, const char *tag, long *bsz, long *bhdr){
     long o=s;
     while(o+8<=e){
-        long sz=(b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3];
+        long sz=rd32_r(b,o);   /* rd32_r returns uint32_t -> no sign-extension (matches box_nth/box_find) */
         long hdr=8;
-        if(sz==1){ sz=(long)(((uint64_t)((b[o+8]<<24)|(b[o+9]<<16)|(b[o+10]<<8)|b[o+11])<<32)|((uint32_t)((b[o+12]<<24)|(b[o+13]<<16)|(b[o+14]<<8)|b[o+15]))); hdr=16; }
+        if(sz==1){ sz=(long)(((uint64_t)rd32_r(b,o+8)<<32)|rd32_r(b,o+12)); hdr=16; }
         else if(sz==0) sz=e-o;
         if(!memcmp(b+o+4,tag,4)){ *bsz=sz; *bhdr=hdr; return o; }
         if(sz<=0) break;
@@ -380,6 +380,14 @@ int main(int argc,char**argv){
      * valid. ---- */
     long mdat_content = md1 - mdat;
     munmap(D,(size_t)DLEN); D=NULL; munmap(R,(size_t)RLEN);  /* done reading; release before the in-place write */
+    /* Crash-safe in-place commit. Recovery runs at boot, right after a power
+     * event, so a second cut mid-write must not leave a findable-but-truncated
+     * moov (box_in would then report "already has moov" on a broken clip). Write
+     * the moov box with a placeholder 'free' tag, fsync it (+ the mdat-size fix
+     * and the truncate), and ONLY THEN flip the 4-byte tag to "moov" -- the single
+     * atomic commit. A crash before the flip leaves a 'free' box (ignored by every
+     * player) and the clip is simply re-recovered, idempotently, on the next boot. */
+    OB[4]='f'; OB[5]='r'; OB[6]='e'; OB[7]='e';   /* moov tag -> placeholder until the commit below */
     f=fopen(argv[1],"r+b"); if(!f){perror("finalize");return 1;}
     if(bhdr==8){
         uint8_t hb[4]={(uint8_t)(mdat_content>>24),(uint8_t)(mdat_content>>16),(uint8_t)(mdat_content>>8),(uint8_t)mdat_content};
@@ -391,8 +399,12 @@ int main(int argc,char**argv){
     }
     fseek(f,md1,SEEK_SET);
     if(fwrite(OB,1,OL,f)!=(size_t)OL){fclose(f);return 1;}
-    fflush(f);
+    fflush(f); fsync(fileno(f));
     if(ftruncate(fileno(f), md1+OL)!=0){ /* best-effort: leftover tail is harmless if it fails */ }
+    fsync(fileno(f));
+    /* commit: publish the moov tag last, as one aligned 4-byte write */
+    { uint8_t mv[4]={'m','o','o','v'}; fseek(f,md1+4,SEEK_SET); if(fwrite(mv,1,4,f)!=4){fclose(f);return 1;} }
+    fflush(f); fsync(fileno(f));
     fclose(f);
     fprintf(stderr,"mdat=%ld bytes; appended %ld-byte moov; recovery OK\n",mdat_content,OL);
     printf("RECOVERED_DURATION_SEC=%u\n",(unsigned)(dur_media/(media_ts?media_ts:1)));  /* for boot script rename */
