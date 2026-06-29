@@ -162,6 +162,15 @@ main_loop() {
     sleep $INIT_GRACE
     wait_for_api && log "  api ready" || log "  api wait timed out, proceeding anyway"
 
+    # Surface the build manifest now that the API/SD card are up. The early
+    # top-level copy can run before /mnt/sda is writable, so do it here too --
+    # this is the point we know writes succeed (the log above just wrote).
+    if [ -f /etc/soccercam_build ]; then
+        mkdir -p /mnt/sda/soccercam 2>/dev/null
+        cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+        log "  build manifest -> /mnt/sda/soccercam/build.txt"
+    fi
+
     local LAST_STATE=""
     while true; do
         if [ -f "$OVERRIDE_FILE" ]; then
