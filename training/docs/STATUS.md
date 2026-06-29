@@ -1,6 +1,31 @@
 # Current Status
 
-*Last updated: 2026-06-11*
+*Last updated: 2026-06-29*
+
+## Game-phase detection — split to its own branch (2026-06-29)
+
+Phase-prediction work now lives on **`feat/game-phase-detection`** (off `main`), extracted from
+the `feat/homegrown-ball-detector` mega-branch so it can iterate/merge independently. Code:
+`training/data_prep/phase_detect.py` (multi-signal detector: player-on-field curve + AutoCam
+ball-restart + whistle), `phase_eval.py` (scores `--predict` output vs `game_state` source=`human`,
+per-boundary seconds + within-10s fraction), `static/phase-edit{,-yt}.html` (GT verifiers — their
+`/api/phasesv2` + YT-match endpoints still live on the mega-branch's `annotation_server.py`; port
+if the in-browser editor is needed here). Detector/eval run on the box against `G:/F:`.
+
+**Latest eval vs human GT (2026-06-29, 12 games / 48 transitions, predictions from 6/28):**
+- within-10s **14/48 (29%)**, median |err| **72.5 s**; per-boundary medians: kickoff 42.8 s,
+  halftime 17.7 s, second_half 125.4 s, end 133.6 s.
+- **Bimodal**, not uniformly weak: 6/04 Irondequoit is exact on all four (kick +0 / half -4 / 2H +5 /
+  end +0); 6/01 Pittsford + 6/06 close-ish. But several are off by **tens of minutes**
+  (6/10 Lakefront: 2H -1699 s, end -3152 s; Upper_90: kick +356 s, end -705 s) — and some of those
+  are even flagged `OK` by the detector's own cross-check, so the self-assessment is unreliable too.
+
+**Hypothesis (UNCONFIRMED - next step):** the catastrophic games look like per-game time-base /
+trim-offset / segment-offset misalignment (same class as the far-label upload-vs-recording offset),
+not the signal logic failing - a near-perfect game right next to a 52-min-off game points at
+alignment, not detection. Confirm by dumping `<gid>.fit.json` vs `game_state` segments/fps for
+6/10 + Upper_90 (the box registry is a list-of-dicts; `phase_eval.py`'s loader reads it correctly -
+reuse it, don't re-parse). Then fix the offset handling and re-score before touching detector logic.
 
 ## Field-boundary distillation (in progress, 2026-06-11)
 
