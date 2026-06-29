@@ -14,9 +14,8 @@ files from Reolink's portal yourself (see "Acquiring stock firmware" below).
 | HTTP download speed | broken / 1 Mbps throttle | **~86 Mbps** | `builds/build_http_unlock.sh` |
 | Max main bitrate | 12288 kbps | **20480 kbps** | `builds/build_bitrate_cap.sh` |
 | Auto-toggle recording by network | manual UI toggling | **off at home, on at field** | `builds/build_netstate.sh` |
-| Mid-game truncation on a full card | last 8K segment lost when the card fills | **free-space reserve 500 MiB → 20 GiB** so the segment always fits | `builds/build_soccercam_v2.sh` |
+| Mid-game truncation on a full card | last 8K segment lost when the card fills | **free-space reserve 500 MiB → 20 GiB** so the recycler always keeps a full segment's headroom | `builds/build_soccercam_v2.sh` |
 | Home power-on stub recordings | a junk clip every home boot | **auto-deleted** (netstate v2 stub cleanup) | `builds/build_soccercam_v2.sh` |
-| Proactive SD headroom | just-in-time overwrite races | **S98_SdKeep** keeps a target amount free | `builds/build_soccercam_v2.sh` |
 | Power-cut recording recovery | orphaned (moov-less) clip discarded | **rebuilt in place** — video + best-effort audio — at next boot | `builds/build_soccercam_comprehensive.sh` |
 | FPS dropdown cap (web UI) | 20 | 25 (encoder still ceilings ~20) | `builds/build_fps_cap.sh` |
 | Shutter / exposure mode | AE only | full Auto / LowNoise / Anti-Smearing / Manual | runtime API only — `runtime/set_exposure.sh` |
@@ -27,7 +26,7 @@ so you can pick the highest-tier build for your needs:
 - **`build_http_unlock.sh`** = HTTP unlock only.
 - **`build_bitrate_cap.sh`** = HTTP unlock + bitrate cap. **Recommended for most users.**
 - **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon.
-- **`build_soccercam_v2.sh`** = the above **+ netstate v2 (stub cleanup) + free-space reserve + SD-headroom daemon**. Fixes the full-card mid-game truncation.
+- **`build_soccercam_v2.sh`** = the above **+ netstate v2 (stub cleanup) + free-space reserve**. Fixes the full-card mid-game truncation (the raised reserve makes the camera's own recycler keep a full segment's headroom free).
 - **`build_soccercam_comprehensive.sh`** = `v2` **+ boot-time power-cut recovery** (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC audio). **Recommended for the soccer-cam use case.** Audio recovery needs the Helix AAC source fetched locally (see `recover/helix/README.md`); without it the build falls back to video-only recovery automatically.
 - **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended (the h.265 ASIC drops ~20% of frames at 16MP@25fps so recorded output stays around 20 fps anyway, with added jitter).
 
@@ -67,7 +66,7 @@ reolink-firmware-patching/
 │   ├── build_bitrate_cap.sh
 │   ├── build_fps_cap.sh
 │   ├── build_netstate.sh
-│   ├── build_soccercam_v2.sh        # + reserve + netstate v2 + SD-headroom daemon
+│   ├── build_soccercam_v2.sh        # + free-space reserve + netstate v2 (stub cleanup)
 │   ├── build_soccercam_comprehensive.sh  # + power-cut recovery (video+audio)
 │   └── BUILD_LOG.md                 # artifact tracker (sha256 / CRC / contents)
 ├── recover/                         # power-cut recovery (compiled into the comprehensive build)
@@ -83,8 +82,6 @@ reolink-firmware-patching/
 │   ├── netstate/
 │   │   ├── S99_NetState.template    # v1 daemon (build_netstate.sh)
 │   │   └── S99_NetState_v2.template # v2: home/away + power-on stub cleanup
-│   ├── sdkeep/
-│   │   └── S98_SdKeep.template      # proactive SD-headroom daemon
 │   └── recover/
 │       └── S35_RecRecover           # boot-time recovery init script
 └── verify/                          # empirical checks
@@ -232,6 +229,18 @@ bash verify/test_recover_mp4.sh /path/to/a_good_recording.mp4
 After flashing, the recovery runs automatically at boot before the camera's
 own scan; its log is fetchable over the unlocked HTTP path:
 `curl -u admin:PASS http://CAMERA_IP/downloadfile/recover/log`.
+
+Want the card-full truncation fix **without** the power-cut recovery binary
+(no cross-compiler / Helix needed)? Use `build_soccercam_v2.sh` — same
+arguments, minus the recovery step:
+
+```bash
+bash builds/build_soccercam_v2.sh \
+    /path/to/stock.pak \
+    /path/to/soccercam_v2.pak \
+    20480 admin YOUR_CAMERA_PASSWORD 20 \
+    aa:bb:cc:dd:ee:ff
+```
 
 ## Quickstart — motion-blur reduction (no flash, any firmware)
 

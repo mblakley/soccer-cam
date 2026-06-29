@@ -20,7 +20,8 @@ The **comprehensive** soccer-cam build (Step 4, option C) additionally:
 - **Never truncates the last segment when the card fills.** Stock keeps only
   ~500 MiB free, which is smaller than one 8K main-stream segment (~780 MB),
   so the final write fails and the segment is lost mid-game. The reserve is
-  lifted to 20 GiB and a small daemon keeps headroom proactively.
+  lifted to 20 GiB, so the camera's own recycler always keeps a full segment's
+  worth of headroom free and the write never fails.
 - **Deletes the junk "stub" clip** the camera records during the boot window
   when it powers on at home.
 - **Recovers power-cut recordings at boot.** A clip cut by power loss has no
@@ -182,9 +183,9 @@ build_netstate.sh <stock.pak> <output.pak> <kbps> <admin-user> <admin-password> 
 ### Option C — comprehensive soccer-cam build (recommended)
 
 Everything in Option B **plus** the full-card truncation fix, home power-on
-stub cleanup, the SD-headroom daemon, and boot-time power-cut recovery
-(video + best-effort audio). Requires the cross-compiler (and, for audio, the
-Helix source) from the Prerequisites section.
+stub cleanup, and boot-time power-cut recovery (video + best-effort audio).
+Requires the cross-compiler (and, for audio, the Helix source) from the
+Prerequisites section.
 
 ```bash
 bash builds/build_soccercam_comprehensive.sh \
@@ -200,9 +201,9 @@ Argument order:
 ```
 build_soccercam_comprehensive.sh <stock.pak> <output.pak> <kbps> <admin-user> <admin-password> <reserve-gb> <home-mac> [more-home-macs...]
 ```
-(`build_soccercam_v2.sh` is the same minus the recovery binary, if you want the
-card-full fixes without power-cut recovery; it takes `<min_free_gb> <target_gb>`
-in place of the single `<reserve-gb>`.)
+(`build_soccercam_v2.sh` takes the **same arguments** but skips the power-cut
+recovery binary — use it if you want the card-full truncation fix without the
+cross-compiler / Helix dependency.)
 
 ### What the builder does (Options B/C)
 
@@ -211,8 +212,9 @@ in place of the single `<reserve-gb>`.)
    (in `app`) to remove the speed throttle.
 3. Patch the bitrate cap immediate in the `router` binary (in `app`).
 4. **(v2/comprehensive)** Patch the free-space reserve constant in
-   `libStorageFileManager.so` (500 MiB → your `<reserve-gb>`), and install the
-   `S98_SdKeep` headroom daemon + `S99_NetState` **v2** (with stub cleanup).
+   `libStorageFileManager.so` (500 MiB → your `<reserve-gb>`) and install
+   `S99_NetState` **v2** (with stub cleanup). The raised reserve is the whole
+   truncation fix — the camera's own recycler then keeps that much free.
 5. **(comprehensive)** Cross-compile `recover_mp4` (static aarch64, Helix AAC
    linked if present) into `/usr/bin`, install `S35_RecRecover` boot script.
 6. Otherwise install the v1 `S99_NetState` daemon (Option B).
@@ -326,10 +328,12 @@ power-cut test). All paths are readable over the HTTP unlock.
 # Power-cut recovery log (what the boot recovery did to each orphan):
 curl -u admin:<PASSWORD> "http://<CAMERA_IP>/downloadfile/recover/log"
 # expect, per recovered clip: "recovered N video samples ... N audio frames ... recovery OK"
-
-# SD-headroom daemon log (proactive free-space management):
-curl -u admin:<PASSWORD> "http://<CAMERA_IP>/downloadfile/sdkeep/log"
 ```
+
+The card-full truncation fix is **passive** — it's the raised free-space reserve,
+which the firmware's own recycler enforces, so there's no daemon or log to check.
+Verify it after a card-full game by confirming the **last** main-stream segment is
+present and plays to the end (stock firmware would have dropped it).
 
 To deliberately test recovery: start recording at the field, then pull power
 mid-segment (the normal failure mode). On next boot the last clip — which stock

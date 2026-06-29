@@ -457,8 +457,17 @@ after:  a0 00 c0 d2   ; movz x0, #0x5,    lsl #32   = 0x500000000 = 20 GiB
 `builds/build_soccercam_v2.sh` parameterizes the reserve: it encodes
 `<reserve_gb> * 2^30` as a single `movz x0, #imm, lsl #sh` (so the value must be
 a clean `movz` immediate — 16/20/32 GiB all work) and `assert`s the stock
-`d2a3e800` bytes before patching. A companion `S98_SdKeep` daemon keeps headroom
-proactively so the overwrite never has to free a full segment under deadline.
+`d2a3e800` bytes before patching.
+
+This single byte-patch is the whole fix: the camera's own overwrite recycler
+frees space *down to this reserve floor* (see root cause above), so raising the
+floor to 20 GiB makes the firmware itself maintain ~26 segments of headroom,
+per-segment, with no further work. An earlier approach added a userspace
+`S98_SdKeep` daemon that polled free space and deleted the oldest day-dirs
+proactively; once the reserve floor was corrected that daemon became redundant
+(and coarser-grained than the firmware's per-segment recycler), so it was
+**removed**. It only ever did anything the recycler didn't when overwrite was
+*disabled* — and the soccer-cam config records with `overwrite=1`.
 
 Note the byte order: the instruction word is little-endian in the file, so the
 stock `movz x0,#0x1f40,lsl#16` (`0xd2a3e800`) appears as `00 e8 a3 d2`.
@@ -651,7 +660,7 @@ picks these up.
 | `builds/build_http_unlock.sh` | HTTP `/downloadfile/` unlock. `sudo bash builds/build_http_unlock.sh <stock.pak> <out.pak>`. |
 | `builds/build_bitrate_cap.sh` | Parameterized bitrate-cap lift (includes HTTP unlock). `sudo bash builds/build_bitrate_cap.sh <stock.pak> <out.pak> <kbps>`. Recommended `<kbps>`: 20480. |
 | `builds/build_netstate.sh` | + auto-toggle recording daemon (v1). `… <kbps> <user> <pass> <home_mac> [more]`. |
-| `builds/build_soccercam_v2.sh` | + free-space reserve (§5c truncation fix) + `S98_SdKeep` + netstate **v2** (stub cleanup). `… <kbps> <user> <pass> <min_free_gb> <target_gb> <home_mac> [more]`. |
+| `builds/build_soccercam_v2.sh` | + free-space reserve (Patch v20 truncation fix) + netstate **v2** (stub cleanup). `… <kbps> <user> <pass> <reserve_gb> <home_mac> [more]`. |
 | `builds/build_soccercam_comprehensive.sh` | + boot-time power-cut recovery (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC). `… <kbps> <user> <pass> <reserve_gb> <home_mac> [more]`. |
 | `builds/BUILD_LOG.md` | Artifact tracker: each built `.pak`'s sha256, CRC, and exact contents. |
 

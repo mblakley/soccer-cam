@@ -1,17 +1,24 @@
 #!/bin/bash
 # Build the soccer-cam v2 patched .pak. Layers on STOCK:
-#   - HTTP /downloadfile/ unlock        (device, app)        [carried from v1]
-#   - Main-stream max bitrate -> <kbps> (router, app)        [carried from v1]
-#   - /etc/init.d/S99_NetState  v2      (rootfs)  home/away recording + HOME-STUB CLEANUP
-#   - /etc/init.d/S98_SdKeep            (rootfs)  proactive SD headroom (fixes truncation)
+#   - HTTP /downloadfile/ unlock              (device, app)               [carried from v1]
+#   - Main-stream max bitrate -> <kbps>       (router, app)               [carried from v1]
+#   - Free-space reserve 500MiB -> <reserve_gb>GiB  (libStorageFileManager, app)  [fixes truncation]
+#   - /etc/init.d/S99_NetState  v2            (rootfs)  home/away recording + HOME-STUB CLEANUP
+#
+# The raised reserve makes the camera's own overwrite recycler keep <reserve_gb> GiB
+# free (it frees down to that floor), which is far more than one 8K main segment
+# (~780 MB) -- so a segment write never fails on a full card. This supersedes the old
+# proactive S98_SdKeep headroom daemon (removed): the firmware now maintains the
+# headroom itself, per-segment, with no userspace poller. See FIRMWARE_PATCH_NOTES "Patch v20".
 #
 # No sudo required: unsquashfs runs with -no-xattrs and mksquashfs with -all-root.
 #
 # Usage:
 #   bash build_soccercam_v2.sh <stock.pak> <out.pak> <kbps> <user> <pass> \
-#        <min_free_gb> <target_gb> <home_mac> [more_macs...]
+#        <reserve_gb> <home_mac> [more_macs...]
+# <reserve_gb> must be a clean movz immediate (16/20/32 GiB all work).
 # Example:
-#   bash build_soccercam_v2.sh stock.pak duo3_v2.pak 20480 admin <PW> 30 40 <home_router_mac>
+#   bash build_soccercam_v2.sh stock.pak duo3_v2.pak 20480 admin <PW> 20 <home_router_mac>
 set -euo pipefail
 
 STOCK="${1:?usage: see header}"
@@ -19,16 +26,14 @@ OUT="${2:?usage}"
 KBPS="${3:?usage}"
 USER="${4:?usage}"
 PASS="${5:?usage}"
-MIN_FREE_GB="${6:?usage}"
-TARGET_GB="${7:?usage}"
-shift 7
+RES_GB="${6:?usage}"
+shift 6
 HOME_MACS="$*"
 [[ -n "$HOME_MACS" ]] || { echo "ERROR: at least one home MAC required"; exit 1; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAK_DIR="$(cd "$HERE/../pak" && pwd)"
 NS_TPL="$HERE/../runtime/netstate/S99_NetState_v2.template"
-SK_TPL="$HERE/../runtime/sdkeep/S98_SdKeep.template"
 [[ -f "$NS_TPL" ]] || { echo "ERROR: missing template $NS_TPL"; exit 1; }
 WORK="$(mktemp -d)"; trap "rm -rf '$WORK'" EXIT; cd "$WORK"
 HOME_MACS_LC=$(echo "$HOME_MACS" | tr 'A-Z' 'a-z')
@@ -76,12 +81,12 @@ open("rootfs_unpacked/etc/init.d/S99_NetState","w",newline="\n").write(t)
 os.chmod("rootfs_unpacked/etc/init.d/S99_NetState",0o755); print(f"   S99_NetState ({len(t)} bytes)")
 PY
 
-echo "==> 6) RESERVE patch: libStorageFileManager.so free-space reserve 500MiB -> ${MIN_FREE_GB}GiB"
+echo "==> 6) RESERVE patch: libStorageFileManager.so free-space reserve 500MiB -> ${RES_GB}GiB"
 python3 - <<PY
 OFF=0x44788                      # Get_storage_space free-space threshold (only occurrence)
 CUR=(0xd2a3e800).to_bytes(4,"little")   # movz x0,#0x1f40,lsl#16 = 0x1f400000 = 500 MiB (LE in file)
 SO="app_unpacked/libStorageFileManager.so"
-V=$MIN_FREE_GB*(1<<30)
+V=$RES_GB*(1<<30)
 enc=None
 for sh in (0,16,32,48):
     imm=V>>sh
@@ -94,7 +99,7 @@ new=word.to_bytes(4,"little")
 d=bytearray(open(SO,"rb").read())
 assert bytes(d[OFF:OFF+4])==CUR, f"{SO}[{hex(OFF)}]={bytes(d[OFF:OFF+4]).hex()} != stock 500MiB reserve; firmware changed, stop"
 d[OFF:OFF+4]=new; open(SO,"wb").write(bytes(d))
-print(f"   reserve 500MiB -> {$MIN_FREE_GB}GiB  (d2a3e800 -> {new.hex()}, movz x0,#{hex(imm)},lsl#{sh})")
+print(f"   reserve 500MiB -> {$RES_GB}GiB  (d2a3e800 -> {new.hex()}, movz x0,#{hex(imm)},lsl#{sh})")
 PY
 
 echo "==> 7) Repack app + rootfs squashfs (deterministic, all-root)"
@@ -114,7 +119,7 @@ python3 "$PAK_DIR/reolink_crc.py" compute "$OUT"
 echo
 echo "===================================================================="
 echo " soccer-cam v2 built: $OUT"
-echo "  HTTP unlock + ${KBPS}kbps + netstate-v2(stub-clean) + free-space reserve ${MIN_FREE_GB}GiB (was 500MiB)"
+echo "  HTTP unlock + ${KBPS}kbps + netstate-v2(stub-clean) + free-space reserve ${RES_GB}GiB (was 500MiB)"
 echo " Flash via web UI -> Settings -> Maintenance -> Local Upgrade."
 echo " Recover with RECOVERY/CURRENT_WORKING_netstate_4896.pak or FACTORY_STOCK_4867.pak."
 echo "===================================================================="
