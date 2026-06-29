@@ -36,7 +36,7 @@ Build: `builds/build_soccercam_v2.sh` (driven by `/tmp` wrapper that carries cre
 ## "Comprehensive" firmware — ready to flash
 | File | sha256 | Notes |
 |---|---|---|
-| **`IPC_NT15NA416MP.4900_…REOLINK_soccercam_comprehensive.pak`** | `1eaafe72…` | **CURRENT / recommended.** Audio recovery + netstate hardening (`INIT_GRACE=5`, fail-enabled retry) + **build manifest** (`/etc/soccercam_build`, readable at `/downloadfile/soccercam/build.txt`). CRC `0x3414781d`, commit `0c6577d`. **Correctly named for flashing.** |
+| **`IPC_NT15NA416MP.4900_…REOLINK_soccercam_comprehensive.pak`** | `9f245cf8…` | **CURRENT / recommended.** Audio recovery + netstate hardening (`INIT_GRACE=5`, fail-enabled retry) + **build manifest** (`/etc/soccercam_build`, readable at `/downloadfile/soccercam/build.txt`). CRC `0x086a57e2`, commit `35d0f66`. **Correctly named for flashing.** |
 | `IPC_…4899…` (= `BUILT/soccercam_COMPREHENSIVE_4899.pak`) | `52ed6ac5…` | prior — audio recovery; pre-manifest, `INIT_GRACE=45`, old (latching) netstate loop. CRC `0x70ef529f`. |
 | `IPC_…4898…` (= `BUILT/soccercam_COMPREHENSIVE_4898.pak`) | `6e96223d…` | video-only recovery @ fixed 20 fps. **Flash-verified on the camera 2026-06-29.** |
 
@@ -51,6 +51,6 @@ Everything in the simple-fixes pak **plus** boot-time power-cut recovery:
 - **`/etc/init.d/S35_RecRecover`** — at boot (before the camera's scan), finds a reference, recovers each orphan in place, renames the end-time to the recovered duration so the camera's duration check passes, re-indexes as a normal `/downloadfile/` video. **Never deletes** a recoverable file; leaves unparseable ones in place.
 - **`/etc/soccercam_build`** (4900+) — build manifest (variant, options, git commit), copied to `/mnt/sda/soccercam/build.txt` at boot by `S99_NetState`. Identify which firmware a camera runs over the HTTP unlock: `curl http://<cam>/downloadfile/soccercam/build.txt` (every pak otherwise reports the same stock `v3.0.0.4867` version string).
 
-Build: `builds/build_soccercam_comprehensive.sh` (source `recover/recover_mp4.c` + `recover/helix/`, `runtime/recover/S35_RecRecover`). 4900 verified pak contents: recover_mp4 (aarch64, +x, Helix-linked 847 KB), S35_RecRecover, S99_NetState v2 (`INIT_GRACE=5` + fail-enabled retry), `/etc/soccercam_build` manifest, http unlock, bitrate 20480, reserve 20 GiB; rootfs 5.75 MB < 8 MB partition; CRC `0x3414781d` verified.
+Build: `builds/build_soccercam_comprehensive.sh` (source `recover/recover_mp4.c` + `recover/helix/`, `runtime/recover/S35_RecRecover`). 4900 verified pak contents: recover_mp4 (aarch64, +x, Helix-linked 847 KB), S35_RecRecover, S99_NetState v2 (`INIT_GRACE=5` + fail-enabled retry), `/etc/soccercam_build` manifest, http unlock, bitrate 20480, reserve 20 GiB; rootfs 5.75 MB < 8 MB partition; CRC `0x086a57e2` verified.
 
 Known limits: main stream (`RecM09`, H.265) only; `RecS09` sub-stream recovery is a follow-on. Audio is best-effort — a corrupt audio chunk drops that chunk's sound (video unaffected).
