@@ -473,6 +473,8 @@ for g in games:
     cen = []
     if ball_ev:
         cxp, cyp = float(poly[:, 0].mean()), float(poly[:, 1].mean())
+        # tolerance vs the field centroid-x; generous (the center circle is offset from the
+        # centroid under panorama distortion). Absolute px works across the scored resolutions.
         cen = sorted(e[0] for e in ball_ev if abs(e[1] - cxp) < 350 and e[2] < cyp)
 
     def mstr(m):  # multi-blast strength = # of whistle blasts in its 5s cluster
@@ -508,12 +510,18 @@ for g in games:
         sig.append("player")
     on2 = ht_dip[1]
 
-    # KO: first center ball-restart before HT, refined to the single whistle just before it.
+    # KO: first center ball-restart before HT, refined to the single whistle just before it. With no
+    # ball signal, the kickoff is the first whistle of the game (warm-up is silent before it).
     ko = None
     kc = [t for t in cen if t <= ht and t <= 25 * 60]
     if kc:
         ko = pre_single(kc[0]) or kc[0]
         sig.append("ball")
+    elif blasts:
+        fw = next((b for b in blasts if b >= 20), None)
+        if fw is not None:
+            ko = fw
+            sig.append("whistle")
     # 2H: first center ball-restart after the halftime dip, refined to the single whistle before.
     sh = None
     s2 = [t for t in cen if t >= on2 - 90]
