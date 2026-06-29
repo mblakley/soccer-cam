@@ -44,6 +44,14 @@ ALL_ON='111111111111111111111111111111111111111111111111111111111111111111111111
 
 mkdir -p "$CONFIG_DIR" 2>/dev/null
 
+# Surface the firmware build manifest to the SD card so it is readable over the
+# HTTP unlock at /downloadfile/soccercam/build.txt -- identifies which build is
+# running (every pak reports the same stock version string otherwise).
+if [ -f /etc/soccercam_build ]; then
+    mkdir -p /mnt/sda/soccercam 2>/dev/null
+    cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+fi
+
 log() {
     local MSG="[$(date '+%F %T')] $*"
     echo "$MSG"

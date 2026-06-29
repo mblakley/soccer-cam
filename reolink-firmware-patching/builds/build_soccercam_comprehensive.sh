@@ -6,12 +6,21 @@
 #   - /etc/init.d/S99_NetState v2 (home/away + stub cleanup)        (rootfs)
 #   - /usr/bin/recover_mp4 (static aarch64 reindexer)               (rootfs)         [power-cut recovery]
 #   - /etc/init.d/S35_RecRecover (boot recovery, runs before scan)  (rootfs)
+#   - /etc/soccercam_build (build manifest; surfaced to /mnt/sda at boot)  (rootfs)  [identify firmware]
 #
 # No sudo needed (unsquashfs -no-xattrs, mksquashfs -all-root).
 # Usage: bash build_soccercam_comprehensive.sh <stock.pak> <out.pak> <kbps> <user> <pass> <reserve_gb> <home_mac> [more_macs...]
+# NOTE: <out.pak> MUST be named to the Reolink pattern or the camera rejects it on upload:
+#   IPC_NT15NA416MP.<build>_2505072124.Reolink-Duo-3-PoE.16MP.REOLINK_soccercam_comprehensive.pak
 set -euo pipefail
 STOCK="${1:?}"; OUT="${2:?}"; KBPS="${3:?}"; USER="${4:?}"; PASS="${5:?}"; RES_GB="${6:?}"; shift 6
 HOME_MACS="$*"; [[ -n "$HOME_MACS" ]] || { echo "ERROR: home MAC required"; exit 1; }
+case "$(basename "$OUT")" in
+  IPC_NT15NA416MP.*_*.Reolink-Duo-3-PoE.16MP.REOLINK*.pak) : ;;
+  *) echo "WARNING: output name '$(basename "$OUT")' does NOT match the Reolink pattern;" >&2
+     echo "         the camera's Local Upgrade will reject it ('Failed to recognize the file format')." >&2
+     echo "         e.g. IPC_NT15NA416MP.4900_2505072124.Reolink-Duo-3-PoE.16MP.REOLINK_soccercam_comprehensive.pak" >&2 ;;
+esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAK_DIR="$(cd "$HERE/../pak" && pwd)"
 NS_TPL="$HERE/../runtime/netstate/S99_NetState_v2.template"
@@ -87,14 +96,32 @@ if [[ -d "$HELIX_SRC" && -f "$HELIX_COMPAT/Arduino.h" ]]; then
   aarch64-linux-gnu-gcc -O2 -DNDEBUG -DARDUINO -static \
     -I"$HELIX_COMPAT" -I"$HELIX_SRC" \
     -o rootfs_unpacked/usr/bin/recover_mp4 "$REC_C" "$HXB/libhelixaac.a"
+  AUDIO=yes
 else
   echo "   WARNING: Helix AAC source absent -> VIDEO-ONLY recovery (-DNO_AUDIO)"
   aarch64-linux-gnu-gcc -O2 -DNDEBUG -DNO_AUDIO -static -o rootfs_unpacked/usr/bin/recover_mp4 "$REC_C"
+  AUDIO=no
 fi
 chmod 755 rootfs_unpacked/usr/bin/recover_mp4
 file rootfs_unpacked/usr/bin/recover_mp4 | cut -d, -f1-3
 install -m 0755 "$REC_SH" rootfs_unpacked/etc/init.d/S35_RecRecover
 echo "   recover_mp4 + S35_RecRecover installed"
+
+echo "==> 6b) bake build manifest (/etc/soccercam_build)"
+COMMIT="${SOCCERCAM_COMMIT:-$(git -C "$HERE/.." rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+cat > rootfs_unpacked/etc/soccercam_build <<EOF
+variant=comprehensive
+pak=$(basename "$OUT")
+base=v3.0.0.4867_2505072124
+kbps=$KBPS
+reserve_gb=$RES_GB
+netstate=v2
+recover=yes
+audio=$AUDIO
+commit=$COMMIT
+EOF
+chmod 644 rootfs_unpacked/etc/soccercam_build
+echo "   manifest: comprehensive audio=$AUDIO commit=$COMMIT (read at /downloadfile/soccercam/build.txt)"
 
 echo "==> 7) repack app + rootfs"
 mksquashfs app_unpacked    app_new.bin    -comp xz -b 262144 -noappend -no-progress -no-exports -all-root -mkfs-time 0 -all-time 0 >/dev/null
@@ -108,6 +135,7 @@ print(f"   wrote $OUT size={size} crc=0x{crc:08x}")
 PY
 echo "==> 9) verify CRC"; python3 "$PAK_DIR/reolink_crc.py" compute "$OUT"
 echo "==================================================================="
-echo " COMPREHENSIVE: HTTP+${KBPS}kbps + reserve ${RES_GB}GiB + netstate-v2 + power-cut recovery"
-echo " Flash via web UI. Recover with RECOVERY/*.pak if needed."
+echo " COMPREHENSIVE: HTTP+${KBPS}kbps + reserve ${RES_GB}GiB + netstate-v2 + power-cut recovery (audio=$AUDIO)"
+echo " Build id readable at  http://<cam>/downloadfile/soccercam/build.txt  after boot."
+echo " Flash via web UI (filename MUST match IPC_NT15NA416MP.*REOLINK*.pak). Recover with RECOVERY/*.pak."
 echo "==================================================================="

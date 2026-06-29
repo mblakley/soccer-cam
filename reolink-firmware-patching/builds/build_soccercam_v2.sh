@@ -30,6 +30,12 @@ RES_GB="${6:?usage}"
 shift 6
 HOME_MACS="$*"
 [[ -n "$HOME_MACS" ]] || { echo "ERROR: at least one home MAC required"; exit 1; }
+case "$(basename "$OUT")" in
+  IPC_NT15NA416MP.*_*.Reolink-Duo-3-PoE.16MP.REOLINK*.pak) : ;;
+  *) echo "WARNING: output name '$(basename "$OUT")' does NOT match the Reolink pattern;" >&2
+     echo "         the camera's Local Upgrade will reject it ('Failed to recognize the file format')." >&2
+     echo "         e.g. IPC_NT15NA416MP.4900_2505072124.Reolink-Duo-3-PoE.16MP.REOLINK_soccercam_v2.pak" >&2 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAK_DIR="$(cd "$HERE/../pak" && pwd)"
@@ -101,6 +107,22 @@ assert bytes(d[OFF:OFF+4])==CUR, f"{SO}[{hex(OFF)}]={bytes(d[OFF:OFF+4]).hex()} 
 d[OFF:OFF+4]=new; open(SO,"wb").write(bytes(d))
 print(f"   reserve 500MiB -> {$RES_GB}GiB  (d2a3e800 -> {new.hex()}, movz x0,#{hex(imm)},lsl#{sh})")
 PY
+
+echo "==> 6b) bake build manifest (/etc/soccercam_build)"
+COMMIT="${SOCCERCAM_COMMIT:-$(git -C "$HERE/.." rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+cat > rootfs_unpacked/etc/soccercam_build <<EOF
+variant=v2
+pak=$(basename "$OUT")
+base=v3.0.0.4867_2505072124
+kbps=$KBPS
+reserve_gb=$RES_GB
+netstate=v2
+recover=no
+audio=no
+commit=$COMMIT
+EOF
+chmod 644 rootfs_unpacked/etc/soccercam_build
+echo "   manifest: v2 commit=$COMMIT (read at /downloadfile/soccercam/build.txt)"
 
 echo "==> 7) Repack app + rootfs squashfs (deterministic, all-root)"
 mksquashfs app_unpacked    app_new.bin    -comp xz -b 262144 -noappend -no-progress -no-exports -all-root -mkfs-time 0 -all-time 0 >/dev/null
