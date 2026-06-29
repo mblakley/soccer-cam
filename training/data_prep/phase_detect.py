@@ -278,28 +278,64 @@ def snap(cands, target, tol):
     return min(c, key=lambda x: abs(x - target)) if c else None
 
 
-def ball_restarts(base):
-    """From the AutoCam ball sidecar (<...>.mp4.jsonl, per-frame {t,xy} in source px on the game
-    timeline), find restart events = ball static (~1.5s) then moving off. Kickoffs recur at the
-    center spot -> return (events[(t,x,y)], center_xy). center = densest restart-spot cluster."""
-    sc = None
+def ball_restarts(base, gj=None):
+    """Ball restart events (ball static ~1.5s then moving off) + center spot, on the game timeline.
+    Returns (events[(t,x,y)], center_xy); center = densest restart-spot cluster.
+
+    Source priority, robust to header/short lines + missing keys (never raises):
+      1) reolink Once-native <video>.mp4.jsonl with {t, xy} (already on the game timeline, seconds);
+      2) dahua-segment games: ball_track.jsonl with {seg, f, x, y} (per-segment frame) -> global
+         seconds via game.json segment global_offset/fps. (The dahua <...>-once-processed.mp4.jsonl
+         carries xy but no t, so path 1 yields nothing for it and we fall through to the track.)"""
+    T, X, Y = [], [], []
+    # --- path 1: {t, xy} global-seconds sidecar (reolink) ---
     for f in glob.glob(
         os.path.join(base, "**", "*.mp4.jsonl"), recursive=True
     ) + glob.glob(os.path.join(base, "**", "*.mkv.jsonl"), recursive=True):
-        sc = f
-    if not sc:
-        return None, None
-    T, X, Y = [], [], []
-    for ln in open(sc, encoding="utf-8"):
-        if '"xy"' not in ln:
-            continue
-        try:
-            r = json.loads(ln)
-        except Exception:
-            continue
-        T.append(r["t"])
-        X.append(r["xy"][0])
-        Y.append(r["xy"][1])
+        for ln in open(f, encoding="utf-8"):
+            if '"xy"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+            except Exception:
+                continue
+            t, xy = r.get("t"), r.get("xy")
+            if t is None or not xy:
+                continue
+            T.append(float(t))
+            X.append(float(xy[0]))
+            Y.append(float(xy[1]))
+        if len(T) >= 100:
+            break
+    # --- path 2: per-segment ball track {seg, f, x, y} -> global seconds (dahua) ---
+    if len(T) < 100 and gj:
+        segmap = {
+            s.get("seg"): (
+                float(s.get("global_offset", 0)),
+                float(s.get("fps") or 20.0),
+            )
+            for s in (gj.get("segments") or [])
+        }
+        bt = os.path.join(base, "ball_track.jsonl")
+        if os.path.exists(bt):
+            T, X, Y = [], [], []
+            for ln in open(bt, encoding="utf-8"):
+                try:
+                    r = json.loads(ln)
+                except Exception:
+                    continue
+                seg, fr, x, y = r.get("seg"), r.get("f"), r.get("x"), r.get("y")
+                if seg not in segmap or fr is None or x is None or y is None:
+                    continue
+                off, fps = segmap[seg]
+                T.append((off + float(fr)) / fps)
+                X.append(float(x))
+                Y.append(float(y))
+            if T:  # segments may be out of order in the file -> sort by global time
+                order = np.argsort(T)
+                T = list(np.asarray(T)[order])
+                X = list(np.asarray(X)[order])
+                Y = list(np.asarray(Y)[order])
     if len(T) < 100:
         return None, None
     T, X, Y = np.array(T, float), np.array(X, float), np.array(Y, float)
@@ -400,7 +436,7 @@ for g in games:
         ts, cnt, dur = player_curve(vid, polyf, rot, STEP)
         blasts, multis, sr = whistle_blasts(vid)
         ball_ev, bcenter = ball_restarts(
-            d
+            d, gj
         )  # ball restart events + center spot (source px)
         json.dump(
             {
