@@ -192,7 +192,10 @@ def segment(ts, cnt):
     off1 = (ts[a_ht - 1] + ts[a_ht]) / 2 if a_ht > 0 else ts[a_ht]
     on2 = (ts[b_ht] + ts[b_ht + 1]) / 2 if b_ht + 1 < n else ts[b_ht]
     off2 = ts[play[-1]]
-    return on1, off1, on2, off2, sm
+    # all candidate mid-game player dips (onset,offset) — fusion picks the halftime one by the
+    # multi-whistle that precedes it, not by length alone (a spurious long dip != halftime).
+    dips = [(float(ts[a]), float(ts[b])) for a, b in mid]
+    return on1, off1, on2, off2, sm, dips
 
 
 # ---------- whistle refinement ----------
@@ -458,59 +461,91 @@ for g in games:
     if not seg:
         print("  [%s] no-play-plateau (frame=%dx%d dur=%.0fs)" % (gid, fw, fh, dur))
         continue
-    on1, off1, on2, off2, sm = seg
-    # ---- FUSION: player dip (HT region) + whistle (HT/END) + ball restart (precise KO/2H) ----
-    # HT: a multi-blast right at the player dip, else a close single blast, else the dip itself.
-    ht = (snap(multis, off1, 90) or snap(blasts, off1, 45) or off1) if blasts else off1
-    sig = ["player"]
-    # KO / 2H from ball restarts at the CENTER CIRCLE (kickoffs recur there): near the field
-    # centroid-x, in the far half (panorama foreshortens the center circle high in frame).
-    ko_b = sh_b = None
+    on1, off1, on2, off2, sm, dips = seg
+    dur = float(ts[-1])
+    # ---- FUSION by the boundary signatures (each cross-checks the others) ----
+    #   KO  : single whistle, then a center ball-restart (static ball -> moves)
+    #   HT  : MULTI-whistle, then the players leave the field (a player dip FOLLOWS it)
+    #   2H  : single whistle, then the next center ball-restart
+    #   END : late MULTI-whistle, after which the ball stops + players leave
+    sig = []
+    # center-circle ball restarts (kickoffs recur there): near field-centroid-x, in the far half
+    cen = []
     if ball_ev:
         cxp, cyp = float(poly[:, 0].mean()), float(poly[:, 1].mean())
         cen = sorted(e[0] for e in ball_ev if abs(e[1] - cxp) < 350 and e[2] < cyp)
-        kc = [t for t in cen if t <= ht and t <= 20 * 60]
-        if kc:
-            ko_b = kc[0]  # first center kickoff = KO
-        s2 = [
-            t for t in cen if t >= on2
-        ]  # first center kickoff after the halftime dip recovers
-        if s2:
-            sh_b = s2[0]
-        if ko_b is not None or sh_b is not None:
+
+    def mstr(m):  # multi-blast strength = # of whistle blasts in its 5s cluster
+        return sum(1 for b in blasts if m <= b <= m + 5)
+
+    def pre_single(
+        t, tol=10
+    ):  # the single whistle just before event t (the restart whistle)
+        c = [b for b in blasts if t - tol <= b <= t + 2]
+        return max(c) if c else None
+
+    # HALFTIME: a multi-whistle that a player dip FOLLOWS (players leave after the whistle), nearest
+    # the game centre. Centrality (halves are ~equal) rejects spurious water-break dips; the
+    # following-dip requirement rejects loud crowd multis that aren't halftime.
+    ht = ht_dip = None
+    htc = [
+        (m, d)
+        for m in multis
+        if 0.30 * dur <= m <= 0.68 * dur
+        for d in [next((dp for dp in dips if m - 45 <= dp[0] <= m + 240), None)]
+        if d
+    ]
+    if htc:
+        ht, ht_dip = min(htc, key=lambda md: abs(md[0] - dur / 2))
+        sig.append("whistle")
+    if ht is None:  # fallback: longest dip itself, snapped to any nearby whistle
+        ht_dip = (off1, on2)
+        ht = (
+            (snap(multis, off1, 120) or snap(blasts, off1, 60) or off1)
+            if blasts
+            else off1
+        )
+        sig.append("player")
+    on2 = ht_dip[1]
+
+    # KO: first center ball-restart before HT, refined to the single whistle just before it.
+    ko = None
+    kc = [t for t in cen if t <= ht and t <= 25 * 60]
+    if kc:
+        ko = pre_single(kc[0]) or kc[0]
+        sig.append("ball")
+    # 2H: first center ball-restart after the halftime dip, refined to the single whistle before.
+    sh = None
+    s2 = [t for t in cen if t >= on2 - 90]
+    if s2:
+        sh = pre_single(s2[0]) or s2[0]
+        if "ball" not in sig:
             sig.append("ball")
-    # 2H: ball restart, else first whistle after the field refills, else player refill.
-    if sh_b is not None:
-        sh = sh_b
     elif blasts:
         after2 = [b for b in blasts if on2 - 30 <= b <= on2 + 150]
         sh = after2[0] if after2 else on2
     else:
         sh = on2
-    # END: largest late multi-blast with KO>=0 (excludes post-game whistle); else symmetry/last-play.
-    if blasts:
-        cap = ht + sh
-        cands = sorted(
-            (m for m in multis if sh + 15 * 60 <= m <= min(off2 + 120, cap)),
-            reverse=True,
-        )
-        end = next((e for e in cands if 18 * 60 <= e - sh <= 50 * 60), None) or (
-            snap(blasts, off2, 120) or off2
-        )
-        sig.append("whistle")
+
+    # END: the last late multi-whistle (full-time) before the game empties out (no ht+sh cap).
+    if multis:
+        late = [m for m in multis if m >= sh + 15 * 60 and m <= off2 + 240]
+        end = late[-1] if late else (snap(blasts, off2, 120) or off2)
+        if "whistle" not in sig:
+            sig.append("whistle")
     else:
         end = off2
-    # KO: ball restart (most precise), else whistle symmetry, else player onset.
-    if ko_b is not None:
-        ko = ko_b
-    elif blasts:
-        ksym = max(0.0, ht - (end - sh))
-        ko = snap(blasts, ksym, 30) or ksym
-    else:
-        ko = on1
-    # if no whistle END, set END by symmetry from the (ball-)measured 1st half
-    if not blasts:
-        end = sh + (ht - ko)
+
+    # KO fallback when there's no ball restart: whistle symmetry, else player onset.
+    if ko is None:
+        if blasts:
+            ksym = max(0.0, ht - (end - sh))
+            ko = snap(blasts, ksym, 30) or ksym
+            sig.append("sym")
+        else:
+            ko = on1
+            sig.append("player")
+    sig = list(dict.fromkeys(sig))
     used = "+".join(sig) + ("(sr=%d)" % sr if blasts else "")
     h1, h2 = (ht - ko) / 60, (end - sh) / 60
     brkm = (sh - ht) / 60
@@ -611,8 +646,8 @@ for g in games:
         "source": src,
         "signals": sig,
         "half_min": [round(h1, 1), round(h2, 1)],
-        "ko_from_ball": ko_b is not None,
-        "sh_from_ball": sh_b is not None,
+        "ko_from_ball": bool(kc),
+        "sh_from_ball": bool(s2),
         "audio_sr": int(sr or 0),
         "step_sec": STEP,
         "times_sec": {
