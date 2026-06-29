@@ -35,8 +35,19 @@ weren't a constant per-game shift). Three real causes, all addressed or scoped:
 HT=multi-whistle the player-dip FOLLOWS (pick the one nearest game-centre); 2H=single whistle->next
 center restart; END=last late multi-whistle (no `ht+sh` cap). Result on the 13 scored human-GT
 games: **within-10s 27%->38%**, END **median 134s->2s** (8/13), HT **median 18s->6s** (7/13),
-6/10 now 2H -3s / END -1s. **KO (2/13) and 2H (3/13) remain the weak boundaries** — the center
-ball-restart anchoring is imprecise (warm-up balls; some games have no ball signal). That's next.
+6/10 now 2H -3s / END -1s.
+
+**KO/2H precision pass (2026-06-29):** within-10s 38%->40%; KO 2/13->3/13 via a no-ball->first-
+whistle fallback (Upper_90 KO -247s->-2s, no regressions). Tried + REVERTED: whistle-gated restart
+selection (drops the real kickoff when its whistle is wind-masked: 6/04 +0s->+238s) and
+frame-scaled center tolerance (too tight on the 1080p trims). **KO (3/13) and 2H (3/13) stay the
+weak boundaries and are now BLOCKED on whistle quality**: the warm-up-touch rejection + no-ball
+anchoring both need the whistle, but the per-frame whistle detector has wind false-positives AND
+misses some real kickoff whistles, so whistle-gating breaks as many games as it fixes. The real
+unlock is a **supervised whistle detector** (label a handful of real whistle toots across a windy +
+a calm game, train a tiny spectro-temporal classifier) — that would clean multi-blasts (better
+HT/END too) AND make the KO/2H whistle-gate reliable. Per-frame DSP cleanup was tried and does not
+separate wind from whistle. END + HT are solid; KO/2H need this before they improve further.
 
 **Still only 13 of 43 GT games scored** — 26 lack predictions: ~23 are 2024/25 **dahua_segments**
 games whose video IS present (top-level timestamped `.mp4` + `combined.mp4`) but `files_offsets`
