@@ -28,7 +28,12 @@ LOG=$CONFIG_DIR/log
 REC_DIR=/mnt/sda/Mp4Record
 
 POLL_INTERVAL=30
-INIT_GRACE=45
+# Head-start before the first home/away check. Kept short: wait_for_api (below)
+# already polls until the camera API is reachable, so a long pre-sleep only
+# delays the home-disable and lets the camera record a longer boot "stub" at
+# home. Fail-enabled is preserved regardless -- the camera boots recording and
+# we only ever DISABLE on a confirmed home MAC.
+INIT_GRACE=5
 LOG_MAX_BYTES=262144
 
 # This boot's start time (epoch). Anything in Mp4Record with mtime >= this was
@@ -163,18 +168,34 @@ main_loop() {
             elif is_home_mac "$MAC"; then NEW_STATE="home"
             else NEW_STATE="away"; fi
         fi
-        if [ "$NEW_STATE" != "$LAST_STATE" ]; then
-            log "state change: ${LAST_STATE:-init} -> $NEW_STATE  (gw=${GW:-none} mac=${MAC:-none})"
-            if [ "$NEW_STATE" = "home" ]; then
-                set_record_state off && log "  recording DISABLED (home)"
-                clean_home_stubs
-            else
-                set_record_state on && log "  recording ENABLED (away, TIMING all-on)"
-            fi
-            LAST_STATE="$NEW_STATE"
-        elif [ "$NEW_STATE" = "home" ]; then
-            clean_home_stubs   # catch any straggler stub while we remain home
-        fi
+        # FAIL-ENABLED: only ever DISABLE on a confirmed home MAC, and latch
+        # LAST_STATE only once the camera CONFIRMS the change. A failed
+        # SetRecV20 is retried on the next poll instead of being latched, so a
+        # powered-on field camera can never silently sit not-recording because
+        # of one API hiccup.
+        case "$NEW_STATE" in
+            home)
+                if [ "$LAST_STATE" != "home" ]; then
+                    if set_record_state off; then
+                        log "state -> home: recording DISABLED  (gw=${GW:-none} mac=${MAC:-none})"
+                        LAST_STATE="home"
+                    else
+                        log "home detected, disable failed; still recording (safe) -- retry next poll"
+                    fi
+                fi
+                clean_home_stubs   # also catch stragglers while we remain home
+                ;;
+            *)  # away / no-network / ambiguous -> ensure recording is ON
+                if [ "$LAST_STATE" != "away" ]; then
+                    if set_record_state on; then
+                        log "state -> away: recording ENABLED (TIMING all-on)  (gw=${GW:-none} mac=${MAC:-none})"
+                        LAST_STATE="away"
+                    else
+                        log "away, enable FAILED -- retry next poll (must not sit idle at a game)"
+                    fi
+                fi
+                ;;
+        esac
         sleep $POLL_INTERVAL
     done
 }

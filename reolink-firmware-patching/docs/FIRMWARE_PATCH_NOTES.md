@@ -638,6 +638,72 @@ through the existing pipeline unchanged.
 
 ---
 
+## 5d. Recording control & the home-boot "stub" (netstate)
+
+The soccer-cam build records continuously — master `Rec.enable=1` + a 24/7
+all-on `TIMING` schedule (not motion-triggered) — and the `S99_NetState` daemon
+only ever *disables* recording, and only once it has positively confirmed the
+**home** gateway MAC. **FAIL-ENABLED is the rule:** the camera boots recording,
+and every failure or ambiguity (no link, no DHCP, no/unknown gateway, API error,
+timeout) leaves it recording, so a game is never missed.
+
+### The "stub", and why a userspace daemon can't fully prevent it
+
+On a home power-on the camera writes a short (~4 s) segment before the daemon can
+stop it. That is structural, not a daemon bug — from the decompiled boot order:
+
+```
+rcS -> /etc/init.d/S??*  (lexical order)
+  S25_Net      eth0 up, STATIC_IP 192.168.0.3   <- no DHCP/gateway yet
+  start_app:
+     ./router &      (config owner; feeds /dev/watchdog after handoff)
+     ./device &      (starts udhcpc -> DHCP/default gateway appear HERE)
+     ./recorder &    (writes the boot segment)
+     ... cgiserver.cgi   (HTTP API — comes up LAST)
+```
+
+The home/away signal (the gateway MAC) does not exist until `device` runs
+`udhcpc`; `recorder` starts immediately after; and the HTTP API the daemon uses
+to flip `Rec.enable` isn't up until later still. So any API-driven daemon can
+only disable recording *after* it has already begun → the home-boot stub.
+
+Mitigations shipped here:
+- `INIT_GRACE` is short (5 s): the daemon leans on `wait_for_api` for readiness
+  instead of a fixed pre-sleep, so it disables as soon as the API answers — the
+  single biggest cut to the stub window.
+- `S99_NetState` **v2** deletes the residual home-boot stub (`clean_home_stubs`,
+  files newer than this boot only — never older game footage).
+- The daemon latches state only on a *successful* `SetRecV20`, and retries
+  otherwise, so a transient API failure can never strand a field camera disabled.
+
+### Recording-config facts (constrain any deeper fix)
+
+- `recorder` receives its record-enable over IPC (`MSG_CFG_REC_NOTIFY = 0x812`);
+  it does **not** read `rec.cfg`, so editing `rec.cfg` on disk is a no-op.
+- `router` owns `rec.cfg` under `/mnt/para`, and it is **AES-encrypted**.
+- `recorder` is **not** a `/dev/watchdog` feeder (router is), so skipping or
+  delaying `recorder` is watchdog-safe.
+- HTTP `/downloadfile/` is nginx static-serve baked into `device`, so downloads
+  work even if `recorder` never starts.
+- There is **no arbitrary-file SD web UI**: runtime files under `/mnt/sda/...`
+  go via `telnet` (`telnetd` is left running by `S25_Net`) or by pulling the
+  card; config is otherwise baked at build time.
+
+### Deferred: a firmware-level record-at-home gate (zero stub)
+
+Eliminating the stub *entirely* (while staying fail-enabled) requires deciding
+home/away **before** `recorder` starts — i.e. inside `start_app`, between
+`./device &` and `./recorder &`: bounded-wait for the home gateway MAC and launch
+`recorder` only if NOT home (a rootfs text edit, no binary patch), or byte-patch
+`recorder` to honor an `access("/mnt/para/no_record")` flag at record-start. Both
+are fail-enabled (home-only suppression; any error records). This is designed but
+**not yet hardware-validated**, and it edits the boot-critical launch path, so it
+is deliberately kept out of the shipping builds until proven on a spare camera.
+Approaches that *fail-disabled* — e.g. patching `router`'s boot notify to
+`enable=0`, which has no re-enabler — were considered and rejected.
+
+---
+
 ## 6. Toolchain (committed under `reolink-firmware-patching/`)
 
 All scripts run from WSL Ubuntu when they need Linux utilities

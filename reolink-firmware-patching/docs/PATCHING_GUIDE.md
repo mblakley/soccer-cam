@@ -345,9 +345,10 @@ self-test in Step 4, option C against any good recording.
 
 ## Updating the netstate config without re-flashing
 
-The daemon respects two runtime files on the SD card. Create them via
-the camera's SD-card management UI or any other method that puts files
-under `/mnt/sda/`:
+The daemon respects two runtime files on the SD card. There is **no
+arbitrary-file web UI** on these cameras — create them over `telnet` (`telnetd`
+is left running by `S25_Net`) or by pulling the microSD card and editing it on a
+PC (any method that places files under `/mnt/sda/` works):
 
 | file | purpose |
 |---|---|

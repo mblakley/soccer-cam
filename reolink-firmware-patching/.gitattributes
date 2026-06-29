@@ -1,0 +1,7 @@
+# Firmware build scripts, on-camera shell, and init templates MUST stay LF.
+# CRLF breaks busybox sh on the camera and bash on the WSL build host, and a
+# CRLF init script/template would bake carriage returns into /etc/init.d/*.
+*.sh                text eol=lf
+*.template          text eol=lf
+# Extensionless init scripts installed verbatim into /etc/init.d (e.g. S35_RecRecover)
+S[0-9][0-9]_*       text eol=lf
