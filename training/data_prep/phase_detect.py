@@ -613,10 +613,30 @@ for g in games:
         ht, ht_dip = min(htc, key=lambda md: abs(md[0] - dur / 2))
         sig.append("whistle")
     elif not dips and central_multis:
-        # field never clearly emptied (youth games) but there IS a central multi-whistle: trust the
-        # one nearest game centre as halftime. Gated on no-dips so games with a real dip are
-        # unaffected (they keep the dip-following-whistle / longest-dip paths below).
-        ht = min(central_multis, key=lambda m: abs(m - dur / 2))
+        # field never clearly emptied (youth games) but there ARE central multi-whistles: halftime
+        # and the 2nd-half kickoff are a PAIR of central multis a break (3-18min) apart, straddling
+        # game centre. Pick the EARLIER of the best such pair as HT (HT precedes 2H); else the
+        # earliest central multi. Gated on no-dips so games with a real dip are unaffected.
+        prov_ko = next((b for b in blasts if b >= 20), 0.0)  # first whistle ~ kickoff
+        prov_end = max(multis) if multis else off2  # last multi ~ full-time
+        pairs = [
+            (a, b)
+            for a in central_multis
+            for b in central_multis
+            if 3 * 60 <= b - a <= 18 * 60
+        ]
+        best = (
+            min(pairs, key=lambda p: abs((p[0] - prov_ko) - (prov_end - p[1])))
+            if pairs
+            else None
+        )
+        if best and abs((best[0] - prov_ko) - (prov_end - best[1])) < 5 * 60:
+            # a SYMMETRIC HT/2H pair (1H = HT-KO ~ 2H = END-2Hkick) => confident HT = its earlier
+            # whistle. If the best pair is still asymmetric, only one of HT/2H was detected as a
+            # multi (the other wind-masked), so a pair is unreliable -> use the central multi.
+            ht = best[0]
+        else:
+            ht = min(central_multis, key=lambda m: abs(m - dur / 2))
         ht_dip = (ht, ht)
         sig.append("whistle")
     if ht is None:  # fallback: longest dip itself, snapped to any nearby whistle
