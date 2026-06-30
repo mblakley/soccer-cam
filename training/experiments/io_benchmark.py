@@ -170,7 +170,7 @@ def _dummy_loss(out):
             if o.is_floating_point():
                 m = o.mean()
                 total = m if total is None else total + m
-        elif isinstance(o, (list, tuple)):
+        elif isinstance(o, list | tuple):
             for x in o:
                 collect(x)
         elif isinstance(o, dict):
