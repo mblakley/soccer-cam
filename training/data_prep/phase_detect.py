@@ -761,6 +761,15 @@ for g in games:
     # (a lone whistle a few seconds before the ball moves) that put 05.30/05.31 2H ~50-80s early.
     MIN_BREAK, MAX_BREAK = 3 * 60, 18 * 60
     s2k = [k for k in kicks if ht + MIN_BREAK <= k[0] <= ht + MAX_BREAK and kickoff(k)]
+    # a no-whistle restart immediately followed (<=75s) by a whistled full kickoff = the first was a
+    # warm-up restart and the whistle marks the real 2H kickoff -- prefer the whistled one (05.27 2H:
+    # no-whistle restart 54:04 then whistle+full+center 55:04, real 2H 55:04). Mirrors the KO nxt_ko
+    # rule. Only reorders within the break window; if no whistled kickoff follows, s2k[0] is unchanged.
+    s2k0 = s2k[0] if s2k else None
+    if s2k0 is not None and not s2k0[1]:
+        nxt2 = next((k for k in s2k if k[1] and s2k0[0] < k[0] <= s2k0[0] + 75), None)
+        if nxt2 is not None:
+            s2k0 = nxt2
     w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
     # the 2nd-half kickoff WHISTLE = the first whistle once the field has refilled (HT dip offset on2).
     # When the ball model misses the real 2H restart (no center restart at the kickoff), this whistle
@@ -768,11 +777,9 @@ for g in games:
     # outrank it. So trust a ball-restart kick only if it is whistle-corroborated, or there is no
     # refill whistle, or the kick is not far (<=90s) after that whistle.
     w2_refill = next((b for b in w2 if b >= on2 - 30), None)
-    use_s2k = bool(
-        s2k and (s2k[0][1] or w2_refill is None or s2k[0][0] <= w2_refill + 90)
-    )
+    use_s2k = bool(s2k0 and (s2k0[1] or w2_refill is None or s2k0[0] <= w2_refill + 90))
     if use_s2k:
-        sh = s2k[0][0]
+        sh = s2k0[0]
         sig.append("kick")
     elif w2_refill is not None:
         sh = w2_refill

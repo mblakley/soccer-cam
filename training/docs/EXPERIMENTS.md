@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-08: 2H prefers the whistled kickoff over a preceding warm-up restart (2026-06-30)
+
+**Hypothesis (walking 05.27 with the worklist):** 05.27 2H missed by -60s -- the detector picked a
+no-whistle full restart at 54:04, but the real 2H kickoff (human GT) is 60s later at 55:04, a
+full+center restart with a tightly-coupled whistle (ball 55:03, whistle 55:04). The 2H picker took
+the FIRST kickoff()-passing restart in the break window, so the warm-up restart beat the whistled
+kickoff right after it. The KO path already handles this (nxt_ko: a no-whistle restart immediately
+followed by a whistled kickoff -> trust the whistled one); the 2H path lacked it.
+**Method:** before the 2H decision, if the first break-window kickoff is no-whistle, look <=75s ahead
+for a whistled full kickoff and prefer it. Isolated to the 2H selection; KO/HT/END untouched.
+**Result (reolink, vs human GT):** 05.27 2H -60->**+0s**. Reolink within-10s 50->**51/63 (79->81%)**:
+2H 12->13/18, KO/HT/END unchanged, median 1.3->1.1s. No regressions.
+**Conclusion:** the warm-up-restart-then-whistled-kickoff pattern needed the same nxt_ko treatment in
+the 2H path as in KO. Does NOT help 05.28 (real 2H 49:38 has NO detected ball restart and a stray
+whistle 92s before it -- the EXP-PHASE-01 ball-in-play gap, still open).
+
+---
+
 ## EXP-PHASE-07: 06.08 KO/END — under-counted opening kickoff + collapsed final whistle (2026-06-30)
 
 **Hypothesis (from walking 06.08 with Mark):** 06.08 (full, non-truncated) missed both KO (+163s)
