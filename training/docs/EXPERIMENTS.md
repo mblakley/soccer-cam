@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-10: remaining two full-file misses are within-tolerance edge cases (2026-06-30)
+
+After EXP-PHASE-07/08/09 the only full-file (non-truncated) reolink misses left are both small and
+both within Mark's 3-min bound; chased both, neither warrants a risky change now.
+
+**06.06-S END +48s (whistle false positives).** GT END 80:15 is a real, loud, pitch-stable whistle
+(verified by re-decoding the audio: f0 locked at 3575-3618 Hz, loudness up to ~30-37x the 75th-pct,
+tonality 0.78-0.84). Mark confirmed by ear there is NO whistle at the two later detected "multis"
+(80:46, 81:03). Re-decode shows those are rising/falling-pitch CROWD/VOICE sounds (80:46 glides
+2842->3230 Hz, 80:55 sweeps up then down) at only ~4-12x p75 -- the STFT's +/-300 Hz pitch band
+catches part of the glide, so `whistle_blasts` fires a false multi, and the END "last late multi"
+rule latches onto post-game crowd noise. **Clean discriminators: pitch STABILITY (a ref whistle
+holds one pitch; a cheer glides) and LOUDNESS (real is ~3-8x louder).** Not fixed: it needs a
+pitch-stability/loudness filter inside `whistle_blasts`, which changes global blast detection and
+requires re-decoding every game's audio + re-verifying the 52/63 -- real regression risk for a miss
+already inside tolerance. Logged as the next whistle-precision improvement.
+
+**06.10 KO +24s (upload trimmed exactly to the kickoff).** Mark confirmed the YouTube/trimmed upload
+starts right at the kick (field full of players from frame 0; GT KO = 0:00 trimmed). There is no
+pre-kick signature (no static-center-ball restart, no kickoff whistle in-frame) so the detector
+latches onto the first in-play foul whistle at 0:24. A guard (`ko_sym<=15` + field-full-at-frame-0
+-> KO=0:00) both missed 06.10 (its ko_sym is ~18s) and regressed another game's KO (13->12/15), so
+it was reverted. Left as a within-tolerance limitation; not truncation (the kickoff IS captured, at
+frame 0) so it is not flagged.
+
+**State:** reolink within-10s **52/63 (83%)**, median **1.1s**; KO 13/15, HT 14/18, 2H 14/18, END
+11/12. All large full-file misses fixed (EXP-PHASE-07/08/09). The remaining HT/2H reolink misses are
+all in truncated games (06.07 BU15/Lakefront, West Seneca, 03.21) or dahua (no whistle).
+
+---
+
 ## EXP-PHASE-09: 2H anchors to the FULL-field refill whistle (closes 05.28) (2026-06-30)
 
 **Hypothesis (verified on cached signals):** 05.28 2H -92s. The 2H whistle picker took the first
