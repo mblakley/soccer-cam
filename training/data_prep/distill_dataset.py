@@ -28,8 +28,10 @@ depth **between the polygon's two edge-curves**: interpolate the far-edge ``y_fa
 ``y_near(x)`` at the ball's x and take ``(y - y_far(x)) / (y_near(x) - y_far(x))`` (0 = far touchline,
 1 = near). A constant-depth boundary is then a curve parallel to the far touchline. The far edge is
 picked as the 5 polygon points higher in the (corrected, upright) frame, so this is correct
-regardless of the polygon's point ordering and on the flipped early-Dahua games. ``far_frac`` is
-calibrated to where the human far labels actually sit (~15-20 % of field depth).
+regardless of the polygon's point ordering and on the flipped early-Dahua games. **How much** of that
+depth counts as far is derived per game from the polygon's **squish** (``far_frac_from_squish``: the
+far touchline's pixel-foreshortening) — a less-squished close field reserves almost nothing as far
+(trust AutoCam), a more-squished distant field reserves more for the human GT.
 
 Inputs per game come from the per-video JSONL store on F: (canonical per DECISIONS.md 2026-06-26):
 ``autocam_detections.jsonl`` (``{seg,f,x,y,conf}``, one row/candidate), ``autocam_viewport.jsonl``
@@ -171,6 +173,36 @@ def curve_depth(
     if abs(span) < 1.0:
         return 0.5
     return float(np.clip((y - yf) / span, 0.0, 1.0))
+
+
+def far_frac_from_squish(
+    far_edge: np.ndarray,
+    near_edge: np.ndarray,
+    *,
+    size_frac: float = 0.55,
+    cap: float = 0.45,
+) -> tuple[float, float]:
+    """Derive **how much** of the field counts as far from the polygon's foreshortening (squish).
+
+    The far touchline is squished to ``sq = W_far / W_near`` of the near touchline's pixel length —
+    that ratio *is* the perspective, and apparent ball size scales with the local field width. A ball
+    is "far" once its apparent size drops below ``size_frac`` × the near-edge size; with apparent size
+    ~ linear in curve-depth, that boundary is at depth ``(size_frac - sq) / (1 - sq)``. So a
+    **less-squished** (close) field gets ``far_frac ≈ 0`` (trust AutoCam almost everywhere) and a
+    **more-squished** (distant) field reserves a larger far band for the human GT — self-calibrating
+    per game from the polygon, and it leans the AutoCam signal toward the clean close games.
+
+    Returns ``(far_frac, sq)``. ``size_frac`` is the one physical knob ("a ball smaller than this
+    fraction of the near-edge ball is far"); ``cap`` bounds the reserve.
+    """
+    w_far = float(far_edge[:, 0].max() - far_edge[:, 0].min())
+    w_near = float(near_edge[:, 0].max() - near_edge[:, 0].min())
+    if w_near <= 1.0:
+        return 0.0, 1.0
+    sq = w_far / w_near
+    if sq >= size_frac:
+        return 0.0, sq
+    return float(min(cap, (size_frac - sq) / max(1e-3, 1.0 - sq))), sq
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +373,8 @@ def build_distill_games(
     exclude: dict | None = None,
     base_stride: int = 4,
     dense_stride: int = 2,
-    far_frac: float = 0.22,
+    far_frac: float | None = None,
+    size_frac: float = 0.55,
     frozen_vel_px: float = 1.5,
     frozen_min_run: int = 20,
     gate_mult: float = 4.0,
@@ -392,12 +425,16 @@ def build_distill_games(
         )
         n_sel = len(teacher)
 
-        # 2. far band → drop AutoCam (human GT owns it); keep non-far
+        # 2. far band → drop AutoCam (human GT owns it); keep non-far.
+        # far_frac is per-game from the polygon's squish unless explicitly overridden.
         if far_edge is not None:
-            non_far, far_frames = split_far(
-                teacher, far_edge, near_edge, far_frac=far_frac
-            )
+            if far_frac is None:
+                ff, sq = far_frac_from_squish(far_edge, near_edge, size_frac=size_frac)
+            else:
+                ff, sq = far_frac, float("nan")
+            non_far, far_frames = split_far(teacher, far_edge, near_edge, far_frac=ff)
         else:
+            ff, sq = 0.0, float("nan")
             non_far, far_frames = dict(teacher), set()
         n_far = len(far_frames)
 
@@ -451,6 +488,6 @@ def build_distill_games(
                 f"{gid} [{gc.get('camera', '?')}/{gc.get('team', '?')}]: "
                 f"sel {n_sel} -> far-drop {n_far}, frozen {n_frozen} -> subsample {len(kept)} "
                 f"+ human {n_human} (novis {len(human_novis)}) = {len(labels)} labels"
-                f"  far<{far_frac:.0%} of field depth"
+                f"  squish={sq:.2f} -> far<{ff:.0%} of field depth"
             )
     return games

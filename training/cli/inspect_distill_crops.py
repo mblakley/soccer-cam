@@ -172,7 +172,12 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=6)
     ap.add_argument("--sigma", type=float, default=4.0)
-    ap.add_argument("--far-frac", type=float, default=0.22)
+    ap.add_argument(
+        "--far-frac",
+        type=float,
+        default=None,
+        help="override the per-game squish-derived far fraction (default: auto)",
+    )
     ap.add_argument("--target-width", type=int, default=None)
     args = ap.parse_args()
 
@@ -210,6 +215,12 @@ def main() -> None:
         offsets = dd.seg_offsets(gc["segments"])
         geom = build_field_geometry(np.asarray(poly, float))
         far_edge, near_edge = dd.field_edges(poly)
+        # far_frac per-game from the polygon squish (unless overridden on the CLI)
+        if args.far_frac is None:
+            ff, sq = dd.far_frac_from_squish(far_edge, near_edge)
+        else:
+            ff, sq = args.far_frac, float("nan")
+        print(f"{gid}: squish={sq:.2f} -> far_frac={ff:.0%}")
         dets = dd.load_detections(gc["detections"], offsets)
         vps = dd.load_viewport(gc["viewport"], offsets)
         human, novis = (
@@ -218,9 +229,7 @@ def main() -> None:
             else ({}, set())
         )
         teacher = dd.select_teacher(dets, vps, geom)
-        non_far, far_frames = dd.split_far(
-            teacher, far_edge, near_edge, far_frac=args.far_frac
-        )
+        non_far, far_frames = dd.split_far(teacher, far_edge, near_edge, far_frac=ff)
         non_far, _ = dd.drop_frozen_runs(non_far)
         kept = dd.subsample(non_far)
         label_xy = dict(kept)
@@ -257,7 +266,7 @@ def main() -> None:
         cxs = np.linspace(bx_lo, bx_hi, 60)
         yfs = np.interp(cxs, far_edge[:, 0], far_edge[:, 1])
         yns = np.interp(cxs, near_edge[:, 0], near_edge[:, 1])
-        ybnd = yfs + args.far_frac * (yns - yfs)
+        ybnd = yfs + ff * (yns - yfs)
         far_curve = warp.points(np.column_stack([cxs, ybnd]))
 
         want = {f for f, _ in samples}
