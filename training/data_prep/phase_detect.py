@@ -784,10 +784,24 @@ for g in games:
         sh = ht + 8 * 60
         sig.append("order")
 
-    # END: the last late multi-whistle (full-time) after 2H; else last-play.
+    # END: the full-time whistle. Prefer a late multi-blow; but the final whistle often collapses to a
+    # SINGLE blast ("twit..twit.....tweeeeeeeeet" merges into one event) and players can stay on the
+    # field after it (so the player-curve last-play `off2` overshoots toward end-of-file). The final
+    # whistle is the LAST whistle of the game -- refs don't whistle after full-time -- so when no late
+    # multi registered, anchor END to the last blast in the valid 2H window (06.08 END: GT 93:57, one
+    # merged final-whistle blast at 93:59, players stayed on -> off2 sat at 99:12 = end-of-file, +315s).
+    end_blasts = [b for b in blasts if sh + 15 * 60 <= b <= off2 + 240]
     if multis:
         late = [m for m in multis if m >= sh + 15 * 60 and m <= off2 + 240]
-        end = late[-1] if late else (snap(blasts, off2, 120) or off2)
+        end = (
+            late[-1]
+            if late
+            else (end_blasts[-1] if end_blasts else (snap(blasts, off2, 120) or off2))
+        )
+        if "whistle" not in sig:
+            sig.append("whistle")
+    elif end_blasts:
+        end = end_blasts[-1]
         if "whistle" not in sig:
             sig.append("whistle")
     else:
@@ -800,9 +814,27 @@ for g in games:
     # during warm-up, well before the real kickoff).
     firstw = next((b for b in blasts if b >= 5), None) if blasts else None
     ko_sym = max(0.0, ht - (end - sh))
+    # kickoff candidates before halftime: full-field restarts OR center restarts with a TIGHTLY
+    # coupled whistle (<=3s) AND a MODERATE field (>=0.4x this game's normal crowd). A whistle that
+    # fires the instant a center static ball moves is a kickoff even when the in-field count is
+    # under-detected at the opening kickoff (06.08 KO at 1:59: real center restart 1:57 + whistle 1:59
+    # had only 5 in-field detections < the full-field gate, so it was dropped and KO jumped to a 4:42
+    # warm-up restart). The 0.4x floor still rejects an early warm-up whistle over a near-empty field
+    # (05.31 Spencerport: a coincidental tight whistle at 0:30 over just 2 players is NOT the kickoff;
+    # the real KO is the full restart at 1:45).
     prek = [
-        k for k in kicks if k[0] < ht - 60 and k[2]
-    ]  # full-field kicks before halftime
+        k
+        for k in kicks
+        if k[0] < ht - 60
+        and (
+            k[2]
+            or (
+                k[4] is not None
+                and abs(k[4] - k[3]) <= 3.0
+                and pcount_at(k[3]) >= 0.4 * med_play
+            )
+        )
+    ]
     if prek:
         kt, kw = prek[0][0], prek[0][1]
         # a whistle+full kickoff within ~75s AFTER the first full restart = the warm-up restart was

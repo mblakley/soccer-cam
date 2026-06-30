@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-07: 06.08 KO/END — under-counted opening kickoff + collapsed final whistle (2026-06-30)
+
+**Hypothesis (from walking 06.08 with Mark):** 06.08 (full, non-truncated) missed both KO (+163s)
+and END (+315s) while HT/2H were already +0. Mark confirmed from YouTube: the real kickoff is a
+center static-ball restart (1:57) + whistle (1:59), and the final whistle at 93:57 is a clear
+multi ("twit..twit.....tweeeeeeeeet") with players staying on the field afterward.
+**Root cause (verified on cached signals, instant re-fuse):** (1) **KO** — the 1:59 kickoff was a
+CENTER restart with a tightly-coupled whistle (1.8s) but only **5** in-field detections, under the
+0.6x-median full-field gate, so it was dropped from `prek` and KO jumped to a 4:42 warm-up restart.
+(2) **END** — the final multi-blow collapsed into a **single** cached blast (5639.0s = 93:59; the
+whole game had only one detected "multi", at 66:22, where two blasts happened to land 0.4s apart),
+and because players stay on the field after full-time the player-curve last-play `off2` sat at
+end-of-file (99:12). END only anchored to multis -> fell through to `off2` = +315s.
+**Method:** (1) include in `prek` a center restart with a whistle <=3s AND a MODERATE field
+(>=0.4x median crowd) — accepts the under-counted real kickoff but still rejects an early warm-up
+whistle over a near-empty field (05.31 Spencerport: a coincidental tight whistle at 0:30 over just
+2 players is NOT the kickoff; real KO is the full restart at 1:45). (2) END: when no late multi
+registers, anchor to the LAST whistle blast in the valid 2H window (refs don't whistle after
+full-time, so the last blast IS the collapsed final whistle). Both changes isolated to the KO/END
+branches; HT/2H/sanity-gate untouched.
+**Result (reolink, vs human GT):** 06.08 KO +163->**-1s**, END +315->**+1s** (HT/2H stayed +0; all
+four now within 1s). 05.31 Spencerport KO restored (warm-up regression caught + gated: 0:30 ->
+**2:53-8s**). Reolink within-10s **48->50/63 (76->79%)**: KO 12->13/15, END 10->11/12, HT/2H
+unchanged, median 1.3s. Zero protected-boundary regressions.
+**Conclusion:** the full-field gate must flex for the opening kickoff (corroborated by a tight
+whistle), and END must fall back from "multi" to "last whistle of the game" when the final
+multi-blow merges into one blast. Remaining full-file reolink misses: 06.10 KO +24, the youth
+warm-up-on-field 2H gap (05.28, EXP-PHASE-01), and one large KO outlier (max 335s).
+
+---
+
 ## EXP-PHASE-06: anchor HT to the dip-preceding whistle + whistle-only 2H kickoff (2026-06-30)
 
 **Hypothesis (Mark):** the HT-selection family (05.27/05.28) and 06.01 2H miss even though the
