@@ -166,6 +166,17 @@ def main():
             "crops are unaffected. K=0 leaves training byte-identical to the curve."
         ),
     )
+    ap.add_argument(
+        "--base",
+        type=int,
+        default=24,
+        help="HeatmapNet base channel width (24 = the distill baseline capacity).",
+    )
+    ap.add_argument(
+        "--runs",
+        default=None,
+        help="checkpoint dir (default <out>/runs). Set per experiment to avoid clobbering.",
+    )
     args = ap.parse_args()
 
     import torch
@@ -236,9 +247,9 @@ def main():
     dl = DataLoader(
         tr, batch_size=args.batch, shuffle=True, num_workers=4, drop_last=True
     )
-    model = HeatmapNet(in_frames=3, in_ch_per_frame=1).to(dev)
+    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    runs = Path("G:/v4bench/runs/hm_v4")
+    runs = Path(args.runs) if args.runs else (out / "runs")
     runs.mkdir(parents=True, exist_ok=True)
     best = -1.0
     for ep in range(args.epochs):

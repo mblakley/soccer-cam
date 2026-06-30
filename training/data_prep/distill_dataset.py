@@ -1,43 +1,28 @@
-"""Build the distillation ``games`` list for :func:`build_heatmap_crops` from AutoCam's
-re-run ball detections, split by field-relative depth.
+"""Build the distillation ``games`` list for :func:`build_heatmap_crops` — per-frame **ball** labels
+to train our homegrown ball *detector* (not a viewport model; the viewport is produced downstream by
+the existing tracker consuming our detector's detections).
 
-**Strategy (locked with Mark, 2026-06-30).** Our homegrown detector is already *better than
-AutoCam on far balls* — that is what the ~thousands of human far-ball labels bought us. It is
-*worse on near/normal balls*, because it only ever trained on the sparse far distribution (the
-"dim-ball" problem: the ball is in its candidate set but ranked ~3rd). So:
+**Teacher signal (validated with Mark, 2026-06-30).** The label each frame is the ball position from
+the **existing tracker** (``world_model.reranker.track_ball``) run over AutoCam's per-frame detection
+candidates, anchored by the human GT, and **snapped to the real detection the tracker is following**
+(the actual ball pixel that frame — we train a detector, so the target must be the ball, not a
+Kalman-smoothed estimate). Frames with no detection backing the track (coasted / guessed) are
+dropped; ``not_visible`` human frames are emitted with no ball.
 
-* **Non-far band → distill AutoCam.** AutoCam is reliable on near/normal balls; its dense per-frame
-  detections teach our detector to rank the easy ball #1.
-* **Far band → human ground truth only.** AutoCam loses far balls, so we do *not* distill it there
-  — the human far labels (``ball``) own the far band, and ``not_visible`` frames (no findable ball)
-  override any spurious AutoCam pick. This is what *preserves* our far advantage.
-* **Preserve far by composition, not loss-weighting** (loss up-weighting was tried — EXP-DIST-13/14
-  — and hurt): subsample the huge near-ball mass, keep every human far label.
-
-**Teacher label per non-far frame = viewport-gated nearest candidate.** AutoCam's raw top-conf
-candidate is the ball only ~13.5 % of the time on hard frames (off-field false positives win), but
-AutoCam's *viewport* (its own internally-selected, smoothed ball) tells us *which* candidate is the
-ball. So we pick the raw detection candidate nearest the viewport (within a depth-scaled gate, and
-in the field) — recovering AutoCam's selection at the precise, **de-lagged** raw-detection location,
-with detector confidence available for filtering. Frames where the viewport has no nearby
-supporting candidate (AutoCam parked / lost) get no label.
-
-**Far is field-relative and follows the touchline curve** (the camera is on a movable tripod, and the
-far touchline bows up at the sides in the dewarped band — a flat horizontal cut is wrong). We measure
-depth **between the polygon's two edge-curves**: interpolate the far-edge ``y_far(x)`` and near-edge
-``y_near(x)`` at the ball's x and take ``(y - y_far(x)) / (y_near(x) - y_far(x))`` (0 = far touchline,
-1 = near). A constant-depth boundary is then a curve parallel to the far touchline. The far edge is
-picked as the 5 polygon points higher in the (corrected, upright) frame, so this is correct
-regardless of the polygon's point ordering and on the flipped early-Dahua games. **How much** of that
-depth counts as far is derived per game from the polygon's **squish** (``far_frac_from_squish``: the
-far touchline's pixel-foreshortening) — a less-squished close field reserves almost nothing as far
-(trust AutoCam), a more-squished distant field reserves more for the human GT.
+Why this and not AutoCam's viewport or a raw argmax: measured on 1,880 human far-GT balls (the frames
+AutoCam loses), the existing tracker over AutoCam detections lands within **R15 m 0.77** of the GT
+(median 2.1 m) vs AutoCam's own viewport at **0.15** (median 41 m), and the ball is in the detection
+candidate set 0.97 of the time. So the detections are good and the existing tracker turns them into a
+ball track that beats AutoCam — the distillation just needs our detector to reproduce those
+detections. Human ``ball`` frames override (anchoring through AutoCam's failures, so far balls are
+trained from GT); every human label is kept, the dense tracked frames are subsampled.
 
 Inputs per game come from the per-video JSONL store on F: (canonical per DECISIONS.md 2026-06-26):
-``autocam_detections.jsonl`` (``{seg,f,x,y,conf}``, one row/candidate), ``autocam_viewport.jsonl``
-(``{seg,f,x,y}``), ``game.json`` (``field_polygon``, ``segments[].global_offset``, ``video_rotation``)
-and optional ``ball_labels.jsonl`` (``{seg,f,a,p}``, ``a in {ball,not_visible,out_of_play}``). All
-coordinates are source px on the same global-frame axis (``global = segment.global_offset + f``).
+``autocam_detections.jsonl`` (``{seg,f,x,y,conf}``, one row/candidate), ``game.json``
+(``field_polygon``, ``segments[].global_offset``, ``video_rotation``) and optional ``ball_labels.jsonl``
+(``{seg,f,a,p}``, ``a in {ball,not_visible,out_of_play}``). All coordinates are source px on the same
+global-frame axis (``global = segment.global_offset + f``). ``field_edges`` / ``curve_depth`` remain
+for the far-vs-near *evaluation* split (report where we beat AutoCam), not the teacher.
 """
 
 from __future__ import annotations
@@ -363,6 +348,88 @@ def _assert_no_eval_leak(labels: dict, game_id: str, exclude: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Teacher track = the EXISTING tracker over AutoCam detections + human GT override
+# ---------------------------------------------------------------------------
+
+
+def teacher_track(
+    detections: dict[int, list[tuple]],
+    polygon,
+    *,
+    geom=None,
+    human_balls: dict[int, tuple[float, float]] | None = None,
+    human_novis: set[int] | None = None,
+    conf_floor: float = 0.06,
+    backing_px: float = 45.0,
+) -> dict[int, tuple[float, float]]:
+    """Per-frame ball labels for distillation = the **existing** tracker (``world_model.track_ball``)
+    run over AutoCam's per-frame detection candidates, anchored by the human GT, kept only where a
+    real detection backs the track (so coasted / guessed frames are dropped).
+
+    This is the validated teacher signal: the existing tracker over AutoCam detections lands within
+    R15 m of the human far-GT **0.77** of the time (median 2.1 m) vs AutoCam's own viewport at 0.15
+    (median 41 m). Human ``ball`` frames override (anchoring the track through AutoCam's failures);
+    ``not_visible`` frames are emitted as empty (no ball). Needs a **valid** field geometry (the
+    meters-smooth tracker); returns ``{}`` for neutral geometry.
+    """
+    from training.world_model.geometry import build_field_geometry
+    from training.world_model.reranker import track_ball
+    from training.world_model.tbd import Candidate
+
+    human_balls = human_balls or {}
+    human_novis = human_novis or set()
+    if geom is None and polygon is not None:
+        geom = build_field_geometry(np.asarray(polygon, dtype=np.float64))
+    if geom is None or not getattr(geom, "valid", False):
+        return {}
+
+    gframes = sorted(set(detections) | set(human_balls))
+    frames: list[list] = []
+    for g in gframes:
+        if g in human_balls:
+            frames.append(
+                [Candidate(x=human_balls[g][0], y=human_balls[g][1], score=1.0)]
+            )
+        elif g in human_novis:
+            frames.append([])
+        else:
+            frames.append(
+                [
+                    Candidate(x=x, y=y, score=max(c, 1e-3))
+                    for (x, y, c) in detections.get(g, [])
+                    if c >= conf_floor
+                ]
+            )
+    gaps = [
+        (gframes[i + 1] - gframes[i]) if i + 1 < len(gframes) else 4
+        for i in range(len(gframes))
+    ]
+    track = track_ball(frames, geom, frame_gaps=gaps)
+
+    out: dict[int, tuple[float, float]] = {}
+    b2 = backing_px * backing_px
+    for i, g in enumerate(gframes):
+        if g in human_novis:
+            continue
+        if g in human_balls:
+            out[g] = human_balls[g]
+            continue
+        if i not in track:
+            continue
+        tx, ty = track[i]
+        # snap the label to the REAL detection the tracker is following (the actual ball pixel that
+        # frame), not the Kalman-smoothed position — we train a ball DETECTOR, so the target must be
+        # the ball, not a smoothed estimate. Drop the frame if no detection backs the track (coasted).
+        cands = detections.get(g, [])
+        if not cands:
+            continue
+        cx, cy, _ = min(cands, key=lambda c: (c[0] - tx) ** 2 + (c[1] - ty) ** 2)
+        if (cx - tx) ** 2 + (cy - ty) ** 2 <= b2:
+            out[g] = (cx, cy)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Top-level builder
 # ---------------------------------------------------------------------------
 
@@ -373,28 +440,18 @@ def build_distill_games(
     exclude: dict | None = None,
     base_stride: int = 4,
     dense_stride: int = 2,
-    far_frac: float | None = None,
-    size_frac: float = 0.55,
-    frozen_vel_px: float = 1.5,
-    frozen_min_run: int = 20,
-    gate_mult: float = 4.0,
-    gate_floor_px: float = 50.0,
-    max_nonfar_per_game: int | None = None,
+    conf_floor: float = 0.06,
+    backing_px: float = 45.0,
     report: bool = True,
 ) -> list[dict]:
     """Turn per-game configs into the ``games`` list consumed by ``build_heatmap_crops``.
 
-    Each ``game_config``: ``{game_id, video, segments, polygon?, detections, viewport,
-    human_labels?, split?, camera?, team?, target_width?}`` where ``segments`` is the ``game.json``
-    ``segments`` list, ``detections``/``viewport``/``human_labels`` are sidecar paths.
-
-    Each output game: ``{game_id, video, polygon, labels:{frame:(x,y)}, split, target_width?,
-    video_rotation?}``. ``labels`` = subsampled non-far AutoCam teacher + every human far ``ball``,
-    with ``not_visible`` frames removed. Human labels win on conflict and are exempt from the far
-    drop and the frozen/subsample filters.
+    Each ``game_config``: ``{game_id, video, segments, polygon, detections, human_labels?, split?,
+    camera?, team?, target_width?, video_rotation?}`` (``detections``/``human_labels`` are sidecar
+    paths). The per-frame teacher = :func:`teacher_track` (existing tracker over AutoCam detections,
+    human-GT-anchored, detection-backed); human ``ball`` frames are kept in full, the rest are
+    subsampled. Output game: ``{game_id, video, polygon, labels:{frame:(x,y)}, split, ...}``.
     """
-    from training.world_model.geometry import build_field_geometry
-
     exclude = exclude or {"game_ids": set(), "frame_ranges": {}}
     games: list[dict] = []
     for gc in game_configs:
@@ -406,68 +463,39 @@ def build_distill_games(
 
         offsets = seg_offsets(gc["segments"])
         polygon = gc.get("polygon")
-        geom = (
-            build_field_geometry(np.asarray(polygon, dtype=np.float64))
-            if polygon
-            else None
-        )
-        far_edge, near_edge = field_edges(polygon) if polygon else (None, None)
-
         detections = load_detections(gc["detections"], offsets)
-        viewport = load_viewport(gc["viewport"], offsets)
         human_balls, human_novis = ({}, set())
         if gc.get("human_labels"):
             human_balls, human_novis = load_human_labels(gc["human_labels"], offsets)
 
-        # 1. recover AutoCam's selected ball at the raw-detection location (de-lagged)
-        teacher = select_teacher(
-            detections, viewport, geom, gate_mult=gate_mult, gate_floor_px=gate_floor_px
+        track = teacher_track(
+            detections,
+            polygon,
+            human_balls=human_balls,
+            human_novis=human_novis,
+            conf_floor=conf_floor,
+            backing_px=backing_px,
         )
-        n_sel = len(teacher)
+        if not track:
+            if report:
+                print(f"{gid}: 0 teacher labels (neutral geometry?) — skipped")
+            continue
 
-        # 2. far band → drop AutoCam (human GT owns it); keep non-far.
-        # far_frac is per-game from the polygon's squish unless explicitly overridden.
-        if far_edge is not None:
-            if far_frac is None:
-                ff, sq = far_frac_from_squish(far_edge, near_edge, size_frac=size_frac)
-            else:
-                ff, sq = far_frac, float("nan")
-            non_far, far_frames = split_far(teacher, far_edge, near_edge, far_frac=ff)
-        else:
-            ff, sq = 0.0, float("nan")
-            non_far, far_frames = dict(teacher), set()
-        n_far = len(far_frames)
-
-        # 3. drop AutoCam-lost holds, then strip excluded eval frames BEFORE subsampling
-        non_far, n_frozen = drop_frozen_runs(
-            non_far, vel_px=frozen_vel_px, min_run=frozen_min_run
-        )
+        # strip held-out eval frames before subsampling
         for lo, hi in exclude.get("frame_ranges", {}).get(gid, []):
-            non_far = {f: xy for f, xy in non_far.items() if not (lo <= f <= hi)}
+            track = {f: xy for f, xy in track.items() if not (lo <= f <= hi)}
 
-        # 4. subsample the near mass (balance lever), optional hard cap per game
-        kept = subsample(non_far, base_stride=base_stride, dense_stride=dense_stride)
-        if max_nonfar_per_game and len(kept) > max_nonfar_per_game:
-            keep_frames = set(
-                sorted(kept)[:: max(1, len(kept) // max_nonfar_per_game)][
-                    :max_nonfar_per_game
-                ]
-            )
-            kept = {f: xy for f, xy in kept.items() if f in keep_frames}
-
-        # 5. merge human far GT: ball wins on conflict & is exempt from filters; not_visible removes
+        # keep every human GT label; subsample the (dense) tracked frames
+        human_frames = set(human_balls)
+        auto = {f: xy for f, xy in track.items() if f not in human_frames}
+        kept = subsample(auto, base_stride=base_stride, dense_stride=dense_stride)
         labels = dict(kept)
-        labels.update(human_balls)
-        for g in human_novis:
-            labels.pop(g, None)
-        # never let a human-labeled eval frame leak either
-        for lo, hi in exclude.get("frame_ranges", {}).get(gid, []):
-            labels = {f: xy for f, xy in labels.items() if not (lo <= f <= hi)}
+        labels.update({f: track[f] for f in human_frames if f in track})
 
         _assert_no_eval_leak(labels, gid, exclude)
         if not labels:
             if report:
-                print(f"{gid}: 0 labels after filtering — skipped")
+                print(f"{gid}: 0 labels — skipped")
             continue
 
         out = {
@@ -483,11 +511,9 @@ def build_distill_games(
             out["video_rotation"] = gc["video_rotation"]
         games.append(out)
         if report:
-            n_human = len(human_balls)
             print(
                 f"{gid} [{gc.get('camera', '?')}/{gc.get('team', '?')}]: "
-                f"sel {n_sel} -> far-drop {n_far}, frozen {n_frozen} -> subsample {len(kept)} "
-                f"+ human {n_human} (novis {len(human_novis)}) = {len(labels)} labels"
-                f"  squish={sq:.2f} -> far<{ff:.0%} of field depth"
+                f"track {len(track)} (human {len(human_balls)}) -> "
+                f"subsample {len(kept)} + human = {len(labels)} labels"
             )
     return games
