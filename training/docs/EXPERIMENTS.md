@@ -21,6 +21,17 @@ pitch-stability/loudness filter inside `whistle_blasts`, which changes global bl
 requires re-decoding every game's audio + re-verifying the 52/63 -- real regression risk for a miss
 already inside tolerance. Logged as the next whistle-precision improvement.
 
+*Tried (Mark's suggestion): wind-noise reduction as a pre-filter (PR #77 `experiment/wind-noise-
+reduction`).* Re-decoded 06.06-S at 16 kHz and ran the whistle STFT on the original vs `afftdn=nf=-25`,
+`hp120+afftdn`, `afftdn=nr=25:nf=-30:tn=1` (tracked), and `hp120+afftdn_tracked`. **Negative result:**
+every afftdn variant keeps the real 80:15 whistle BUT leaves the 80:51/80:55/81:03 gust FPs intact
+(identical end-window blasts), and the tracked variant ADDS blasts (23->31 multis). afftdn removes a
+broadband noise FLOOR; these FPs are a TONAL transient (a gust resonating through the mic at ~3.4 kHz),
+which spectral denoise is designed to preserve -- consistent with WIND_NOISE.md (afftdn shaves only
+~0.7-4.6 dB off the gust; the `noisereduce` hybrid, not on the box, is "modest" too). Conclusion: wind
+denoise is the wrong tool for tonal-gust whistle FPs; the discriminator must be pitch-stability +
+loudness inside `whistle_blasts`, not audio pre-cleaning.
+
 **06.10 KO +24s (upload trimmed exactly to the kickoff).** Mark confirmed the YouTube/trimmed upload
 starts right at the kick (field full of players from frame 0; GT KO = 0:00 trimmed). There is no
 pre-kick signature (no static-center-ball restart, no kickoff whistle in-frame) so the detector
