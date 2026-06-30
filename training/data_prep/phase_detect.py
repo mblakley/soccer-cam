@@ -254,7 +254,7 @@ def whistle_blasts(path):
     c = av.open(path)
     if not c.streams.audio:
         c.close()
-        return None, None, 0
+        return [], [], 0  # no audio stream (some dahua combined videos) -> no whistles
     sr = c.streams.audio[0].rate or 44100
     if sr < 9000:
         c.close()
@@ -569,6 +569,8 @@ for g in games:
             },
             open(cpath, "w", encoding="utf-8"),
         )
+    blasts = blasts or []  # guard no-audio games (cache may hold null from older runs)
+    multis = multis or []
     seg = segment(ts, cnt)
     if not seg:
         print("  [%s] no-play-plateau (frame=%dx%d dur=%.0fs)" % (gid, fw, fh, dur))
