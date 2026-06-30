@@ -29,6 +29,10 @@ human-verified + correctable through a TTT-triggered, NTFY-screenshot review loo
    do NOT tighten it.
 9. **Branch off `feat/game-phase-detection`** (NOT `main`) for this work — it consumes the detector that
    lives there; the detector branch merges to `main` in sequence later.
+10. **Detector core lives with the DELIVERED code**, not training. The signals + fusion move to
+    `video_grouper/inference/phase_detector.py` (next to `field_detector.py`).
+    `training/data_prep/phase_detect.py` becomes a thin CLI importing the core for registry-loop GT
+    scoring. (Box-scratch verification co-locates the core flat in `G:\ballresearch\` via an import shim.)
 
 ---
 
@@ -86,13 +90,17 @@ combine done (combined.mp4)
 
 ## soccer-cam work (branch `feat/phase-detection-game-start`, off `feat/game-phase-detection`; one commit per phase)
 
-- **S0 — Library-ify the detector.** Extract `phase_detect.py`'s fusion into an importable function
-  `detect_phases(combined_video, field_polygon, ball_sidecar=None) -> {phases, confidence, meta}` with
-  no `sys.argv`/printing/global side effects. Keep the training CLI as a thin wrapper. Unit-test the
-  fusion on a couple of cached signal fixtures. (Also lands the EXP-PHASE 07–11 work that's currently
-  on `feat/game-phase-detection` — rebase/merge that first.)
-- **S1 — `phase_detect` pipeline step + config switch.** New registered step (`type = phase_detect`,
-  `consumes` combined video + field polygon, `produces` a phases artifact). Add
+- **S0 — Move the detector into the delivered code.** Extract the signals + fusion from
+  `training/data_prep/phase_detect.py` into **`video_grouper/inference/phase_detector.py`** (next to
+  `field_detector.py`), exposing `compute_signals(...)`, `fuse_phases(signals) -> {times, ok, used,
+  meta}` (trimmed-time, no `voff`), and `detect_phases(combined_video, field_polygon,
+  ball_sidecar=None) -> result` — no `sys.argv`/printing/global side effects. `phase_detect.py` becomes
+  a thin training CLI importing the core (with a flat-import shim so box-scratch verification still
+  runs). Unit-test `fuse_phases` on 2–3 cached signal fixtures (06.08, 06.06-S, 05.28). **Gate:** the
+  box `--predict --gt-only` + `phase_eval --human-only` scorecard must stay **reolink 53/63** exactly.
+- **S1 — `phase_detect` pipeline step + config switch.** New registered step at
+  `video_grouper/pipeline/steps/phase_detect.py` (`type = phase_detect`, `consumes` combined video +
+  field polygon, `produces` a phases artifact) that calls `video_grouper.inference.phase_detector`. Add
   `[PROCESSING] game_start_method = phase_detection|ntfy` (default `phase_detection`). On `ok` fit, set
   `match_info.start_time_offset` from KO using the **existing coarse 4-min backup**
   (`GAME_START_BACKUP_SECONDS`, unchanged — decision 8). **Fall back to the existing GameStartTask walk**
