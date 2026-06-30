@@ -77,6 +77,7 @@ def main() -> None:
 
     all_track_err, all_vp_err, all_ceil_err, sizes = [], [], [], []
     vp_vecs = []
+    vsvp_games = []  # per-game dense tracker-vs-viewport match (normal-play proxy GT)
     for d in labeled_dirs(args.roots):
         gj = json.loads((d / "game.json").read_text(encoding="utf-8", errors="ignore"))
         poly = gj.get("field_polygon")
@@ -110,6 +111,28 @@ def main() -> None:
             novis=novis if args.gt_override else None,
         )
         track = track_ball(frames, geom, frame_gaps=gaps)
+
+        # dense per-game match vs the AutoCam viewport (proxy GT for normal play, every frame)
+        if vps:
+            vverr = [
+                float(
+                    np.linalg.norm(
+                        geom.image_to_world(np.asarray([track[i]], float))[0]
+                        - geom.image_to_world(np.asarray([vps[g]], float))[0]
+                    )
+                )
+                for i, g in enumerate(gframes)
+                if i in track and g in vps
+            ]
+            if vverr:
+                vsvp_games.append(
+                    (
+                        d.name,
+                        len(vverr),
+                        _hits(vverr, args.radii),
+                        float(np.median(vverr)),
+                    )
+                )
 
         def nearest_idx(g):
             # nearest strided detection frame to a GT frame (stride ~4)
@@ -159,6 +182,13 @@ def main() -> None:
             f"  viewport-GT vector mean={mv.round(0)} std={sv.round(0)}  "
             f"(large mean vs std => coord offset; ~0 mean + large std => AutoCam looked elsewhere)"
         )
+    if vsvp_games:
+        print(
+            "\n  dense tracker-vs-AutoCam-viewport match per game (normal-play proxy GT):"
+        )
+        for name, n, hits, med in vsvp_games:
+            print(f"    {name[:46]:<46} n={n:>6}  {hits}  median={med:.1f}m")
+
     # hit-rate by apparent size for the tracker
     sz = np.array(sizes)
     er = np.array(all_track_err)
