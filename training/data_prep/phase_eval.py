@@ -15,6 +15,7 @@ Usage: phase_eval.py [--human-only] [--game GID]
 
 import json
 import os
+import statistics
 import sys
 
 REG = os.environ.get("GAME_REGISTRY", r"F:\training_data\game_registry.json")
@@ -91,8 +92,12 @@ if ONLY:
 rows = []
 misaligned = []
 errs: dict[str, list[float]] = {t: [] for t in TRANSITIONS}
+# reolink subset (the clean, whistle-capable games we weight heavily): same per-transition errors
+# restricted to video_format=reolink* so we can read the reolink accuracy that the gate cares about.
+errs_reo: dict[str, list[float]] = {t: [] for t in TRANSITIONS}
 for g in sorted(reg, key=lambda g: g["game_id"]):
     gid = g["game_id"]
+    is_reo = str(g.get("video_format", "")).startswith("reolink")
     d = vd(g)
     gjp = os.path.join(d, "game.json") if d else None
     if not gjp or not os.path.exists(gjp):
@@ -100,8 +105,20 @@ for g in sorted(reg, key=lambda g: g["game_id"]):
     gj = json.load(open(gjp, encoding="utf-8"))
     if not gj.get("game_state"):
         continue
-    if gj.get("truncated") and "--include-truncated" not in sys.argv:
-        continue  # truncated games (start@0:00 / end@fulldur) are excluded from train/val/eval
+    # truncated games: score only the VALID boundaries (don't drop the whole game). A start-truncated
+    # recording begins after the real kickoff (kickoff unknowable) -> skip "kickoff"; an end-truncated
+    # one stops before the final whistle -> skip "end". Every other boundary is still real GT.
+    # (--include-truncated scores all.) A legacy game carrying only the old `truncated` bool skips both.
+    skip_t: set[str] = set()
+    if "--include-truncated" not in sys.argv:
+        if gj.get("truncated_start"):
+            skip_t.add("kickoff")
+        if gj.get("truncated_end"):
+            skip_t.add("end")
+        if gj.get("truncated") and not (
+            gj.get("truncated_start") or gj.get("truncated_end")
+        ):
+            skip_t.update(("kickoff", "end"))
     ht, src = human_times(gj)
     if HUMAN_ONLY and "human" not in src:
         continue
@@ -116,9 +133,14 @@ for g in sorted(reg, key=lambda g: g["game_id"]):
         continue
     cells = []
     for t in TRANSITIONS:
+        if t in skip_t:
+            cells.append("trunc")
+            continue
         if t in ht and t in dtimes:
             e = dtimes[t] - ht[t]
             errs[t].append(abs(e))
+            if is_reo:
+                errs_reo[t].append(abs(e))
             cells.append("%s%+ds" % (mmss(ht[t]), round(e)))
         else:
             cells.append("-")
@@ -135,36 +157,46 @@ for gid, src, ok, cells in rows:
         % (gid[:50], src[:14], "OK" if ok else "rej", *cells)
     )
 
-print("\n==== per-transition error vs reference game_state ====")
-allerr = []
-for t in TRANSITIONS:
-    e = errs[t]
-    allerr += e
-    if e:
-        import statistics
 
-        w10 = sum(1 for x in e if x <= 10)
+def summary(title, errmap):
+    print("\n==== %s ====" % title)
+    allerr = []
+    for t in TRANSITIONS:
+        e = errmap[t]
+        allerr += e
+        if e:
+            w10 = sum(1 for x in e if x <= 10)
+            print(
+                "  %-12s n=%2d  mean=%5.1fs  median=%5.1fs  max=%5.1fs  within10s=%d/%d"
+                % (
+                    t,
+                    len(e),
+                    statistics.mean(e),
+                    statistics.median(e),
+                    max(e),
+                    w10,
+                    len(e),
+                )
+            )
+    if allerr:
+        w10 = sum(1 for x in allerr if x <= 10)
         print(
-            "  %-12s n=%2d  mean=%5.1fs  median=%5.1fs  max=%5.1fs  within10s=%d/%d"
-            % (t, len(e), statistics.mean(e), statistics.median(e), max(e), w10, len(e))
+            "  %-12s n=%2d  mean=%5.1fs  median=%5.1fs  max=%5.1fs  within10s=%d/%d (%.0f%%)"
+            % (
+                "ALL",
+                len(allerr),
+                statistics.mean(allerr),
+                statistics.median(allerr),
+                max(allerr),
+                w10,
+                len(allerr),
+                100 * w10 / len(allerr),
+            )
         )
-if allerr:
-    import statistics
 
-    w10 = sum(1 for x in allerr if x <= 10)
-    print(
-        "  %-12s n=%2d  mean=%5.1fs  median=%5.1fs  max=%5.1fs  within10s=%d/%d (%.0f%%)"
-        % (
-            "ALL",
-            len(allerr),
-            statistics.mean(allerr),
-            statistics.median(allerr),
-            max(allerr),
-            w10,
-            len(allerr),
-            100 * w10 / len(allerr),
-        )
-    )
+
+summary("per-transition error vs reference game_state", errs)
+summary("reolink-only (video_format=reolink*)", errs_reo)
 if misaligned:
     print(
         "\n%d games EXCLUDED (video span != GT span; data issue, not detector): %s"

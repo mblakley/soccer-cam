@@ -660,21 +660,69 @@ for g in games:
         i = min(bisect.bisect_left(list(ts), float(t)), len(sm) - 1)
         return sm[i]
 
+    # a real kickoff has BOTH teams on the field; a one-team restart (opponent still walking on) has
+    # only ~half. Gate "full field" RELATIVE to this game's normal in-play crowd, not an absolute
+    # floor — one-team restarts cleared the old PLAY_THR=5 and were mis-called as KO/2H.
+    med_play = (
+        float(np.median([x for x in sm if x >= 4]))
+        if any(x >= 4 for x in sm)
+        else float(PLAY_THR)
+    )
     kicks = []
     for et, ex, ey in ball_ev or []:
         if not (abs(ex - cxp) < 350 and ey < cyp):  # must be a CENTER restart
             continue
         w = pre_single(et, 12)  # single whistle just before
-        full = pcount_at(et) >= PLAY_THR  # players on the field
+        full = (
+            pcount_at(et) >= 0.6 * med_play
+        )  # both teams on (relative to this game's crowd)
         if w is None and not full:  # need a corroborator beyond "center"
             continue
-        kicks.append((w if w is not None else et, bool(w), bool(full)))
+        # tuple: (time, has_whistle, full, ball_event_time, whistle_time). The kick TIME is the
+        # whistle (when present, == the moment play is signalled) else the ball restart; et and w are
+        # kept so kickoff() can test how tightly the whistle couples to the ball.
+        kicks.append((w if w is not None else et, bool(w), bool(full), et, w))
     kicks.sort()
 
-    # 2H: the first kickoff in the post-halftime break window; else first whistle there; else HT + a
-    # typical break. Computed before KO so KO's symmetric fallback can use it.
+    def is_multi(
+        w,
+    ):  # whistle w belongs to a multi-blast cluster (2H "ready"/HT/END double-blow)
+        return w is not None and any(m - 1 <= w <= m + 5 for m in multis)
+
+    def kickoff(k):
+        """A real kickoff restart: full field AND its whistle (if any) is a genuine start signal — a
+        lone single whistle several seconds BEFORE the ball moves is positioning/noise, not a kickoff
+        (this is the spurious pre-kickoff restart that put 05.30/05.31 2H ~50-80s early). A real
+        kickoff whistle is tight to the kick (<=3s) or part of the 2H ready multi; a full restart with
+        no detected whistle stays eligible (some kickoff whistles are wind-masked, e.g. 06.10 2H)."""
+        _, has_w, full, et, w = k
+        if not full:
+            return False
+        return w is None or abs(w - et) <= 3.0 or is_multi(w)
+
+    if DEBUG:  # (kick_time, has_whistle, full, kickoff?, in-field count, ball_ev time)
+        print(
+            "      kicks:",
+            [
+                (
+                    mmss(k[0]),
+                    k[1],
+                    k[2],
+                    kickoff(k),
+                    round(float(pcount_at(k[0])), 1),
+                    mmss(k[3]),
+                )
+                for k in kicks
+            ],
+            "med_play=%.1f" % med_play,
+        )
+
+    # 2H: the first real KICKOFF (full field + a tight/multi whistle or none — see kickoff()) in the
+    # post-halftime break window; else first whistle there; else HT + a typical break. Computed before
+    # KO so KO's symmetric fallback can use it. kickoff() rejects the spurious pre-kickoff restart
+    # (a lone whistle a few seconds before the ball moves) that put 05.30/05.31 2H ~50-80s early.
     MIN_BREAK, MAX_BREAK = 3 * 60, 18 * 60
-    s2k = [k for k in kicks if ht + MIN_BREAK <= k[0] <= ht + MAX_BREAK]
+    s2k = [k for k in kicks if ht + MIN_BREAK <= k[0] <= ht + MAX_BREAK and kickoff(k)]
     if s2k:
         sh = s2k[0][0]
         sig.append("kick")
@@ -703,9 +751,17 @@ for g in games:
         k for k in kicks if k[0] < ht - 60 and k[2]
     ]  # full-field kicks before halftime
     if prek:
-        kt, kw, _ = prek[0]
+        kt, kw = prek[0][0], prek[0][1]
+        # a whistle+full kickoff within ~75s AFTER the first full restart = the warm-up restart was
+        # immediately followed by the real kickoff whistle; trust that kickoff over the no-whistle
+        # restart (06.06-S: first full restart 3:54 no-whistle, real KO whistle+full 4:25, 31s later).
+        nxt_ko = next(
+            (k[0] for k in kicks if k[1] and k[2] and kt < k[0] <= kt + 75), None
+        )
         if kw:
             ko = kt  # whistle + full + center => a clean kickoff; trust it
+        elif nxt_ko is not None:
+            ko = nxt_ko  # no-whistle restart shortly followed by a whistle+full kickoff => kickoff
         elif firstw is not None and kt < firstw <= kt + 90:
             ko = firstw  # warm-up restart shortly followed by the kickoff whistle => the whistle
         elif abs(kt - ko_sym) <= 75:
