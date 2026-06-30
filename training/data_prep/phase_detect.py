@@ -47,6 +47,12 @@ os.makedirs(CACHE, exist_ok=True)
 TEAM = sys.argv[sys.argv.index("--team") + 1] if "--team" in sys.argv else None
 ONLY = sys.argv[sys.argv.index("--game") + 1] if "--game" in sys.argv else None
 STEP = float(sys.argv[sys.argv.index("--step") + 1]) if "--step" in sys.argv else 12.0
+# Game selection. Default = ALL games (dahua + reolink); the per-game loop handles dahua
+# (16kHz combined audio -> no whistle, falls back to player+ball; ball via ball_track.jsonl).
+#   --reolink-only : legacy behaviour, whistle-capable reolink games only
+#   --gt-only      : only games with human-verified game_state (cheap coverage/--predict runs)
+REOLINK_ONLY = "--reolink-only" in sys.argv
+GT_ONLY = "--gt-only" in sys.argv
 PLAY_THR = 5  # >= this many in-field persons => play
 reg = json.load(open(REG, encoding="utf-8"))
 
@@ -375,13 +381,32 @@ def mmss(s):
     return "%d:%05.2f" % (int(s) // 60, s % 60)
 
 
-games = [g for g in reg if str(g.get("video_format", "")).startswith("reolink")]
+def _has_human_gt(g):
+    d = vd(g)
+    gjp = os.path.join(d, "game.json") if d else None
+    if not gjp or not os.path.exists(gjp):
+        return False
+    try:
+        gs = json.load(open(gjp, encoding="utf-8")).get("game_state") or []
+    except Exception:
+        return False
+    return any(p.get("source") == "human" for p in gs)
+
+
+games = list(reg)
+if REOLINK_ONLY:
+    games = [g for g in games if str(g.get("video_format", "")).startswith("reolink")]
+if GT_ONLY:
+    games = [g for g in games if _has_human_gt(g)]
 if TEAM:
     games = [g for g in games if g.get("team") == TEAM]
 if ONLY:
     games = [g for g in reg if g["game_id"] == ONLY]
 games.sort(key=lambda g: g["game_id"])
-print("reolink games: %d WRITE=%s FORCE=%s STEP=%ss" % (len(games), WRITE, FORCE, STEP))
+print(
+    "games: %d (reolink_only=%s gt_only=%s) WRITE=%s FORCE=%s STEP=%ss"
+    % (len(games), REOLINK_ONLY, GT_ONLY, WRITE, FORCE, STEP)
+)
 
 for g in games:
     gid = g["game_id"]
