@@ -1,6 +1,48 @@
 # Current Status
 
-*Last updated: 2026-06-29*
+*Last updated: 2026-06-30*
+
+## Game-phase detection — FULL coverage of all GT games (2026-06-30)
+
+**Coverage achieved.** The detector now scores **every** human-GT game, not just reolink (was ~13
+of 38). The reolink-only filter is gone (`--reolink-only` is now opt-in); the dahua paths that
+already existed are now actually exercised:
+- **video**: `find_fullframe_video` picks the largest non-segment, non-cropped mp4 (dahua
+  `combined_video` is frequently missing/odd across the 2024 archive).
+- **orientation is auto-detected**, NOT from `video_rotation` (which is inconsistent — raw files
+  tagged rot=0, rotated files too). `player_curve` votes in-field persons both ways over the first
+  frames; `ball_restarts` flips iff that lands more detections in the upright polygon. **Vision-
+  verified** on raw + pre-rotated dahua games (players land in the field; dahua 06.15 HT frame =
+  field empty + teams at the sidelines).
+- **no-play-plateau robustness**: youth games whose field never empties at halftime used to hard-
+  fail; `segment()` now returns a placeholder and fusion uses the central multi-whistle (the
+  earlier of the symmetric HT/2H pair) for HT. Fixed 3 reolink games (05.07 perfect).
+- **no-audio crash fix** (some dahua combined videos have no audio stream).
+- **misalignment guard**: games whose video span (`voff+vdur`) differs from the GT recording span
+  by >120 s are incomplete or multi-game videos (06.01 -20 min, 10.13 +76 min); their timeline
+  can't map to GT, so they're excluded as a DATA issue (like truncated games).
+
+**Honest within-10s vs human GT (33 aligned games, 5 dahua excluded as data issues):**
+| split | games | within-10s | median |err| |
+|---|---|---|---|
+| **combined** | 33 | **33%** (43/132) | 49 s |
+| **reolink** | 13 | **60%** (31/52) | **3 s** |
+| **dahua** | 20 | **15%** (12/80) | 128 s |
+
+- Reolink is strong and **up from the prior reolink-heavy "48%"** (no-play robustness + symmetric
+  HT/2H pairs). Near-perfect: Upper_90 (all <3 s), 06.04 Irondequoit (all <4 s), 05.07, 05.30.
+- Dahua: **HT/END decent** (player-curve dip + order; 06.15 HT -1 s, 09.21 HT -9 s, 07.02 2H -11 s)
+  but **KO/2H poor** — no usable whistle (8-16 kHz audio) so KO/2H lean on AutoCam ball restarts,
+  and the center-circle restart is often mis-clustered (picks a goal-area restart, not the centre).
+
+**Real remaining detector gaps (not data):**
+- Dahua KO/2H: improve center-restart selection, or use the player-curve 2H (field-refill after the
+  HT dip) instead of the noisy ball restart when there's no whistle.
+- A few reolink 2H -60..-120 s (05.27/05.28/06.01) and KO outliers (West_Seneca +384, 06.06 +236).
+
+Branch `feat/game-phase-detection` pushed to origin. Box scripts (`G:\ballresearch\phase_*.py`)
+mirror the committed copies; per-game signal cache rebuilt for all dahua games with correct
+orientation. `phase_eval.py --human-only` is the scoreboard; `--include-misaligned` re-adds the 5.
 
 ## Game-phase detection — split to its own branch (2026-06-29)
 

@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-04: full-coverage phase eval — score ALL GT games, not reolink-only (2026-06-30)
+
+**Hypothesis:** the prior "48% within-10s" was measured on ~13 reolink-heavy games (the detector was
+reolink-only). The honest number across the full human-GT set (38 scoreable games, 25 dahua + 13 reolink)
+will be lower, and will localize where the detector actually fails.
+**Method:** dropped the reolink-only filter; made the dahua paths fire — `find_fullframe_video` (dahua
+`combined_video` is often missing/odd), AUTO-detected frame + ball orientation (vote in-field persons/
+detections both ways; `video_rotation` is inconsistent across the 2024 archive — raw files tagged rot=0),
+`thread_type=AUTO` decode, no-audio crash guard, and `segment()` placeholder + central-multi HT for youth
+games whose field never empties. Recomputed the per-game signal cache for all 25 dahua games on the box
+(CPU, ~10 min/game; 4-core box, single worker — 2 parallel workers oversubscribe and are slower). Added a
+video<->GT misalignment guard: exclude games where |voff+vdur - gt_dur| > 120 s (incomplete or multi-game
+videos can't map to GT). Vision-verified orientation + that predictions land on real events.
+**Result (vs human GT, 33 aligned games; 5 dahua excluded as data issues):**
+- combined within-10s **33%** (43/132), median 49 s.
+- **reolink 60%** (31/52), median **3 s** — UP from the old reolink "48%" (no-play robustness +
+  symmetric HT/2H pair selection fixed 05.07/05.30/06.06). Near-perfect: Upper_90, 06.04, 05.07, 05.30.
+- **dahua 15%** (12/80), median 128 s — HT/END decent (player-curve dip + order: 06.15 HT -1 s, 09.21
+  HT -9 s, 07.02 2H -11 s), KO/2H poor (no usable whistle at 8-16 kHz; KO/2H lean on AutoCam ball
+  restarts whose center-circle cluster is often mis-detected = a goal-area restart).
+- 5 misaligned-video games excluded (flash 06.01 -20 min incomplete `-raw`, 10.04, 10.13 +76 min
+  multi-game `combined.mp4`, heat 05.19, 05.28).
+**Conclusion:** coverage solved; reolink phase detection is genuinely good (60%, median 3 s) and the
+whistle is the load-bearing signal. Dahua is the open problem: with no whistle, KO/2H need a better
+center-restart selection or a player-curve 2H (field-refill after the HT dip) rather than the noisy
+AutoCam ball restart. The honest full-set number is 33%, not 48% — the 48% was a reolink-subset artifact.
+
 ## EXP-PHASE-03: multi-signal phase detector (player-curve + whistle), half-length AGNOSTIC (2026-06-28)
 
 **Hypothesis (Mark):** the fixed-40-min assumption (EXP-PHASE-02) doesn't generalize — younger ages play 30-min
