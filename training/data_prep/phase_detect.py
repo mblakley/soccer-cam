@@ -141,7 +141,7 @@ def player_curve(path, polyf, rot, step):
                 break
         if fr is None:
             break
-        if rot == 180:
+        if rot % 360 == 180:  # camera mounted inverted (reolink +180, dahua -180)
             fr = fr[::-1, ::-1].copy()
         ps = persons(fr)
         nin = sum(
@@ -316,19 +316,34 @@ def ball_restarts(base, gj=None):
             Y.append(float(xy[1]))
         if len(T) >= 100:
             break
-    # --- path 2: per-segment ball track {seg, f, x, y} -> global seconds (dahua) ---
+    # --- path 2: per-segment dahua detections {seg,f,x,y(,conf)} -> global seconds, made upright ---
+    # AutoCam ran on the raw (inverted) video so its x,y are in RAW space; field_polygon is upright
+    # => rotate 180 when video_rotation is +/-180. Primary source autocam_detections.jsonl (raw
+    # per-frame ball candidates, deduped to the max-conf detection per frame); ball_track.jsonl
+    # (empty for these games) is the fallback. Maps {seg,f} -> global sec via global_offset/fps.
     if len(T) < 100 and gj:
+        segs0 = gj.get("segments") or []
         segmap = {
             s.get("seg"): (
                 float(s.get("global_offset", 0)),
-                float(s.get("fps") or 20.0),
+                float(s.get("fps") or 25.0),
             )
-            for s in (gj.get("segments") or [])
+            for s in segs0
         }
+        rotg = int(gj.get("video_rotation", 0) or 0)
+        Wg = int(segs0[0]["w"]) if segs0 else 0
+        Hg = int(segs0[0]["h"]) if segs0 else 0
+        flip = (rotg % 360 == 180) and Wg and Hg
+        det = os.path.join(base, "autocam_detections.jsonl")
         bt = os.path.join(base, "ball_track.jsonl")
-        if os.path.exists(bt):
-            T, X, Y = [], [], []
-            for ln in open(bt, encoding="utf-8"):
+        src = (
+            det
+            if (os.path.exists(det) and os.path.getsize(det) > 0)
+            else (bt if os.path.exists(bt) else None)
+        )
+        if src:
+            best = {}  # (seg,f) -> (x,y,conf), keep the highest-conf detection per frame
+            for ln in open(src, encoding="utf-8"):
                 try:
                     r = json.loads(ln)
                 except Exception:
@@ -336,11 +351,23 @@ def ball_restarts(base, gj=None):
                 seg, fr, x, y = r.get("seg"), r.get("f"), r.get("x"), r.get("y")
                 if seg not in segmap or fr is None or x is None or y is None:
                     continue
+                conf = float(r.get("conf", 1.0))
+                if (
+                    conf < 0.3
+                ):  # drop low-confidence noise (autocam dumps candidates down to 0.05)
+                    continue
+                k = (seg, fr)
+                if k not in best or conf > best[k][2]:
+                    best[k] = (float(x), float(y), conf)
+            T, X, Y = [], [], []
+            for (seg, fr), (x, y, conf) in best.items():
                 off, fps = segmap[seg]
+                if flip:
+                    x, y = Wg - 1 - x, Hg - 1 - y
                 T.append((off + float(fr)) / fps)
-                X.append(float(x))
-                Y.append(float(y))
-            if T:  # segments may be out of order in the file -> sort by global time
+                X.append(x)
+                Y.append(y)
+            if T:  # frames may be out of order in the file -> sort by global time
                 order = np.argsort(T)
                 T = list(np.asarray(T)[order])
                 X = list(np.asarray(X)[order])
@@ -428,6 +455,11 @@ for g in games:
         continue
     trim, raw, comb, off = files_offsets(d)  # d = F: archive folder (game.json's dir)
     vid = trim or raw or comb
+    if (
+        not vid
+    ):  # dahua flat layout: no subdir mp4 / combined.mp4 -> game.json combined_video
+        cv = gj.get("combined_video")
+        vid = cv if (cv and os.path.exists(cv)) else None
     if not vid:
         print("  [%s] no video file in %s" % (gid, d))
         continue
@@ -571,13 +603,13 @@ for g in games:
     # kickoff). A restart far from it is a later restart, not the kickoff (6/10: trim cut the
     # kickoff whistle, game starts ~0:00; a 1:41 restart must NOT be snapped to).
     near_r = [cand] if (cand is not None and abs(cand - ko_sym) < 60) else []
-    fw = next((b for b in blasts if b >= 20), None) if blasts else None
+    firstw = next((b for b in blasts if b >= 20), None) if blasts else None
     if near_r:
         ko = pre_single(near_r[0]) or near_r[0]
         if "ball" not in sig:
             sig.append("ball")
-    elif fw is not None:
-        ko = fw
+    elif firstw is not None:
+        ko = firstw
         sig.append("whistle")
     else:
         ko = ko_sym
