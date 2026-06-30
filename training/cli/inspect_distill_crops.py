@@ -31,9 +31,20 @@ import numpy as np
 def load_game_config(video_dir: Path) -> dict:
     """Build a ``build_distill_games`` config from a game's F: video dir (reads ``game.json``)."""
     gj = json.loads((video_dir / "game.json").read_text())
+    # combined_video is sometimes blank in game.json; the marathon's source is the dir's combined.mp4
+    # (frame_base=0 => decode index == global frame). Fall back to it, then to a *-raw.mp4.
+    video = gj.get("combined_video")
+    if not video:
+        for cand in ("combined.mp4", "combined_rotated.mp4"):
+            if (video_dir / cand).exists():
+                video = str(video_dir / cand)
+                break
+        if not video:
+            raws = sorted(video_dir.glob("*-raw.mp4"))
+            video = str(raws[0]) if raws else str(video_dir / "video.mp4")
     gc = {
         "game_id": gj["game_id"],
-        "video": gj.get("combined_video") or str(video_dir / "video.mp4"),
+        "video": video,
         "segments": gj["segments"],
         "polygon": gj.get("field_polygon"),
         "detections": str(video_dir / "autocam_detections.jsonl"),
