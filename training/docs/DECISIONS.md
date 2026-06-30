@@ -4,6 +4,27 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-30: Truncation representation — explicit start/end booleans in game.json
+
+**Context:** Some games' recording missed the kickoff (camera started after KO) or the final whistle
+(stopped early). These have clamped GT boundaries (KO=0:00 or END=fulldur) that aren't real whistles,
+so they're excluded from train/val/eval. We only had `truncated` (bool) + `truncated_reason` (a
+comma-joined string `"start@0:00"`/`"end@fulldur"`); telling start- from end-truncation meant parsing
+that string, and the writer wasn't even in the repo.
+
+**Decision:** Canonical truncation representation in `game.json`, set by
+`training/data_prep/trunc_flag.py` (now in the repo):
+- `truncated` (bool) — overall = start OR end.
+- `truncated_start` (bool) — **kickoff missing**; `first_half.start` clamped to `[seg0, 0]` (0:00).
+- `truncated_end` (bool) — **final whistle missing**; `post_game.start` at ~full duration.
+- `truncated_reason` (str) — human detail only (`"start@0:00"`, `"end@fulldur"`).
+
+Code that must differentiate reads the **booleans**, never parses `truncated_reason`. Detection is
+GT-derived: kickoff `<15s` ⇒ start-truncated; end `>fulldur−15s` ⇒ end-truncated. Run `trunc_flag.py
+--write` after editing GT (e.g. clamping a KO to 0:00). All reolink games backfilled 2026-06-30.
+
+---
+
 ## 2026-06-12: Field-outline wired into the plugin pipeline as a `field_detect` step
 
 **Context:** The distilled field-outline model (EXP-008) needed to actually drive homegrown ball tracking + rendering. The pipeline's track and render steps already consume a `field_polygon_path` manifest artifact (location filtering, mount-tilt/leveling derivation, off-field rejection, pan bounds) — but nothing produced it automatically.
