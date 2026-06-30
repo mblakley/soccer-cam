@@ -96,6 +96,12 @@ def main() -> None:
     )
     ap.add_argument("--val", nargs="*", default=[], help="game_ids for the val split")
     ap.add_argument("--max-games", type=int, default=None)
+    ap.add_argument(
+        "--base-stride",
+        type=int,
+        default=4,
+        help="thin the (already stride-4) teacher frames by this index step (16 ~ 1.5 Hz)",
+    )
     ap.add_argument("--crop", type=int, default=256)
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--target-width", type=int, default=None)
@@ -112,7 +118,7 @@ def main() -> None:
         flush=True,
     )
 
-    games = dd.build_distill_games(cfgs, report=True)
+    games = dd.build_distill_games(cfgs, base_stride=args.base_stride, report=True)
     if not games:
         raise SystemExit("no games produced labels")
     val_ids = {g["game_id"] for g in games if g.get("split") == "val"}
