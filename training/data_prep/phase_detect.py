@@ -583,13 +583,13 @@ for g in games:
     #   2H  : single whistle, then the next center ball-restart
     #   END : late MULTI-whistle, after which the ball stops + players leave
     sig = []
-    # center-circle ball restarts (kickoffs recur there): near field-centroid-x, in the far half
-    cen = []
+    # field centroid in px. Center-circle restarts (kickoffs recur there) sit near centroid-x in the
+    # far half; cxp/cyp feed the signature-driven kickoff detector below. The x-tolerance is generous
+    # (the center circle is offset from the centroid under panorama distortion); absolute px works
+    # across the scored resolutions.
+    cxp = cyp = None
     if ball_ev:
         cxp, cyp = float(poly[:, 0].mean()), float(poly[:, 1].mean())
-        # tolerance vs the field centroid-x; generous (the center circle is offset from the
-        # centroid under panorama distortion). Absolute px works across the scored resolutions.
-        cen = sorted(e[0] for e in ball_ev if abs(e[1] - cxp) < 350 and e[2] < cyp)
 
     def mstr(m):  # multi-blast strength = # of whistle blasts in its 5s cluster
         return sum(1 for b in blasts if m <= b <= m + 5)
@@ -651,22 +651,37 @@ for g in games:
         sig.append("player")
     on2 = ht_dip[1]
 
-    # ---- KO/2H derived from the phase ORDER + structure, anchored to the reliable HT/END ----
-    # 2H: ordered AFTER halftime within a plausible break; first center restart in that window
-    # (else first whistle there; else HT + a typical break). Rejects 1st-half + warm-up-return
-    # restarts that wrecked the from-scratch pick.
+    # ---- KICKOFFS: signature-driven, applied throughout the video ----
+    # A KICKOFF = a CENTER static-ball restart that ALSO has a single kickoff whistle just before it
+    # AND/OR a full field of players. We detect every such event, then assign the first before HT to
+    # KO and the first in the post-HT break to 2H. This replaces the old symmetric-halves prior +
+    # "first center restart in window" pick (whose 20s whistle floor lost early kickoffs).
+    def pcount_at(t):
+        i = min(bisect.bisect_left(list(ts), float(t)), len(sm) - 1)
+        return sm[i]
+
+    kicks = []
+    for et, ex, ey in ball_ev or []:
+        if not (abs(ex - cxp) < 350 and ey < cyp):  # must be a CENTER restart
+            continue
+        w = pre_single(et, 12)  # single whistle just before
+        full = pcount_at(et) >= PLAY_THR  # players on the field
+        if w is None and not full:  # need a corroborator beyond "center"
+            continue
+        kicks.append((w if w is not None else et, bool(w), bool(full)))
+    kicks.sort()
+
+    # 2H: the first kickoff in the post-halftime break window; else first whistle there; else HT + a
+    # typical break. Computed before KO so KO's symmetric fallback can use it.
     MIN_BREAK, MAX_BREAK = 3 * 60, 18 * 60
-    s2 = [t for t in cen if ht + MIN_BREAK <= t <= ht + MAX_BREAK]
-    if s2:
-        sh = pre_single(s2[0]) or s2[0]
-        sig.append("ball")
-    elif blasts:
+    s2k = [k for k in kicks if ht + MIN_BREAK <= k[0] <= ht + MAX_BREAK]
+    if s2k:
+        sh = s2k[0][0]
+        sig.append("kick")
+    else:
         w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
         sh = w2[0] if w2 else ht + 8 * 60
         sig.append("whistle" if w2 else "order")
-    else:
-        sh = ht + 8 * 60
-        sig.append("order")
 
     # END: the last late multi-whistle (full-time) after 2H; else last-play.
     if multis:
@@ -677,21 +692,36 @@ for g in games:
     else:
         end = off2
 
-    # KO: the equal-halves symmetric estimate (KO = HT - 2nd-half-length) is the PRIOR; snap to the
-    # nearest real center restart before HT (rejects warm-up, which is far from the prior). No nearby
-    # restart -> first whistle of the game (no-ball games); none -> the symmetric estimate itself.
+    # KO: assign the first pre-halftime kickoff signature. A kickoff whistle right at the start must
+    # NOT be lost to a floor (the old >=20s floor lost West_Seneca's 0:11 kickoff), so the whistle
+    # fallback uses >=5s. The symmetric equal-halves estimate (KO = HT - 2nd-half-length) is the
+    # prior used to reject pre-game warm-up restarts (a CENTER static ball + full field also occurs
+    # during warm-up, well before the real kickoff).
+    firstw = next((b for b in blasts if b >= 5), None) if blasts else None
     ko_sym = max(0.0, ht - (end - sh))
-    pre_ko = [t for t in cen if t < ht]
-    cand = min(pre_ko, key=lambda t: abs(t - ko_sym)) if pre_ko else None
-    # snap ONLY if a restart sits right at the symmetric KO (equal halves => HT-(END-2H) IS the
-    # kickoff). A restart far from it is a later restart, not the kickoff (6/10: trim cut the
-    # kickoff whistle, game starts ~0:00; a 1:41 restart must NOT be snapped to).
-    near_r = [cand] if (cand is not None and abs(cand - ko_sym) < 60) else []
-    firstw = next((b for b in blasts if b >= 20), None) if blasts else None
-    if near_r:
-        ko = pre_single(near_r[0]) or near_r[0]
-        if "ball" not in sig:
-            sig.append("ball")
+    prek = [
+        k for k in kicks if k[0] < ht - 60 and k[2]
+    ]  # full-field kicks before halftime
+    if prek:
+        kt, kw, _ = prek[0]
+        if kw:
+            ko = kt  # whistle + full + center => a clean kickoff; trust it
+        elif firstw is not None and kt < firstw <= kt + 90:
+            ko = firstw  # warm-up restart shortly followed by the kickoff whistle => the whistle
+        elif abs(kt - ko_sym) <= 75:
+            ko = kt  # first full restart matches the symmetric prior => it is the kickoff
+        else:
+            # first full restart is far from the prior => warm-up; prefer a whistle+full kickoff near
+            # the prior, else the first whistle of the game, else the symmetric estimate itself.
+            wfull = [k[0] for k in kicks if k[1] and k[2] and k[0] < ht - 60]
+            near = [t for t in wfull if abs(t - ko_sym) <= 120]
+            if near:
+                ko = min(near, key=lambda t: abs(t - ko_sym))
+            elif firstw is not None:
+                ko = firstw
+            else:
+                ko = ko_sym
+        sig.append("kick")
     elif firstw is not None:
         ko = firstw
         sig.append("whistle")
@@ -807,8 +837,8 @@ for g in games:
         "source": src,
         "signals": sig,
         "half_min": [round(h1, 1), round(h2, 1)],
-        "ko_from_ball": bool(near_r),
-        "sh_from_ball": bool(s2),
+        "ko_from_ball": bool(prek),
+        "sh_from_ball": bool(s2k),
         "audio_sr": int(sr or 0),
         "step_sec": STEP,
         "times_sec": {
