@@ -102,6 +102,12 @@ def main() -> None:
         default=4,
         help="thin the (already stride-4) teacher frames by this index step (16 ~ 1.5 Hz)",
     )
+    ap.add_argument(
+        "--max-per-game",
+        type=int,
+        default=None,
+        help="hard cap on auto labels/game (uniform); bounds crop count for a fast first build",
+    )
     ap.add_argument("--crop", type=int, default=256)
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--target-width", type=int, default=None)
@@ -118,7 +124,12 @@ def main() -> None:
         flush=True,
     )
 
-    games = dd.build_distill_games(cfgs, base_stride=args.base_stride, report=True)
+    games = dd.build_distill_games(
+        cfgs,
+        base_stride=args.base_stride,
+        max_per_game=args.max_per_game,
+        report=True,
+    )
     if not games:
         raise SystemExit("no games produced labels")
     val_ids = {g["game_id"] for g in games if g.get("split") == "val"}

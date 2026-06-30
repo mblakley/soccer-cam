@@ -443,6 +443,7 @@ def build_distill_games(
     dense_stride: int = 2,
     conf_floor: float = 0.06,
     backing_px: float = 45.0,
+    max_per_game: int | None = None,
     report: bool = True,
 ) -> list[dict]:
     """Turn per-game configs into the ``games`` list consumed by ``build_heatmap_crops``.
@@ -490,6 +491,12 @@ def build_distill_games(
         human_frames = set(human_balls)
         auto = {f: xy for f, xy in track.items() if f not in human_frames}
         kept = subsample(auto, base_stride=base_stride, dense_stride=dense_stride)
+        # hard per-game cap (uniform over the game) — bounds crop count / build time for a fast
+        # first run; the turn-densification means base_stride alone doesn't reliably thin.
+        if max_per_game and len(kept) > max_per_game:
+            ks = sorted(kept)
+            picks = {ks[int(i * len(ks) / max_per_game)] for i in range(max_per_game)}
+            kept = {f: xy for f, xy in kept.items() if f in picks}
         labels = dict(kept)
         labels.update({f: track[f] for f in human_frames if f in track})
 
