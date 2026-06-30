@@ -4,6 +4,30 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-09: 2H anchors to the FULL-field refill whistle (closes 05.28) (2026-06-30)
+
+**Hypothesis (verified on cached signals):** 05.28 2H -92s. The 2H whistle picker took the first
+whistle after the HT dip offset on2, which is a stray warm-up whistle blown while players are still
+trickling back (48:06, only 5 in-field). The REAL 2H whistle is a detected blast at 49:38 (= human
+GT) where the field is FULL (11 in-field = med_play); the ball model missed the 2H restart, and the
+only nearby restart is a no-whistle one 86s later (51:04, a mid-half re-acquire).
+**Method:** (1) `w2_full` = first whistle after on2 where the field is full (`pcount_at >= 0.6x
+med_play`); use it as the refill whistle, falling back to the first whistle after on2 when none is
+full. (2) when the refill whistle is full-field-corroborated, narrow the "trust a later no-whistle
+ball restart over the whistle" window from 90s to **60s** -- the kickoff ball moves within ~a minute,
+so a restart 86s later (05.28 51:04) is mid-half (keep the whistle), but a restart ~25s after a
+pre-kickoff whistle (06.10 50:48 after 50:23) is still the kickoff (keep the restart). Isolated to
+the 2H whistle/override; KO/HT/END untouched.
+**Result (reolink, vs human GT):** 05.28 2H -92->**+0s**, 06.10 2H held at **-3s** (the gap-based
+60s window distinguishes 06.10's 25s restart from 05.28's 86s). Reolink within-10s 51->**52/63
+(81->83%)**: 2H 13->14/18, KO/HT/END unchanged, median 1.1s. No regressions.
+**Conclusion:** the 2H kickoff whistle is the first whistle once BOTH teams are back in formation,
+not the first whistle while players trickle on; and "is the nearby no-whistle restart the kickoff?"
+is a function of its gap to that whistle (~within a minute). Remaining full-file reolink misses:
+06.06-S END +48, 06.10 KO +24, and one large KO outlier (max 335s, a truncated game).
+
+---
+
 ## EXP-PHASE-08: 2H prefers the whistled kickoff over a preceding warm-up restart (2026-06-30)
 
 **Hypothesis (walking 05.27 with the worklist):** 05.27 2H missed by -60s -- the detector picked a

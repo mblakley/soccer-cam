@@ -772,12 +772,25 @@ for g in games:
             s2k0 = nxt2
     w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
     # the 2nd-half kickoff WHISTLE = the first whistle once the field has refilled (HT dip offset on2).
+    # Prefer the first whistle when the field is FULL again (both teams in kickoff formation,
+    # >=0.6x median crowd): the plain "first whistle after on2" catches a stray warm-up whistle while
+    # players are still trickling on (05.28: stray 48:06 at 5 in-field vs the real 2H 49:38 at 11 =
+    # full). Fall back to the first whistle after on2 when no full-field whistle is found.
     # When the ball model misses the real 2H restart (no center restart at the kickoff), this whistle
     # is the only signal there; a no-whistle ball restart re-acquired later in the half must NOT
-    # outrank it. So trust a ball-restart kick only if it is whistle-corroborated, or there is no
-    # refill whistle, or the kick is not far (<=90s) after that whistle.
-    w2_refill = next((b for b in w2 if b >= on2 - 30), None)
-    use_s2k = bool(s2k0 and (s2k0[1] or w2_refill is None or s2k0[0] <= w2_refill + 90))
+    # outrank it. Trust a ball-restart kick only if it is whistle-corroborated, there is no refill
+    # whistle, or the kick is close after it -- and when the refill whistle is full-field-corroborated
+    # (a confident kickoff signal) the kickoff ball moves within ~a minute, so a restart 86s later
+    # (05.28 51:04) is a mid-half re-acquire (use the whistle) but a restart ~25s after a pre-kickoff
+    # whistle (06.10 50:48 after 50:23) IS the kickoff (use the restart). Loose no-full case keeps 90s.
+    w2_full = next(
+        (b for b in w2 if b >= on2 - 30 and pcount_at(b) >= 0.6 * med_play), None
+    )
+    w2_refill = w2_full or next((b for b in w2 if b >= on2 - 30), None)
+    override = 60 if w2_full is not None else 90
+    use_s2k = bool(
+        s2k0 and (s2k0[1] or w2_refill is None or s2k0[0] <= w2_refill + override)
+    )
     if use_s2k:
         sh = s2k0[0]
         sig.append("kick")
