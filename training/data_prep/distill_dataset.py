@@ -441,7 +441,12 @@ def teacher_track(
         if not cands:
             continue
         cx, cy, _ = min(cands, key=lambda c: (c[0] - tx) ** 2 + (c[1] - ty) ** 2)
-        if (cx - tx) ** 2 + (cy - ty) ** 2 <= b2:
+        # the snapped detection must be IN-FIELD — the marathon's raw detections include off-field
+        # false positives (sky/trees/nets), and the tracker can coast onto one; an off-field label is
+        # garbage. Drop it if the backing detection is off the field polygon.
+        if (cx - tx) ** 2 + (cy - ty) ** 2 <= b2 and bool(
+            geom.is_in_support(np.asarray((cx, cy)), margin_px=50.0)[0]
+        ):
             out[g] = (cx, cy)
     return out
 

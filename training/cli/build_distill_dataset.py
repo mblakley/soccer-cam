@@ -98,6 +98,11 @@ def main() -> None:
     ap.add_argument("--val", nargs="*", default=[], help="game_ids for the val split")
     ap.add_argument("--max-games", type=int, default=None)
     ap.add_argument(
+        "--camera",
+        default=None,
+        help="restrict to one camera (e.g. reolink) — Reolink is the clean primary",
+    )
+    ap.add_argument(
         "--base-stride",
         type=int,
         default=4,
@@ -121,6 +126,8 @@ def main() -> None:
 
     holdout, val = set(args.holdout), set(args.val)
     cfgs = [c for c in find_configs(args.roots) if c["game_id"] not in holdout]
+    if args.camera:
+        cfgs = [c for c in cfgs if c.get("camera") == args.camera]
     if args.max_games:
         cfgs = balance(cfgs, args.max_games)
     for c in cfgs:
