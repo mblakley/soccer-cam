@@ -2,6 +2,32 @@
 
 *Last updated: 2026-06-30*
 
+## Game-phase detection — kickoff signature + GT review (2026-06-30, later)
+
+Interactive GT review (Mark verifying each off-boundary on YouTube) + two detector passes.
+
+**GT corrections found + written to game.json (source=human):** 06.06 Fairport KO was invalid
+(mapped before video start) → start-truncated; 06.10 HT 42:23→**44:25** (the 42:23 was the ref's
+attention-whistle; the detector's 44:23 was right); West Seneca END → end-truncated. Truncation now
+has explicit `truncated_start`/`truncated_end` booleans (see DECISIONS 2026-06-30); `trunc_flag.py`
+is in the repo; phase_eval scores truncated games **per-boundary** (valid boundaries still count).
+
+**Detector — signature-driven kickoff (commits 5026ec5, 6461a53):** KO/2H now = a CENTER static-
+ball restart + a kickoff whistle (tight to the ball, or part of the 2H "ready" multi, or no-whistle
+for wind-masked) + a near-full field (relative count) — applied throughout the video. Fixed the
+"grabbed a one-team restart / a positioning whistle / a later restart" misses.
+
+**Reolink within-10s (verified):** KO **12/15**, HT 12/18, 2H **10/18** (was 5), END 10/12, ALL
+**44/63 (70%)**, **median 1.6s**. Near-exact now: 05.07, 06.04, 05.10, 05.30-Western, 05.31-gold,
+06.06-Fairport, 06.10; KO fixed on West Seneca/05.27/05.28/06.06-S.
+
+**Remaining reolink misses (next):** (1) HT-selection family — 05.27 +139, 05.28 +194, West Seneca
++163 (GT correct; detector grabs the wrong halftime multi). (2) Two regressions the kickoff pass
+introduced: **06.01 2H** -193→+379 and **06.08** (long 115-min game, now rejected: 2H -191 / END
+-1655). (3) Truncated hard games 06.07-BU15, 03.21. Dahua KO/2H still need the homegrown ball
+detector. NOTE: 70% isn't comparable to the earlier 60% — per-boundary truncation grew the
+denominator (44→63); the within-10s count rose in every transition.
+
 ## Game-phase detection — FULL coverage of all GT games (2026-06-30)
 
 **Coverage achieved.** The detector now scores **every** human-GT game, not just reolink (was ~13

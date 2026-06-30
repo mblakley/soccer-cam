@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-05: signature-driven kickoff (KO/2H) + interactive GT review (2026-06-30)
+
+**Hypothesis (Mark):** apply the kickoff signature throughout the video — whistle + static ball at
+centre + (most) players on the field, then motion — to fix KO/2H, which were grabbing wrong restarts.
+**Method:** interactive review (Mark verified each off-boundary on YouTube against the trimmed-raw
+upload = the YouTube video, so YT time = trimmed-file time directly). Corrected GT where wrong, then
+two detector passes (commits 5026ec5, 6461a53): KO/2H = a CENTER ball-restart corroborated by a
+kickoff whistle (tight to the ball ≤3s, OR part of the 2H "ready" multi-blast, OR no-whistle for
+wind-masked games) AND a near-full field (relative threshold ~0.6×median in-play count, since YOLO
+under-counts at distance so absolute counts can't separate one-team from both-team restarts). KO =
+first pre-HT kick, 2H = first kick in the break window. Eval scores truncated games per-boundary.
+**Result (reolink within-10s):** KO 6→**12/15**, 2H 5→**10/18**, HT 12/18, END 10/12, median **1.6s**.
+Exact fixes: West Seneca KO +384→0, 05.27 KO +114→0, 05.30 2H -80→-1, 05.31 2H -50→-1, 06.06-S KO
+-31→0, 05.28 KO -13→-1. GT errors caught: 06.06 KO (truncated), 06.10 HT (42:23→44:25, detector was
+right), West Seneca END (truncated).
+**Conclusion:** the kickoff signature works; the discriminating feature is a whistle TIGHT to the
+ball (positioning whistles fire ~50-80s early), not the player count (too noisy at distance). Cost:
+the 2H discriminator regressed 06.01 2H (+379) and the long/odd 06.08 (rejected) — to clean up next,
+along with the HT-selection family (05.27/05.28/West Seneca grab the wrong halftime multi).
+
+---
+
 ## EXP-PHASE-04: full-coverage phase eval — score ALL GT games, not reolink-only (2026-06-30)
 
 **Hypothesis:** the prior "48% within-10s" was measured on ~13 reolink-heavy games (the detector was
