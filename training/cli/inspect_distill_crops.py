@@ -101,7 +101,9 @@ def _pick_samples(
     return out[:n]
 
 
-def _render_panels(band_gray, dbx, dby, depth, far, tag, gid, frame, sigma, crop=256):
+def _render_panels(
+    band_gray, dbx, dby, depth, far, tag, gid, frame, sigma, crop=256, far_curve=None
+):
     import cv2
 
     from training.data_prep.heatmap_dataset import gaussian_heatmap
@@ -112,6 +114,19 @@ def _render_panels(band_gray, dbx, dby, depth, far, tag, gid, frame, sigma, crop
     # Panel A: full masked band downscaled to ~1600 wide, marker at the label.
     scale = 1600.0 / bw
     a = cv2.resize(band_bgr, (1600, max(1, int(round(bh * scale)))))
+    # far/near boundary curve (the curve-following far split) — should hug the far touchline
+    if far_curve is not None and len(far_curve):
+        pts = (np.asarray(far_curve, np.float64) * scale).round().astype(np.int32)
+        cv2.polylines(a, [pts], False, (255, 200, 0), 2)
+        cv2.putText(
+            a,
+            "far<->near boundary",
+            (pts[0][0] + 4, pts[0][1] - 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 200, 0),
+            1,
+        )
     ax, ay = int(round(dbx * scale)), int(round(dby * scale))
     cv2.circle(a, (ax, ay), 16, (0, 0, 255), 2)
     cv2.drawMarker(a, (ax, ay), (0, 255, 255), cv2.MARKER_CROSS, 28, 2)
@@ -157,7 +172,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=6)
     ap.add_argument("--sigma", type=float, default=4.0)
-    ap.add_argument("--far-frac", type=float, default=0.35)
+    ap.add_argument("--far-frac", type=float, default=0.22)
     ap.add_argument("--target-width", type=int, default=None)
     args = ap.parse_args()
 
@@ -172,7 +187,6 @@ def main() -> None:
     )
     from training.data_prep.warped_dataset import (
         apply_display_rotation,
-        field_band_from_polygon,
         resolve_video_rotation,
     )
     from training.world_model.geometry import build_field_geometry
@@ -195,7 +209,7 @@ def main() -> None:
         # reconstruct intermediates for sampling / far visualisation
         offsets = dd.seg_offsets(gc["segments"])
         geom = build_field_geometry(np.asarray(poly, float))
-        yt0, yb0 = field_band_from_polygon(poly)
+        far_edge, near_edge = dd.field_edges(poly)
         dets = dd.load_detections(gc["detections"], offsets)
         vps = dd.load_viewport(gc["viewport"], offsets)
         human, novis = (
@@ -204,7 +218,9 @@ def main() -> None:
             else ({}, set())
         )
         teacher = dd.select_teacher(dets, vps, geom)
-        non_far, far_frames = dd.split_far(teacher, yt0, yb0, far_frac=args.far_frac)
+        non_far, far_frames = dd.split_far(
+            teacher, far_edge, near_edge, far_frac=args.far_frac
+        )
         non_far, _ = dd.drop_frozen_runs(non_far)
         kept = dd.subsample(non_far)
         label_xy = dict(kept)
@@ -235,6 +251,15 @@ def main() -> None:
         mask = np.zeros((bh, bw), np.uint8)
         cv2.fillPoly(mask, [mpoly], 255)
 
+        # the curve-following far/near boundary, in band coords, for the overlay
+        bx_lo = max(far_edge[:, 0].min(), near_edge[:, 0].min())
+        bx_hi = min(far_edge[:, 0].max(), near_edge[:, 0].max())
+        cxs = np.linspace(bx_lo, bx_hi, 60)
+        yfs = np.interp(cxs, far_edge[:, 0], far_edge[:, 1])
+        yns = np.interp(cxs, near_edge[:, 0], near_edge[:, 1])
+        ybnd = yfs + args.far_frac * (yns - yfs)
+        far_curve = warp.points(np.column_stack([cxs, ybnd]))
+
         want = {f for f, _ in samples}
         lo, hi = min(want) - 2, max(want)
         buf: list = []
@@ -252,11 +277,20 @@ def main() -> None:
                 bx, by = lbl(idx)
                 dxy = warp.points([(bx, by)])[0]
                 dbx, dby = float(dxy[0]), float(dxy[1])
-                depth = float(np.clip(dby / max(bh, 1), 0.0, 1.0))
+                depth = dd.curve_depth(bx, by, far_edge, near_edge)
                 tag = next(t for f, t in samples if f == idx)
                 far = idx in far_frames
                 png = _render_panels(
-                    buf[-1], dbx, dby, depth, far, tag, gid, idx, args.sigma
+                    buf[-1],
+                    dbx,
+                    dby,
+                    depth,
+                    far,
+                    tag,
+                    gid,
+                    idx,
+                    args.sigma,
+                    far_curve=far_curve,
                 )
                 fn = out / f"{gid}_f{idx:06d}_{tag}.png"
                 cv2.imwrite(str(fn), png)

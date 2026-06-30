@@ -22,13 +22,14 @@ in the field) — recovering AutoCam's selection at the precise, **de-lagged** r
 with detector confidence available for filtering. Frames where the viewport has no nearby
 supporting candidate (AutoCam parked / lost) get no label.
 
-**Far is field-relative, not a pixel row** (the camera is on a movable tripod). We classify a ball as
-far by its **band-y depth** — the field band's top edge is the far touchline (``band_depth``, the same
-convention as ``build_heatmap_crops(record_depth=True)``: 0 = far, 1 = near). A ball in the top
-``far_frac`` of the band is "far". This uses only the band's y-extent, so it is robust to the
-field-polygon point ordering (some games store pts 0-4 at the image top, some bottom) and to the
-flipped early-Dahua games — unlike a world-geometry far test, which needs a clean, correctly-oriented
-homography fit (and silently degrades on the inverted polygons).
+**Far is field-relative and follows the touchline curve** (the camera is on a movable tripod, and the
+far touchline bows up at the sides in the dewarped band — a flat horizontal cut is wrong). We measure
+depth **between the polygon's two edge-curves**: interpolate the far-edge ``y_far(x)`` and near-edge
+``y_near(x)`` at the ball's x and take ``(y - y_far(x)) / (y_near(x) - y_far(x))`` (0 = far touchline,
+1 = near). A constant-depth boundary is then a curve parallel to the far touchline. The far edge is
+picked as the 5 polygon points higher in the (corrected, upright) frame, so this is correct
+regardless of the polygon's point ordering and on the flipped early-Dahua games. ``far_frac`` is
+calibrated to where the human far labels actually sit (~15-20 % of field depth).
 
 Inputs per game come from the per-video JSONL store on F: (canonical per DECISIONS.md 2026-06-26):
 ``autocam_detections.jsonl`` (``{seg,f,x,y,conf}``, one row/candidate), ``autocam_viewport.jsonl``
@@ -137,18 +138,39 @@ def load_human_labels(
 
 
 # ---------------------------------------------------------------------------
-# Field-relative far classification (band-y depth)
+# Field-relative far classification (curve-following depth from the polygon)
 # ---------------------------------------------------------------------------
 
 
-def band_depth(cy: float, y_top: float, y_bot: float) -> float:
-    """Normalized field depth of a source-px row: 0 = far touchline (band top), 1 = near (band
-    bottom). Matches ``build_heatmap_crops(record_depth=True)``. Robust to the field-polygon point
-    ordering and to the flipped early-Dahua games (it only uses the band's y-extent), unlike a
-    world-geometry far test that needs a clean, correctly-oriented homography fit.
+def field_edges(polygon) -> tuple[np.ndarray, np.ndarray]:
+    """Split the 10-point field polygon into ``(far_edge, near_edge)``, each ``(5, 2)`` sorted by x.
+
+    The polygon is a perimeter loop: points 0-4 are one touchline, 5-9 the other. The **far**
+    touchline is the one higher in the (corrected, upright) frame — smaller mean image-y — so this
+    is correct regardless of the polygon's point ordering and on the flipped early-Dahua games
+    (``video_rotation`` makes every frame upright before this runs, putting far at the top).
     """
-    span = max(y_bot - y_top, 1.0)
-    return float(np.clip((cy - y_top) / span, 0.0, 1.0))
+    poly = np.asarray(polygon, dtype=np.float64)
+    a, b = poly[:5], poly[5:10]
+    far, near = (a, b) if a[:, 1].mean() <= b[:, 1].mean() else (b, a)
+    return far[np.argsort(far[:, 0])], near[np.argsort(near[:, 0])]
+
+
+def curve_depth(
+    x: float, y: float, far_edge: np.ndarray, near_edge: np.ndarray
+) -> float:
+    """Field depth following the touchline curves: 0 = on the far touchline, 1 = on the near one.
+
+    Interpolates the far- and near-edge curves at the ball's ``x`` (so the iso-depth boundary is a
+    curve **parallel to the far touchline**, hugging the fisheye bow — not a flat horizontal line)
+    and returns the ball's normalized position between them.
+    """
+    yf = float(np.interp(x, far_edge[:, 0], far_edge[:, 1]))
+    yn = float(np.interp(x, near_edge[:, 0], near_edge[:, 1]))
+    span = yn - yf
+    if abs(span) < 1.0:
+        return 0.5
+    return float(np.clip((y - yf) / span, 0.0, 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -200,20 +222,21 @@ def select_teacher(
 
 def split_far(
     stream: dict[int, tuple[float, float]],
-    y_top: float,
-    y_bot: float,
+    far_edge: np.ndarray,
+    near_edge: np.ndarray,
     *,
-    far_frac: float = 0.35,
+    far_frac: float = 0.22,
 ) -> tuple[dict[int, tuple[float, float]], set[int]]:
-    """Partition a teacher stream into ``(non_far, far_frames)`` by band-y depth.
+    """Partition a teacher stream into ``(non_far, far_frames)`` by curve-following field depth.
 
-    A frame is *far* when its ball sits in the top ``far_frac`` of the field band (toward the far
-    touchline) — the regime where AutoCam loses the ball and human GT must own it.
+    A frame is *far* when its ball sits within ``far_frac`` of the way from the far touchline (the
+    curved far-edge) toward the near one — the regime where AutoCam loses the ball and human GT must
+    own it. The boundary follows the touchline curve, not a flat row.
     """
     non_far: dict[int, tuple[float, float]] = {}
     far_frames: set[int] = set()
     for g, (x, y) in stream.items():
-        if band_depth(y, y_top, y_bot) < far_frac:
+        if curve_depth(x, y, far_edge, near_edge) < far_frac:
             far_frames.add(g)
         else:
             non_far[g] = (x, y)
@@ -318,7 +341,7 @@ def build_distill_games(
     exclude: dict | None = None,
     base_stride: int = 4,
     dense_stride: int = 2,
-    far_frac: float = 0.35,
+    far_frac: float = 0.22,
     frozen_vel_px: float = 1.5,
     frozen_min_run: int = 20,
     gate_mult: float = 4.0,
@@ -337,7 +360,6 @@ def build_distill_games(
     with ``not_visible`` frames removed. Human labels win on conflict and are exempt from the far
     drop and the frozen/subsample filters.
     """
-    from training.data_prep.warped_dataset import field_band_from_polygon
     from training.world_model.geometry import build_field_geometry
 
     exclude = exclude or {"game_ids": set(), "frame_ranges": {}}
@@ -356,7 +378,7 @@ def build_distill_games(
             if polygon
             else None
         )
-        y_top, y_bot = field_band_from_polygon(polygon) if polygon else (0.0, 1.0)
+        far_edge, near_edge = field_edges(polygon) if polygon else (None, None)
 
         detections = load_detections(gc["detections"], offsets)
         viewport = load_viewport(gc["viewport"], offsets)
@@ -371,7 +393,12 @@ def build_distill_games(
         n_sel = len(teacher)
 
         # 2. far band → drop AutoCam (human GT owns it); keep non-far
-        non_far, far_frames = split_far(teacher, y_top, y_bot, far_frac=far_frac)
+        if far_edge is not None:
+            non_far, far_frames = split_far(
+                teacher, far_edge, near_edge, far_frac=far_frac
+            )
+        else:
+            non_far, far_frames = dict(teacher), set()
         n_far = len(far_frames)
 
         # 3. drop AutoCam-lost holds, then strip excluded eval frames BEFORE subsampling
@@ -424,6 +451,6 @@ def build_distill_games(
                 f"{gid} [{gc.get('camera', '?')}/{gc.get('team', '?')}]: "
                 f"sel {n_sel} -> far-drop {n_far}, frozen {n_frozen} -> subsample {len(kept)} "
                 f"+ human {n_human} (novis {len(human_novis)}) = {len(labels)} labels"
-                f"  band=[{y_top:.0f},{y_bot:.0f}] far<{far_frac:.0%}"
+                f"  far<{far_frac:.0%} of field depth"
             )
     return games
