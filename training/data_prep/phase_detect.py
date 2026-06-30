@@ -510,32 +510,24 @@ for g in games:
         sig.append("player")
     on2 = ht_dip[1]
 
-    # KO: first center ball-restart before HT, refined to the single whistle just before it. With no
-    # ball signal, the kickoff is the first whistle of the game (warm-up is silent before it).
-    ko = None
-    kc = [t for t in cen if t <= ht and t <= 25 * 60]
-    if kc:
-        ko = pre_single(kc[0]) or kc[0]
-        sig.append("ball")
-    elif blasts:
-        fw = next((b for b in blasts if b >= 20), None)
-        if fw is not None:
-            ko = fw
-            sig.append("whistle")
-    # 2H: first center ball-restart after the halftime dip, refined to the single whistle before.
-    sh = None
-    s2 = [t for t in cen if t >= on2 - 90]
+    # ---- KO/2H derived from the phase ORDER + structure, anchored to the reliable HT/END ----
+    # 2H: ordered AFTER halftime within a plausible break; first center restart in that window
+    # (else first whistle there; else HT + a typical break). Rejects 1st-half + warm-up-return
+    # restarts that wrecked the from-scratch pick.
+    MIN_BREAK, MAX_BREAK = 3 * 60, 18 * 60
+    s2 = [t for t in cen if ht + MIN_BREAK <= t <= ht + MAX_BREAK]
     if s2:
         sh = pre_single(s2[0]) or s2[0]
-        if "ball" not in sig:
-            sig.append("ball")
+        sig.append("ball")
     elif blasts:
-        after2 = [b for b in blasts if on2 - 30 <= b <= on2 + 150]
-        sh = after2[0] if after2 else on2
+        w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
+        sh = w2[0] if w2 else ht + 8 * 60
+        sig.append("whistle" if w2 else "order")
     else:
-        sh = on2
+        sh = ht + 8 * 60
+        sig.append("order")
 
-    # END: the last late multi-whistle (full-time) before the game empties out (no ht+sh cap).
+    # END: the last late multi-whistle (full-time) after 2H; else last-play.
     if multis:
         late = [m for m in multis if m >= sh + 15 * 60 and m <= off2 + 240]
         end = late[-1] if late else (snap(blasts, off2, 120) or off2)
@@ -544,15 +536,24 @@ for g in games:
     else:
         end = off2
 
-    # KO fallback when there's no ball restart: whistle symmetry, else player onset.
-    if ko is None:
-        if blasts:
-            ksym = max(0.0, ht - (end - sh))
-            ko = snap(blasts, ksym, 30) or ksym
-            sig.append("sym")
-        else:
-            ko = on1
-            sig.append("player")
+    # KO: the equal-halves symmetric estimate (KO = HT - 2nd-half-length) is the PRIOR; snap to the
+    # nearest real center restart before HT (rejects warm-up, which is far from the prior). No nearby
+    # restart -> first whistle of the game (no-ball games); none -> the symmetric estimate itself.
+    ko_sym = max(0.0, ht - (end - sh))
+    pre_ko = [t for t in cen if t < ht]
+    cand = min(pre_ko, key=lambda t: abs(t - ko_sym)) if pre_ko else None
+    near_r = [cand] if (cand is not None and abs(cand - ko_sym) < 300) else []
+    fw = next((b for b in blasts if b >= 20), None) if blasts else None
+    if near_r:
+        ko = pre_single(near_r[0]) or near_r[0]
+        if "ball" not in sig:
+            sig.append("ball")
+    elif fw is not None:
+        ko = fw
+        sig.append("whistle")
+    else:
+        ko = ko_sym
+        sig.append("sym")
     sig = list(dict.fromkeys(sig))
     used = "+".join(sig) + ("(sr=%d)" % sr if blasts else "")
     h1, h2 = (ht - ko) / 60, (end - sh) / 60
@@ -654,7 +655,7 @@ for g in games:
         "source": src,
         "signals": sig,
         "half_min": [round(h1, 1), round(h2, 1)],
-        "ko_from_ball": bool(kc),
+        "ko_from_ball": bool(near_r),
         "sh_from_ball": bool(s2),
         "audio_sr": int(sr or 0),
         "step_sec": STEP,
