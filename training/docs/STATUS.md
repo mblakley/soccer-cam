@@ -37,6 +37,19 @@ center restart; END=last late multi-whistle (no `ht+sh` cap). Result on the 13 s
 games: **within-10s 27%->38%**, END **median 134s->2s** (8/13), HT **median 18s->6s** (7/13),
 6/10 now 2H -3s / END -1s.
 
+**GT is CORRECT — do NOT re-investigate a "+60s GT offset" (2026-06-29).** A timestamp spot-check
+appeared to show human GT ~60s late on several games; this was a SCRIPT error, not a GT/web-app bug.
+The YouTube uploads are the TRIMMED videos (yt_dur ≈ trimmed dur, confirmed via yt-dlp), so YT time
+= global − trim_offset. A one-off check script used `t = global` instead of `global − trim_offset`,
+so its links pointed ~trim_offset late; Mark's reported YT times + trim_offset exactly match the
+stored game_state. The phase-edit-yt editor (offset = match_info trim_offset) is correct. Net: the
+eval numbers below are scored against CORRECT GT; the detector's KO/2H/HT misses are real.
+
+**KO snap tighten (2026-06-29):** within-10s 44%→**48%**, KO 4→6/13 (median 13s) — symmetric KO
+prior snaps to a restart only within ±60s, else trusts the prior (6/10 +102→+24s, 06.01 −54→0s,
+GUFC +106→−4s). Real remaining detector misses (vs correct GT): 06.01 2H −3min (grabs a warm-up-
+return touch, not the real 2H set→burst), 05.27/05.28 HT +3min (HT locks onto a wrong dip/multi).
+
 **KO/2H precision pass (2026-06-29):** got to within-10s **44%** via the phase ORDER + structure
 (Mark's insight), after several from-scratch-selection approaches all washed out.
 - DEAD ENDS (tried + reverted, each regressed as many games as it fixed because KO/2H are limited
