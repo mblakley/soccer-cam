@@ -32,6 +32,17 @@ which spectral denoise is designed to preserve -- consistent with WIND_NOISE.md 
 denoise is the wrong tool for tonal-gust whistle FPs; the discriminator must be pitch-stability +
 loudness inside `whistle_blasts`, not audio pre-cleaning.
 
+*Follow-up experiment (06.06-S only, per Mark): a per-blast LOUDNESS gate.* Measured per detected
+blast its peak loudness (xp75 frame loudness) and pitch spread. The real END whistle (80:14/80:15)
+is 16-21x p75; the three gust FPs (80:51/80:55/81:03) are only 5.5-9.7x. A peak-loudness gate of
+**>=10-14x p75** (comfortable margin) kills all three FPs and resolves END to 80:14 (= GT 80:15, +48s
+-> ~+1s) while KEEPING every real boundary (KO 17.6/14.3x, HT 20.9/24.8x, 2H 17.4x). Loudness alone
+sufficed -- pitch-stability not even needed. A referee whistle is genuinely loud + pitch-locked; the
+gust whistle-through-the-mic is quieter + sweeps. **Caveat before rollout:** a global loudness gate
+could drop a quieter wind-masked real whistle in another game, so a full rollout needs --recompute on
+all games + full scorecard re-verify (at native 44.1kHz, re-calibrating the multiple). On 06.06-S the
+fix is clean and unambiguous.
+
 **06.10 KO +24s (upload trimmed exactly to the kickoff).** Mark confirmed the YouTube/trimmed upload
 starts right at the kick (field full of players from frame 0; GT KO = 0:00 trimmed). There is no
 pre-kick signature (no static-center-ball restart, no kickoff whistle in-frame) so the detector
