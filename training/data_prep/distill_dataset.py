@@ -305,9 +305,10 @@ def subsample(
     turn_deg: float = 45.0,
     turn_window: int = 10,
 ) -> dict[int, tuple[float, float]]:
-    """Thin the dense stream: keep every ``base_stride``-th frame, densify to ``dense_stride``
-    within ``turn_window`` frames of a > ``turn_deg`` heading change (the most appearance-varied
-    frames). This is the near-mass balance lever — raise ``base_stride`` to keep far from drowning."""
+    """Thin the dense stream: keep every ``base_stride``-th frame (by sorted **index**, since the
+    teacher frames are already stride-4 in source units), densify to ``dense_stride`` within
+    ``turn_window`` frames of a > ``turn_deg`` heading change (the most appearance-varied frames).
+    Raise ``base_stride`` to thin further (the crop-count / balance lever)."""
     frames = sorted(stream)
     if not frames:
         return {}
@@ -326,9 +327,9 @@ def subsample(
         if d > turn_deg:
             turn_frames.update(frames[max(0, i - turn_window) : i + turn_window])
     out: dict[int, tuple[float, float]] = {}
-    for f in frames:
+    for idx, f in enumerate(frames):
         stride = dense_stride if f in turn_frames else base_stride
-        if f % stride == 0:
+        if idx % stride == 0:
             out[f] = stream[f]
     return out
 
