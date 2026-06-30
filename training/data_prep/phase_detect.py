@@ -542,7 +542,10 @@ for g in games:
     ko_sym = max(0.0, ht - (end - sh))
     pre_ko = [t for t in cen if t < ht]
     cand = min(pre_ko, key=lambda t: abs(t - ko_sym)) if pre_ko else None
-    near_r = [cand] if (cand is not None and abs(cand - ko_sym) < 300) else []
+    # snap ONLY if a restart sits right at the symmetric KO (equal halves => HT-(END-2H) IS the
+    # kickoff). A restart far from it is a later restart, not the kickoff (6/10: trim cut the
+    # kickoff whistle, game starts ~0:00; a 1:41 restart must NOT be snapped to).
+    near_r = [cand] if (cand is not None and abs(cand - ko_sym) < 60) else []
     fw = next((b for b in blasts if b >= 20), None) if blasts else None
     if near_r:
         ko = pre_single(near_r[0]) or near_r[0]
