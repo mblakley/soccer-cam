@@ -100,6 +100,26 @@ def files_offsets(base):
     return trim, raw, comb, off
 
 
+def find_fullframe_video(base, gj):
+    """Largest full-frame combined mp4 in a dahua archive folder. game.json's combined_video is
+    frequently missing or points at a slow/odd derivative across the 2024 archive, so pick the
+    biggest base-level .mp4 that is NOT a per-segment ch1 file and NOT the cropped once-processed
+    output. Orientation is sorted out later by player_curve's auto-detect."""
+    segnames = {s.get("seg") for s in (gj.get("segments") or [])}
+    best, bestsz = None, 0
+    for f in glob.glob(os.path.join(base, "*.mp4")):
+        b = os.path.basename(f).lower()
+        stem = os.path.splitext(os.path.basename(f))[0]
+        if stem in segnames or "_ch1" in b:
+            continue
+        if "once-processed" in b or "viewport" in b or "detections" in b:
+            continue
+        sz = os.path.getsize(f)
+        if sz > bestsz:
+            best, bestsz = f, sz
+    return best if bestsz > 1e9 else None
+
+
 # ---------- player-on-field curve ----------
 def persons(frame, thr=0.30):
     h, w = frame.shape[:2]
@@ -120,14 +140,30 @@ def persons(frame, thr=0.30):
     return res
 
 
+def _count_in(ps, polyf):
+    return sum(
+        1
+        for x1, y1, x2, y2 in ps
+        if cv2.pointPolygonTest(polyf, (float((x1 + x2) / 2), float(y2)), False) >= 0
+    )
+
+
 def player_curve(path, polyf, rot, step):
-    """Decode ~1 frame / step sec, count in-field persons. Returns (times[], counts[], dur)."""
+    """Decode ~1 frame / step sec, count in-field persons. Returns (times[], counts[], dur).
+
+    Orientation is AUTO-DETECTED, not taken from video_rotation: the field_polygon is upright, but
+    the combined video may be raw (camera mounted inverted) OR already rotated, and the dahua
+    archive's video_rotation is inconsistent (raw files tagged rot=0, rotated files too). For the
+    first frames we count in-field persons BOTH ways and commit to whichever orientation wins."""
     c = av.open(path)
     vs = c.streams.video[0]
+    vs.thread_type = "AUTO"  # 4K panorama files are decode-bound; use all cores
     dur = float(vs.duration * vs.time_base) if vs.duration else None
     if not dur:
         dur = float(c.duration / 1e6) if c.duration else 0.0
     ts, cnt = [], []
+    flip = None  # None = still deciding; True = rotate 180 to make upright
+    vote = [0, 0]  # cumulative in-field persons [as-decoded, 180-rotated]
     t = 2.0
     while t < dur - 1:
         try:
@@ -141,15 +177,17 @@ def player_curve(path, polyf, rot, step):
                 break
         if fr is None:
             break
-        if rot % 360 == 180:  # camera mounted inverted (reolink +180, dahua -180)
-            fr = fr[::-1, ::-1].copy()
-        ps = persons(fr)
-        nin = sum(
-            1
-            for x1, y1, x2, y2 in ps
-            if cv2.pointPolygonTest(polyf, (float((x1 + x2) / 2), float(y2)), False)
-            >= 0
-        )
+        if flip is None:  # decide orientation from the first populated frames
+            a = _count_in(persons(fr), polyf)
+            b = _count_in(persons(fr[::-1, ::-1].copy()), polyf)
+            vote[0] += a
+            vote[1] += b
+            nin = max(a, b)
+            if vote[0] + vote[1] >= 40 or len(ts) >= 16:
+                flip = vote[1] > vote[0]
+        else:
+            frame = fr[::-1, ::-1].copy() if flip else fr
+            nin = _count_in(persons(frame), polyf)
         ts.append(t)
         cnt.append(nin)
         t += step
@@ -168,10 +206,19 @@ def smooth(a, k=5):
 def segment(ts, cnt):
     """Half-length agnostic. Halftime = the longest SUSTAINED low-player run in the middle of the
     game (field empties). 1H = first-play -> halftime; 2H = halftime -> last-play. Returns the
-    onset/offset of each half in video time (refined to whistles later)."""
+    onset/offset of each half in video time (refined to whistles/ball later).
+
+    Never returns None when there IS play: some (esp. youth) games don't clearly empty the field at
+    halftime, so when no mid-game dip is found we still return a structure (midpoint placeholder +
+    empty dips) and let the whistle/ball fusion locate halftime. Only a total absence of detected
+    play -> None."""
     n = len(cnt)
     sm = smooth(cnt, 3)  # light denoise of single-frame yolo misses
     dur = ts[-1]
+    play = [k for k in range(n) if sm[k] >= 4]
+    if not play:
+        return None  # no sustained play detected at all -> unusable
+    on1, off2 = ts[play[0]], ts[play[-1]]
     low = sm <= 2  # field essentially empty
     runs, i = [], 0
     while i < n:
@@ -188,19 +235,17 @@ def segment(ts, cnt):
         for a, b in runs
         if (b - a + 1) >= 3 and 0.20 * dur <= ts[a] <= 0.80 * dur
     ]
-    if not mid:
-        return None
-    a_ht, b_ht = max(mid, key=lambda r: r[1] - r[0])  # longest mid low-run = halftime
-    play = [k for k in range(n) if sm[k] >= 4]
-    if not play:
-        return None
-    on1 = ts[play[0]]
-    off1 = (ts[a_ht - 1] + ts[a_ht]) / 2 if a_ht > 0 else ts[a_ht]
-    on2 = (ts[b_ht] + ts[b_ht + 1]) / 2 if b_ht + 1 < n else ts[b_ht]
-    off2 = ts[play[-1]]
     # all candidate mid-game player dips (onset,offset) — fusion picks the halftime one by the
     # multi-whistle that precedes it, not by length alone (a spurious long dip != halftime).
     dips = [(float(ts[a]), float(ts[b])) for a, b in mid]
+    if mid:
+        a_ht, b_ht = max(
+            mid, key=lambda r: r[1] - r[0]
+        )  # longest mid low-run = halftime
+        off1 = (ts[a_ht - 1] + ts[a_ht]) / 2 if a_ht > 0 else ts[a_ht]
+        on2 = (ts[b_ht] + ts[b_ht + 1]) / 2 if b_ht + 1 < n else ts[b_ht]
+    else:  # field never clearly emptied -> placeholder; fusion leans on whistle/ball for HT
+        off1 = on2 = (on1 + off2) / 2
     return on1, off1, on2, off2, sm, dips
 
 
@@ -287,15 +332,16 @@ def snap(cands, target, tol):
     return min(c, key=lambda x: abs(x - target)) if c else None
 
 
-def ball_restarts(base, gj=None):
+def ball_restarts(base, gj=None, poly_src=None):
     """Ball restart events (ball static ~1.5s then moving off) + center spot, on the game timeline.
-    Returns (events[(t,x,y)], center_xy); center = densest restart-spot cluster.
+    Returns (events[(t,x,y)], center_xy); center = densest restart-spot cluster. poly_src is the
+    upright field polygon in source px (used to auto-detect dahua detection orientation).
 
     Source priority, robust to header/short lines + missing keys (never raises):
       1) reolink Once-native <video>.mp4.jsonl with {t, xy} (already on the game timeline, seconds);
-      2) dahua-segment games: ball_track.jsonl with {seg, f, x, y} (per-segment frame) -> global
-         seconds via game.json segment global_offset/fps. (The dahua <...>-once-processed.mp4.jsonl
-         carries xy but no t, so path 1 yields nothing for it and we fall through to the track.)"""
+      2) dahua-segment games: autocam_detections.jsonl {seg, f, x, y, conf} (per-segment frame,
+         raw space) -> global seconds via segment global_offset/fps, made upright by the auto-
+         detected 180 flip; ball_track.jsonl (empty for these games) is the fallback."""
     T, X, Y = [], [], []
     # --- path 1: {t, xy} global-seconds sidecar (reolink) ---
     for f in glob.glob(
@@ -330,10 +376,8 @@ def ball_restarts(base, gj=None):
             )
             for s in segs0
         }
-        rotg = int(gj.get("video_rotation", 0) or 0)
         Wg = int(segs0[0]["w"]) if segs0 else 0
         Hg = int(segs0[0]["h"]) if segs0 else 0
-        flip = (rotg % 360 == 180) and Wg and Hg
         det = os.path.join(base, "autocam_detections.jsonl")
         bt = os.path.join(base, "ball_track.jsonl")
         src = (
@@ -359,6 +403,17 @@ def ball_restarts(base, gj=None):
                 k = (seg, fr)
                 if k not in best or conf > best[k][2]:
                     best[k] = (float(x), float(y), conf)
+            # auto-detect orientation: rotate 180 iff that puts more detections in the upright field
+            flip = False
+            if best and poly_src is not None and len(poly_src) and Wg and Hg:
+                pf = poly_src.reshape(-1, 1, 2).astype(np.float32)
+                raw_in = rot_in = 0
+                for x, y, conf in best.values():
+                    if cv2.pointPolygonTest(pf, (x, y), False) >= 0:
+                        raw_in += 1
+                    if cv2.pointPolygonTest(pf, (Wg - 1 - x, Hg - 1 - y), False) >= 0:
+                        rot_in += 1
+                flip = rot_in > raw_in
             T, X, Y = [], [], []
             for (seg, fr), (x, y, conf) in best.items():
                 off, fps = segmap[seg]
@@ -457,9 +512,9 @@ for g in games:
     vid = trim or raw or comb
     if (
         not vid
-    ):  # dahua flat layout: no subdir mp4 / combined.mp4 -> game.json combined_video
+    ):  # dahua flat layout: game.json combined_video, else largest full-frame mp4
         cv = gj.get("combined_video")
-        vid = cv if (cv and os.path.exists(cv)) else None
+        vid = cv if (cv and os.path.exists(cv)) else find_fullframe_video(d, gj)
     if not vid:
         print("  [%s] no video file in %s" % (gid, d))
         continue
@@ -496,8 +551,8 @@ for g in games:
         ts, cnt, dur = player_curve(vid, polyf, rot, STEP)
         blasts, multis, sr = whistle_blasts(vid)
         ball_ev, bcenter = ball_restarts(
-            d, gj
-        )  # ball restart events + center spot (source px)
+            d, gj, poly
+        )  # ball restart events + center spot (upright source px)
         json.dump(
             {
                 "ts": ts.tolist(),
@@ -547,15 +602,22 @@ for g in games:
     # the game centre. Centrality (halves are ~equal) rejects spurious water-break dips; the
     # following-dip requirement rejects loud crowd multis that aren't halftime.
     ht = ht_dip = None
+    central_multis = [m for m in multis if 0.30 * dur <= m <= 0.68 * dur]
     htc = [
         (m, d)
-        for m in multis
-        if 0.30 * dur <= m <= 0.68 * dur
+        for m in central_multis
         for d in [next((dp for dp in dips if m - 45 <= dp[0] <= m + 240), None)]
         if d
     ]
     if htc:
         ht, ht_dip = min(htc, key=lambda md: abs(md[0] - dur / 2))
+        sig.append("whistle")
+    elif not dips and central_multis:
+        # field never clearly emptied (youth games) but there IS a central multi-whistle: trust the
+        # one nearest game centre as halftime. Gated on no-dips so games with a real dip are
+        # unaffected (they keep the dip-following-whistle / longest-dip paths below).
+        ht = min(central_multis, key=lambda m: abs(m - dur / 2))
+        ht_dip = (ht, ht)
         sig.append("whistle")
     if ht is None:  # fallback: longest dip itself, snapped to any nearby whistle
         ht_dip = (off1, on2)
