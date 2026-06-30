@@ -85,6 +85,7 @@ def build_heatmap_crops(
     neg_per_pos: int = 1,
     hard_neg_crops: dict[str, list] | None = None,
     record_depth: bool = False,
+    hwaccel: bool = False,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -128,9 +129,24 @@ def build_heatmap_crops(
             continue
         # PyAV ignores the container's display-rotation; resolve it (explicit else game.json) and apply per frame
         vrot = resolve_video_rotation(str(g["video"]), g.get("video_rotation"))
-        container = av.open(str(g["video"]))
+        # NVDEC hardware decode for the huge (7680x2160 HEVC / 4096 H.264) videos — ~3.3x faster
+        # than CPU on this box; per-video software fallback if the GPU can't take a codec/size.
+        _hw = None
+        if hwaccel:
+            try:
+                _hw = av.codec.hwaccel.HWAccel(
+                    device_type="cuda", allow_software_fallback=True
+                )
+            except Exception:  # noqa: BLE001 — no CUDA / old PyAV → CPU decode
+                _hw = None
+        container = (
+            av.open(str(g["video"]), hwaccel=_hw)
+            if _hw is not None
+            else av.open(str(g["video"]))
+        )
         stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
+        if _hw is None:
+            stream.thread_type = "AUTO"
         sw = stream.codec_context.width
         sh = stream.codec_context.height
         # Build BOTH the band crop and the mask from the far-margin-expanded polygon, so

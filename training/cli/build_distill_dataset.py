@@ -111,6 +111,11 @@ def main() -> None:
     ap.add_argument("--crop", type=int, default=256)
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--target-width", type=int, default=None)
+    ap.add_argument(
+        "--no-hwaccel",
+        action="store_true",
+        help="disable NVDEC hardware decode (default: on; ~3.3x faster on this box)",
+    )
     args = ap.parse_args()
 
     holdout, val = set(args.holdout), set(args.val)
@@ -143,6 +148,7 @@ def main() -> None:
         sigma=args.sigma,
         val_game_ids=val_ids,
         target_width=args.target_width,
+        hwaccel=not args.no_hwaccel,
     )
     print("\nDATASET:", summary, flush=True)
 
