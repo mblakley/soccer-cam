@@ -68,9 +68,11 @@ def det_times(gid):
     fit = json.load(open(fp, encoding="utf-8"))
     voff = fit.get("voff", 0.0)
     vdur, gtd = fit.get("vdur"), fit.get("gt_dur")
-    # misaligned: the chosen video span differs a lot from the GT span (incomplete or multi-game
-    # video), so its timeline can't be mapped to GT -> a data issue, not a detector error.
-    mis = bool(vdur and gtd and abs(vdur - gtd) > 120)
+    # misaligned: the video's GLOBAL span (voff .. voff+vdur) doesn't reach the GT recording span,
+    # i.e. the chosen video is incomplete or multi-game, so its timeline can't map to GT -- a data
+    # issue, not a detector error. (Must add voff: reolink trimmed uploads have vdur < gt_dur by the
+    # trim offset, which voff corrects -- comparing vdur alone wrongly flags every reolink game.)
+    mis = bool(vdur and gtd and abs(vdur + voff - gtd) > 120)
     return (
         {t: fit["times"][t] + voff for t in TRANSITIONS},
         fit.get("ok"),
