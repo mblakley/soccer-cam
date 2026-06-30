@@ -36,8 +36,15 @@ already existed are now actually exercised:
   and the center-circle restart is often mis-clustered (picks a goal-area restart, not the centre).
 
 **Real remaining detector gaps (not data):**
-- Dahua KO/2H: improve center-restart selection, or use the player-curve 2H (field-refill after the
-  HT dip) instead of the noisy ball restart when there's no whistle.
+- Dahua KO/2H. **Measured (2026-06-30) and ruled out the easy fix:** the player-curve `on2`
+  (field-refill at the end of the HT dip) is a LOWER BOUND on 2H, not the kickoff — it ≈ GT 2H only
+  when the 2nd-half warm-up is short (05.01 on2 51:08 vs GT 50:56, where the ball restart wrongly
+  picked 60:09), but it REGRESSES games where the ball restart is already right (07.02 ball 47:07 =
+  GT 47:18, on2 39:50 would be -448 s). `on1` ≈ 0:02 always (warm-up onset), useless for KO. There
+  is no clean `on2`-vs-ball selection rule (distance-from-on2 doesn't separate the two regimes). The
+  true gap is the dahua ball **detection**: the actual 2H-kickoff center restart is often not
+  detected (AutoCam center cluster lands on a goal-area restart), so KO (symmetric off 2H) follows
+  it wrong. Needs better center-restart detection (homegrown ball detector), not selection.
 - A few reolink 2H -60..-120 s (05.27/05.28/06.01) and KO outliers (West_Seneca +384, 06.06 +236).
 
 Branch `feat/game-phase-detection` pushed to origin. Box scripts (`G:\ballresearch\phase_*.py`)
