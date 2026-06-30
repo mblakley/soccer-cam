@@ -1,0 +1,255 @@
+#!/bin/sh
+# /etc/init.d/S99_NetState  (v2: + home-stub cleanup)
+# Toggles scheduled recording based on the default-gateway MAC address.
+# Idle on home networks (the HOME_MACS_DEFAULT list below, set at build time);
+# record continuously everywhere else.
+#
+# v2 change: when we are HOME (recording disabled), automatically delete any
+# recording files created during THIS boot (the boot-window "stub" the camera
+# writes before the daemon flips enable=0). Files from previous boots (real
+# field game footage already on the card) are never touched, because we only
+# delete files whose mtime is at/after this boot's start time.
+#
+# Runtime overrides (on the writable SD card):
+#   /mnt/sda/netstate/home_macs.txt  - one MAC per line, replaces baked-in list
+#   /mnt/sda/netstate/override       - presence => daemon yields, you control rec
+#   /mnt/sda/netstate/no_stub_clean  - presence => disable home-stub cleanup
+#   /mnt/sda/netstate/log            - decision log (auto-rotates at 256 KB)
+
+HOME_MACS_DEFAULT="%%HOME_MACS%%"
+USER="%%CAMERA_USER%%"
+PASS="%%CAMERA_PASS%%"
+
+CONFIG_DIR=/mnt/sda/netstate
+HOME_MACS_FILE=$CONFIG_DIR/home_macs.txt
+OVERRIDE_FILE=$CONFIG_DIR/override
+NOCLEAN_FILE=$CONFIG_DIR/no_stub_clean
+LOG=$CONFIG_DIR/log
+REC_DIR=/mnt/sda/Mp4Record
+
+POLL_INTERVAL=30
+# Head-start before the first home/away check. Kept short: wait_for_api (below)
+# already polls until the camera API is reachable, so a long pre-sleep only
+# delays the home-disable and lets the camera record a longer boot "stub" at
+# home. Fail-enabled is preserved regardless -- the camera boots recording and
+# we only ever DISABLE on a confirmed home MAC.
+INIT_GRACE=5
+LOG_MAX_BYTES=262144
+
+# This boot's start time (epoch). Anything in Mp4Record with mtime >= this was
+# written during the current power-on; if we're home, it's a stub to remove.
+BOOT_EPOCH=$(( $(date +%s) - $(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0) ))
+
+ALL_ON='111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'
+
+mkdir -p "$CONFIG_DIR" 2>/dev/null
+
+# Surface the firmware build manifest to the SD card so it is readable over the
+# HTTP unlock at /downloadfile/soccercam/build.txt -- identifies which build is
+# running (every pak reports the same stock version string otherwise).
+if [ -f /etc/soccercam_build ]; then
+    mkdir -p /mnt/sda/soccercam 2>/dev/null
+    cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+fi
+
+log() {
+    local MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    if [ -w "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" 2>/dev/null; then
+        if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+            mv "$LOG" "$LOG.old" 2>/dev/null
+        fi
+        echo "$MSG" >>"$LOG"
+    fi
+}
+
+# Delete recordings created during THIS boot (mtime >= BOOT_EPOCH). Only called
+# while home.
+#
+# We deliberately do NOT compute "today's" directory from `date`: the shell's
+# clock is UTC, but the camera names its Mp4Record/<YYYY-MM-DD> subdirs in LOCAL
+# time, so after dark the two land on different calendar days and a date-derived
+# path misses the stub entirely (this is exactly why the home boot-stub was not
+# being cleaned). Instead we scan EVERY date subdir and let the epoch-based
+# mtime test -- which is timezone-independent -- decide what belongs to this
+# boot. Verbose logging records the boot epoch, what was scanned, and whether
+# each rm actually removed the file (re-stat after deleting).
+clean_home_stubs() {
+    [ -f "$NOCLEAN_FILE" ] && return
+    local D F MT N=0 CAND=0 SCANNED=0 FIRST=0
+    [ -z "$CLEAN_RAN" ] && { FIRST=1; CLEAN_RAN=1; }
+    [ -d "$REC_DIR" ] || { [ "$FIRST" = 1 ] && log "  clean: $REC_DIR missing -- nothing to clean"; return; }
+    # First pass: count candidates (mtime >= this boot) WITHOUT deleting, so the
+    # verbose per-file log only fires when there is actually a stub to remove.
+    for D in "$REC_DIR"/*; do
+        [ -d "$D" ] || continue
+        for F in "$D"/*.mp4; do
+            [ -f "$F" ] || continue
+            SCANNED=$((SCANNED+1))
+            MT=$(stat -c %Y "$F" 2>/dev/null) || continue
+            [ "$MT" -ge "$BOOT_EPOCH" ] && CAND=$((CAND+1))
+        done
+    done
+    if [ "$CAND" = 0 ]; then
+        [ "$FIRST" = 1 ] && log "  clean: boot_epoch=$BOOT_EPOCH date_utc='$(date '+%F %T')' scanned=$SCANNED candidates=0 (nothing newer than this boot)"
+        return
+    fi
+    log "  clean: boot_epoch=$BOOT_EPOCH now=$(date +%s) date_utc='$(date '+%F %T')' scanned=$SCANNED candidates=$CAND -- deleting stub(s)"
+    for D in "$REC_DIR"/*; do
+        [ -d "$D" ] || continue
+        for F in "$D"/*.mp4; do
+            [ -f "$F" ] || continue
+            MT=$(stat -c %Y "$F" 2>/dev/null) || continue
+            [ "$MT" -ge "$BOOT_EPOCH" ] || continue
+            log "    rm $F  (mtime=$MT, +$((MT-BOOT_EPOCH))s into boot)"
+            rm -f "$F"
+            if [ -f "$F" ]; then
+                log "    FAILED -- still present after rm: $F"
+            else
+                log "    removed -- gone after rm: $F"
+                N=$((N+1))
+            fi
+        done
+        rmdir "$D" 2>/dev/null && log "    rmdir emptied dir $D"
+    done
+    log "  clean: deleted $N of $CAND candidate stub(s) (boot_epoch $BOOT_EPOCH)"
+}
+
+home_macs() {
+    if [ -r "$HOME_MACS_FILE" ]; then
+        sed 's/#.*//; s/[[:space:]]//g' "$HOME_MACS_FILE" | grep -v '^$'
+    else
+        echo "$HOME_MACS_DEFAULT" | tr ' ' '\n'
+    fi
+}
+
+is_home_mac() {
+    local M CANDIDATE
+    CANDIDATE=$(echo "$1" | tr 'A-Z' 'a-z')
+    for M in $(home_macs | tr 'A-Z' 'a-z'); do
+        [ "$M" = "$CANDIDATE" ] && return 0
+    done
+    return 1
+}
+
+get_gateway_ip() {
+    local HEX
+    HEX=$(awk '$2 == "00000000" { print $3; exit }' /proc/net/route)
+    [ -z "$HEX" ] && return 1
+    printf '%d.%d.%d.%d\n' 0x${HEX:6:2} 0x${HEX:4:2} 0x${HEX:2:2} 0x${HEX:0:2}
+}
+
+resolve_arp_mac() {
+    local IP=$1 MAC
+    MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    if [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ]; then
+        ping -c 1 -W 1 "$IP" >/dev/null 2>&1
+        MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    fi
+    [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ] && return 1
+    echo "$MAC"
+}
+
+api_login() {
+    local BODY="[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"$USER\",\"password\":\"$PASS\"}}}]"
+    local URL="http://127.0.0.1/api.cgi?cmd=Login&token=null"
+    local TMP=/tmp/netstate_resp.$$ TMPE=/tmp/netstate_err.$$
+    wget -q -O "$TMP" --header='Content-Type: application/json' --post-data="$BODY" "$URL" 2>"$TMPE"
+    local TOK=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+    if [ -z "$TOK" ]; then
+        wget -q -O "$TMP" --post-data="$BODY" "$URL" 2>"$TMPE"
+        TOK=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+    fi
+    rm -f "$TMP" "$TMPE"
+    [ -n "$TOK" ] && echo "$TOK"
+}
+
+set_record_state() {
+    local TOK BODY RESP ENABLE
+    TOK=$(api_login)
+    if [ -z "$TOK" ]; then log "  api_login failed"; return 1; fi
+    if [ "$1" = "on" ]; then ENABLE=1; else ENABLE=0; fi
+    BODY="[{\"cmd\":\"SetRecV20\",\"action\":0,\"param\":{\"Rec\":{\"enable\":$ENABLE,\"overwrite\":1,\"postRec\":\"15 Seconds\",\"preRec\":1,\"saveDay\":7,\"schedule\":{\"channel\":0,\"table\":{\"TIMING\":\"$ALL_ON\"}}}}}]"
+    RESP=$(wget -q -O- --header='Content-Type: application/json' --post-data="$BODY" \
+        "http://127.0.0.1/api.cgi?cmd=SetRecV20&token=$TOK" 2>/dev/null)
+    case "$RESP" in
+        *'"rspCode"'*200*) return 0 ;;
+        *) log "  set_record_state rsp: $RESP"; return 1 ;;
+    esac
+}
+
+wait_for_api() {
+    local i=0
+    while [ $i -lt 60 ]; do
+        if wget -q -O- --timeout=2 "http://127.0.0.1/api.cgi?cmd=GetTime&token=null" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2; i=$((i+1))
+    done
+    return 1
+}
+
+main_loop() {
+    log "===== netstate daemon (v2 +stub-clean) starting ====="
+    log "  HOME_MACS_DEFAULT=$HOME_MACS_DEFAULT boot_epoch=$BOOT_EPOCH"
+    sleep $INIT_GRACE
+    wait_for_api && log "  api ready" || log "  api wait timed out, proceeding anyway"
+
+    # Surface the build manifest now that the API/SD card are up. The early
+    # top-level copy can run before /mnt/sda is writable, so do it here too --
+    # this is the point we know writes succeed (the log above just wrote).
+    if [ -f /etc/soccercam_build ]; then
+        mkdir -p /mnt/sda/soccercam 2>/dev/null
+        cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+        log "  build manifest -> /mnt/sda/soccercam/build.txt"
+    fi
+
+    local LAST_STATE=""
+    while true; do
+        if [ -f "$OVERRIDE_FILE" ]; then
+            [ "$LAST_STATE" != "override" ] && { log "override present -- daemon yields"; LAST_STATE="override"; }
+            sleep $POLL_INTERVAL; continue
+        fi
+        local GW MAC NEW_STATE
+        GW=$(get_gateway_ip)
+        if [ -z "$GW" ]; then NEW_STATE="away"; MAC=""; else
+            MAC=$(resolve_arp_mac "$GW")
+            if [ -z "$MAC" ]; then NEW_STATE="away"
+            elif is_home_mac "$MAC"; then NEW_STATE="home"
+            else NEW_STATE="away"; fi
+        fi
+        # FAIL-ENABLED: only ever DISABLE on a confirmed home MAC, and latch
+        # LAST_STATE only once the camera CONFIRMS the change. A failed
+        # SetRecV20 is retried on the next poll instead of being latched, so a
+        # powered-on field camera can never silently sit not-recording because
+        # of one API hiccup.
+        case "$NEW_STATE" in
+            home)
+                if [ "$LAST_STATE" != "home" ]; then
+                    if set_record_state off; then
+                        log "state -> home: recording DISABLED  (gw=${GW:-none} mac=${MAC:-none})"
+                        LAST_STATE="home"
+                    else
+                        log "home detected, disable failed; still recording (safe) -- retry next poll"
+                    fi
+                fi
+                clean_home_stubs   # also catch stragglers while we remain home
+                ;;
+            *)  # away / no-network / ambiguous -> ensure recording is ON
+                if [ "$LAST_STATE" != "away" ]; then
+                    if set_record_state on; then
+                        log "state -> away: recording ENABLED (TIMING all-on)  (gw=${GW:-none} mac=${MAC:-none})"
+                        LAST_STATE="away"
+                    else
+                        log "away, enable FAILED -- retry next poll (must not sit idle at a game)"
+                    fi
+                fi
+                ;;
+        esac
+        sleep $POLL_INTERVAL
+    done
+}
+
+( main_loop ) &
+disown 2>/dev/null
+exit 0

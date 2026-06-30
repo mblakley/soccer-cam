@@ -18,3 +18,10 @@ camera.env
 *.json
 !*.example.*
 __pycache__/
+
+# External third-party source (Helix AAC decoder — RealNetworks RPSL, fetched locally;
+# see recover/helix/README.md). Our compat stubs + integration code ARE committed.
+recover/helix/ESP8266Audio/
+recover/helix/build/
+*.a
+*.o

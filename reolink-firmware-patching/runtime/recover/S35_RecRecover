@@ -1,0 +1,61 @@
+#!/bin/sh
+# /etc/init.d/S35_RecRecover
+# Rebuild power-cut recordings into normal, playable files at boot — BEFORE the camera's own
+# scan discards them as "Invalid". Runs the bundled reindexer, which appends a valid moov IN
+# PLACE under the original RecM09 name (mdat untouched), so the camera re-indexes the file as a
+# regular /downloadfile/ + Search video. Recovers the video track (loses <=1 GOP, ~2s at 20fps).
+# NEVER deletes a recoverable file; leaves truly-unparseable ones in place for inspection.
+
+REC=/mnt/sda/Mp4Record
+DIRR=/mnt/sda/recover
+LOG=$DIRR/log
+TOOL=/usr/bin/recover_mp4
+mkdir -p "$DIRR" 2>/dev/null
+# mkdir in log() too: the top-level mkdir can run before /mnt/sda is mounted/writable
+# at early boot, so re-ensure the dir each time we log (otherwise log lines are lost).
+log(){ mkdir -p "$DIRR" 2>/dev/null; echo "[$(date '+%F %T')] $*" >>"$LOG" 2>/dev/null; }
+
+run(){
+    i=0; while [ ! -d "$REC" ] && [ $i -lt 90 ]; do sleep 1; i=$((i+1)); done
+    [ -d "$REC" ] || { log "no $REC; exit"; return; }
+    [ -x "$TOOL" ] || { log "tool $TOOL missing; exit"; return; }
+    log "===== recovery scan start ====="
+
+    # rotate log if big
+    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt 262144 ]; then mv "$LOG" "$LOG.old" 2>/dev/null; fi
+
+    # find a reference good file (already has a moov => tool exits 2)
+    REF=""
+    for f in "$REC"/*/RecM09_*.mp4; do
+        [ -f "$f" ] || continue
+        "$TOOL" "$f" "$f" >/dev/null 2>&1
+        [ $? -eq 2 ] && { REF="$f"; break; }
+    done
+    [ -n "$REF" ] || { log "no complete reference file found; skip"; return; }
+    log "reference: $REF"
+
+    # recover orphans (main stream)
+    for f in "$REC"/*/RecM09_*.mp4; do
+        [ -f "$f" ] || continue
+        OUT=$("$TOOL" "$f" "$REF" 2>>"$LOG"); rc=$?
+        if [ $rc -eq 0 ]; then
+            dur=$(echo "$OUT" | sed -n 's/.*RECOVERED_DURATION_SEC=\([0-9][0-9]*\).*/\1/p')
+            log "RECOVERED $f (dur=${dur}s)"
+            # fix filename end-time = start + recovered duration (passes camera duration check)
+            if [ -n "$dur" ]; then
+                base=$(basename "$f"); d=$(dirname "$f"); start=$(echo "$base" | cut -d_ -f3)
+                newend=$(awk -v s="$start" -v dd="$dur" 'BEGIN{h=substr(s,1,2)+0;m=substr(s,3,2)+0;se=substr(s,5,2)+0;t=h*3600+m*60+se+dd;printf "%02d%02d%02d",int(t/3600)%24,int(t/60)%60,t%60}')
+                f1=$(echo "$base" | cut -d_ -f1); f2=$(echo "$base" | cut -d_ -f2); rest=$(echo "$base" | cut -d_ -f5-)
+                nn="${f1}_${f2}_${start}_${newend}_${rest}"
+                if [ "$nn" != "$base" ]; then mv "$f" "$d/$nn" 2>/dev/null && log "  renamed -> $nn"; fi
+            fi
+        elif [ $rc -eq 3 ]; then
+            log "UNRECOVERABLE (left in place) $f"
+        fi
+        # rc 2 = already valid -> skip
+    done
+    log "===== recovery scan done ====="
+}
+( run ) &
+disown 2>/dev/null
+exit 0
