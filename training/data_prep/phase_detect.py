@@ -39,6 +39,10 @@ CACHE = os.environ.get("PHASE_CACHE", r"G:\ballresearch\phase_cache")
 WRITE = "--write" in sys.argv
 FORCE = "--force" in sys.argv
 RECOMPUTE = "--recompute" in sys.argv  # ignore cached curve/whistle, recompute
+# --recompute-whistle: re-run ONLY whistle_blasts (cheap audio re-decode) and merge into the cache,
+# keeping the slow cached player-curve + ball signals. For rolling out a whistle-detection change
+# (e.g. populating the loudness gate's per-blast ratios) without a full --recompute.
+RECOMPUTE_WHISTLE = "--recompute-whistle" in sys.argv
 # --predict: compute the fit + dump <gid>.fit.json for ALL games (even human-verified) but NEVER
 # write game_state. For scoring the current detector against human GT without touching it.
 PREDICT = "--predict" in sys.argv
@@ -54,6 +58,12 @@ STEP = float(sys.argv[sys.argv.index("--step") + 1]) if "--step" in sys.argv els
 REOLINK_ONLY = "--reolink-only" in sys.argv
 GT_ONLY = "--gt-only" in sys.argv
 PLAY_THR = 5  # >= this many in-field persons => play
+# END-whistle loudness gate: the full-time whistle must be at least this multiple of the p75 frame
+# loudness. Wind resonating through the mic at the ref's pitch makes a faint, pitch-wandering
+# post-game "multi" (06.06-S gusts ~8-11x p75) that the "last late multi" END rule wrongly picked
+# over the loud (~30x) real whistle. Applied ONLY to END selection (a global gate over-prunes the
+# quieter, game-variable KO/HT/2H whistles). From the cached per-blast ratios; env-tunable.
+LOUD_GATE = float(os.environ.get("PHASE_LOUD_GATE", "12"))
 reg = json.load(open(REG, encoding="utf-8"))
 
 _SESS = None
@@ -254,11 +264,16 @@ def whistle_blasts(path):
     c = av.open(path)
     if not c.streams.audio:
         c.close()
-        return [], [], 0  # no audio stream (some dahua combined videos) -> no whistles
+        return (
+            [],
+            [],
+            0,
+            [],
+        )  # no audio stream (some dahua combined videos) -> no whistles
     sr = c.streams.audio[0].rate or 44100
     if sr < 9000:
         c.close()
-        return [], [], sr  # audio too low-rate for whistle (~4.3kHz)
+        return [], [], sr, []  # audio too low-rate for whistle (~4.3kHz)
     buf = []
     try:
         for fr in c.decode(audio=0):
@@ -273,7 +288,7 @@ def whistle_blasts(path):
         pass
     c.close()
     if not buf:
-        return [], [], sr
+        return [], [], sr, []
     audio = np.concatenate(buf).astype(np.float32)
     win, hop = 1024, 512
     freqs = np.fft.rfftfreq(win, 1.0 / sr)
@@ -295,12 +310,14 @@ def whistle_blasts(path):
     tframes = np.arange(nf) * hop / sr
     tf = peakf[(ton > 0.4) & (loud > np.percentile(loud, 80))]
     if len(tf) < 3:
-        return [], [], sr
+        return [], [], sr, []
     hist, edges = np.histogram(tf, bins=np.arange(3000, 4900, 100))
     pitch = edges[int(np.argmax(hist))] + 50
-    active = (
-        (ton > 0.35) & (np.abs(peakf - pitch) < 300) & (loud > np.percentile(loud, 75))
-    )
+    l75 = float(np.percentile(loud, 75))
+    active = (ton > 0.35) & (np.abs(peakf - pitch) < 300) & (loud > l75)
+    # each active run -> (start_time, peak-loudness ratio = max frame loudness / p75). The ratio lets
+    # fusion drop faint wind-gust "whistles" (a gust resonating at the ref pitch is pitch-wandering
+    # and only ~5-10x p75; a real whistle is ~14x+) -- see LOUD_GATE.
     out, i = [], 0
     while i < nf:
         if active[i]:
@@ -308,14 +325,19 @@ def whistle_blasts(path):
             while j < nf and active[j]:
                 j += 1
             if tframes[j - 1] - tframes[i] >= 0.08:
-                out.append(tframes[i])
+                out.append((tframes[i], float(loud[i:j].max() / (l75 + 1e-9))))
             i = j
         else:
             i += 1
-    blasts = []
-    for t in out:
+    blasts, blast_loud = [], []
+    for t, lr in out:
         if not blasts or t - blasts[-1] > 0.4:
             blasts.append(t)
+            blast_loud.append(lr)
+        else:
+            blast_loud[-1] = max(
+                blast_loud[-1], lr
+            )  # loudest sub-blast of a merged cluster
     ev = []
     for t in blasts:
         if ev and t - ev[-1][2] <= 5.0:
@@ -324,7 +346,7 @@ def whistle_blasts(path):
         else:
             ev.append([t, 1, t])
     multis = [e[0] for e in ev if e[1] >= 2]
-    return blasts, multis, sr
+    return blasts, multis, sr, blast_loud
 
 
 def snap(cands, target, tol):
@@ -546,10 +568,24 @@ for g in games:
         cc = json.load(open(cpath, encoding="utf-8"))
         ts, cnt, dur = np.array(cc["ts"]), np.array(cc["cnt"], np.float32), cc["dur"]
         blasts, multis, sr = cc["blasts"], cc["multis"], cc["sr"]
+        blast_loud = cc.get("blast_loud")
         ball_ev, bcenter = cc.get("ball_ev"), cc.get("ball_center")
+        if (
+            RECOMPUTE_WHISTLE
+        ):  # re-run just the whistle signal; keep cached curve + ball
+            blasts, multis, sr, blast_loud = whistle_blasts(vid)
+            cc.update(
+                {
+                    "blasts": blasts,
+                    "multis": multis,
+                    "blast_loud": blast_loud,
+                    "sr": sr,
+                }
+            )
+            json.dump(cc, open(cpath, "w", encoding="utf-8"))
     else:
         ts, cnt, dur = player_curve(vid, polyf, rot, STEP)
-        blasts, multis, sr = whistle_blasts(vid)
+        blasts, multis, sr, blast_loud = whistle_blasts(vid)
         ball_ev, bcenter = ball_restarts(
             d, gj, poly
         )  # ball restart events + center spot (upright source px)
@@ -560,6 +596,7 @@ for g in games:
                 "dur": dur,
                 "blasts": blasts,
                 "multis": multis,
+                "blast_loud": blast_loud,
                 "sr": sr,
                 "fw": fw,
                 "fh": fh,
@@ -571,6 +608,24 @@ for g in games:
         )
     blasts = blasts or []  # guard no-audio games (cache may hold null from older runs)
     multis = multis or []
+    blast_loud = blast_loud or []
+    # Per-multi peak loudness (max blast loudness ratio in its 5s cluster), used ONLY by the END
+    # gate below. A global loudness gate over-prunes -- quieter real KO/HT/2H whistles vary a lot
+    # game-to-game and dropping them wrecks accuracy (swept: a global 12x gate took reolink 52->44).
+    # But wind resonating at the ref pitch makes a FAINT post-game "multi" (06.06-S gusts ~8-11x p75)
+    # that the "last late multi" END rule wrongly picks over the loud (~30x) real full-time whistle.
+    # So gate ONLY the END selection on per-multi loudness, with a fall-back to ungated (below).
+    multi_loud: list = []
+    if len(blast_loud) == len(blasts):
+        ev2: list = []
+        for t, lr in zip(blasts, blast_loud, strict=True):
+            if ev2 and t - ev2[-1][1] <= 5.0:
+                ev2[-1][1] = t
+                ev2[-1][2] = max(ev2[-1][2], lr)
+                ev2[-1][3] += 1
+            else:
+                ev2.append([t, t, lr, 1])  # [first_time, last_time, peak_loud, count]
+        multi_loud = [(e[0], e[2]) for e in ev2 if e[3] >= 2]
     seg = segment(ts, cnt)
     if not seg:
         print("  [%s] no-play-plateau (frame=%dx%d dur=%.0fs)" % (gid, fw, fh, dur))
@@ -813,11 +868,29 @@ for g in games:
     end_blasts = [b for b in blasts if sh + 15 * 60 <= b <= off2 + 240]
     if multis:
         late = [m for m in multis if m >= sh + 15 * 60 and m <= off2 + 240]
-        end = (
-            late[-1]
-            if late
-            else (end_blasts[-1] if end_blasts else (snap(blasts, off2, 120) or off2))
-        )
+        end = late[-1] if late else None
+        # TRAILING WIND-GUST guard: wind resonating at the ref pitch can fire a FAINT "multi" in the
+        # minute AFTER the real full-time whistle (06.06-S: real 80:14 at ~30x, gust multis 80:51/81:03
+        # at ~8-11x). If the last late multi is faint AND a LOUD multi (>=LOUD_GATE x p75) sits within
+        # 120s before it, that loud multi is full-time and the faint trailer is wind -- use it. A loud
+        # is NOT preferred over a quiet final whistle in general (faint real whistles exist in
+        # wind-masked games and would be wrongly skipped); only a faint multi with a louder one right
+        # before it is overridden, so quiet-final-whistle games are untouched.
+        if late and multi_loud:
+            ml = dict(multi_loud)
+            loud_late = [
+                m
+                for (m, lr) in multi_loud
+                if sh + 15 * 60 <= m <= off2 + 240 and lr >= LOUD_GATE
+            ]
+            if (
+                ml.get(end, 999) < LOUD_GATE
+                and loud_late
+                and 0 < (end - loud_late[-1]) <= 120
+            ):
+                end = loud_late[-1]
+        if end is None:
+            end = end_blasts[-1] if end_blasts else (snap(blasts, off2, 120) or off2)
         if "whistle" not in sig:
             sig.append("whistle")
     elif end_blasts:

@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-11: wind whistle FPs — no global gate possible; trailing-gust END guard (2026-06-30)
+
+**Goal (Mark): handle wind globally, not END-only — "wind is usually all game."** Correct: the global
+loudness gate (below) fixed not just 06.06-S END but also West Seneca HT (+163->-2) and 05.30 HT
+(+18->0), both wind FPs at other boundaries. Wind FPs are an all-game phenomenon.
+**Infrastructure:** `whistle_blasts` now also returns a per-blast peak-loudness ratio (max frame
+loudness / p75); cached as `blast_loud` and populated for all GT games via a new `--recompute-whistle`
+(re-runs only the audio whistle pass, keeps the slow cached player-curve + ball signals).
+**Global gate -- FAILED.** Swept a global "drop blasts < Nx p75" gate: at 12x, reolink within-10s
+**52 -> 44** -- it fixed 3 (06.06 END, West Seneca HT, 05.30 HT) but BROKE 7 (05.07 HT +449, 05.27
+KO-275/END-747, 05.31, 06.01, 06.07, 06.10) by dropping their quieter REAL whistles. Tested
+pitch-stability (loudness-independent) as the alternative axis -- ALSO fails: in poor-audio games the
+real whistle is itself faint AND pitch-smeared (05.07 HT 6.8x / 394Hz spread; West Seneca END 5.5x /
+289Hz; vs 06.06 clean whistles 17-25x / 11-31Hz). A wind-masked / distant-ref whistle is
+indistinguishable from a wind gust by loudness OR pitch -- the separating information is not in the
+audio, so ANY global gate necessarily over-prunes those games.
+**Fix that works -- trailing-gust END guard.** Wind resonating at the ref pitch fires a FAINT "multi"
+in the minute AFTER the real full-time whistle (06.06-S: real 80:14 ~30x, gust multis 80:51/81:03
+~8-11x; the "last late multi" rule grabbed 81:03 -> +48s). Override the last late multi ONLY when it
+is faint (< LOUD_GATE x p75) AND a loud multi sits within 120s before it -- that loud multi is
+full-time, the faint trailer is wind. A loud multi is NOT preferred over a quiet final whistle in
+general (that regressed an END to +746s by picking a loud mid-half foul), so quiet-final-whistle games
+are untouched.
+**Result (reolink, vs human GT):** 06.06-S END +48 -> **-1s**; reolink END **11 -> 12/12** (every
+scoreable END within 3.1s), within-10s **52 -> 53/63 (84%)**, median 1.1s, KO/HT/2H unchanged, zero
+regressions. LOUD_GATE default 12x (env `PHASE_LOUD_GATE`).
+**Open:** HT wind FPs (West Seneca +163, 05.30 +18) are a different mechanism (not "trailing" a louder
+whistle) and a loudness gate there would drop 05.07's faint 6.8x real HT -- deferred; needs a
+non-loudness signal (e.g. corroborate HT against the player dip, which it already partly does).
+
+---
+
 ## EXP-PHASE-10: remaining two full-file misses are within-tolerance edge cases (2026-06-30)
 
 After EXP-PHASE-07/08/09 the only full-file (non-truncated) reolink misses left are both small and
