@@ -37,17 +37,22 @@ center restart; END=last late multi-whistle (no `ht+sh` cap). Result on the 13 s
 games: **within-10s 27%->38%**, END **median 134s->2s** (8/13), HT **median 18s->6s** (7/13),
 6/10 now 2H -3s / END -1s.
 
-**KO/2H precision pass (2026-06-29):** within-10s 38%->40%; KO 2/13->3/13 via a no-ball->first-
-whistle fallback (Upper_90 KO -247s->-2s, no regressions). Tried + REVERTED: whistle-gated restart
-selection (drops the real kickoff when its whistle is wind-masked: 6/04 +0s->+238s) and
-frame-scaled center tolerance (too tight on the 1080p trims). **KO (3/13) and 2H (3/13) stay the
-weak boundaries and are now BLOCKED on whistle quality**: the warm-up-touch rejection + no-ball
-anchoring both need the whistle, but the per-frame whistle detector has wind false-positives AND
-misses some real kickoff whistles, so whistle-gating breaks as many games as it fixes. The real
-unlock is a **supervised whistle detector** (label a handful of real whistle toots across a windy +
-a calm game, train a tiny spectro-temporal classifier) — that would clean multi-blasts (better
-HT/END too) AND make the KO/2H whistle-gate reliable. Per-frame DSP cleanup was tried and does not
-separate wind from whistle. END + HT are solid; KO/2H need this before they improve further.
+**KO/2H precision pass (2026-06-29):** got to within-10s **44%** via the phase ORDER + structure
+(Mark's insight), after several from-scratch-selection approaches all washed out.
+- DEAD ENDS (tried + reverted, each regressed as many games as it fixed because KO/2H are limited
+  by the ball-restart CANDIDATES, not selection): whistle-gated restart (drops the real kickoff
+  when its whistle is wind-masked: 6/04 +0->+238s), whistle->restart pairing, motion-confirm
+  (set->burst burst is real — validated — but "first confirmed" lands on the wrong restart: 6/10
+  +1352s), frame-scaled center tolerance (too tight on 1080p trims). The motion `cen_motion` data
+  is cached in phase_cache but NOT used by the fusion.
+- WHAT WORKED (committed): use the reliable HT (median 6s) + END (median 2s) to CONSTRAIN KO/2H.
+  **2H = first center restart in [HT+3min, HT+18min]** (ordered after halftime, plausible break) —
+  fixed Upper_90 2H -453s->-1s. **KO = equal-halves symmetric prior HT-(END-2H), snapped to the
+  nearest real restart before HT** (rejects warm-up), first-whistle fallback for no-ball games.
+  Result: KO 2->4/13, 2H 3->4/13; **Upper_90 + 6/04 now solved on all four boundaries**; no
+  regressions. Remaining KO/2H misses (~1-3 min) are candidate quality: dahua 8kHz (no whistle,
+  e.g. 09.30) and games where the ball detector missed the kickoff restart. Next gain would need a
+  better ball-restart detector or a supervised whistle model, not more fusion.
 
 **Still only 13 of 43 GT games scored** — 26 lack predictions: ~23 are 2024/25 **dahua_segments**
 games whose video IS present (top-level timestamped `.mp4` + `combined.mp4`) but `files_offsets`
