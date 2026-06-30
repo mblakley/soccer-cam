@@ -600,6 +600,21 @@ for g in games:
         c = [b for b in blasts if t - tol <= b <= t + 2]
         return max(c) if c else None
 
+    # WIDE multi-whistles: re-cluster the cached `blasts` with a wider gap than the 5s `multis`. A
+    # halftime double/triple-blow can be spread (~10s) or so tight it merged (<0.4s) into one blast;
+    # the 5s clustering misses both, so the spot-on HT whistle never registered as a multi. Chain
+    # blasts while the gap <= WIDE_GAP; a chain of >=2 is a wide multi (its time = the first blast).
+    # Recomputed here from cache so no audio re-decode is needed.
+    WIDE_GAP = 11.0
+    wev = []
+    for b in blasts:
+        if wev and b - wev[-1][1] <= WIDE_GAP:
+            wev[-1][1] = b
+            wev[-1][2] += 1
+        else:
+            wev.append([b, b, 1])
+    wmultis = [e[0] for e in wev if e[2] >= 2]
+
     # HALFTIME: a multi-whistle that a player dip FOLLOWS (players leave after the whistle), nearest
     # the game centre. Centrality (halves are ~equal) rejects spurious water-break dips; the
     # following-dip requirement rejects loud crowd multis that aren't halftime.
@@ -641,14 +656,37 @@ for g in games:
             ht = min(central_multis, key=lambda m: abs(m - dur / 2))
         ht_dip = (ht, ht)
         sig.append("whistle")
-    if ht is None:  # fallback: longest dip itself, snapped to any nearby whistle
+    if ht is None:
+        # No central 5s-multi with a following dip registered (the HT whistle was spread/tight so it
+        # never clustered as a 5s multi, or there was no central one). Anchor HT to the WHISTLE that
+        # PRECEDES the halftime field-empty dip: youth players take up to ~3min to clear the field, so
+        # the dip onset LAGS the whistle and must not itself be HT (the old 60s snap was too narrow).
+        # Look back from the halftime dip onset for a wide multi, else the nearest single blast.
         ht_dip = (off1, on2)
-        ht = (
-            (snap(multis, off1, 120) or snap(blasts, off1, 60) or off1)
-            if blasts
-            else off1
-        )
-        sig.append("player")
+        dip_on = off1
+        if dips:
+            # halftime dip = the longest mid low-run; a brief mid-break refill can split it into
+            # adjacent runs, so extend backward over runs separated by only a short gap and use the
+            # cluster's earliest onset (the moment the field actually started to empty).
+            hi_i = max(range(len(dips)), key=lambda i: dips[i][1] - dips[i][0])
+            lo_i = hi_i
+            while lo_i > 0 and dips[lo_i][0] - dips[lo_i - 1][1] <= 60:
+                lo_i -= 1
+            dip_on = dips[lo_i][0]
+        lo, hi = dip_on - 180, dip_on + 30
+        wmw = [m for m in wmultis if lo <= m <= hi]
+        bw = [b for b in blasts if lo <= b <= hi]
+        if wmw:
+            ht = min(
+                wmw, key=lambda m: abs(m - dip_on)
+            )  # wide multi nearest before the dip
+            sig.append("whistle")
+        elif bw:
+            ht = max(bw)  # the single blast nearest before the dip onset
+            sig.append("whistle")
+        else:
+            ht = (snap(multis, off1, 120) or off1) if blasts else off1
+            sig.append("player")
     on2 = ht_dip[1]
 
     # ---- KICKOFFS: signature-driven, applied throughout the video ----
@@ -723,13 +761,28 @@ for g in games:
     # (a lone whistle a few seconds before the ball moves) that put 05.30/05.31 2H ~50-80s early.
     MIN_BREAK, MAX_BREAK = 3 * 60, 18 * 60
     s2k = [k for k in kicks if ht + MIN_BREAK <= k[0] <= ht + MAX_BREAK and kickoff(k)]
-    if s2k:
+    w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
+    # the 2nd-half kickoff WHISTLE = the first whistle once the field has refilled (HT dip offset on2).
+    # When the ball model misses the real 2H restart (no center restart at the kickoff), this whistle
+    # is the only signal there; a no-whistle ball restart re-acquired later in the half must NOT
+    # outrank it. So trust a ball-restart kick only if it is whistle-corroborated, or there is no
+    # refill whistle, or the kick is not far (<=90s) after that whistle.
+    w2_refill = next((b for b in w2 if b >= on2 - 30), None)
+    use_s2k = bool(
+        s2k and (s2k[0][1] or w2_refill is None or s2k[0][0] <= w2_refill + 90)
+    )
+    if use_s2k:
         sh = s2k[0][0]
         sig.append("kick")
+    elif w2_refill is not None:
+        sh = w2_refill
+        sig.append("whistle")
+    elif w2:
+        sh = w2[0]
+        sig.append("whistle")
     else:
-        w2 = [b for b in blasts if ht + MIN_BREAK <= b <= ht + MAX_BREAK]
-        sh = w2[0] if w2 else ht + 8 * 60
-        sig.append("whistle" if w2 else "order")
+        sh = ht + 8 * 60
+        sig.append("order")
 
     # END: the last late multi-whistle (full-time) after 2H; else last-play.
     if multis:
@@ -894,7 +947,7 @@ for g in games:
         "signals": sig,
         "half_min": [round(h1, 1), round(h2, 1)],
         "ko_from_ball": bool(prek),
-        "sh_from_ball": bool(s2k),
+        "sh_from_ball": use_s2k,
         "audio_sr": int(sr or 0),
         "step_sec": STEP,
         "times_sec": {

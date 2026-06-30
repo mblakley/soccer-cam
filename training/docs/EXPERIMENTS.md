@@ -4,6 +4,34 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-06: anchor HT to the dip-preceding whistle + whistle-only 2H kickoff (2026-06-30)
+
+**Hypothesis (Mark):** the HT-selection family (05.27/05.28) and 06.01 2H miss even though the
+spot-on whistle is already a detected blast — HT leans on the player-dip (which lags the whistle by
+~2min as youth players walk off slowly) and 2H requires a center ball-restart (sometimes missed by
+the ball model). Both ignore the whistle. Halftime is usually a multi-blow but its spread varies
+(~10s spread, or a tight tweet-tweet that the <0.4s merge collapses to one), so the 5s multi
+clustering registers neither.
+**Method (fusion-only, cached signals -> instant re-fuse, no re-decode):** (1) recompute wide
+multis from the cached `blasts` with an 11s gap (kept the 5s `multis` for htc/END). (2) when no
+central 5s-multi-with-following-dip registers, anchor HT to the whistle PRECEDING the halftime dip:
+take the dip-cluster onset (merge runs split by a brief mid-break refill, <=60s gap), look back 180s
+(not the old 60s snap to the lagging dip) for a wide multi, else the nearest single blast. (3) 2H =
+the first whistle once the field has refilled (HT dip offset `on2`); a no-whistle ball restart in the
+break window only outranks it if it is <=90s after that whistle (else it is a mid-half re-acquire,
+not the kickoff). Validated on the box (`--predict --gt-only` + `phase_eval --human-only`).
+**Result (reolink, vs human GT):** 05.27 HT +139->**-1s**, 05.28 HT +194->**-2s**, 06.01 2H
++379->**0s** (bonus 06.08 2H -191->**0s**). Non-truncated reolink HT within-10s **9/11 -> 11/11**;
+reolink within-10s 44/63 -> **48/63 (70->76%)**, median 1.6->1.3s (HT 12->14, 2H 10->12, END max
+1655->314s). No protected (non-truncated reolink) boundary regressed; KO/END/sanity-gate untouched.
+**Conclusion:** anchoring HT to the dip-preceding whistle and accepting a whistle-only 2H kickoff
+fixes the HT-selection family + 06.01 without disturbing the KO-signature work. Cost: heat 05.28 2H
++85->-92s (non-protected; both wrong either way — a youth warm-up-on-field game with a stray whistle
+after the short dip, real 2H 3min later). Remaining: 05.28 2H and the youth warm-up-on-field 2H/END
+gap (EXP-PHASE-01) still need ball-in-play, and dahua KO/2H still lack a whistle.
+
+---
+
 ## EXP-PHASE-05: signature-driven kickoff (KO/2H) + interactive GT review (2026-06-30)
 
 **Hypothesis (Mark):** apply the kickoff signature throughout the video — whistle + static ball at
