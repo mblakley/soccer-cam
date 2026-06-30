@@ -67,6 +67,14 @@ PRESETS: dict[str, list[_PresetStep]] = {
             },
         ),
         (
+            "phase_detect",
+            "phase_detect",
+            # Fuses kickoff/halftime/second-half/end from whistle + ball + the
+            # player-on-field curve. Runs right after field_detect (consumes its
+            # polygon); needs no model source of its own.
+            {"phase_step_seconds": 12.0},
+        ),
+        (
             "ball_detect",
             "ball_detect",
             # Model source intentionally omitted — user supplies model_key

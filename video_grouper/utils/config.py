@@ -88,6 +88,15 @@ class ProcessingConfig(BaseModel):
     ffmpeg_timeout_seconds: int = 1800
     seam_realign_enabled: bool = False
     seam_realign_profile_path: str | None = None
+    # How the game-start time used for trimming is found (decision 1).
+    #   "phase_detection" (default): run the offline whistle/ball/player
+    #     game-phase detector on the combined video and set the start
+    #     automatically from the detected kickoff. Whistle-capable Reolink
+    #     cameras only — Dahua cameras (no usable whistle audio) and any
+    #     rejected / low-confidence fit fall back to the NTFY walk (decision 7),
+    #     so behavior is never worse than today.
+    #   "ntfy": always ask via the NTFY "did the game start?" notification walk.
+    game_start_method: Literal["phase_detection", "ntfy"] = "phase_detection"
 
 
 class LoggingConfig(BaseModel):
