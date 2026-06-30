@@ -43,6 +43,22 @@ def seg_offsets(segments: list[dict]) -> dict[str, int]:
     return {s["seg"]: int(s["global_offset"]) for s in segments}
 
 
+def active_play_ranges(segments, game_state) -> list[tuple[int, int]]:
+    """Global-frame ``[(lo, hi), ...]`` for the actual halves (``first_half``/``second_half``) from
+    ``game.json`` ``game_state``. Used to drop warm-up / halftime / pre- & post-game frames, where
+    AutoCam tracks players (not a game ball) — the dominant teacher-label noise. Returns ``[]`` when
+    no phases are known (caller then keeps all frames).
+    """
+    offs = seg_offsets(segments)
+    out: list[tuple[int, int]] = []
+    for ph in game_state or []:
+        if ph.get("phase") in ("first_half", "second_half"):
+            s, e = ph.get("start"), ph.get("end")
+            if s and e and s[0] in offs and e[0] in offs:
+                out.append((offs[s[0]] + int(s[1]), offs[e[0]] + int(e[1])))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Sidecar loaders (JSONL next to the video on F:)
 # ---------------------------------------------------------------------------
@@ -490,6 +506,20 @@ def build_distill_games(
         # keep every human GT label; subsample the (dense) tracked frames
         human_frames = set(human_balls)
         auto = {f: xy for f, xy in track.items() if f not in human_frames}
+        # restrict AutoCam labels to the actual halves — drop warm-up / halftime / pre-&-post-game
+        # where AutoCam tracks players, not a game ball (human far-GT is exempt: it's in-play & clean)
+        ranges = active_play_ranges(gc["segments"], gc.get("game_state"))
+        if ranges:
+            n_before = len(auto)
+            auto = {
+                f: xy
+                for f, xy in auto.items()
+                if any(lo <= f <= hi for lo, hi in ranges)
+            }
+            if report:
+                print(
+                    f"  {gid}: active-play filter {n_before} -> {len(auto)} auto labels"
+                )
         kept = subsample(auto, base_stride=base_stride, dense_stride=dense_stride)
         # hard per-game cap (uniform over the game) — bounds crop count / build time for a fast
         # first run; the turn-densification means base_stride alone doesn't reliably thin.

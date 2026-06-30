@@ -52,6 +52,7 @@ def game_config(vdir: Path) -> dict | None:
         "camera": gj.get("camera", "?"),
         "team": gj.get("team", "?"),
         "video_rotation": gj.get("video_rotation", 0),
+        "game_state": gj.get("game_state"),
     }
     if (vdir / "ball_labels.jsonl").exists():
         gc["human_labels"] = str(vdir / "ball_labels.jsonl")
