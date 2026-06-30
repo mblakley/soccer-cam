@@ -759,6 +759,14 @@ for g in games:
             },
             "h1": round(h1, 1),
             "h2": round(h2, 1),
+            # video span vs GT span: if they differ a lot the chosen video is incomplete or
+            # multi-game (e.g. flash 06.01 -20min, 10.13 +76min), so its timeline can't map to GT.
+            "vdur": round(float(dur), 1),
+            "gt_dur": round(
+                sum(int(s["frames"]) for s in gj["segments"])
+                / (gj["segments"][0].get("fps") or 25.0),
+                1,
+            ),
         },
         open(os.path.join(CACHE, gid + ".fit.json"), "w", encoding="utf-8"),
     )

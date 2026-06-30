@@ -67,10 +67,15 @@ def det_times(gid):
         return None
     fit = json.load(open(fp, encoding="utf-8"))
     voff = fit.get("voff", 0.0)
+    vdur, gtd = fit.get("vdur"), fit.get("gt_dur")
+    # misaligned: the chosen video span differs a lot from the GT span (incomplete or multi-game
+    # video), so its timeline can't be mapped to GT -> a data issue, not a detector error.
+    mis = bool(vdur and gtd and abs(vdur - gtd) > 120)
     return (
         {t: fit["times"][t] + voff for t in TRANSITIONS},
         fit.get("ok"),
         fit.get("used", ""),
+        mis,
     )
 
 
@@ -82,6 +87,7 @@ reg = json.load(open(REG, encoding="utf-8"))
 if ONLY:
     reg = [g for g in reg if g["game_id"] == ONLY]
 rows = []
+misaligned = []
 errs: dict[str, list[float]] = {t: [] for t in TRANSITIONS}
 for g in sorted(reg, key=lambda g: g["game_id"]):
     gid = g["game_id"]
@@ -100,7 +106,12 @@ for g in sorted(reg, key=lambda g: g["game_id"]):
     dt = det_times(gid)
     if not dt:
         continue
-    dtimes, ok, used = dt
+    dtimes, ok, used, mis = dt
+    if mis and "--include-misaligned" not in sys.argv:
+        misaligned.append(
+            gid
+        )  # video span != GT span (data issue) -> excluded from accuracy
+        continue
     cells = []
     for t in TRANSITIONS:
         if t in ht and t in dtimes:
@@ -152,3 +163,9 @@ if allerr:
             100 * w10 / len(allerr),
         )
     )
+if misaligned:
+    print(
+        "\n%d games EXCLUDED (video span != GT span; data issue, not detector): %s"
+        % (len(misaligned), ", ".join(misaligned))
+    )
+    print("  (re-include with --include-misaligned)")
