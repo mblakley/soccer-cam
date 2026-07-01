@@ -61,11 +61,75 @@ def push_phases_to_ttt(
     phases to push, or the client can't authenticate — the local artifacts still
     stand and the pipeline is never failed by a push problem.
     """
-    if not ttt_config or not ttt_config.get("enabled", True):
-        return False
     fields = phases_to_session_fields(payload)
     if not fields:
         return False
+    client, session = _authed_client_and_session(
+        ttt_config, recording_group_dir, storage_path
+    )
+    if client is None or session is None:
+        return False
+    try:
+        client.update_game_session(session["id"], **fields)
+        logger.info(
+            "phase push: updated TTT session %s with %s",
+            session["id"],
+            {k: fields[k] for k in fields if k.endswith("_offset")},
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 — push is best-effort, never fatal
+        logger.warning("phase push to TTT failed (non-fatal): %s", e)
+        return False
+
+
+# detector boundary key -> TTT per-phase verification column (T1 schema).
+_VERIFIED_COLUMNS = {
+    "kickoff": "phase_kickoff_verified",
+    "halftime": "phase_halftime_verified",
+    "second_half": "phase_second_half_verified",
+    "end": "phase_end_verified",
+}
+
+
+def push_phase_verified(
+    ttt_config: dict | None,
+    recording_group_dir: str,
+    phase_key: str,
+    verdict: str,
+    storage_path: str,
+) -> bool:
+    """Write a per-phase human verification (S3) to the TTT game session. Best-effort.
+
+    ``verdict`` is ``"correct"`` / ``"not_correct"`` for one of the four
+    ``phase_*_verified`` columns. Returns True iff written; never raises.
+    """
+    col = _VERIFIED_COLUMNS.get(phase_key)
+    if col is None or verdict not in ("correct", "not_correct"):
+        return False
+    client, session = _authed_client_and_session(
+        ttt_config, recording_group_dir, storage_path
+    )
+    if client is None or session is None:
+        return False
+    try:
+        client.update_game_session(session["id"], **{col: verdict})
+        logger.info("phase verify: %s=%s on session %s", col, verdict, session["id"])
+        return True
+    except Exception as e:  # noqa: BLE001 — best-effort
+        logger.warning("phase verify push failed (non-fatal): %s", e)
+        return False
+
+
+def _authed_client_and_session(
+    ttt_config: dict | None, recording_group_dir: str, storage_path: str
+):
+    """Build an authenticated TTT client and resolve the game session for a recording.
+
+    Returns ``(client, session)`` or ``(None, None)`` when TTT is disabled, the
+    client can't authenticate, or no session exists for the dir. Never raises.
+    """
+    if not ttt_config or not ttt_config.get("enabled", True):
+        return None, None
     try:
         from video_grouper.api_integrations.ttt_api import TTTApiClient
 
@@ -80,23 +144,15 @@ def push_phases_to_ttt(
             if email and password:
                 client.login(email, password)
         if not client.is_authenticated():
-            logger.info(
-                "phase push: TTT not authenticated; skipping (phases stay local)"
-            )
-            return False
+            logger.info("phase TTT: not authenticated; skipping (phases stay local)")
+            return None, None
         session = client.get_game_session_by_dir(recording_group_dir)
         if not session or not session.get("id"):
             logger.info(
-                "phase push: no TTT game session for %s; skipping", recording_group_dir
+                "phase TTT: no game session for %s; skipping", recording_group_dir
             )
-            return False
-        client.update_game_session(session["id"], **fields)
-        logger.info(
-            "phase push: updated TTT session %s with %s",
-            session["id"],
-            {k: fields[k] for k in fields if k.endswith("_offset")},
-        )
-        return True
-    except Exception as e:  # noqa: BLE001 — push is best-effort, never fatal
-        logger.warning("phase push to TTT failed (non-fatal): %s", e)
-        return False
+            return None, None
+        return client, session
+    except Exception as e:  # noqa: BLE001
+        logger.warning("phase TTT: client/session resolution failed: %s", e)
+        return None, None

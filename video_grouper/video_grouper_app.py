@@ -456,6 +456,12 @@ class VideoGrouperApp:
                     config=self.config,
                     ttt_client=ttt_client,
                     resource_manager=self.resource_manager,
+                    # S3: a verify_phases request starts the NTFY verify-loop.
+                    on_verify_phases=(
+                        self.ntfy_processor.request_phase_verify
+                        if self.ntfy_processor is not None
+                        else None
+                    ),
                 )
                 logger.info("TTT ReprocessRequestProcessor initialized")
 

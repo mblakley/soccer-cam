@@ -308,6 +308,7 @@ module = [
     "video_grouper.task_processors.tasks.ntfy.base_ntfy_task",
     "video_grouper.task_processors.tasks.ntfy.game_end_task",
     "video_grouper.task_processors.tasks.ntfy.game_start_task",
+    "video_grouper.task_processors.tasks.ntfy.phase_verify_task",
     "video_grouper.task_processors.tasks.ntfy.task_factory",
     "video_grouper.task_processors.tasks.ntfy.team_info_task",
     "video_grouper.task_processors.tasks.ntfy.was_there_a_match_task",

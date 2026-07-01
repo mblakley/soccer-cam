@@ -138,6 +138,52 @@ async def test_phase_correction_repush_skipped_when_no_session(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_verify_phases_calls_callback_and_completes(tmp_path: Path):
+    group = _seed_group(tmp_path, "grp-1")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = {
+        "id": "req-v",
+        "recording_id": "rec-1",
+        "kind": "verify_phases",
+    }
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+    called = {}
+
+    async def _cb(gd):
+        called["group_dir"] = gd
+
+    proc = _mk_processor(tmp_path, ttt)
+    proc.on_verify_phases = _cb
+
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-v", payload={"id": "req-v"})
+    )
+
+    assert str(called["group_dir"]) == str(group)
+    assert ttt.update_reprocess_status.call_args[0][1] == "completed"
+    ttt.update_game_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_phases_without_callback_reports_failure(tmp_path: Path):
+    _seed_group(tmp_path, "grp-1")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = {
+        "id": "req-v",
+        "recording_id": "rec-1",
+        "kind": "verify_phases",
+    }
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+    proc = _mk_processor(tmp_path, ttt)  # on_verify_phases stays None
+
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-v", payload={"id": "req-v"})
+    )
+
+    assert ttt.update_reprocess_status.call_args[0][1] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_stabilization_row_unchanged_by_dispatch(tmp_path: Path):
     """A row with no `kind` still takes the stabilization marker path."""
     group = _seed_group(tmp_path, "grp-1")

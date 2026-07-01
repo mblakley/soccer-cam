@@ -43,10 +43,16 @@ class ReprocessRequestProcessor(QueueProcessor):
         config: Config,
         ttt_client=None,
         resource_manager=None,
+        on_verify_phases=None,
     ):
         super().__init__(storage_path, config)
         self.ttt_client = ttt_client
         self.resource_manager = resource_manager
+        # S3: async callback (group_dir -> None) that starts the NTFY phase
+        # verify-loop. Wired to NtfyProcessor.request_phase_verify by the app;
+        # None when NTFY isn't configured (a verify_phases request then fails
+        # cleanly rather than silently).
+        self.on_verify_phases = on_verify_phases
 
     @property
     def queue_type(self) -> QueueType:
@@ -103,6 +109,9 @@ class ReprocessRequestProcessor(QueueProcessor):
             kind = claimed.get("kind") or "stabilization"
             if kind == "phase_correction":
                 await self._handle_phase_correction(ttt_id, claimed, group_dir)
+                return
+            if kind == "verify_phases":
+                await self._handle_verify_phases(ttt_id, group_dir)
                 return
 
             local_request = {
@@ -198,6 +207,38 @@ class ReprocessRequestProcessor(QueueProcessor):
                 )
         except Exception as exc:  # noqa: BLE001 — re-push is best-effort
             logger.warning("phase_correction: TTT re-push failed (%s)", exc)
+
+    # ------------------------------------------------------------------
+    # S3: verify-phases trigger
+    # ------------------------------------------------------------------
+
+    async def _handle_verify_phases(self, ttt_id: str, group_dir: Path) -> None:
+        """Start the NTFY verify-loop for this recording (S3).
+
+        The loop itself runs asynchronously in NtfyProcessor (one Correct/
+        Not-Correct question per boundary); the reprocess request just means
+        "begin verifying", so we mark it completed once the loop is queued.
+        """
+        if self.on_verify_phases is None:
+            await self._report_failure(
+                ttt_id,
+                "Phase verification is unavailable on this install (NTFY not configured).",
+            )
+            return
+        try:
+            await self.on_verify_phases(group_dir)
+        except Exception as exc:  # noqa: BLE001
+            await self._report_failure(
+                ttt_id, f"Could not start phase verification: {exc}"
+            )
+            return
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verify_phases: could not report completion (%s)", exc)
+        logger.info("verify_phases: started verify-loop for %s", group_dir.name)
 
     # ------------------------------------------------------------------
     # Helpers

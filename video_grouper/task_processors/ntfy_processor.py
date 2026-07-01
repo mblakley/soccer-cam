@@ -532,6 +532,71 @@ class NtfyProcessor(QueueProcessor):
             f"NTFY_QUEUE: queued trim for {group_dir} after phase-detection game start"
         )
 
+    async def request_phase_verify(self, group_dir: str) -> bool:
+        """S3: start the phase verify-loop for a recording.
+
+        Reads the detected boundaries from state.json, then queues a
+        ``PhaseVerifyTask`` that walks each one (Correct / Not-Correct via NTFY,
+        screenshot at the transition in trimmed-video time) and writes the verdict
+        to the TTT ``phase_*_verified`` columns. Invoked from the reprocess
+        consumer when TTT enqueues a ``verify_phases`` request. Returns False (no
+        task queued) when there are no detected phases to verify."""
+        import os
+        from pathlib import Path
+
+        from video_grouper.models import DirectoryState
+        from video_grouper.task_processors.tasks.ntfy.phase_verify_task import (
+            PhaseVerifyTask,
+            sanitize_ttt_conn,
+        )
+
+        phases = DirectoryState(group_dir).get_game_phases() or {}
+        times = phases.get("times") or {} if isinstance(phases, dict) else {}
+        order = ("kickoff", "halftime", "second_half", "end")
+        remaining = [[k, float(times[k])] for k in order if times.get(k) is not None]
+        if not remaining:
+            logger.info(
+                "phase_verify: no detected phases for %s; nothing to verify", group_dir
+            )
+            return False
+
+        video_path = None
+        try:
+            from video_grouper.task_processors.tasks.pipeline.utils import (
+                get_ball_tracking_io_paths,
+            )
+
+            video_path, _ = get_ball_tracking_io_paths(Path(group_dir))
+        except Exception as e:  # noqa: BLE001 — screenshots are optional
+            logger.info(
+                "phase_verify: no trimmed video for screenshots (%s); "
+                "sending questions without images",
+                e,
+            )
+
+        ttt_conn: dict = {}
+        ttt_cfg = getattr(self.config, "ttt", None)
+        if ttt_cfg is not None and getattr(ttt_cfg, "enabled", False):
+            ttt_conn = sanitize_ttt_conn(ttt_cfg.model_dump())
+
+        task = PhaseVerifyTask(
+            group_dir=group_dir,
+            config=self.config,
+            ntfy_service=self.ntfy_service,
+            video_path=video_path,
+            remaining=remaining,
+            recording_group_dir=os.path.basename(group_dir.rstrip("/\\")),
+            storage_path=str(self.storage_path),
+            ttt_conn=ttt_conn,
+        )
+        await self.add_work(task)
+        logger.info(
+            "phase_verify: queued verification of %d boundaries for %s",
+            len(remaining),
+            group_dir,
+        )
+        return True
+
     async def remove_completed_task_from_queue(
         self, group_dir: str, task_type: str
     ) -> None:
