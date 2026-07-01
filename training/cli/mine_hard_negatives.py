@@ -1,0 +1,214 @@
+"""Mine hard-negative crops = the current detector's confident IN-FIELD false fires.
+
+The held-out eval showed the ball IS in our detector's peaks (candidate ceiling ~0.95) but the tracker
+selects a distractor (selected ~0.24): the detector fires as confidently on players / line
+intersections / the centre circle as on the ball, so the Viterbi tracker coasts onto a smooth
+distractor trajectory. Random background negatives (mostly grass) don't teach it to suppress those
+specific ball-like distractors.
+
+This miner runs the detector over sampled teacher-label frames at band scale and, for every
+high-confidence peak that is **in-field** but **far from the teacher ball**, writes a 256-crop centred
+on it as an extra NEGATIVE into an existing crop store (append to ``index.json``). A fine-tune on the
+augmented store teaches the detector to score those distractors low → clean candidates → the tracker
+we know works (0.85 on AutoCam's clean detections). Off-field peaks are left to ``eval_detector``'s
+in-field gate, so we keep only the in-field residual the gate can't remove.
+
+    python -m training.cli.mine_hard_negatives --roots F:/Flash_2013s F:/Heat_2012s F:/Guest \
+        --camera reolink --holdout heat__2026.05.31_vs_Spencerport_gold_2_away \
+        --val flash__2026.05.09_vs_Cleveland_Force_SC_White_home \
+        --ckpt G:/ballresearch/distill/runs/hm_reolink/best.pt \
+        --out G:/ballresearch/distill/crops_reolink
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+from pathlib import Path
+
+import numpy as np
+
+from training.cli.build_distill_dataset import find_configs
+from training.data_prep import distill_dataset as dd
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--roots", nargs="+", required=True)
+    ap.add_argument("--ckpt", required=True)
+    ap.add_argument(
+        "--out",
+        required=True,
+        help="existing crop store to augment (crops/ + index.json)",
+    )
+    ap.add_argument("--camera", default="reolink")
+    ap.add_argument("--holdout", nargs="*", default=[])
+    ap.add_argument("--val", nargs="*", default=[])
+    ap.add_argument("--base", type=int, default=24)
+    ap.add_argument("--base-stride", type=int, default=1)
+    ap.add_argument(
+        "--sample-stride",
+        type=int,
+        default=8,
+        help="mine every Nth teacher-label frame (distractors recur; no need for all frames)",
+    )
+    ap.add_argument(
+        "--max-frames", type=int, default=6000, help="cap decode span per game"
+    )
+    ap.add_argument("--crop", type=int, default=256)
+    ap.add_argument(
+        "--score-thr", type=float, default=0.3, help="only mine confident false peaks"
+    )
+    ap.add_argument(
+        "--min-ball-dist-px",
+        type=float,
+        default=48.0,
+        help="band px; keep only peaks farther than this from the ball (never negate the ball)",
+    )
+    ap.add_argument("--max-per-frame", type=int, default=3)
+    ap.add_argument("--top-k", type=int, default=24)
+    ap.add_argument("--tile-w", type=int, default=2560)
+    ap.add_argument("--overlap", type=int, default=256)
+    ap.add_argument("--infield-margin", type=float, default=120.0)
+    ap.add_argument("--no-hwaccel", action="store_true")
+    args = ap.parse_args()
+
+    import av
+    import cv2
+    import torch
+
+    from training.cli.eval_detector import infer_band
+    from training.data_prep.heatmap_dataset import (
+        _dewarp_mask_gray,
+        _far_margin_polygon,
+        _native_iso_warp,
+    )
+    from training.data_prep.warped_dataset import (
+        apply_display_rotation,
+        resolve_video_rotation,
+    )
+    from training.models.heatmap_net import HeatmapNet
+    from training.world_model.eval import extract_peaks
+    from training.world_model.geometry import build_field_geometry
+
+    out = Path(args.out)
+    crops = out / "crops"
+    index = json.loads((out / "index.json").read_text())
+    if not (
+        out / "index.orig.json"
+    ).exists():  # one-time backup so mining is revertible
+        shutil.copy2(out / "index.json", out / "index.orig.json")
+
+    holdout, val = set(args.holdout), set(args.val)
+    cfgs = [c for c in find_configs(args.roots) if c["game_id"] not in holdout]
+    if args.camera:
+        cfgs = [c for c in cfgs if c.get("camera") == args.camera]
+    for c in cfgs:
+        c["split"] = "val" if c["game_id"] in val else "train"
+    games = dd.build_distill_games(cfgs, base_stride=args.base_stride, report=False)
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
+    ck = torch.load(args.ckpt, map_location=dev)
+    model.load_state_dict(ck["model"] if "model" in ck else ck)
+    model.eval()
+
+    half = args.crop // 2
+    total = 0
+    for g in games:
+        gid = g["game_id"]
+        if g.get("split") == "val":
+            continue
+        labels = {int(k): v for k, v in g["labels"].items()}
+        if not labels:
+            continue
+        geom = build_field_geometry(np.asarray(g["polygon"], float))
+        if not geom.valid:
+            continue
+        vrot = resolve_video_rotation(str(g["video"]), g.get("video_rotation"))
+        _hw = None
+        if not args.no_hwaccel:
+            try:
+                _hw = av.codec.hwaccel.HWAccel(
+                    device_type="cuda", allow_software_fallback=True
+                )
+            except Exception:  # noqa: BLE001
+                _hw = None
+        container = (
+            av.open(str(g["video"]), hwaccel=_hw) if _hw else av.open(str(g["video"]))
+        )
+        stream = container.streams.video[0]
+        if _hw is None:
+            stream.thread_type = "AUTO"
+        sw, sh = stream.codec_context.width, stream.codec_context.height
+        far_poly = _far_margin_polygon(g["polygon"], 400.0)
+        warp = _native_iso_warp(far_poly, sw, sh, g.get("target_width"))
+        bh, bw = warp.shape
+        mpoly = warp.points(far_poly).astype(np.int32)
+        mask = np.zeros((bh, bw), np.uint8)
+        cv2.fillPoly(mask, [mpoly], 255)
+
+        want = sorted(labels)
+        lo, hi = want[0], min(want[-1], want[0] + args.max_frames)
+        infer_set = {
+            f
+            for i, f in enumerate(want)
+            if lo <= f <= hi and i % args.sample_stride == 0
+        }
+        buf: list = []
+        idx = -1
+        nadd = 0
+        for fr in container.decode(stream):
+            idx += 1
+            if idx < lo - 2:
+                continue
+            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
+            buf.append(_dewarp_mask_gray(img, warp, mask))
+            if len(buf) > 3:
+                buf.pop(0)
+            if idx in infer_set:
+                grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                stack = np.stack(grays, 0).astype(np.float32) / 255.0
+                hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
+                bx, by = warp.points([labels[idx]])[0]
+                kept = 0
+                for hx, hy, _sc in extract_peaks(
+                    hm, top_k=args.top_k, threshold=args.score_thr, min_distance=6
+                ):
+                    if kept >= args.max_per_frame:
+                        break
+                    if (hx - bx) ** 2 + (hy - by) ** 2 <= args.min_ball_dist_px**2:
+                        continue  # this peak IS (near) the ball — never negate it
+                    sx, sy = hx / warp.scale, hy / warp.scale + warp.y_top
+                    if not bool(
+                        geom.is_in_support(
+                            np.asarray([(sx, sy)], float), margin_px=args.infield_margin
+                        )[0]
+                    ):
+                        continue  # off-field distractor — the eval gate already drops these
+                    x0 = int(np.clip(round(hx) - half, 0, max(0, bw - args.crop)))
+                    y0 = int(np.clip(round(hy) - half, 0, max(0, bh - args.crop)))
+                    cstack = np.zeros((3, args.crop, args.crop), np.uint8)
+                    for i, gr in enumerate(grays):
+                        patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
+                        cstack[i, : patch.shape[0], : patch.shape[1]] = patch
+                    fname = f"{gid}_f{idx:06d}_hardmine{kept}.npy"
+                    np.save(crops / fname, cstack)
+                    index.append(
+                        {"file": fname, "x": None, "y": None, "split": "train"}
+                    )
+                    kept += 1
+                    nadd += 1
+            if idx > hi:
+                break
+        container.close()
+        total += nadd
+        print(f"{gid}: +{nadd} hard-neg crops", flush=True)
+
+    (out / "index.json").write_text(json.dumps(index))
+    print(f"\nMINED: +{total} hard-negative crops appended to {out}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
