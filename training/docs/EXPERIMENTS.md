@@ -4,6 +4,43 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-16: distill AutoCam via its detections + OUR existing tracker (not the viewport) (2026-06-30)
+
+**Hypothesis (Mark).** Our detector is better on far balls (human GT); AutoCam is better on near/normal.
+Distill AutoCam's near/normal detections into our detector while preserving our far advantage with
+human GT, so OUR **existing tracker** (fed OUR detector's detections) follows the ball to viewport
+tolerance (~10–15 m) everywhere — matching AutoCam in normal play, beating it on far.
+
+**GT-grounded diagnosis (the pivotal result).** On **1,880 human far-GT balls** (frames AutoCam
+loses), scored in meters (`cli/gt_near_far.py`, `cli/validate_tracker.py`):
+
+| signal | R15 m | median err |
+|---|---|---|
+| candidate ceiling (ball in AutoCam's detection set) | **0.97** | 0.3 m |
+| **existing tracker over AutoCam detections** | **0.766** | 2.1 m |
+| AutoCam raw viewport-gated pick (nearest cand to viewport) | 0.10 | — |
+| **AutoCam's own viewport (what it delivers)** | **0.147** | 41.2 m |
+
+So AutoCam's detector **finds** the far ball 97% of the time; AutoCam's *selection* (viewport) loses
+it (0.15); the existing tracker over the same detections recovers it (0.77). The viewport-vs-GT error
+is random-direction (mean [418,245] vs std [1931,418]) → AutoCam genuinely looks elsewhere, not a
+coordinate bug. **Conclusion: detection is fine, selection is the game, and the existing tracker
+already solves it.** → teacher = tracker over AutoCam detections + human-GT override (`teacher_track`),
+NOT the smoothed viewport. Dense tracker-vs-viewport agreement across whole games is low (median
+13–50 m) because the viewport is a loose camera-centre, not a tight ball track — reinforces the above.
+
+**Method.** teacher_track (active-play + in-field filtered, snapped to real detections; human far-GT
+exempt) → `build_heatmap_crops` (NVDEC) → HeatmapNet base24. Held-out `heat__2026.05.31_vs_Spencerport`
+(545 GT). Crop vision-gate caught 3 teacher bugs pre-training (warm-up, off-field, Dahua noise).
+Reolink-primary first build (2024 Dahua = noisy detection + no GT anchor).
+
+**Result.** Training + held-out eval RUNNING overnight (2026-06-30) — see STATUS.md
+(`train_reolink.log` / `eval_reolink.log`). **TODO: fill in held-in val recall (must ≫ 0.16) and the
+held-out meters table (our detector→tracker vs AutoCam viewport 0.15, far/near) when they land.**
+
+Supersedes the far-weight dead end (EXP-DIST-13/14) and the world-model-reranker plan; the lever was
+never loss-weighting or a bespoke re-ranker — it was giving the existing tracker good detections.
+
 ## EXP-PHASE-03: multi-signal phase detector (player-curve + whistle), half-length AGNOSTIC (2026-06-28)
 
 **Hypothesis (Mark):** the fixed-40-min assumption (EXP-PHASE-02) doesn't generalize — younger ages play 30-min
