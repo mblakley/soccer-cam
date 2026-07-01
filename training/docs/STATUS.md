@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-06-30*
+*Last updated: 2026-07-01*
 
 ## AutoCam distillation → homegrown ball detector (2026-06-30)
 
@@ -37,14 +37,29 @@ game's band (NVDEC, tiled to fit the 1060) → `extract_peaks` → inverse-warp 
 → meters vs human GT (R5/10/15), far/near by apparent size, vs the AutoCam-viewport bar. Held-out =
 `heat__2026.05.31_vs_Spencerport_gold_2_away` (545 GT balls, frames 6714–21760).
 
-**RUNNING overnight on DESKTOP-5L867J8 (chained):** build `G:\ballresearch\distill\crops_reolink`
-(`build_reolink.log`) → auto-train HeatmapNet base24 15ep → `runs/hm_reolink/best.pt`
-(`train_reolink.log`, per-epoch Cleveland val recall = held-in sanity, must ≫ 0.16) → auto-eval on
-Spencerport (`eval_reolink.log`). **Read those 3 logs first next session.** Box worktree
-`G:\ballresearch\distill\repo_hg`; venv `G:\v4bench\wt\.venv`. Branch `feat/homegrown-ball-detector`.
+**Build DONE, training RUNNING on DESKTOP-5L867J8 (2026-07-01).** Reolink build finished:
+`G:\ballresearch\distill\crops_reolink` = **76,875 crops** (71,332 train / 5,543 Cleveland-val /
+45,164 positive) from **15 Reolink games** (holdout Spencerport, val Cleveland). Training HeatmapNet
+base24 40ep → `runs/hm_reolink/best.pt`, GPU-bound ~23 min/epoch. **Held-in Cleveland val recall
+peaked 0.387 @ epoch 5** then flat (0.38x) — clears the ≫0.16 sanity gate; a plateau is forming.
+Orchestrated by **two scheduled tasks** (survive a session close — a `Start-Process` launched inside
+a WinRM session does NOT): `distill_chain_reolink` (build→train→auto-eval) + `distill_watch_reolink`
+(early-stops training at a val-recall plateau — no new best for 6 epochs, ≥12 — which drops the chain
+through to the eval). Logs are **UTF-16BE** (`Get-Content -Encoding BigEndianUnicode`); heartbeats
+`chain_reolink.status` / `watch_reolink.status`. Box worktree `G:\ballresearch\distill\repo_hg`
+(HEAD 7e10727 for build/train; `eval_detector.py` alone bumped to 0155dc4). venv `G:\v4bench\wt\.venv`.
+Branch `feat/homegrown-ball-detector`. (One stale eval-waiter from the original overnight run had to
+be killed — it fired an early eval on the epoch-5 ckpt and was contending for VRAM.)
 
-**Next:** confirm we beat AutoCam on far (eval); per-camera `target_width` normalization + fold Dahua
-back in down-weighted for the all-games production build; document results here + EXPERIMENTS.md.
+**Success bar (Mark, restated 2026-07-01):** OUR `detector→tracker` must **match AutoCam on
+near+medium balls and beat it on far**. `cli/eval_detector.py` now prints this head-to-head directly:
+ALL / NEAR+MED / FAR bands, each with OUR detector→tracker vs **AutoCam viewport**, plus two
+diagnostics — **AutoCam-detections→OUR-tracker** (isolates whether a far gap is our *detector* or our
+*selection*) and our per-frame candidate ceiling.
+
+**Next:** read `eval_reolink.log` head-to-head when the eval lands (far vs AutoCam's ~0.15 bar; near+med
+parity); fill EXP-DIST-16 results; then the per-camera `target_width` `--normalize` all-games build
+folding Dahua back in down-weighted.
 
 ## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
 

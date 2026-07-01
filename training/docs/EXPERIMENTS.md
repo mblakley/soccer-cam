@@ -34,9 +34,13 @@ exempt) → `build_heatmap_crops` (NVDEC) → HeatmapNet base24. Held-out `heat_
 (545 GT). Crop vision-gate caught 3 teacher bugs pre-training (warm-up, off-field, Dahua noise).
 Reolink-primary first build (2024 Dahua = noisy detection + no GT anchor).
 
-**Result.** Training + held-out eval RUNNING overnight (2026-06-30) — see STATUS.md
-(`train_reolink.log` / `eval_reolink.log`). **TODO: fill in held-in val recall (must ≫ 0.16) and the
-held-out meters table (our detector→tracker vs AutoCam viewport 0.15, far/near) when they land.**
+**Result (2026-07-01).** Reolink build = **76,875 crops / 15 games**. Held-in Cleveland val recall
+peaked **0.387 @ epoch 5** (≫0.16 sanity — distill learns the distribution fast, ~5 epochs) then flat
+→ plateau. Held-out eval on Spencerport pending the plateau early-stop. `cli/eval_detector.py` now
+prints a true head-to-head (the success bar Mark restated: **match AutoCam on near+medium, beat it on
+far**): ALL / NEAR+MED / FAR bands, each with OUR detector→tracker vs **AutoCam viewport**, plus
+**AutoCam-detections→OUR-tracker** (detector-vs-selection diagnostic) and our candidate ceiling.
+**TODO: paste the meters table when it lands (far must beat AutoCam ~0.15; near+med must match).**
 
 Supersedes the far-weight dead end (EXP-DIST-13/14) and the world-model-reranker plan; the lever was
 never loss-weighting or a bespoke re-ranker — it was giving the existing tracker good detections.
