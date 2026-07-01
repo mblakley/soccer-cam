@@ -417,10 +417,9 @@ def teacher_track(
                     if c >= conf_floor
                 ]
             )
-    gaps = [
-        (gframes[i + 1] - gframes[i]) if i + 1 < len(gframes) else 4
-        for i in range(len(gframes))
-    ]
+    # frame_gaps[t] = gap INTO frame t (from t-1) — track_ball scales its smoothness budget and
+    # teleport gate by it, so this MUST be the backward difference (gaps[0] unused).
+    gaps = [4] + [gframes[i] - gframes[i - 1] for i in range(1, len(gframes))]
     track = track_ball(frames, geom, frame_gaps=gaps)
 
     out: dict[int, tuple[float, float]] = {}

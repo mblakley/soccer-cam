@@ -173,7 +173,7 @@ def main() -> None:
     frames_cands: dict[int, list] = {}
     buf: list = []
     idx = -1
-    lo_dec = min(want)
+    lo_dec = max(0, min(want) - 2)  # fill the 3-frame stack before the first eval frame
     for fr in container.decode(stream):
         idx += 1
         if idx < lo_dec:
@@ -197,11 +197,9 @@ def main() -> None:
     container.close()
     print(f"ran detector on {len(frames_cands)} frames", flush=True)
 
-    # existing tracker over OUR detector's candidates
+    # existing tracker over OUR detector's candidates. frame_gaps[t] = gap INTO t (backward diff).
     ef = sorted(frames_cands)
-    gaps = [
-        (ef[i + 1] - ef[i]) if i + 1 < len(ef) else args.stride for i in range(len(ef))
-    ]
+    gaps = [args.stride] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
     track = track_ball([frames_cands[f] for f in ef], geom, frame_gaps=gaps)
     fidx = {f: i for i, f in enumerate(ef)}
 
