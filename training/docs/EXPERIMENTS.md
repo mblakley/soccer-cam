@@ -4,6 +4,41 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-12: untrimmed (combined-video) KO fails — diagnosis (2026-06-18)
+
+**Why:** productionizing phase detection to (maybe) replace the NTFY game-start question needs the
+detector to run on the **untrimmed combined video** (warm-up -> game -> post-game), not the trimmed
+game-only upload it was tuned on. Validation via `detect_phases` on combined videos (real polygon)
+vs human GT: 05.10 KO -2s / 05.07 -1s (clean), but 03.21 **KO +527s with ok=True**, 05.09/05.27/05.28
+hundreds of s off. So it does NOT reliably find the game start untrimmed.
+**Method:** cached combined-video signals (`G:\ballresearch\phase_cache_comb\<gid>.json`) + dumped
+`fuse_phases(debug=True)` internals for 03.21 (confident-wrong late), 05.27 (early, ok=False), 05.10
+(clean) — so fix iteration is now instant.
+**Three mechanisms:**
+1. **No-whistle combined video (03.21):** `n_blasts=0` (the combined.mp4 audio lacks the whistle even
+   though the trimmed upload has it) + very low counts (`med_play=4`, so the 0.6x full-field gate is
+   meaningless). KO falls to the symmetric prior; HT is also misplaced; the result is internally
+   symmetric (h1≈h2≈31.6) so the **sanity gate passes (ok=True)** -> a confidently-wrong shifted fit.
+   This is the dangerous case (would trim 9 min into the game).
+2. **Warm-up / mid-half artifacts (05.27):** first whistle 4:50 is warm-up, first multi 25:37 is a
+   first-half foul; the "first whistle / first multi" heuristics grab them instead of the real HT
+   (49:28), shifting everything early. Sanity gate caught it (ok=False -> NTFY). Safe but wrong.
+3. **Clean structure works (05.10):** one unambiguous HT dip (field empty 51:00-57:00) + KO whistle
+   10:04 -> all four within 3s. Proof the fusion logic is fine WHEN the game block is located.
+**Root cause:** the fusion assumes the game fills the video (true trimmed, false untrimmed) via
+"first X" heuristics; it never LOCATES the game block. The robust anchor is the **one halftime dip
+with sustained play on BOTH sides** (warm-up has no such dip; post-game empties but never refills).
+**Fix plan (next):** (a) locate the game block = longest sustained-activity region bracketing the one
+central full-both-sides HT dip; run the (validated) fusion anchored to that block, ignoring warm-up
+/post-game tails. (b) anchor KO/HT to whistles/multis WITHIN the block, not the first in the video.
+(c) SAFETY: a KO not whistle/kick-anchored (symmetric-only) or a no-whistle combined video is NOT
+trustworthy for trimming -> force NTFY fallback; and reject a KO far from the block's activity onset
+(kills 03.21's ok=True). (d) **Two-front validation per change: must not regress trimmed 53/63** while
+improving combined-video KO. Approach cleanly as a `locate_game_block` pre-step so the validated
+`fuse_phases` core stays intact.
+
+---
+
 ## EXP-PHASE-11: wind whistle FPs — no global gate possible; trailing-gust END guard (2026-06-30)
 
 **Goal (Mark): handle wind globally, not END-only — "wind is usually all game."** Correct: the global
