@@ -128,6 +128,16 @@ combine done (combined.mp4)
   when: `ntfy` mode, the camera is **Dahua** (`video_format`, decision 7), or the fit is rejected /
   no-whistle-low-confidence — so behavior is never worse than today. Persist all four phases to
   game.json (`game_state`, source `phase_fused`).
+  - **HARD GUARD — `truncated_start` ⇒ never auto-trim (EXP-PHASE-14, 2026-06-30).** When the
+    combined recording is missing its beginning (`game.json.truncated_start`), the game start IS the
+    file head (offset 0); the detector CANNOT see this — the whole video is game play, so
+    `locate_game_block` anchors KO onto the first in-field full-crowd first-half whistle (05.09:
+    real KO 0:00, anchored 8:37, `ko_trustworthy=True`). Trimming at `KO − 4min` would cut ~4.6 min
+    INTO the game. This truncated-start case is indistinguishable in-detector from a dense-warm-up
+    game (both show sustained full play at t=0), so the guard MUST live here: if `truncated_start`,
+    do NOT use the detected KO for trimming (leave `start_time_offset` at 0 / defer to NTFY). All
+    other trusted KO errors are EARLY (≤0) or tiny (−40/−42s), which the 4-min backup makes trim-safe
+    by construction — only a LATE KO is dangerous, and truncated-start is the only late-trust source.
 - **S2 — Push phases to TTT.** After the step, if a TTT session exists for this `recording_group_dir`,
   `update_game_session(...)` with the four phase offsets + source + confidence. Inline (no scheduled
   loop). No-account installs skip the push (phases stay local).

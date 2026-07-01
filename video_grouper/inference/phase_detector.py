@@ -635,6 +635,13 @@ def fuse_phases(signals, *, debug=False, localize=False):
     # not the game onset, so this check is skipped -- the KO is still gated by no-whistle / symmetric
     # / the fusion sanity gate.
     far = localized and (ko - t0) > LOCATE_KO_FAR_SEC
+    # NOTE (EXP-PHASE-14): production trims at KO - a 4min backup, so an EARLY KO is trim-safe (it just
+    # keeps more pre-game); only a LATE KO past the backup mis-trims. Every trusted KO here is early or
+    # tiny EXCEPT on a truncated-start recording (game begins at the file head, no warm-up in the file):
+    # locate anchors onto the first full-crowd first-half whistle and marks it trusted (05.09: real KO
+    # 0:00, anchored 8:37). That case is indistinguishable in-detector from a dense-warm-up game, so the
+    # production step MUST skip auto-trim when game.json.truncated_start is set (see
+    # PHASE_DETECTION_INTEGRATION.md S1 guard); do NOT rely on this flag alone for truncated recordings.
     # Trust the KO for trimming (production game-start runs on the untrimmed combined video) when it is
     # whistle/kick-anchored (not the symmetric prior), not implausibly far from the block onset, AND
     # EITHER the whole fit is plausible (ok) OR the game block was localized. The `or localized` is the
