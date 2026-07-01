@@ -609,8 +609,18 @@ def fuse_phases(signals, *, debug=False):
     # not the game onset, so this check is skipped -- the KO is still gated by no-whistle / symmetric
     # / the fusion sanity gate.
     far = localized and (ko - t0) > LOCATE_KO_FAR_SEC
+    # Trust the KO for trimming (production game-start runs on the untrimmed combined video) when it is
+    # whistle/kick-anchored (not the symmetric prior), not implausibly far from the block onset, AND
+    # EITHER the whole fit is plausible (ok) OR the game block was localized. The `or localized` is the
+    # key: a youth game can have an EXACT kickoff-whistle KO but a failed HT/2H (no clear halftime dip)
+    # so ok=False -- we only trim on KO, and a localized block means the warm-up whistles were skipped
+    # and KO is the post-warm-up kickoff whistle (05.27/05.28: KO -1s/-3s, ok=False, localized ->
+    # trust). A wrong KO from a warm-up whistle is NOT localized (05.30 -261s) or is symmetric (03.21).
     res["ko_trustworthy"] = bool(
-        blasts and res.get("ko_anchor") != "sym" and not far and res["ok"]
+        blasts
+        and res.get("ko_anchor") != "sym"
+        and not far
+        and (res["ok"] or localized)
     )
     return res
 
