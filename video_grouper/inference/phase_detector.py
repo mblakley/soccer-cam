@@ -68,6 +68,13 @@ LOCATE_MIN_BLOCK_SEC = float(
 LOCATE_KO_FAR_SEC = float(
     os.environ.get("PHASE_BLOCK_KO_FAR_SEC", "90")
 )  # KO far from block onset => untrustworthy
+# KICKOFF-whistle full-field band, RELATIVE to the game's p75 in-field crowd (``busy``). A real
+# kickoff has BOTH teams lined up on the field (~1x busy). The LOWER bound rejects a warm-up whistle
+# over a sparse field (05.31-Spencerport: warm-up blasts at 0.44x busy, kickoff at 0.56x); the UPPER
+# bound rejects the DENSE both-teams-warming-up crowd that reads as ~3x the in-play count (06.06-S:
+# warm-up whistles at 2.2-3.0x busy, kickoff at 1.33x). Env-tunable.
+LOCATE_FULL_LO = float(os.environ.get("PHASE_BLOCK_FULL_LO", "0.55"))
+LOCATE_FULL_HI = float(os.environ.get("PHASE_BLOCK_FULL_HI", "1.8"))
 
 _SESS = None
 
@@ -491,23 +498,25 @@ def locate_game_block(signals):
     video (warm-up -> game -> post-game), so the validated fusion runs anchored to the game and
     ignores the warm-up before kickoff (which supplies stray whistles/restarts that pull KO early).
 
-    The anchor is the KICKOFF WHISTLE = the first blast NOT immediately followed by a sustained field
-    clear (a warm-up whistle is followed by the field emptying as the teams line up; the kickoff
-    whistle is followed by continuous play). A clear = a field-empty run of at least
-    LOCATE_LONG_CLEAR_SEC whose onset falls within LOCATE_CLEAR_WINDOW_SEC after the blast -- long
-    enough that a brief player-detection gap does NOT count as a clear (which is what made a strict
-    2-sample test wrongly skip real kickoff whistles). ``block_start`` = that whistle minus a small
-    margin, so it keeps the kickoff whistle while dropping earlier warm-up whistles/ball-restarts.
+    ONLY runs when the caller opts into localization (``fuse_phases(..., localize=True)``, i.e. the
+    production combined-video path); the trimmed scorecard uses ``localize=False`` and never reaches
+    here, so it stays byte-identical (the 53/63 scorecard + fixtures are unaffected by anything here).
 
-    We localize ONLY when an earlier (warm-up) blast is actually being skipped AND the kickoff whistle
-    is at least LOCATE_MIN_WARMUP_SEC in. A cleanly-trimmed upload -- including the coarse 4-min
-    pre-kickoff backup the pipeline leaves in (so its first whistle IS the kickoff, not followed by a
-    long clear) -- returns ``(0, dur)``, so the fusion output is byte-identical (the 53/63 scorecard +
-    fixtures are unaffected). No-whistle combined videos also return ``(0, dur)`` (the safety flag
-    marks their KO untrustworthy instead). ``block_end`` is left at ``dur`` -- the post-game tail is
-    handled by the existing END/off2 logic; trimming it risked cutting a real final whistle that
-    follows a late field-empty stoppage. A degenerate/too-short block also falls back to ``(0, dur)``
-    (never trims away a real game)."""
+    The anchor is the KICKOFF WHISTLE = the first blast that (a) has BOTH teams on the field --
+    in-field player count within ``[LOCATE_FULL_LO, LOCATE_FULL_HI]`` x the game's p75 crowd
+    (``busy``), which rejects both a warm-up whistle over a sparse field (below the band) and the
+    dense both-teams-warming-up crowd that reads ~3x the in-play count (above the band) -- AND (b) is
+    NOT immediately followed by a sustained field clear (a warm-up whistle is followed by the field
+    emptying as the teams line up; the kickoff whistle is followed by continuous play). A clear = a
+    field-empty run of at least LOCATE_LONG_CLEAR_SEC whose onset falls within LOCATE_CLEAR_WINDOW_SEC
+    after the blast. ``block_start`` = that whistle minus a small margin.
+
+    When the first blast is already the in-range kickoff (no earlier warm-up whistle to skip) and it
+    is early (< LOCATE_MIN_WARMUP_SEC), we no-op ``(0, dur)`` -- the game starts at the file head, so
+    the within-video fusion handles it. No-whistle combined videos also no-op (the safety flag marks
+    their KO untrustworthy). ``block_end`` stays at ``dur`` -- the post-game tail is handled by the
+    existing END/off2 logic; trimming it risked cutting a real final whistle after a late stoppage. A
+    degenerate/too-short block also falls back to ``(0, dur)`` (never trims away a real game)."""
     ts = np.asarray(signals["ts"], dtype=float)
     if len(ts) < 6:
         return (0.0, float(ts[-1]) if len(ts) else 0.0)
@@ -520,16 +529,30 @@ def locate_game_block(signals):
     step = float(ts[1] - ts[0]) if len(ts) > 1 else 12.0
     long_n = max(3, int(round(LOCATE_LONG_CLEAR_SEC / max(step, 1e-6))))
     clears = _empty_run_onsets(sm, ts, long_n)  # onsets of sustained field clears
+    busy = float(np.percentile(sm, 75)) or 1.0
+    tsl = ts.tolist()
+
+    def sm_at(b):  # smoothed in-field count at the nearest sample to time b
+        return float(sm[min(bisect.bisect_left(tsl, float(b)), len(sm) - 1)])
 
     def cleared(b):  # a sustained clear starts within the window just after this blast
         return any(b < on <= b + LOCATE_CLEAR_WINDOW_SEC for on in clears)
 
-    ko_i = next((i for i, b in enumerate(blasts) if not cleared(b)), None)
-    # ko_i == 0: the first blast is already the kickoff (no earlier warm-up whistle) -> no-op.
-    if ko_i is None or ko_i == 0 or blasts[ko_i] < LOCATE_MIN_WARMUP_SEC:
+    def full_ok(b):  # both teams on the field, relative to this game's normal crowd
+        return LOCATE_FULL_LO <= sm_at(b) / busy <= LOCATE_FULL_HI
+
+    ko_i = next(
+        (i for i, b in enumerate(blasts) if full_ok(b) and not cleared(b)), None
+    )
+    if ko_i is None:
+        return (0.0, dur)  # no in-range post-clear whistle -> can't anchor
+    anchor = float(blasts[ko_i])
+    # ko_i == 0 + early: the first whistle is already the in-range kickoff (no warm-up to skip) ->
+    # no-op, let the within-video fusion place KO (avoids anchoring on a genuinely-immediate start).
+    if ko_i == 0 and anchor < LOCATE_MIN_WARMUP_SEC:
         return (0.0, dur)
-    block_start = max(0.0, float(blasts[ko_i]) - LOCATE_HEAD_MARGIN_SEC)
-    if block_start < 0.5 or (dur - block_start) < LOCATE_MIN_BLOCK_SEC:
+    block_start = max(0.0, anchor - LOCATE_HEAD_MARGIN_SEC)
+    if (dur - block_start) < LOCATE_MIN_BLOCK_SEC:
         return (
             0.0,
             dur,
@@ -566,7 +589,7 @@ def _slice_signals(signals, t0, t1):
     return out
 
 
-def fuse_phases(signals, *, debug=False):
+def fuse_phases(signals, *, debug=False, localize=False):
     """Locate the game block, then segment + fuse the (block-restricted) signals into phase
     boundaries in the ORIGINAL video timeline.
 
@@ -580,7 +603,10 @@ def fuse_phases(signals, *, debug=False):
     from the block onset, or the fit was rejected. Returns None for a no-play plateau."""
     ts_full = np.asarray(signals["ts"], dtype=float)
     dur = float(ts_full[-1]) if len(ts_full) else 0.0
-    t0, t1 = locate_game_block(signals)
+    # localize ONLY on the production combined-video path. The trimmed scorecard + fixtures fuse with
+    # localize=False, so they never call locate_game_block and are byte-identical to the validated
+    # _fuse_core (the 53/63 reolink scorecard is guaranteed unchanged by construction).
+    t0, t1 = locate_game_block(signals) if localize else (0.0, dur)
     localized = t0 > 0.5 or t1 < dur - 0.5
     res = _fuse_core(
         _slice_signals(signals, t0, t1) if localized else signals, debug=debug
@@ -1072,4 +1098,5 @@ def detect_phases(video_path, field_polygon, *, ball_sidecar=None, rot=0, step=1
     )
     signals = compute_signals(video_path, polyf, rot, poly, step, base=base)
     signals["poly"] = poly
-    return fuse_phases(signals, debug=False)
+    # production runs on the untrimmed combined video -> localize the game block before fusing.
+    return fuse_phases(signals, debug=False, localize=True)

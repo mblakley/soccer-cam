@@ -4,6 +4,60 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-14: untrimmed-KO — opt-in localize + full-field BAND anchor (resolves 13) (2026-06-30)
+
+**Goal:** push combined-video KO past ff04e6d's whistle-clear anchor without the trust-precision
+collapse EXP-PHASE-13 hit when it tried the full-field anchor. Measured on the now-**16-game**
+combined cache (`phase_cache_comb\`, `_combval.py --localize`), two-front gate = trimmed stays reolink
+53/63 AND combined KO improves with few confident-wrong trims.
+
+**Two changes vs ff04e6d (both load-bearing):**
+1. **Opt-in `localize`** — `fuse_phases(signals, *, localize=False)`; the trimmed CLI + fixtures fuse
+   with the default (never call `locate_game_block`), `detect_phases` (production, combined) passes
+   `localize=True`. This makes the 53/63 guarantee **structural** (localization CANNOT touch trimmed),
+   so `locate_game_block` is now free to be aggressive without any trimmed risk. Verified: trimmed
+   reolink **53/63, END 12/12 byte-identical**; 3 fixtures pass; ruff clean.
+2. **Full-field BAND anchor** — KO whistle = first blast with in-field count in
+   `[0.55, 1.8] × busy` (busy = p75 of the smoothed curve) AND not-cleared. EXP-PHASE-13's full-field
+   anchor used only a LOWER bound and over-localized onto the **dense both-teams-warming-up crowd**
+   (06.06 warm-up ~3.0× busy read as "full" → +323s, ok=True). **The UPPER bound (1.8) is the fix:** it
+   rejects that crowd (06.06-Lakefront-Sullivan warm-up 2.2-3.0× excluded, real KO 1.33× kept → -1s).
+
+**Result (combined, 14 scoreable non-truncated reolink):** KO≤10s **9/14** (ff04e6d baseline 8/13);
+**05.31-Spencerport -83s→-1s** (warm-up whistles at 0.44× busy dropped, kickoff at 0.56× kept — this
+removed a ff04e6d DANGEROUS). Trust: **7/9 trusted-KOs correct**; the 2 wrong-trusted shrank from
+ff04e6d's -83/-154s to **-40s (06.04) / -42s (06.10)** — small enough that the S3 NTFY screenshot
+verify-loop catches them.
+
+**Failed levers this session (reverted / not baked):**
+- *Curve block_start = onset of longest sustained high-play run:* the steadiest high-play is MID-half,
+  so block_start landed at 26:02 / 37:02 etc., overshooting KO. Scored 3-4/13. Confirms EXP-PHASE-13's
+  "curve head too noisy" for onset localization.
+- *Bench-dip via loosened clear (`LONG_CLEAR 120→72s`, `WINDOW 75→180s`):* fixed 05.30-Western-NY
+  (bench dip 2:50-4:14 skips its 0:18 warm-up whistle → 4:55 -2s) but **broke 05.10** (+258s DANGEROUS
+  — its first-half dip 12:26-14:02 empties for 108s and now reads as a lineup clear). **Bench dips and
+  first-half stoppage dips are indistinguishable by duration/depth/timing at 12s sampling** — loosening
+  to catch one catches the other. Kept the safe 120/75.
+- *Center-ball-restart refinement of the anchor:* the sidecar's center restarts are scattered mid-play
+  center passes, NOT the kickoff (06.04 has zero within 75s of its real KO). Not usable as a KO signal.
+- *Symmetric-prior cross-check for trust (untrust when anchor disagrees with HT-(END-2H)):* flags the
+  wrong 06.04 (anchor 7:57 vs sym 8:43) but ALSO the correct 05.31-Spencerport (its 2H is -104s, so sym
+  is 104s off) — no clean separation. Not baked.
+
+**Honest bottom line:** combined KO **9/14 (64%)** vs trimmed **53/63 (84%)** — a real +1 over ff04e6d
+with smaller dangerous errors and a cleaner (structural) safety guarantee, but still short of the
+trimmed bar. The 5 misses are each genuinely hard from audio + player-curve alone: no-whistle video
+(03.21 — correctly untrusted), warm-up whistle over a populated field with no bench dip (05.30-Fair
+— untrusted), bench dip indistinguishable from a first-half dip (05.30-West — untrusted), **missing
+KO whistle** (06.04, real KO 8:37 silent → anchors the 7:57 pre-kick whistle, -40s), KO field-count
+below the band (06.10, 0.50× busy, -42s). 3 of 5 are correctly UNTRUSTED (→ NTFY, no regression); 2
+are trusted but only -40s and caught by human verify. This is the robust ceiling for this signal set;
+a materially higher combined KO needs a signal the 180° audio+curve doesn't carry (e.g. the homegrown
+ball detector's kickoff-restart once it exists, or a finer head curve that still can't separate the
+two dip types here).
+
+---
+
 ## EXP-PHASE-13: untrimmed-KO fix — locate_game_block + KO anchor (partial) (2026-06-18)
 
 **Goal:** get KO reliable on the untrimmed combined video (the production regime) toward the trimmed
