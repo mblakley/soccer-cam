@@ -1,8 +1,35 @@
 # Current Status
 
-*Last updated: 2026-06-30*
+*Last updated: 2026-06-30 (untrimmed-KO / production-safety)*
 
-## Game-phase detection — kickoff signature + GT review (2026-06-30, later)
+## Game-phase detection — untrimmed-KO opt-in localize + PRODUCTION-SAFE (2026-06-30, latest)
+
+Committed on `feat/phase-detection-game-start`: `3923ad5` (detector) + `bae8a1f` (S1 guard docs);
+NOT pushed. See EXPERIMENTS.md **EXP-PHASE-14** and `~/.claude/plans/untrimmed-ko-handoff.md` (final
+state) for the full write-up.
+
+**Trimmed (regression gate): reolink 53/63 (84%), END 12/12 — byte-identical, verified.** Made
+structural: `fuse_phases(..., localize=False)` default (trimmed CLI + fixtures never localize);
+`detect_phases` passes `localize=True`.
+
+**Combined-video (untrimmed = production regime) KO: 9/14 within-10s** (ff04e6d was 8/13). Fix =
+full-field BAND anchor `[0.55,1.8]×busy` + not-cleared (the UPPER bound rejects dense warm-up crowds
+that over-localized before). 05.31-Spencerport −83→−1s (removed a confident-wrong trim).
+
+**PRODUCTION-SAFE via the 4-min trim backup (decision 8):** trim = `KO−240s`, so an EARLY KO is
+trim-safe; only a LATE KO mis-trims. All trusted KOs are early/tiny (worst −42s) EXCEPT
+truncated-start recordings (05.09 real KO 0:00 → anchored 8:37, trusted) — so **S1 must skip
+auto-trim when `truncated_start`** (documented). With that guard, zero trusted KO mis-trims.
+
+**Ceiling reached** for the audio+player-curve signal set (9/14 vs 84% trimmed). Reverted failed
+levers (curve-onset, loosened-clear bench-dip, ball-refine, symmetric-trust) — all in EXP-PHASE-14.
+The 5 combined misses are genuinely signal-limited; 3 correctly untrusted (→NTFY), 2 early/trim-safe.
+
+**OPEN DECISION (Mark):** flip game-start default to phase-detection (proceed S1–S4/T2) accepting 64%
+display accuracy + human-verify, or keep game-start on NTFY and use phases for post-trim display only?
+Safety bar met; the accuracy gap is display-quality (human-verify catches it), not trim-safety.
+
+## Game-phase detection — kickoff signature + GT review (2026-06-30, earlier)
 
 Interactive GT review (Mark verifying each off-boundary on YouTube) + two detector passes.
 
