@@ -8,9 +8,13 @@ Committed on `feat/phase-detection-game-start`: `3923ad5` (detector) + `bae8a1f`
 NOT pushed. See EXPERIMENTS.md **EXP-PHASE-14** and `~/.claude/plans/untrimmed-ko-handoff.md` (final
 state) for the full write-up.
 
-**Trimmed (regression gate): reolink 53/63 (84%), END 12/12 — byte-identical, verified.** Made
-structural: `fuse_phases(..., localize=False)` default (trimmed CLI + fixtures never localize);
-`detect_phases` passes `localize=True`.
+**Trimmed reolink 54/63 (86%) — up from 53/63 (EXP-PHASE-15, 2026-07-01):** halftime anchor is now
+Mark's "whistle just before the field-empty; else the decline onset", with **central** dip selection
+(a first-half stoppage can be the longest empty) and KO **decoupled** from the output HT (`ht_ko`).
+HT 14→15/18 (W.Seneca +163→−2s), KO 13/15 unchanged, 2H 14/18, END 12/12; fixtures byte-identical.
+Default `PHASE_HT_MODE=dipfirst` (revert with `=committed`). The opt-in-localize structure stands:
+`fuse_phases(..., localize=False)` default (trimmed CLI + fixtures never localize); `detect_phases`
+passes `localize=True`.
 
 **Combined-video (untrimmed = production regime) KO: 9/14 within-10s** (ff04e6d was 8/13). Fix =
 full-field BAND anchor `[0.55,1.8]×busy` + not-cleared (the UPPER bound rejects dense warm-up crowds

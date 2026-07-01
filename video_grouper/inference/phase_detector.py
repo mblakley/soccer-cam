@@ -76,6 +76,17 @@ LOCATE_KO_FAR_SEC = float(
 LOCATE_FULL_LO = float(os.environ.get("PHASE_BLOCK_FULL_LO", "0.55"))
 LOCATE_FULL_HI = float(os.environ.get("PHASE_BLOCK_FULL_HI", "1.8"))
 
+# ---- halftime anchoring (default "dipfirst" = the validated path; "committed" reverts to the old) ----
+# "dipfirst" = Mark's algorithm: the OUTPUT halftime = the whistle JUST BEFORE the halftime field-empty
+# (players run off AFTER the whistle); if no whistle within HT_DECLINE_REJECT_SEC before the decline,
+# fall back to the DECLINE ONSET (first players leaving). HT_DIP_SELECT chooses the halftime dip
+# (central beats longest -- a first-half stoppage can be the longest empty). The KO stays anchored to
+# the COMMITTED halftime estimate (ht_ko) so refining the output HT never reroutes KO (decoupled).
+# dipfirst lifts trimmed reolink HT 14->15/18 (W.Seneca +163->-2s) with KO unchanged -- EXP-PHASE-15.
+HT_MODE = os.environ.get("PHASE_HT_MODE", "dipfirst")  # dipfirst | committed
+HT_DECLINE_REJECT = float(os.environ.get("PHASE_HT_DECLINE_REJECT_SEC", "120"))
+HT_DIP_SELECT = os.environ.get("PHASE_HT_DIP_SELECT", "central")  # central | longest
+
 _SESS = None
 
 
@@ -809,6 +820,41 @@ def _fuse_core(signals, *, debug=False):
         else:
             ht = (snap(multis, off1, 120) or off1) if blasts else off1
             sig.append("player")
+    # ht_ko = the COMMITTED halftime estimate; KO stays anchored to it so refining the OUTPUT
+    # halftime (dipfirst, below) never reroutes KO's symmetric prior (decoupled -- see EXP-PHASE-15).
+    ht_ko = ht
+    if HT_MODE == "dipfirst" and dips:
+        # Mark's algorithm (OUTPUT halftime only): HT = the whistle JUST BEFORE the halftime
+        # field-empty dip (players run off AFTER the whistle). Pick the dip (central beats longest --
+        # a first-half stoppage can be the longest empty), extend its onset backward over adjacent
+        # runs, find the DECLINE ONSET (last in-play sample = first players leaving), take the whistle
+        # just before it (double-blast preferred, else the nearest single blast); if none within
+        # HT_DECLINE_REJECT sec before the decline, use the decline onset itself.
+        if HT_DIP_SELECT == "longest":
+            pick = max(range(len(dips)), key=lambda i: dips[i][1] - dips[i][0])
+        else:
+            pick = min(
+                range(len(dips)),
+                key=lambda i: abs((dips[i][0] + dips[i][1]) / 2 - dur / 2),
+            )
+        lo_i = pick
+        while lo_i > 0 and dips[lo_i][0] - dips[lo_i - 1][1] <= 60:
+            lo_i -= 1
+        dip_on, dip_off = dips[lo_i][0], dips[pick][1]
+        desc = [k for k in range(len(sm)) if ts[k] < dip_on and sm[k] >= PLAY_THR]
+        decl_on = float(ts[desc[-1]]) if desc else float(dip_on)
+        wlo, whi = decl_on - HT_DECLINE_REJECT, dip_on + 15
+        wmw2 = [m for m in wmultis if wlo <= m <= whi]
+        bw2 = [b for b in blasts if wlo <= b <= whi]
+        if wmw2:
+            ht = min(wmw2, key=lambda m: abs(m - decl_on))
+        elif bw2:
+            ht = max(
+                bw2
+            )  # nearest whistle before players run off = the halftime whistle
+        else:
+            ht = decl_on  # no whistle in range -> the decline onset (first players leaving)
+        ht_dip = (ht, dip_off)
     on2 = ht_dip[1]
 
     # ---- KICKOFFS: signature-driven, applied throughout the video ----
@@ -973,7 +1019,7 @@ def _fuse_core(signals, *, debug=False):
     # prior used to reject pre-game warm-up restarts (a CENTER static ball + full field also occurs
     # during warm-up, well before the real kickoff).
     firstw = next((b for b in blasts if b >= 5), None) if blasts else None
-    ko_sym = max(0.0, ht - (end - sh))
+    ko_sym = max(0.0, ht_ko - (end - sh))
     # kickoff candidates before halftime: full-field restarts OR center restarts with a TIGHTLY
     # coupled whistle (<=3s) AND a MODERATE field (>=0.4x this game's normal crowd). A whistle that
     # fires the instant a center static ball moves is a kickoff even when the in-field count is
@@ -985,7 +1031,7 @@ def _fuse_core(signals, *, debug=False):
     prek = [
         k
         for k in kicks
-        if k[0] < ht - 60
+        if k[0] < ht_ko - 60
         and (
             k[2]
             or (
@@ -1023,7 +1069,7 @@ def _fuse_core(signals, *, debug=False):
         else:
             # first full restart is far from the prior => warm-up; prefer a whistle+full kickoff near
             # the prior, else the first whistle of the game, else the symmetric estimate itself.
-            wfull = [k[0] for k in kicks if k[1] and k[2] and k[0] < ht - 60]
+            wfull = [k[0] for k in kicks if k[1] and k[2] and k[0] < ht_ko - 60]
             near = [t for t in wfull if abs(t - ko_sym) <= 120]
             if near:
                 ko = min(near, key=lambda t: abs(t - ko_sym))

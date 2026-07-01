@@ -4,6 +4,41 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-15: halftime anchor — dip→whistle-before, central dip, KO decoupled (2026-07-01)
+
+**Goal (Mark's algorithm):** the field empties at halftime, but the empty region LAGS the whistle
+(players run off AFTER the whistle), so HT = the WHISTLE JUST BEFORE the halftime field-empty; if no
+whistle within ~2min before the decline, fall back to the DECLINE ONSET (first players leaving).
+Parameterized the HT path (`PHASE_HT_MODE` / `PHASE_HT_DIP_SELECT` / `PHASE_HT_DECLINE_REJECT_SEC`)
+and swept via the authoritative `phase_detect --predict` + `phase_eval` (NOT side-probes -- the
+`phase_cache` disagrees with the scorecard on `--game` runs, so all tuning went through the scorecard).
+
+**Why the old primary failed (W.Seneca):** the committed HT anchored on a central DOUBLE-blast with a
+following dip. When the real halftime whistle is a SINGLE blast (W.Seneca 30:13), it's invisible to
+that rule, which grabbed a stray double-blast (32:58) sitting INSIDE the empty region -> +163s late.
+
+**Two findings from the sweep:**
+1. **central dip >> longest dip.** `longest` scored 51/63 -- a first-half stoppage can be the longest
+   field-empty (06.10: a deep 90s stoppage dip at 20:52 vs the real shallow central halftime dip that
+   only reaches 3-4 players near center). Selecting the most-CENTRAL dip fixes this. `central`=54/63.
+2. **HT feeds KO -> must decouple.** A naive dip-first (HT drives everything) fixed W.Seneca HT but
+   BROKE its KO (+0->+175s): KO's symmetric prior `ko_sym = ht - (end - sh)` shifts with HT, which
+   rerouted KO's fallback from `firstw` onto a warm-up whistle (3:07). Fix: keep `ht_ko` = the
+   COMMITTED halftime estimate and anchor KO (`prek` window + `ko_sym`) to it, while the OUTPUT HT
+   (+ 2H window) uses the dipfirst value. KO then never moves when HT is refined.
+
+**Result (trimmed reolink, authoritative scorecard):** committed **53/63** -> dipfirst+central+decoupled
+**54/63 (86%)**: KO 13/15 (unchanged), HT **14->15/18** (W.Seneca +163->-2s, no other HT regressed),
+2H 14/18, END 12/12. Fixtures byte-identical (06.08/06.06-S/05.28 unchanged). Combined-video KO
+unchanged **9/14** (KO decoupled). `HT_DECLINE_REJECT` 90/120/150 made no difference (a whistle is
+always found in-window on these games); kept 120. Shipped as the default `PHASE_HT_MODE=dipfirst`.
+
+**Still-missed HT (3):** 03.21 (no-whistle video), 05.30-Fairport (+18s, borderline), 06.07-BU15
+(+306s -- degenerate: the field never clearly empties so there's no halftime dip to anchor). These
+need a signal the whistle+curve doesn't carry; left as-is.
+
+---
+
 ## EXP-PHASE-14: untrimmed-KO — opt-in localize + full-field BAND anchor (resolves 13) (2026-06-30)
 
 **Goal:** push combined-video KO past ff04e6d's whistle-clear anchor without the trust-precision
