@@ -203,45 +203,81 @@ def main() -> None:
     track = track_ball([frames_cands[f] for f in ef], geom, frame_gaps=gaps)
     fidx = {f: i for i, f in enumerate(ef)}
 
-    det_err, vp_err, ceil_err, sizes = [], [], [], []
+    # Reference: AutoCam's OWN detections through OUR tracker (same frames/gaps). This isolates
+    # detection from selection: if it beats OUR-detector->tracker on far, our detector is the gap;
+    # if it also loses on far, selection (the tracker) is the gap, not the detector.
+    ac_track = {}
+    ac_path = vdir / "autocam_detections.jsonl"
+    if ac_path.exists():
+        ac_dets = dd.load_detections(ac_path, offs)
+        ac_cands = [
+            [Candidate(x=x, y=y, score=cf) for (x, y, cf) in ac_dets.get(f, [])]
+            for f in ef
+        ]
+        ac_track = track_ball(ac_cands, geom, frame_gaps=gaps)
+
+    # Per-ball rows: (apparent_size_px, our_err, autocam_viewport_err|None, our_candidate_ceiling|None).
+    # The goal is a head-to-head: match AutoCam on near+medium, beat it on far. That only reads cleanly
+    # if BOTH our track AND AutoCam's viewport are split by the SAME size gate — so score them together
+    # per ball and split afterward, rather than reporting AutoCam as a single blended number.
+    rows = []
     for g, gt in balls.items():
         near = min(ef, key=lambda f: abs(f - g)) if ef else None
         if near is None or abs(near - g) > args.stride or fidx[near] not in track:
             continue
         gw = geom.image_to_world(np.asarray([gt], float))[0]
         tw = geom.image_to_world(np.asarray([track[fidx[near]]], float))[0]
-        det_err.append((float(np.linalg.norm(tw - gw)), g))
-        sizes.append(float(geom.expected_ball_diameter_px(np.asarray(gt))[0]))
+        our = float(np.linalg.norm(tw - gw))
+        size = float(geom.expected_ball_diameter_px(np.asarray(gt))[0])
+        vpe = None
         if g in vps:
             vw = geom.image_to_world(np.asarray([vps[g]], float))[0]
-            vp_err.append(float(np.linalg.norm(vw - gw)))
+            vpe = float(np.linalg.norm(vw - gw))
         cands = frames_cands.get(near, [])
-        if cands:
-            ceil_err.append(
-                min(
-                    float(
-                        np.linalg.norm(
-                            geom.image_to_world(np.asarray([(c.x, c.y)], float))[0] - gw
-                        )
+        ce = (
+            min(
+                float(
+                    np.linalg.norm(
+                        geom.image_to_world(np.asarray([(c.x, c.y)], float))[0] - gw
                     )
-                    for c in cands
                 )
+                for c in cands
             )
+            if cands
+            else None
+        )
+        ace = None
+        if fidx[near] in ac_track:
+            aw = geom.image_to_world(np.asarray([ac_track[fidx[near]]], float))[0]
+            ace = float(np.linalg.norm(aw - gw))
+        rows.append((size, our, vpe, ce, ace))
 
-    de = [e for e, _ in det_err]
-    sz = np.asarray(sizes)
-    far = [e for (e, _), s in zip(det_err, sz, strict=False) if s < args.far_size_px]
-    nearb = [e for (e, _), s in zip(det_err, sz, strict=False) if s >= args.far_size_px]
+    def _col(rws, i):
+        return [r[i] for r in rws if r[i] is not None]
+
+    far_rows = [r for r in rows if r[0] < args.far_size_px]
+    near_rows = [r for r in rows if r[0] >= args.far_size_px]
     print(
-        f"\n=== HELD-OUT EVAL (n={len(de)} GT balls, far<{args.far_size_px}px apparent) ==="
+        f"\n=== HELD-OUT EVAL: {gj['game_id']} "
+        f"(n={len(rows)} GT balls; far = apparent <{args.far_size_px}px) ==="
     )
-    print(f"  OUR detector -> tracker : {_hits(de, args.radii)}")
-    print(f"    far  : {_hits(far, args.radii)}")
-    print(f"    near : {_hits(nearb, args.radii)}")
-    if ceil_err:
-        print(f"  candidate ceiling       : {_hits(ceil_err, args.radii)}")
-    if vp_err:
-        print(f"  AutoCam viewport (bar)  : {_hits(vp_err, args.radii)}")
+    print("  goal: OUR ~= AutoCam on NEAR+MED, and OUR beats AutoCam on FAR\n")
+
+    def _band(title, rws):
+        if not rws:
+            return
+        print(f"  [{title}]  n={len(rws)}")
+        print(f"    OUR detector -> tracker : {_hits(_col(rws, 1), args.radii)}")
+        if any(r[2] is not None for r in rws):
+            print(f"    AutoCam viewport        : {_hits(_col(rws, 2), args.radii)}")
+        if any(r[4] is not None for r in rws):
+            print(f"    AutoCam dets -> OUR trk : {_hits(_col(rws, 4), args.radii)}")
+        if any(r[3] is not None for r in rws):
+            print(f"    OUR candidate ceiling   : {_hits(_col(rws, 3), args.radii)}")
+
+    _band("ALL", rows)
+    _band("NEAR+MED", near_rows)
+    _band("FAR", far_rows)
 
 
 if __name__ == "__main__":
