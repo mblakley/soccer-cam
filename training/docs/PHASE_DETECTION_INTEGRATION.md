@@ -24,9 +24,12 @@ human-verified + correctable through a TTT-triggered, NTFY-screenshot review loo
 7. **Dahua cameras use NTFY.** `phase_detection` mode auto-falls-back to the NTFY game-start walk when
    `video_format` is Dahua (no usable whistle audio, ~45%). Only Reolink (whistle-capable) gets
    auto-phase-detection.
-8. **Keep the current coarse trim buffer.** The detected KO sets `start_time_offset` using the existing
-   4-min backup (`GAME_START_BACKUP_SECONDS`), same as the NTFY walk — safe (never cuts into the start);
-   do NOT tighten it.
+8. **Trim buffer.** The detected KO sets `start_time_offset = KO − backup` — safe (never cuts into the
+   start). *(Originally: reuse the NTFY walk's 4-min `GAME_START_BACKUP_SECONDS`.)* **Amended 2026-07-01:**
+   decoupled from the NTFY buffer — the phase path uses its own `PHASE_KO_TRIM_BACKUP_SECONDS = 60`
+   (env-overridable); the NTFY walk keeps 240s (tied to its 5-min poll). The detector's trusted KO error
+   is early/tiny (worst −42s), so 60s stays trim-safe while dropping ~3 min of warm-up. See DECISIONS.md
+   2026-07-01. The `truncated_start` guard (below) still blocks the only late-KO source.
 9. **Branch off `feat/game-phase-detection`** (NOT `main`) for this work — it consumes the detector that
    lives there; the detector branch merges to `main` in sequence later.
 10. **Detector core lives with the DELIVERED code**, not training. The signals + fusion move to
@@ -123,8 +126,9 @@ combine done (combined.mp4)
   `video_grouper/pipeline/steps/phase_detect.py` (`type = phase_detect`, `consumes` combined video +
   field polygon, `produces` a phases artifact) that calls `video_grouper.inference.phase_detector`. Add
   `[PROCESSING] game_start_method = phase_detection|ntfy` (default `phase_detection`). On `ok` fit, set
-  `match_info.start_time_offset` from KO using the **existing coarse 4-min backup**
-  (`GAME_START_BACKUP_SECONDS`, unchanged — decision 8). **Fall back to the existing GameStartTask walk**
+  `match_info.start_time_offset` from KO using the phase-specific backup
+  (`PHASE_KO_TRIM_BACKUP_SECONDS = 60`, decision 8 as amended 2026-07-01; NTFY keeps 240s).
+  **Fall back to the existing GameStartTask walk**
   when: `ntfy` mode, the camera is **Dahua** (`video_format`, decision 7), or the fit is rejected /
   no-whistle-low-confidence — so behavior is never worse than today. Persist all four phases to
   game.json (`game_state`, source `phase_fused`).
@@ -132,11 +136,11 @@ combine done (combined.mp4)
     combined recording is missing its beginning (`game.json.truncated_start`), the game start IS the
     file head (offset 0); the detector CANNOT see this — the whole video is game play, so
     `locate_game_block` anchors KO onto the first in-field full-crowd first-half whistle (05.09:
-    real KO 0:00, anchored 8:37, `ko_trustworthy=True`). Trimming at `KO − 4min` would cut ~4.6 min
+    real KO 0:00, anchored 8:37, `ko_trustworthy=True`). Trimming at `KO − backup` would cut minutes
     INTO the game. This truncated-start case is indistinguishable in-detector from a dense-warm-up
     game (both show sustained full play at t=0), so the guard MUST live here: if `truncated_start`,
     do NOT use the detected KO for trimming (leave `start_time_offset` at 0 / defer to NTFY). All
-    other trusted KO errors are EARLY (≤0) or tiny (−40/−42s), which the 4-min backup makes trim-safe
+    other trusted KO errors are EARLY (≤0) or tiny (−40/−42s), which the 60s backup makes trim-safe
     by construction — only a LATE KO is dangerous, and truncated-start is the only late-trust source.
 - **S2 — Push phases to TTT.** After the step, if a TTT session exists for this `recording_group_dir`,
   `update_game_session(...)` with the four phase offsets + source + confidence. Inline (no scheduled

@@ -275,3 +275,27 @@ Label sources are tracked separately so we can always compare model performance 
 - Retraining is valuable when track gaps exist that new labels could fill
 - The flywheel naturally converges: longer tracks → fewer gaps → fewer human reviews → less retraining needed → done
 **Trade-off:** Harder to measure automatically than mAP. Requires trajectory building + human review to evaluate. But it's the metric that actually matters for the autocam use case.
+
+## 2026-07-01: Phase-detection trim backup decoupled from the NTFY buffer (60s)
+
+**Context:** Decision 8 reused the NTFY walk's `GAME_START_BACKUP_SECONDS = 240` (4 min)
+as the trim backup for the phase-detection path (`start_time_offset = KO − backup`). That
+4-min value is intrinsic to the NTFY flow — it polls the human every 5 minutes, so a "Yes"
+means kickoff was within the last 5 min, and it backs up 4 min to be sure the trim lands
+before kickoff. The phase detector resolves kickoff far more precisely (trusted, non-
+`truncated_start` fits are early or tiny, worst observed −42s), so 4 min leaves ~3 extra
+minutes of pre-game warm-up in every trimmed/uploaded/AutoCam-processed video for no gain.
+Verified live on 6/15 (heat vs Irondequoit): true KO ≈76s, so a 4-min pad trims from 0:00.
+**Decision:** Decouple the two. The NTFY walk keeps `GAME_START_BACKUP_SECONDS = 240`
+(tied to its poll cadence — do NOT tighten). The phase path gets its own
+`PHASE_KO_TRIM_BACKUP_SECONDS = 60` (env-overridable, `video_grouper/task_processors/phase_game_start.py`).
+60s stays trim-safe with margin over the worst observed trusted error (−42s), only the
+LATE-KO direction is dangerous, and the `truncated_start` guard (decision 8) still blocks
+the sole late-trust source. Precision for tight consumers lives in the phase_* offsets
+pushed to TTT (S2), not the coarse trim point.
+**Trade-off:** ~18s of margin over the worst observed trusted error (vs ~200s before) — a
+future trusted KO late by >60s would mis-trim, but the detector's trusted errors are early
+by construction and `ok:false`/`truncated_start` fits fall back to the NTFY walk. Amends
+decision 8 in `PHASE_DETECTION_INTEGRATION.md`.
+**Files:** `video_grouper/task_processors/phase_game_start.py`,
+`video_grouper/task_processors/tasks/ntfy/game_start_task.py`, `tests/test_phase_game_start.py`

@@ -17,8 +17,11 @@ logger = logging.getLogger(__name__)
 
 # When the user confirms "Yes, game started at T", the actual start is
 # somewhere between the previous "No" (T-5min) and T.  We back up by this
-# buffer so the trim doesn't cut into the real start.  Could be made
-# configurable later; 4 minutes works well with the 5-minute question interval.
+# buffer so the trim doesn't cut into the real start.  4 minutes works well
+# with the 5-minute question interval — this value is INTRINSIC to the NTFY
+# poll cadence, so do NOT tighten it here.  The phase-detection path resolves
+# the kickoff far more precisely and uses its own, much smaller backup
+# (PHASE_KO_TRIM_BACKUP_SECONDS in task_processors/phase_game_start.py).
 GAME_START_BACKUP_SECONDS = 240  # 4 minutes
 
 

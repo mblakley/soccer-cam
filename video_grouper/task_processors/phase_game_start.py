@@ -4,9 +4,17 @@ This is the default way game start is found. When
 ``[PROCESSING] game_start_method == "phase_detection"`` AND the recording camera
 is a whistle-capable Reolink, run the offline game-phase detector on the combined
 video and — if its fit passes the sanity gate — write
-``match_info.start_time_offset`` from the detected kickoff, using the SAME coarse
-``GAME_START_BACKUP_SECONDS`` backup the NTFY walk uses (decision 8; the backup
-never cuts into the real start). The caller then skips the NTFY game-start walk.
+``match_info.start_time_offset`` from the detected kickoff, minus a small
+:data:`PHASE_KO_TRIM_BACKUP_SECONDS` safety backup. The caller then skips the
+NTFY game-start walk.
+
+The backup is far smaller than the NTFY walk's ``GAME_START_BACKUP_SECONDS``
+(240s): that value is tied to the 5-minute human-confirmation poll, whereas the
+detector resolves kickoff to within ~40s on trusted (``ok``) fits. A 60s backup
+keeps the trim safe (all trusted, non-``truncated_start`` KO errors are early or
+tiny) while leaving far less pre-game warm-up in the trimmed output. Only the
+late-KO direction is dangerous, and the ``truncated_start`` guard (decision 8)
+already blocks the sole late-trust source (see the caller).
 
 Falls back (returns ``False`` — the caller runs the NTFY walk unchanged) for:
 
@@ -25,13 +33,15 @@ from __future__ import annotations
 import logging
 import os
 
-# The existing coarse trim backup the NTFY walk applies (decision 8 — reuse it,
-# do NOT introduce a new/tighter buffer). This import is light (no ML deps).
-from video_grouper.task_processors.tasks.ntfy.game_start_task import (
-    GAME_START_BACKUP_SECONDS,
-)
-
 logger = logging.getLogger(__name__)
+
+# Trim safety backup applied to the detected kickoff, decoupled from the NTFY
+# walk's 240s (decision 8, amended 2026-07-01). The detector's trusted KO error
+# is early/tiny (worst observed −42s), so 60s stays trim-safe with margin while
+# keeping ~3 min less warm-up than the inherited 4-min pad. Env-overridable
+# (mirrors the phase_detector.py knobs); the ``truncated_start`` guard in the
+# caller still blocks the only late-KO source.
+PHASE_KO_TRIM_BACKUP_SECONDS = int(os.environ.get("PHASE_KO_TRIM_BACKUP_SECONDS", "60"))
 
 
 def _camera_is_reolink(config) -> bool:
@@ -136,7 +146,7 @@ async def maybe_resolve_phase_game_start(
     """Try to set game start from phase detection. Returns True iff it did.
 
     On True: ``match_info.start_time_offset`` has been written from the detected
-    kickoff minus :data:`GAME_START_BACKUP_SECONDS`, and the fused phases are
+    kickoff minus :data:`PHASE_KO_TRIM_BACKUP_SECONDS`, and the fused phases are
     persisted to the group state (source ``phase_fused``); the caller MUST skip
     the NTFY game-start walk. On False: nothing was written and the caller runs
     the NTFY walk exactly as before.
@@ -173,7 +183,7 @@ async def maybe_resolve_phase_game_start(
     if kickoff is None:
         return False
 
-    start_seconds = max(0, int(round(float(kickoff))) - GAME_START_BACKUP_SECONDS)
+    start_seconds = max(0, int(round(float(kickoff))) - PHASE_KO_TRIM_BACKUP_SECONDS)
     offset = _format_offset(start_seconds)
 
     MatchInfo.update_game_times(
@@ -187,7 +197,7 @@ async def maybe_resolve_phase_game_start(
         offset,
         group_dir,
         float(kickoff),
-        GAME_START_BACKUP_SECONDS,
+        PHASE_KO_TRIM_BACKUP_SECONDS,
     )
     return True
 

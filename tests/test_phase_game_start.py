@@ -17,9 +17,6 @@ import pytest
 
 import video_grouper.task_processors.phase_game_start as pgs
 from video_grouper.models import MatchInfo
-from video_grouper.task_processors.tasks.ntfy.game_start_task import (
-    GAME_START_BACKUP_SECONDS,
-)
 
 
 def _cfg(method: str = "phase_detection", cam_type: str = "reolink"):
@@ -104,10 +101,10 @@ async def test_reolink_ok_sets_offset_and_persists_phases(tmp_path, monkeypatch)
     )
     assert handled is True
 
-    # 600s kickoff - 240s coarse backup = 360s -> "06:00".
-    assert GAME_START_BACKUP_SECONDS == 240
+    # 600s kickoff - 60s phase backup = 540s -> "09:00".
+    assert pgs.PHASE_KO_TRIM_BACKUP_SECONDS == 60
     mi = MatchInfo.get_or_create(group, str(tmp_path))[0]
-    assert mi.start_time_offset == "06:00"
+    assert mi.start_time_offset == "09:00"
 
     # Phases persisted to the group state (source phase_fused) for S2.
     from video_grouper.models import DirectoryState

@@ -20,8 +20,9 @@ passes `localize=True`.
 full-field BAND anchor `[0.55,1.8]×busy` + not-cleared (the UPPER bound rejects dense warm-up crowds
 that over-localized before). 05.31-Spencerport −83→−1s (removed a confident-wrong trim).
 
-**PRODUCTION-SAFE via the 4-min trim backup (decision 8):** trim = `KO−240s`, so an EARLY KO is
-trim-safe; only a LATE KO mis-trims. All trusted KOs are early/tiny (worst −42s) EXCEPT
+**PRODUCTION-SAFE via the phase trim backup (decision 8, amended 2026-07-01):** trim =
+`KO − PHASE_KO_TRIM_BACKUP_SECONDS` (60s; decoupled from the NTFY walk's 240s), so an EARLY KO is
+trim-safe; only a LATE KO mis-trims. All trusted KOs are early/tiny (worst −42s, < 60s margin) EXCEPT
 truncated-start recordings (05.09 real KO 0:00 → anchored 8:37, trusted) — so **S1 must skip
 auto-trim when `truncated_start`** (documented). With that guard, zero trusted KO mis-trims.
 
