@@ -36,6 +36,27 @@ human-verified + correctable through a TTT-triggered, NTFY-screenshot review loo
 
 ---
 
+## UPDATE 2026-06-18 — untrimmed-KO validation + pivot
+
+Ran the detector via `detect_phases` on the **untrimmed combined** video (production regime) with the
+real field polygon, vs human GT, for 6 reolink games. Result: **it does NOT reliably find the game
+start** — the warm-up before kickoff confuses KO. 05.10 −2s and 05.07 −1s were clean, but 03.21 was
+**+527s with `ok=True`** (a confident, sanity-gate-passing 9-min-late KO → would trim 9 min into the
+game), and 05.09 / 05.27 / 05.28 were hundreds of seconds off (mostly `ok=False` → NTFY fallback).
+The detector was tuned on **trimmed** (game-only) videos where KO ≈ 0:00; the untrimmed regime is
+unvalidated and currently unsafe for an on-by-default trim.
+
+**Decision (Mark, 2026-06-18): fix untrimmed KO** rather than fall back to post-trim-only enrichment.
+So decision 1 is **suspended**: game-start stays NTFY *until the detector clears a bar on untrimmed
+combined videos* (KO reliably within tolerance AND no confident-wrong `ok=True` far misses like 03.21).
+The `phase_detect` pipeline step (post-trim, validated 53/63) and the TTT push/display/verify (S2–S4,
+T1–T2) are **deferred** behind this — no point wiring the verify-loop until KO on the production
+video is trustworthy. T1 (TTT schema) is committed and stands. This is now a **detector-research
+task**: make KO/HT/2H/END robust on the untrimmed combined video (warm-up before KO, post-game after
+END), and tighten the sanity gate so confident-wrong far-KOs are rejected.
+
+---
+
 ## What already exists (reuse-first — do NOT reinvent)
 
 | Need | Existing primitive | Where |
