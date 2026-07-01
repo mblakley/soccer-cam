@@ -37,6 +37,38 @@ PLAY_THR = 5  # >= this many in-field persons => play
 # quieter, game-variable KO/HT/2H whistles). From the cached per-blast ratios; env-tunable.
 LOUD_GATE = float(os.environ.get("PHASE_LOUD_GATE", "12"))
 
+# ---- game-block localization (untrimmed combined videos) ----
+# A trimmed upload is the game (plus the coarse 4-min pre-kickoff backup the pipeline leaves in); a
+# combined video is the full recording: a long warm-up -> game -> post-game, and the warm-up supplies
+# stray whistles/ball-restarts that pull KO early. locate_game_block finds where the game body STARTS
+# so the validated fusion runs anchored to it. The robust anchor is the KICKOFF WHISTLE: a warm-up
+# whistle is followed by the field CLEARING for good as the teams line up (a sustained field-empty
+# run), while the kickoff whistle is followed by continuous play. So the KO whistle = the first blast
+# NOT immediately followed by a sustained clear. The clear must be LONG (>= LONG_CLEAR, a real lineup
+# clear) so a brief player-detection gap does not count -- the player curve is too noisy at the head
+# (slow/distant starts, dropouts) to anchor on, only to read the clear signature. We trim only when an
+# EARLIER warm-up blast is skipped AND the KO whistle is >= MIN_WARMUP in, so a trimmed upload (first
+# whistle is the kickoff, no long clear after it) returns (0, dur) -- fusion byte-identical (the 53/63
+# scorecard + fixtures unaffected). Thresholds are env-tunable.
+LOCATE_CLEAR_WINDOW_SEC = float(
+    os.environ.get("PHASE_BLOCK_CLEAR_WINDOW_SEC", "75")
+)  # warm-up clear must START within this of the whistle
+LOCATE_LONG_CLEAR_SEC = float(
+    os.environ.get("PHASE_BLOCK_LONG_CLEAR_SEC", "120")
+)  # a real pre-kickoff clear, not a detection gap or first-half stoppage
+LOCATE_HEAD_MARGIN_SEC = float(
+    os.environ.get("PHASE_BLOCK_HEAD_MARGIN_SEC", "20")
+)  # keep the KO whistle just inside the block
+LOCATE_MIN_WARMUP_SEC = float(
+    os.environ.get("PHASE_BLOCK_MIN_WARMUP_SEC", "240")
+)  # KO whistle >= 4min in => untrimmed
+LOCATE_MIN_BLOCK_SEC = float(
+    os.environ.get("PHASE_BLOCK_MIN_SEC", "1500")
+)  # >=25min game body
+LOCATE_KO_FAR_SEC = float(
+    os.environ.get("PHASE_BLOCK_KO_FAR_SEC", "90")
+)  # KO far from block onset => untrustworthy
+
 _SESS = None
 
 
@@ -435,7 +467,146 @@ def compute_signals(video_path, polyf, rot, poly_src, step, *, base=None, gj=Non
     }
 
 
+def _empty_run_onsets(sm, ts, long_n):
+    """Onset times of field-empty runs (sm <= 2) at least ``long_n`` samples long -- i.e. sustained
+    field clears, not brief detection gaps. A pre-kickoff warm-up clear (both teams off while they
+    line up) is one such run."""
+    n = len(sm)
+    out, i = [], 0
+    while i < n:
+        if sm[i] <= 2:
+            j = i
+            while j < n and sm[j] <= 2:
+                j += 1
+            if j - i >= long_n:
+                out.append(float(ts[i]))
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def locate_game_block(signals):
+    """Locate ``(block_start, block_end)`` in seconds = the game body inside an untrimmed combined
+    video (warm-up -> game -> post-game), so the validated fusion runs anchored to the game and
+    ignores the warm-up before kickoff (which supplies stray whistles/restarts that pull KO early).
+
+    The anchor is the KICKOFF WHISTLE = the first blast NOT immediately followed by a sustained field
+    clear (a warm-up whistle is followed by the field emptying as the teams line up; the kickoff
+    whistle is followed by continuous play). A clear = a field-empty run of at least
+    LOCATE_LONG_CLEAR_SEC whose onset falls within LOCATE_CLEAR_WINDOW_SEC after the blast -- long
+    enough that a brief player-detection gap does NOT count as a clear (which is what made a strict
+    2-sample test wrongly skip real kickoff whistles). ``block_start`` = that whistle minus a small
+    margin, so it keeps the kickoff whistle while dropping earlier warm-up whistles/ball-restarts.
+
+    We localize ONLY when an earlier (warm-up) blast is actually being skipped AND the kickoff whistle
+    is at least LOCATE_MIN_WARMUP_SEC in. A cleanly-trimmed upload -- including the coarse 4-min
+    pre-kickoff backup the pipeline leaves in (so its first whistle IS the kickoff, not followed by a
+    long clear) -- returns ``(0, dur)``, so the fusion output is byte-identical (the 53/63 scorecard +
+    fixtures are unaffected). No-whistle combined videos also return ``(0, dur)`` (the safety flag
+    marks their KO untrustworthy instead). ``block_end`` is left at ``dur`` -- the post-game tail is
+    handled by the existing END/off2 logic; trimming it risked cutting a real final whistle that
+    follows a late field-empty stoppage. A degenerate/too-short block also falls back to ``(0, dur)``
+    (never trims away a real game)."""
+    ts = np.asarray(signals["ts"], dtype=float)
+    if len(ts) < 6:
+        return (0.0, float(ts[-1]) if len(ts) else 0.0)
+    dur = float(ts[-1])
+    blasts = signals.get("blasts") or []
+    if not blasts:
+        return (0.0, dur)  # no whistle -> can't anchor; the safety flag handles trust
+    cnt = np.asarray(signals["cnt"], dtype=np.float32)
+    sm = smooth(cnt, 3)
+    step = float(ts[1] - ts[0]) if len(ts) > 1 else 12.0
+    long_n = max(3, int(round(LOCATE_LONG_CLEAR_SEC / max(step, 1e-6))))
+    clears = _empty_run_onsets(sm, ts, long_n)  # onsets of sustained field clears
+
+    def cleared(b):  # a sustained clear starts within the window just after this blast
+        return any(b < on <= b + LOCATE_CLEAR_WINDOW_SEC for on in clears)
+
+    ko_i = next((i for i, b in enumerate(blasts) if not cleared(b)), None)
+    # ko_i == 0: the first blast is already the kickoff (no earlier warm-up whistle) -> no-op.
+    if ko_i is None or ko_i == 0 or blasts[ko_i] < LOCATE_MIN_WARMUP_SEC:
+        return (0.0, dur)
+    block_start = max(0.0, float(blasts[ko_i]) - LOCATE_HEAD_MARGIN_SEC)
+    if block_start < 0.5 or (dur - block_start) < LOCATE_MIN_BLOCK_SEC:
+        return (
+            0.0,
+            dur,
+        )  # degenerate -> treat as trimmed (never trim away a real game)
+    return (block_start, dur)
+
+
+def _slice_signals(signals, t0, t1):
+    """Restrict a signal dict to the window [t0, t1] with all times offset by -t0, so the validated
+    fusion can run within the located game block. ``blasts`` and ``blast_loud`` are filtered together
+    to stay index-aligned; ``multis``/``ball_ev`` times are shifted; spatial fields (poly, center),
+    ``sr`` pass through unchanged. Callers add t0 back to the fused boundary times."""
+    ts = np.asarray(signals["ts"], dtype=float)
+    m = (ts >= t0) & (ts <= t1)
+    out = dict(signals)
+    out["ts"] = ts[m] - t0
+    out["cnt"] = np.asarray(signals["cnt"], dtype=np.float32)[m]
+    out["dur"] = float(t1 - t0)
+    blasts = signals.get("blasts") or []
+    bl = signals.get("blast_loud") or []
+    if len(bl) == len(blasts):
+        pairs = [
+            (b - t0, lr) for b, lr in zip(blasts, bl, strict=True) if t0 <= b <= t1
+        ]
+        out["blasts"] = [p[0] for p in pairs]
+        out["blast_loud"] = [p[1] for p in pairs]
+    else:
+        out["blasts"] = [b - t0 for b in blasts if t0 <= b <= t1]
+        out["blast_loud"] = bl
+    out["multis"] = [b - t0 for b in (signals.get("multis") or []) if t0 <= b <= t1]
+    ev = signals.get("ball_ev")
+    if ev:
+        out["ball_ev"] = [(t - t0, x, y) for (t, x, y) in ev if t0 <= t <= t1]
+    return out
+
+
 def fuse_phases(signals, *, debug=False):
+    """Locate the game block, then segment + fuse the (block-restricted) signals into phase
+    boundaries in the ORIGINAL video timeline.
+
+    Wraps the validated ``_fuse_core``: on an untrimmed combined video ``locate_game_block`` finds the
+    game body, the signals are sliced to it, ``_fuse_core`` fuses in block-relative time, and the
+    block offset is added back to every boundary. On a trimmed upload (game fills the file) the block
+    is ``(0, dur)`` and ``_fuse_core`` runs on the original signals unchanged -- so trimmed behavior is
+    byte-identical (the 53/63 scorecard + fixtures are unaffected). Adds two keys the S1 game-start
+    resolver reads: ``block`` = [start, end], and ``ko_trustworthy`` -- False (fall back to NTFY, never
+    mis-trim) when the KO is symmetric-prior-only, the combined video has no whistle, the KO is far
+    from the block onset, or the fit was rejected. Returns None for a no-play plateau."""
+    ts_full = np.asarray(signals["ts"], dtype=float)
+    dur = float(ts_full[-1]) if len(ts_full) else 0.0
+    t0, t1 = locate_game_block(signals)
+    localized = t0 > 0.5 or t1 < dur - 0.5
+    res = _fuse_core(
+        _slice_signals(signals, t0, t1) if localized else signals, debug=debug
+    )
+    if res is None:
+        return None
+    if not localized:
+        t0, t1 = 0.0, dur
+    else:
+        for k in res["times"]:
+            res["times"][k] += t0
+    res["block"] = [t0, t1]
+    blasts = signals.get("blasts") or []
+    ko = res["times"]["kickoff"]
+    # "far from block onset" only means something once we've LOCALIZED (t0 = the game onset). On a
+    # no-op (t0 = 0: trimmed, or a combined video whose first whistle is already the kickoff) t0 is
+    # not the game onset, so this check is skipped -- the KO is still gated by no-whistle / symmetric
+    # / the fusion sanity gate.
+    far = localized and (ko - t0) > LOCATE_KO_FAR_SEC
+    res["ko_trustworthy"] = bool(
+        blasts and res.get("ko_anchor") != "sym" and not far and res["ok"]
+    )
+    return res
+
+
+def _fuse_core(signals, *, debug=False):
     """Segment + fuse the cached signals into phase boundaries, in TRIMMED video time (no trim
     offset is applied here; callers add it at output/scoring time).
 
@@ -772,6 +943,11 @@ def fuse_phases(signals, *, debug=False):
             )
         )
     ]
+    # ko_anchor records what actually SET kickoff (not just the sig union): "kick"/"whistle" = a real
+    # start signal in the video; "sym" = the symmetric equal-halves prior only (no whistle/kick to
+    # anchor it). The S1 resolver treats a "sym" KO as not trustworthy for auto-trimming (03.21: a
+    # no-whistle combined video whose KO falls to the prior and shifts 9 min late with ok=True).
+    ko_anchor = "sym"
     if prek:
         kt, kw = prek[0][0], prek[0][1]
         # a whistle+full kickoff within ~75s AFTER the first full restart = the warm-up restart was
@@ -782,12 +958,16 @@ def fuse_phases(signals, *, debug=False):
         )
         if kw:
             ko = kt  # whistle + full + center => a clean kickoff; trust it
+            ko_anchor = "kick"
         elif nxt_ko is not None:
             ko = nxt_ko  # no-whistle restart shortly followed by a whistle+full kickoff => kickoff
+            ko_anchor = "kick"
         elif firstw is not None and kt < firstw <= kt + 90:
             ko = firstw  # warm-up restart shortly followed by the kickoff whistle => the whistle
+            ko_anchor = "whistle"
         elif abs(kt - ko_sym) <= 75:
             ko = kt  # first full restart matches the symmetric prior => it is the kickoff
+            ko_anchor = "kick"
         else:
             # first full restart is far from the prior => warm-up; prefer a whistle+full kickoff near
             # the prior, else the first whistle of the game, else the symmetric estimate itself.
@@ -795,16 +975,21 @@ def fuse_phases(signals, *, debug=False):
             near = [t for t in wfull if abs(t - ko_sym) <= 120]
             if near:
                 ko = min(near, key=lambda t: abs(t - ko_sym))
+                ko_anchor = "whistle"
             elif firstw is not None:
                 ko = firstw
+                ko_anchor = "whistle"
             else:
                 ko = ko_sym
+                ko_anchor = "sym"
         sig.append("kick")
     elif firstw is not None:
         ko = firstw
+        ko_anchor = "whistle"
         sig.append("whistle")
     else:
         ko = ko_sym
+        ko_anchor = "sym"
         sig.append("sym")
     sig = list(dict.fromkeys(sig))
     used = "+".join(sig) + (f"(sr={sr})" if blasts else "")
@@ -838,6 +1023,7 @@ def fuse_phases(signals, *, debug=False):
         "brk": brkm,
         "sm": sm,
         "sig": sig,
+        "ko_anchor": ko_anchor,
         "ko_from_ball": bool(prek),
         "sh_from_ball": use_s2k,
     }
