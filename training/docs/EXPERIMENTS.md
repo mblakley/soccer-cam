@@ -34,13 +34,36 @@ exempt) → `build_heatmap_crops` (NVDEC) → HeatmapNet base24. Held-out `heat_
 (545 GT). Crop vision-gate caught 3 teacher bugs pre-training (warm-up, off-field, Dahua noise).
 Reolink-primary first build (2024 Dahua = noisy detection + no GT anchor).
 
-**Result (2026-07-01).** Reolink build = **76,875 crops / 15 games**. Held-in Cleveland val recall
-peaked **0.387 @ epoch 5** (≫0.16 sanity — distill learns the distribution fast, ~5 epochs) then flat
-→ plateau. Held-out eval on Spencerport pending the plateau early-stop. `cli/eval_detector.py` now
-prints a true head-to-head (the success bar Mark restated: **match AutoCam on near+medium, beat it on
-far**): ALL / NEAR+MED / FAR bands, each with OUR detector→tracker vs **AutoCam viewport**, plus
-**AutoCam-detections→OUR-tracker** (detector-vs-selection diagnostic) and our candidate ceiling.
-**TODO: paste the meters table when it lands (far must beat AutoCam ~0.15; near+med must match).**
+**Result (2026-07-01) — DID NOT meet the goal; the win is a precise diagnosis, not a "beat".**
+Reolink build = **76,875 crops / 15 games**. Held-in Cleveland val recall peaked **0.397 @ epoch 10**
+then flat → watcher early-stopped at epoch 16. Held-out eval on Spencerport (n=420 GT in the capped
+span 6714–12714), R15 m:
+
+| row | ALL | NEAR+MED (n=90) | FAR (n=330) | median |
+|---|---|---|---|---|
+| **OUR detector → tracker** | **0.24** | **0.067** | **0.288** | 50–65 m |
+| AutoCam viewport | 0.026 | 0.044 | 0.021 | 57–66 m |
+| AutoCam dets → OUR tracker | 0.845 | 0.978 | 0.809 | ~3 m |
+| OUR candidate ceiling | 0.948 | 1.0 | 0.933 | ~3 m |
+
+**Read (honest):**
+1. **OUR detector→tracker fails** (R15m 0.24, median 51 m) — the pipeline does NOT follow the ball. Goal not met.
+2. **The AutoCam-viewport baseline is BROKEN** (R15m 0.026, median 57 m; within 5 m only 0.2% — not a
+   credible number for a shipping product). Our `autocam_viewport.jsonl` loader is misaligned
+   (frame-index or coordinate/scale). So "0.24 > 0.026" beats a broken baseline — **meaningless**. This
+   also discredits the earlier **"AutoCam 0.15 far bar"** (EXP-DIST-16 above): same viewport-extraction
+   artifact + cherry-picked frames. **Do not trust any viewport comparison until the loader is audited.**
+3. **Trustworthy (viewport-independent) diagnosis:** our detector SEES the ball (ceiling 0.95, near 1.0),
+   our tracker WORKS (AutoCam dets → our tracker 0.85), but **our detector → our tracker = 0.24**. The
+   gap is **SELECTION**: our detector emits the ball among top-k=24 peaks *plus* many confident
+   distractors (AutoCam emits few, ball-focused), and the Viterbi tracker locks onto a smooth distractor
+   trajectory. Tell-tale: NEAR (0.067) is WORSE than FAR (0.288) — a ball-following tracker would ace big
+   near balls; ours is stuck on distractors regardless of ball position.
+
+**Next (the real lever): candidate quality, not epochs.** Suppress distractors / calibrate peak scores /
+tighten top-k so the tracker can pick the ball from our peaks (it already can from AutoCam's). Separately,
+**audit the viewport loader** before believing any AutoCam-viewport number. Detector + tracker are both
+sound in isolation — the join is the whole problem.
 
 Supersedes the far-weight dead end (EXP-DIST-13/14) and the world-model-reranker plan; the lever was
 never loss-weighting or a bespoke re-ranker — it was giving the existing tracker good detections.

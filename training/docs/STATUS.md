@@ -57,9 +57,19 @@ ALL / NEAR+MED / FAR bands, each with OUR detector→tracker vs **AutoCam viewpo
 diagnostics — **AutoCam-detections→OUR-tracker** (isolates whether a far gap is our *detector* or our
 *selection*) and our per-frame candidate ceiling.
 
-**Next:** read `eval_reolink.log` head-to-head when the eval lands (far vs AutoCam's ~0.15 bar; near+med
-parity); fill EXP-DIST-16 results; then the per-camera `target_width` `--normalize` all-games build
-folding Dahua back in down-weighted.
+**RESULT (2026-07-01) — goal NOT met; clear diagnosis (EXP-DIST-16 for the table).** Held-out
+Spencerport: OUR detector→tracker R15m **0.24** (median 51 m) — does NOT follow the ball. The
+AutoCam-viewport baseline is **broken** (R15m 0.026, median 57 m — not a credible product number →
+viewport loader misaligned; the old "AutoCam 0.15 far bar" is discredited too). Viewport-independent
+truth: our detector SEES the ball (ceiling **0.95**), our tracker WORKS (AutoCam dets→our tracker
+**0.85**), but the join (our detector→our tracker) is **0.24** → the gap is **SELECTION**: our top-k=24
+peaks bury the ball in confident distractors and the Viterbi tracker locks onto the wrong trajectory
+(NEAR 0.067 is worse than FAR 0.288 — not following the ball at all).
+
+**Next (real lever = candidate quality, not epochs):** suppress distractors / calibrate peak scores /
+tighten top-k so the tracker can select the ball from our peaks; **audit the `autocam_viewport.jsonl`
+loader** before trusting any viewport number. Then re-eval, and only after that the `--normalize`
+all-games build. Box scheduled tasks (`distill_chain/watch/notify_reolink`) can be unregistered — run done.
 
 ## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
 
