@@ -197,19 +197,29 @@ def build_heatmap_crops(
                 rec["depth"] = round(float(np.clip(dby / max(bh, 1), 0.0, 1.0)), 4)
             index.append(rec)
 
-        buf: list = []
+        # Transfer (GPU->CPU to_ndarray) + warp ONLY each label's 3-frame window [t-2,t-1,t], not
+        # every frame in [lo,hi]. The decode still walks all frames (cheap on NVDEC), but the
+        # transfer + cv2 warp of the huge band dominate, so for sparse (capped) labels this is a
+        # >10x speedup. Dense labels (far-label sets) are unaffected (need ~= every frame).
+        need: set[int] = set()
+        for _t in want:
+            need.update((_t, _t - 1, _t - 2))
+        warped: dict[int, np.ndarray] = {}
         idx = -1
         for fr in container.decode(stream):
             idx += 1
             if idx < lo:
                 continue
-            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-            buf.append(_dewarp_mask_gray(img, warp, mask))
-            if len(buf) > 3:
-                buf.pop(0)
+            if idx in need:
+                img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
+                warped[idx] = _dewarp_mask_gray(img, warp, mask)
             if idx in want:
                 bx, by = labels[idx]
-                grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
+                seq = [s for s in seq if s is not None]
+                grays = seq if len(seq) == 3 else [seq[0]] * (3 - len(seq)) + seq
+                for _k in [k for k in warped if k < idx - 2]:
+                    del warped[_k]
                 dxy = warp.points([(bx, by)])[0]
                 dbx, dby = float(dxy[0]), float(dxy[1])
                 t = idx
