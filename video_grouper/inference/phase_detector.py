@@ -594,6 +594,15 @@ def fuse_phases(signals, *, debug=False):
             res["times"][k] += t0
     res["block"] = [t0, t1]
     blasts = signals.get("blasts") or []
+    # KO = the kickoff whistle that locate_game_block anchored the block to (the first blast >= block
+    # start; block_start = that whistle - head margin). On a LOCALIZED combined video block_start is
+    # the game onset, so this anchor whistle is a far better KO than the within-block re-derivation
+    # (05.27: anchor ~9:25 = GT 9:26, vs the fuse's 10:20). Trimmed/no-op keeps the fuse KO unchanged.
+    if localized:
+        ko_w = next((b for b in blasts if b >= t0), None)
+        if ko_w is not None:
+            res["times"]["kickoff"] = float(ko_w)
+            res["ko_anchor"] = "whistle"
     ko = res["times"]["kickoff"]
     # "far from block onset" only means something once we've LOCALIZED (t0 = the game onset). On a
     # no-op (t0 = 0: trimmed, or a combined video whose first whistle is already the kickoff) t0 is
