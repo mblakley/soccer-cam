@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-13: untrimmed-KO fix — locate_game_block + KO anchor (partial) (2026-06-18)
+
+**Goal:** get KO reliable on the untrimmed combined video (the production regime) toward the trimmed
+53/63 bar. Iterated against CACHED combined signals (`G:\ballresearch\phase_cache_comb\`); two-front
+gate = trimmed scorecard stays reolink 53/63 (END 12/12) AND combined KO improves.
+**What works (committed b7af1a1 -> 1d3bc1d -> ff04e6d):**
+- `locate_game_block` wraps the validated fusion (renamed `_fuse_core`): on a combined video it anchors
+  to the KICKOFF WHISTLE (first blast not followed by a sustained field-clear -- warm-up whistles
+  precede the teams lining up), slices signals to the game block, fuses, offsets back. Trimmed uploads
+  return `(0,dur)` = byte-identical no-op (53/63 + fixtures unaffected -- verified).
+- KO = the kickoff-whistle anchor on a localized video (first blast >= block_start), not the fuse's
+  within-block re-derivation (05.27 KO +54 -> -1s).
+- `ko_trustworthy` = whistle/kick-anchored AND not-far-from-onset AND (ok OR localized) -- so a youth
+  game with an exact KO but failed HT/2H (ok=False) is still trusted if localized; wrong-KO games stay
+  untrusted (fall back to NTFY, never a confident mis-trim).
+**Result (combined scorecard, 8 games cached so far):** KO<=10s **4/8** (05.10 -2, 05.07 -1, 05.27 -1,
+05.28 -3); trustworthy **3/8, precision 3/3** (never trusts a wrong KO). Trimmed **53/63 unchanged**.
+**Failed approach (reverted):** replacing the whistle anchor with a PLAYER-CURVE "first sustained
+full-field run" onset (Mark's bench-dip idea) -- the head of the curve is too noisy, so it localized
+TRIMMED videos and picked wrong onsets on combined: trimmed 53->44/63, combined KO 4->1/8. The
+whistle-clear anchor is more reliable than the player-curve onset. Reverted cleanly.
+**Honest state:** SAFE (no confident-wrong KO; wrong ones -> NTFY) with zero trimmed regression, but
+NOT yet at the trimmed bar on accuracy. Hard remaining cases: no-whistle combined video (03.21,
+`n_blasts=0`, flat curve -- likely un-doable, NTFY), recording-starts-at-kickoff (05.09 GT KO=0:00,
+first whistle is a foul -- edge case even trimmed), warm-up whistle mistaken for KO where no clear
+follows it (05.30 -261s, the whistle-clear heuristic's weak spot). Full 18-game combined scorecard
+pending the signal cache (`_cacheall` on the box, ~10 games left).
+
+---
+
 ## EXP-PHASE-12: untrimmed (combined-video) KO fails — diagnosis (2026-06-18)
 
 **Why:** productionizing phase detection to (maybe) replace the NTFY game-start question needs the
