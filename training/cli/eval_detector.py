@@ -149,6 +149,11 @@ def main() -> None:
     ap.add_argument(
         "--max-frames", type=int, default=6000, help="cap the eval span (frames)"
     )
+    ap.add_argument(
+        "--dump-cands",
+        default=None,
+        help="also pickle raw candidates (+observed size) + GT here for cli/sweep_tracker",
+    )
     args = ap.parse_args()
 
     import av
@@ -262,16 +267,17 @@ def main() -> None:
                     )[0]
                 ):
                     continue
+                observed = (
+                    _blob_diam(grays[-1], int(hx), int(hy), args.size_win)
+                    / max(warp.scale, 1e-6)
+                )  # observed apparent diameter, source px (for the size gate + the dump)
                 if not args.no_size_gate:
                     expected = float(
                         geom.expected_ball_diameter_px(np.asarray([(sx, sy)], float))[0]
                     )
-                    observed = _blob_diam(
-                        grays[-1], int(hx), int(hy), args.size_win
-                    ) / max(warp.scale, 1e-6)
                     if expected > 0 and observed > args.size_max_ratio * expected:
                         continue  # too big for its field location — a player/structure, not the ball
-                cands.append(Candidate(x=sx, y=sy, score=sc))
+                cands.append(Candidate(x=sx, y=sy, score=sc, size_px=observed))
             frames_cands[idx] = cands
         if idx >= max(want):
             break
@@ -283,6 +289,30 @@ def main() -> None:
     gaps = [args.stride] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
     track = track_ball([frames_cands[f] for f in ef], geom, frame_gaps=gaps)
     fidx = {f: i for i, f in enumerate(ef)}
+
+    if args.dump_cands:
+        # Cache raw candidates (+ observed size) + GT so cli/sweep_tracker can replay track_ball
+        # under many configs in seconds — decode is the 40-min cost; tracking is milliseconds.
+        import pickle
+
+        dump = {
+            "polygon": poly,
+            "ef": ef,
+            "gaps": gaps,
+            "cands": {
+                f: [(c.x, c.y, c.score, c.size_px) for c in frames_cands[f]] for f in ef
+            },
+            "balls": balls,
+            "far_size_px": args.far_size_px,
+            "stride": args.stride,
+        }
+        with open(args.dump_cands, "wb") as fh:
+            pickle.dump(dump, fh)
+        print(
+            f"dumped {sum(len(v) for v in dump['cands'].values())} candidates / "
+            f"{len(ef)} frames -> {args.dump_cands}",
+            flush=True,
+        )
 
     # Reference: AutoCam's OWN detections through OUR tracker (same frames/gaps). This isolates
     # detection from selection: if it beats OUR-detector->tracker on far, our detector is the gap;
