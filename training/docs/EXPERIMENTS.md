@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-16: combined-video KO — strategy sweep hits a signal ceiling at 9/14 (2026-07-01)
+
+**Goal (Mark):** get combined-video (untrimmed, production) KO decently close so it can drive the
+trim. Current: **9/14** within-10s. The 5 misses: 03.21 (+527, NO whistle in the video), 05.30-Fair
+(-261) + 05.30-West (-279) (warm-up whistle picked over the real KO), 06.04 (-40) + 06.10 (-42)
+(small, early). The two 05.30 games are the real targets. Swept candidate localizers on the cached
+combined signals vs human GT.
+
+**Strategies tried (all measured on the 14 GT combined games):**
+- **Extended bench-dip clear** (skip a warm-up whistle when a field-empty starts up to 180s after it,
+  long-clear threshold 72s): FIXES 05.30-West (its bench dip 2:50-4:14 disqualifies the 0:18 warm-up
+  whistle) but BREAKS 05.10 (+258) -- 05.10's first-half dip 12:26-14:02 empties for 108s and reads
+  as a pre-kickoff clear. Net 0. Bench dips and first-half stoppage dips are the same size/depth.
+- **Settle-point** (KO must be after the field settles into sustained play): overshoots badly
+  (05.28 +352, West-Seneca +175, 06.10 +300) -- first-half stoppages reset the "settle" point.
+- **Halftime-anchored symmetric KO** (find the central halftime dip, HT=whistle before it, 2H=whistle
+  after, KO = HT - (END - 2H)): **1/14** -- combined HT/2H localization is too noisy to anchor from.
+- **AutoCam ball** (both the restart detector AND raw trajectory): the sidecar's center "restarts" are
+  scattered mid-play passes, not the kickoff. Raw trajectory around KO: 05.30-Fair's ball settles
+  static pre-KO but the kick is <180px (missed) and post-KO it's the lost-ball PARK; 05.30-West's ball
+  never goes static (warm-up shooting is continuous); 05.31-Spencerport parks at a CORNER after KO
+  (lost-ball park, not center). AutoCam ball is unusable as a kickoff signal.
+
+**Why the 2 hard games are signal-limited:**
+- 05.30-Fair: the warm-up whistle (1:45, field 0.60x busy) reads MORE like a kickoff than
+  05.31-Spencerport's REAL KO (2:53, 0.56x busy) -- so no field-level threshold separates them
+  (raising LO past 0.56 kills Spencerport before it fixes Fairport).
+- 05.30-West: the bench dip is real but indistinguishable from a first-half stoppage (same on 05.10).
+- 03.21: no whistle at all -- undoable from audio.
+
+**Conclusion:** combined KO is at its **9/14 ceiling** for the available signals (whistle +
+player-curve + AutoCam ball). No swept strategy beats it without an equal-and-opposite regression.
+FOR TRIMMING this is workable: 9 trim-correct + 06.04/06.10 (small & EARLY -> the 4-min backup makes
+them safe) = 11/14 auto-trim-safe; 03.21/05.30-Fair/05.30-West -> NTFY (and 05.30-Fair/West can't be
+usefully auto-trimmed anyway -- their detected KO is a warm-up whistle ~4.5min early, so trim=KO-4min
+collapses to ~0). **The real unlock is a reliable KICKOFF ball-restart** (ball placed static at the
+center circle, then kicked) from the HOMEGROWN ball detector -- AutoCam's ball can't provide it, but
+the in-house detector (once accurate) can, and that's the definitive KO signal these games need.
+
+---
+
 ## EXP-PHASE-15: halftime anchor — dip→whistle-before, central dip, KO decoupled (2026-07-01)
 
 **Goal (Mark's algorithm):** the field empties at halftime, but the empty region LAGS the whistle
