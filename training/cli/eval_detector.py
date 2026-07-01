@@ -55,9 +55,11 @@ def infer_band(model, dev, stack: np.ndarray, tile_w: int, overlap: int) -> np.n
 
 
 def _hits(errs, radii):
+    if not errs:
+        return {f"R{r}m": None for r in radii} | {"n": 0, "median_m": None}
     return {
         f"R{r}m": round(float(np.mean([e <= r for e in errs])), 3) for r in radii
-    } | {"n": len(errs), "median_m": round(float(np.median(errs)), 1) if errs else None}
+    } | {"n": len(errs), "median_m": round(float(np.median(errs)), 1)}
 
 
 def main() -> None:
