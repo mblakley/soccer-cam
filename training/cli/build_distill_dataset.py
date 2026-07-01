@@ -118,6 +118,12 @@ def main() -> None:
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--target-width", type=int, default=None)
     ap.add_argument(
+        "--normalize",
+        action="store_true",
+        help="per-camera target_width for a consistent ~8px ball across cameras "
+        "(measured: reolink ~5120, dahua ~3900) — use for the mixed all-games build",
+    )
+    ap.add_argument(
         "--no-hwaccel",
         action="store_true",
         help="disable NVDEC hardware decode (default: on; ~3.3x faster on this box)",
@@ -128,6 +134,10 @@ def main() -> None:
     cfgs = [c for c in find_configs(args.roots) if c["game_id"] not in holdout]
     if args.camera:
         cfgs = [c for c in cfgs if c.get("camera") == args.camera]
+    if args.normalize:
+        by_cam = {"reolink": 5120, "dahua": 3900}
+        for c in cfgs:
+            c["target_width"] = by_cam.get(c.get("camera"))
     if args.max_games:
         cfgs = balance(cfgs, args.max_games)
     for c in cfgs:

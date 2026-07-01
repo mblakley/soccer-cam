@@ -154,7 +154,8 @@ def build_heatmap_crops(
         # far line stay in-band (cropping the band at the raw far line dropped ~1/3 of the
         # very-far GT balls, capping far recall).
         far_poly = _far_margin_polygon(polygon, far_margin)
-        warp = _native_iso_warp(far_poly, sw, sh, target_width)
+        # per-game target_width (for cross-camera ball-size normalization) overrides the global one
+        warp = _native_iso_warp(far_poly, sw, sh, g.get("target_width") or target_width)
         bh, bw = warp.shape
         mpoly = warp.points(far_poly).astype(np.int32)
         mask = np.zeros((bh, bw), np.uint8)
