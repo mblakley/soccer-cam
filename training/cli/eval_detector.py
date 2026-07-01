@@ -79,6 +79,24 @@ def main() -> None:
     ap.add_argument(
         "--far-size-px", type=float, default=8.0, help="apparent ball < this = far"
     )
+    ap.add_argument(
+        "--min-distance",
+        type=int,
+        default=3,
+        help="peak NMS radius in band px (bigger = merge nearby peaks)",
+    )
+    ap.add_argument(
+        "--no-infield-gate",
+        action="store_true",
+        help="disable in-field candidate gating (default: gate — the teacher was in-field "
+        "filtered, so ungated eval peaks flood the tracker with off-field distractors)",
+    )
+    ap.add_argument(
+        "--infield-margin",
+        type=float,
+        default=120.0,
+        help="in-field gate margin in source px (covers lines/throw-ins/airborne)",
+    )
     ap.add_argument("--tile-w", type=int, default=2560)
     ap.add_argument("--overlap", type=int, default=256)
     ap.add_argument("--no-hwaccel", action="store_true")
@@ -186,12 +204,20 @@ def main() -> None:
             grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
             stack = np.stack(grays, 0).astype(np.float32) / 255.0
             hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
-            frames_cands[idx] = [
-                Candidate(x=hx / warp.scale, y=hy / warp.scale + warp.y_top, score=sc)
-                for (hx, hy, sc) in extract_peaks(
-                    hm, top_k=args.top_k, threshold=args.thr
-                )
-            ]
+            cands = []
+            for hx, hy, sc in extract_peaks(
+                hm, top_k=args.top_k, threshold=args.thr, min_distance=args.min_distance
+            ):
+                sx = hx / warp.scale
+                sy = hy / warp.scale + warp.y_top
+                if not args.no_infield_gate and not bool(
+                    geom.is_in_support(
+                        np.asarray([(sx, sy)], float), margin_px=args.infield_margin
+                    )[0]
+                ):
+                    continue
+                cands.append(Candidate(x=sx, y=sy, score=sc))
+            frames_cands[idx] = cands
         if idx >= max(want):
             break
     container.close()
