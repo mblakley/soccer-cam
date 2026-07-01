@@ -116,6 +116,11 @@ class PhaseDetectStep(PipelineStep[PhaseDetectStepConfig]):
         # the canonical artifact is phases.json + the manifest entry above.
         await asyncio.to_thread(self._persist_to_state, ctx, payload)
 
+        # S2: push the trimmed-time boundaries to the recording's TTT game session
+        # (looked up by the group dir). Best-effort + non-fatal; skips cleanly for
+        # community installs (TTT disabled) or recordings with no TTT session.
+        await asyncio.to_thread(self._push_to_ttt, ctx, payload)
+
         logger.info(
             "phase_detect: ok=%s times=%s -> %s",
             payload["ok"],
@@ -134,6 +139,17 @@ class PhaseDetectStep(PipelineStep[PhaseDetectStepConfig]):
             logger.warning(
                 "phase_detect: could not persist phases to state.json: %s", e
             )
+
+    @staticmethod
+    def _push_to_ttt(ctx: StepContext, payload: dict) -> None:
+        from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
+
+        push_phases_to_ttt(
+            ctx.ttt_config,
+            ctx.group_dir.name,
+            payload,
+            str(ctx.storage_path),
+        )
 
 
 register_step(PhaseDetectStep.name, PhaseDetectStep, PhaseDetectStepConfig)
