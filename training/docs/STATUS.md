@@ -1,6 +1,50 @@
 # Current Status
 
-*Last updated: 2026-06-28*
+*Last updated: 2026-06-30*
+
+## AutoCam distillation → homegrown ball detector (2026-06-30)
+
+**Goal (Mark):** train OUR ball *detector* (HeatmapNet, not a viewport model) so that OUR existing
+tracker (`world_model.reranker.track_ball`), fed our detector's detections, follows the ball to
+viewport tolerance (~10–15 m) everywhere — **matching AutoCam in normal play and beating it on far
+balls vs our human GT.** Pipeline at inference: `detector → existing tracker → viewport`.
+
+**Key finding that reframed everything (EXP-DIST-16, GT-grounded).** On 1,880 human far-GT balls
+(the frames AutoCam loses): the ball is in AutoCam's re-run detections **0.97** of the time, the
+existing tracker over those detections lands within **R15 m 0.77** (median 2.1 m) of GT, while
+AutoCam's own **viewport is 0.15** (median 41 m). AutoCam's raw viewport-gated pick only realizes
+0.10. So **detection is fine, selection is the game** — and the existing tracker already solves it.
+The viewport-GT offset is random-direction (not a coord bug): AutoCam genuinely looks elsewhere.
+→ **Teacher = the existing tracker over AutoCam detections + human-GT override**, not the viewport.
+
+**Teacher pipeline (`data_prep/distill_dataset.py:teacher_track`).** Per frame: build Candidate lists
+(human `ball` overrides; `not_visible`→empty; else AutoCam `autocam_detections.jsonl` above conf) →
+`track_ball` → snap each smoothed position to the **nearest in-field detection** (the real ball
+pixel; drop if unbacked/off-field) → keep. Restricted to **active play** (game_state first/second
+half — warm-up/halftime AutoCam tracks players) and **in-field** (marathon detections have off-field
+FPs). Human far-GT is exempt and always kept. All three teacher bugs (warm-up, off-field, Dahua
+noise) were caught by the **crop vision-gate before any training** — always eyeball crops first.
+
+**Build (`cli/build_distill_dataset.py`).** teacher_track → `build_heatmap_crops` with **NVDEC
+hardware decode** (`heatmap_dataset.build_heatmap_crops(hwaccel=True)`; the box is 4-core so CPU
+decode was the wall — Reolink HEVC 7680×2160 decodes 102 vs 31 fps). Note: decode is still
+full-video-per-game (GOP 20–50, no cheap seek), ~hours for many games. `--max-per-game` caps crops
+for storage. `--camera reolink` for the clean first build (Dahua 2024 games have noisy AutoCam
+detection + no GT to anchor — Reolink-primary; add Dahua down-weighted later).
+
+**Held-out eval (`cli/eval_detector.py`, validated end-to-end).** our detector over the held-out
+game's band (NVDEC, tiled to fit the 1060) → `extract_peaks` → inverse-warp to source → `track_ball`
+→ meters vs human GT (R5/10/15), far/near by apparent size, vs the AutoCam-viewport bar. Held-out =
+`heat__2026.05.31_vs_Spencerport_gold_2_away` (545 GT balls, frames 6714–21760).
+
+**RUNNING overnight on DESKTOP-5L867J8 (chained):** build `G:\ballresearch\distill\crops_reolink`
+(`build_reolink.log`) → auto-train HeatmapNet base24 15ep → `runs/hm_reolink/best.pt`
+(`train_reolink.log`, per-epoch Cleveland val recall = held-in sanity, must ≫ 0.16) → auto-eval on
+Spencerport (`eval_reolink.log`). **Read those 3 logs first next session.** Box worktree
+`G:\ballresearch\distill\repo_hg`; venv `G:\v4bench\wt\.venv`. Branch `feat/homegrown-ball-detector`.
+
+**Next:** confirm we beat AutoCam on far (eval); per-camera `target_width` normalization + fold Dahua
+back in down-weighted for the all-games production build; document results here + EXPERIMENTS.md.
 
 ## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
 

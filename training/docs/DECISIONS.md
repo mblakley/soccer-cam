@@ -4,6 +4,35 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-06-30: Distill AutoCam by feeding its detections to OUR existing tracker — teacher is the tracked ball, not the viewport; train a detector, not a viewport model
+
+**The decision.** To beat AutoCam on far balls, we train OUR ball **detector** (HeatmapNet) and run
+it through OUR **existing** tracker (`world_model.reranker.track_ball`) → viewport. We do **not**
+train a viewport/end-to-end model, and we do **not** distill AutoCam's smoothed `autocam_viewport`
+(camera-centre). The distillation **teacher label** each frame is the ball position produced by
+running the existing tracker over AutoCam's re-run per-frame detections (`autocam_detections.jsonl`),
+anchored by human GT and snapped to the real in-field detection (`teacher_track`).
+
+**Why (measured, EXP-DIST-16).** On 1,880 human far-GT balls (frames AutoCam loses): ball present in
+AutoCam's detection candidate set **0.97**; existing tracker over those detections **R15 m 0.77**
+(median 2.1 m); AutoCam's own viewport **0.15** (median 41 m); AutoCam's raw argmax/viewport-gated
+pick **0.10**. So the detector *finds* the far ball AutoCam loses — the gap is **selection**, which
+the existing tracker already closes. The viewport-vs-GT error is random-direction (AutoCam looks
+elsewhere), not a coordinate artifact. Distilling the viewport would cap us at AutoCam and can't win.
+
+**Corollaries.** (a) Teacher restricted to **active play** (game_state halves; warm-up/halftime
+AutoCam tracks players) and **in-field** (marathon detections carry off-field FPs); human far-GT is
+exempt and always kept. (b) **Reolink-primary**: build the first detector on Reolink (clean AutoCam
+detection + GT-anchored); 2024 Dahua games have noisy detection and no GT — fold in down-weighted
+later. (c) The success bar is Mark's: "close enough that the viewport can follow the ball" = meters
+at R10–15, matching AutoCam in normal play + beating it on far vs human GT.
+
+**Reverses the prior session's plan** (world-model re-ranker over a sparse-far-label detector; the
+"far-weight" loss up-weighting, EXP-DIST-13/14, which hurt). See also
+[[reference_autocam_ball_detections]], [[project_tracker_selection_finding]].
+
+---
+
 ## 2026-06-26: `orientation` is RAW-camera provenance, NOT a flip instruction — derive flip from the resolved video's rotation tag
 
 **The trap:** the registry/`game.json` `orientation` field (12 `upside_down`, 91 right-side-up) describes how the
