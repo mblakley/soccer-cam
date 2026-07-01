@@ -95,6 +95,16 @@ class ReprocessRequestProcessor(QueueProcessor):
                 )
                 return
 
+            # Dispatch by request kind. Existing (stabilization) rows carry no
+            # "kind" -> default, so their behavior is unchanged. S4 adds
+            # "phase_correction" (apply a human phase edit); S3 adds
+            # "verify_phases" (kick off the NTFY verify-loop) via a separate
+            # producer the app wires in.
+            kind = claimed.get("kind") or "stabilization"
+            if kind == "phase_correction":
+                await self._handle_phase_correction(ttt_id, claimed, group_dir)
+                return
+
             local_request = {
                 "stabilization_strength": claimed["stabilization_strength"],
                 "skip_detect": claimed["skip_detect"],
@@ -118,6 +128,76 @@ class ReprocessRequestProcessor(QueueProcessor):
                 await _do_work()
         else:
             await _do_work()
+
+    # ------------------------------------------------------------------
+    # S4: phase-correction handler
+    # ------------------------------------------------------------------
+
+    _PHASE_KEYS = ("kickoff", "halftime", "second_half", "end")
+
+    async def _handle_phase_correction(
+        self, ttt_id: str, claimed: dict, group_dir: Path
+    ) -> None:
+        """Apply a camera-manager phase edit: overwrite the local phases with the
+        corrected (human) values and re-confirm them to TTT.
+
+        The corrected boundaries ride in ``claimed["phases"]`` as
+        ``{kickoff/halftime/second_half/end: seconds}`` (trimmed-video time, any
+        subset). Phases are display-only (decision 4), so nothing downstream
+        consumes them yet — no re-trim/re-render is triggered here; that arrives
+        with the first phase consumer.
+        """
+        raw = claimed.get("phases") or {}
+        times = {k: float(raw[k]) for k in self._PHASE_KEYS if raw.get(k) is not None}
+        if not times:
+            await self._report_failure(
+                ttt_id, "phase_correction request carried no phase times"
+            )
+            return
+        payload = {"source": "human", "ok": True, "times": times}
+
+        try:
+            from video_grouper.models import DirectoryState
+
+            await asyncio.to_thread(
+                DirectoryState(str(group_dir)).set_game_phases, payload
+            )
+        except Exception as exc:  # noqa: BLE001 — local persistence is best-effort
+            logger.warning(
+                "phase_correction: could not persist phases to state.json (%s)", exc
+            )
+
+        await self._repush_phases(group_dir, payload)
+
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("phase_correction: could not report completion (%s)", exc)
+        logger.info(
+            "phase_correction: applied human phases %s to %s", times, group_dir.name
+        )
+
+    async def _repush_phases(self, group_dir: Path, payload: dict) -> None:
+        """Re-confirm the (now source=human) phases to the TTT game session."""
+        from video_grouper.task_processors.phase_ttt_push import (
+            phases_to_session_fields,
+        )
+
+        fields = phases_to_session_fields(payload)
+        if not fields:
+            return
+        try:
+            session = await asyncio.to_thread(
+                self.ttt_client.get_game_session_by_dir, group_dir.name
+            )
+            if session and session.get("id"):
+                await asyncio.to_thread(
+                    self.ttt_client.update_game_session, session["id"], **fields
+                )
+        except Exception as exc:  # noqa: BLE001 — re-push is best-effort
+            logger.warning("phase_correction: TTT re-push failed (%s)", exc)
 
     # ------------------------------------------------------------------
     # Helpers
