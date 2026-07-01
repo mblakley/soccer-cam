@@ -123,9 +123,10 @@ def main() -> None:
         raise SystemExit("no human GT (ball_labels.jsonl) in the held-out game")
     video = gj.get("combined_video")
     if not video or not Path(video).exists():
-        video = str(
-            next(iter(vdir.glob("combined*.mp4")), next(iter(vdir.glob("*-raw.mp4"))))
-        )
+        cands = list(vdir.glob("combined*.mp4")) or list(vdir.glob("*-raw.mp4"))
+        if not cands:
+            raise SystemExit(f"no video found in {vdir}")
+        video = str(cands[0])
 
     # eval span = around the GT (contiguous, capped) so the tracker has continuity
     lo, hi = min(balls), max(balls)
