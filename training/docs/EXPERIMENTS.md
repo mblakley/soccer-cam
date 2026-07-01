@@ -32,6 +32,28 @@ first whistle is a foul -- edge case even trimmed), warm-up whistle mistaken for
 follows it (05.30 -261s, the whistle-clear heuristic's weak spot). Full 18-game combined scorecard
 pending the signal cache (`_cacheall` on the box, ~10 games left).
 
+**More attempts (Mark's hints: "one clear anchor per game, work forward/back" + "combine factors:
+whistle + players + static ball + timing") -- net-negative, reverted to ff04e6d:**
+- *Opt-in `localize` flag* (fuse_phases localize=False default; detect_phases -> True): CLEAN idea --
+  makes the trimmed 53/63 guarantee STRUCTURAL (localization never runs on trimmed) instead of relying
+  on a no-op. Worth keeping if this line is resumed.
+- *Combination anchor: KO whistle = first whistle over a FULL field* (both teams on; warm-up whistles
+  are over a sparse field). Verified the discriminator on the signals: 05.30 kickoff 6:04 @ 11 players
+  vs warm-up 1:45/2:03/2:55 @ 4-6; 05.27 9:25 @ 7 + ball-restart vs warm-up 4:50 @ 2. It **fixed 05.30
+  combined KO -261 -> -2s** (real win) and lifted combined KO 4/8 -> 6/13. BUT it **OVER-localizes**:
+  it localized ~7/13 games, ~5 to a WRONG block, and those pass the sanity gate self-consistently
+  (06.06 +323, 05.31 +72, both ok=True), so trust precision collapsed (whistle-clear: 3/3 -> full-
+  field: 2/7). No trust rule (require ok / require localized / not-far) recovered precision because the
+  wrong localizations look valid. The accuracy gain is not worth the safety loss.
+**Conclusion:** the whistle-clear localization (ff04e6d) is the precise sweet spot -- conservative
+(localizes few games, but correctly -> precise trust), which is what a safe auto-trim needs. Reliably
+LOCALIZING the game block on an untrimmed combined video is the hard open problem; player-count-based
+anchors (onset, full-field) improve accuracy but over-localize. **Honest bottom line: combined KO is
+accurate for ~half the whistle-capable games and SAFE (wrong KO -> NTFY) with zero trimmed regression,
+but NOT at the trimmed 53/63 bar.** Next idea if resumed: a per-game CONFIDENCE score for the block
+localization (only trust high-confidence blocks) rather than a binary localized flag; or anchor on the
+HALFTIME multi-whistle (loud, mid-game) where present and derive KO from the equal-halves structure.
+
 ---
 
 ## EXP-PHASE-12: untrimmed (combined-video) KO fails — diagnosis (2026-06-18)
