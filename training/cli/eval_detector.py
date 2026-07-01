@@ -22,6 +22,36 @@ import numpy as np
 from training.data_prep import distill_dataset as dd
 
 
+def _blob_diam(gray: np.ndarray, hx: int, hy: int, win: int = 61) -> float:
+    """Observed apparent diameter (band px) of the contrast blob at ``(hx, hy)`` in a band-gray frame.
+
+    A real ball is a compact bright/dark blob; a player / line intersection / large structure the
+    detector false-fires on is much bigger. Threshold the local window at the midpoint between the peak
+    value and the local median (handles a bright ball on grass OR a dark ball on a bright line), take the
+    connected component holding the peak, return its equivalent-circle diameter. Used only to reject
+    candidates whose size is geometrically impossible for their field location — never to add any.
+    """
+    import cv2
+
+    h, w = gray.shape
+    x0, y0 = max(0, hx - win), max(0, hy - win)
+    x1, y1 = min(w, hx + win + 1), min(h, hy + win + 1)
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
+    if patch.size == 0:
+        return 0.0
+    cy, cx = hy - y0, hx - x0
+    c = float(patch[cy, cx])
+    med = float(np.median(patch))
+    thr = (c + med) / 2.0
+    mask = (patch >= thr if c >= med else patch <= thr).astype(np.uint8)
+    _n, lbl = cv2.connectedComponents(mask)
+    lab = int(lbl[cy, cx])
+    if lab == 0:
+        return 0.0
+    area = int((lbl == lab).sum())
+    return 2.0 * (area / np.pi) ** 0.5
+
+
 def _pad8(a: np.ndarray) -> tuple[np.ndarray, int, int]:
     """Pad an ``(C, H, W)`` stack so H, W are multiples of 8 (the net's 3 downsamples)."""
     _, h, w = a.shape
@@ -96,6 +126,22 @@ def main() -> None:
         type=float,
         default=120.0,
         help="in-field gate margin in source px (covers lines/throw-ins/airborne)",
+    )
+    ap.add_argument(
+        "--no-size-gate",
+        action="store_true",
+        help="disable size-consistency gate (default: gate — reject candidates whose observed blob is "
+        "geometrically too big for the perspective-expected ball size at that field location)",
+    )
+    ap.add_argument(
+        "--size-max-ratio",
+        type=float,
+        default=3.0,
+        help="reject a candidate if observed diameter > this * expected ball diameter (a real ball is "
+        "never this oversized; a player at a far-field spot is ~5x)",
+    )
+    ap.add_argument(
+        "--size-win", type=int, default=61, help="blob-measure window (band px)"
     )
     ap.add_argument("--tile-w", type=int, default=2560)
     ap.add_argument("--overlap", type=int, default=256)
@@ -216,6 +262,15 @@ def main() -> None:
                     )[0]
                 ):
                     continue
+                if not args.no_size_gate:
+                    expected = float(
+                        geom.expected_ball_diameter_px(np.asarray([(sx, sy)], float))[0]
+                    )
+                    observed = _blob_diam(
+                        grays[-1], int(hx), int(hy), args.size_win
+                    ) / max(warp.scale, 1e-6)
+                    if expected > 0 and observed > args.size_max_ratio * expected:
+                        continue  # too big for its field location — a player/structure, not the ball
                 cands.append(Candidate(x=sx, y=sy, score=sc))
             frames_cands[idx] = cands
         if idx >= max(want):
