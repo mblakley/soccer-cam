@@ -177,6 +177,12 @@ def main():
         default=None,
         help="checkpoint dir (default <out>/runs). Set per experiment to avoid clobbering.",
     )
+    ap.add_argument(
+        "--resume",
+        default=None,
+        help="warm-start model weights from this checkpoint (fine-tune, e.g. a hard-neg pass "
+        "on top of best.pt) instead of training from scratch.",
+    )
     args = ap.parse_args()
 
     import torch
@@ -248,6 +254,10 @@ def main():
         tr, batch_size=args.batch, shuffle=True, num_workers=4, drop_last=True
     )
     model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
+    if args.resume:
+        rck = torch.load(args.resume, map_location=dev)
+        model.load_state_dict(rck["model"] if "model" in rck else rck)
+        print(f"resumed (warm-start) from {args.resume}", flush=True)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     runs = Path(args.runs) if args.runs else (out / "runs")
     runs.mkdir(parents=True, exist_ok=True)
