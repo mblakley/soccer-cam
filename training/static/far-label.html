@@ -30,11 +30,24 @@
   .hint { text-align:center; color:var(--muted); padding:0 10px 12px; max-width:1000px; margin:0 auto; }
   #done { display:none; text-align:center; padding:40px; }
   a.dl { color:var(--acc); }
+  #index { display:none; max-width:920px; margin:18px auto; padding:0 14px; }
+  #index h2 { font-size:16px; margin:6px 2px; }
+  #index .sum { color:var(--muted); margin:0 2px 14px; }
+  a.setcard { display:flex; align-items:center; gap:12px; text-decoration:none; color:var(--fg);
+    background:var(--panel); border:1px solid #33414f; border-radius:8px; padding:10px 14px; margin:8px 0; }
+  a.setcard:hover { background:#2c3a4f; }
+  a.setcard .nm { flex:1; font-weight:600; word-break:break-all; }
+  a.setcard.done { opacity:.55; }
+  a.setcard .pbar { width:150px; height:10px; background:#0c0f14; border-radius:6px; overflow:hidden; flex:none; }
+  a.setcard .pbar > i { display:block; height:100%; background:var(--acc); width:0; }
+  a.setcard.done .pbar > i { background:var(--muted); }
+  a.toidx { text-decoration:none; }
 </style>
 </head>
 <body>
 <header>
   <b>Far-ball labeler</b>
+  <a class="pill toidx" href="?" title="Back to the set list">☰ all sets</a>
   <span id="frameLbl" class="pill">—</span>
   <span id="kindLbl" class="pill">—</span>
   <span id="zoomLbl" class="pill">1.0×</span>
@@ -53,10 +66,10 @@
 
 <div class="bar">
   <button id="bConfirm" class="primary" title="Accept the marked hint as the ball">✓ Hint is correct <kbd>C</kbd></button>
-  <button id="bObsc" class="warn" title="Ball is occluded (behind a player) — click its best-guess position from the ghost path">Obscured <kbd>B</kbd></button>
-  <button id="bDist" class="warn" title="This blob is a distractor (bench/sideline/adjacent-field ball), not the game ball">Distractor <kbd>D</kbd></button>
   <button id="bNot" class="warn">Ball not visible <kbd>N</kbd></button>
   <button id="bOut" class="warn">Out of play / off field <kbd>O</kbd></button>
+  <button id="bObsc" class="warn" title="Ball occluded behind a player - click its best-guess position from the blue/orange ghost path">Obscured <kbd>B</kbd></button>
+  <button id="bDist" class="warn" title="Distractor (bench/sideline/adjacent-field ball), not the game ball">Distractor <kbd>D</kbd></button>
   <button id="bPrev" class="ghost">◀ Prev <kbd>←</kbd></button>
   <button id="bNext" class="ghost">Next ▶ <kbd>→</kbd></button>
   <button id="bFar" class="primary">▶ Next far to review <kbd>F</kbd></button>
@@ -64,24 +77,31 @@
   <button id="bReset" class="ghost">Reset zoom <kbd>0</kbd></button>
 </div>
 <p class="hint">
-  <b>Click</b> the ball to place it, or <kbd>C</kbd> to accept AutoCam's guess (arrow: purple = AutoCam-seeded,
-  pink = you). If it's <b>occluded behind a player</b>, press <kbd>B</kbd> then click its best-guess position
-  — the blue→orange <b>ghost dots</b> are AutoCam's ball just before/after this frame, so interpolate the path.
-  <kbd>D</kbd> = distractor (not the game ball), <kbd>N</kbd> = not visible, <kbd>O</kbd> = out of play.
-  <kbd>F</kbd> next to review, <kbd>U</kbd> next unlabeled. Scroll = zoom, drag = pan.
+  Pre-seeded with AutoCam's labels — near balls are trusted as-is. Press <kbd>F</kbd> to jump to the next
+  <b>far ball to review</b>. The arrow points at the marked ball from below-left (tip stops short so the ball
+  stays visible): purple = AutoCam-seeded (unreviewed), pink = you confirmed.
+  <b>Click</b> the ball to fix it, or <kbd>C</kbd> to accept AutoCam's guess (both auto-advance to the next far ball).
+  <kbd>N</kbd> not visible, <kbd>O</kbd> out of play. Scroll = zoom, drag = pan.
 </p>
 
 <div id="done">
   <h2>All frames labeled 🎉</h2>
   <p>Labels are saved on the server. <a class="dl" id="dlLink" href="#">Download labels.json</a></p>
+  <p><a class="dl" href="?">☰ Back to all sets</a></p>
+</div>
+
+<div id="index">
+  <h2>Far-ball label sets</h2>
+  <p class="sum" id="idxSum">loading…</p>
+  <div id="setList"></div>
 </div>
 
 <script>
-const SET = new URLSearchParams(location.search).get("set") || "irondequoit";
+const SET = new URLSearchParams(location.search).get("set");
 const API = `/api/far-label/${SET}`;
 let M=null, frames=[], byIdx={}, labels={}, cur=0, FARY=480;
-let pending="ball";   // the action the NEXT click applies: "ball" (visible) or "obscured" (occluded best-guess)
-let z=1, tx=0, ty=0, baseScale=1;       // view transform (display px), baseScale = fit-to-width
+let pending="ball";   // action the NEXT click applies: "ball" (visible) or "obscured"
+let z=1, tx=0, ty=0, baseScale=1, fitted=false;  // view transform (display px); `fitted` keeps zoom+pan across frames
 let dragging=false, moved=0, sx=0, sy=0, stx=0, sty=0;
 const view=document.getElementById("view"), wrap=document.getElementById("wrap");
 const img=document.getElementById("img"), ov=document.getElementById("ov"), ctx=ov.getContext("2d");
@@ -91,7 +111,7 @@ async function load(){
   frames = M.frames; frames.forEach((f,i)=>byIdx[f.frame_idx]=i);
   (M.labels||[]).forEach(l=>labels[l.frame_idx]=l);
   FARY = Math.min(480, M.far_cut||480);
-  cur = -1; gotoFar();
+  cur = -1; advanceReview();
 }
 function firstUnlabeled(){ for(let i=0;i<frames.length;i++) if(!labels[frames[i].frame_idx]) return i; return 0; }
 function frame(){ return frames[cur]; }
@@ -106,33 +126,36 @@ function show(){
   const n=frames.length, done=Object.keys(labels).length;
   document.getElementById("progLbl").textContent=`${done} / ${n}`;
   document.getElementById("progBar").style.width=(100*done/n)+"%";
-  img.onload=()=>{ fitView(); };
+  img.onload=()=>{ applyDims(); };
   img.src=`${API}/strip/${f.frame_idx}?t=${Date.now()}`;
-  if (img.complete && img.naturalWidth) fitView();
+  if (img.complete && img.naturalWidth) applyDims();
 }
 
-function setupCanvas(){
+function _sizeStrip(){
+  // size img/canvas/view to the strip; returns the fit-to-width scale
   img.width = img.naturalWidth; img.height = img.naturalHeight;
   ov.width = img.naturalWidth; ov.height = img.naturalHeight;
   view.style.height = Math.round(view.clientWidth * img.naturalHeight / img.naturalWidth) + "px";
+  return view.clientWidth / img.naturalWidth;
 }
-let viewInit=false, lastNW=0, lastNH=0;
-// Called on every frame load. PRESERVE the current zoom + pan across frames (so you
-// stay zoomed into the same region) — only fit-to-width on the very first frame or if
-// the strip dimensions change. Use resetView() ("Reset zoom" / key 0) to snap back.
-function fitView(){
-  setupCanvas();
-  const newBase = view.clientWidth / img.naturalWidth;
-  const sizeChanged = (img.naturalWidth!==lastNW || img.naturalHeight!==lastNH);
-  if (!viewInit || sizeChanged){ baseScale=newBase; z=newBase; tx=0; ty=0; viewInit=true; }
-  else { if (newBase!==baseScale){ const ratio=z/baseScale; baseScale=newBase; z=newBase*ratio; } clampPan(); }
-  lastNW=img.naturalWidth; lastNH=img.naturalHeight;
+function applyDims(){
+  // Called on every frame load. Persist the user's zoom + pan across frames so
+  // labeling stays zoomed on the same region (consecutive strips are the same
+  // size). Only the FIRST frame fits to width; afterwards keep the zoom ratio
+  // and pan (clamped). Explicit fit-to-width is `resetZoom()` (Reset / '0').
+  const newBase = _sizeStrip();
+  if (!fitted){
+    baseScale = newBase; z = baseScale; tx = 0; ty = 0; fitted = true;
+  } else {
+    const ratio = z / baseScale;   // zoom level relative to fit
+    baseScale = newBase;
+    z = baseScale * ratio;
+    clampPan();
+  }
   applyTransform(); draw();
 }
-// Explicit reset to fit-width (Reset zoom button / key 0).
-function resetView(){
-  setupCanvas();
-  baseScale = view.clientWidth / img.naturalWidth;
+function resetZoom(){
+  baseScale = _sizeStrip();
   z = baseScale; tx = 0; ty = 0;
   applyTransform(); draw();
 }
@@ -168,22 +191,15 @@ function arrowMark(nx,ny,color,dashed,k){
 function draw(){
   ctx.clearRect(0,0,ov.width,ov.height);
   const f=frame(); const k=baseScale/z;
-  // Context ghosts: AutoCam's ball just BEFORE (blue) / AFTER (orange) this frame. When the ball is
-  // occluded here, interpolate between the blue and orange dots to place its best-guess position.
-  (f.context||[]).forEach(c=>{
-    const gx=c.x-f.crop_x0, gy=c.y-f.crop_y0, r=Math.max(3,5*k);
-    ctx.beginPath(); ctx.arc(gx,gy,r,0,2*Math.PI);
-    ctx.fillStyle = c.df<0 ? "rgba(80,170,255,0.55)" : "rgba(255,160,40,0.55)";
-    ctx.fill();
-  });
+  (f.context||[]).forEach(c=>{ const gx=c.x-f.crop_x0, gy=c.y-f.crop_y0, r=Math.max(3,5*k);
+    ctx.beginPath(); ctx.arc(gx,gy,r,0,2*Math.PI); ctx.fillStyle=c.df<0?"rgba(80,170,255,0.55)":"rgba(255,160,40,0.55)"; ctx.fill(); });
   const lab=labels[f.frame_idx];
-  if (lab && lab.action==="obscured" && lab.x!=null){          // occluded best-guess: dashed ring
-    const ox=lab.x-f.crop_x0, oy=lab.y-f.crop_y0;
+  if (lab && lab.action==="obscured" && lab.x!=null){ const ox=lab.x-f.crop_x0, oy=lab.y-f.crop_y0;
     ctx.strokeStyle="#ffd24a"; ctx.lineWidth=Math.max(2,3*k); ctx.setLineDash([6*k,4*k]);
     ctx.beginPath(); ctx.arc(ox,oy,Math.max(6,10*k),0,2*Math.PI); ctx.stroke(); ctx.setLineDash([]);
   } else if (lab && lab.action==="ball" && lab.x!=null){
     arrowMark(lab.x-f.crop_x0, lab.y-f.crop_y0, lab.source==="human"?"#ff3b6b":"#9b59ff", false, k);
-  } else if (!lab){                                            // unlabeled -> AutoCam guess (dashed)
+  } else if (!lab){
     arrowMark(f.hint_x-f.crop_x0, f.hint_y-f.crop_y0, f.autocam?"#2ecc71":"#ff9f1a", true, k);
   }
 }
@@ -230,7 +246,7 @@ async function post(action,x,y){
   labels[f.frame_idx]={frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"}; draw();
   try{ await fetch(`${API}/result`,{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"})}); }catch(err){ console.error(err); }
-  setTimeout(gotoFar,120);
+  setTimeout(advanceReview,120);
 }
 function next(){ if(cur<frames.length-1){ cur++; show(); } else finish(); }
 function prev(){ if(cur>0){ cur--; show(); } }
@@ -238,21 +254,28 @@ function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_id
 function isFar(f){ return f.hint_y <= FARY; }
 function needsReview(f){ const l=labels[f.frame_idx]; return (!l || l.source!=="human") && (isFar(f) || f.autocam===false); }
 function gotoFar(){ for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } } finish(); }
+// After labeling, advance to the next far/gap frame needing review; if none remain,
+// fall back to sweeping any still-unlabeled frame (so NORMAL-ball sets, which the far
+// flow skips, get labeled instead of dead-ending on the "done" screen); then finish.
+function advanceReview(){
+  for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } }
+  for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(!labels[frames[i].frame_idx]){ cur=i; show(); return; } }
+  finish();
+}
 function finish(){ document.getElementById("stage").style.display="none"; document.querySelector(".bar").style.display="none";
   document.getElementById("done").style.display="block"; document.getElementById("dlLink").href=`${API}`; }
 
-function setPending(a){ pending=a; document.getElementById("bObsc").classList.toggle("primary", a==="obscured");
-  view.style.cursor = a==="obscured" ? "cell" : "crosshair"; }
 document.getElementById("bConfirm").onclick=()=>{ const f=frame(); post("ball",f.hint_x,f.hint_y); };
-document.getElementById("bObsc").onclick=()=>setPending(pending==="obscured"?"ball":"obscured");
-document.getElementById("bDist").onclick=()=>post("not_game_ball",null,null);
 document.getElementById("bNot").onclick=()=>post("not_visible",null,null);
 document.getElementById("bOut").onclick=()=>post("out_of_play",null,null);
+function setPending(x){ pending=x; document.getElementById("bObsc").classList.toggle("primary", x==="obscured"); view.style.cursor = x==="obscured" ? "cell" : "crosshair"; }
+document.getElementById("bObsc").onclick=()=>setPending(pending==="obscured"?"ball":"obscured");
+document.getElementById("bDist").onclick=()=>post("not_game_ball",null,null);
 document.getElementById("bPrev").onclick=prev;
 document.getElementById("bNext").onclick=next;
 document.getElementById("bFar").onclick=gotoFar;
 document.getElementById("bUnlab").onclick=gotoUnlabeled;
-document.getElementById("bReset").onclick=resetView;
+document.getElementById("bReset").onclick=resetZoom;
 addEventListener("keydown",(e)=>{
   if(e.key==="c"||e.key==="C") document.getElementById("bConfirm").click();
   else if(e.key==="b"||e.key==="B") document.getElementById("bObsc").click();
@@ -263,10 +286,40 @@ addEventListener("keydown",(e)=>{
   else if(e.key==="ArrowRight") next();
   else if(e.key==="u"||e.key==="U") gotoUnlabeled();
   else if(e.key==="f"||e.key==="F") gotoFar();
-  else if(e.key==="0") resetView();
+  else if(e.key==="0") resetZoom();
 });
-addEventListener("resize", ()=>{ fitView(); });
-load();
+addEventListener("resize", ()=>{ if(SET) applyDims(); });
+
+// Landing view: no ?set= -> list every set with its labeling progress, click to open.
+async function showIndex(){
+  document.getElementById("stage").style.display="none";
+  document.querySelector(".bar").style.display="none";
+  document.querySelector(".hint").style.display="none";
+  document.querySelector(".toidx").style.display="none";
+  document.getElementById("frameLbl").style.display="none";
+  document.getElementById("kindLbl").style.display="none";
+  document.getElementById("zoomLbl").style.display="none";
+  document.getElementById("index").style.display="block";
+  let sets=[];
+  try{ sets = await (await fetch("/api/far-label")).json(); }
+  catch(err){ document.getElementById("idxSum").textContent="failed to load set list"; return; }
+  const pct = s => s.n_frames ? Math.round(100*Math.min(s.labeled,s.n_frames)/s.n_frames) : 0;
+  sets.sort((a,b)=> pct(a)-pct(b) || a.set.localeCompare(b.set));  // least-labeled first
+  const todo = sets.filter(s=>pct(s)<100).length;
+  const totF = sets.reduce((a,s)=>a+s.n_frames,0), totL = sets.reduce((a,s)=>a+Math.min(s.labeled,s.n_frames),0);
+  document.getElementById("idxSum").textContent =
+    `${sets.length} sets · ${todo} still need work · ${totL} / ${totF} frames labeled overall`;
+  document.getElementById("setList").innerHTML = sets.map(s=>{
+    const p=pct(s), done=p>=100;
+    return `<a class="setcard${done?' done':''}" href="?set=${encodeURIComponent(s.set)}">`+
+      `<span class="nm">${s.set}</span>`+
+      `<span class="pbar"><i style="width:${p}%"></i></span>`+
+      `<span class="pill">${s.labeled} / ${s.n_frames}</span></a>`;
+  }).join("");
+  document.querySelector("header b").textContent = "Far-ball labeler — sets";
+}
+
+if (SET) load(); else showIndex();
 </script>
 </body>
 </html>
