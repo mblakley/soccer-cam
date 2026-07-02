@@ -176,8 +176,12 @@ class DownloadProcessor(QueueProcessor):
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
             if self.ttt_reporter:
-                await self.ttt_reporter.update_recording_status(
-                    dir_state.ttt_recording_id, "download", "downloading"
+                await self.ttt_reporter.update_recording_step(
+                    dir_state.ttt_recording_id,
+                    step_id="download",
+                    step_type="download",
+                    label="Download",
+                    status="running",
                 )
 
             # The camera implementation may expose either a synchronous or an
@@ -224,8 +228,12 @@ class DownloadProcessor(QueueProcessor):
                     return
 
                 if self.ttt_reporter:
-                    await self.ttt_reporter.update_recording_status(
-                        dir_state.ttt_recording_id, "download", "downloaded"
+                    await self.ttt_reporter.update_recording_step(
+                        dir_state.ttt_recording_id,
+                        step_id="download",
+                        step_type="download",
+                        label="Download",
+                        status="complete",
                     )
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
@@ -283,8 +291,12 @@ class DownloadProcessor(QueueProcessor):
                     )
                 await dir_state.update_file_state(file_path, status="download_failed")
                 if self.ttt_reporter:
-                    await self.ttt_reporter.update_recording_status(
-                        dir_state.ttt_recording_id, "download", "failed"
+                    await self.ttt_reporter.update_recording_step(
+                        dir_state.ttt_recording_id,
+                        step_id="download",
+                        step_type="download",
+                        label="Download",
+                        status="failed",
                     )
                 raise RuntimeError(f"Download failed for {os.path.basename(file_path)}")
 
@@ -299,8 +311,13 @@ class DownloadProcessor(QueueProcessor):
             # scan if the camera couldn't reach its own finally block.
             await dir_state.update_file_state(file_path, status="download_failed")
             if self.ttt_reporter:
-                await self.ttt_reporter.update_recording_status(
-                    dir_state.ttt_recording_id, "download", "failed", error=str(e)
+                await self.ttt_reporter.update_recording_step(
+                    dir_state.ttt_recording_id,
+                    step_id="download",
+                    step_type="download",
+                    label="Download",
+                    status="failed",
+                    error=str(e),
                 )
             if self.error_tracker:
                 self.error_tracker.record("download", str(e), {"file": file_name})

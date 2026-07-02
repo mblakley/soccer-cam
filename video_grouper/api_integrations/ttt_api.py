@@ -875,28 +875,50 @@ class TTTApiClient:
         logger.debug("Registering %d recording(s) for camera %s", len(files), camera_id)
         return self._request("POST", url, params=params, json=files)
 
-    def update_recording_status(
+    def update_recording_step(
         self,
         recording_id: str,
-        stage: str,
+        *,
+        step_id: str,
+        step_type: str,
+        label: str,
         status: str,
-        error_message: str | None = None,
-        youtube_url: str | None = None,
-        youtube_video_id: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        error: str | None = None,
+        config: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        pipeline_preset: str | None = None,
     ) -> dict[str, Any] | None:
-        """Update pipeline stage status for a recording.
+        """Upsert one pipeline step for a recording.
 
         PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
+
+        TTT appends a new step if step_id is unknown, or updates in-place if
+        already present, preserving insertion order. When step_type=="upload"
+        and status is "complete", TTT reads youtube_url/youtube_video_id from
+        artifacts.
         """
         url = f"{self.api_base_url}/api/device-link/recordings/{recording_id}/status"
-        body: dict[str, Any] = {"stage": stage, "status": status}
-        if error_message is not None:
-            body["error_message"] = error_message
-        if youtube_url is not None:
-            body["youtube_url"] = youtube_url
-        if youtube_video_id is not None:
-            body["youtube_video_id"] = youtube_video_id
-        logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
+        body: dict[str, Any] = {
+            "step_id": step_id,
+            "type": step_type,
+            "label": label,
+            "status": status,
+        }
+        if started_at is not None:
+            body["started_at"] = started_at
+        if completed_at is not None:
+            body["completed_at"] = completed_at
+        if error is not None:
+            body["error"] = error
+        if config is not None:
+            body["config"] = config
+        if artifacts is not None:
+            body["artifacts"] = artifacts
+        if pipeline_preset is not None:
+            body["pipeline_preset"] = pipeline_preset
+        logger.debug("Updating recording %s: step %s=%s", recording_id, step_id, status)
         return self._request("PATCH", url, json=body)
 
     def enhanced_heartbeat(

@@ -35,9 +35,23 @@ from video_grouper.pipeline.base import StepContext, StepSpec
 from video_grouper.pipeline.manifest import PipelineManifest
 
 if TYPE_CHECKING:
+    from video_grouper.api_integrations.ttt_reporter import TTTReporter
     from video_grouper.pipeline.resources import ResourceManager
 
 logger = logging.getLogger(__name__)
+
+# Human-readable labels for known pipeline step types.
+_STEP_LABELS: dict[str, str] = {
+    "stitch_correct": "Stitch Correction",
+    "field_detect": "Field Detection",
+    "phase_detect": "Phase Detection",
+    "ball_detect": "Ball Detection",
+    "track": "Ball Tracking",
+    "render": "Render",
+    "autocam": "AutoCam",
+    "fanout": "Fanout",
+    "licensed_model": "Licensed Model",
+}
 
 
 @dataclass
@@ -92,10 +106,16 @@ class PipelineRunner:
         specs: list[StepSpec],
         runtime: str = "service",
         resource_manager: ResourceManager | None = None,
+        ttt_reporter: TTTReporter | None = None,
+        ttt_recording_id: str | None = None,
+        pipeline_preset: str | None = None,
     ):
         self.specs = list(specs)
         self.runtime = runtime
         self.resource_manager = resource_manager
+        self._ttt_reporter = ttt_reporter
+        self._ttt_recording_id = ttt_recording_id
+        self._pipeline_preset = pipeline_preset
 
     async def run(
         self, input_path: str, output_path: str, ctx: StepContext
@@ -210,6 +230,7 @@ class PipelineRunner:
 
             before = dict(manifest.artifacts)
             manifest.mark_running(spec.step_id, spec.type, fp, self.runtime)
+            await self._report_step(spec.step_id, spec.type, "running")
             try:
                 ok = await self._run_step(step, manifest, ctx)
             except Exception as e:  # noqa: BLE001 — surface as a failed step
@@ -219,6 +240,9 @@ class PipelineRunner:
                 from video_grouper.utils.ffmpeg_utils import is_decode_corruption_error
 
                 kind = "decode_corruption" if is_decode_corruption_error(e) else None
+                await self._report_step(
+                    spec.step_id, spec.type, "failed", error=f"exception: {e}"
+                )
                 return self._fail(
                     manifest,
                     spec.step_id,
@@ -228,6 +252,9 @@ class PipelineRunner:
                 )
 
             if not ok:
+                await self._report_step(
+                    spec.step_id, spec.type, "failed", error="step returned False"
+                )
                 return self._fail(
                     manifest, spec.step_id, "step returned False", spec.type
                 )
@@ -235,6 +262,12 @@ class PipelineRunner:
             # Strictly validate declared outputs exist + are non-empty.
             for key in step.produces:
                 if not _nonempty_file(manifest.get(key)):
+                    await self._report_step(
+                        spec.step_id,
+                        spec.type,
+                        "failed",
+                        error=f"declared output {key!r} missing or empty",
+                    )
                     return self._fail(
                         manifest,
                         spec.step_id,
@@ -252,6 +285,7 @@ class PipelineRunner:
             produced = {k: after[k] for k in produced_keys if after.get(k)}
 
             manifest.mark_complete(spec.step_id, produced, step_type=spec.type)
+            await self._report_step(spec.step_id, spec.type, "complete")
             logger.info("pipeline: step %s complete", spec.step_id)
 
         out = manifest.output_path
@@ -286,6 +320,30 @@ class PipelineRunner:
 
     def _recorded_outputs_valid(self, manifest: PipelineManifest, step_id: str) -> bool:
         return all(_nonempty_file(p) for p in manifest.produced_paths(step_id).values())
+
+    async def _report_step(
+        self,
+        step_id: str,
+        step_type: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        """Best-effort TTT step upsert. Never raises; never blocks the pipeline."""
+        if self._ttt_reporter is None or self._ttt_recording_id is None:
+            return
+        label = _STEP_LABELS.get(step_type, step_type.replace("_", " ").title())
+        try:
+            await self._ttt_reporter.update_recording_step(
+                self._ttt_recording_id,
+                step_id=step_id,
+                step_type=step_type,
+                label=label,
+                status=status,
+                error=error,
+                pipeline_preset=self._pipeline_preset,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("pipeline: TTT step report failed (ignored): %s", exc)
 
     def _fail(
         self,

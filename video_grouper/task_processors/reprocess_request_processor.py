@@ -116,6 +116,9 @@ class ReprocessRequestProcessor(QueueProcessor):
             if kind in ("truncated_start", "truncated_end"):
                 await self._handle_truncated(ttt_id, group_dir, kind)
                 return
+            if kind == "restart":
+                await self._handle_restart(ttt_id, claimed, group_dir)
+                return
 
             local_request = {
                 "stabilization_strength": claimed["stabilization_strength"],
@@ -314,6 +317,193 @@ class ReprocessRequestProcessor(QueueProcessor):
         except Exception as exc:  # noqa: BLE001
             logger.warning("verify_phases: could not report completion (%s)", exc)
         logger.info("verify_phases: started verify-loop for %s", group_dir.name)
+
+    # ------------------------------------------------------------------
+    # Restart handler (kind="restart")
+    # ------------------------------------------------------------------
+
+    async def _handle_restart(
+        self, ttt_id: str, claimed: dict, group_dir: Path
+    ) -> None:
+        """Handle a TTT-initiated pipeline restart from a specific step.
+
+        ``claimed["phases"]`` is reused as a generic payload:
+        ``{"from_step": str, "config_preset": str | None}``.
+        ``from_step`` is one of: "download", "combine", "trim", a pipeline
+        manifest step id (e.g. "ball_detect", "render"), or "upload".
+        ``config_preset`` is an optional preset name ("homegrown", "autocam").
+        """
+        payload = claimed.get("phases") or {}
+        from_step = str(payload.get("from_step") or "").strip()
+        config_preset = payload.get("config_preset") or None
+
+        if not from_step:
+            await self._report_failure(
+                ttt_id, "restart request missing required from_step field"
+            )
+            return
+
+        try:
+            self._apply_restart(group_dir, from_step, config_preset)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "restart: %s failed (from_step=%r): %s", group_dir.name, from_step, exc
+            )
+            await self._report_failure(
+                ttt_id, f"restart from {from_step!r} failed: {exc}"
+            )
+            return
+
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("restart: could not report completion (%s)", exc)
+        logger.info(
+            "restart: applied from_step=%r preset=%r to %s",
+            from_step,
+            config_preset,
+            group_dir.name,
+        )
+
+    def _apply_restart(
+        self, group_dir: Path, from_step: str, config_preset: str | None
+    ) -> None:
+        """Synchronous dispatch: reset the group to re-run from *from_step*."""
+        if from_step == "trim":
+            # Re-queue TrimTask: MatchInfo must be populated + state -> "combined"
+            from video_grouper.models import MatchInfo
+
+            mi, _ = MatchInfo.get_or_create(
+                str(group_dir), storage_path=self.storage_path
+            )
+            if mi is None or not mi.is_populated():
+                raise ValueError(
+                    "MatchInfo not populated; populate team info + start offset "
+                    "before re-trimming"
+                )
+            self._write_state(group_dir, "combined")
+
+        elif from_step == "combine":
+            # Delete combined.mp4 + reset to downloaded so CombineTask re-runs.
+            # Best-effort: if .dav source files were cleaned up the combine will
+            # fail and the group will need a manual fix.
+            combined = group_dir / "combined.mp4"
+            if combined.exists():
+                try:
+                    combined.unlink()
+                except OSError as exc:
+                    logger.warning("restart: could not remove combined.mp4 (%s)", exc)
+            self._write_state(group_dir, "downloaded")
+
+        elif from_step == "upload":
+            # Re-queue upload by setting state -> "pipeline_complete" so
+            # PipelineDiscoveryProcessor._recover_upload picks it up.
+            self._write_state(group_dir, "pipeline_complete")
+
+        elif from_step == "download":
+            # TODO: implement a clean re-download reset when the download
+            # processor gains an explicit "re-fetch from camera" trigger.
+            # For now fall back to "downloaded" so combine + later stages
+            # can re-run without touching raw .dav files.
+            # IMPORTANT: raw camera .dav files are NOT deleted here.
+            logger.warning(
+                "restart: from_step='download' full re-download is not yet "
+                "implemented. Falling back to 'downloaded' state so combine "
+                "re-runs. Raw .dav files are preserved; to re-download, "
+                "manually clear the group directory and reset to 'pending'."
+            )
+            self._write_state(group_dir, "downloaded")
+
+        else:
+            # Treat from_step as a pipeline/manifest step id (ball_detect, render, …)
+            self._invalidate_pipeline_from(group_dir, from_step, config_preset)
+
+    def _invalidate_pipeline_from(
+        self,
+        group_dir: Path,
+        step_id: str,
+        config_preset: str | None,
+    ) -> None:
+        """Invalidate the pipeline manifest from *step_id* and queue reprocess."""
+        from video_grouper.pipeline.manifest import MANIFEST_FILENAME, PipelineManifest
+
+        manifest_path = group_dir / MANIFEST_FILENAME
+        if manifest_path.exists():
+            # Dummy paths are safe: load_or_init only uses them when the file is
+            # absent/corrupt; an existing file with version=1 is returned as-is.
+            manifest = PipelineManifest.load_or_init(
+                group_dir,
+                input_path=str(group_dir / "combined.mp4"),
+                output_path=str(group_dir / "processed.mp4"),
+            )
+            manifest.invalidate_from(step_id)
+            logger.debug(
+                "restart: invalidated manifest from step %r in %s",
+                step_id,
+                group_dir.name,
+            )
+        else:
+            logger.debug(
+                "restart: no manifest in %s; runner will start fresh from %r",
+                group_dir.name,
+                step_id,
+            )
+
+        if config_preset:
+            from video_grouper.pipeline import presets
+
+            try:
+                presets.get_preset(
+                    config_preset
+                )  # validate; raises KeyError if unknown
+            except KeyError as exc:
+                raise ValueError(str(exc)) from exc
+            # The runner reads config_preset from reprocess_request.json and
+            # rebuilds this run's specs from the preset (apply_overrides), so the
+            # processing pipeline re-runs under the swapped provider.
+            logger.info(
+                "restart: config_preset=%r -> pipeline will re-run under that preset",
+                config_preset,
+            )
+
+        local_request: dict = {
+            "requested_at": None,
+            "requested_by": f"ttt:restart:{step_id}",
+        }
+        if config_preset:
+            local_request["config_preset"] = config_preset
+
+        (group_dir / "reprocess_request.json").write_text(
+            json.dumps(local_request), encoding="utf-8"
+        )
+        self._nudge_state(group_dir)
+
+    def _write_state(self, group_dir: Path, status: str) -> None:
+        """Write *status* directly to state.json, clearing any error_message.
+
+        Unlike :meth:`_nudge_state` this always writes regardless of current
+        status, so callers can move the group to an earlier lifecycle stage
+        (e.g. "combined" for a re-trim, "downloaded" for a re-combine).
+        """
+        state_path = group_dir / "state.json"
+        try:
+            state = (
+                json.loads(state_path.read_text(encoding="utf-8"))
+                if state_path.exists()
+                else {}
+            )
+        except (OSError, json.JSONDecodeError):
+            state = {}
+        state["status"] = status
+        state.pop("error_message", None)
+        try:
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "restart: could not write state.json at %s (%s)", state_path, exc
+            )
 
     # ------------------------------------------------------------------
     # Helpers

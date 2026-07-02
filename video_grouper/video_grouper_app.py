@@ -627,6 +627,8 @@ class VideoGrouperApp:
             dl_proc.error_tracker = self.error_tracker
         self.video_processor.ttt_reporter = self.ttt_reporter
         self.upload_processor.ttt_reporter = self.ttt_reporter
+        if getattr(self, "pipeline_processor", None) is not None:
+            self.pipeline_processor.ttt_reporter = self.ttt_reporter
 
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,

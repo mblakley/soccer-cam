@@ -189,54 +189,100 @@ class TestRecordingPipelineWorkflow:
     def test_02_download_in_progress(self, ttt_client):
         """Update recording: download stage starting."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "download", "in_progress")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="running",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_03_download_complete(self, ttt_client):
         """Update recording: download complete."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "download", "completed")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_04_combine_in_progress(self, ttt_client):
         """Update recording: combine stage starting."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "combine", "in_progress")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="combine",
+            step_type="combine",
+            label="Combine",
+            status="running",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_05_combine_complete(self, ttt_client):
         """Update recording: combine complete."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "combine", "completed")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="combine",
+            step_type="combine",
+            label="Combine",
+            status="complete",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_06_trim_in_progress(self, ttt_client):
         """Update recording: trim stage starting."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "trim", "in_progress")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="trim",
+            step_type="trim",
+            label="Trim",
+            status="running",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_07_trim_complete(self, ttt_client):
         """Update recording: trim complete."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "trim", "completed")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="trim",
+            step_type="trim",
+            label="Trim",
+            status="complete",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_08_upload_in_progress(self, ttt_client):
         """Update recording: upload stage starting."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(rec_id, "upload", "in_progress")
+        result = ttt_client.update_recording_step(
+            rec_id,
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="running",
+        )
         assert result is None or isinstance(result, dict)
 
     def test_09_upload_complete_with_youtube(self, ttt_client):
         """Update recording: upload complete with YouTube URL and video ID."""
         rec_id = TestRecordingPipelineWorkflow._recording_ids[0]
-        result = ttt_client.update_recording_status(
+        result = ttt_client.update_recording_step(
             rec_id,
-            "upload",
-            "completed",
-            youtube_url="https://youtube.com/watch?v=integ_test_123",
-            youtube_video_id="integ_test_123",
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="complete",
+            artifacts={
+                "youtube_url": "https://youtube.com/watch?v=integ_test_123",
+                "youtube_video_id": "integ_test_123",
+            },
         )
         assert result is None or isinstance(result, dict)
 
@@ -263,11 +309,13 @@ class TestRecordingPipelineWorkflow:
         fail_id = registered[0]["id"]
         TestRecordingPipelineWorkflow._fail_recording_id = fail_id
 
-        result = ttt_client.update_recording_status(
+        result = ttt_client.update_recording_step(
             fail_id,
-            "download",
-            "failed",
-            error_message="Connection timeout: camera unreachable",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="failed",
+            error="Connection timeout: camera unreachable",
         )
         assert result is None or isinstance(result, dict)
 
@@ -501,11 +549,13 @@ class TestErrorDisplayWorkflows:
         rec_id = registered[0]["id"]
 
         # Fail the recording at download stage
-        ttt_client.update_recording_status(
+        ttt_client.update_recording_step(
             rec_id,
-            "download",
-            "failed",
-            error_message="Integration test: camera connection lost",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="failed",
+            error="Integration test: camera connection lost",
         )
 
         # Check that an alert was created
@@ -840,7 +890,13 @@ class TestStandaloneOperation:
         await reporter.report_camera_status("online")
         result = await reporter.register_recordings([])
         assert result is None
-        await reporter.update_recording_status("rec-1", "download", "downloaded")
+        await reporter.update_recording_step(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
         result = await reporter.sync_config()
         assert result is None
         await reporter.push_config()
@@ -921,8 +977,14 @@ class TestStandaloneOperation:
         config.ttt.heartbeat_interval = 30
         reporter = TTTReporter(ttt_client=client, config=config)
 
-        await reporter.update_recording_status(None, "download", "downloaded")
-        client.update_recording_status.assert_not_called()
+        await reporter.update_recording_step(
+            None,
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
+        client.update_recording_step.assert_not_called()
 
 
 class TestGracefulDegradation:
@@ -935,7 +997,7 @@ class TestGracefulDegradation:
         for method_name in [
             "update_camera_status",
             "register_recordings",
-            "update_recording_status",
+            "update_recording_step",
             "enhanced_heartbeat",
             "get_pending_commands",
             "get_camera_config",
@@ -972,11 +1034,15 @@ class TestGracefulDegradation:
         assert result is None  # Not a crash, just None
 
     @pytest.mark.asyncio
-    async def test_update_recording_status_survives_error(self):
-        """update_recording_status silently logs on error."""
+    async def test_update_recording_step_survives_error(self):
+        """update_recording_step silently logs on error."""
         reporter = self._make_failing_reporter()
-        await reporter.update_recording_status(
-            "rec-123", "download", "failed"
+        await reporter.update_recording_step(
+            "rec-123",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="failed",
         )  # Should not raise
 
     @pytest.mark.asyncio
