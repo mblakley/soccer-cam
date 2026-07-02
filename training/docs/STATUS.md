@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-07-01*
+*Last updated: 2026-07-02*
 
 ## AutoCam distillation → homegrown ball detector (2026-06-30)
 
@@ -66,21 +66,37 @@ truth: our detector SEES the ball (ceiling **0.95**), our tracker WORKS (AutoCam
 peaks bury the ball in confident distractors and the Viterbi tracker locks onto the wrong trajectory
 (NEAR 0.067 is worse than FAR 0.288 — not following the ball at all).
 
-**UPDATE (2026-07-01, EXP-DIST-17) — the selection gap was the TELEPORT GATE, and it's largely fixed.**
-Built an offline tracker sweep (`cli/eval_detector --dump-cands` → `cli/sweep_tracker`) to test tracker
-configs in seconds instead of 40-min evals. Result: candidate *gating* (in-field, size) does nothing /
-hurts, but **loosening the meters-space teleport gate (max_jump 6→40, vmax 2.5→20) lifts far R15m
-0.288→0.618 and median 51.5→12.6 m** — the old tight gate hard-excluded the true far candidate (meters
-ill-conditioned near the far touchline; EXP-DIST-11's 82.5%). The tracker now beats score-argmax (0.293).
-Shipped as the `RerankConfig` default (tests green). `alpha=0.3`/`static_w=2.0` stayed best; size/support
-priors hurt/null.
+**OVERNIGHT PDCA 2026-07-01→02 (EXP-DIST-17..20). Tooling: `cli/eval_detector --dump-cands` →
+`cli/sweep_tracker` replays the tracker under many configs in SECONDS off a cached candidate dump — this
+broke the 40-min-per-hypothesis loop and is how all of the below was found.**
 
-**Still open (the decomposition keeps us honest):** far 0.618 < ceiling **0.933** — our candidates are
-noisier than AutoCam's (AutoCam-dets→our-tracker 0.845), so cleaner scores (hard-negatives,
-`cli/mine_hard_negatives`) is the next far lever. NEAR **0.222 ≪ 1.0** ceiling (≈ argmax) — the single
-global-smooth path can't follow far↔near excursions; that's the world-model (mode-aware) frontier.
-**Next:** (1) validate mj40/v20 across the held-out span (sweep-optimum on one game); (2) hard-neg
-fine-tune for cleaner far candidates; (3) audit the broken `autocam_viewport.jsonl` loader (task #14).
+**Wins (validated on TWO held-out games, Spencerport + Irondequoit):**
+1. **Teleport gate was the far bug.** The tight meters-space gate hard-excluded the true far candidate
+   (meters ill-conditioned near the far touchline). Loosening it lifts **far R15m 0.288 → ~0.65**, median
+   **51 → 12 m**, and the tracker finally beats score-argmax. Cross-validated (Iron far 0.455 → 0.727).
+2. **Corrected an overfit:** the single-game optimum (a0.3/mj40/v20) was Spencerport-tuned; robust default
+   is **a1.0/mj25/v12** (α raised because the hard-neg detector's scores are now worth trusting).
+3. **Hard-neg fine-tune** cleaned candidates + lifted near *detection* (argmax 0.244 → 0.378); recall/
+   ceiling held. Detector generalizes (Iron ceiling 0.91–0.94).
+4. **Fixed the BAR:** AutoCam's viewport/sidecar is camera *framing* (~53 m from ball), NOT detection —
+   the "AutoCam 0.15 far" premise is dead. Real bar = AutoCam-dets→tracker (far **0.845**/near **0.978**);
+   our ceiling (0.933/1.0) exceeds it, so the goal is achievable via selection/score.
+
+**Scorecard vs goal** (far>0.845, near≥0.978): FAR **~0.55–0.73** cross-validated (was 0.288 — big,
+tractable, candidate-quality-limited). NEAR **~0.19–0.31** (was 0.067) — the OPEN problem.
+
+**Near is DETECTOR-quality-limited (diagnosed, EXP-DIST-19/20):** the ball is in candidates 94–99%
+(ceiling), but the detector scores a distractor above the near ball ~60% of the time (argmax near only
+0.38 Spc / 0.06 Iron), and the confidence-hybrid can't rescue it (raw sigmoid is saturated ~1.0). The two
+tracker levers are exhausted (teleport fixed, cross-validated). **So the remaining gap on BOTH far and
+near is DETECTOR candidate quality, not the tracker.**
+
+**Validated architecture / next levers:** (a) **detector** — the biggest lever now: near-focused training
+(size-adaptive heatmap targets so big near balls score high; near-distractor hard-negs) and the
+**high-value labels Mark offered** (far balls, distractor-disambiguation, new venues — never normal play);
+(b) **selector** — a mode-aware / per-frame-competitive path (the RESEARCH_REPORT world-model) for the
+near far↔near excursions the single global-smooth Viterbi can't follow. Running overnight: 2nd hard-neg
+round (`distill_hn2`, both-game sweep). Detector artifact now = `runs/hm_reolink_hn/best.pt`.
 
 ## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
 
