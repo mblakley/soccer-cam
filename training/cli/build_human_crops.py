@@ -79,8 +79,25 @@ def main() -> None:
         if not labels:
             continue
         clip = m["clip"]
-        if not Path(clip).exists():
+        clip_p = Path(clip)
+        if not clip_p.exists():
             print(f"  SKIP {sd.name}: clip missing", flush=True)
+            continue
+        # Never train on stubs: house/camera-test recordings are tiny (~50MB) vs real game
+        # clips (0.7GB+ per segment). Directory clips are raw .dav recordings, not decodable here.
+        if clip_p.is_dir():
+            print(
+                f"  SKIP {sd.name}: clip is a directory (raw recording): {clip}",
+                flush=True,
+            )
+            continue
+        MIN_CLIP_BYTES = 200 * 1024 * 1024
+        if clip_p.stat().st_size < MIN_CLIP_BYTES:
+            mb = clip_p.stat().st_size // (1024 * 1024)
+            print(
+                f"  SKIP {sd.name}: clip {mb}MB < 200MB — stub/non-game footage: {clip}",
+                flush=True,
+            )
             continue
         poly = m["polygon"]
         hint = {
