@@ -18,8 +18,8 @@ import os
 import statistics
 import sys
 
-REG = os.environ.get("GAME_REGISTRY", r"F:\training_data\game_registry.json")
-CACHE = os.environ.get("PHASE_CACHE", r"G:\ballresearch\phase_cache")
+REG = os.environ.get("GAME_REGISTRY", "")
+CACHE = os.environ.get("PHASE_CACHE", "")
 HUMAN_ONLY = "--human-only" in sys.argv
 ONLY = sys.argv[sys.argv.index("--game") + 1] if "--game" in sys.argv else None
 TRANSITIONS = ["kickoff", "halftime", "second_half", "end"]

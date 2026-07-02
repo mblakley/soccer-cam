@@ -32,7 +32,7 @@ from pydantic import BaseModel
 # at module top). In a bundle without the inference stack importing this module
 # fails and register_steps' try/except omits the step — same pattern as
 # field_detect / ball_detect.
-from video_grouper.inference.phase_detector import detect_phases
+from video_grouper.inference.phase_detector import PersonModelUnavailable, detect_phases
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
 from video_grouper.pipeline.manifest import PipelineManifest
@@ -48,6 +48,13 @@ class PhaseDetectStepConfig(BaseModel):
     # curve — the detector's backbone signal. Lower = finer halftime
     # localization but slower; mirrors the detector core's default.
     phase_step_seconds: float = 12.0
+
+    # Optional override for the YOLO person-detection model. Unlike ball_detect
+    # (freemium: model_key licenses a TTT model) the person model is a base
+    # public detector shipped with the install, so the default is the bundled
+    # model. Set model_path only to point at a different local .onnx; when it
+    # can't be resolved the step degrades to an ok=false artifact (below).
+    model_path: str | None = None
 
 
 def _load_polygon(path: str) -> list:
@@ -99,13 +106,31 @@ class PhaseDetectStep(PipelineStep[PhaseDetectStepConfig]):
         polygon_path = cast(str, manifest.get("field_polygon_path"))
         polygon = await asyncio.to_thread(_load_polygon, polygon_path)
 
-        result = await asyncio.to_thread(
-            detect_phases,
-            str(in_path),
-            polygon,
-            step=self.config.phase_step_seconds,
-        )
-        payload = _build_payload(result)
+        try:
+            result = await asyncio.to_thread(
+                detect_phases,
+                str(in_path),
+                polygon,
+                step=self.config.phase_step_seconds,
+                person_model=self.config.model_path,
+            )
+            payload = _build_payload(result)
+        except PersonModelUnavailable:
+            # No person model resolvable (not bundled, not configured). The
+            # player-on-field curve is the detector's backbone, so there is no
+            # meaningful result — record an ok=false artifact rather than fail
+            # the pipeline, so downstream steps and the non-empty-output
+            # contract still hold. (field_detect degrades the same way.)
+            logger.warning(
+                "phase_detect: no YOLO person model available; writing ok=false phases artifact. "
+                "Set [PIPELINE] phase_detect model_path or install the bundled person model."
+            )
+            payload = {
+                "ok": False,
+                "source": "phase_fused",
+                "times": {},
+                "reasons": ["no_person_model"],
+            }
 
         phases_path = in_path.with_name("phases.json")
         with open(phases_path, "w", encoding="utf-8") as f:

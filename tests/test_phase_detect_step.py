@@ -104,10 +104,11 @@ async def test_phase_detect_writes_artifact_manifest_and_state(tmp_path, monkeyp
     }
     captured = {}
 
-    def fake_detect_phases(video_path, polygon, *, step=12.0):
+    def fake_detect_phases(video_path, polygon, *, step=12.0, person_model=None):
         captured["video_path"] = video_path
         captured["polygon"] = polygon
         captured["step"] = step
+        captured["person_model"] = person_model
         return fake
 
     monkeypatch.setattr(
@@ -189,3 +190,29 @@ async def test_phase_detect_no_play_writes_empty_artifact(tmp_path, monkeypatch)
     assert payload["ok"] is False
     assert payload["times"] == {}
     assert payload["reasons"] == ["no_play"]
+
+
+@pytest.mark.asyncio
+async def test_phase_detect_missing_person_model_degrades(tmp_path, monkeypatch):
+    """No resolvable person model -> ok=false artifact, not a pipeline crash.
+
+    The player-on-field curve is the detector's backbone, so a missing model
+    raises PersonModelUnavailable; the step must catch it and still write the
+    declared output (like field_detect degrading to a full-frame polygon)."""
+    from video_grouper.inference.phase_detector import PersonModelUnavailable
+
+    def _raise(*a, **k):
+        raise PersonModelUnavailable("no person model")
+
+    monkeypatch.setattr(
+        "video_grouper.pipeline.steps.phase_detect.detect_phases", _raise
+    )
+    manifest = _manifest_with_polygon(tmp_path)
+    step = create_step("phase_detect", {})
+    ok = await step.run(manifest, _ctx(tmp_path))
+    assert ok is True
+
+    payload = json.loads((tmp_path / "phases.json").read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["times"] == {}
+    assert payload["reasons"] == ["no_person_model"]

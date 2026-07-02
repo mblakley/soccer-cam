@@ -36,9 +36,9 @@ except ImportError:  # box-scratch: core co-located flat in the same dir
         whistle_blasts,
     )
 
-REG = os.environ.get("GAME_REGISTRY", r"F:\training_data\game_registry.json")
-SS = os.environ.get("SOCCERCAM_STORAGE", r"D:\soccer-cam-storage")
-CACHE = os.environ.get("PHASE_CACHE", r"G:\ballresearch\phase_cache")
+REG = os.environ.get("GAME_REGISTRY", "")
+SS = os.environ.get("SOCCERCAM_STORAGE", "")
+CACHE = os.environ.get("PHASE_CACHE", "")
 WRITE = "--write" in sys.argv
 FORCE = "--force" in sys.argv
 RECOMPUTE = "--recompute" in sys.argv  # ignore cached curve/whistle, recompute

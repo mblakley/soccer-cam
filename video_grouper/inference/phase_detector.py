@@ -15,20 +15,21 @@ cross-checking by relative timing (half-length range is only a sanity gate):
 This module is the delivered detector core (no CLI, no module-level execution, no I/O side effects):
 ``compute_signals`` runs the three per-game passes; ``fuse_phases`` segments + fuses them into phase
 boundaries (in TRIMMED video time); ``detect_phases`` wires both together for a single video. The
-sanity gate rejects implausible fits. Paths default to the training-box layout (override via env).
+sanity gate rejects implausible fits. The person model is resolved from an explicit path, the
+``YOLO_PERSON_MODEL`` env var, or the model bundled with the install (see ``resolve_person_model``).
 """
 
 import bisect
 import glob
 import json
 import os
+import sys
 
 import av
 import cv2
 import numpy as np
 import onnxruntime as ort
 
-M = os.environ.get("YOLO_PERSON_MODEL", r"G:\pipeline_work\eval\yolo26n.onnx")
 PLAY_THR = 5  # >= this many in-field persons => play
 # END-whistle loudness gate: the full-time whistle must be at least this multiple of the p75 frame
 # loudness. Wind resonating through the mic at the ref's pitch makes a faint, pitch-wandering
@@ -87,20 +88,55 @@ HT_MODE = os.environ.get("PHASE_HT_MODE", "dipfirst")  # dipfirst | committed
 HT_DECLINE_REJECT = float(os.environ.get("PHASE_HT_DECLINE_REJECT_SEC", "120"))
 HT_DIP_SELECT = os.environ.get("PHASE_HT_DIP_SELECT", "central")  # central | longest
 
-_SESS = None
+
+class PersonModelUnavailable(RuntimeError):
+    """No YOLO person-detection model could be resolved (not configured, not
+    bundled). Callers degrade gracefully — the pipeline step writes an
+    ``ok=false`` artifact and the NTFY game-start path falls back to the manual
+    walk — rather than crashing."""
 
 
-def sess():
-    global _SESS
-    if _SESS is None:
-        _SESS = ort.InferenceSession(
-            M, providers=["DmlExecutionProvider", "CPUExecutionProvider"]
+def _bundled_person_model():
+    """Path to the person model shipped with the install, or ``None``.
+
+    PyInstaller lays bundled data under ``sys._MEIPASS``; a source checkout
+    resolves relative to this package (``video_grouper/models/person.onnx``).
+    Returns the path only if the file actually exists."""
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "models", "person.onnx"))
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates.append(os.path.join(pkg_root, "models", "person.onnx"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def resolve_person_model(explicit=None):
+    """Resolve the YOLO person-detection model path: an explicit path, then the
+    ``YOLO_PERSON_MODEL`` env override, then the bundled model. ``None`` if no
+    source is available."""
+    return explicit or os.environ.get("YOLO_PERSON_MODEL") or _bundled_person_model()
+
+
+_SESS_CACHE: dict = {}
+
+
+def sess(model_path):
+    """Cached ONNX session for ``model_path`` (keyed by path — one model per run)."""
+    s = _SESS_CACHE.get(model_path)
+    if s is None:
+        s = ort.InferenceSession(
+            model_path, providers=["DmlExecutionProvider", "CPUExecutionProvider"]
         )
-    return _SESS
+        _SESS_CACHE[model_path] = s
+    return s
 
 
 # ---------- player-on-field curve ----------
-def persons(frame, thr=0.30):
+def persons(frame, session, thr=0.30):
     h, w = frame.shape[:2]
     r = min(1280 / h, 1280 / w)
     nh, nw = int(round(h * r)), int(round(w * r))
@@ -108,7 +144,7 @@ def persons(frame, thr=0.30):
     top, left = (1280 - nh) // 2, (1280 - nw) // 2
     canvas[top : top + nh, left : left + nw] = cv2.resize(frame, (nw, nh))
     blob = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
-    s = sess()
+    s = session
     out = s.run(None, {s.get_inputs()[0].name: blob})[0][0]
     res = []
     for row in out:
@@ -127,9 +163,10 @@ def _count_in(ps, polyf):
     )
 
 
-def player_curve(path, polyf, rot, step):
+def player_curve(path, polyf, rot, step, session):
     """Decode ~1 frame / step sec, count in-field persons. Returns (times[], counts[], dur).
 
+    ``session`` is the ONNX person-detection session (see ``sess`` / ``resolve_person_model``).
     Orientation is AUTO-DETECTED, not taken from video_rotation: the field_polygon is upright, but
     the combined video may be raw (camera mounted inverted) OR already rotated, and the dahua
     archive's video_rotation is inconsistent (raw files tagged rot=0, rotated files too). For the
@@ -157,8 +194,8 @@ def player_curve(path, polyf, rot, step):
         if fr is None:
             break
         if flip is None:  # decide orientation from the first populated frames
-            a = _count_in(persons(fr), polyf)
-            b = _count_in(persons(fr[::-1, ::-1].copy()), polyf)
+            a = _count_in(persons(fr, session), polyf)
+            b = _count_in(persons(fr[::-1, ::-1].copy(), session), polyf)
             vote[0] += a
             vote[1] += b
             nin = max(a, b)
@@ -166,7 +203,7 @@ def player_curve(path, polyf, rot, step):
                 flip = vote[1] > vote[0]
         else:
             frame = fr[::-1, ::-1].copy() if flip else fr
-            nin = _count_in(persons(frame), polyf)
+            nin = _count_in(persons(frame, session), polyf)
         ts.append(t)
         cnt.append(nin)
         t += step
@@ -454,7 +491,9 @@ def mmss(s):
     return f"{int(s) // 60}:{s % 60:05.2f}"
 
 
-def compute_signals(video_path, polyf, rot, poly_src, step, *, base=None, gj=None):
+def compute_signals(
+    video_path, polyf, rot, poly_src, step, *, base=None, gj=None, person_model=None
+):
     """Run the three per-game passes and return the cacheable signal dict.
 
     Wraps player_curve + whistle_blasts + ball_restarts. ``polyf`` is the field polygon scaled to the
@@ -462,14 +501,25 @@ def compute_signals(video_path, polyf, rot, poly_src, step, *, base=None, gj=Non
     source px (ball-restart orientation auto-detect + fusion's center-circle reference). ``base`` is
     the archive folder ball_restarts searches for the ball sidecar (defaults to the video's own
     directory); ``gj`` is the dahua game.json enabling the per-segment detection path. Reolink /
-    single-video callers leave gj=None and rely on the {t,xy} sidecar.
+    single-video callers leave gj=None and rely on the {t,xy} sidecar. ``person_model`` overrides the
+    YOLO person-model path (else env / bundled — see ``resolve_person_model``).
 
     Returns {"ts","cnt","dur","blasts","multis","blast_loud","ball_ev","ball_center","sr"} matching
     the on-disk cache schema. fuse_phases additionally reads a "poly" entry (the source-px polygon);
-    callers inject it before fusing — see detect_phases."""
+    callers inject it before fusing — see detect_phases.
+
+    Raises ``PersonModelUnavailable`` when no person model can be resolved (the player-on-field curve
+    is the detector's backbone, so there is no meaningful degraded result — callers catch it)."""
     if base is None:
         base = os.path.dirname(video_path)
-    ts, cnt, dur = player_curve(video_path, polyf, rot, step)
+    model_path = resolve_person_model(person_model)
+    if not model_path or not os.path.exists(model_path):
+        raise PersonModelUnavailable(
+            "no YOLO person model available — set YOLO_PERSON_MODEL, pass person_model, "
+            "or install the bundled model"
+        )
+    session = sess(model_path)
+    ts, cnt, dur = player_curve(video_path, polyf, rot, step, session)
     blasts, multis, sr, blast_loud = whistle_blasts(video_path)
     ball_ev, bcenter = ball_restarts(base, gj, poly_src)
     return {
@@ -1157,6 +1207,7 @@ def detect_phases(
     ball_sidecar=None,
     rot=0,
     step=12.0,
+    person_model=None,
     truncated_start=False,
     truncated_end=False,
 ):
@@ -1181,7 +1232,9 @@ def detect_phases(
     base = (
         os.path.dirname(ball_sidecar) if ball_sidecar else os.path.dirname(video_path)
     )
-    signals = compute_signals(video_path, polyf, rot, poly, step, base=base)
+    signals = compute_signals(
+        video_path, polyf, rot, poly, step, base=base, person_model=person_model
+    )
     signals["poly"] = poly
     # production runs on the untrimmed combined video -> localize the game block before fusing.
     # truncated_start/end come from the human's NTFY confirmation (re-run after "already

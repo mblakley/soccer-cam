@@ -20,7 +20,7 @@ import os
 import sys
 
 WRITE = "--write" in sys.argv
-REG = os.environ.get("GAME_REGISTRY", r"F:\training_data\game_registry.json")
+REG = os.environ.get("GAME_REGISTRY", "")
 # default reolink-only (the whistle-verified YT games); --all also scans dahua
 ALL = "--all" in sys.argv
 reg = json.load(open(REG, encoding="utf-8"))
