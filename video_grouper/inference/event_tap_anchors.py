@@ -82,23 +82,50 @@ def _largest_cluster(times: list[float], window: float) -> list[float]:
     return best
 
 
-def build_anchors(taps: list[dict], recording_start: datetime) -> dict[str, Anchor]:
+def _tap_video_time(tap: dict, recording_start: datetime | None) -> float | None:
+    """Video-time (seconds) for one tap, or None if it can't be placed.
+
+    Prefers a TTT-computed ``video_time_seconds`` (the time-sync system already
+    mapped the tap into video time -- no wall-clock math, no timezone risk).
+    Falls back to ``device_timestamp - recording_start`` (both must be tz-aware),
+    minus the reaction lag. Returns None (drop the tap) when neither is usable."""
+    vts = tap.get("video_time_seconds")
+    if isinstance(vts, int | float) and not isinstance(vts, bool):
+        return float(vts)
+    if recording_start is None:
+        return None
+    ts = tap.get("device_timestamp")
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+    if not isinstance(ts, datetime):
+        return None
+    try:
+        return (ts - recording_start).total_seconds() - REACTION_LAG_S
+    except TypeError:
+        # naive vs aware mismatch -> can't place this tap reliably.
+        return None
+
+
+def build_anchors(
+    taps: list[dict], recording_start: datetime | None
+) -> dict[str, Anchor]:
     """Turn raw event taps into per-boundary anchors in video time.
 
     ``taps``: dicts with a moment-tagger ``label`` (kickoff | halftime_start |
-    halftime_end | game_end) and a wall-clock ``device_timestamp`` (an aware
-    ``datetime`` or ISO string). ``recording_start``: the wall-clock instant of
-    video time 0 (the reconciled true recording start).
+    halftime_end | game_end) and either a TTT-computed ``video_time_seconds`` or a
+    wall-clock ``device_timestamp`` (aware ``datetime`` or ISO string).
+    ``recording_start``: wall-clock instant of video time 0 (the reconciled true
+    recording start); only needed for taps lacking ``video_time_seconds``.
 
-    For each boundary: convert taps to video-time (``ts - recording_start`` minus
-    the reaction lag), find the largest cluster within ``CLUSTER_WINDOW_S``; if it
-    has >= 2 taps the anchor is **high** confidence at the cluster median,
+    For each boundary: place each tap in video time (see ``_tap_video_time``),
+    find the largest cluster within ``CLUSTER_WINDOW_S``; if it has >= 2 taps the
+    anchor is **high** confidence at the cluster median (outliers excluded),
     otherwise **low** confidence at the median of all the boundary's taps. Only
     boundaries with >= 1 usable tap appear in the result.
     """
-    if recording_start is None:
-        return {}
-
     by_boundary: dict[str, list[float]] = {}
     for tap in taps:
         label = tap.get("label")
@@ -107,21 +134,9 @@ def build_anchors(taps: list[dict], recording_start: datetime) -> dict[str, Anch
         boundary = BOUNDARY_FOR_LABEL.get(label)
         if boundary is None:
             continue
-        ts = tap.get("device_timestamp")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.fromisoformat(ts)
-            except ValueError:
-                continue
-        if not isinstance(ts, datetime):
-            continue
-        try:
-            vt = (ts - recording_start).total_seconds() - REACTION_LAG_S
-        except TypeError:
-            # naive vs aware mismatch -> can't place this tap reliably.
-            continue
-        if vt < 0:
-            # tap before the recording started: implausible, drop it.
+        vt = _tap_video_time(tap, recording_start)
+        if vt is None or vt < 0:
+            # unplaceable, or before the recording started (implausible) -> drop.
             continue
         by_boundary.setdefault(boundary, []).append(vt)
 

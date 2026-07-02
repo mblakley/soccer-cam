@@ -104,6 +104,27 @@ def test_iso_string_timestamp_parsed():
     assert a.video_time == 6000 - REACTION_LAG_S
 
 
+def test_video_time_seconds_used_directly_without_recording_start():
+    # A TTT-computed video_time_seconds places the tap directly (no tz math), so
+    # it works even with no recording_start.
+    taps = [{"label": "kickoff", "video_time_seconds": 600.0}]
+    a = build_anchors(taps, None)["kickoff"]
+    assert a.video_time == 600.0
+    assert a.confidence == "low"
+
+
+def test_video_time_seconds_preferred_over_device_timestamp():
+    taps = [
+        {
+            "label": "game_end",
+            "video_time_seconds": 5000.0,
+            "device_timestamp": START + timedelta(seconds=9999),
+        }
+    ]
+    a = build_anchors(taps, START)["end"]
+    assert a.video_time == 5000.0
+
+
 def test_tap_before_recording_start_dropped():
     # A tap whose wall-clock precedes the recording start is implausible.
     taps = [{"label": "kickoff", "device_timestamp": START - timedelta(seconds=30)}]

@@ -137,8 +137,12 @@ async def _run_detector(
     *,
     truncated_start: bool = False,
     truncated_end: bool = False,
+    anchors: dict | None = None,
 ) -> dict | None:
-    """Load the polygon and run the detector off the event loop."""
+    """Load the polygon and run the detector off the event loop.
+
+    ``anchors`` (optional) is the {boundary: Anchor} map of parent event-tap
+    priors the caller fetched from TTT (see maybe_resolve_phase_game_start)."""
     import asyncio
     from functools import partial
 
@@ -154,8 +158,66 @@ async def _run_detector(
             polygon,
             truncated_start=truncated_start,
             truncated_end=truncated_end,
+            anchors=anchors,
         )
     )
+
+
+def _group_recording_start(group_dir: str, storage_path: str | None):
+    """Wall-clock of the recording's first file (video time 0), or None.
+
+    Best-effort: parent taps prefer a TTT-computed ``video_time_seconds`` anyway,
+    so this only feeds the wall-clock fallback in build_anchors."""
+    try:
+        from video_grouper.models import DirectoryState
+
+        state = DirectoryState(group_dir, storage_path)
+        first = state.get_first_file()
+        return first.start_time if first is not None else None
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+
+
+def _fetch_event_tap_anchors(config, group_dir: str, storage_path: str | None) -> dict:
+    """Parent event-tap phase anchors for this recording's game session, or {}.
+
+    ONLY fetches when the install is logged in as a TTT user: reuses
+    ``_authed_client_and_session`` (which returns a client only when
+    ``client.is_authenticated()``), so a non-TTT / logged-out install never calls
+    TTT and runs detector-only. Runs sync (call from a thread). Best-effort: any
+    failure -> {} (never worse than the detector alone)."""
+    try:
+        from video_grouper.inference.event_tap_anchors import build_anchors
+        from video_grouper.task_processors.phase_ttt_push import (
+            _authed_client_and_session,
+        )
+
+        ttt = getattr(config, "ttt", None)
+        _dump = getattr(ttt, "model_dump", None)
+        ttt_config = _dump() if callable(_dump) else ttt
+        client, session = _authed_client_and_session(
+            ttt_config, group_dir, str(storage_path or "")
+        )
+        if client is None or session is None:
+            return {}  # TTT disabled, not logged in, or no session -> no fetch
+        raw = client.get_sync_anchors(session["id"]) or []
+        taps = [
+            a
+            for a in raw
+            if isinstance(a, dict) and a.get("anchor_type") == "event_tap"
+        ]
+        recording_start = _group_recording_start(group_dir, storage_path)
+        anchors = build_anchors(taps, recording_start)
+        if anchors:
+            logger.info(
+                "phase anchors: %d parent event-taps -> %s",
+                len(taps),
+                {b: (a.confidence, round(a.video_time, 1)) for b, a in anchors.items()},
+            )
+        return anchors
+    except Exception as e:  # noqa: BLE001 — best-effort, never fatal
+        logger.warning("event-tap anchor fetch failed (non-fatal): %s", e)
+        return {}
 
 
 def _phase_payload(result: dict) -> dict:
@@ -302,8 +364,16 @@ async def maybe_resolve_phase_game_start(
     if not combined_video_path or not os.path.exists(combined_video_path):
         return False
 
+    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
+    # this install is a logged-in TTT user; {} otherwise -> detector-only.
+    import asyncio
+
+    anchors = await asyncio.to_thread(
+        _fetch_event_tap_anchors, config, group_dir, storage_path
+    )
+
     try:
-        result = await _run_detector(group_dir, combined_video_path)
+        result = await _run_detector(group_dir, combined_video_path, anchors=anchors)
     except Exception as e:  # noqa: BLE001 — never let detection break the flow
         logger.warning("phase game-start: detector failed for %s: %s", group_dir, e)
         return False
