@@ -121,69 +121,77 @@ def main() -> None:
         if not want:
             continue
 
-        vrot = resolve_video_rotation(clip, m.get("video_rotation"))
-        _hw = None
-        if not args.no_hwaccel:
-            try:
-                _hw = av.codec.hwaccel.HWAccel(
-                    device_type="cuda", allow_software_fallback=True
-                )
-            except Exception:  # noqa: BLE001
-                _hw = None
-        container = av.open(clip, hwaccel=_hw) if _hw else av.open(clip)
-        stream = container.streams.video[0]
-        if _hw is None:
-            stream.thread_type = "AUTO"
-        sw, sh = stream.codec_context.width, stream.codec_context.height
-        far_poly = _far_margin_polygon(poly, args.far_margin)
-        warp = _native_iso_warp(far_poly, sw, sh, None)
-        bh, bw = warp.shape
-        mpoly = warp.points(far_poly).astype(np.int32)
-        mask = np.zeros((bh, bw), np.uint8)
-        cv2.fillPoly(mask, [mpoly], 255)
+        # Isolate each set: a decode failure on one clip (e.g. NVDEC choking on a raw camera
+        # segment) must not lose every other set's crops. Skip the bad set and keep going.
+        container = None
+        try:
+            vrot = resolve_video_rotation(clip, m.get("video_rotation"))
+            _hw = None
+            if not args.no_hwaccel:
+                try:
+                    _hw = av.codec.hwaccel.HWAccel(
+                        device_type="cuda", allow_software_fallback=True
+                    )
+                except Exception:  # noqa: BLE001
+                    _hw = None
+            container = av.open(clip, hwaccel=_hw) if _hw else av.open(clip)
+            stream = container.streams.video[0]
+            if _hw is None:
+                stream.thread_type = "AUTO"
+            sw, sh = stream.codec_context.width, stream.codec_context.height
+            far_poly = _far_margin_polygon(poly, args.far_margin)
+            warp = _native_iso_warp(far_poly, sw, sh, None)
+            bh, bw = warp.shape
+            mpoly = warp.points(far_poly).astype(np.int32)
+            mask = np.zeros((bh, bw), np.uint8)
+            cv2.fillPoly(mask, [mpoly], 255)
 
-        lo, hi = min(want) - 2, max(want)
-        buf: list = []
-        idx = -1
-        n = 0
-        for fr in container.decode(stream):
-            idx += 1
-            if idx < lo:
-                continue
-            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-            buf.append(_dewarp_mask_gray(img, warp, mask))
-            if len(buf) > 3:
-                buf.pop(0)
-            if idx in want:
-                sx, sy, is_pos = want[idx]
-                bx, by = warp.points([(sx, sy)])[0]
-                x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
-                y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
-                grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
-                stack = np.zeros((3, args.crop, args.crop), np.uint8)
-                for i, gr in enumerate(grays):
-                    patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
-                    stack[i, : patch.shape[0], : patch.shape[1]] = patch
-                lx, ly = bx - x0, by - y0
-                if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
+            lo, hi = min(want) - 2, max(want)
+            buf: list = []
+            idx = -1
+            n = 0
+            for fr in container.decode(stream):
+                idx += 1
+                if idx < lo:
                     continue
-                tag = "hpos" if is_pos else "hneg"
-                fn = f"human_{sd.name}_f{idx:06d}_{tag}.npy"
-                np.save(crops / fn, stack)
-                items.append(
-                    {
-                        "file": fn,
-                        "x": round(float(lx), 1) if is_pos else None,
-                        "y": round(float(ly), 1) if is_pos else None,
-                        "split": "train",
-                    }
-                )
-                n += 1
-                totals["pos" if is_pos else "neg"] += 1
-            if idx >= hi:
-                break
-        container.close()
-        print(f"  {sd.name}: +{n} crops", flush=True)
+                img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
+                buf.append(_dewarp_mask_gray(img, warp, mask))
+                if len(buf) > 3:
+                    buf.pop(0)
+                if idx in want:
+                    sx, sy, is_pos = want[idx]
+                    bx, by = warp.points([(sx, sy)])[0]
+                    x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
+                    y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
+                    grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                    stack = np.zeros((3, args.crop, args.crop), np.uint8)
+                    for i, gr in enumerate(grays):
+                        patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
+                        stack[i, : patch.shape[0], : patch.shape[1]] = patch
+                    lx, ly = bx - x0, by - y0
+                    if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
+                        continue
+                    tag = "hpos" if is_pos else "hneg"
+                    fn = f"human_{sd.name}_f{idx:06d}_{tag}.npy"
+                    np.save(crops / fn, stack)
+                    items.append(
+                        {
+                            "file": fn,
+                            "x": round(float(lx), 1) if is_pos else None,
+                            "y": round(float(ly), 1) if is_pos else None,
+                            "split": "train",
+                        }
+                    )
+                    n += 1
+                    totals["pos" if is_pos else "neg"] += 1
+                if idx >= hi:
+                    break
+            print(f"  {sd.name}: +{n} crops", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"  SKIP {sd.name}: decode/emit error: {e!r}", flush=True)
+        finally:
+            if container is not None:
+                container.close()
 
     idx_obj["items"] = items
     idx_obj.setdefault("summary", {})
