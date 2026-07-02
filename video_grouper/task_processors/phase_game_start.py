@@ -3,18 +3,24 @@
 This is the default way game start is found. When
 ``[PROCESSING] game_start_method == "phase_detection"`` AND the recording camera
 is a whistle-capable Reolink, run the offline game-phase detector on the combined
-video and — if its fit passes the sanity gate — write
-``match_info.start_time_offset`` from the detected kickoff, minus a small
+video and — if the detected kickoff is ``ko_trustworthy`` — write
+``match_info.start_time_offset`` from it, minus a small
 :data:`PHASE_KO_TRIM_BACKUP_SECONDS` safety backup. The caller then skips the
 NTFY game-start walk.
 
-The backup is far smaller than the NTFY walk's ``GAME_START_BACKUP_SECONDS``
-(240s): that value is tied to the 5-minute human-confirmation poll, whereas the
-detector resolves kickoff to within ~40s on trusted (``ok``) fits. A 60s backup
-keeps the trim safe (all trusted, non-``truncated_start`` KO errors are early or
-tiny) while leaving far less pre-game warm-up in the trimmed output. Only the
-late-KO direction is dangerous, and the ``truncated_start`` guard (decision 8)
-already blocks the sole late-trust source (see the caller).
+The gate is ``ko_trustworthy`` (KO-specific), not ``ok`` (whole-fit): we only
+trim on KO, so a game with an exact kickoff-whistle KO but a failed HT/2H is
+still auto-trimmed (05.27 / 06.06-Sullivan). The backup is far smaller than the
+NTFY walk's ``GAME_START_BACKUP_SECONDS`` (240s, tied to the 5-minute poll):
+every trusted, non-truncated KO measured is within 60s (worst -42s, all early),
+so 60s keeps the trim safe while leaving far less pre-game warm-up.
+
+Truncation trade-off (accepted, decision 2026-07-01): a truncated-start recording
+reads as ``ko_trustworthy`` but anchors a mid-first-half whistle as "kickoff" —
+indistinguishable from a real kickoff on every available signal (no reliable
+schedule; no in-video separator). Rather than force an attention-grab on every
+game to catch a rare case, we auto-proceed on trust and rely on the post-detection
+verify loop / a viewer to catch the rare miss.
 
 Falls back (returns ``False`` — the caller runs the NTFY walk unchanged) for:
 
@@ -171,9 +177,27 @@ async def maybe_resolve_phase_game_start(
         logger.warning("phase game-start: detector failed for %s: %s", group_dir, e)
         return False
 
-    if not result or not result.get("ok"):
+    # Auto-trim gate = ``ko_trustworthy``, NOT ``ok`` (decision 2026-07-01). We only
+    # trim on KO, so the KO-specific trust flag is the right gate: it accepts a game
+    # with an exact kickoff-whistle KO even when HT/2H/END failed the full-fit sanity
+    # (``ok`` is False) -- e.g. 05.27 / 06.06-Sullivan (KO -1s, ok=False, localized).
+    # It still rejects a KO from the symmetric prior (03.21, no whistle) or a non-
+    # localized warm-up whistle (05.30). Every trusted, non-truncated KO measured is
+    # within 60s (worst -42s, all early), so PHASE_KO_TRIM_BACKUP_SECONDS keeps them
+    # trim-safe.
+    #
+    # TRUNCATION TRADE-OFF (accepted): a truncated-start recording anchors a mid-
+    # first-half whistle as "kickoff" and reads as ko_trustworthy (05.09 / 06.06-
+    # Fairport) -- indistinguishable from a real kickoff on every available signal
+    # (no reliable schedule; no in-video separator -- field-dip, block-onset, and
+    # structural asymmetry all overlap; verified). Getting a human's attention is the
+    # expensive step, so rather than force a confirmation on every game to catch a
+    # rare case, we auto-proceed on trust and let the post-detection verify loop (S3)
+    # or a viewer catch the rare miss. Attention is spent only when the detector is
+    # itself unsure (ko_trustworthy False -> the NTFY walk below).
+    if not result or not result.get("ko_trustworthy"):
         logger.info(
-            "phase game-start: no usable fit for %s (falling back to the NTFY walk)",
+            "phase game-start: KO not trustworthy for %s (falling back to the NTFY walk)",
             group_dir,
         )
         return False

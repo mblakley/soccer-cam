@@ -85,6 +85,7 @@ async def test_reolink_ok_sets_offset_and_persists_phases(tmp_path, monkeypatch)
     group, combined = _make_group(tmp_path)
     fake = {
         "ok": True,
+        "ko_trustworthy": True,
         "times": {
             "kickoff": 600.0,
             "halftime": 1500.0,
@@ -123,7 +124,7 @@ async def test_reolink_kickoff_clamped_at_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pgs,
         "_run_detector",
-        _async_return({"ok": True, "times": {"kickoff": 30.0}}),
+        _async_return({"ok": True, "ko_trustworthy": True, "times": {"kickoff": 30.0}}),
     )
     handled = await pgs.maybe_resolve_phase_game_start(
         group, combined, _cfg(), str(tmp_path)
@@ -133,18 +134,54 @@ async def test_reolink_kickoff_clamped_at_zero(tmp_path, monkeypatch):
     assert mi.start_time_offset == "00:00"
 
 
+@pytest.mark.asyncio
+async def test_ko_trustworthy_but_not_ok_still_trims(tmp_path, monkeypatch):
+    """The gate is ``ko_trustworthy``, not ``ok``: a game with an exact
+    kickoff-whistle KO but a failed full-fit (ok=False) is still auto-trimmed
+    (05.27 / 06.06-Sullivan: KO -1s, ok=False, localized -> trusted)."""
+    group, combined = _make_group(tmp_path)
+    monkeypatch.setattr(
+        pgs,
+        "_run_detector",
+        _async_return(
+            {
+                "ok": False,
+                "ko_trustworthy": True,
+                "reasons": ["asym=16.3"],
+                "times": {"kickoff": 600.0},
+            }
+        ),
+    )
+    handled = await pgs.maybe_resolve_phase_game_start(
+        group, combined, _cfg(), str(tmp_path)
+    )
+    assert handled is True
+    mi = MatchInfo.get_or_create(group, str(tmp_path))[0]
+    assert mi.start_time_offset == "09:00"  # 600s - 60s backup
+
+
 # --------------------------------------------------------------------------
 # Resolver: fallbacks (return False, nothing written)
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_reolink_rejected_fit_falls_back(tmp_path, monkeypatch):
+async def test_untrustworthy_ko_falls_back(tmp_path, monkeypatch):
+    """A KO that is not ``ko_trustworthy`` (symmetric prior / non-localized
+    warm-up whistle: 03.21, 05.30) falls back to the NTFY walk — even if a
+    kickoff time was produced."""
     group, combined = _make_group(tmp_path)
     monkeypatch.setattr(
         pgs,
         "_run_detector",
-        _async_return({"ok": False, "times": {"kickoff": 600.0}, "reasons": ["asym"]}),
+        _async_return(
+            {
+                "ok": False,
+                "ko_trustworthy": False,
+                "times": {"kickoff": 600.0},
+                "reasons": ["asym"],
+            }
+        ),
     )
     handled = await pgs.maybe_resolve_phase_game_start(
         group, combined, _cfg(), str(tmp_path)

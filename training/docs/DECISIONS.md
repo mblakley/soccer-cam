@@ -299,3 +299,31 @@ by construction and `ok:false`/`truncated_start` fits fall back to the NTFY walk
 decision 8 in `PHASE_DETECTION_INTEGRATION.md`.
 **Files:** `video_grouper/task_processors/phase_game_start.py`,
 `video_grouper/task_processors/tasks/ntfy/game_start_task.py`, `tests/test_phase_game_start.py`
+
+## 2026-07-01: Auto-trim gate = ko_trustworthy (not ok); accept rare truncated silent mis-trim
+
+**Context:** The game-start resolver auto-trimmed only on `ok` (whole-fit plausible), sending every
+`ok=False` game to the NTFY walk — including games with an exact kickoff-whistle KO whose only failure
+was HT/2H (05.27, 06.06-Sullivan: KO -1s, ok=False, localized). We only trim on KO, so `ok` is the
+wrong gate. The detector already exposes `ko_trustworthy` (KO whistle/kick-anchored + localized +
+not-far) for exactly this. Investigation established that **truncated-start recordings cannot be
+distinguished from real games** by any available signal — no reliable schedule (camera set up early /
+torn down late), and field-dip / block-onset / pre-block density / structural asymmetry all overlap
+completely (05.27 real and 05.09 truncated are identical: both ok=False, asym~16, localized ~8min).
+The design principle (Mark): getting a human's attention is the expensive step (0→1 interaction >>
+1→N taps), so auto-proceed with zero taps whenever the detector is confident, and spend attention
+only when it is not.
+**Decision:** Gate auto-trim on `ko_trustworthy`, not `ok`
+(`video_grouper/task_processors/phase_game_start.py`). Accept the trade-off (option B): a truncated-
+start recording reads as `ko_trustworthy` and will silently mis-trim (rare), caught by the post-
+detection verify loop (S3) or a viewer — rather than force a confirmation on every game to catch it.
+Effect on the 14-game combined GT set: auto-trim (no-tap) 7 → 9 real games, all within 60s (worst
+-42s, early); 2 truncated games (05.09, 06.06-Fairport) silently mis-trim (accepted); the rest
+(03.21 no-whistle, 05.30 warm-up-whistle, 05.28/West_Seneca not-localized) stay `ko_trustworthy`=False
+→ NTFY.
+**Trade-off:** rare silent truncated mis-trim in exchange for never interrupting a confident game.
+Reversible (flip the gate back to `ok`). Supersedes the never-implemented "truncated_start guard"
+in decision 8 (that guard required a `truncated_start` flag that does not exist in the live pipeline
+and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk fallback with a
+single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
+**Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`

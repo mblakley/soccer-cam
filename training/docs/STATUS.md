@@ -20,11 +20,16 @@ passes `localize=True`.
 full-field BAND anchor `[0.55,1.8]×busy` + not-cleared (the UPPER bound rejects dense warm-up crowds
 that over-localized before). 05.31-Spencerport −83→−1s (removed a confident-wrong trim).
 
-**PRODUCTION-SAFE via the phase trim backup (decision 8, amended 2026-07-01):** trim =
+**Auto-trim gate = `ko_trustworthy`, backup = 60s (decision 2026-07-01).** Trim =
 `KO − PHASE_KO_TRIM_BACKUP_SECONDS` (60s; decoupled from the NTFY walk's 240s), so an EARLY KO is
-trim-safe; only a LATE KO mis-trims. All trusted KOs are early/tiny (worst −42s, < 60s margin) EXCEPT
-truncated-start recordings (05.09 real KO 0:00 → anchored 8:37, trusted) — so **S1 must skip
-auto-trim when `truncated_start`** (documented). With that guard, zero trusted KO mis-trims.
+trim-safe; only a LATE KO mis-trims. Every trusted, **non-truncated** KO is early/tiny (worst −42s,
+< 60s margin). Gating on `ko_trustworthy` (not `ok`) auto-trims 9/14 combined GT games (was 7), all
+within 60s. **Truncated-start is NOT separable** from a real game by any available signal (no reliable
+schedule; field-dip / block-onset / asym all overlap — 05.27 real ≡ 05.09 truncated), and the
+`truncated_start` flag does not exist in the live pipeline. Per **option B (accepted)** we auto-proceed
+on trust and let a truncated recording (05.09, 06.06-Fairport) silently mis-trim rarely, caught by the
+S3 verify loop / a viewer — rather than interrupt every confident game. The old "S1 skips on
+`truncated_start`" guard (decision 8) was never implemented and is not achievable; superseded here.
 
 **Ceiling reached** for the audio+player-curve signal set (9/14 vs 84% trimmed). Reverted failed
 levers (curve-onset, loosened-clear bench-dip, ball-refine, symmetric-trust) — all in EXP-PHASE-14.
