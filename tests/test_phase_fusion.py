@@ -54,3 +54,36 @@ def test_fuse_phases_matches_golden(gid):
         assert abs(times[key] - golden[key]) <= 0.05, (
             f"{gid} {key}: {times[key]} != golden {golden[key]}"
         )
+
+
+@pytest.mark.parametrize("gid", GIDS)
+def test_truncated_start_pins_kickoff_to_zero(gid):
+    """A human-confirmed truncated start (NTFY "already started") pins KO to the
+    file head and trusts it for the trim; HT/2H stay detector-driven."""
+    signals, _ = _load(gid)
+    result = fuse_phases(signals, truncated_start=True)
+    assert result is not None
+    assert result["times"]["kickoff"] == 0.0
+    assert result["ko_trustworthy"] is True
+    assert result["truncated_start"] is True
+    # HT is still a real detection (not pinned), so it sits well into the game.
+    assert result["times"]["halftime"] > 60.0
+
+
+@pytest.mark.parametrize("gid", GIDS)
+def test_truncated_end_pins_end_to_file_end(gid):
+    """A human-confirmed truncated end (NTFY "still playing") pins END to the file end."""
+    signals, _ = _load(gid)
+    dur = float(np.asarray(signals["ts"], dtype=float)[-1])
+    result = fuse_phases(signals, truncated_end=True)
+    assert result is not None
+    assert result["times"]["end"] == dur
+    assert result["truncated_end"] is True
+
+
+def test_non_truncated_flags_default_false():
+    """Default (non-truncated) results carry both flags False (byte-identical path)."""
+    signals, _ = _load(GIDS[0])
+    result = fuse_phases(signals)
+    assert result["truncated_start"] is False
+    assert result["truncated_end"] is False

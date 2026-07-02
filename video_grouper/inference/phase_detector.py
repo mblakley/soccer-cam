@@ -600,7 +600,9 @@ def _slice_signals(signals, t0, t1):
     return out
 
 
-def fuse_phases(signals, *, debug=False, localize=False):
+def fuse_phases(
+    signals, *, debug=False, localize=False, truncated_start=False, truncated_end=False
+):
     """Locate the game block, then segment + fuse the (block-restricted) signals into phase
     boundaries in the ORIGINAL video timeline.
 
@@ -614,6 +616,13 @@ def fuse_phases(signals, *, debug=False, localize=False):
     from the block onset, or the fit was rejected. Returns None for a no-play plateau."""
     ts_full = np.asarray(signals["ts"], dtype=float)
     dur = float(ts_full[-1]) if len(ts_full) else 0.0
+    # A truncated recording's game body IS the whole file: there is no pre-game to
+    # localize past (truncated_start) nor post-game after the end (truncated_end), so
+    # skip localization and pin the missing boundary to the file edge below. Both flags
+    # come ONLY from the human's NTFY confirmation ("already started" / "still playing")
+    # -- truncation is not separable from the signals, so it is never auto-derived.
+    if truncated_start or truncated_end:
+        localize = False
     # localize ONLY on the production combined-video path. The trimmed scorecard + fixtures fuse with
     # localize=False, so they never call locate_game_block and are byte-identical to the validated
     # _fuse_core (the 53/63 reolink scorecard is guaranteed unchanged by construction).
@@ -640,6 +649,15 @@ def fuse_phases(signals, *, debug=False, localize=False):
         if ko_w is not None:
             res["times"]["kickoff"] = float(ko_w)
             res["ko_anchor"] = "whistle"
+    # Human-confirmed truncation (NTFY): the missing boundary is the file edge, not a
+    # detected whistle. KO=0 means "game already in progress at the head, nothing to
+    # trim off the front"; END=dur means "recording cut off before full-time". HT/2H
+    # (and the un-truncated END/KO) are still detected normally by _fuse_core above.
+    if truncated_start:
+        res["times"]["kickoff"] = 0.0
+        res["ko_anchor"] = "truncated"
+    if truncated_end:
+        res["times"]["end"] = float(dur)
     ko = res["times"]["kickoff"]
     # "far from block onset" only means something once we've LOCALIZED (t0 = the game onset). On a
     # no-op (t0 = 0: trimmed, or a combined video whose first whistle is already the kickoff) t0 is
@@ -660,12 +678,17 @@ def fuse_phases(signals, *, debug=False, localize=False):
     # so ok=False -- we only trim on KO, and a localized block means the warm-up whistles were skipped
     # and KO is the post-warm-up kickoff whistle (05.27/05.28: KO -1s/-3s, ok=False, localized ->
     # trust). A wrong KO from a warm-up whistle is NOT localized (05.30 -261s) or is symmetric (03.21).
-    res["ko_trustworthy"] = bool(
+    # A human-confirmed truncated start pins KO to the file head — trust it for the
+    # trim (start_time_offset 0 keeps everything, which is correct for a game already
+    # in progress), regardless of the whistle-based signal checks.
+    res["ko_trustworthy"] = bool(truncated_start) or bool(
         blasts
         and res.get("ko_anchor") != "sym"
         and not far
         and (res["ok"] or localized)
     )
+    res["truncated_start"] = bool(truncated_start)
+    res["truncated_end"] = bool(truncated_end)
     return res
 
 
@@ -1127,7 +1150,16 @@ def _fuse_core(signals, *, debug=False):
     }
 
 
-def detect_phases(video_path, field_polygon, *, ball_sidecar=None, rot=0, step=12.0):
+def detect_phases(
+    video_path,
+    field_polygon,
+    *,
+    ball_sidecar=None,
+    rot=0,
+    step=12.0,
+    truncated_start=False,
+    truncated_end=False,
+):
     """End-to-end phase detection for a single video + field polygon.
 
     Scales the field polygon to the decoded frame size (mirroring the training CLI), runs
@@ -1152,4 +1184,12 @@ def detect_phases(video_path, field_polygon, *, ball_sidecar=None, rot=0, step=1
     signals = compute_signals(video_path, polyf, rot, poly, step, base=base)
     signals["poly"] = poly
     # production runs on the untrimmed combined video -> localize the game block before fusing.
-    return fuse_phases(signals, debug=False, localize=True)
+    # truncated_start/end come from the human's NTFY confirmation (re-run after "already
+    # started" / "still playing"); they pin KO=0 / END=file-end and skip localization.
+    return fuse_phases(
+        signals,
+        debug=False,
+        localize=True,
+        truncated_start=truncated_start,
+        truncated_end=truncated_end,
+    )

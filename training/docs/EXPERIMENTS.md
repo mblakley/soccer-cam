@@ -684,3 +684,31 @@ precision. Untested refinement: isolate the period-end whistle by **duration/lou
 **Result:** 568K → 488K files, 759K → 606K detections (20% removed).
 **Follow-up:** Trajectory validator removed additional 24% (606K → 462K), keeping only detections in trajectories ≥3 frames.
 **Code:** `training/data_prep/label_filters.py`, `training/data_prep/trajectory_validator.py`
+
+## EXP-PHASE-17: human-confirmed truncation re-run (NTFY overload) (2026-07-02)
+
+**Goal (Mark):** truncation is undetectable from signals (no reliable schedule; field-dip / block-
+onset / asym all overlap real vs truncated — see EXP-PHASE-16 follow-up), so capture the one bit the
+human knows via a context-answerable NTFY tap, then re-run detection with it. NTFY allows **3 action
+buttons** (verified against docs.ntfy.sh: "up to three user actions"); the game-start ping already
+uses all 3 (Yes/No/Not-a-Game), so **overload "Yes" on the 0:00 question = "game already in progress"
+= truncated_start** (no 4th button needed).
+
+**Detector change:** `fuse_phases(..., truncated_start=, truncated_end=)` + `detect_phases(...)`
+passthrough. A truncated recording's game body IS the whole file, so truncation forces
+`localize=False` (no game-block localization past a missing edge) and pins the missing boundary to the
+file edge: `truncated_start` → KO=0 (+ `ko_trustworthy=True`, human-confirmed), `truncated_end` →
+END=dur. HT/2H (and the un-truncated edge) stay `_fuse_core`-detected. Non-truncated path is
+byte-identical (defaults False; fixtures assert `times` only — 10/10 green).
+
+**Validated on the box (cached combined signals + human GT):**
+- 06.06-Fairport (trunc-start): baseline KO **5:23** → **0:00** (exact); HT −2s, END −4s.
+- 05.09 (trunc-start): baseline HT **43:38 / +9min garbage**, 2H 46:51 → truncated **HT 34:07 (−4s),
+  2H 43:38 (+0s)**, KO 0:00 — the false localized block had wrecked HT/2H; localize=False fixes it.
+- West Seneca (trunc-end): END **59:22 (−332s)** → **64:50 (−5s)** (pinned to file end).
+- Residual per-game misses (05.09 END −853s, 06.06 2H −31s) are pre-existing detection issues, not
+  the truncation logic.
+
+**Next:** wire the 0:00-"Yes" overload in `game_start_task` (+ a "still playing" END-task tap for
+`truncated_end`) to set the flag, trim at 0 / keep-to-end, and re-run + re-push; plus a truncated
+toggle in the T2 app for the confident-but-truncated games that never get the walk.
