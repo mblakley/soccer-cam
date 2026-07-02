@@ -174,10 +174,41 @@ class GameEndTask(BaseNtfyTask):
         if "yes" in response_lower or "game ended" in response_lower:
             logger.info(f"Game ended at {self.time_offset} for {self.group_dir}")
 
-            # Update match info with end time
-            match_info = self.get_match_info()
-            match_info.end_time_offset = self.time_offset
-            match_info.save()
+            # Compute total_duration = confirmed_end - start_time_offset and
+            # persist via update_game_times so TrimTask uses the correct value.
+            # (Setting match_info.end_time_offset on the dataclass and calling
+            # save() is wrong — end_time_offset is not a declared field so it
+            # never reaches total_duration in the ini file.)
+            try:
+                from video_grouper.models import MatchInfo
+
+                start_parts = self.start_time_offset.split(":")
+                if len(start_parts) == 3:
+                    start_secs = (
+                        int(start_parts[0]) * 3600
+                        + int(start_parts[1]) * 60
+                        + int(start_parts[2])
+                    )
+                elif len(start_parts) == 2:
+                    start_secs = int(start_parts[0]) * 60 + int(start_parts[1])
+                else:
+                    start_secs = 0
+                end_secs = int(self.time_seconds or 0)
+                duration_secs = max(0, end_secs - start_secs)
+                h = duration_secs // 3600
+                m = (duration_secs % 3600) // 60
+                s = duration_secs % 60
+                total_duration = f"{h:02d}:{m:02d}:{s:02d}"
+                MatchInfo.update_game_times(
+                    self.group_dir,
+                    total_duration=total_duration,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "game_end: could not persist total_duration for %s: %s",
+                    self.group_dir,
+                    exc,
+                )
 
             return NtfyTaskResult(
                 success=True,

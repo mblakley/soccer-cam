@@ -287,3 +287,267 @@ async def test_truncated_end_reruns_with_end_flag(tmp_path: Path, monkeypatch):
     assert kwargs["phase_truncated_end"] is True
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[1] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Restart dispatch tests (kind="restart")
+# ---------------------------------------------------------------------------
+
+
+def _restart_claim(from_step: str, config_preset: str | None = None, **over):
+    base = {
+        "id": "req-r",
+        "status": "claimed",
+        "recording_id": "rec-1",
+        "kind": "restart",
+        "phases": {"from_step": from_step},
+        "requested_by": "u",
+    }
+    if config_preset is not None:
+        base["phases"]["config_preset"] = config_preset
+    base.update(over)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_restart_trim_sets_combined_state(tmp_path: Path, monkeypatch):
+    """kind=restart from_step=trim -> state set to 'combined' so TrimTask re-queues."""
+    group = _seed_group(tmp_path, "grp-1", status="pipeline_complete")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim("trim")
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    import video_grouper.models as models_mod
+
+    class _FakeMI:
+        def is_populated(self):
+            return True
+
+    monkeypatch.setattr(
+        models_mod,
+        "MatchInfo",
+        type(
+            "MatchInfo",
+            (),
+            {"get_or_create": staticmethod(lambda gd, **kw: (_FakeMI(), None))},
+        ),
+    )
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    state = json.loads((group / "state.json").read_text())
+    assert state["status"] == "combined"
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"
+    assert not (group / "reprocess_request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_restart_trim_fails_when_match_info_not_populated(
+    tmp_path: Path, monkeypatch
+):
+    """from_step=trim with unpopulated MatchInfo reports failure (not crash)."""
+    _seed_group(tmp_path, "grp-1")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim("trim")
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    import video_grouper.models as models_mod
+
+    class _EmptyMI:
+        def is_populated(self):
+            return False
+
+    monkeypatch.setattr(
+        models_mod,
+        "MatchInfo",
+        type(
+            "MatchInfo",
+            (),
+            {"get_or_create": staticmethod(lambda gd, **kw: (_EmptyMI(), None))},
+        ),
+    )
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_restart_pipeline_step_invalidates_manifest_and_queues(
+    tmp_path: Path, monkeypatch
+):
+    """from_step=ball_detect -> manifest invalidated + state -> pipeline_queued_reprocess."""
+    import json as _json
+
+    group = _seed_group(tmp_path, "grp-1", status="pipeline_complete")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim("ball_detect")
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    # Seed a minimal pipeline_state.json with ball_detect + render steps
+    manifest_data = {
+        "version": 1,
+        "input_path": str(group / "combined.mp4"),
+        "output_path": str(group / "out.mp4"),
+        "artifacts": {
+            "input_path": str(group / "combined.mp4"),
+            "output_path": str(group / "out.mp4"),
+        },
+        "steps": [
+            {
+                "step_id": "field_detect",
+                "type": "field_detect",
+                "status": "complete",
+                "config_fingerprint": "fp1",
+            },
+            {
+                "step_id": "ball_detect",
+                "type": "ball_detect",
+                "status": "complete",
+                "config_fingerprint": "fp2",
+            },
+            {
+                "step_id": "render",
+                "type": "render",
+                "status": "complete",
+                "config_fingerprint": "fp3",
+            },
+        ],
+    }
+    (group / "pipeline_state.json").write_text(_json.dumps(manifest_data))
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    # Manifest: field_detect stays complete; ball_detect + render reset to pending
+    saved = _json.loads((group / "pipeline_state.json").read_text())
+    steps = {s["step_id"]: s for s in saved["steps"]}
+    assert steps["field_detect"]["status"] == "complete"
+    assert steps["ball_detect"]["status"] == "pending"
+    assert "config_fingerprint" not in steps["ball_detect"]
+    assert steps["render"]["status"] == "pending"
+
+    # State -> pipeline_queued_reprocess
+    state = _json.loads((group / "state.json").read_text())
+    assert state["status"] == "pipeline_queued_reprocess"
+
+    # reprocess_request.json written
+    rr = _json.loads((group / "reprocess_request.json").read_text())
+    assert "ttt:restart:ball_detect" in rr["requested_by"]
+
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_restart_pipeline_step_with_preset(tmp_path: Path, monkeypatch):
+    """config_preset is validated and stored in reprocess_request.json."""
+    import json as _json
+
+    group = _seed_group(tmp_path, "grp-1", status="pipeline_complete")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim(
+        "render", config_preset="homegrown"
+    )
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    rr = _json.loads((group / "reprocess_request.json").read_text())
+    assert rr.get("config_preset") == "homegrown"
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_restart_pipeline_step_invalid_preset_reports_failure(tmp_path: Path):
+    """An unknown preset name must report failure, not crash."""
+    _seed_group(tmp_path, "grp-1", status="pipeline_complete")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim(
+        "render", config_preset="nonexistent_preset"
+    )
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_restart_upload_sets_pipeline_complete(tmp_path: Path):
+    """from_step=upload -> state -> pipeline_complete for upload recovery."""
+    group = _seed_group(tmp_path, "grp-1", status="complete")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _restart_claim("upload")
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    state = json.loads((group / "state.json").read_text())
+    assert state["status"] == "pipeline_complete"
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_restart_missing_from_step_reports_failure(tmp_path: Path):
+    """A restart request with no from_step must fail cleanly."""
+    _seed_group(tmp_path, "grp-1")
+    ttt = _mk_ttt()
+    bad_claim = {
+        "id": "req-r",
+        "recording_id": "rec-1",
+        "kind": "restart",
+        "phases": {},  # no from_step
+    }
+    ttt.claim_reprocess_request.return_value = bad_claim
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_restart_completion_always_reported(tmp_path: Path):
+    """Completion status is always reported, even for unknown step IDs."""
+    _seed_group(tmp_path, "grp-1", status="pipeline_complete")
+    ttt = _mk_ttt()
+    # "upload" is a known step that always succeeds
+    ttt.claim_reprocess_request.return_value = _restart_claim("upload")
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-r", payload={"id": "req-r"})
+    )
+
+    ttt.update_reprocess_status.assert_called_once()
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[0] == "req-r"
+    assert sargs[1] == "completed"

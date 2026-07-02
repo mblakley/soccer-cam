@@ -172,11 +172,12 @@ class TrimTask(BaseFfmpegTask):
 
         end_time = None
         if trim_end_enabled:
-            # Calculate end time from start_time_offset + total_duration
+            # Pass the game duration (not the absolute end position) so
+            # _trim_video_sync can compute end_pts = start + duration without
+            # double-counting the start offset.  The absolute end position in
+            # the combined video is: start_offset + total_duration.
             total_duration_seconds = match_info.get_total_duration_seconds()
-            start_offset_seconds = cls._time_to_seconds(start_time)
-            end_time_seconds = start_offset_seconds + total_duration_seconds
-            end_time = cls._seconds_to_time(end_time_seconds)
+            end_time = cls._seconds_to_time(total_duration_seconds)
 
         return cls(group_dir=group_dir, start_time=start_time, end_time=end_time)
 
