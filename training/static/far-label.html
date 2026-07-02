@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Far-ball labeler</title>
+<style>
+  :root { --bg:#11151c; --panel:#1b212b; --fg:#e7edf3; --muted:#8b97a7; --acc:#2ecc71; --gap:#ff9f1a; --click:#ff3b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:8px 14px; background:var(--panel); position:sticky; top:0; z-index:5; }
+  header b { font-size:15px; }
+  .prog { flex:1; height:10px; background:#0c0f14; border-radius:6px; overflow:hidden; }
+  .prog > i { display:block; height:100%; background:var(--acc); width:0; transition:width .15s; }
+  .pill { padding:2px 8px; border-radius:10px; background:#0c0f14; color:var(--muted); }
+  .pill.gap { color:#111; background:var(--gap); font-weight:600; }
+  .pill.ac { color:#111; background:var(--acc); font-weight:600; }
+  #stage { margin:10px auto; max-width:1700px; }
+  #view { position:relative; overflow:hidden; background:#000; border-radius:6px; touch-action:none; cursor:crosshair; }
+  #wrap { position:absolute; left:0; top:0; transform-origin:0 0; line-height:0; }
+  #img { display:block; }
+  #ov { position:absolute; inset:0; pointer-events:none; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px; max-width:1700px; margin:0 auto; }
+  button { background:#243042; color:var(--fg); border:1px solid #33414f; border-radius:8px; padding:9px 14px; font-size:14px; cursor:pointer; }
+  button:hover { background:#2c3a4f; }
+  button.primary { background:var(--acc); color:#06210f; border-color:var(--acc); font-weight:700; }
+  button.warn { background:#3a2230; color:#ffb3c6; }
+  button.ghost { background:#1b212b; }
+  kbd { background:#0c0f14; border:1px solid #33414f; border-radius:4px; padding:0 5px; font-size:11px; color:var(--muted); }
+  .hint { text-align:center; color:var(--muted); padding:0 10px 12px; max-width:1000px; margin:0 auto; }
+  #done { display:none; text-align:center; padding:40px; }
+  a.dl { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <b>Far-ball labeler</b>
+  <span id="frameLbl" class="pill">—</span>
+  <span id="kindLbl" class="pill">—</span>
+  <span id="zoomLbl" class="pill">1.0×</span>
+  <div class="prog"><i id="progBar"></i></div>
+  <span id="progLbl" class="pill">0 / 0</span>
+</header>
+
+<div id="stage">
+  <div id="view">
+    <div id="wrap">
+      <img id="img" alt="" />
+      <canvas id="ov"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="bar">
+  <button id="bConfirm" class="primary" title="Accept the marked hint as the ball">✓ Hint is correct <kbd>C</kbd></button>
+  <button id="bObsc" class="warn" title="Ball is occluded (behind a player) — click its best-guess position from the ghost path">Obscured <kbd>B</kbd></button>
+  <button id="bDist" class="warn" title="This blob is a distractor (bench/sideline/adjacent-field ball), not the game ball">Distractor <kbd>D</kbd></button>
+  <button id="bNot" class="warn">Ball not visible <kbd>N</kbd></button>
+  <button id="bOut" class="warn">Out of play / off field <kbd>O</kbd></button>
+  <button id="bPrev" class="ghost">◀ Prev <kbd>←</kbd></button>
+  <button id="bNext" class="ghost">Next ▶ <kbd>→</kbd></button>
+  <button id="bFar" class="primary">▶ Next far to review <kbd>F</kbd></button>
+  <button id="bUnlab" class="ghost">Next unlabeled <kbd>U</kbd></button>
+  <button id="bReset" class="ghost">Reset zoom <kbd>0</kbd></button>
+</div>
+<p class="hint">
+  <b>Click</b> the ball to place it, or <kbd>C</kbd> to accept AutoCam's guess (arrow: purple = AutoCam-seeded,
+  pink = you). If it's <b>occluded behind a player</b>, press <kbd>B</kbd> then click its best-guess position
+  — the blue→orange <b>ghost dots</b> are AutoCam's ball just before/after this frame, so interpolate the path.
+  <kbd>D</kbd> = distractor (not the game ball), <kbd>N</kbd> = not visible, <kbd>O</kbd> = out of play.
+  <kbd>F</kbd> next to review, <kbd>U</kbd> next unlabeled. Scroll = zoom, drag = pan.
+</p>
+
+<div id="done">
+  <h2>All frames labeled 🎉</h2>
+  <p>Labels are saved on the server. <a class="dl" id="dlLink" href="#">Download labels.json</a></p>
+</div>
+
+<script>
+const SET = new URLSearchParams(location.search).get("set") || "irondequoit";
+const API = `/api/far-label/${SET}`;
+let M=null, frames=[], byIdx={}, labels={}, cur=0, FARY=480;
+let pending="ball";   // the action the NEXT click applies: "ball" (visible) or "obscured" (occluded best-guess)
+let z=1, tx=0, ty=0, baseScale=1;       // view transform (display px), baseScale = fit-to-width
+let dragging=false, moved=0, sx=0, sy=0, stx=0, sty=0;
+const view=document.getElementById("view"), wrap=document.getElementById("wrap");
+const img=document.getElementById("img"), ov=document.getElementById("ov"), ctx=ov.getContext("2d");
+
+async function load(){
+  M = await (await fetch(API)).json();
+  frames = M.frames; frames.forEach((f,i)=>byIdx[f.frame_idx]=i);
+  (M.labels||[]).forEach(l=>labels[l.frame_idx]=l);
+  FARY = Math.min(480, M.far_cut||480);
+  cur = -1; gotoFar();
+}
+function firstUnlabeled(){ for(let i=0;i<frames.length;i++) if(!labels[frames[i].frame_idx]) return i; return 0; }
+function frame(){ return frames[cur]; }
+
+function show(){
+  const f=frame();
+  document.getElementById("done").style.display="none";
+  document.getElementById("stage").style.display=""; document.querySelector(".bar").style.display="flex";
+  document.getElementById("frameLbl").textContent=`frame ${f.frame_idx}`;
+  const kl=document.getElementById("kindLbl");
+  kl.textContent=f.autocam?"AutoCam hint":"GAP (missed)"; kl.className="pill "+(f.autocam?"ac":"gap");
+  const n=frames.length, done=Object.keys(labels).length;
+  document.getElementById("progLbl").textContent=`${done} / ${n}`;
+  document.getElementById("progBar").style.width=(100*done/n)+"%";
+  img.onload=()=>{ fitView(); };
+  img.src=`${API}/strip/${f.frame_idx}?t=${Date.now()}`;
+  if (img.complete && img.naturalWidth) fitView();
+}
+
+function setupCanvas(){
+  img.width = img.naturalWidth; img.height = img.naturalHeight;
+  ov.width = img.naturalWidth; ov.height = img.naturalHeight;
+  view.style.height = Math.round(view.clientWidth * img.naturalHeight / img.naturalWidth) + "px";
+}
+let viewInit=false, lastNW=0, lastNH=0;
+// Called on every frame load. PRESERVE the current zoom + pan across frames (so you
+// stay zoomed into the same region) — only fit-to-width on the very first frame or if
+// the strip dimensions change. Use resetView() ("Reset zoom" / key 0) to snap back.
+function fitView(){
+  setupCanvas();
+  const newBase = view.clientWidth / img.naturalWidth;
+  const sizeChanged = (img.naturalWidth!==lastNW || img.naturalHeight!==lastNH);
+  if (!viewInit || sizeChanged){ baseScale=newBase; z=newBase; tx=0; ty=0; viewInit=true; }
+  else { if (newBase!==baseScale){ const ratio=z/baseScale; baseScale=newBase; z=newBase*ratio; } clampPan(); }
+  lastNW=img.naturalWidth; lastNH=img.naturalHeight;
+  applyTransform(); draw();
+}
+// Explicit reset to fit-width (Reset zoom button / key 0).
+function resetView(){
+  setupCanvas();
+  baseScale = view.clientWidth / img.naturalWidth;
+  z = baseScale; tx = 0; ty = 0;
+  applyTransform(); draw();
+}
+function applyTransform(){
+  wrap.style.transform = `translate(${tx}px,${ty}px) scale(${z})`;
+  document.getElementById("zoomLbl").textContent = (z/baseScale).toFixed(1)+"×";
+}
+function clampPan(){
+  const w=img.naturalWidth*z, h=img.naturalHeight*z;
+  const vw=view.clientWidth, vh=view.clientHeight;
+  tx = Math.min(0, Math.max(tx, vw - w));
+  ty = Math.min(0, Math.max(ty, vh - h));
+  if (w < vw) tx=0; if (h < vh) ty=0;
+}
+
+// Arrow pointing IN at (nx,ny) from the lower-left; tip stops short so the ball
+// stays visible. Coords are NATURAL px (canvas is natural-sized, transformed with wrap).
+function arrowMark(nx,ny,color,dashed,k){
+  const gap=20*k, len=60*k, head=18*k;        // gap = clearance so the ball shows
+  const dx=0.6, dy=-0.8;                        // direction tail->ball (up-right)
+  const tipx=nx-dx*gap, tipy=ny-dy*gap;         // arrowhead apex, just outside the ball
+  const tailx=nx-dx*(gap+len), taily=ny-dy*(gap+len);
+  ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=Math.max(2,4*k);
+  ctx.setLineDash(dashed?[8*k,5*k]:[]);
+  ctx.beginPath(); ctx.moveTo(tailx,taily); ctx.lineTo(tipx,tipy); ctx.stroke();
+  ctx.setLineDash([]);
+  const a=Math.atan2(dy,dx);
+  ctx.beginPath(); ctx.moveTo(tipx,tipy);
+  ctx.lineTo(tipx-head*Math.cos(a-0.45), tipy-head*Math.sin(a-0.45));
+  ctx.lineTo(tipx-head*Math.cos(a+0.45), tipy-head*Math.sin(a+0.45));
+  ctx.closePath(); ctx.fill();
+}
+function draw(){
+  ctx.clearRect(0,0,ov.width,ov.height);
+  const f=frame(); const k=baseScale/z;
+  // Context ghosts: AutoCam's ball just BEFORE (blue) / AFTER (orange) this frame. When the ball is
+  // occluded here, interpolate between the blue and orange dots to place its best-guess position.
+  (f.context||[]).forEach(c=>{
+    const gx=c.x-f.crop_x0, gy=c.y-f.crop_y0, r=Math.max(3,5*k);
+    ctx.beginPath(); ctx.arc(gx,gy,r,0,2*Math.PI);
+    ctx.fillStyle = c.df<0 ? "rgba(80,170,255,0.55)" : "rgba(255,160,40,0.55)";
+    ctx.fill();
+  });
+  const lab=labels[f.frame_idx];
+  if (lab && lab.action==="obscured" && lab.x!=null){          // occluded best-guess: dashed ring
+    const ox=lab.x-f.crop_x0, oy=lab.y-f.crop_y0;
+    ctx.strokeStyle="#ffd24a"; ctx.lineWidth=Math.max(2,3*k); ctx.setLineDash([6*k,4*k]);
+    ctx.beginPath(); ctx.arc(ox,oy,Math.max(6,10*k),0,2*Math.PI); ctx.stroke(); ctx.setLineDash([]);
+  } else if (lab && lab.action==="ball" && lab.x!=null){
+    arrowMark(lab.x-f.crop_x0, lab.y-f.crop_y0, lab.source==="human"?"#ff3b6b":"#9b59ff", false, k);
+  } else if (!lab){                                            // unlabeled -> AutoCam guess (dashed)
+    arrowMark(f.hint_x-f.crop_x0, f.hint_y-f.crop_y0, f.autocam?"#2ecc71":"#ff9f1a", true, k);
+  }
+}
+
+// pointer -> natural image coords
+function toNatural(clientX, clientY){
+  const r = img.getBoundingClientRect();
+  const nx = (clientX - r.left)/r.width * img.naturalWidth;
+  const ny = (clientY - r.top)/r.height * img.naturalHeight;
+  return [nx, ny];
+}
+
+// wheel zoom toward cursor
+view.addEventListener("wheel",(e)=>{
+  e.preventDefault();
+  const r = view.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;        // cursor in view px
+  const ix = (cx - tx)/z, iy = (cy - ty)/z;                      // image natural px under cursor
+  const factor = e.deltaY < 0 ? 1.2 : 1/1.2;
+  z = Math.max(baseScale, Math.min(z*factor, baseScale*16));
+  tx = cx - ix*z; ty = cy - iy*z;
+  clampPan(); applyTransform();
+},{passive:false});
+
+// drag to pan / click to label
+view.addEventListener("pointerdown",(e)=>{ dragging=true; moved=0; sx=e.clientX; sy=e.clientY; stx=tx; sty=ty; view.setPointerCapture(e.pointerId); });
+view.addEventListener("pointermove",(e)=>{
+  if(!dragging) return;
+  const dx=e.clientX-sx, dy=e.clientY-sy; moved=Math.max(moved, Math.abs(dx)+Math.abs(dy));
+  tx=stx+dx; ty=sty+dy; clampPan(); applyTransform();
+});
+view.addEventListener("pointerup",(e)=>{
+  dragging=false;
+  if (moved < 6){ // a click, not a pan
+    const [nx,ny]=toNatural(e.clientX,e.clientY);
+    if (nx>=0&&ny>=0&&nx<=img.naturalWidth&&ny<=img.naturalHeight){
+      const f=frame(); post(pending, f.crop_x0+nx, f.crop_y0+ny); setPending("ball");
+    }
+  }
+});
+
+async function post(action,x,y){
+  const f=frame();
+  labels[f.frame_idx]={frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"}; draw();
+  try{ await fetch(`${API}/result`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"})}); }catch(err){ console.error(err); }
+  setTimeout(gotoFar,120);
+}
+function next(){ if(cur<frames.length-1){ cur++; show(); } else finish(); }
+function prev(){ if(cur>0){ cur--; show(); } }
+function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_idx]) finish(); else { cur=i; show(); } }
+function isFar(f){ return f.hint_y <= FARY; }
+function needsReview(f){ const l=labels[f.frame_idx]; return (!l || l.source!=="human") && (isFar(f) || f.autocam===false); }
+function gotoFar(){ for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } } finish(); }
+function finish(){ document.getElementById("stage").style.display="none"; document.querySelector(".bar").style.display="none";
+  document.getElementById("done").style.display="block"; document.getElementById("dlLink").href=`${API}`; }
+
+function setPending(a){ pending=a; document.getElementById("bObsc").classList.toggle("primary", a==="obscured");
+  view.style.cursor = a==="obscured" ? "cell" : "crosshair"; }
+document.getElementById("bConfirm").onclick=()=>{ const f=frame(); post("ball",f.hint_x,f.hint_y); };
+document.getElementById("bObsc").onclick=()=>setPending(pending==="obscured"?"ball":"obscured");
+document.getElementById("bDist").onclick=()=>post("not_game_ball",null,null);
+document.getElementById("bNot").onclick=()=>post("not_visible",null,null);
+document.getElementById("bOut").onclick=()=>post("out_of_play",null,null);
+document.getElementById("bPrev").onclick=prev;
+document.getElementById("bNext").onclick=next;
+document.getElementById("bFar").onclick=gotoFar;
+document.getElementById("bUnlab").onclick=gotoUnlabeled;
+document.getElementById("bReset").onclick=resetView;
+addEventListener("keydown",(e)=>{
+  if(e.key==="c"||e.key==="C") document.getElementById("bConfirm").click();
+  else if(e.key==="b"||e.key==="B") document.getElementById("bObsc").click();
+  else if(e.key==="d"||e.key==="D") document.getElementById("bDist").click();
+  else if(e.key==="n"||e.key==="N") document.getElementById("bNot").click();
+  else if(e.key==="o"||e.key==="O") document.getElementById("bOut").click();
+  else if(e.key==="ArrowLeft") prev();
+  else if(e.key==="ArrowRight") next();
+  else if(e.key==="u"||e.key==="U") gotoUnlabeled();
+  else if(e.key==="f"||e.key==="F") gotoFar();
+  else if(e.key==="0") resetView();
+});
+addEventListener("resize", ()=>{ fitView(); });
+load();
+</script>
+</body>
+</html>
