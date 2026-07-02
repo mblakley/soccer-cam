@@ -4,6 +4,32 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-19: hard-neg fine-tune (modest far gain) + near is a TWO-part problem (2026-07-02)
+
+**Hard-neg fine-tune** (`cli/mine_hard_negatives` → augment store → `train_v4_heatmap --resume best.pt`,
+8 ep; re-dump + re-sweep). Fine-tuned candidates vs original, held-out Spencerport R15m:
+
+| | far (best cfg) | near argmax | near (best tracker) | ceiling |
+|---|---|---|---|---|
+| original best.pt | 0.618 | 0.244 | 0.222 | far .933 / near 1.0 |
+| **hard-neg best.pt** | **0.648** | **0.378** | 0.189 | far .939 / near .989 |
+
+Hard-neg **cleaned the candidates** (old tight-teleport baseline far 0.288→0.597) and **improved near
+detection** (argmax 0.244→0.378) — recall held (0.384), ceiling held. Far nudged 0.618→0.648.
+
+**The confidence-hybrid (EXP 3) failed as a near fix:** the detector's top RAW sigmoid score is saturated
+(~1.0 every frame), so "trust argmax where score≥T" collapses to plain argmax at all T. Size-consistency
+can't separate a near ball from a far distractor either (both are size-consistent at their own locations).
+
+**Near is now a diagnosed TWO-part problem:** (a) **detector near-score** — even argmax hits only 0.378
+(ceiling 0.989), so a distractor still outscores the near ball **62%** of near frames; hard-neg helped but
+not enough. (b) **global-path tracker** — argmax (0.378) beats every tracker config on near (≤0.189): the
+single global-smooth Viterbi sacrifices the minority near-excursions (90 near vs 330 far) to keep the far
+track smooth. Neither yields to a config tweak. → the near fix needs a **near-focused detector pass**
+(more near GT / near-distractor hard-negs) AND a **non-global-single-path selector** (mode-aware /
+per-frame-competitive — the world-model). Far (0.648, target 0.845) is candidate-quality-limited.
+Cross-game validation (Irondequoit, held-out) running.
+
 ## EXP-DIST-18: the AutoCam "viewport/sidecar" is camera FRAMING, not ball detection — real bar reset (2026-07-01)
 
 Chasing "beat AutoCam" needs a valid bar. `autocam_viewport.jsonl` starts at x=3840,y=1080 = exact
