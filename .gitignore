@@ -202,6 +202,10 @@ review_packets/*
 *.onnx
 *.tflite
 *.mlpackage
+# The base person model for phase detection is intentionally committed (Git LFS,
+# see .gitattributes) so the feature works out of the box. Keep it tracked
+# despite the blanket *.onnx ignore above.
+!video_grouper/models/person.onnx
 certs/
 
 # Claude Code local state

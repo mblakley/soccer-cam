@@ -428,6 +428,36 @@ class DirectoryState:
             pass
         return None
 
+    # ------------------------------------------------------------------
+    # Game-phase boundaries (kickoff / halftime / second-half / end)
+    # ------------------------------------------------------------------
+    # The phase_detect pipeline step persists the fused boundaries here so the
+    # later TTT push (S2) and the dashboard can read them. Stored verbatim under
+    # "game_phases" (source "phase_fused" + the four offsets + the sanity-gate
+    # verdict). Sync helpers via _update_state_field, like set_autocam_run.
+
+    def set_game_phases(self, phases: dict) -> None:
+        """Persist the fused game-phase boundaries to state.json.
+
+        Args:
+            phases: Dict with at least ``source``, ``ok`` and a ``times`` map
+                (kickoff / halftime / second_half / end offsets). Stored
+                verbatim under the ``game_phases`` key.
+        """
+        self._update_state_field("game_phases", phases)
+
+    def get_game_phases(self) -> dict | None:
+        """Read the ``game_phases`` marker, or None if none is recorded."""
+        try:
+            with FileLock(self.state_file_path):
+                if os.path.exists(self.state_file_path):
+                    with open(self.state_file_path) as f:
+                        state_data = json.load(f)
+                    return state_data.get("game_phases")
+        except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
+            pass
+        return None
+
     def _update_state_field(self, key: str, value) -> None:
         """Read-modify-write a single state.json field under FileLock.
 

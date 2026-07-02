@@ -13,6 +13,7 @@ class NtfyInputType(Enum):
     GAME_END_TIME = "game_end_time"
     PLAYLIST_NAME = "playlist_name"
     WAS_THERE_A_MATCH = "was_there_a_match"
+    PHASE_VERIFY = "phase_verify"
 
 
 class NtfyStatus(Enum):

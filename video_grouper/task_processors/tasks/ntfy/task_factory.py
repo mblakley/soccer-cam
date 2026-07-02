@@ -140,6 +140,24 @@ class NtfyTaskFactory:
                 combined_video_path=combined_video_path,
             )
 
+        elif task_type == NtfyInputType.PHASE_VERIFY.value:
+            from .phase_verify_task import PhaseVerifyTask
+
+            remaining = metadata.get("remaining") or []
+            if not remaining:
+                logger.error("Missing remaining phases for phase verify task")
+                return None
+            return PhaseVerifyTask(
+                group_dir=group_dir,
+                config=config,
+                ntfy_service=ntfy_service,
+                video_path=metadata.get("video_path"),
+                remaining=remaining,
+                recording_group_dir=metadata.get("recording_group_dir", ""),
+                storage_path=metadata.get("storage_path", ""),
+                ttt_conn=metadata.get("ttt_conn", {}),
+            )
+
         else:
             logger.error(f"Unknown task type: {task_type}")
             return None

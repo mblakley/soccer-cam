@@ -18,6 +18,15 @@ max_concurrent_conversions = 1
 retry_attempts = 3
 retry_delay = 60
 
+# How the game-start time used for trimming is found.
+#   phase_detection (default) - run the offline game-phase detector on the
+#     combined video and set the start automatically from the detected kickoff.
+#     Whistle-capable Reolink cameras only; Dahua cameras and any rejected /
+#     low-confidence fit fall back to the NTFY walk below, so behavior is never
+#     worse than the manual flow.
+#   ntfy - always ask via an NTFY "did the game start?" notification walk.
+# game_start_method = phase_detection
+
 # Per-row stitch correction (dual-lens panoramic cameras only). The profile
 # is per-camera and lives at seam_realign_profile_path. TTT's calibration tool
 # writes to it via ttt_reporter.sync_config when a coach saves a profile

@@ -644,6 +644,21 @@ class TTTApiClient:
         logger.debug("Fetching game sessions for team %s", team_id)
         return self._request("GET", url, params=params)
 
+    def get_game_session_by_dir(
+        self, recording_group_dir: str
+    ) -> dict[str, Any] | None:
+        """Find a single game session by its recording_group_dir (no team_id needed).
+
+        GET {api_base_url}/api/game-sessions?recording_group_dir=... -> first match or None.
+        The sync-client counterpart of ``MomentApiClient.get_game_session_by_dir`` — used by
+        the phase-detect TTT push, which has the recording dir but not the team id.
+        """
+        url = f"{self.api_base_url}/api/game-sessions"
+        sessions = self._request(
+            "GET", url, params={"recording_group_dir": recording_group_dir}
+        )
+        return sessions[0] if sessions else None
+
     def create_game_session(
         self,
         team_id: str,
