@@ -146,26 +146,35 @@ def main() -> None:
             mask = np.zeros((bh, bw), np.uint8)
             cv2.fillPoly(mask, [mpoly], 255)
 
-            lo, hi = min(want) - 2, max(want)
-            buf: list = []
+            hi = max(want)
+            # Warping every full-match frame (cv2.remap on 7680x2160) is the real cost and dwarfs
+            # NVDEC decode. Only warp frames inside a label's 3-frame band; decode stays sequential
+            # (cheap) but we skip the remap for the ~99% of frames with no nearby label. The crop at
+            # each labeled frame is byte-identical to the naive version — this only drops dead work.
+            warp_frames: set[int] = set()
+            for f in want:
+                warp_frames.update((f - 2, f - 1, f))
+            band: dict[int, np.ndarray] = {}
             idx = -1
             n = 0
             for fr in container.decode(stream):
                 idx += 1
-                if idx < lo:
+                if idx > hi:
+                    break
+                if idx not in warp_frames:
                     continue
                 img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-                buf.append(_dewarp_mask_gray(img, warp, mask))
-                if len(buf) > 3:
-                    buf.pop(0)
+                band[idx] = _dewarp_mask_gray(img, warp, mask)
                 if idx in want:
                     sx, sy, is_pos = want[idx]
                     bx, by = warp.points([(sx, sy)])[0]
                     x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
                     y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
-                    grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                    g0 = band[idx]
+                    g1 = band.get(idx - 1, g0)
+                    g2 = band.get(idx - 2, g1)
                     stack = np.zeros((3, args.crop, args.crop), np.uint8)
-                    for i, gr in enumerate(grays):
+                    for i, gr in enumerate((g2, g1, g0)):
                         patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
                         stack[i, : patch.shape[0], : patch.shape[1]] = patch
                     lx, ly = bx - x0, by - y0
@@ -184,8 +193,8 @@ def main() -> None:
                     )
                     n += 1
                     totals["pos" if is_pos else "neg"] += 1
-                if idx >= hi:
-                    break
+                    for k in [j for j in band if j < idx - 2]:
+                        del band[k]
             print(f"  {sd.name}: +{n} crops", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"  SKIP {sd.name}: decode/emit error: {e!r}", flush=True)
