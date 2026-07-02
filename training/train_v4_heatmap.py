@@ -221,6 +221,8 @@ def main():
         ``HeatmapCropDataset`` (byte-identical to the curve)."""
 
         def __getitem__(self, i):
+            import random
+
             import numpy as _np
 
             r = self.items[i]
@@ -233,6 +235,9 @@ def main():
             else:
                 tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
                 far = float(1.0 - r.get("depth", 0.0))  # far touchline -> 1.0
+            if self.augment and random.random() < 0.5:
+                stack = _np.ascontiguousarray(stack[:, :, ::-1])
+                tgt = _np.ascontiguousarray(tgt[:, ::-1])
             return (
                 torch.from_numpy(stack),
                 torch.from_numpy(tgt[None]),
