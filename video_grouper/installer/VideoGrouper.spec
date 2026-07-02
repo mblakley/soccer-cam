@@ -146,11 +146,38 @@ TRAY_EXCLUDES = TRAINING_EXCLUDES + [
     "av",
 ]
 
+# Bundle the base YOLO person model the phase_detect step's player-on-field
+# curve uses, so game-phase detection works out of the box. The model is
+# committed via Git LFS (see .gitattributes); a checkout without `git lfs pull`
+# leaves a ~130-byte pointer file, which must NOT be bundled (it isn't the
+# model). Include the weights only when the real bytes are present — else the
+# step degrades to an ok=false artifact at runtime (resolve_person_model / the
+# PersonModelUnavailable path). The AGPL-3.0 license ships beside it.
+_PHASE_MODEL = os.path.join(PROJECT_ROOT, "video_grouper", "models", "person.onnx")
+_PHASE_MODEL_LICENSE = os.path.join(
+    PROJECT_ROOT, "video_grouper", "models", "LICENSE-AGPL-3.0.txt"
+)
+PHASE_MODEL_DATAS = []
+if os.path.exists(_PHASE_MODEL) and os.path.getsize(_PHASE_MODEL) > 1_000_000:
+    PHASE_MODEL_DATAS.append((_PHASE_MODEL, "models"))
+    if os.path.exists(_PHASE_MODEL_LICENSE):
+        PHASE_MODEL_DATAS.append((_PHASE_MODEL_LICENSE, "models"))
+    print(
+        f"VideoGrouper.spec: bundling person model "
+        f"({os.path.getsize(_PHASE_MODEL)} bytes) from {_PHASE_MODEL}"
+    )
+else:
+    print(
+        "VideoGrouper.spec: WARNING person model missing or an un-pulled LFS "
+        f"pointer at {_PHASE_MODEL}; phase detection will degrade to ok=false. "
+        "Run `git lfs pull` before building a release."
+    )
+
 a_service = Analysis(
     [SERVICE_MAIN],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=PHASE_MODEL_DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

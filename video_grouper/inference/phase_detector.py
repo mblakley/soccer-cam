@@ -513,10 +513,17 @@ def compute_signals(
     if base is None:
         base = os.path.dirname(video_path)
     model_path = resolve_person_model(person_model)
-    if not model_path or not os.path.exists(model_path):
+    # An un-pulled Git LFS pointer is a ~130-byte text file, not the weights;
+    # treat anything implausibly small as unavailable so callers degrade cleanly
+    # instead of onnxruntime raising an opaque "invalid model" error.
+    if (
+        not model_path
+        or not os.path.exists(model_path)
+        or os.path.getsize(model_path) < 1_000_000
+    ):
         raise PersonModelUnavailable(
             "no YOLO person model available — set YOLO_PERSON_MODEL, pass person_model, "
-            "or install the bundled model"
+            "or install the bundled model (an un-pulled Git LFS pointer counts as missing)"
         )
     session = sess(model_path)
     ts, cnt, dur = player_curve(video_path, polyf, rot, step, session)

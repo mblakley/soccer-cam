@@ -2,12 +2,10 @@
 # normalizes text to LF at commit AND checks out LF, so Windows working
 # trees never trip the "LF will be replaced by CRLF" conversion warning.
 * text=auto eol=lf
-
 # Windows-native script types are the one CRLF exception.
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
-
 # Binaries — never convert.
 *.png binary
 *.jpg binary
@@ -30,7 +28,7 @@
 *.woff binary
 *.woff2 binary
 *.ttf binary
-
 # Lock files stay LF.
 uv.lock text eol=lf
 package-lock.json text eol=lf
+video_grouper/models/*.onnx filter=lfs diff=lfs merge=lfs -text

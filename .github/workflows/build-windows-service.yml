@@ -19,6 +19,9 @@ jobs:
     - uses: actions/checkout@v6
       with:
         fetch-depth: 0
+        # Pull the LFS-tracked bundled model (video_grouper/models/*.onnx) so
+        # PyInstaller bundles the real weights, not a pointer file.
+        lfs: true
 
     - name: Set up Python
       uses: actions/setup-python@v6
