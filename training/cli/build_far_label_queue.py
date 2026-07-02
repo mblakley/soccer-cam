@@ -246,7 +246,23 @@ def main() -> None:
     hi = max(want)
     written = 0
     idx = -1
-    for fr in container.decode(stream):
+    # Corruption-tolerant decode: a bad packet in a re-encoded combined video makes libav raise
+    # mid-stream (observed on the Flaitz game). Because seeking past it silently misaligns this
+    # stream, stop cleanly and build a PARTIAL set from the strips decoded before the corruption —
+    # all correctly aligned — instead of crashing and producing nothing.
+    decoder = container.decode(stream)
+    while True:
+        try:
+            fr = next(decoder)
+        except StopIteration:
+            break
+        except Exception as e:  # noqa: BLE001 — corrupt / undecodable packet
+            print(
+                f"  DECODE ERROR at frame ~{idx + 1} ({type(e).__name__}: {e}); "
+                f"stopping with a partial set of {written}/{len(want)} strips",
+                flush=True,
+            )
+            break
         idx += 1
         if idx in want:
             img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
@@ -259,6 +275,10 @@ def main() -> None:
         if idx >= hi:
             break
     container.close()
+    if written == 0:
+        raise SystemExit(
+            f"no decodable strips for {gid} (video corrupt from the start)"
+        )
 
     kept = [e for e in frames if (strips / e["file"]).exists()]
     for e in kept:
