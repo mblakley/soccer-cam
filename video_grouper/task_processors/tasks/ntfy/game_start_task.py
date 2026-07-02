@@ -95,15 +95,23 @@ class GameStartTask(BaseNtfyTask):
         ntfy_config = self.metadata.get("config", {}).get("ntfy", {})
         topic = ntfy_config.get("topic", "")
 
-        # Create action buttons
+        # On the very first (00:00) question, "Yes" means the game was ALREADY in
+        # progress at the recording head -> truncated start (arrived late / start not
+        # recorded). NTFY caps actions at 3 (already Yes/No/Not-a-Game), so we overload
+        # the 0:00 "Yes" instead of adding a 4th button.
+        first_frame = self.time_seconds == 0
         actions = [
             {
                 "action": "http",
-                "label": "Yes",
+                "label": "Already started" if first_frame else "Yes",
                 "url": f"https://ntfy.sh/{topic}",
                 "method": "POST",
                 "headers": {"Content-Type": "text/plain"},
-                "body": f"Yes, game started at {self.time_offset}",
+                "body": (
+                    f"Yes, already in progress at {self.time_offset}"
+                    if first_frame
+                    else f"Yes, game started at {self.time_offset}"
+                ),
                 "clear": True,
             },
             {
@@ -126,8 +134,15 @@ class GameStartTask(BaseNtfyTask):
             },
         ]
 
+        message = (
+            "Is the game already in progress at the very start of the recording? "
+            "Tap 'Already started' if you arrived after kickoff / the start wasn't "
+            "recorded; otherwise 'No'."
+            if first_frame
+            else f"Does the game start at {self.time_offset}? (Screenshot at {self.time_offset})"
+        )
         return {
-            "message": f"Does the game start at {self.time_offset}? (Screenshot at {self.time_offset})",
+            "message": message,
             "title": f"Game Start Time - {self.time_offset}",
             "tags": ["game_start", "screenshot", self.time_offset],
             "priority": 4,
@@ -152,7 +167,33 @@ class GameStartTask(BaseNtfyTask):
         """
         response_lower = response.lower()
 
-        if "yes" in response_lower or "game started" in response_lower:
+        if (
+            "yes" in response_lower
+            or "already in progress" in response_lower
+            or "game started" in response_lower
+        ):
+            if self.time_seconds == 0:
+                # "Yes" on the 00:00 frame = the game was already underway at the
+                # recording head = truncated start. Trim at 0 and re-run the detector
+                # with truncated_start=True so KO is pinned to 0 and HT/2H/END are
+                # re-detected correctly (a mid-first-half whistle is NOT the kickoff).
+                logger.info(
+                    f"Truncated start (already in progress) for {self.group_dir}"
+                )
+                from video_grouper.task_processors.phase_game_start import (
+                    resolve_truncated_start,
+                )
+
+                await resolve_truncated_start(
+                    self.group_dir, self.combined_video_path, self.config
+                )
+                return NtfyTaskResult(
+                    success=True,
+                    should_continue=False,
+                    message="Truncated start: trimmed at 00:00, phases re-run",
+                    metadata={"start_time_offset": "00:00", "truncated_start": True},
+                )
+
             logger.info(f"Game started at {self.time_offset} for {self.group_dir}")
 
             # Back up from the confirmed time so the trim doesn't cut into

@@ -709,6 +709,9 @@ byte-identical (defaults False; fixtures assert `times` only — 10/10 green).
 - Residual per-game misses (05.09 END −853s, 06.06 2H −31s) are pre-existing detection issues, not
   the truncation logic.
 
-**Next:** wire the 0:00-"Yes" overload in `game_start_task` (+ a "still playing" END-task tap for
-`truncated_end`) to set the flag, trim at 0 / keep-to-end, and re-run + re-push; plus a truncated
-toggle in the T2 app for the confident-but-truncated games that never get the walk.
+**Wiring (landed):** `game_start_task` overloads the 00:00 "Yes" ("Already started" label +
+truncation-framed question) -> `phase_game_start.resolve_truncated_start`: trim at 0 + re-run
+`detect_phases(truncated_start=True)` + persist + best-effort TTT re-push. The re-run recomputes
+signals (~min); a follow-up can cache the phase_detect-step signals for an instant re-fuse.
+**Still to do:** a "still playing" END-task tap for `truncated_end`, and a truncated toggle in the T2
+app for the confident-but-truncated games that never get the walk (05.09 / 06.06-Fairport).

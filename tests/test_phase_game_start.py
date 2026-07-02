@@ -363,3 +363,77 @@ async def test_wiring_dahua_falls_back_to_walk(mock_config, tmp_path):
         )
 
     assert "GameStartTask" in _drain_task_types(processor)
+
+
+# --------------------------------------------------------------------------
+# GameStartTask: overload "Yes" at 00:00 = truncated start (NTFY 3-button cap)
+# --------------------------------------------------------------------------
+
+
+def _game_start_task(tmp_path, time_seconds=0):
+    from video_grouper.task_processors.tasks.ntfy.game_start_task import GameStartTask
+
+    group = tmp_path / "grp"
+    group.mkdir(exist_ok=True)
+    combined = group / "combined.mp4"
+    combined.write_bytes(b"x")
+    # Lightweight config/service — the task only reads config.ntfy.{topic,server_url,
+    # enabled} for the buttons; the detector re-run is mocked in these tests.
+    config = SimpleNamespace(
+        ntfy=SimpleNamespace(topic="t", server_url="https://ntfy.sh", enabled=True),
+        ttt=SimpleNamespace(),
+    )
+    to = f"{time_seconds // 60:02d}:{time_seconds % 60:02d}"
+    return GameStartTask(
+        str(group),
+        config,
+        MagicMock(),
+        str(combined),
+        time_offset=to,
+        time_seconds=time_seconds,
+    )
+
+
+@pytest.mark.asyncio
+async def test_game_start_yes_at_zero_triggers_truncated(tmp_path, monkeypatch):
+    """'Yes' on the 00:00 frame -> truncated-start re-run (not the normal offset)."""
+    task = _game_start_task(tmp_path, time_seconds=0)
+    called = {}
+
+    async def fake_resolve(group_dir, video, config, storage_path=None):
+        called["args"] = (group_dir, video)
+        return True
+
+    monkeypatch.setattr(pgs, "resolve_truncated_start", fake_resolve)
+    result = await task.process_response("Yes, already in progress at 00:00")
+    assert called  # the truncated re-run was invoked
+    assert result.should_continue is False
+    assert result.metadata.get("truncated_start") is True
+    assert result.metadata.get("start_time_offset") == "00:00"
+
+
+@pytest.mark.asyncio
+async def test_game_start_yes_after_zero_is_normal(tmp_path, monkeypatch):
+    """'Yes' at a later frame keeps the normal walk behavior (offset = T - backup)."""
+    task = _game_start_task(tmp_path, time_seconds=600)  # 10:00
+    calls = {"n": 0}
+
+    async def fake_resolve(*_a, **_k):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(pgs, "resolve_truncated_start", fake_resolve)
+    result = await task.process_response("Yes, game started at 10:00")
+    assert calls["n"] == 0  # NOT the truncated path
+    assert result.should_continue is False
+    assert result.metadata.get("start_time_offset") == "06:00"  # 600 - 240s backup
+
+
+@pytest.mark.asyncio
+async def test_game_start_zero_question_is_truncation_framed(tmp_path):
+    """The 00:00 question is phrased as the 'already in progress?' truncation check."""
+    task = _game_start_task(tmp_path, time_seconds=0)
+    task.generate_screenshot = _async_return(None)
+    q = await task.create_question()
+    assert "already in progress" in q["message"].lower()
+    assert "Already started" in [a["label"] for a in q["actions"]]

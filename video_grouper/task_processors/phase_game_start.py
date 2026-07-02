@@ -131,16 +131,109 @@ def _load_field_polygon(group_dir: str, combined_video_path: str):
         return None
 
 
-async def _run_detector(group_dir: str, combined_video_path: str) -> dict | None:
+async def _run_detector(
+    group_dir: str,
+    combined_video_path: str,
+    *,
+    truncated_start: bool = False,
+    truncated_end: bool = False,
+) -> dict | None:
     """Load the polygon and run the detector off the event loop."""
     import asyncio
+    from functools import partial
 
     from video_grouper.inference.phase_detector import detect_phases
 
     polygon = _load_field_polygon(group_dir, combined_video_path)
     if not polygon:
         return None
-    return await asyncio.to_thread(detect_phases, combined_video_path, polygon)
+    return await asyncio.to_thread(
+        partial(
+            detect_phases,
+            combined_video_path,
+            polygon,
+            truncated_start=truncated_start,
+            truncated_end=truncated_end,
+        )
+    )
+
+
+async def resolve_truncated_start(
+    group_dir: str,
+    combined_video_path: str,
+    config,
+    storage_path: str | None = None,
+) -> bool:
+    """Handle the NTFY "already started" answer on the 0:00 game-start question.
+
+    The game was already in progress when recording began (arrived late = truncated
+    start), so there is nothing to trim off the front: set ``start_time_offset = 0``
+    and re-run the detector with ``truncated_start=True`` (KO pinned to 0, HT/2H/END
+    still detected) so the persisted + pushed phases are correct rather than anchored
+    to a bogus mid-first-half whistle. Always writes the offset; the re-run + push are
+    best-effort. Returns True.
+
+    (Perf note: the re-run recomputes signals (~minutes); a follow-up can cache the
+    phase_detect step's signals so this re-fuses instantly.)
+    """
+    import asyncio
+
+    from video_grouper.models import MatchInfo
+
+    # Trim at 0 -- keep everything; the game is already underway at the file head.
+    MatchInfo.update_game_times(
+        group_dir, start_time_offset="00:00", storage_path=storage_path
+    )
+
+    if not combined_video_path or not os.path.exists(combined_video_path):
+        return True
+
+    try:
+        result = await _run_detector(
+            group_dir, combined_video_path, truncated_start=True
+        )
+    except Exception as e:  # noqa: BLE001 — never let the re-run break the flow
+        logger.warning(
+            "phase game-start: truncated re-run failed for %s: %s", group_dir, e
+        )
+        result = None
+
+    if result:
+        _persist_phases(group_dir, storage_path, result)
+        try:
+            from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
+
+            ttt = getattr(config, "ttt", None)
+            _dump = getattr(ttt, "model_dump", None)
+            ttt_config = _dump() if callable(_dump) else ttt
+            payload = {
+                "source": "phase_fused",
+                "ok": bool(result.get("ok")),
+                "times": {
+                    k: float(v)
+                    for k, v in (result.get("times") or {}).items()
+                    if v is not None
+                },
+                "reasons": list(result.get("reasons") or []),
+                "used": result.get("used"),
+                "truncated_start": True,
+            }
+            await asyncio.to_thread(
+                push_phases_to_ttt,
+                ttt_config,
+                os.path.basename(group_dir.rstrip("/\\")),
+                payload,
+                str(storage_path or ""),
+            )
+        except Exception as e:  # noqa: BLE001 — the TTT push is best-effort
+            logger.warning(
+                "phase game-start: truncated TTT push failed for %s: %s", group_dir, e
+            )
+    logger.info(
+        "phase game-start: truncated_start resolved for %s (trim 0, phases re-run)",
+        group_dir,
+    )
+    return True
 
 
 async def maybe_resolve_phase_game_start(
