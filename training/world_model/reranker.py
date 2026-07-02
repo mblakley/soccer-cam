@@ -42,17 +42,21 @@ from training.world_model.tbd import Candidate
 class RerankConfig:
     """Re-ranker weights.
 
-    Teleport defaults RAISED 2026-07-01 (EXP-DIST-17, cli/sweep_tracker on the distilled detector,
-    held-out Spencerport): the old (vmax 2.5, max_jump 6.0) gate hard-EXCLUDED the true far candidate
-    (meters-space is ill-conditioned near the far touchline, so the real ball's world position jitters
-    past a tight gate — EXP-DIST-11's 82.5% far-exclusion). Loosening to (20, 40) lifted far R15m
-    0.288 -> 0.618 and cut median error 51.5 m -> 12.6 m, with the tracker finally beating score-argmax
-    (0.293). Sweep-optimum on ONE game — validate across the held-out span before over-trusting.
-    ``alpha=0.3`` and ``static_w=2.0`` stayed best (raising alpha / cutting static both hurt)."""
+    Teleport defaults RAISED 2026-07-01/02 (EXP-DIST-17/20, cli/sweep_tracker on the distilled detector).
+    The old (vmax 2.5, max_jump 6.0) gate hard-EXCLUDED the true far candidate (meters-space is
+    ill-conditioned near the far touchline, so the real ball's world position jitters past a tight gate —
+    EXP-DIST-11's 82.5% far-exclusion); loosening it lifted far R15m 0.288 -> ~0.65 and cut median error
+    51 m -> 12 m. **Cross-validated on TWO held-out games** (Spencerport + Irondequoit): the first
+    single-game optimum (a0.3, mj40, v20) was Spencerport-overfit (Iron far 0.455 vs 0.727 at the tighter
+    a1.0/mj25); the robust choice across both is **alpha=1.0, max_jump=25, vmax=12** (Spc far 0.648/near
+    0.189; Iron far 0.727-0.545/near 0.312). alpha RAISED 0.3->1.0 because the hard-neg detector's scores
+    are now worth trusting (a0.3 underperforms on held-out Iron); a3.0 overshoots. static_w=2.0 unchanged
+    (cutting it hurt on both). Far target (AutoCam-dets->tracker 0.845) not yet reached; near (target
+    0.978) is the open problem — see EXP-DIST-19/20."""
 
-    vmax_m_per_frame: float = 20.0  # smoothness budget (scaled by the frame gap)
-    max_jump_m_per_frame: float = 40.0  # hard teleport ceiling
-    alpha: float = 0.3  # detector-score weight (low: trust context over brightness)
+    vmax_m_per_frame: float = 12.0  # smoothness budget (scaled by the frame gap)
+    max_jump_m_per_frame: float = 25.0  # hard teleport ceiling
+    alpha: float = 1.0  # detector-score weight (raised 0.3->1.0 for the distilled detector, EXP-DIST-20)
     static_w: float = 2.0  # static-persistence penalty weight (the dominant lever)
     motion_w: float = 0.5  # motion-blob support bonus weight
     miss_cost: float = 0.9  # cost of the occlusion/miss state
