@@ -725,38 +725,60 @@ def fuse_phases(
     if truncated_end:
         res["times"]["end"] = float(dur)
     # Parent event-tap anchors (optional). Reconcile the fused boundaries with the
-    # human taps per their confidence tier (see event_tap_anchors.build_anchors):
-    #   * HIGH (agreeing parent cluster) -> trusted: snap to a whistle within
-    #     ANCHOR_SNAP_SEC of the cluster (that whistle IS the event they reacted
-    #     to), else use the cluster estimate directly. May override the detector.
-    #   * LOW (lone / scattered tap) -> lowest quality: only fill in a boundary
-    #     the detector left untrusted (symmetric-prior KO, or an unset boundary),
-    #     and only by snapping to a nearby whistle. Never overrides a confident
-    #     detector boundary.
+    # human taps per their confidence tier (see event_tap_anchors.build_anchors),
+    # with two guards the GT simulation proved necessary (parents mis-tap):
+    #   * a HIGH (agreeing cluster) anchor overrides the detector only when it is
+    #     CORROBORATED -- it snaps to a whistle within ANCHOR_SNAP_SEC (that
+    #     whistle IS the event they reacted to). An uncorroborated cluster (no
+    #     whistle near) may only FILL a boundary the detector itself left
+    #     untrusted; it never moves a confident detector boundary (a "confidently
+    #     wrong" cluster must not drag a good boundary off).
+    #   * a LOW (lone / scattered) tap is the lowest quality: fills an untrusted
+    #     boundary only, and only by snapping to a nearby whistle.
+    #   * STRUCTURAL SANITY: no anchor may cross its neighbouring boundaries -- a
+    #     'kickoff' tapped at the 2nd-half time (wrong button) is rejected here.
     # No-op when anchors is None, so the validated scorecard + fixtures (which
     # fuse with anchors unset) are byte-identical.
     anchored: dict = {}
     if anchors:
+        _ORDER = ("kickoff", "halftime", "second_half", "end")
+        skeleton = dict(res["times"])  # the detector boundaries, as an ordering ref
+
+        def _keeps_order(boundary, cand):
+            i = _ORDER.index(boundary)
+            prev, nxt = (
+                (_ORDER[i - 1] if i else None),
+                (_ORDER[i + 1] if i < 3 else None),
+            )
+            if prev in skeleton and cand <= skeleton[prev]:
+                return False
+            if nxt in skeleton and cand >= skeleton[nxt]:
+                return False
+            return True
+
         for boundary, anc in anchors.items():
-            if boundary not in ("kickoff", "halftime", "second_half", "end"):
+            if boundary not in _ORDER:
                 continue
             at = float(anc.video_time)
             wnear = min(blasts, key=lambda b: abs(b - at)) if blasts else None
             near = wnear is not None and abs(wnear - at) <= ANCHOR_SNAP_SEC
-            if getattr(anc, "confidence", "low") == "high":
-                res["times"][boundary] = float(wnear) if near else at
-                anchored[boundary] = {
-                    "mode": "snap" if near else "direct",
-                    "confidence": "high",
-                }
-                if boundary == "kickoff":
-                    res["ko_anchor"] = "event_tap"
-            else:
-                weak = boundary != "kickoff" and boundary not in res["times"]
-                weak = weak or (boundary == "kickoff" and res.get("ko_anchor") == "sym")
-                if weak and near:
-                    res["times"][boundary] = float(wnear)
-                    anchored[boundary] = {"mode": "snap", "confidence": "low"}
+            cand = float(wnear) if near else at
+            high = getattr(anc, "confidence", "low") == "high"
+            # "weak": the detector left this boundary untrusted (a symmetric-prior
+            # KO -> no whistle-anchored kickoff). Only such boundaries accept an
+            # UNCORROBORATED anchor.
+            weak = boundary == "kickoff" and res.get("ko_anchor") == "sym"
+            apply = near if high else (near and weak)
+            apply = apply or (weak and (high or near))
+            if not apply or not _keeps_order(boundary, cand):
+                continue
+            res["times"][boundary] = cand
+            anchored[boundary] = {
+                "mode": "snap" if near else "direct",
+                "confidence": "high" if high else "low",
+            }
+            if boundary == "kickoff":
+                res["ko_anchor"] = "event_tap"
     res["anchored"] = anchored
     ko = res["times"]["kickoff"]
     # "far from block onset" only means something once we've LOCALIZED (t0 = the game onset). On a

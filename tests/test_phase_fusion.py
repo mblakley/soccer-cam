@@ -134,14 +134,28 @@ def test_high_confidence_kickoff_snaps_to_nearby_whistle():
     assert result["ko_trustworthy"] is True
 
 
-def test_high_confidence_kickoff_with_no_nearby_whistle_uses_cluster():
-    """No whistle within the snap window -> trust the parent cluster directly."""
+def test_uncorroborated_cluster_does_not_override_confident_ko():
+    """A high cluster with NO whistle near it must NOT move a confident detector
+    KO -- guards the 'confidently wrong cluster' case the GT sim surfaced."""
     signals, _ = _load(GIDS[0])
+    base = fuse_phases(signals)
+    if base.get("ko_anchor") == "sym":
+        pytest.skip("fixture KO is weak; this guards the confident-KO case")
     far = float(max(signals["blasts"])) + 500.0  # no blast within ANCHOR_SNAP_SEC
     result = fuse_phases(signals, anchors={"kickoff": _hi("kickoff", far)})
-    assert result["times"]["kickoff"] == far
-    assert result["anchored"]["kickoff"] == {"mode": "direct", "confidence": "high"}
-    assert result["ko_trustworthy"] is True
+    assert result["times"]["kickoff"] == base["times"]["kickoff"]  # unchanged
+    assert "kickoff" not in result["anchored"]
+
+
+def test_structural_sanity_rejects_cross_boundary_anchor():
+    """A 'kickoff' cluster mis-tapped at the 2nd-half time must be rejected
+    (it can't cross halftime) -- guards the wrong-button case."""
+    signals, _ = _load(GIDS[0])
+    base = fuse_phases(signals)
+    at = float(base["times"]["second_half"])  # a whistle near the 2nd-half restart
+    result = fuse_phases(signals, anchors={"kickoff": _hi("kickoff", at)})
+    assert result["times"]["kickoff"] == base["times"]["kickoff"]  # KO not dragged
+    assert "kickoff" not in result["anchored"]
 
 
 def test_low_confidence_does_not_override_confident_detector_ko():
