@@ -180,6 +180,26 @@ def main() -> None:
         use_kalman=False,
     )
 
+    # Confidence-hybrid: where the detector's top RAW score is high (typically the bright near ball —
+    # argmax nails near, the global-smooth tracker drags it off), trust argmax; else the tracker (weak
+    # far balls need continuity). Tests the near fix without a rerank change.
+    print("\nconfidence-hybrid (argmax where max-score>=T, else tracker):")
+    strong = replace(base, alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0)
+    strong_track = kalman_smooth(
+        rerank(frames, geom, frame_gaps=gaps, config=strong), geom
+    )
+    for T in (0.2, 0.3, 0.5, 0.7):
+        hyb = {}
+        for i, fr in enumerate(frames):
+            if not fr:
+                continue
+            top = max(fr, key=lambda c: c.score)
+            if top.score >= T:
+                hyb[i] = (top.x, top.y)
+            elif i in strong_track:
+                hyb[i] = strong_track[i]
+        line(f"hybrid conf>={T}", *_score(hyb, frames, ef, balls, geom, far_px, stride))
+
 
 if __name__ == "__main__":
     main()
