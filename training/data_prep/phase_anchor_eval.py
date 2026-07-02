@@ -205,8 +205,18 @@ def main():
         gt, src = human_times(gj)
         if "human" not in src or not gt:
             continue
-        signals, voff, _fit = load_signals(gid)
+        signals, voff, fit = load_signals(gid)
         if signals is None:
+            continue
+        # Exclude misaligned games (video span != GT span -> the timeline can't map
+        # to GT; a data issue, not the detector). Same gate as phase_eval.py.
+        vdur, gtd = fit.get("vdur"), fit.get("gt_dur")
+        if (
+            vdur
+            and gtd
+            and abs(vdur + voff - gtd) > 120
+            and "--include-misaligned" not in sys.argv
+        ):
             continue
         signals["poly"] = np.array(gj.get("field_polygon") or [], dtype=np.float32)
         base = fuse_phases(signals)
@@ -264,7 +274,7 @@ def main():
             wor = sum(1 for x, y in all_pairs if y > x + 0.5)
             maxw = max((y - x for x, y in all_pairs), default=0.0)
             print(
-                "%-19s %-11s %6.1f %6.1f %+6.1f  worse=%d/%d maxΔ+%.0fs"
+                "%-19s %-11s %6.1f %6.1f %+6.1f  worse=%d/%d max_worse=+%.0fs"
                 % (sname, "ALL", b, a, a - b, wor, len(all_pairs), maxw)
             )
         print("-" * 74)
