@@ -1773,6 +1773,11 @@ async def submit_far_label(set_id: str, result: dict):
     return {"accepted": True, "labeled": len(labels)}
 
 
+# game.json-backed field + phase editors (/api/fieldv2/*, /api/phasesv2/*).
+from training import field_edit_v2 as _field_edit_v2  # noqa: E402
+
+app.include_router(_field_edit_v2.router)
+
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
     "/static",
