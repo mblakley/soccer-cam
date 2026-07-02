@@ -19,6 +19,30 @@ _VIDEO_STEP_LABELS: dict[str, str] = {
 }
 
 
+def _get_video_duration_seconds(path: str) -> float | None:
+    """Return video duration in seconds via PyAV, or None on any failure.
+
+    Tries the first video stream's declared duration first (most accurate),
+    then falls back to the container-level duration (AV_TIME_BASE units).
+    Never raises — callers treat a missing duration as a non-fatal omission.
+    """
+    try:
+        import av  # lazy import: av is an optional heavy dep
+
+        with av.open(path) as container:
+            video_streams = container.streams.video
+            if video_streams:
+                stream = video_streams[0]
+                if stream.duration is not None and stream.time_base is not None:
+                    return float(stream.duration * stream.time_base)
+            # Fall back to container duration (1 / AV_TIME_BASE = 1e-6 s per unit)
+            if container.duration is not None:
+                return float(container.duration) / 1_000_000
+    except Exception:
+        pass
+    return None
+
+
 class VideoProcessor(QueueProcessor):
     """
     Task processor for video operations (combine, trim).
@@ -97,6 +121,15 @@ class VideoProcessor(QueueProcessor):
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
+                        # Compute output duration; failure just omits the artifact
+                        duration_artifacts: dict[str, float] | None = None
+                        try:
+                            output_path = item.get_output_path()
+                            dur = _get_video_duration_seconds(output_path)
+                            if dur is not None:
+                                duration_artifacts = {"duration_seconds": dur}
+                        except Exception:
+                            pass
                         await self.ttt_reporter.update_recording_step(
                             dir_state.ttt_recording_id,
                             step_id=item.task_type,
@@ -105,6 +138,7 @@ class VideoProcessor(QueueProcessor):
                                 item.task_type, item.task_type.title()
                             ),
                             status="complete",
+                            artifacts=duration_artifacts,
                         )
                     except Exception:
                         pass  # Never block video processing on TTT
