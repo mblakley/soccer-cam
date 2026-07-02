@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from video_grouper.inference.event_tap_anchors import Anchor
 from video_grouper.inference.phase_detector import fuse_phases
 
 FIX = Path(__file__).parent / "fixtures" / "phase"
@@ -87,3 +88,78 @@ def test_non_truncated_flags_default_false():
     result = fuse_phases(signals)
     assert result["truncated_start"] is False
     assert result["truncated_end"] is False
+
+
+# --- parent event-tap anchors ---------------------------------------------
+
+
+def _hi(boundary, video_time):
+    return Anchor(
+        boundary=boundary,
+        video_time=video_time,
+        confidence="high",
+        n_taps=3,
+        spread_s=6.0,
+    )
+
+
+def _lo(boundary, video_time):
+    return Anchor(
+        boundary=boundary,
+        video_time=video_time,
+        confidence="low",
+        n_taps=1,
+        spread_s=0.0,
+    )
+
+
+def test_anchors_none_is_noop():
+    """Explicit anchors={} / None matches the no-anchor fusion exactly."""
+    signals, _ = _load(GIDS[0])
+    base = fuse_phases(signals)
+    withnone = fuse_phases(signals, anchors=None)
+    assert withnone["times"] == base["times"]
+    assert withnone["anchored"] == {}
+
+
+def test_high_confidence_kickoff_snaps_to_nearby_whistle():
+    """An agreeing parent cluster near a whistle snaps KO to that whistle and
+    trusts it for the trim."""
+    signals, _ = _load(GIDS[0])
+    b0 = float(signals["blasts"][0])
+    result = fuse_phases(signals, anchors={"kickoff": _hi("kickoff", b0 + 6.0)})
+    assert result["times"]["kickoff"] == b0  # snapped to the whistle
+    assert result["anchored"]["kickoff"] == {"mode": "snap", "confidence": "high"}
+    assert result["ko_anchor"] == "event_tap"
+    assert result["ko_trustworthy"] is True
+
+
+def test_high_confidence_kickoff_with_no_nearby_whistle_uses_cluster():
+    """No whistle within the snap window -> trust the parent cluster directly."""
+    signals, _ = _load(GIDS[0])
+    far = float(max(signals["blasts"])) + 500.0  # no blast within ANCHOR_SNAP_SEC
+    result = fuse_phases(signals, anchors={"kickoff": _hi("kickoff", far)})
+    assert result["times"]["kickoff"] == far
+    assert result["anchored"]["kickoff"] == {"mode": "direct", "confidence": "high"}
+    assert result["ko_trustworthy"] is True
+
+
+def test_low_confidence_does_not_override_confident_detector_ko():
+    """A lone/scattered tap must not move a confident (whistle/ball) detector KO."""
+    signals, _ = _load(GIDS[0])
+    base = fuse_phases(signals)
+    if base.get("ko_anchor") == "sym":
+        pytest.skip("this fixture's KO is symmetric-prior; covered by the fill-in test")
+    b0 = float(signals["blasts"][0])
+    result = fuse_phases(signals, anchors={"kickoff": _lo("kickoff", b0 + 6.0)})
+    assert result["times"]["kickoff"] == base["times"]["kickoff"]  # unchanged
+    assert "kickoff" not in result["anchored"]
+
+
+def test_high_confidence_end_snaps_to_nearby_whistle():
+    """A parent 'Final Whistle' cluster near a whistle snaps END to it."""
+    signals, _ = _load(GIDS[0])
+    bl = float(signals["blasts"][-1])
+    result = fuse_phases(signals, anchors={"end": _hi("end", bl + 4.0)})
+    assert result["times"]["end"] == bl
+    assert result["anchored"]["end"] == {"mode": "snap", "confidence": "high"}

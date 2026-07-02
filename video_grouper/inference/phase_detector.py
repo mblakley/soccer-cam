@@ -69,6 +69,9 @@ LOCATE_MIN_BLOCK_SEC = float(
 LOCATE_KO_FAR_SEC = float(
     os.environ.get("PHASE_BLOCK_KO_FAR_SEC", "90")
 )  # KO far from block onset => untrustworthy
+# Parent event-tap reconciliation: a whistle within this many seconds of a tap
+# estimate IS the event the parent was reacting to -> snap the boundary to it.
+ANCHOR_SNAP_SEC = float(os.environ.get("PHASE_ANCHOR_SNAP_SEC", "20"))
 # KICKOFF-whistle full-field band, RELATIVE to the game's p75 in-field crowd (``busy``). A real
 # kickoff has BOTH teams lined up on the field (~1x busy). The LOWER bound rejects a warm-up whistle
 # over a sparse field (05.31-Spencerport: warm-up blasts at 0.44x busy, kickoff at 0.56x); the UPPER
@@ -658,7 +661,13 @@ def _slice_signals(signals, t0, t1):
 
 
 def fuse_phases(
-    signals, *, debug=False, localize=False, truncated_start=False, truncated_end=False
+    signals,
+    *,
+    debug=False,
+    localize=False,
+    truncated_start=False,
+    truncated_end=False,
+    anchors=None,
 ):
     """Locate the game block, then segment + fuse the (block-restricted) signals into phase
     boundaries in the ORIGINAL video timeline.
@@ -715,6 +724,40 @@ def fuse_phases(
         res["ko_anchor"] = "truncated"
     if truncated_end:
         res["times"]["end"] = float(dur)
+    # Parent event-tap anchors (optional). Reconcile the fused boundaries with the
+    # human taps per their confidence tier (see event_tap_anchors.build_anchors):
+    #   * HIGH (agreeing parent cluster) -> trusted: snap to a whistle within
+    #     ANCHOR_SNAP_SEC of the cluster (that whistle IS the event they reacted
+    #     to), else use the cluster estimate directly. May override the detector.
+    #   * LOW (lone / scattered tap) -> lowest quality: only fill in a boundary
+    #     the detector left untrusted (symmetric-prior KO, or an unset boundary),
+    #     and only by snapping to a nearby whistle. Never overrides a confident
+    #     detector boundary.
+    # No-op when anchors is None, so the validated scorecard + fixtures (which
+    # fuse with anchors unset) are byte-identical.
+    anchored: dict = {}
+    if anchors:
+        for boundary, anc in anchors.items():
+            if boundary not in ("kickoff", "halftime", "second_half", "end"):
+                continue
+            at = float(anc.video_time)
+            wnear = min(blasts, key=lambda b: abs(b - at)) if blasts else None
+            near = wnear is not None and abs(wnear - at) <= ANCHOR_SNAP_SEC
+            if getattr(anc, "confidence", "low") == "high":
+                res["times"][boundary] = float(wnear) if near else at
+                anchored[boundary] = {
+                    "mode": "snap" if near else "direct",
+                    "confidence": "high",
+                }
+                if boundary == "kickoff":
+                    res["ko_anchor"] = "event_tap"
+            else:
+                weak = boundary != "kickoff" and boundary not in res["times"]
+                weak = weak or (boundary == "kickoff" and res.get("ko_anchor") == "sym")
+                if weak and near:
+                    res["times"][boundary] = float(wnear)
+                    anchored[boundary] = {"mode": "snap", "confidence": "low"}
+    res["anchored"] = anchored
     ko = res["times"]["kickoff"]
     # "far from block onset" only means something once we've LOCALIZED (t0 = the game onset). On a
     # no-op (t0 = 0: trimmed, or a combined video whose first whistle is already the kickoff) t0 is
@@ -738,11 +781,20 @@ def fuse_phases(
     # A human-confirmed truncated start pins KO to the file head — trust it for the
     # trim (start_time_offset 0 keeps everything, which is correct for a game already
     # in progress), regardless of the whistle-based signal checks.
-    res["ko_trustworthy"] = bool(truncated_start) or bool(
-        blasts
-        and res.get("ko_anchor") != "sym"
-        and not far
-        and (res["ok"] or localized)
+    # A HIGH-confidence parent kickoff cluster is an independent human confirmation
+    # of the KO -> trust it for the trim regardless of the whistle-based checks
+    # (it can even correct a wrong detector block onset, which the `far` gate would
+    # otherwise reject).
+    ko_anchor_high = anchored.get("kickoff", {}).get("confidence") == "high"
+    res["ko_trustworthy"] = (
+        bool(truncated_start)
+        or ko_anchor_high
+        or bool(
+            blasts
+            and res.get("ko_anchor") != "sym"
+            and not far
+            and (res["ok"] or localized)
+        )
     )
     res["truncated_start"] = bool(truncated_start)
     res["truncated_end"] = bool(truncated_end)
@@ -1217,15 +1269,17 @@ def detect_phases(
     person_model=None,
     truncated_start=False,
     truncated_end=False,
+    anchors=None,
 ):
     """End-to-end phase detection for a single video + field polygon.
 
     Scales the field polygon to the decoded frame size (mirroring the training CLI), runs
     compute_signals, then fuse_phases. ``field_polygon`` may be normalized (0..1) or in frame px;
     ``ball_sidecar`` overrides where the ball-restart {t,xy} sidecar is searched (defaults to the
-    video's directory). Returns the fuse_phases dict (trimmed-time boundaries) or None for a no-play
-    plateau. Single-video callers have no per-segment archive, so source px == frame px (polyf and
-    poly_src coincide)."""
+    video's directory). ``anchors`` (optional) is a {boundary: Anchor} map of parent event-tap priors
+    in this video's timeline (see event_tap_anchors) that fuse_phases reconciles per-confidence.
+    Returns the fuse_phases dict (trimmed-time boundaries) or None for a no-play plateau. Single-video
+    callers have no per-segment archive, so source px == frame px (polyf and poly_src coincide)."""
     poly = np.array(field_polygon or [], dtype=np.float32)
     if not len(poly):
         return None
@@ -1252,4 +1306,5 @@ def detect_phases(
         localize=True,
         truncated_start=truncated_start,
         truncated_end=truncated_end,
+        anchors=anchors,
     )
