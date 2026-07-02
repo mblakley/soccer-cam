@@ -54,6 +54,26 @@ def test_fields_partial_and_ok_false():
     }
 
 
+def test_fields_carry_truncation_flags():
+    f = phases_to_session_fields(
+        {
+            "ok": True,
+            "times": {"kickoff": 0.0, "end": 5640.0},
+            "truncated_start": True,
+            "truncated_end": False,
+        }
+    )
+    assert f["phase_truncated_start"] is True
+    assert f["phase_truncated_end"] is False
+    assert f["phase_kickoff_offset"] == 0.0
+
+
+def test_fields_omit_truncation_when_absent():
+    f = phases_to_session_fields({"ok": True, "times": {"kickoff": 10.0}})
+    assert "phase_truncated_start" not in f
+    assert "phase_truncated_end" not in f
+
+
 # ---- push_phases_to_ttt (best-effort) ----
 
 

@@ -113,6 +113,9 @@ class ReprocessRequestProcessor(QueueProcessor):
             if kind == "verify_phases":
                 await self._handle_verify_phases(ttt_id, group_dir)
                 return
+            if kind in ("truncated_start", "truncated_end"):
+                await self._handle_truncated(ttt_id, group_dir, kind)
+                return
 
             local_request = {
                 "stabilization_strength": claimed["stabilization_strength"],
@@ -187,6 +190,78 @@ class ReprocessRequestProcessor(QueueProcessor):
         logger.info(
             "phase_correction: applied human phases %s to %s", times, group_dir.name
         )
+
+    async def _handle_truncated(self, ttt_id: str, group_dir: Path, kind: str) -> None:
+        """Re-run the detector with the human-supplied truncation flag (from the T2
+        "already started" / "ended early" control) and re-push corrected phases.
+
+        ``truncated_start`` pins KO=0 and sets the trim to 0 (the game is already in
+        progress at the file head); ``truncated_end`` pins END to the file end. HT/2H
+        (and the un-truncated boundary) are re-detected. This is the app-side path for
+        confident-but-truncated games that never hit the NTFY game-start walk.
+        """
+        ts = kind == "truncated_start"
+        combined = group_dir / "combined.mp4"
+
+        if ts:
+            # Trim at 0 -- nothing to cut off the front of a game already underway.
+            try:
+                from video_grouper.models import MatchInfo
+
+                await asyncio.to_thread(
+                    MatchInfo.update_game_times,
+                    str(group_dir),
+                    start_time_offset="00:00",
+                    storage_path=self.storage_path,
+                )
+            except Exception as exc:  # noqa: BLE001 — trim write is best-effort
+                logger.warning("truncated_start: could not set start offset (%s)", exc)
+
+        result = None
+        if combined.exists():
+            try:
+                from video_grouper.task_processors.phase_game_start import _run_detector
+
+                result = await _run_detector(
+                    str(group_dir),
+                    str(combined),
+                    truncated_start=ts,
+                    truncated_end=not ts,
+                )
+            except Exception as exc:  # noqa: BLE001 — never break the flow
+                logger.warning(
+                    "truncated re-run failed for %s (%s)", group_dir.name, exc
+                )
+
+        if result:
+            payload = {
+                "source": "phase_fused",
+                "ok": bool(result.get("ok")),
+                "times": {
+                    k: float(v)
+                    for k, v in (result.get("times") or {}).items()
+                    if v is not None
+                },
+                "truncated_start": bool(result.get("truncated_start")),
+                "truncated_end": bool(result.get("truncated_end")),
+            }
+            try:
+                from video_grouper.models import DirectoryState
+
+                await asyncio.to_thread(
+                    DirectoryState(str(group_dir)).set_game_phases, payload
+                )
+            except Exception as exc:  # noqa: BLE001 — local persistence is best-effort
+                logger.warning("truncated: could not persist phases (%s)", exc)
+            await self._repush_phases(group_dir, payload)
+
+        try:
+            await asyncio.to_thread(
+                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("truncated: could not report completion (%s)", exc)
+        logger.info("%s applied to %s", kind, group_dir.name)
 
     async def _repush_phases(self, group_dir: Path, payload: dict) -> None:
         """Re-confirm the (now source=human) phases to the TTT game session."""

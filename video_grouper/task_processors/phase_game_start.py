@@ -158,6 +158,46 @@ async def _run_detector(
     )
 
 
+def _phase_payload(result: dict) -> dict:
+    """Shape a detector result into the persisted/pushed phases payload (carries the
+    truncated_start/end flags the detector set)."""
+    return {
+        "source": "phase_fused",
+        "ok": bool(result.get("ok")),
+        "times": {
+            k: float(v) for k, v in (result.get("times") or {}).items() if v is not None
+        },
+        "reasons": list(result.get("reasons") or []),
+        "used": result.get("used"),
+        "truncated_start": bool(result.get("truncated_start")),
+        "truncated_end": bool(result.get("truncated_end")),
+    }
+
+
+async def _persist_and_push(config, group_dir, storage_path, result) -> None:
+    """Persist the fused phases to group state and best-effort push them to TTT."""
+    import asyncio
+
+    _persist_phases(group_dir, storage_path, result)
+    try:
+        from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
+
+        ttt = getattr(config, "ttt", None)
+        _dump = getattr(ttt, "model_dump", None)
+        ttt_config = _dump() if callable(_dump) else ttt
+        await asyncio.to_thread(
+            push_phases_to_ttt,
+            ttt_config,
+            os.path.basename(group_dir.rstrip("/\\")),
+            _phase_payload(result),
+            str(storage_path or ""),
+        )
+    except Exception as e:  # noqa: BLE001 — the TTT push is best-effort
+        logger.warning(
+            "phase game-start: truncated TTT push failed for %s: %s", group_dir, e
+        )
+
+
 async def resolve_truncated_start(
     group_dir: str,
     combined_video_path: str,
@@ -176,8 +216,6 @@ async def resolve_truncated_start(
     (Perf note: the re-run recomputes signals (~minutes); a follow-up can cache the
     phase_detect step's signals so this re-fuses instantly.)
     """
-    import asyncio
-
     from video_grouper.models import MatchInfo
 
     # Trim at 0 -- keep everything; the game is already underway at the file head.
@@ -194,44 +232,44 @@ async def resolve_truncated_start(
         )
     except Exception as e:  # noqa: BLE001 — never let the re-run break the flow
         logger.warning(
-            "phase game-start: truncated re-run failed for %s: %s", group_dir, e
+            "phase game-start: truncated_start re-run failed for %s: %s", group_dir, e
         )
         result = None
 
     if result:
-        _persist_phases(group_dir, storage_path, result)
-        try:
-            from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
-
-            ttt = getattr(config, "ttt", None)
-            _dump = getattr(ttt, "model_dump", None)
-            ttt_config = _dump() if callable(_dump) else ttt
-            payload = {
-                "source": "phase_fused",
-                "ok": bool(result.get("ok")),
-                "times": {
-                    k: float(v)
-                    for k, v in (result.get("times") or {}).items()
-                    if v is not None
-                },
-                "reasons": list(result.get("reasons") or []),
-                "used": result.get("used"),
-                "truncated_start": True,
-            }
-            await asyncio.to_thread(
-                push_phases_to_ttt,
-                ttt_config,
-                os.path.basename(group_dir.rstrip("/\\")),
-                payload,
-                str(storage_path or ""),
-            )
-        except Exception as e:  # noqa: BLE001 — the TTT push is best-effort
-            logger.warning(
-                "phase game-start: truncated TTT push failed for %s: %s", group_dir, e
-            )
+        await _persist_and_push(config, group_dir, storage_path, result)
     logger.info(
         "phase game-start: truncated_start resolved for %s (trim 0, phases re-run)",
         group_dir,
+    )
+    return True
+
+
+async def resolve_truncated_end(
+    group_dir: str,
+    combined_video_path: str,
+    config,
+    storage_path: str | None = None,
+) -> bool:
+    """Handle "ended early" — the recording cut off before full-time (e.g. a dead
+    battery). Re-run the detector with ``truncated_end=True`` (END pinned to the file
+    end; KO/HT/2H unchanged) and persist + push. The start trim is left as-is — only
+    the end boundary moves. Best-effort; returns True."""
+    if not combined_video_path or not os.path.exists(combined_video_path):
+        return False
+
+    try:
+        result = await _run_detector(group_dir, combined_video_path, truncated_end=True)
+    except Exception as e:  # noqa: BLE001 — never let the re-run break the flow
+        logger.warning(
+            "phase game-start: truncated_end re-run failed for %s: %s", group_dir, e
+        )
+        result = None
+
+    if result:
+        await _persist_and_push(config, group_dir, storage_path, result)
+    logger.info(
+        "phase game-start: truncated_end resolved for %s (END = file end)", group_dir
     )
     return True
 

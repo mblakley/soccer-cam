@@ -206,3 +206,84 @@ async def test_stabilization_row_unchanged_by_dispatch(tmp_path: Path):
     marker = json.loads((group / "reprocess_request.json").read_text())
     assert marker["stabilization_strength"] == "heavy"
     ttt.update_game_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_truncated_start_reruns_and_repushes(tmp_path: Path, monkeypatch):
+    """kind=truncated_start -> re-run detector (truncated_start=True), trim 0,
+    persist + re-push phases carrying phase_truncated_start, report completion."""
+    group = _seed_group(tmp_path, "grp-1")
+    (group / "combined.mp4").write_bytes(b"x")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _claim(
+        kind="truncated_start", phases=None
+    )
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+    ttt.get_game_session_by_dir.return_value = {"id": "sess-1"}
+
+    import video_grouper.task_processors.phase_game_start as pgs
+
+    seen = {}
+
+    async def fake_run(group_dir, video, *, truncated_start=False, truncated_end=False):
+        seen["ts"], seen["te"] = truncated_start, truncated_end
+        return {
+            "ok": True,
+            "times": {"kickoff": 0.0, "halftime": 2000.0, "end": 5000.0},
+            "truncated_start": True,
+            "truncated_end": False,
+        }
+
+    monkeypatch.setattr(pgs, "_run_detector", fake_run)
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-1", payload={"id": "req-1"})
+    )
+
+    assert seen == {"ts": True, "te": False}
+    gp = json.loads((group / "state.json").read_text())["game_phases"]
+    assert gp["truncated_start"] is True
+    assert gp["times"]["kickoff"] == 0.0
+    _, kwargs = ttt.update_game_session.call_args
+    assert kwargs["phase_truncated_start"] is True
+    assert kwargs["phase_kickoff_offset"] == 0.0
+    assert not (group / "reprocess_request.json").exists()  # not the stabilization path
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_truncated_end_reruns_with_end_flag(tmp_path: Path, monkeypatch):
+    """kind=truncated_end -> re-run detector with truncated_end=True; re-push carries
+    phase_truncated_end. The start trim is left alone."""
+    group = _seed_group(tmp_path, "grp-1")
+    (group / "combined.mp4").write_bytes(b"x")
+    ttt = _mk_ttt()
+    ttt.claim_reprocess_request.return_value = _claim(kind="truncated_end", phases=None)
+    ttt.get_camera_recording.return_value = {"id": "rec-1", "file_group": "grp-1"}
+    ttt.get_game_session_by_dir.return_value = {"id": "sess-1"}
+
+    import video_grouper.task_processors.phase_game_start as pgs
+
+    seen = {}
+
+    async def fake_run(group_dir, video, *, truncated_start=False, truncated_end=False):
+        seen["ts"], seen["te"] = truncated_start, truncated_end
+        return {
+            "ok": True,
+            "times": {"kickoff": 60.0, "end": 5400.0},
+            "truncated_start": False,
+            "truncated_end": True,
+        }
+
+    monkeypatch.setattr(pgs, "_run_detector", fake_run)
+    proc = _mk_processor(tmp_path, ttt)
+    await proc.process_item(
+        ReprocessRequestTask(ttt_id="req-1", payload={"id": "req-1"})
+    )
+
+    assert seen == {"ts": False, "te": True}
+    _, kwargs = ttt.update_game_session.call_args
+    assert kwargs["phase_truncated_end"] is True
+    sargs, _ = ttt.update_reprocess_status.call_args
+    assert sargs[1] == "completed"

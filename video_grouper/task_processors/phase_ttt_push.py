@@ -45,6 +45,12 @@ def phases_to_session_fields(payload: dict) -> dict:
     fields["phase_source"] = payload.get("source") or "phase_fused"
     if payload.get("ok") is not None:
         fields["phase_ok"] = bool(payload["ok"])
+    # Truncation flags (set by the truncated_start / truncated_end re-run): tell TTT
+    # the recording began after kickoff / ended before full-time, for display.
+    if payload.get("truncated_start") is not None:
+        fields["phase_truncated_start"] = bool(payload["truncated_start"])
+    if payload.get("truncated_end") is not None:
+        fields["phase_truncated_end"] = bool(payload["truncated_end"])
     return fields
 
 
