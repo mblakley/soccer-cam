@@ -33,8 +33,7 @@ def _hits(errs, radii=(5, 10, 15)):
 
 def _prior_size(frames, geom, w, ramp=1.5):
     """Soft, asymmetric size penalty (additive COST): penalize candidates whose observed diameter is
-    > ``ramp`` * the perspective-expected ball size at their location. Soft (never removes) so it can't
-    drop the ceiling; asymmetric (too-big only) so a real ball measured a bit large is untouched."""
+    > ``ramp`` * the perspective-expected ball size at their location."""
     out = []
     for cs in frames:
         if not cs:
@@ -61,13 +60,6 @@ def _prior_support(frames, geom, w, margin=120.0):
         inside = geom.is_in_support(xy, margin_px=margin)
         out.append(w * (~np.asarray(inside)).astype(float))
     return out
-
-
-def _sum_priors(*plists):
-    plists = [p for p in plists if p is not None]
-    if not plists:
-        return None
-    return [sum(pl[t] for pl in plists) for t in range(len(plists[0]))]
 
 
 def _score(track, frames, ef, balls, geom, far_px, stride):
@@ -131,7 +123,7 @@ def main() -> None:
     def line(name, det, near, far):
         a, nr, fr = _hits(det), _hits(near), _hits(far)
         print(
-            f"  {name:<34} ALL R15 {str(a['R15']):<6} NEAR {str(nr['R15']):<6} "
+            f"  {name:<26} ALL R15 {str(a['R15']):<6} NEAR {str(nr['R15']):<6} "
             f"FAR {str(fr['R15']):<6} | ALL med {a['med']}"
         )
 
@@ -145,58 +137,48 @@ def main() -> None:
 
     base = RerankConfig()
     print("\nselected R15m by variant:")
-    # score-argmax (no tracker): trust the detector's top peak per frame
     argmax = {
         i: (max(fr, key=lambda c: c.score).x, max(fr, key=lambda c: c.score).y)
         for i, fr in enumerate(frames)
         if fr
     }
     line(
-        "score-argmax (no tracker)",
+        "score-argmax (no track)",
         *_score(argmax, frames, ef, balls, geom, far_px, stride),
     )
 
-    variants = [
-        ("baseline (a0.3 static2)", base, None),
-        ("alpha 1.0", replace(base, alpha=1.0), None),
-        ("alpha 3.0", replace(base, alpha=3.0), None),
-        ("alpha 10", replace(base, alpha=10.0), None),
-        ("static_w 0.5", replace(base, static_w=0.5), None),
-        ("static_w 0.0", replace(base, static_w=0.0), None),
-        (
-            "loose teleport (mj20 v8)",
-            replace(base, max_jump_m_per_frame=20.0, vmax_m_per_frame=8.0),
-            None,
-        ),
-        ("a3 + static0.5", replace(base, alpha=3.0, static_w=0.5), None),
-        (
-            "a3 + loose teleport",
-            replace(base, alpha=3.0, max_jump_m_per_frame=20.0, vmax_m_per_frame=8.0),
-            None,
-        ),
-        ("a3 + size prior", replace(base, alpha=3.0), ("size", 2.0)),
-        ("a3 + support prior", replace(base, alpha=3.0), ("support", 2.0)),
-        (
-            "a3 static0.5 loose + size",
-            replace(
-                base,
-                alpha=3.0,
-                static_w=0.5,
-                max_jump_m_per_frame=20.0,
-                vmax_m_per_frame=8.0,
-            ),
-            ("size", 2.0),
-        ),
-    ]
-    for name, cfg, prior in variants:
+    def run(name, cfg, *, prior=None, use_kalman=True):
         pr = None
-        if prior and prior[0] == "size":
-            pr = _prior_size(frames, geom, prior[1])
-        elif prior and prior[0] == "support":
-            pr = _prior_support(frames, geom, prior[1])
+        if prior == "size":
+            pr = _prior_size(frames, geom, 2.0)
+        elif prior == "support":
+            pr = _prior_support(frames, geom, 2.0)
         sel = rerank(frames, geom, frame_gaps=gaps, priors=pr, config=cfg)
-        track = kalman_smooth(sel, geom)
+        track = kalman_smooth(sel, geom) if use_kalman else sel
         line(name, *_score(track, frames, ef, balls, geom, far_px, stride))
+
+    run("baseline a0.3 mj6 v2.5", base)
+    # teleport x alpha grid (static_w kept at 2.0 — reducing it hurt)
+    for a in (0.3, 1.0, 3.0):
+        for mj, vm in ((15, 8), (25, 12), (40, 20)):
+            run(
+                f"a{a} mj{mj} v{vm}",
+                replace(base, alpha=a, max_jump_m_per_frame=mj, vmax_m_per_frame=vm),
+            )
+    # Kalman ablation on a strong config — does the CV smoother drag NEAR picks off the ball?
+    strong = replace(base, alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0)
+    run("strong +kalman", strong, use_kalman=True)
+    run("strong  NO-kalman", strong, use_kalman=False)
+    # very loose (near-ungated) + trust detector — approaches argmax while keeping far coasting
+    run(
+        "a3 mj80 v30 +kal",
+        replace(base, alpha=3.0, max_jump_m_per_frame=80.0, vmax_m_per_frame=30.0),
+    )
+    run(
+        "a3 mj80 v30 NO-kal",
+        replace(base, alpha=3.0, max_jump_m_per_frame=80.0, vmax_m_per_frame=30.0),
+        use_kalman=False,
+    )
 
 
 if __name__ == "__main__":
