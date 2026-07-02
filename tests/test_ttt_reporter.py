@@ -283,40 +283,92 @@ class TestRecordingReporter:
         assert call_args.args[1] == "team-uuid-1"
 
     @pytest.mark.asyncio
-    async def test_update_recording_status_calls_client(self):
-        await self.reporter.update_recording_status("rec-1", "download", "downloaded")
-        self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "download", "downloaded", None, None, None
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_noop_when_no_id(self):
-        await self.reporter.update_recording_status(None, "download", "downloaded")
-        self.client.update_recording_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_noop_when_disabled(self):
-        reporter = TTTReporter(ttt_client=None, config=self.config)
-        await reporter.update_recording_status("rec-1", "download", "downloaded")
-        self.client.update_recording_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_handles_error(self):
-        self.client.update_recording_status.side_effect = Exception("network")
-        # Should not raise
-        await self.reporter.update_recording_status("rec-1", "download", "failed")
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_passes_optional_fields(self):
-        await self.reporter.update_recording_status(
+    async def test_update_recording_step_calls_client(self):
+        await self.reporter.update_recording_step(
             "rec-1",
-            "upload",
-            "complete",
-            youtube_url="https://youtu.be/abc",
-            youtube_video_id="abc",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
         )
-        self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "upload", "complete", None, "https://youtu.be/abc", "abc"
+        self.client.update_recording_step.assert_called_once_with(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+            started_at=None,
+            completed_at=None,
+            error=None,
+            config=None,
+            artifacts=None,
+            pipeline_preset=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_noop_when_no_id(self):
+        await self.reporter.update_recording_step(
+            None,
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
+        self.client.update_recording_step.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        await reporter.update_recording_step(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
+        self.client.update_recording_step.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_handles_error(self):
+        self.client.update_recording_step.side_effect = Exception("network")
+        # Should not raise
+        await self.reporter.update_recording_step(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="failed",
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_passes_optional_fields(self):
+        await self.reporter.update_recording_step(
+            "rec-1",
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="complete",
+            artifacts={
+                "youtube_url": "https://youtu.be/abc",
+                "youtube_video_id": "abc",
+            },
+            pipeline_preset="homegrown",
+        )
+        self.client.update_recording_step.assert_called_once_with(
+            "rec-1",
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="complete",
+            started_at=None,
+            completed_at=None,
+            error=None,
+            config=None,
+            artifacts={
+                "youtube_url": "https://youtu.be/abc",
+                "youtube_video_id": "abc",
+            },
+            pipeline_preset="homegrown",
         )
 
     @pytest.mark.asyncio

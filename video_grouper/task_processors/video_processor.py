@@ -13,6 +13,11 @@ from .tasks.video import BaseFfmpegTask
 
 logger = logging.getLogger(__name__)
 
+_VIDEO_STEP_LABELS: dict[str, str] = {
+    "combine": "Combine",
+    "trim": "Trim",
+}
+
 
 class VideoProcessor(QueueProcessor):
     """
@@ -67,8 +72,14 @@ class VideoProcessor(QueueProcessor):
                     from video_grouper.models import DirectoryState
 
                     dir_state = DirectoryState(group_dir)
-                    await self.ttt_reporter.update_recording_status(
-                        dir_state.ttt_recording_id, item.task_type, "in_progress"
+                    await self.ttt_reporter.update_recording_step(
+                        dir_state.ttt_recording_id,
+                        step_id=item.task_type,
+                        step_type=item.task_type,
+                        label=_VIDEO_STEP_LABELS.get(
+                            item.task_type, item.task_type.title()
+                        ),
+                        status="running",
                     )
                 except Exception:
                     pass  # Never block video processing on TTT
@@ -86,8 +97,14 @@ class VideoProcessor(QueueProcessor):
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_status(
-                            dir_state.ttt_recording_id, item.task_type, "complete"
+                        await self.ttt_reporter.update_recording_step(
+                            dir_state.ttt_recording_id,
+                            step_id=item.task_type,
+                            step_type=item.task_type,
+                            label=_VIDEO_STEP_LABELS.get(
+                                item.task_type, item.task_type.title()
+                            ),
+                            status="complete",
                         )
                     except Exception:
                         pass  # Never block video processing on TTT
@@ -127,8 +144,14 @@ class VideoProcessor(QueueProcessor):
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_status(
-                            dir_state.ttt_recording_id, item.task_type, "failed"
+                        await self.ttt_reporter.update_recording_step(
+                            dir_state.ttt_recording_id,
+                            step_id=item.task_type,
+                            step_type=item.task_type,
+                            label=_VIDEO_STEP_LABELS.get(
+                                item.task_type, item.task_type.title()
+                            ),
+                            status="failed",
                         )
                     except Exception:
                         pass  # Never block video processing on TTT
