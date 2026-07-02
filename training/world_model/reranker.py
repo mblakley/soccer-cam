@@ -40,10 +40,18 @@ from training.world_model.tbd import Candidate
 
 @dataclass(frozen=True)
 class RerankConfig:
-    """Re-ranker weights. Defaults are the EXP-28 cross-clip optimum (broad plateau)."""
+    """Re-ranker weights.
 
-    vmax_m_per_frame: float = 2.5  # smoothness budget (scaled by the frame gap)
-    max_jump_m_per_frame: float = 6.0  # hard teleport ceiling
+    Teleport defaults RAISED 2026-07-01 (EXP-DIST-17, cli/sweep_tracker on the distilled detector,
+    held-out Spencerport): the old (vmax 2.5, max_jump 6.0) gate hard-EXCLUDED the true far candidate
+    (meters-space is ill-conditioned near the far touchline, so the real ball's world position jitters
+    past a tight gate — EXP-DIST-11's 82.5% far-exclusion). Loosening to (20, 40) lifted far R15m
+    0.288 -> 0.618 and cut median error 51.5 m -> 12.6 m, with the tracker finally beating score-argmax
+    (0.293). Sweep-optimum on ONE game — validate across the held-out span before over-trusting.
+    ``alpha=0.3`` and ``static_w=2.0`` stayed best (raising alpha / cutting static both hurt)."""
+
+    vmax_m_per_frame: float = 20.0  # smoothness budget (scaled by the frame gap)
+    max_jump_m_per_frame: float = 40.0  # hard teleport ceiling
     alpha: float = 0.3  # detector-score weight (low: trust context over brightness)
     static_w: float = 2.0  # static-persistence penalty weight (the dominant lever)
     motion_w: float = 0.5  # motion-blob support bonus weight
