@@ -4,6 +4,27 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-18: the AutoCam "viewport/sidecar" is camera FRAMING, not ball detection — real bar reset (2026-07-01)
+
+Chasing "beat AutoCam" needs a valid bar. `autocam_viewport.jsonl` starts at x=3840,y=1080 = exact
+frame-center of 7680×2160 (constant for the first frames) — it's AutoCam's **pan center** (frames a wide
+region), not the ball. The `<processed>.mp4.jsonl` sidecar `xy` is the same camera-framing signal (R15m
+**0.022**, median **53 m** vs GT — a working camera is not 53 m from the ball; it frames a region with
+the ball off-center). So BOTH are camera framing, **NOT AutoCam's ball detection**, and `load_viewport`'s
+"AutoCam's selected ball" docstring is mislabeled. This also finally kills the "AutoCam 0.15 far" premise
+(EXP-DIST-08/16) — that number was the viewport too.
+
+**Valid bars (meters vs human GT, held-out Spencerport):**
+- AutoCam DETECTIONS → OUR tracker: **far 0.845, near 0.978** — the real "beat AutoCam on detection"
+  target (same tracker both sides).
+- OUR candidate ceiling: **far 0.933, near 1.0** — EXCEEDS AutoCam's, so the goal is achievable: the ball
+  is in our candidates more often than AutoCam's detections realize; the residual is SELECTION/SCORE.
+- OUR detector→tracker now (post teleport fix): far 0.618, near 0.222.
+
+**Targets:** far **> 0.845**, near **≥ 0.978**. The near gap (0.222 vs 1.0 ceiling; even argmax 0.244) is
+a detector-SCORE problem — near distractors (players) outscore the near ball. → hard-negative fine-tune
+(EXP-DIST-19, running overnight) is the lever for BOTH far and near.
+
 ## EXP-DIST-17: the teleport gate was the far-ball selection bug (2026-07-01)
 
 **Setup.** Held-out Spencerport, distilled `best.pt` (val 0.397), meters-to-human-GT. Built an offline
