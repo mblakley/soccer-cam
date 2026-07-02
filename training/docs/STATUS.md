@@ -66,10 +66,21 @@ truth: our detector SEES the ball (ceiling **0.95**), our tracker WORKS (AutoCam
 peaks bury the ball in confident distractors and the Viterbi tracker locks onto the wrong trajectory
 (NEAR 0.067 is worse than FAR 0.288 — not following the ball at all).
 
-**Next (real lever = candidate quality, not epochs):** suppress distractors / calibrate peak scores /
-tighten top-k so the tracker can select the ball from our peaks; **audit the `autocam_viewport.jsonl`
-loader** before trusting any viewport number. Then re-eval, and only after that the `--normalize`
-all-games build. Box scheduled tasks (`distill_chain/watch/notify_reolink`) can be unregistered — run done.
+**UPDATE (2026-07-01, EXP-DIST-17) — the selection gap was the TELEPORT GATE, and it's largely fixed.**
+Built an offline tracker sweep (`cli/eval_detector --dump-cands` → `cli/sweep_tracker`) to test tracker
+configs in seconds instead of 40-min evals. Result: candidate *gating* (in-field, size) does nothing /
+hurts, but **loosening the meters-space teleport gate (max_jump 6→40, vmax 2.5→20) lifts far R15m
+0.288→0.618 and median 51.5→12.6 m** — the old tight gate hard-excluded the true far candidate (meters
+ill-conditioned near the far touchline; EXP-DIST-11's 82.5%). The tracker now beats score-argmax (0.293).
+Shipped as the `RerankConfig` default (tests green). `alpha=0.3`/`static_w=2.0` stayed best; size/support
+priors hurt/null.
+
+**Still open (the decomposition keeps us honest):** far 0.618 < ceiling **0.933** — our candidates are
+noisier than AutoCam's (AutoCam-dets→our-tracker 0.845), so cleaner scores (hard-negatives,
+`cli/mine_hard_negatives`) is the next far lever. NEAR **0.222 ≪ 1.0** ceiling (≈ argmax) — the single
+global-smooth path can't follow far↔near excursions; that's the world-model (mode-aware) frontier.
+**Next:** (1) validate mj40/v20 across the held-out span (sweep-optimum on one game); (2) hard-neg
+fine-tune for cleaner far candidates; (3) audit the broken `autocam_viewport.jsonl` loader (task #14).
 
 ## Game-phase detection — multi-signal, half-length agnostic (2026-06-28)
 

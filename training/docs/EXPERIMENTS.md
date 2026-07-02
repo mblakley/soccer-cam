@@ -4,6 +4,40 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-17: the teleport gate was the far-ball selection bug (2026-07-01)
+
+**Setup.** Held-out Spencerport, distilled `best.pt` (val 0.397), meters-to-human-GT. Built an offline
+tracker sweep (`cli/eval_detector --dump-cands` → `cli/sweep_tracker`): cache the 1,501-frame candidate
+set once (~40 min decode), then replay `world_model.reranker` under many configs in seconds — the ceiling
+is candidate-fixed (the bar), only selection changes. This broke the 40-min-per-hypothesis loop.
+
+**Cheap gates first — both FAILED (as designed to test):** in-field gate = no change (0.24→0.24; the
+distractors are IN-field, not off-field). Size-consistency HARD gate DROPPED the ceiling 0.94→0.869
+(rejected real balls — the pixel-blob size measure is unreliable near lines/bright patches); a soft size
+prior also hurt. → candidate **gating** is not the selection fix.
+
+**The lever = the teleport gate.** The tracker mis-selects though the ball is a candidate 94% of the
+time; even NEAR balls fail (0.067, ceiling 1.0), so it's the tracker, not the candidates. Sweep:
+
+| config | ALL R15 | NEAR | FAR | median |
+|---|---|---|---|---|
+| candidate ceiling (bar) | 0.948 | 1.0 | 0.933 | 2.7 m |
+| score-argmax (no tracker) | 0.293 | 0.244 | 0.306 | 60.4 m |
+| baseline (mj6 v2.5) | 0.24 | 0.067 | 0.288 | 51.5 m |
+| **mj40 v20 (new default)** | **0.533** | 0.222 | **0.618** | **12.6 m** |
+
+The old tight **meters-space** gate hard-excluded the true far candidate (meters are ill-conditioned near
+the far touchline — EXP-DIST-11's 82.5%). Loosening it (max_jump 6→40, vmax 2.5→20 per frame) lifts far
+R15m **0.288→0.618**, median **51.5→12.6 m**, and the tracker finally beats argmax (0.293). `alpha=0.3`
+and `static_w=2.0` stayed best (raising alpha / cutting static both hurt); Kalman marginal-positive;
+size & support priors hurt/null. Shipped as the `RerankConfig` default.
+
+**Still open:** (1) far 0.618 < ceiling 0.933 — our candidates are noisier than AutoCam's
+(AutoCam-dets→our-tracker 0.845); cleaner scores (hard-negatives, `cli/mine_hard_negatives`) is the next
+far lever. (2) NEAR 0.222 ≪ 1.0 ceiling and ≈ argmax — a single global-smooth path can't cheaply follow
+far↔near excursions; needs per-frame trust / mode-aware selection (the world-model). (3) Validate
+mj40/v20 across the held-out span before fully trusting the new default (sweep-optimum on one game).
+
 ## EXP-DIST-16: distill AutoCam via its detections + OUR existing tracker (not the viewport) (2026-06-30)
 
 **Hypothesis (Mark).** Our detector is better on far balls (human GT); AutoCam is better on near/normal.
