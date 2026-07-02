@@ -4,6 +4,46 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-18: parent event-tap phase anchors — GT simulation validates + hardens (2026-07-02)
+
+**Goal (Mark):** parents already tap Kickoff/Halftime/2nd-Half/Final-Whistle in moment-tagger
+(`EventSyncPrompt` → `sync_anchors`). Consume those as human anchors to narrow the phase boundaries —
+especially KO/END, the detector's weakest — but robustly, since parents mis-tap. Trust model: a lone/
+scattered tap is the LOWEST-quality signal; ≥2 parents agreeing within 10s are a TRUSTED consensus.
+Fetch gated on TTT login (a TTT feature). PR #101.
+
+**Design:** `event_tap_anchors.build_anchors` clusters taps per boundary (≥2 within `CLUSTER_WINDOW_S`
+= high confidence at the cluster median, outliers excluded; else low). `fuse_phases(anchors=…)`
+reconciles: HIGH snaps to a whistle within `ANCHOR_SNAP_SEC` (that whistle IS the event) or, for a
+weak (symmetric-prior, no-whistle) KO, direct-fills it; LOW only snap-fills a weak boundary. No-op
+when `anchors=None`, so the validated scorecard is byte-identical.
+
+**Method:** no real parent taps exist for the historical GT games (parents tag live games; these were
+tagged by Mark), so validate by SIMULATION — `training/data_prep/phase_anchor_eval.py` synthesizes
+realistic taps at the true boundaries (reaction lag + jitter) under 5 scenarios and re-fuses WITH vs
+WITHOUT anchors, scoring |err| vs human GT across 38 aligned GT games (misaligned excluded, as
+phase_eval).
+
+**Result (mean boundary error, s):**
+- **trusted_cluster: 155.0 → 101.5 (−53.6)** — **kickoff 262.4 → 97.4 (−165), 17/38 improved, 0 worse**;
+  ALL worse=5/152, max regression **+2s** (snap jitter).
+- **lone / scattered / wrong_kickoff: 0 changed, 0 worse** — low-quality + mis-labelled taps are inert.
+- confidently_offset (contrived: 3 parents all agree but ~40s off): −38.8 net, but 14/152 worse
+  (max +52s).
+
+**Failure found + hardened (the sim's payoff):** an early version snapped a "kickoff" tapped at the
+2nd-half time to the wrong whistle — **KO 119s → 3235s**, a catastrophe the unit tests missed. Added a
+STRUCTURAL-SANITY guard (an anchor may not cross its neighbouring boundaries) + CORROBORATION (an
+uncorroborated high cluster can't move a confident boundary). Both verified by re-run: wrong_kickoff →
+0 changed. Dropping the weak-KO direct-fill (to also zero-out confidently_offset) was tested and
+reverted — it collapsed the real KO win from −165s to −29s, i.e. the win comes from correctly filling
+KOs the detector had no whistle for.
+
+**Conclusion:** validated — trusted clusters materially improve KO with no meaningful regression, bad
+taps are safe. Residual: `confidently_offset` is net-positive but not zero-regression; it needs an
+unrealistic input (agreeing parents saw the same event), so accepted as a known edge. Merged (#101);
+anchors default off / TTT-login-gated.
+
 ## EXP-PHASE-16: combined-video KO — strategy sweep hits a signal ceiling at 9/14 (2026-07-01)
 
 **Goal (Mark):** get combined-video (untrimmed, production) KO decently close so it can drive the
