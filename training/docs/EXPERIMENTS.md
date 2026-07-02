@@ -4,6 +4,30 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-20: cross-game validation (Irondequoit) — generalizes, but the mj40 default was overfit (2026-07-02)
+
+Every labeled Reolink game except Spencerport was IN the distill training set (Cleveland=val, rest=train),
+so the only clean 2nd held-out game is **Irondequoit 06.15** (no `autocam_detections` → excluded from the
+build → genuinely held-out; n=27 GT in span, so noisy but directional). Dumped with the hard-neg model,
+swept:
+
+| config | ALL | NEAR | FAR |
+|---|---|---|---|
+| candidate ceiling | 0.926 | 0.938 | 0.909 |
+| score-argmax (no track) | 0.074 | 0.062 | 0.091 |
+| baseline (tight mj6) | 0.296 | 0.188 | 0.455 |
+| a0.3 mj40 v20 (shipped) | 0.296 | 0.188 | 0.455 |
+| **a1.0 mj15–25 (best)** | **0.481** | **0.312** | **0.727** |
+
+**Validated:** (1) the detector generalizes — Iron ceiling 0.91–0.94 ≈ Spencerport 0.95. (2) Teleport
+loosening generalizes — far 0.455→0.727. (3) The tracker adds real value — argmax 0.07 vs tracker 0.48
+(opposite of Spencerport, where argmax was competitive — Iron's candidates are noisier, so context matters
+more). **Corrected:** the single-game optimum (a0.3, mj40, v20) was **Spencerport-overfit** — on Iron it
+gives far 0.455 vs 0.727 at the tighter a1.0/mj25, and **α=1.0 beats α=0.3 decisively** (the hard-neg
+detector's scores are now worth trusting). → robust default set to **α=1.0, mj=25, v=12** (Spc far
+0.648/near 0.189; Iron far 0.545–0.727/near 0.312). Far cross-validated ~0.55–0.73 (target 0.845 — closer,
+not there); NEAR still ~0.19–0.31 (target 0.978) — the open frontier (EXP-DIST-19).
+
 ## EXP-DIST-19: hard-neg fine-tune (modest far gain) + near is a TWO-part problem (2026-07-02)
 
 **Hard-neg fine-tune** (`cli/mine_hard_negatives` → augment store → `train_v4_heatmap --resume best.pt`,
