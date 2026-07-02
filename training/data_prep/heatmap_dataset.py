@@ -275,17 +275,29 @@ def build_heatmap_crops(
 class HeatmapCropDataset:
     """torch Dataset over pre-rendered crops; builds the Gaussian target at load."""
 
-    def __init__(self, root, split: str = "train", crop: int = 256, sigma: float = 4.0):
+    def __init__(
+        self,
+        root,
+        split: str = "train",
+        crop: int = 256,
+        sigma: float = 4.0,
+        augment: bool | None = None,
+    ):
         self.root = Path(root)
         data = json.loads((self.root / "index.json").read_text())
         self.crop = data.get("summary", {}).get("crop", crop)
         self.sigma = data.get("summary", {}).get("sigma", sigma)
         self.items = [r for r in data["items"] if r["split"] == split]
+        # Horizontal-flip augmentation (train only): a mirrored field strip is a valid, different
+        # soccer scene, so it adds real variety — cheaper diversity than pure oversampling.
+        self.augment = (split == "train") if augment is None else augment
 
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, i):
+        import random
+
         import torch
 
         r = self.items[i]
@@ -294,4 +306,8 @@ class HeatmapCropDataset:
             tgt = np.zeros((self.crop, self.crop), np.float32)
         else:
             tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+        if self.augment and random.random() < 0.5:
+            # mirror the band AND the target so the Gaussian peak lands at W-1-x
+            stack = np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = np.ascontiguousarray(tgt[:, ::-1])
         return torch.from_numpy(stack), torch.from_numpy(tgt[None])
