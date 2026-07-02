@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field editor (game.json)</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #111; color: #eee; display: flex; height: 100vh; }
+  #side { width: 320px; overflow-y: auto; border-right: 1px solid #333; padding: 8px; font-size: 13px; }
+  #side .g { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+  #side .g:hover { background: #1c2536; }
+  #side .g.sel { background: #1f3a2a; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+  .b-ver { background: #1a7f37; } .b-auto { background: #9a6700; color: #000; } .b-none { background: #7a1f1f; } .b-exc { background: #444; }
+  #main { flex: 1; display: flex; flex-direction: column; padding: 10px; overflow: auto; }
+  #wrap { position: relative; display: inline-block; }
+  canvas { border: 1px solid #444; cursor: crosshair; max-width: 100%; }
+  #bar { margin: 8px 0; }
+  button { background: #243; color: #eee; border: 1px solid #456; padding: 7px 13px; margin-right: 6px; cursor: pointer; border-radius: 4px; }
+  button:hover { background: #365; }
+  #msg { margin-left: 10px; }
+  h2 { margin: 4px 0; font-size: 15px; }
+  .hint { color: #9ab; font-size: 12px; max-width: 1100px; }
+</style>
+</head>
+<body>
+<div id="side"><h2>Games</h2><div id="list">loading…</div></div>
+<div id="main">
+  <h2 id="title">Pick a game</h2>
+  <div class="hint">Drag the numbered points onto the field corners. <b>0–4 = near sideline (bottom), 5–9 = far sideline (top)</b> — this ordering is load-bearing for the far-margin lift. Blue = near, gold = far. Save sets source=human_field_edit + verified.</div>
+  <div id="bar">
+    <button onclick="save()">Save &amp; mark verified</button>
+    <button onclick="resetDefault()">Reset to default box</button>
+    <span id="msg"></span>
+  </div>
+  <div id="wrap"><canvas id="cv"></canvas></div>
+</div>
+<script>
+let GID = null, pts = [], srcW = 0, dispW = 1280, dispH = 720, scale = 1, drag = -1;
+const bg = new Image();
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+
+async function loadList() {
+  const gs = await (await fetch('/api/fieldv2/games')).json();
+  gs.sort((a, b) => (a.verified - b.verified) || a.game_id.localeCompare(b.game_id));
+  const el = document.getElementById('list'); el.innerHTML = '';
+  for (const g of gs) {
+    let cls = 'b-none', txt = 'none';
+    if (g.note) { cls = 'b-exc'; txt = 'exclude?'; }
+    else if (g.verified) { cls = 'b-ver'; txt = 'verified'; }
+    else if (g.has_polygon) { cls = 'b-auto'; txt = 'auto ' + (g.mean_score || ''); }
+    const d = document.createElement('div'); d.className = 'g'; d.dataset.gid = g.game_id;
+    d.innerHTML = '<span>' + g.game_id + '</span><span class="badge ' + cls + '">' + txt + '</span>';
+    d.onclick = () => load(g.game_id);
+    el.appendChild(d);
+  }
+}
+
+async function load(gid) {
+  GID = gid; document.getElementById('title').textContent = gid;
+  document.querySelectorAll('#side .g').forEach(e => e.classList.toggle('sel', e.dataset.gid === gid));
+  const m = await (await fetch('/api/fieldv2/' + encodeURIComponent(gid))).json();
+  srcW = m.src_w || 1; dispW = m.disp_w || 1280; scale = dispW / srcW;
+  bg.onload = () => {
+    dispH = bg.naturalHeight; cv.width = dispW; cv.height = dispH;
+    if (m.polygon && m.polygon.length >= 4) pts = m.polygon.map(p => [p[0] * scale, p[1] * scale]);
+    else defaultPts();
+    draw();
+  };
+  bg.src = '/api/fieldv2/' + encodeURIComponent(gid) + '/bg.jpg?t=' + Date.now();
+  document.getElementById('msg').textContent = m.note ? ('⚠ ' + m.note) : (m.source || '');
+}
+
+function defaultPts() {
+  pts = [];
+  for (let i = 0; i < 5; i++) pts.push([(0.1 + 0.2 * i) * dispW, 0.72 * dispH]); // near 0-4 bottom L->R
+  for (let j = 0; j < 5; j++) pts.push([(0.9 - 0.2 * j) * dispW, 0.30 * dispH]); // far 5-9 top R->L
+}
+function resetDefault() { if (GID) { defaultPts(); draw(); } }
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (bg.complete) ctx.drawImage(bg, 0, 0, dispW, dispH);
+  if (!pts.length) return;
+  ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.stroke();
+  for (let i = 0; i < pts.length; i++) {
+    ctx.fillStyle = i < 5 ? '#4cf' : '#fc4';
+    ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], 7, 0, 7); ctx.fill();
+    ctx.fillStyle = '#000'; ctx.font = '11px sans-serif'; ctx.fillText(i, pts[i][0] - 3, pts[i][1] + 4);
+  }
+}
+
+cv.onmousedown = e => {
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (cv.width / r.width), y = (e.clientY - r.top) * (cv.height / r.height);
+  drag = -1;
+  for (let i = 0; i < pts.length; i++) if (Math.hypot(pts[i][0] - x, pts[i][1] - y) < 14) { drag = i; break; }
+};
+cv.onmousemove = e => {
+  if (drag < 0) return;
+  const r = cv.getBoundingClientRect();
+  pts[drag] = [(e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height)];
+  draw();
+};
+window.onmouseup = () => { drag = -1; };
+
+async function save() {
+  if (!GID || pts.length < 4) { alert('no game / not enough points'); return; }
+  const poly = pts.map(p => [p[0] / scale, p[1] / scale]);
+  const r = await fetch('/api/fieldv2/' + encodeURIComponent(GID), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ polygon: poly })
+  });
+  const j = await r.json();
+  document.getElementById('msg').textContent = r.ok ? ('✓ saved verified (' + j.points + ' pts)') : ('save failed');
+  if (r.ok) loadList();
+}
+
+loadList();
+</script>
+</body>
+</html>
