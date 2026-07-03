@@ -38,9 +38,19 @@ pan-center semantics are RIGHT for main-dir processed videos. **REMAINING:** the
 Spencerport `bu14---...-05-31-2026.mp4` + `.jsonl`, `match_info.ini start_time_offset`) — audit after
 0a frees the Spencerport segments. Do NOT trust Spencerport viewport math until that passes.
 
-**Next:** read 0a verdict → if PASS, dump 2 training games with `hm_reolink_hn2` (kill-test inputs);
-0d trimmed-basis audit; Phase 2a far-label tool actions (`not_game_ball` + `obscured`); then Phase 1
-kill test (go/no-go for the learned selector).
+**Phase 2a DONE + DEPLOYED (7d5951f; annotation checkout 8984e3b, restarted, live-verified).**
+LABEL-INVENTORY CORRECTION: the branch's far-label.html was stale — the DEPLOYED UI (PR #99, main)
+already had `obscured` (click position) + a `not_game_ball` button. Actual D: data across 27 sets:
+ball 2,676 · not_visible 469 · out_of_play 82 · **obscured 54** · not_game_ball **0** (null-coord
+verdict, never used). 2a rebased onto the #99 UI and upgraded Distractor into a click mode that
+stores **decoy coordinates** (`distractors: [[x,y],…]` on the frame's single row; orange ✕, several
+per frame, no auto-advance; `action:"none"` rows still surface in F-nav). Server sanitizes the array;
+`load_human_labels` ignores `obscured`/`none` rows by design (selector GT, not detector GT).
+**Lesson re-learned: diff the DEPLOYED checkout before editing a tool that lives on another branch.**
+
+**Next:** read 0a verdict (job healthy: GPU 45%, ETA ~16:00–16:30) → if PASS, dump 2 training games
+with `hm_reolink_hn2` (kill-test inputs, ~1.5–2 h detached); 0d trimmed-basis audit (~20 min);
+0c server-side crop-rebuild check (~30–40 min); then Phase 1 kill test (~half a day).
 
 ## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
 
