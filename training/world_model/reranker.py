@@ -248,6 +248,7 @@ def rerank(
     motion: list[list[Candidate]] | None = None,
     frame_gaps: list[int] | None = None,
     priors: list[np.ndarray] | None = None,
+    miss_costs: list[float] | None = None,
     config: RerankConfig | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Re-rank per-frame ball candidates by physics/context (see module docstring).
@@ -266,6 +267,11 @@ def rerank(
             in extra context the re-ranker doesn't model itself — e.g. an action/player-density
             prior (the ball sits where players cluster; a far lone-player track is in low
             density) or a size prior. ``None`` for no prior.
+        miss_costs: optional PER-FRAME miss-state emission cost overriding the flat
+            ``config.miss_cost`` (one float per frame). The learned selector supplies
+            ``-log P(no visible ball)`` here: missing becomes expensive exactly when a
+            confident candidate exists (the near-excursion fix) and cheap when the ball is
+            genuinely invisible. ``None`` keeps the flat cost.
         config: :class:`RerankConfig`.
 
     Returns:
@@ -311,11 +317,14 @@ def rerank(
             e += float(priors[t][i])
         return e
 
+    def miss(t: int) -> float:
+        return float(miss_costs[t]) if miss_costs is not None else cfg.miss_cost
+
     # Viterbi: state K = miss. cost[t][j], back[t][j].
     cost: list[np.ndarray] = []
     back: list[np.ndarray] = []
     k0 = len(frames[0])
-    cost.append(np.array([emis(0, i) for i in range(k0)] + [cfg.miss_cost]))
+    cost.append(np.array([emis(0, i) for i in range(k0)] + [miss(0)]))
     back.append(np.full(k0 + 1, -1, int))
     for t in range(1, n):
         k = len(frames[t])
@@ -325,7 +334,7 @@ def rerank(
         gap = max(1, gaps[t])
         budget = cfg.vmax_m_per_frame * gap
         for j in range(k + 1):
-            e = cfg.miss_cost if j == k else emis(t, j)
+            e = miss(t) if j == k else emis(t, j)
             best, bi = np.inf, -1
             for i in range(kp + 1):
                 if not np.isfinite(cost[t - 1][i]):
@@ -365,6 +374,7 @@ def track_ball(
     player_boxes: list[list[tuple[float, float]]] | None = None,
     frame_gaps: list[int] | None = None,
     action_weight: float = 0.5,
+    miss_costs: list[float] | None = None,
     config: RerankConfig | None = None,
 ) -> dict[int, tuple[float, float]]:
     """The full production ball-tracking pipeline (the verified-best config).
@@ -388,12 +398,20 @@ def track_ball(
         player_boxes: optional per-frame YOLO player-box CENTRES in source px (action prior).
         frame_gaps: optional per-frame source-frame gaps (stride-N dumps).
         action_weight: action-prior strength (0.5 optimum; 0 to disable).
+        miss_costs: optional per-frame miss cost (see :func:`rerank` — the learned
+            selector's ``-log P(no visible ball)``).
         config: :class:`RerankConfig`.
     """
     priors = None
     if player_boxes is not None and action_weight:
         priors = action_density_prior(frames, player_boxes, geom, weight=action_weight)
     sel = rerank(
-        frames, geom, motion=motion, frame_gaps=frame_gaps, priors=priors, config=config
+        frames,
+        geom,
+        motion=motion,
+        frame_gaps=frame_gaps,
+        priors=priors,
+        miss_costs=miss_costs,
+        config=config,
     )
     return kalman_smooth(sel, geom)

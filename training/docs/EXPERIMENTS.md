@@ -4,6 +4,30 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-23: viewport-loader alignment audit — PASS, viewport math unblocked (2026-07-03)
+
+**Why.** EXP-DIST-16 flagged all AutoCam-viewport comparisons as untrustworthy (loader misalignment
+suspected). The selector iteration's acceptance protocol (T3) is a mathematical our-viewport-vs-
+AutoCam-viewport comparison, so alignment had to be established first.
+
+**Method.** Box-scratch `G:\ballresearch\selector\viewport_audit.py`: sample `autocam_viewport.jsonl`
+rows at 25/50/75% of a game; composite (a) the source panorama cropped at the sidecar `(x,y)` with a
+crosshair vs (b) the AutoCam-processed video frame at the same global index (and at candidate trim
+offsets). Vision-verified panel-by-panel.
+
+**Results.**
+- `flash__2024.05.01_vs_RNYFC_away` (Dahua, main-dir `-once-processed.mp4`): **3/3 pose-exact** —
+  same instant, crosshair on the framed action. `(seg,f)→global` mapping + pan-center semantics RIGHT.
+- `heat__2026.05.31_vs_Spencerport_gold_2_away` (Reolink, render in the upload subdir): tested offsets
+  {0, 1162}: **3/3 match at offset 0** (e.g. g=60426: AR in red + identical spectator poses in both
+  panels); offset 1162 clearly a different moment. So the sidecar is already on the combined/global
+  axis and the subdir render aligns 1:1 — it was made from the UNTRIMMED raw (10.6 GB ≈ combined);
+  the far-label +1162 trim belongs to the YouTube upload only, NOT the render.
+
+**Verdict: viewport comparisons are trustworthy** on both the main-dir and subdir-render layouts
+(cv2 frame seek verified pose-exact at sampled frames). Composites: `G:\ballresearch\selector\
+vp_audit_{rnyfc,spc}\*.jpg`.
+
 ## EXP-DIST-22: RANK diagnostic + hn2 read-off — the ball is present but DEEPLY buried (2026-07-03)
 
 **Question.** (a) When selection misses, is the GT ball ranked 2–5 by score (a context re-ranker can

@@ -101,6 +101,40 @@ def test_rerank_handles_empty_frames_and_misses():
     )  # the visible ball is tracked
 
 
+def test_rerank_per_frame_miss_costs_gate_the_miss_state():
+    """The learned selector's -log P(none) drives the miss state PER FRAME: a cheap miss
+    lets the path skip a frame, an expensive miss forces it to pick the candidate."""
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    frames = [[Candidate(3000.0 + 40.0 * t, 1000.0, 0.2)] for t in range(6)]
+
+    # candidate emission is weak (alpha low), flat miss would win everywhere at 0.0
+    cheap = rerank(
+        frames,
+        geom,
+        miss_costs=[-5.0] * 6,  # "no visible ball" extremely likely every frame
+        config=RerankConfig(alpha=0.3),
+    )
+    assert len(cheap) == 0  # every frame prefers the miss state
+
+    forced = rerank(
+        frames,
+        geom,
+        miss_costs=[5.0] * 6,  # "a ball is clearly visible" every frame
+        config=RerankConfig(alpha=0.3),
+    )
+    assert len(forced) == 6  # every frame must take its candidate
+
+    # per-frame: only frame 2 confidently "none" -> only frame 2 misses
+    mixed = rerank(
+        frames,
+        geom,
+        miss_costs=[5.0, 5.0, -5.0, 5.0, 5.0, 5.0],
+        config=RerankConfig(alpha=0.3),
+    )
+    assert 2 not in mixed
+    assert sum(f in mixed for f in (0, 1, 3, 4, 5)) == 5
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player
