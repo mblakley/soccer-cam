@@ -293,10 +293,18 @@ class TestReolinkGetSettings:
                         }
                     },
                 ),
+                "GetIsp": _reolink_ok(
+                    "GetIsp",
+                    {"Isp": {"backLight": "DynamicRangeControl", "nr3d": 1}},
+                ),
+                "GetImage": _reolink_ok(
+                    "GetImage",
+                    {"Image": {"saturation": 60, "contrast": 62, "bright": 60}},
+                ),
             },
         )
         results = await cam.get_current_settings()
-        assert len(results) == 5
+        assert len(results) == 6
 
         rec = next(r for r in results if r["setting"] == "recording")
         assert rec["success"] is True
@@ -317,6 +325,10 @@ class TestReolinkGetSettings:
         net = next(r for r in results if r["setting"] == "network")
         assert net["success"] is True
         assert "Static" in net["current_value"]
+
+        img = next(r for r in results if r["setting"] == "image")
+        assert img["success"] is True
+        assert "WDR on" in img["current_value"]
 
     @pytest.mark.asyncio
     async def test_partial_schedule(self, tmp_path):
@@ -395,10 +407,19 @@ class TestReolinkApplySettings:
                     },
                 ),
                 "SetLocalLink": _reolink_ok("SetLocalLink"),
+                "GetIsp": _reolink_ok(
+                    "GetIsp", {"Isp": {"backLight": "Off", "nr3d": 0}}
+                ),
+                "SetIsp": _reolink_ok("SetIsp"),
+                "GetImage": _reolink_ok(
+                    "GetImage",
+                    {"Image": {"saturation": 50, "contrast": 50, "bright": 50}},
+                ),
+                "SetImage": _reolink_ok("SetImage"),
             },
         )
         results = await cam.apply_optimal_settings()
-        assert len(results) == 5
+        assert len(results) == 6
         assert all(r["success"] for r in results)
 
         enc = next(r for r in results if r["setting"] == "encoding")
