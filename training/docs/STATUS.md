@@ -61,9 +61,19 @@ per frame, no auto-advance; `action:"none"` rows still surface in F-nav). Server
 `load_human_labels` ignores `obscured`/`none` rows by design (selector GT, not detector GT).
 **Lesson re-learned: diff the DEPLOYED checkout before editing a tool that lives on another branch.**
 
-**Next:** read 0a verdict (job healthy: GPU 45%, ETA ~16:00–16:30) → if PASS, dump 2 training games
-with `hm_reolink_hn2` (kill-test inputs, ~1.5–2 h detached); 0d trimmed-basis audit (~20 min);
-0c server-side crop-rebuild check (~30–40 min); then Phase 1 kill test (~half a day).
+**Phase 0d COMPLETE — both layouts PASS (EXP-DIST-23):** RNYFC main-dir 3/3 pose-exact; Spencerport
+subdir render 3/3 at OFFSET 0 (sidecar already on the combined axis; the +1162 trim belongs only to
+the YouTube upload the far-labels were made on). All T3 viewport math unblocked.
+
+**v1 integration pre-built while the chain runs (770f38b, 2d77385):** `rerank`/`track_ball` accept
+per-frame `miss_costs` (the learned `-log P(none)` hookup — near-excursion fix) and kickoff identity
+`anchors={frame:(x,y)}` (in-radius candidates only, miss forbidden, bidirectional propagation;
+unreachable anchor = no-op). Both unit-tested.
+
+**Next:** kill-chain verdict (`kill_chain.log`, ETA ~19:00–19:15) → GO: scale teacher build to all 72
+games + train selector v1 (~1 day) / NO-GO: pivot primary to B-track round 3 + depth calibration.
+Then: 0c Fairport crop-rebuild check (~30–40 min, needs GPU-free box); field_outline v3 retrain
+(C-track, automated) once the GPU frees.
 
 ## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
 
