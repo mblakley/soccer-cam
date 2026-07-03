@@ -24,10 +24,23 @@ stream label windows via `iter_frames_from_segments` (non-combined bases = one s
 STILL TO VERIFY server-side: rebuild one game's crops (Fairport) and compare vs the old store —
 queued behind the 0a eval job (GPU/decode contention).
 
-**Phase 0a RUNNING (server):** scheduled task `selector_eval_validate_0a` (ExecutionTimeLimit ZERO) —
-fresh `eval_detector --dump-cands` for Spencerport + Irondequoit with `hm_reolink_human`, then
-`G:\ballresearch\selector\compare_dumps.py` old-vs-new (PASS = counts identical, |dxy|≤0.5px,
-|dscore|≤2e-3). Log: `G:\ballresearch\selector\eval_validate_0a.log`.
+**Phase 0a PASS — BYTE-EXACT (2026-07-03 15:46).** Fresh `eval_detector --dump-cands` for BOTH
+held-out games with `hm_reolink_human` reproduces the cached old-code dumps exactly: 1501/1501 frames
+exact, 0 count mismatches, worst |dxy| 0.0000 px / |dscore| 0.00000 (`eval_validate_0a.log`,
+`compare_dumps.py`). The refactored raw-segment eval is TRUSTED; also validates the segment-decode
+path end-to-end on real 8K data (de-risks the 0c crop-builder refactor — its Fairport rebuild-compare
+is still queued as the formal check).
+
+**Phase 1 KILL-TEST HARNESS BUILT + CHAIN RUNNING (311f93b; task `selector_kill_chain`, no time
+limit).** New: `world_model/selector_features.py` (14 context dims, knockout families),
+`models/selector_net.py` (listwise softmax over K+1, pooled none-logit, temperature-calibrated, lazy
+torch), `cli/build_selector_labels.py` (selection-level distillation: teacher_track snapped onto OUR
+candidate dumps, stability-filtered, gold ×20, active-play gated — plumbing-verified on real
+Spencerport data: teacher 12,313 → 393 supervised dump frames), `cli/kill_test_selector.py`
+(learned-argmax + rerank-emission replay + knockout sweep). Chain: dump Cleveland + Chili with
+`hm_reolink_hn2` (~80 min each, measured) → build labels → kill test on held-out spc/iron hn2 dumps.
+**Verdict in `G:\ballresearch\selector\kill_chain.log` ~19:15–19:45. GO = learned argmax ≥ +0.15 far
+AND near vs 0.264/0.467 (hn2 raw argmax), both games.**
 
 **Phase 0d viewport-loader audit — PASS on the untrimmed case (3/3):** vision-audited RNYFC
 (`G:\ballresearch\selector\viewport_audit.py` → `vp_audit_rnyfc\*.jpg`): source-panorama crop at
