@@ -694,6 +694,22 @@ class TTTApiClient:
         logger.debug("Updating game session %s", session_id)
         return self._request("PATCH", url, json=fields)
 
+    def update_game_session_phases(
+        self, session_id: str, **fields: Any
+    ) -> dict[str, Any]:
+        """Push detected/verified game-phase fields to a game session.
+
+        Uses the camera-manager-authorized worker route, NOT the team-admin
+        gated user route: soccer-cam runs on the camera manager's hardware and
+        a camera manager need not be a team admin. Only phase_* fields are
+        accepted (TTT ``GameSessionPhaseUpdate``).
+
+        PATCH {api_base_url}/api/internal/game-sessions/{session_id}/phases
+        """
+        url = f"{self.api_base_url}/api/internal/game-sessions/{session_id}/phases"
+        logger.debug("Pushing phases to game session %s", session_id)
+        return self._request("PATCH", url, json=fields)
+
     # ------------------------------------------------------------------
     # Time sync
     # ------------------------------------------------------------------

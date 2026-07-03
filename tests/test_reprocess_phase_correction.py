@@ -88,7 +88,7 @@ async def test_phase_correction_applies_human_phases_and_repushes(tmp_path: Path
     # NOT the stabilization path
     assert not (group / "reprocess_request.json").exists()
     # re-push to TTT with the human offsets
-    args, kwargs = ttt.update_game_session.call_args
+    args, kwargs = ttt.update_game_session_phases.call_args
     assert args[0] == "sess-1"
     assert kwargs["phase_kickoff_offset"] == 45.0
     assert kwargs["phase_source"] == "human"
@@ -112,7 +112,7 @@ async def test_phase_correction_no_times_reports_failure(tmp_path: Path):
 
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[1] == "failed"
-    ttt.update_game_session.assert_not_called()
+    ttt.update_game_session_phases.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -133,7 +133,7 @@ async def test_phase_correction_repush_skipped_when_no_session(tmp_path: Path):
         json.loads((group / "state.json").read_text())["game_phases"]["source"]
         == "human"
     )
-    ttt.update_game_session.assert_not_called()
+    ttt.update_game_session_phases.assert_not_called()
     assert ttt.update_reprocess_status.call_args[0][1] == "completed"
 
 
@@ -161,7 +161,7 @@ async def test_verify_phases_calls_callback_and_completes(tmp_path: Path):
 
     assert str(called["group_dir"]) == str(group)
     assert ttt.update_reprocess_status.call_args[0][1] == "completed"
-    ttt.update_game_session.assert_not_called()
+    ttt.update_game_session_phases.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -205,7 +205,7 @@ async def test_stabilization_row_unchanged_by_dispatch(tmp_path: Path):
 
     marker = json.loads((group / "reprocess_request.json").read_text())
     assert marker["stabilization_strength"] == "heavy"
-    ttt.update_game_session.assert_not_called()
+    ttt.update_game_session_phases.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -244,7 +244,7 @@ async def test_truncated_start_reruns_and_repushes(tmp_path: Path, monkeypatch):
     gp = json.loads((group / "state.json").read_text())["game_phases"]
     assert gp["truncated_start"] is True
     assert gp["times"]["kickoff"] == 0.0
-    _, kwargs = ttt.update_game_session.call_args
+    _, kwargs = ttt.update_game_session_phases.call_args
     assert kwargs["phase_truncated_start"] is True
     assert kwargs["phase_kickoff_offset"] == 0.0
     assert not (group / "reprocess_request.json").exists()  # not the stabilization path
@@ -283,7 +283,7 @@ async def test_truncated_end_reruns_with_end_flag(tmp_path: Path, monkeypatch):
     )
 
     assert seen == {"ts": False, "te": True}
-    _, kwargs = ttt.update_game_session.call_args
+    _, kwargs = ttt.update_game_session_phases.call_args
     assert kwargs["phase_truncated_end"] is True
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[1] == "completed"

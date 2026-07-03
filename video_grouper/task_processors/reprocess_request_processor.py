@@ -281,7 +281,7 @@ class ReprocessRequestProcessor(QueueProcessor):
             )
             if session and session.get("id"):
                 await asyncio.to_thread(
-                    self.ttt_client.update_game_session, session["id"], **fields
+                    self.ttt_client.update_game_session_phases, session["id"], **fields
                 )
         except Exception as exc:  # noqa: BLE001 — re-push is best-effort
             logger.warning("phase_correction: TTT re-push failed (%s)", exc)
