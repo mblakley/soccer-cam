@@ -4,6 +4,25 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-02: Game-start / trim default = phase_detection (confirmed live)
+
+**Context:** STATUS.md (2026-06-30) left an OPEN DECISION — flip the game-start/trim default to the
+phase detector, or keep NTFY and use phases for post-trim display only. The trim-safety bar was met
+(gate `ko_trustworthy`, backup 60s; every trusted, non-truncated KO is early/tiny, within the 60s
+margin); the residual gap is display-quality accuracy (~64% on combined/untrimmed video), which the
+S3 verify-loop + human-verify catches.
+
+**Decision (Mark, 2026-07-02): the default is `phase_detection`.** This was already the shipped state
+on `main` — `[PROCESSING] game_start_method = phase_detection` has been the default since S1
+(`e6a342d`), refined by `fb61a75` (60s backup, decoupled from the NTFY 240s), `6385671` (gate =
+`ko_trustworthy`, not `ok`), `99801b8` / `9ef524d` (truncated-start), `3811224` (parent event-tap
+anchors). Reolink-only; Dahua and any rejected / low-confidence fit fall back to the NTFY walk, so
+behavior is never worse than NTFY. This entry records the decision as made and supersedes the
+"suspended, stays NTFY" note in PHASE_DETECTION_INTEGRATION.md (2026-06-18). Verified 2026-07-02: 131
+phase / NTFY / trim / reprocess unit tests green.
+
+---
+
 ## 2026-06-30: Truncation representation — explicit start/end booleans in game.json
 
 **Context:** Some games' recording missed the kickoff (camera started after KO) or the final whistle
