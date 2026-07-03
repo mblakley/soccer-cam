@@ -23,10 +23,10 @@ video clips and optionally compiles them into highlight reels.
 
 | # | Phase | Status | Target |
 |---|-------|--------|--------|
-| 1 | [API Client](phase-1-api-client.md) | DONE | `api_integrations/moment_api_client.py` — HTTP client for team-tech-tools API |
-| 2 | [Timestamp Matching](phase-2-timestamp-matching.md) | DONE | `task_processors/services/timestamp_matcher.py` — wall-clock → video offset |
-| 3 | [Clip Generation](phase-3-clip-generation.md) | DONE | `clip_discovery_processor.py` + `clip_processor.py` + `tasks/clips/clip_extraction_task.py` |
-| 4 | [Highlight Compilation](phase-4-highlight-compilation.md) | DONE | `tasks/clips/highlight_compilation_task.py` + `highlight_reel_processor.py` |
+| 1 | [API Client](phase-1-api-client.md) | DONE | `video_grouper/api_integrations/moment_api_client.py` — HTTP client for team-tech-tools API |
+| 2 | [Timestamp Matching](phase-2-timestamp-matching.md) | DONE | `video_grouper/task_processors/services/timestamp_matcher.py` — wall-clock → video offset |
+| 3 | [Clip Generation](phase-3-clip-generation.md) | DONE | `video_grouper/task_processors/{clip_discovery_processor,clip_processor}.py` + `tasks/clips/clip_extraction_task.py` |
+| 4 | [Highlight Compilation](phase-4-highlight-compilation.md) | DONE | `video_grouper/task_processors/highlight_reel_processor.py` + `tasks/{clips/highlight_compilation_task,ttt/highlight_reel_task}.py` |
 
 ### Status key
 
