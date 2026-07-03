@@ -219,26 +219,24 @@ def main() -> None:
 
     import cv2
 
-    from training.data_prep.segment_decode import extract_frames_from_segments
+    from training.data_prep.segment_decode import iter_frames_from_segments
     from training.data_prep.warped_dataset import resolve_video_rotation
 
     seg0 = gj["segments"][0]
     sw, sh = int(seg0["w"]), int(seg0["h"])
     vrot = resolve_video_rotation(video, gj.get("video_rotation"))
 
-    # Extract the wanted global frames from the RAW per-segment clips, NOT the re-encoded/VFR/
+    # STREAM the wanted global frames from the RAW per-segment clips, NOT the re-encoded/VFR/
     # corruption-prone combined video. The combined is a stream-copy concat, so raw-segment frame f
     # is bit-identical to combined global (offset+f); decoding raw is frame-exact, corruption-isolated
     # (a bad segment loses only its own frames), and fast (a keyframe seek + short decode per label).
+    # Each JPEG is written as its frame arrives — never hold the full-res frame set in memory.
     want = {int(e["frame_idx"]) for e in frames}
-    got = extract_frames_from_segments(
-        vdir, gj["segments"], want, vrot, hwaccel=not args.no_hwaccel
-    )
     written = 0
-    for f in sorted(got):
-        cv2.imwrite(
-            str(strips / f"f{f:06d}.jpg"), got[f], [cv2.IMWRITE_JPEG_QUALITY, 88]
-        )
+    for f, img in iter_frames_from_segments(
+        vdir, gj["segments"], want, vrot, hwaccel=not args.no_hwaccel
+    ):
+        cv2.imwrite(str(strips / f"f{f:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88])
         written += 1
     print(
         f"  wrote {written}/{len(want)} strips via raw-segment decode "

@@ -84,10 +84,8 @@ def main() -> None:
         _far_margin_polygon,
         _native_iso_warp,
     )
-    from training.data_prep.warped_dataset import (
-        apply_display_rotation,
-        resolve_video_rotation,
-    )
+    from training.data_prep.segment_decode import iter_frames_from_segments
+    from training.data_prep.warped_dataset import resolve_video_rotation
     from training.models.heatmap_net import HeatmapNet
     from training.world_model.eval import extract_peaks
     from training.world_model.geometry import build_field_geometry
@@ -126,22 +124,11 @@ def main() -> None:
         geom = build_field_geometry(np.asarray(g["polygon"], float))
         if not geom.valid:
             continue
+        # Rotation is applied inside iter_frames_from_segments; probe only for dims.
         vrot = resolve_video_rotation(str(g["video"]), g.get("video_rotation"))
-        _hw = None
-        if not args.no_hwaccel:
-            try:
-                _hw = av.codec.hwaccel.HWAccel(
-                    device_type="cuda", allow_software_fallback=True
-                )
-            except Exception:  # noqa: BLE001
-                _hw = None
-        container = (
-            av.open(str(g["video"]), hwaccel=_hw) if _hw else av.open(str(g["video"]))
-        )
-        stream = container.streams.video[0]
-        if _hw is None:
-            stream.thread_type = "AUTO"
-        sw, sh = stream.codec_context.width, stream.codec_context.height
+        with av.open(str(g["video"])) as _probe:
+            _vs = _probe.streams.video[0]
+            sw, sh = _vs.codec_context.width, _vs.codec_context.height
         far_poly = _far_margin_polygon(g["polygon"], 400.0)
         warp = _native_iso_warp(far_poly, sw, sh, g.get("target_width"))
         bh, bw = warp.shape
@@ -156,19 +143,32 @@ def main() -> None:
             for i, f in enumerate(want)
             if lo <= f <= hi and i % args.sample_stride == 0
         }
-        buf: list = []
-        idx = -1
+        # Raw-segment streaming decode (EXP-DIST-21): only each sampled frame's
+        # 3-frame window is decoded (~one GOP per cluster), corruption-isolated.
+        # Non-combined bases (corrected/trimmed single clip) = one synthetic segment.
+        video_p = Path(str(g["video"]))
+        gjp = video_p.parent / "game.json"
+        if video_p.name == "combined.mp4" and gjp.exists():
+            segments = json.loads(gjp.read_text(encoding="utf-8", errors="ignore"))[
+                "segments"
+            ]
+        else:
+            segments = [{"seg": video_p.stem, "global_offset": 0, "frames": 10**9}]
+        need: set[int] = set()
+        for f in infer_set:
+            need.update(k for k in (f, f - 1, f - 2) if k >= 0)
+        warped: dict[int, np.ndarray] = {}
         nadd = 0
-        for fr in container.decode(stream):
-            idx += 1
-            if idx < lo - 2:
-                continue
-            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-            buf.append(_dewarp_mask_gray(img, warp, mask))
-            if len(buf) > 3:
-                buf.pop(0)
+        for idx, img in iter_frames_from_segments(
+            video_p.parent, segments, sorted(need), vrot, hwaccel=not args.no_hwaccel
+        ):
+            warped[idx] = _dewarp_mask_gray(img, warp, mask)
             if idx in infer_set:
-                grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
+                seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
+                seq = [s for s in seq if s is not None]
+                grays = seq if len(seq) == 3 else [seq[0]] * (3 - len(seq)) + seq
+                for _k in [k for k in warped if k < idx - 2]:
+                    del warped[_k]
                 stack = np.stack(grays, 0).astype(np.float32) / 255.0
                 hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
                 bx, by = warp.points([labels[idx]])[0]
@@ -200,9 +200,6 @@ def main() -> None:
                     )
                     kept += 1
                     nadd += 1
-            if idx > hi:
-                break
-        container.close()
         total += nadd
         print(f"{gid}: +{nadd} hard-neg crops", flush=True)
 

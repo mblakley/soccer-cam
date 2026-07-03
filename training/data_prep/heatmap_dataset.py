@@ -16,8 +16,9 @@ heatmap):
    plus background crops as negatives. The net is fully convolutional, so training
    on crops and running on the whole masked band at inference is consistent.
 
-The camera encodes GOP=1 (all keyframes), so seeking to ``t-2`` and decoding three
-frames is exact and cheap.
+Frames come from the raw per-segment clips via ``segment_decode`` (GOP=20 + VFR —
+keyframe-seek + presentation-order-PTS matching is exact; EXP-DIST-21), so each
+label costs ~one GOP of decode, corruption-isolated per segment.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from pathlib import Path
 
 import numpy as np
 
+from training.data_prep.segment_decode import iter_frames_from_segments
 from training.data_prep.warped_dataset import (
     CropIsoWarp,
-    apply_display_rotation,
     field_band_from_polygon,
     resolve_video_rotation,
 )
@@ -127,28 +128,13 @@ def build_heatmap_crops(
         labels = {int(k): v for k, v in g["labels"].items()}
         if not labels:
             continue
-        # PyAV ignores the container's display-rotation; resolve it (explicit else game.json) and apply per frame
+        # PyAV ignores the container's display-rotation; resolve it (explicit else game.json).
+        # Rotation is applied INSIDE iter_frames_from_segments — frames arrive corrected.
         vrot = resolve_video_rotation(str(g["video"]), g.get("video_rotation"))
-        # NVDEC hardware decode for the huge (7680x2160 HEVC / 4096 H.264) videos — ~3.3x faster
-        # than CPU on this box; per-video software fallback if the GPU can't take a codec/size.
-        _hw = None
-        if hwaccel:
-            try:
-                _hw = av.codec.hwaccel.HWAccel(
-                    device_type="cuda", allow_software_fallback=True
-                )
-            except Exception:  # noqa: BLE001 — no CUDA / old PyAV → CPU decode
-                _hw = None
-        container = (
-            av.open(str(g["video"]), hwaccel=_hw)
-            if _hw is not None
-            else av.open(str(g["video"]))
-        )
-        stream = container.streams.video[0]
-        if _hw is None:
-            stream.thread_type = "AUTO"
-        sw = stream.codec_context.width
-        sh = stream.codec_context.height
+        with av.open(str(g["video"])) as _probe:
+            _vs = _probe.streams.video[0]
+            sw = _vs.codec_context.width
+            sh = _vs.codec_context.height
         # Build BOTH the band crop and the mask from the far-margin-expanded polygon, so
         # the band top includes the far margin — airborne/very-far balls above the ground
         # far line stay in-band (cropping the band at the raw far line dropped ~1/3 of the
@@ -161,11 +147,21 @@ def build_heatmap_crops(
         mask = np.zeros((bh, bw), np.uint8)
         cv2.fillPoly(mask, [mpoly], 255)
 
-        # Sequential decode with a rolling 3-frame buffer. Frame-EXACT and
-        # gop-agnostic; seeking is wrong on re-encoded clips (e.g. the trimmed
-        # Irondequoit val clip), which silently misaligns the ball from the target.
+        # Raw-segment streaming decode (EXP-DIST-21): pull ONLY each label's 3-frame
+        # window from the raw per-segment clips — keyframe-seek + presentation-order
+        # PTS matching (frame-exact, incl. on re-encoded clips), corruption-isolated
+        # per segment. A non-combined basis (corrected/trimmed single clip) becomes
+        # one synthetic segment: same PTS-exact path, local index == global index.
+        video_p = Path(str(g["video"]))
+        gjp = video_p.parent / "game.json"
+        if video_p.name == "combined.mp4" and gjp.exists():
+            segments = json.loads(gjp.read_text(encoding="utf-8", errors="ignore"))[
+                "segments"
+            ]
+        else:
+            segments = [{"seg": video_p.stem, "global_offset": 0, "frames": 10**9}]
+
         want = set(labels)
-        lo, hi = min(want) - 2, max(want)
         grays: list = []
         dbx = dby = 0.0
         t = 0
@@ -198,22 +194,16 @@ def build_heatmap_crops(
                 rec["depth"] = round(float(np.clip(dby / max(bh, 1), 0.0, 1.0)), 4)
             index.append(rec)
 
-        # Transfer (GPU->CPU to_ndarray) + warp ONLY each label's 3-frame window [t-2,t-1,t], not
-        # every frame in [lo,hi]. The decode still walks all frames (cheap on NVDEC), but the
-        # transfer + cv2 warp of the huge band dominate, so for sparse (capped) labels this is a
-        # >10x speedup. Dense labels (far-label sets) are unaffected (need ~= every frame).
+        # Warp ONLY each label's 3-frame window [t-2, t-1, t]; the generator decodes
+        # ~one GOP per cluster instead of walking the whole video.
         need: set[int] = set()
         for _t in want:
-            need.update((_t, _t - 1, _t - 2))
+            need.update(k for k in (_t, _t - 1, _t - 2) if k >= 0)
         warped: dict[int, np.ndarray] = {}
-        idx = -1
-        for fr in container.decode(stream):
-            idx += 1
-            if idx < lo:
-                continue
-            if idx in need:
-                img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-                warped[idx] = _dewarp_mask_gray(img, warp, mask)
+        for idx, img in iter_frames_from_segments(
+            video_p.parent, segments, sorted(need), vrot, hwaccel=hwaccel
+        ):
+            warped[idx] = _dewarp_mask_gray(img, warp, mask)
             if idx in want:
                 bx, by = labels[idx]
                 seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
@@ -252,9 +242,6 @@ def build_heatmap_crops(
                         hard_neg_crops.get(f"{gid}|{idx}", [])[:2]
                     ):
                         _emit(float(hx), float(hy), False, f"hard{hi_}")
-            if idx > hi:
-                break
-        container.close()
 
     n_train = sum(1 for r in index if r["split"] == "train")
     n_val = sum(1 for r in index if r["split"] == "val")

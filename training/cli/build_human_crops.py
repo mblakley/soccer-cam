@@ -49,7 +49,7 @@ def main() -> None:
         _far_margin_polygon,
         _native_iso_warp,
     )
-    from training.data_prep.segment_decode import extract_frames_from_segments
+    from training.data_prep.segment_decode import iter_frames_from_segments
     from training.data_prep.warped_dataset import resolve_video_rotation
 
     out = Path(args.out)
@@ -133,54 +133,62 @@ def main() -> None:
         band_globals: set[int] = set()
         for f in want:
             band_globals.update((max(0, f - 2), max(0, f - 1), f))
+        # STREAM the band frames (ascending): warp each as it arrives, emit a label's
+        # crop once its window [f-2, f] is in hand, evict older band frames. Never
+        # holds the full-res frame set (a dense far-label set OOMs the 16 GB box).
+        far_poly = _far_margin_polygon(poly, args.far_margin)
+        warp = mask = None
+        bh = bw = 0
+        band_gray: dict[int, np.ndarray] = {}
+        n = 0
         try:
-            got = extract_frames_from_segments(
+            for f, img in iter_frames_from_segments(
                 game_dir, segments, band_globals, vrot, hwaccel=not args.no_hwaccel
-            )
+            ):
+                if warp is None:
+                    sh_, sw_ = img.shape[:2]
+                    warp = _native_iso_warp(far_poly, sw_, sh_, None)
+                    bh, bw = warp.shape
+                    mpoly = warp.points(far_poly).astype(np.int32)
+                    mask = np.zeros((bh, bw), np.uint8)
+                    cv2.fillPoly(mask, [mpoly], 255)
+                band_gray[f] = _dewarp_mask_gray(img, warp, mask)
+                if f in want:
+                    sx, sy, is_pos = want[f]
+                    bx, by = warp.points([(sx, sy)])[0]
+                    x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
+                    y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
+                    lx, ly = bx - x0, by - y0
+                    if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
+                        continue
+                    g0 = band_gray[f]
+                    g1 = band_gray.get(f - 1, g0)
+                    g2 = band_gray.get(f - 2, g1)
+                    stack = np.zeros((3, args.crop, args.crop), np.uint8)
+                    for i, gr in enumerate((g2, g1, g0)):
+                        patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
+                        stack[i, : patch.shape[0], : patch.shape[1]] = patch
+                    tag = "hpos" if is_pos else "hneg"
+                    fn = f"human_{sd.name}_f{f:06d}_{tag}.npy"
+                    np.save(crops / fn, stack)
+                    items.append(
+                        {
+                            "file": fn,
+                            "x": round(float(lx), 1) if is_pos else None,
+                            "y": round(float(ly), 1) if is_pos else None,
+                            "split": "train",
+                        }
+                    )
+                    n += 1
+                    totals["pos" if is_pos else "neg"] += 1
+                for _k in [k for k in band_gray if k < f - 2]:
+                    del band_gray[_k]
         except Exception as e:  # noqa: BLE001
             print(f"  SKIP {sd.name}: extract error: {e!r}", flush=True)
             continue
-        if not got:
+        if warp is None:
             print(f"  SKIP {sd.name}: no frames extracted", flush=True)
             continue
-        sh_, sw_ = next(iter(got.values())).shape[:2]
-        far_poly = _far_margin_polygon(poly, args.far_margin)
-        warp = _native_iso_warp(far_poly, sw_, sh_, None)
-        bh, bw = warp.shape
-        mpoly = warp.points(far_poly).astype(np.int32)
-        mask = np.zeros((bh, bw), np.uint8)
-        cv2.fillPoly(mask, [mpoly], 255)
-        band_gray = {f: _dewarp_mask_gray(img, warp, mask) for f, img in got.items()}
-        n = 0
-        for f, (sx, sy, is_pos) in want.items():
-            if f not in band_gray:
-                continue  # frame unavailable (corrupt / missing segment)
-            bx, by = warp.points([(sx, sy)])[0]
-            x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
-            y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
-            lx, ly = bx - x0, by - y0
-            if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
-                continue
-            g0 = band_gray[f]
-            g1 = band_gray.get(f - 1, g0)
-            g2 = band_gray.get(f - 2, g1)
-            stack = np.zeros((3, args.crop, args.crop), np.uint8)
-            for i, gr in enumerate((g2, g1, g0)):
-                patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
-                stack[i, : patch.shape[0], : patch.shape[1]] = patch
-            tag = "hpos" if is_pos else "hneg"
-            fn = f"human_{sd.name}_f{f:06d}_{tag}.npy"
-            np.save(crops / fn, stack)
-            items.append(
-                {
-                    "file": fn,
-                    "x": round(float(lx), 1) if is_pos else None,
-                    "y": round(float(ly), 1) if is_pos else None,
-                    "split": "train",
-                }
-            )
-            n += 1
-            totals["pos" if is_pos else "neg"] += 1
         print(f"  {sd.name}: +{n} crops (raw-segment)", flush=True)
 
     idx_obj["items"] = items
