@@ -217,64 +217,34 @@ def main() -> None:
     for old in strips.glob("*.jpg"):
         old.unlink()
 
-    import av
     import cv2
 
-    from training.data_prep.warped_dataset import (
-        apply_display_rotation,
-        resolve_video_rotation,
-    )
+    from training.data_prep.segment_decode import extract_frames_from_segments
+    from training.data_prep.warped_dataset import resolve_video_rotation
 
+    seg0 = gj["segments"][0]
+    sw, sh = int(seg0["w"]), int(seg0["h"])
     vrot = resolve_video_rotation(video, gj.get("video_rotation"))
-    _hw = None
-    if not args.no_hwaccel:
-        try:
-            _hw = av.codec.hwaccel.HWAccel(
-                device_type="cuda", allow_software_fallback=True
-            )
-        except Exception:  # noqa: BLE001
-            _hw = None
-    container = av.open(video, hwaccel=_hw) if _hw else av.open(video)
-    stream = container.streams.video[0]
-    if _hw is None:
-        stream.thread_type = "AUTO"
-    sw, sh = stream.codec_context.width, stream.codec_context.height
 
-    # SEQUENTIAL decode (combined video is re-encoded — seeking silently misaligns; same rule as the
-    # distill/eval decoders). Save each wanted global frame; stop after the last one.
-    want = {e["frame_idx"] for e in frames}
-    hi = max(want)
+    # Extract the wanted global frames from the RAW per-segment clips, NOT the re-encoded/VFR/
+    # corruption-prone combined video. The combined is a stream-copy concat, so raw-segment frame f
+    # is bit-identical to combined global (offset+f); decoding raw is frame-exact, corruption-isolated
+    # (a bad segment loses only its own frames), and fast (a keyframe seek + short decode per label).
+    want = {int(e["frame_idx"]) for e in frames}
+    got = extract_frames_from_segments(
+        vdir, gj["segments"], want, vrot, hwaccel=not args.no_hwaccel
+    )
     written = 0
-    idx = -1
-    # Corruption-tolerant decode: a bad packet in a re-encoded combined video makes libav raise
-    # mid-stream (observed on the Flaitz game). Because seeking past it silently misaligns this
-    # stream, stop cleanly and build a PARTIAL set from the strips decoded before the corruption —
-    # all correctly aligned — instead of crashing and producing nothing.
-    decoder = container.decode(stream)
-    while True:
-        try:
-            fr = next(decoder)
-        except StopIteration:
-            break
-        except Exception as e:  # noqa: BLE001 — corrupt / undecodable packet
-            print(
-                f"  DECODE ERROR at frame ~{idx + 1} ({type(e).__name__}: {e}); "
-                f"stopping with a partial set of {written}/{len(want)} strips",
-                flush=True,
-            )
-            break
-        idx += 1
-        if idx in want:
-            img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-            cv2.imwrite(
-                str(strips / f"f{idx:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88]
-            )
-            written += 1
-            if written % 20 == 0:
-                print(f"  wrote {written}/{len(want)} strips (frame {idx})", flush=True)
-        if idx >= hi:
-            break
-    container.close()
+    for f in sorted(got):
+        cv2.imwrite(
+            str(strips / f"f{f:06d}.jpg"), got[f], [cv2.IMWRITE_JPEG_QUALITY, 88]
+        )
+        written += 1
+    print(
+        f"  wrote {written}/{len(want)} strips via raw-segment decode "
+        f"({len(want) - written} unavailable — corrupt/missing segments)",
+        flush=True,
+    )
     if written == 0:
         raise SystemExit(
             f"no decodable strips for {gid} (video corrupt from the start)"
