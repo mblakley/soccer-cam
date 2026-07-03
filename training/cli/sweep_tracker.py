@@ -217,6 +217,42 @@ def main() -> None:
         "score-argmax (no track)",
         *_score(argmax, frames, ef, balls, geom, far_px, stride),
     )
+
+    # Depth-calibrated confidence (EXP-DIST-22: the raw sigmoid is saturated and carries
+    # ~no cross-frame ranking signal): re-score every candidate as its score PERCENTILE
+    # within the game's depth band, so a far ball competes against far peers instead of
+    # being buried under confident near distractors.
+    from training.world_model.selector_features import FEATURE_NAMES, build_features
+
+    i_pd = FEATURE_NAMES.index("pct_depth")
+    feats = build_features(frames, geom)
+    dc_frames = [
+        [
+            Candidate(x=c.x, y=c.y, score=float(fx[i, i_pd]), size_px=c.size_px)
+            for i, c in enumerate(cs)
+        ]
+        for cs, fx in zip(frames, feats, strict=True)
+    ]
+    dc_argmax = {
+        i: (max(fr, key=lambda c: c.score).x, max(fr, key=lambda c: c.score).y)
+        for i, fr in enumerate(dc_frames)
+        if fr
+    }
+    line(
+        "DEPTH-CAL argmax",
+        *_score(dc_argmax, frames, ef, balls, geom, far_px, stride),
+    )
+    dc_cfg = replace(
+        RerankConfig(), alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0
+    )
+    dc_track = kalman_smooth(
+        rerank(dc_frames, geom, frame_gaps=gaps, config=dc_cfg), geom
+    )
+    line(
+        "DEPTH-CAL tracker a1 mj25 v12",
+        *_score(dc_track, frames, ef, balls, geom, far_px, stride),
+    )
+
     if args.rank_only:
         return
 

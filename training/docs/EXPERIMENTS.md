@@ -4,6 +4,53 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-24: selector KILL TEST — NO-GO at 2-game supervision; depth-cal rescoring a wash (2026-07-03)
+
+**Setup (the pre-registered Phase-1 gate for the learned-selector bet).** Selection-level
+distillation labels on 2 training games (Cleveland 505 + Chili 778 frames after stability
+filtering; teacher = AutoCam dets → `track_ball`, interpolated onto the dump grid — the marathon's
+detections are on the 0-mod-4 grid, a dump's ef grid is phased by its GT span, and on Cleveland they
+never intersect: exact-key matching produced 0/1501 labels until `teacher_at()` lerp landed).
+Listwise net (14 context features, softmax over 24+none), evaluated on the held-out hn2 dumps.
+**GO required: learned argmax ≥ +0.15 over raw argmax on far AND near, BOTH games.**
+
+**Result: NO-GO.**
+
+| game | raw argmax (near/far) | LEARNED argmax (near/far) | best learned-emission tracker (far) | hand-tuned tracker (far) |
+|---|---|---|---|---|
+| Spencerport (n=420) | 0.467 / 0.264 | **0.300 / 0.294** (−0.17 / +0.03) | 0.29 | **0.703** |
+| Irondequoit (n=27) | 0.188 / 0.273 | 0.375 / 0.455 (+0.19 / +0.18) | 0.60 | 0.727 |
+
+Training never fit well (val CE ~1.9 ≈ choosing among ~7; no early stop in 60 epochs). Notable: the
+training windows carried **0 none-labels and 0 gold** (the games' human labels fall outside the
+dumps' 6,000-frame GT spans), and the label mass is far-biased — consistent with the near
+degradation on Spc.
+
+**Knockout diagnostics (the useful part):**
+- knockout **score** → far collapses (Spc 0.215): the score family carries most of the signal.
+- knockout **geometry** → far IMPROVES on both (Spc argmax 0.294→0.376, Iron 0.455→0.636): at
+  2-game scale the depth/infield/size features are venue-overfit noise — the red-team's watch-item
+  confirmed empirically.
+- window/persistence/frame knockouts ≈ wash at this scale.
+
+**Depth-calibrated confidence replay (B-lever 2, `sweep_tracker` DEPTH-CAL rows):** re-scoring
+candidates by score-percentile-within-depth-band: Spc argmax far +0.03 / near −0.11, tracker far
+0.636 vs 0.682 raw; Iron tracker far 0.636 vs 0.727 raw. **Wash-to-negative** — the raw sigmoid is
+saturated, so percentiles recover no ordering information. Calibration must come from the detector's
+TRAINING (which hard-neg rounds demonstrably do: hn2 near argmax 0.30→0.467).
+
+**Decisions.**
+1. Per the pre-registered branch: **B-track is now primary** — hard-neg round 3 launched
+   (`selector_hn3_chain`: mine with hn2 → fine-tune → dump both held-out → sweep; first live run of
+   the segment-decode miner).
+2. The learned selector is NOT dead-and-buried — Iron's +0.18/+0.19 and the score-knockout collapse
+   show a learnable, transferring signal exists — but it goes back on the shelf until the
+   supervision is materially better: full-game dumps (not 6k windows), many more games, none-labels
+   + gold overlay in-window, and geometry features dropped until venue count supports them. Do NOT
+   re-run the same 2-game test expecting different results.
+3. Keep: the harness (features/net/labels/kill CLI), per-frame `miss_costs`, kickoff `anchors` —
+   all integration-ready when (2) is revisited.
+
 ## EXP-DIST-23: viewport-loader alignment audit — PASS, viewport math unblocked (2026-07-03)
 
 **Why.** EXP-DIST-16 flagged all AutoCam-viewport comparisons as untrustworthy (loader misalignment

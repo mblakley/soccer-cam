@@ -70,10 +70,24 @@ per-frame `miss_costs` (the learned `-log P(none)` hookup — near-excursion fix
 `anchors={frame:(x,y)}` (in-radius candidates only, miss forbidden, bidirectional propagation;
 unreachable anchor = no-op). Both unit-tested.
 
-**Next:** kill-chain verdict (`kill_chain.log`, ETA ~19:00–19:15) → GO: scale teacher build to all 72
-games + train selector v1 (~1 day) / NO-GO: pivot primary to B-track round 3 + depth calibration.
-Then: 0c Fairport crop-rebuild check (~30–40 min, needs GPU-free box); field_outline v3 retrain
-(C-track, automated) once the GPU frees.
+**KILL TEST RAN — NO-GO (EXP-DIST-24).** Learned selector at 2-game supervision fails the
+pre-registered gate on Spencerport (argmax near −0.17 / far +0.03); Iron improved (+0.18 both) but
+n=27. Knockouts: score family carries the signal; geometry features venue-overfit at this scale
+(removing them HELPS far). Depth-percentile rescoring also tested → wash-to-negative (sweep_tracker
+DEPTH-CAL rows). Two chain bugs found+fixed on the way: teacher/dump stride-phase mismatch (teacher
+now interpolates onto the ef grid) and a Windows drive-colon CLI separator.
+
+**PIVOT EXECUTED per plan: B-track primary. `selector_hn3_chain` RUNNING** (launched 17:42): mine
+round-3 hard negatives with hn2 (first live run of the segment-decode miner) → fine-tune
+`hm_reolink_hn3` → dump both held-out games → sweep. **ETA ~01:30–03:00; results in
+`G:\ballresearch\selector\sweep_hn3.log`; ntfy push on completion.** Success = held-out
+score-argmax up + ceiling flat vs hn2 (far argmax 0.264 / near 0.467 / ceiling 0.958/0.989 are the
+bars). Selector bet shelved until supervision scale materially improves (conditions in EXP-DIST-24
+§Decisions; harness + miss_costs + anchors are ready when it does).
+
+**Next after hn3:** read sweep → hn4 if still climbing, else venue-diversity labeling; 0c Fairport
+crop-rebuild check (~30–40 min, idle box); C-track field_outline v3 retrain (automated) in the GPU
+gaps; new-store label sets for Mark's obscured/decoy labeling continue to accumulate value.
 
 ## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
 
