@@ -466,6 +466,31 @@ class VideoGrouperApp:
                 logger.info("TTT ReprocessRequestProcessor initialized")
 
                 self._ttt_client = ttt_client
+
+                # Schedule service — caches TTT team schedule and auto-matches
+                # recordings to games. Best-effort; never blocks startup.
+                try:
+                    from video_grouper.task_processors.services.schedule_service import (
+                        ScheduleService,
+                    )
+
+                    schedule_service = ScheduleService(
+                        self.storage_path, self.config, ttt_client
+                    )
+                    self._schedule_service = schedule_service
+                    # Wire into match_info_service if the NTFY block already created it
+                    if (
+                        self.ntfy_processor is not None
+                        and getattr(self.ntfy_processor, "match_info_service", None)
+                        is not None
+                    ):
+                        self.ntfy_processor.match_info_service.schedule_service = (
+                            schedule_service
+                        )
+                except Exception:
+                    logger.warning(
+                        "ScheduleService failed to initialize", exc_info=True
+                    )
             except Exception as e:
                 logger.error(f"Failed to initialize TTT processors: {e}")
 
@@ -589,6 +614,7 @@ class VideoGrouperApp:
                         reprocess_request_processor=getattr(
                             self, "reprocess_request_processor", None
                         ),
+                        schedule_service=getattr(self, "_schedule_service", None),
                         poll_interval=self.config.ttt.clip_request_poll_interval,
                     )
                     logger.info("TTTPoller initialized")

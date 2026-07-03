@@ -152,6 +152,25 @@ class UploadProcessor(QueueProcessor):
                         )
                     except Exception:
                         pass  # Never block upload on TTT
+
+                # Auto-match uploaded video with TTT game schedule (best-effort)
+                if self.ttt_reporter:
+                    yt_video_id = getattr(item, "youtube_video_id", None)
+                    if yt_video_id:
+                        group_dir = item.get_item_path()
+                        try:
+                            from video_grouper.models import DirectoryState
+
+                            dir_state = DirectoryState(group_dir)
+                            files = list(dir_state.files.values())
+                            if files:
+                                files.sort(key=lambda f: f.start_time)
+                                recorded_at = files[0].start_time
+                                await self.ttt_reporter.auto_match_video(
+                                    group_dir, yt_video_id, recorded_at
+                                )
+                        except Exception:
+                            pass  # Never block upload on TTT
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
                 # Report upload failure to TTT (best-effort)

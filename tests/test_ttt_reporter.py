@@ -1,6 +1,7 @@
 """Tests for the TTT reporter module."""
 
 import asyncio
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -651,3 +652,56 @@ class TestEnhancedHeartbeat:
             return_value={},
         ):
             await self.reporter.report_heartbeat()  # Should not raise
+
+
+class TestAutoMatchVideo:
+    """Tests for TTTReporter.auto_match_video."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.config = MagicMock()
+        self.config.ttt.camera_id = "cam-1"
+        self.config.ttt.heartbeat_interval = 30
+        self.reporter = TTTReporter(ttt_client=self.client, config=self.config)
+        # Pre-cache team_id so we don't need to mock get_team_assignments here
+        self.reporter._cached_team_id = "team-1"
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_calls_client_with_correct_args(self):
+        self.client.auto_match_video.return_value = {"matched": True, "message": "ok"}
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+        self.client.auto_match_video.assert_called_once_with(
+            "team-1",
+            "https://youtu.be/vid123",
+            recorded_at.isoformat(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_swallows_client_error(self):
+        self.client.auto_match_video.side_effect = Exception("network error")
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        # Must not raise
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        # Must not raise and must not call client
+        await reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+        self.client.auto_match_video.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_noop_when_no_team_id(self):
+        self.reporter._cached_team_id = None
+        self.client.get_team_assignments.return_value = []
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+        self.client.auto_match_video.assert_not_called()
