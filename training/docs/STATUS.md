@@ -2,6 +2,27 @@
 
 *Last updated: 2026-07-03*
 
+## 2026-07-03 (later) — ball-selector iteration STARTED (branch `feat/ball-selector`)
+
+Plan approved by Mark: **selection-level distillation** (dense selector supervision = teacher track
+snapped onto OUR candidates, human labels as gold overlay) + listwise learned emission + person/play-
+density head + ball-state machine + uncertainty-aware viewport; success bar unchanged (SELECTED far
+>0.845 / near ≥0.978, then track continuity + viewport-divergence vs AutoCam). Branch
+`feat/ball-selector` off `origin/feat/homegrown-ball-detector`, dedicated worktree
+`../soccer-cam-ball-selector`, isolated server checkout `G:\ballresearch\selector\repo` (leave
+`repo_hg` alone — other sessions may use it).
+
+**Phase 0b DONE — RANK diagnostic + hn2 read-off (EXP-DIST-22):** the GT ball is in the candidates but
+**rank 11+ of 24 ~40% of the time** (hard-mined GT); hn2 raised ceiling (Spc far 0.958) + near argmax
+(0.467) and is still climbing → hn2 = new base detector, hard-neg round 3 justified; confidence-hybrid
+flat at every threshold = saturated raw scores. Full numbers in EXPERIMENTS.md EXP-DIST-22.
+Also fixed 3 stale unit tests on the branch (Reolink image-setting count, field_detect fake signature).
+
+**Next (Phase 0 remainder):** 0a validate refactored eval_detector vs old dump (gate); 0c decode
+migration (`build_heatmap_crops`, `mine_hard_negatives`, dict→streaming); 0d viewport-loader alignment
+audit (vision) — gate for any viewport-vs-viewport comparison. Then Phase 1 kill test (go/no-go for
+the learned selector).
+
 ## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
 
 Full write-up (with the held-out numbers + external comparison, kept out of the repo per policy):

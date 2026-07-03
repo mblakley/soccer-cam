@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-22: RANK diagnostic + hn2 read-off — the ball is present but DEEPLY buried (2026-07-03)
+
+**Question.** (a) When selection misses, is the GT ball ranked 2–5 by score (a context re-ranker can
+fix it) or 11+/absent (the detector buries it)? (b) Did the 2nd hard-negative round (`hm_reolink_hn2`,
+dumped 7/2 but never read) move anything? Tool: new `sweep_tracker` RANK section (`rank_table`) — the
+GT ball = nearest candidate in meters within R15; report its 1-based score-rank per band, `--rank-only`
+for fast replays. (This is the rank script the 07-03 session attempted; the `geometry` API mismatch is
+resolved by using `image_to_world`/`expected_ball_diameter_px` exactly as `_ceiling` does.)
+
+**RANK result (epoch-3 human model dumps; GT sets are hard-mined, so ranks are biased hard):**
+
+| game (band, n) | r1 | r2–3 | r4–5 | r6–10 | r11+ | absent | med rank |
+|---|---|---|---|---|---|---|---|
+| Spc near (90) | 0.12 | 0.12 | 0.10 | 0.23 | **0.42** | 0.00 | 9 |
+| Spc far (330) | 0.17 | 0.08 | 0.05 | 0.15 | **0.46** | 0.08 | 10 |
+| Iron near (16) | 0.06 | 0.06 | 0.12 | 0.12 | **0.56** | 0.06 | 14 |
+| Iron far (11) | 0.18 | 0.27 | 0.00 | 0.00 | 0.45 | 0.09 | 8 |
+
+**hn2 read-off (Spencerport n=420 / Irondequoit n=27):**
+- **Ceiling UP, no regression:** Spc ALL 0.936→**0.964**, far 0.918→**0.958**, near 0.989. Iron flat
+  (0.926/0.938/0.909).
+- **Near ranking improved a lot:** Spc near argmax 0.30→**0.467** (hn1 was 0.378 — still climbing),
+  med rank 9→6, r11+ 0.42→0.32. **Far barely moved:** argmax 0.239→0.264, r11+ 0.46→0.44, med 10.
+- **Best SELECTED:** Spc far **0.703** (a3.0/mj15/v8), near ≤0.34; Iron far **0.727** (a1.0/mj25/v12),
+  near 0.75 @ a0.3/mj15/v8 (n=16, directional). The per-game optimum DISAGREES across games again
+  (Spc wants α3.0, Iron α0.3) — the hand-tuned emission is fragile, same as EXP-DIST-20.
+- **Confidence-hybrid identical at T=0.2..0.7 on both dumps** — raw sigmoid saturated ≥0.7 essentially
+  everywhere (confirms EXP-DIST-19); raw score carries almost no usable confidence signal.
+
+**Conclusions.**
+1. On hard frames the ball is in the candidate set (absent ≤0.09) but **rank 11+ of 24 roughly 40% of
+   the time** — this is NOT a "rank 2–5, light re-rank" situation. Any learned selector must lift
+   deeply-buried candidates on context alone → the Phase-1 kill test (learned argmax ≥ +0.15 both
+   bands, both games) is the decisive gate before building on bet (A).
+2. **Hard-negative mining (B) is still climbing** (ceiling +0.04 far, near argmax +0.09 over hn1) →
+   run round 3; make **hn2 the base detector** for kill-test dumps and future evals.
+3. Depth-calibrated confidence is strongly motivated: scores are saturated and carry no cross-frame
+   ranking signal (score_norm is per-frame-max anyway).
+
+**Code:** `training/cli/sweep_tracker.py` (`rank_table`, `--rank-only`), `tests/test_rank_diagnostic.py`.
+
 ## EXP-DIST-21: raw per-segment decode replaces combined-video decode (2026-07-02)
 
 **Problem.** Extracting crops/strips by sequentially decoding the per-game `combined.mp4` is slow (a
