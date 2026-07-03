@@ -35,6 +35,7 @@ class MatchInfoService:
         teamsnap_service: TeamSnapService,
         playmetrics_service: PlayMetricsService,
         ntfy_service: NtfyService,
+        schedule_service=None,
     ):
         """
         Initialize match info service.
@@ -43,10 +44,12 @@ class MatchInfoService:
             teamsnap_service: TeamSnap service instance
             playmetrics_service: PlayMetrics service instance
             ntfy_service: NTFY service instance
+            schedule_service: Optional ScheduleService for TTT-authoritative schedule
         """
         self.teamsnap_service = teamsnap_service
         self.playmetrics_service = playmetrics_service
         self.ntfy_service = ntfy_service
+        self.schedule_service = schedule_service
 
     def _get_recording_timespan(
         self, group_dir: str
@@ -166,6 +169,27 @@ class MatchInfoService:
         )
         games = []
 
+        # TTT schedule is authoritative — if it returns a match, skip TeamSnap/PlayMetrics
+        if self.schedule_service is not None:
+            try:
+                logger.info("Querying TTT schedule for games...")
+                ttt_game = self.schedule_service.find_game_for_recording(
+                    recording_start, recording_end
+                )
+                if ttt_game:
+                    logger.info(
+                        f"Found TTT game: {ttt_game.get('team_name', 'Unknown')} vs "
+                        f"{ttt_game.get('opponent_name', 'Unknown')} at "
+                        f"{ttt_game.get('location', 'Unknown')}"
+                    )
+                    return [ttt_game]
+                else:
+                    logger.info(
+                        "No TTT game found for the recording timespan, falling back to APIs"
+                    )
+            except Exception as e:
+                logger.error(f"Error getting game from TTT schedule: {e}")
+
         # Try TeamSnap
         logger.info(f"TeamSnap service enabled: {self.teamsnap_service.enabled}")
         if self.teamsnap_service.enabled:
@@ -224,6 +248,12 @@ class MatchInfoService:
         if len(games) == 1:
             return games[0]
 
+        # Prefer TTT (authoritative) over all other sources
+        for game in games:
+            if game.get("source") == "TTT":
+                logger.info(f"Selected TTT game over {len(games) - 1} other options")
+                return game
+
         # For now, prefer TeamSnap over PlayMetrics
         # TODO: Implement more sophisticated selection logic
         for game in games:
@@ -251,7 +281,15 @@ class MatchInfoService:
         source = game.get("source", "Unknown")
         logger.info(f"Game source: {source}")
 
-        if source == "TeamSnap":
+        if source == "TTT":
+            match_info = {
+                "my_team_name": game.get("team_name", ""),
+                "opponent_team_name": game.get("opponent_name", ""),
+                "location": game.get("location", ""),
+            }
+            logger.info(f"TTT conversion result: {match_info}")
+            return match_info
+        elif source == "TeamSnap":
             # Prefer the team_name field that TeamSnapService added
             my_team = game.get("team_name", "")
 
