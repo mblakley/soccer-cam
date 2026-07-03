@@ -35,9 +35,11 @@ S3 verify loop / a viewer — rather than interrupt every confident game. The ol
 levers (curve-onset, loosened-clear bench-dip, ball-refine, symmetric-trust) — all in EXP-PHASE-14.
 The 5 combined misses are genuinely signal-limited; 3 correctly untrusted (→NTFY), 2 early/trim-safe.
 
-**OPEN DECISION (Mark):** flip game-start default to phase-detection (proceed S1–S4/T2) accepting 64%
-display accuracy + human-verify, or keep game-start on NTFY and use phases for post-trim display only?
-Safety bar met; the accuracy gap is display-quality (human-verify catches it), not trim-safety.
+**DECISION (Mark) — RESOLVED 2026-07-02:** flip the game-start default TO phase-detection. Shipped on `main`
+(`game_start_method = phase_detection`, commit `e6a342d`): Reolink-first, Dahua→NTFY fallback, `ko_trustworthy`
+gate, 60s trim backup. Accepted the 64% display accuracy + human-verify (safety bar met; the gap is display-quality,
+caught by the S3 verify loop, not trim-safety). See cross-repo plan `~/.claude/plans/idempotent-sniffing-blanket.md`
+§10 (decision) + §14 (verification, 131 tests green). Post-trim display continues to use phases regardless.
 
 ## Game-phase detection — kickoff signature + GT review (2026-06-30, earlier)
 
