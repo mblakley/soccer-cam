@@ -4,6 +4,19 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-02: Decode raw per-segment clips, not the combined video, for crop/strip extraction
+
+**Context.** The per-game `combined.mp4` is a stream-copy concat of the raw camera segments with
+realigned audio — it's VFR, slow to decode end-to-end, and one corrupt packet crashes the whole decode
+(the Flaitz game produced no far-label set). Verified the combined's frame `offset+f` is bit-identical
+to raw-segment frame `f` (0.00 diff, incl. cross-segment).
+**Decision.** Extract wanted frames from the **raw per-segment clips** via `data_prep/segment_decode`
+(`global = segment.global_offset + f`; GOP=20 / VFR-aware keyframe-seek + presentation-order PTS
+matching). Frame-exact, corruption-isolated per segment, and fast (decode ~one GOP per label). Applies
+to `build_far_label_queue` and `build_human_crops`; replaces the earlier stop-at-corruption stopgap.
+**Trade-off.** Building the per-segment PTS map demuxes the whole clip (I/O), so the win is avoiding
+the full *decode*, not the full read — still ~an order of magnitude less decode work than sequential.
+
 ## 2026-06-30: Distill AutoCam by feeding its detections to OUR existing tracker — teacher is the tracked ball, not the viewport; train a detector, not a viewport model
 
 **The decision.** To beat AutoCam on far balls, we train OUR ball **detector** (HeatmapNet) and run

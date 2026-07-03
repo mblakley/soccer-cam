@@ -4,6 +4,32 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-21: raw per-segment decode replaces combined-video decode (2026-07-02)
+
+**Problem.** Extracting crops/strips by sequentially decoding the per-game `combined.mp4` is slow (a
+full-game `__hard` set decodes ~88k 7680×2160 HEVC frames — the human-label crop build took ~2h and a
+scheduled-task time limit killed it right before the index write) and fragile (a corrupt packet
+crashes the whole decode — the Flaitz game produced no far-label set at all).
+
+**Findings (verified, not assumed).**
+- `combined.mp4` is a **stream-copy concat** of the raw segments + realigned audio, so a raw-segment
+  frame is **bit-identical** to the combined's `global = segment.global_offset + f` (mean-abs-diff
+  0.00, incl. across a segment boundary).
+- Both the combined and the raw Reolink clips are **VFR** (irregular PTS — half-frame offsets, dropped
+  frames), and the raw clips are **GOP=20** (not GOP=1 as an old docstring claimed). So per-frame
+  seeking must land on a keyframe and decode forward, indexed by presentation-order PTS.
+
+**Solution.** `data_prep/segment_decode.py::extract_frames_from_segments`: map each wanted global to
+`(segment, f)`, per segment build the presentation-order PTS list, seek to the keyframe ≤ each cluster
+and decode forward. Corruption-isolated per segment; decodes ~one GOP per label, not the whole stream.
+
+**Validation.** Module: 11/11 frames pixel-exact incl. cross-segment + a consecutive band. `build_far_
+label_queue`: Flaitz (which crashed before) now builds 150/150 strips, vision-confirmed clean. `build_
+human_crops`: Fairport rebuild matches old crops to ≤10/255 (NVDEC-vs-CPU decoder rounding, not
+misalignment — a wrong frame is 30–80). Wired into both CLIs.
+
+**Code:** `data_prep/segment_decode.py`, `cli/build_far_label_queue.py`, `cli/build_human_crops.py`.
+
 ## EXP-DIST-20: cross-game validation (Irondequoit) — generalizes, but the mj40 default was overfit (2026-07-02)
 
 Every labeled Reolink game except Spencerport was IN the distill training set (Cleveland=val, rest=train),
