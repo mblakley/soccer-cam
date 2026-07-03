@@ -191,6 +191,36 @@ def test_find_game_tags_team_name_from_assignment(tmp_path):
     assert result["team_name"] == "Heat"  # assignment wins over config fallback
 
 
+def test_find_game_converts_utc_to_camera_timezone(tmp_path):
+    """Regression: TTT serialises game times as UTC (TIMESTAMPTZ); recording times
+    are naive camera-local. A 14:00 EDT game arrives as 18:00Z and must be
+    converted to 14:00 local — NOT stripped to a naive 18:00 (4h off → never
+    matches within the 2-hour proximity guard)."""
+    games = [
+        {
+            "game_id": "g-utc",
+            "start_time": "2026-06-01T18:00:00+00:00",  # 14:00 EDT (UTC-4 in June)
+            "end_time": "2026-06-01T20:00:00+00:00",  # 16:00 EDT
+            "opponent_name": "Rivals",
+        }
+    ]
+    _seed_cache(tmp_path, "team-1", games)
+    client = _mk_client(team_id="team-1")
+    config = MagicMock()
+    config.ttt.team_name = ""
+    config.app.timezone = "America/New_York"
+    svc = ScheduleService(str(tmp_path), config, client)
+
+    # Recording 14:30–15:30 LOCAL — inside the game once the UTC time is
+    # converted to EDT. With the old naive strip this returned None.
+    result = svc.find_game_for_recording(
+        datetime(2026, 6, 1, 14, 30),
+        datetime(2026, 6, 1, 15, 30),
+    )
+    assert result is not None
+    assert result["game_id"] == "g-utc"
+
+
 # ---------------------------------------------------------------------------
 # _resolve_team_id()
 # ---------------------------------------------------------------------------

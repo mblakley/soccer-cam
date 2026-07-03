@@ -9,12 +9,18 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from video_grouper.api_integrations.ttt_api import TTTApiClient
     from video_grouper.utils.config import Config
 
 logger = logging.getLogger(__name__)
+
+# Don't hammer the TTT schedule endpoint every poll cycle — the schedule barely
+# changes. Refresh at most this often; the local cache serves reads in between.
+_REFRESH_MIN_INTERVAL = timedelta(hours=1)
+_DEFAULT_TZ = "America/New_York"
 
 
 class ScheduleService:
@@ -35,6 +41,7 @@ class ScheduleService:
         self._ttt_client = ttt_client
         self._team_id: str | None = None
         self._team_name: str | None = None
+        self._last_refresh_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -68,7 +75,7 @@ class ScheduleService:
     def _get_team_name(self) -> str:
         """Return the TTT team name resolved from the device-link assignment.
 
-        Falls back to a ``config.ttt.team_name`` override if present, else "".
+        Falls back to a ``config.ttt.team_name`` if set, else "".
         """
         if self._team_name:
             return self._team_name
@@ -84,6 +91,21 @@ class ScheduleService:
     def _cache_path(self, team_id: str) -> Path:
         return self._storage_path / "ttt" / f"schedule_{team_id}.json"
 
+    def _camera_tz(self) -> ZoneInfo:
+        """The camera's local timezone (config.app.timezone), used to convert
+        TTT's UTC game times to the same naive-local frame as recording times.
+        """
+        tz_name = _DEFAULT_TZ
+        try:
+            app_cfg = getattr(self._config, "app", None)
+            tz_name = getattr(app_cfg, "timezone", None) or _DEFAULT_TZ
+        except Exception:
+            pass
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            return ZoneInfo(_DEFAULT_TZ)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -97,10 +119,17 @@ class ScheduleService:
         team_id = self._resolve_team_id()
         if not team_id:
             return False
+        now = datetime.now()
+        if (
+            self._last_refresh_at is not None
+            and now - self._last_refresh_at < _REFRESH_MIN_INTERVAL
+        ):
+            # Cache is still fresh — the poller calls this every cycle; don't
+            # hit the API more than once per _REFRESH_MIN_INTERVAL.
+            return True
         try:
-            today = datetime.now()
-            start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-            end_date = (today + timedelta(days=180)).strftime("%Y-%m-%d")
+            start_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+            end_date = (now + timedelta(days=180)).strftime("%Y-%m-%d")
             schedule = self._ttt_client.get_schedule(
                 team_id,
                 start_date=start_date,
@@ -121,6 +150,7 @@ class ScheduleService:
                 except OSError:
                     pass
                 raise
+            self._last_refresh_at = now
             logger.debug(
                 "ScheduleService: wrote %d game(s) to %s",
                 len(schedule or []),
@@ -162,6 +192,17 @@ class ScheduleService:
 
         from video_grouper.utils.game_selection import select_best_game
 
+        cam_tz = self._camera_tz()
+
+        def _to_local_naive(raw: str) -> datetime:
+            # TTT serialises game times as UTC (TIMESTAMPTZ). Recording times are
+            # naive camera-local. Convert UTC -> camera tz BEFORE dropping tzinfo,
+            # or a naive-UTC value would be off by the UTC offset and never match.
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(cam_tz).replace(tzinfo=None)
+            return dt
+
         candidates = []
         for game in games:
             try:
@@ -169,16 +210,12 @@ class ScheduleService:
                 g_end_raw = game.get("end_time")
                 if not g_start_raw:
                     continue
-                g_start = datetime.fromisoformat(g_start_raw)
-                # Strip timezone so naive Reolink recording times compare cleanly
-                if g_start.tzinfo is not None:
-                    g_start = g_start.replace(tzinfo=None)
-                if g_end_raw:
-                    g_end = datetime.fromisoformat(g_end_raw)
-                    if g_end.tzinfo is not None:
-                        g_end = g_end.replace(tzinfo=None)
-                else:
-                    g_end = g_start + timedelta(hours=2)
+                g_start = _to_local_naive(g_start_raw)
+                g_end = (
+                    _to_local_naive(g_end_raw)
+                    if g_end_raw
+                    else g_start + timedelta(hours=2)
+                )
                 candidates.append((game, g_start, g_end))
             except (ValueError, TypeError) as exc:
                 logger.debug(
@@ -192,7 +229,7 @@ class ScheduleService:
             candidates,
             start,
             end,
-            game_label_fn=lambda g: g.get("id", "?"),
+            game_label_fn=lambda g: g.get("game_id", g.get("id", "?")),
         )
         if selected is None:
             return None
