@@ -118,6 +118,8 @@ def main() -> None:
 
         fx, mx, lx, wx = [], [], [], []
         for _d, frames, geom, lab, _p in train_sets:
+            if not lab:
+                print(f"WARNING: {_p} contributed 0 labels")
             feats, mask = _features_packed(frames, geom, keep)
             top_k = feats.shape[1]
             for i_str, (cand, w) in lab.items():
@@ -126,6 +128,11 @@ def main() -> None:
                 mx.append(mask[i])
                 lx.append(top_k if cand < 0 else cand)
                 wx.append(w)
+        if not fx:
+            raise SystemExit(
+                "NO training labels at all — check the label builder's stats "
+                "(teacher/dump frame-axis mismatch was the failure mode here once)"
+            )
         feats = np.stack(fx)
         mask = np.stack(mx)
         labels = np.asarray(lx)

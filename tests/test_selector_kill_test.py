@@ -128,6 +128,36 @@ class TestSnap:
         assert labels[0] == (0, 20.0) and stats["gold"] == 1
         assert 1 not in labels and stats["skip_outofplay"] >= 1
 
+    def test_phase_offset_grid_interpolates(self):
+        """The marathon's detections sit on the 0-mod-4 grid; a dump's ef grid can be
+        phase-shifted (Cleveland: ef ≡ 2 mod 4 -> ZERO exact hits). The teacher must
+        interpolate onto the ef frames instead of exact-key matching."""
+        geom = _geom()
+        ef = [102, 106]  # ≡ 2 mod 4
+        cands = {
+            102: [(1010.0, 901.0, 0.8, None)],
+            106: [(1030.0, 903.0, 0.7, None)],
+        }
+        # teacher on the 0-mod-4 grid, ball drifting +5px/frame
+        teacher = {100: (1000.0, 900.0), 104: (1020.0, 902.0), 108: (1040.0, 904.0)}
+        labels, stats = snap_teacher_to_candidates(
+            ef, cands, teacher, {}, set(), geom, [], stability_k=0
+        )
+        assert labels[0][0] == 0 and labels[1][0] == 0
+        assert stats["ball"] == 2 and stats["skip_nocover"] == 0
+
+    def test_interp_span_gate(self):
+        """No interpolation across a teacher gap wider than interp_max_span."""
+        geom = _geom()
+        ef = [102]
+        cands = {102: [(1010.0, 901.0, 0.8, None)]}
+        teacher = {100: (1000.0, 900.0), 120: (1100.0, 910.0)}  # 20-frame gap
+        labels, stats = snap_teacher_to_candidates(
+            ef, cands, teacher, {}, set(), geom, [], stability_k=0
+        )
+        assert labels == {}
+        assert stats["skip_nocover"] == 1
+
     def test_unstable_dropped(self):
         geom, ef, cands = self._setup()
         # teacher jumps ~60 m between 104 and 108 -> discontinuity; both ends dropped

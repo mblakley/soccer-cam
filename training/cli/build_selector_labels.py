@@ -44,6 +44,7 @@ def snap_teacher_to_candidates(
     jump_m_per_frame: float = 12.0,
     gap_frames: int = 12,
     gold_weight: float = 20.0,
+    interp_max_span: int = 8,
 ) -> tuple[dict[int, tuple[int, float]], dict]:
     """Return ``({ef_index: (cand_index | -1 for none, weight)}, stats)``.
 
@@ -51,6 +52,13 @@ def snap_teacher_to_candidates(
     coverage gap > ``gap_frames`` source frames, or world jump > ``jump_m_per_frame`` *
     frame-gap between consecutive teacher frames; labels within ``stability_k`` dump
     steps of one are dropped (unless human-anchored — gold is exempt).
+
+    The teacher lives on the detection grid (the marathon ran ``--stride 4``, phase
+    ``0 mod 4``) while the dump's ``ef`` grid is phased by the GT span start — the two
+    grids need not intersect AT ALL (they didn't on Cleveland: 0/1501). So the teacher
+    position at ``g`` is linearly INTERPOLATED between its neighbouring teacher frames
+    when they bracket ``g`` within ``interp_max_span`` source frames (a ball moves
+    <~0.7 m/frame, so a few frames of lerp stays well inside ``snap_m``).
     """
     stats = {
         "ball": 0,
@@ -83,6 +91,27 @@ def snap_teacher_to_candidates(
     stride = int(np.median(np.diff(ef))) if len(ef) > 1 else 1
     pad = stability_k * stride
 
+    tga = np.asarray(tg, int)
+    tpx = np.asarray([teacher[g] for g in tg], float).reshape(-1, 2)
+
+    def teacher_at(g: int) -> tuple[float, float] | None:
+        """Teacher position at global ``g``: exact frame, else lerp between the
+        bracketing teacher frames when they span <= interp_max_span frames."""
+        if g in teacher:
+            return teacher[g]
+        if len(tga) < 2:
+            return None
+        hi = int(np.searchsorted(tga, g))
+        if hi <= 0 or hi >= len(tga):
+            return None
+        lo = hi - 1
+        span = int(tga[hi] - tga[lo])
+        if span > interp_max_span:
+            return None
+        w = (g - int(tga[lo])) / span
+        p = (1.0 - w) * tpx[lo] + w * tpx[hi]
+        return (float(p[0]), float(p[1]))
+
     out: dict[int, tuple[int, float]] = {}
     for i, g in enumerate(ef):
         if not in_play(g):
@@ -93,7 +122,8 @@ def snap_teacher_to_candidates(
             out[i] = (-1, gold_weight)
             stats["none"] += 1
             continue
-        if g not in teacher:
+        t_xy = teacher_at(g)
+        if t_xy is None:
             stats["skip_nocover"] += 1
             continue
         if not gold and any(abs(g - b) <= pad for b in bad_globals):
@@ -103,7 +133,7 @@ def snap_teacher_to_candidates(
         if not cs:
             stats["skip_missed"] += 1
             continue
-        txy = geom.image_to_world(np.asarray([teacher[g]], float))[0]
+        txy = geom.image_to_world(np.asarray([t_xy], float))[0]
         cw = geom.image_to_world(np.asarray([(c[0], c[1]) for c in cs], float))
         d = np.linalg.norm(cw - txy, axis=1)
         j = int(np.argmin(d))
