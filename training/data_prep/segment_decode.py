@@ -11,20 +11,25 @@ The raw Reolink clips are GOP=20 and VFR. So to pull specific GLOBAL frames (whe
   * seek to the keyframe at/before each cluster of wanted frames and decode forward, matching frames
     by PTS.
 
-This is **corruption-isolated** (a bad segment only loses its own frames, not the whole game) and
-**fast** (decode ~one GOP per label instead of the entire stream). ``f`` is presentation order, which
-is exactly how the AutoCam detections are numbered, so the extracted frame is identical to the
-combined video's ``global = offset + f``.
+Corruption-isolated (a bad segment only loses its own frames) and fast (decode ~one GOP per label).
+``f`` is presentation order, exactly how AutoCam numbers detections, so the extracted frame is
+identical to the combined video's ``global = offset + f``.
+
+**Stream, don't accumulate.** ``iter_frames_from_segments`` yields ``(global, bgr)`` one at a time in
+ascending global order, so callers processing thousands of frames (eval, distill build) never hold
+more than one frame. ``extract_frames_from_segments`` is a dict convenience for *small* frame sets
+only — a full 7680×2160 frame is ~50 MB, so hundreds of them will thrash / OOM a 16 GB box.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 
 
-def extract_frames_from_segments(
+def iter_frames_from_segments(
     game_dir,
     segments: list[dict],
     wanted_globals,
@@ -32,44 +37,37 @@ def extract_frames_from_segments(
     *,
     hwaccel: bool = True,
     cluster_gap: int = 30,
-) -> dict[int, np.ndarray]:
-    """Return ``{global_frame: bgr_ndarray}`` for ``wanted_globals``, read from the raw per-segment
-    clips (``<segment.seg>.mp4`` beside the combined video). A segment whose clip is missing or fails
-    to decode is skipped with a message (its frames are simply absent from the result)."""
+) -> Iterator[tuple[int, np.ndarray]]:
+    """Yield ``(global_frame, bgr_ndarray)`` for ``wanted_globals`` in ascending global order, read
+    from the raw per-segment clips (``<segment.seg>.mp4`` beside the combined video). A segment whose
+    clip is missing or fails to decode is skipped with a message (its frames simply don't appear)."""
     import av  # noqa: PLC0415
 
     game_dir = Path(game_dir)
     wanted = {int(g) for g in wanted_globals}
-    by_seg: dict[str, dict[int, int]] = {}
-    for s in segments:
+    for s in sorted(segments, key=lambda z: int(z["global_offset"])):
         lo = int(s["global_offset"])
         hi = lo + int(s["frames"])
         local = {g - lo: g for g in wanted if lo <= g < hi}
-        if local:
-            by_seg[s["seg"]] = local
-
-    out: dict[int, np.ndarray] = {}
-    for name, local in by_seg.items():
-        clip = game_dir / f"{name}.mp4"
+        if not local:
+            continue
+        clip = game_dir / f"{s['seg']}.mp4"
         if not clip.exists():
             print(
-                f"  segment {name}: raw clip missing, skipping {len(local)} frames",
+                f"  segment {s['seg']}: raw clip missing, skipping {len(local)} frames",
                 flush=True,
             )
             continue
         try:
-            _extract_one(av, str(clip), local, vrot, hwaccel, cluster_gap, out)
+            yield from _iter_one(av, str(clip), local, vrot, hwaccel, cluster_gap)
         except Exception as e:  # noqa: BLE001 — corrupt/undecodable segment: isolate it
-            got = sum(1 for g in local.values() if g in out)
             print(
-                f"  segment {name}: decode error ({type(e).__name__}: {e}); "
-                f"kept {got}/{len(local)} frames",
+                f"  segment {s['seg']}: decode error ({type(e).__name__}: {e})",
                 flush=True,
             )
-    return out
 
 
-def _extract_one(av, clip, local, vrot, hwaccel, cluster_gap, out):
+def _iter_one(av, clip, local, vrot, hwaccel, cluster_gap):
     from training.data_prep.warped_dataset import (  # noqa: PLC0415
         apply_display_rotation,
     )
@@ -113,10 +111,34 @@ def _extract_one(av, clip, local, vrot, hwaccel, cluster_gap, out):
                 if fr.pts is None:
                     continue
                 if fr.pts in want_pts:
-                    out[local[pts_to_f[fr.pts]]] = apply_display_rotation(
-                        fr.to_ndarray(format="bgr24"), vrot
+                    yield (
+                        local[pts_to_f[fr.pts]],
+                        apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot),
                     )
                 if fr.pts >= target_hi:
                     break
     finally:
         c.close()
+
+
+def extract_frames_from_segments(
+    game_dir,
+    segments: list[dict],
+    wanted_globals,
+    vrot,
+    *,
+    hwaccel: bool = True,
+    cluster_gap: int = 30,
+) -> dict[int, np.ndarray]:
+    """Dict form — holds every requested frame in memory. Use only for SMALL frame sets; for anything
+    large, stream with ``iter_frames_from_segments`` instead (a 7680×2160 frame is ~50 MB)."""
+    return dict(
+        iter_frames_from_segments(
+            game_dir,
+            segments,
+            wanted_globals,
+            vrot,
+            hwaccel=hwaccel,
+            cluster_gap=cluster_gap,
+        )
+    )
