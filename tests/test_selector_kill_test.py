@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from training.cli.build_selector_labels import snap_teacher_to_candidates
+from training.cli.kill_test_selector import split_train_pair
 from training.world_model.geometry import build_field_geometry
 from training.world_model.selector_features import (
     FEATURE_FAMILIES,
@@ -167,6 +168,14 @@ class TestSnap:
         )
         assert 2 not in labels
         assert stats["skip_unstable"] >= 1
+
+
+def test_split_train_pair_windows_paths():
+    """Drive colons must not be mistaken for the pair separator (the stage-2 crash)."""
+    d, la = split_train_pair(r"G:\sel\cands_a.pkl;G:\sel\labels_a.json")
+    assert d == r"G:\sel\cands_a.pkl" and la == r"G:\sel\labels_a.json"
+    with pytest.raises(SystemExit):
+        split_train_pair(r"G:\sel\cands_a.pkl:G:\sel\labels_a.json")
 
 
 class TestNet:

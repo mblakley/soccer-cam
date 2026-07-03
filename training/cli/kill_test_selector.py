@@ -15,7 +15,7 @@ printed as the reference bar). Feature-family knockouts (--knockouts) decide whe
 person-density head is justified next.
 
     python -m training.cli.kill_test_selector \
-      --train dumpA.pkl:labelsA.json dumpB.pkl:labelsB.json \
+      --train "dumpA.pkl;labelsA.json" "dumpB.pkl;labelsB.json" \
       --eval cands_spc_hn2.pkl cands_iron_hn2.pkl
 """
 
@@ -27,6 +27,15 @@ import pickle
 from dataclasses import replace
 
 import numpy as np
+
+
+def split_train_pair(pair: str) -> tuple[str, str]:
+    """Split a ``dump;labels`` CLI pair. The separator is ``;`` (never ``:``) because
+    Windows paths contain drive colons — a ``:`` separator split inside ``G:\\...``."""
+    if ";" not in pair:
+        raise SystemExit(f"--train pair needs 'dump;labels' (got: {pair!r})")
+    a, b = pair.split(";", 1)
+    return a, b
 
 
 def _load_dump(path):
@@ -58,7 +67,8 @@ def main() -> None:
         "--train",
         nargs="+",
         required=True,
-        help="dump.pkl:selector_labels.json pairs (training games)",
+        help="'dump.pkl;selector_labels.json' pairs (training games; ';' separator "
+        "because Windows paths contain drive colons)",
     )
     ap.add_argument(
         "--eval", nargs="+", required=True, help="held-out dumps (contain GT)"
@@ -97,7 +107,7 @@ def main() -> None:
     # ---- load training pairs once -------------------------------------------------
     train_sets = []
     for pair in args.train:
-        dump_path, labels_path = pair.rsplit(":", 1)
+        dump_path, labels_path = split_train_pair(pair)
         d, frames, geom = _load_dump(dump_path)
         lab = json.loads(open(labels_path, encoding="utf-8").read())["labels"]
         train_sets.append((d, frames, geom, lab, dump_path))
