@@ -78,6 +78,70 @@ def _score(track, frames, ef, balls, geom, far_px, stride):
     return det, near, far
 
 
+def rank_table(frames, ef, balls, geom, far_px, stride, radius_m=15.0):
+    """Score-RANK of the GT ball among its frame's candidates (the A-vs-B diagnostic).
+
+    For each GT ball: the candidate nearest in meters is "the ball" when within
+    ``radius_m``; record its 1-based rank in the frame's score ordering, else
+    ``None`` (absent — includes empty frames, unlike ``_ceiling`` which skips
+    them). Bands split by expected apparent size, same as ``_score``/``_ceiling``.
+    Ball usually rank 2-5 => a context re-ranker can fix selection; often rank
+    11+/absent => the detector genuinely buries it.
+    """
+    fidx = {f: i for i, f in enumerate(ef)}
+    ranks: dict[str, list[int | None]] = {"near": [], "far": []}
+    for g, gt in balls.items():
+        nf = min(ef, key=lambda f: abs(f - g))
+        if abs(nf - g) > stride:
+            continue
+        size = float(geom.expected_ball_diameter_px(np.asarray([gt], float))[0])
+        band = "far" if size < far_px else "near"
+        cs = frames[fidx[nf]]
+        if not cs:
+            ranks[band].append(None)
+            continue
+        gw = geom.image_to_world(np.asarray([gt], float))[0]
+        cw = geom.image_to_world(np.asarray([(c.x, c.y) for c in cs], float))
+        derr = np.linalg.norm(cw - gw, axis=1)
+        i_ball = int(np.argmin(derr))
+        if float(derr[i_ball]) > radius_m:
+            ranks[band].append(None)
+            continue
+        order = np.argsort([-c.score for c in cs], kind="stable")
+        ranks[band].append(int(np.where(order == i_ball)[0][0]) + 1)
+    return ranks
+
+
+def _print_rank_table(ranks):
+    print(
+        "\nRANK diagnostic (GT ball's score-rank among its frame's candidates; "
+        "fractions of ALL GT in band):"
+    )
+    buckets = (("r1", 1, 1), ("r2-3", 2, 3), ("r4-5", 4, 5), ("r6-10", 6, 10))
+    for band in ("near", "far"):
+        rs = ranks[band]
+        n = len(rs)
+        if not n:
+            print(f"  {band:<5} n=0")
+            continue
+        present = [r for r in rs if r is not None]
+        parts = [
+            f"{k} {sum(1 for r in present if lo <= r <= hi) / n:.2f}"
+            for k, lo, hi in buckets
+        ]
+        parts.append(f"r11+ {sum(1 for r in present if r >= 11) / n:.2f}")
+        parts.append(f"absent {(n - len(present)) / n:.2f}")
+        cum = " ".join(
+            f"{sum(1 for r in present if r <= k) / n:.2f}" for k in (1, 3, 5, 10)
+        )
+        med = int(np.median(present)) if present else None
+        print(
+            f"  {band:<5} n={n:<5} "
+            + " ".join(parts)
+            + f" | P(rank<=1/3/5/10) {cum} | med-rank {med}"
+        )
+
+
 def _ceiling(frames, ef, balls, geom, far_px, stride):
     fidx = {f: i for i, f in enumerate(ef)}
     det, far, near = [], [], []
@@ -104,6 +168,11 @@ def _ceiling(frames, ef, balls, geom, far_px, stride):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump", required=True)
+    ap.add_argument(
+        "--rank-only",
+        action="store_true",
+        help="print ceiling + argmax + the RANK diagnostic, skip the config sweep",
+    )
     args = ap.parse_args()
 
     from training.world_model.geometry import build_field_geometry
@@ -135,6 +204,8 @@ def main() -> None:
     print("CEILING (config-independent bar):")
     line("candidate ceiling", cd, cn, cf)
 
+    _print_rank_table(rank_table(frames, ef, balls, geom, far_px, stride))
+
     base = RerankConfig()
     print("\nselected R15m by variant:")
     argmax = {
@@ -146,6 +217,8 @@ def main() -> None:
         "score-argmax (no track)",
         *_score(argmax, frames, ef, balls, geom, far_px, stride),
     )
+    if args.rank_only:
+        return
 
     def run(name, cfg, *, prior=None, use_kalman=True):
         pr = None
