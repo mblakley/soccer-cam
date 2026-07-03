@@ -76,7 +76,7 @@ def push_phases_to_ttt(
     if client is None or session is None:
         return False
     try:
-        client.update_game_session(session["id"], **fields)
+        client.update_game_session_phases(session["id"], **fields)
         logger.info(
             "phase push: updated TTT session %s with %s",
             session["id"],
@@ -118,7 +118,7 @@ def push_phase_verified(
     if client is None or session is None:
         return False
     try:
-        client.update_game_session(session["id"], **{col: verdict})
+        client.update_game_session_phases(session["id"], **{col: verdict})
         logger.info("phase verify: %s=%s on session %s", col, verdict, session["id"])
         return True
     except Exception as e:  # noqa: BLE001 — best-effort

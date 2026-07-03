@@ -104,7 +104,7 @@ def test_push_updates_session_with_offset_fields(MockClient):
 
     assert ok is True
     client.get_game_session_by_dir.assert_called_once_with("grp-dir")
-    args, kwargs = client.update_game_session.call_args
+    args, kwargs = client.update_game_session_phases.call_args
     assert args[0] == "sess-1"
     assert kwargs["phase_kickoff_offset"] == 10.0
     assert kwargs["phase_end_offset"] == 5640.0
@@ -136,7 +136,7 @@ def test_push_skips_when_no_session(MockClient):
     ok = push_phases_to_ttt(TTT_CFG, "grp", _payload(kickoff=1.0), "/s")
 
     assert ok is False
-    client.update_game_session.assert_not_called()
+    client.update_game_session_phases.assert_not_called()
 
 
 @patch("video_grouper.api_integrations.ttt_api.TTTApiClient")
