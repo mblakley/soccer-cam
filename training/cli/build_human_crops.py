@@ -42,7 +42,6 @@ def main() -> None:
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
-    import av
     import cv2
 
     from training.data_prep.heatmap_dataset import (
@@ -50,10 +49,8 @@ def main() -> None:
         _far_margin_polygon,
         _native_iso_warp,
     )
-    from training.data_prep.warped_dataset import (
-        apply_display_rotation,
-        resolve_video_rotation,
-    )
+    from training.data_prep.segment_decode import extract_frames_from_segments
+    from training.data_prep.warped_dataset import resolve_video_rotation
 
     out = Path(args.out)
     crops = out / "crops"
@@ -121,86 +118,70 @@ def main() -> None:
         if not want:
             continue
 
-        # Isolate each set: a decode failure on one clip (e.g. NVDEC choking on a raw camera
-        # segment) must not lose every other set's crops. Skip the bad set and keep going.
-        container = None
+        # Pull the 3-frame band ({f-2, f-1, f}) for each label from the RAW per-segment clips instead
+        # of the re-encoded/VFR/corruption-prone combined video. A "combined.mp4" set uses global
+        # frame indices (mapped via game.json segments); a single-clip set's frame_idx is local to
+        # that one clip. Corruption-isolated per segment; a missing frame just drops that one label.
+        clip_p2 = Path(clip)
+        game_dir = clip_p2.parent
+        gjp = game_dir / "game.json"
+        if clip_p2.name == "combined.mp4" and gjp.exists():
+            segments = json.loads(gjp.read_text())["segments"]
+        else:
+            segments = [{"seg": clip_p2.stem, "global_offset": 0, "frames": 10**9}]
+        vrot = resolve_video_rotation(clip, m.get("video_rotation"))
+        band_globals: set[int] = set()
+        for f in want:
+            band_globals.update((max(0, f - 2), max(0, f - 1), f))
         try:
-            vrot = resolve_video_rotation(clip, m.get("video_rotation"))
-            _hw = None
-            if not args.no_hwaccel:
-                try:
-                    _hw = av.codec.hwaccel.HWAccel(
-                        device_type="cuda", allow_software_fallback=True
-                    )
-                except Exception:  # noqa: BLE001
-                    _hw = None
-            container = av.open(clip, hwaccel=_hw) if _hw else av.open(clip)
-            stream = container.streams.video[0]
-            if _hw is None:
-                stream.thread_type = "AUTO"
-            sw, sh = stream.codec_context.width, stream.codec_context.height
-            far_poly = _far_margin_polygon(poly, args.far_margin)
-            warp = _native_iso_warp(far_poly, sw, sh, None)
-            bh, bw = warp.shape
-            mpoly = warp.points(far_poly).astype(np.int32)
-            mask = np.zeros((bh, bw), np.uint8)
-            cv2.fillPoly(mask, [mpoly], 255)
-
-            hi = max(want)
-            # Warping every full-match frame (cv2.remap on 7680x2160) is the real cost and dwarfs
-            # NVDEC decode. Only warp frames inside a label's 3-frame band; decode stays sequential
-            # (cheap) but we skip the remap for the ~99% of frames with no nearby label. The crop at
-            # each labeled frame is byte-identical to the naive version — this only drops dead work.
-            warp_frames: set[int] = set()
-            for f in want:
-                warp_frames.update((f - 2, f - 1, f))
-            band: dict[int, np.ndarray] = {}
-            idx = -1
-            n = 0
-            for fr in container.decode(stream):
-                idx += 1
-                if idx > hi:
-                    break
-                if idx not in warp_frames:
-                    continue
-                img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-                band[idx] = _dewarp_mask_gray(img, warp, mask)
-                if idx in want:
-                    sx, sy, is_pos = want[idx]
-                    bx, by = warp.points([(sx, sy)])[0]
-                    x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
-                    y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
-                    g0 = band[idx]
-                    g1 = band.get(idx - 1, g0)
-                    g2 = band.get(idx - 2, g1)
-                    stack = np.zeros((3, args.crop, args.crop), np.uint8)
-                    for i, gr in enumerate((g2, g1, g0)):
-                        patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
-                        stack[i, : patch.shape[0], : patch.shape[1]] = patch
-                    lx, ly = bx - x0, by - y0
-                    if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
-                        continue
-                    tag = "hpos" if is_pos else "hneg"
-                    fn = f"human_{sd.name}_f{idx:06d}_{tag}.npy"
-                    np.save(crops / fn, stack)
-                    items.append(
-                        {
-                            "file": fn,
-                            "x": round(float(lx), 1) if is_pos else None,
-                            "y": round(float(ly), 1) if is_pos else None,
-                            "split": "train",
-                        }
-                    )
-                    n += 1
-                    totals["pos" if is_pos else "neg"] += 1
-                    for k in [j for j in band if j < idx - 2]:
-                        del band[k]
-            print(f"  {sd.name}: +{n} crops", flush=True)
+            got = extract_frames_from_segments(
+                game_dir, segments, band_globals, vrot, hwaccel=not args.no_hwaccel
+            )
         except Exception as e:  # noqa: BLE001
-            print(f"  SKIP {sd.name}: decode/emit error: {e!r}", flush=True)
-        finally:
-            if container is not None:
-                container.close()
+            print(f"  SKIP {sd.name}: extract error: {e!r}", flush=True)
+            continue
+        if not got:
+            print(f"  SKIP {sd.name}: no frames extracted", flush=True)
+            continue
+        sh_, sw_ = next(iter(got.values())).shape[:2]
+        far_poly = _far_margin_polygon(poly, args.far_margin)
+        warp = _native_iso_warp(far_poly, sw_, sh_, None)
+        bh, bw = warp.shape
+        mpoly = warp.points(far_poly).astype(np.int32)
+        mask = np.zeros((bh, bw), np.uint8)
+        cv2.fillPoly(mask, [mpoly], 255)
+        band_gray = {f: _dewarp_mask_gray(img, warp, mask) for f, img in got.items()}
+        n = 0
+        for f, (sx, sy, is_pos) in want.items():
+            if f not in band_gray:
+                continue  # frame unavailable (corrupt / missing segment)
+            bx, by = warp.points([(sx, sy)])[0]
+            x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
+            y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
+            lx, ly = bx - x0, by - y0
+            if is_pos and not (0 <= lx < args.crop and 0 <= ly < args.crop):
+                continue
+            g0 = band_gray[f]
+            g1 = band_gray.get(f - 1, g0)
+            g2 = band_gray.get(f - 2, g1)
+            stack = np.zeros((3, args.crop, args.crop), np.uint8)
+            for i, gr in enumerate((g2, g1, g0)):
+                patch = gr[y0 : y0 + args.crop, x0 : x0 + args.crop]
+                stack[i, : patch.shape[0], : patch.shape[1]] = patch
+            tag = "hpos" if is_pos else "hneg"
+            fn = f"human_{sd.name}_f{f:06d}_{tag}.npy"
+            np.save(crops / fn, stack)
+            items.append(
+                {
+                    "file": fn,
+                    "x": round(float(lx), 1) if is_pos else None,
+                    "y": round(float(ly), 1) if is_pos else None,
+                    "split": "train",
+                }
+            )
+            n += 1
+            totals["pos" if is_pos else "neg"] += 1
+        print(f"  {sd.name}: +{n} crops (raw-segment)", flush=True)
 
     idx_obj["items"] = items
     idx_obj.setdefault("summary", {})
