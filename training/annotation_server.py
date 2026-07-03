@@ -1512,12 +1512,40 @@ async def list_field_boundaries():
     except Exception:
         pass
 
+    # v4 field-store games (Reolink clips) — edited via this same editor
+    if FIELD_EDIT_DIR.exists():
+        for d in sorted(FIELD_EDIT_DIR.iterdir()):
+            mp = d / "meta.json"
+            if mp.exists():
+                gid = json.loads(mp.read_text()).get("game_id", d.name)
+                results.append(
+                    {
+                        "game_id": gid,
+                        "has_polygon": True,
+                        "source": "human_field_edit",
+                        "confidence": 1.0,
+                        "needs_human_review": False,
+                    }
+                )
     return {"games": results, "not_tiled": not_tiled}
 
 
 @app.get("/api/field-boundary/{game_id}")
 async def get_field_boundary(game_id: str):
     """Get field boundary polygon for a specific game."""
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        meta = json.loads((v4 / "meta.json").read_text())
+        poly = json.loads((v4 / "polygon.json").read_text()).get("polygon")
+        return {
+            "game_id": game_id,
+            "polygon": poly,
+            "source": "human_field_edit",
+            "confidence": 1.0,
+            "needs_human_review": False,
+            "src_w": meta.get("src_w", 7680),
+            "src_h": meta.get("src_h", 2160),
+        }
     from training.data_prep.game_manifest import GameManifest
 
     game_dir = GAMES_DIR / game_id
@@ -1549,10 +1577,14 @@ async def get_field_boundary(game_id: str):
             "source": "template",
             "confidence": 0,
             "needs_human_review": True,
+            "src_w": 4096,
+            "src_h": 1800,
         }
 
     fb = json.loads(fb_raw)
     fb["game_id"] = game_id
+    fb.setdefault("src_w", 4096)
+    fb.setdefault("src_h", 1800)
     return fb
 
 
@@ -1569,6 +1601,23 @@ async def save_field_boundary(game_id: str, request: Request):
 
     if not polygon or len(polygon) < 4:
         raise HTTPException(400, "Polygon must have at least 4 points")
+
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        meta = json.loads((v4 / "meta.json").read_text())
+        payload = {
+            "polygon": [[float(x), float(y)] for x, y in polygon],
+            "source": "human_field_edit",
+            "game": game_id,
+        }
+        (v4 / "polygon.json").write_text(json.dumps(payload))
+        for cp in meta.get("canonical_paths", []):
+            try:
+                Path(cp).write_text(json.dumps(payload))
+            except Exception as e:
+                logger.warning("v4 canonical polygon write failed %s: %s", cp, e)
+        logger.info("Saved v4 field polygon for %s: %d points", game_id, len(polygon))
+        return {"accepted": True, "point_count": len(polygon)}
 
     game_dir = GAMES_DIR / game_id
     if not game_dir.exists():
@@ -1596,6 +1645,12 @@ async def get_field_boundary_panoramic(
     game_id: str, overlay: bool = True, flip: bool = False
 ):
     """Serve a panoramic JPEG, optionally with the field boundary polygon overlaid."""
+    v4 = _v4_store_by_game(game_id)
+    if v4 is not None:
+        f = v4 / "frame.jpg"
+        if not f.exists():
+            raise HTTPException(404, "Frame not found")
+        return FileResponse(f, media_type="image/jpeg")
     from training.data_prep.game_manifest import GameManifest
     from training.tasks.field_boundary import reconstruct_panoramic
 
@@ -1669,11 +1724,14 @@ async def get_field_boundary_panoramic(
     return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
-# Static file mount must come AFTER all API routes (catch-all).
 # ------------------------------------------------------------------
-# Far-ball labeling sets. A "set" is a directory under FAR_LABEL_DIR with a
-# manifest.json (built by cli/build_far_label_queue) + pre-extracted full-frame
-# strips. Labels are collected in SOURCE pixel coords, stored next to the set.
+# Far-ball labeling API (v4)
+# ------------------------------------------------------------------
+# Self-contained click-to-locate labeler for FAR balls — the ones the reference
+# detector (AutoCam) misses, so it can't be ground truth there. Each "set" is a
+# directory under FAR_LABEL_DIR with a manifest.json (built by the far-label
+# builder from a raw clip + far_ball_miner) and pre-extracted far-field crop
+# strips. Labels are collected in SOURCE pixel coords and stored next to the set.
 # Independent of the tile-pack/manifest system (clips aren't tiled).
 
 FAR_LABEL_DIR = Path("D:/training_data/far_label")
@@ -1722,7 +1780,6 @@ async def list_far_sets():
                 "set": d.name,
                 "n_frames": m.get("n_frames", len(m.get("frames", []))),
                 "labeled": len(labels),
-                "criteria": m.get("criteria"),
             }
         )
     return out
@@ -1738,7 +1795,7 @@ async def get_far_set(set_id: str):
 
 @app.get("/api/far-label/{set_id}/strip/{frame_idx}")
 async def get_far_strip(set_id: str, frame_idx: int):
-    """Serve a pre-extracted full-frame strip (native-res JPEG)."""
+    """Serve a pre-extracted far-field crop strip (native-res JPEG)."""
     d = _far_set_dir(set_id)
     strip = d / "strips" / f"f{frame_idx:06d}.jpg"
     if not strip.exists():
@@ -1748,35 +1805,70 @@ async def get_far_strip(set_id: str, frame_idx: int):
 
 @app.post("/api/far-label/{set_id}/result")
 async def submit_far_label(set_id: str, result: dict):
-    """Store one far-ball label.
+    """Store one far-ball label (one row per frame).
 
-    Expected: ``{"frame_idx": int, "action": str, "x": float|null, "y": float|null}`` — x/y are
-    SOURCE pixels. ``action`` is one of ``ball`` (visible, at x/y), ``obscured`` (occluded behind a
-    player — x/y is the human's best-guess path position; used as tracker GT, NOT detector-positive),
-    ``not_game_ball`` (a distractor, e.g. sideline/adjacent-field ball — a hard negative),
-    ``out_of_play`` / ``not_visible`` (no findable game ball). ``reason`` (the set's selection reason)
-    is stored verbatim if sent.
+    Expected: {"frame_idx": int,
+    "action": "ball"|"obscured"|"not_visible"|"out_of_play"|"none",
+    "x": float|null, "y": float|null,
+    "distractors": [[x, y], ...] (optional)} — all coords SOURCE pixels.
+
+    ``obscured`` = the game ball is hidden but the annotator marks where it is
+    (selector/occlusion GT). ``distractors`` = ball-like objects that are NOT the
+    game ball (identity GT); they ride on the frame's single row alongside any
+    primary action. ``none`` = only distractors marked so far, game ball unjudged.
     """
     _load_far_manifest(set_id)  # validate set
     labels = _load_far_labels(set_id)
     fi = int(result["frame_idx"])
-    labels[fi] = {
+    row = {
         "frame_idx": fi,
-        "action": result.get("action", "ball"),
+        "action": result.get("action") or "none",
         "x": result.get("x"),
         "y": result.get("y"),
-        "reason": result.get("reason"),
         "source": result.get("source", "human"),
         "submitted_at": datetime.now(UTC).isoformat(),
     }
+    ds = result.get("distractors")
+    if isinstance(ds, list):
+        clean = []
+        for d in ds:
+            try:
+                clean.append([float(d[0]), float(d[1])])
+            except (TypeError, ValueError, IndexError):
+                continue
+        if clean:
+            row["distractors"] = clean
+    labels[fi] = row
     _save_far_labels(set_id, labels)
     return {"accepted": True, "labeled": len(labels)}
 
 
-# game.json-backed field + phase editors (/api/fieldv2/*, /api/phasesv2/*).
-from training import field_edit_v2 as _field_edit_v2  # noqa: E402
+# ------------------------------------------------------------------
+# Field polygon editor (v4) — drag the 10-point field outline on a full-res
+# frame from a v4 clip and save it back to the canonical polygon JSON the warp +
+# field-mask use. Independent of the tiled-pipeline field-boundary editor (which
+# is hardcoded to the legacy 4096x1800 Dahua panorama); v4 clips are 7680x2160.
+# Each set is a dir under FIELD_EDIT_DIR with frame.jpg + polygon.json + meta.json
+# ({game_id, src_w, src_h, canonical_paths:[...]}).
 
-app.include_router(_field_edit_v2.router)
+FIELD_EDIT_DIR = Path("D:/training_data/v4_fields")
+
+
+def _v4_store_by_game(game_id: str) -> Path | None:
+    """v4 field-store dir whose meta.game_id matches game_id, else None.
+
+    v4 clips (7680x2160 Reolink) are edited THROUGH the existing
+    /api/field-boundary editor (annotate.html) — no separate editor — so those
+    endpoints branch to this store when the game_id is a v4 one.
+    """
+    if not FIELD_EDIT_DIR.exists():
+        return None
+    for d in sorted(FIELD_EDIT_DIR.iterdir()):
+        mp = d / "meta.json"
+        if mp.exists() and json.loads(mp.read_text()).get("game_id") == game_id:
+            return d
+    return None
+
 
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(
