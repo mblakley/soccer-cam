@@ -135,6 +135,43 @@ def test_rerank_per_frame_miss_costs_gate_the_miss_state():
     assert sum(f in mixed for f in (0, 1, 3, 4, 5)) == 5
 
 
+def test_rerank_identity_anchor_propagates_bidirectionally():
+    """A kickoff-style anchor pins the path to the anchored object's track; identity
+    propagates to every other frame through the smoothness transitions."""
+    geom = build_field_geometry(np.asarray(_POLY, dtype=float))
+    frames = []
+    a_track, b_track = [], []
+    for t in range(8):
+        a = (2800.0 + 30.0 * t, 1350.0)  # bright decoy track (near-left)
+        b = (5600.0 + 30.0 * t, 700.0)  # dim game-ball track, far across the field
+        frames.append([Candidate(*a, 0.9), Candidate(*b, 0.4)])
+        a_track.append(a)
+        b_track.append(b)
+    # the tracks are farther apart than the teleport gate allows -> switching mid-path
+    # is impossible, so an anchor decides the WHOLE path's identity
+    aw = geom.image_to_world(np.asarray(a_track, float))
+    bw = geom.image_to_world(np.asarray(b_track, float))
+    assert float(np.linalg.norm(aw[3] - bw[4])) > RerankConfig().max_jump_m_per_frame
+
+    # unanchored, trusting score: the path follows the bright decoy
+    # (persistence/motion off — this test isolates score + smoothness + anchor)
+    cfg = RerankConfig(alpha=0.5, static_w=0.0, motion_w=0.0)
+    free = rerank(frames, geom, config=cfg)
+    assert free[4] == a_track[4]
+
+    # anchored mid-sequence on the dim track: identity propagates BOTH directions
+    anchored = rerank(frames, geom, anchors={4: b_track[4]}, config=cfg)
+    assert anchored[0] == b_track[0]
+    assert anchored[4] == b_track[4]
+    assert anchored[7] == b_track[7]
+
+    # an anchor with no candidate in radius is ignored, never breaks the path
+    ignored = rerank(
+        frames, geom, anchors={4: (300.0, 1071.0)}, config=cfg
+    )  # left corner, ~90 m from both tracks
+    assert ignored[4] == a_track[4]
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player

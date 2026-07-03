@@ -249,6 +249,8 @@ def rerank(
     frame_gaps: list[int] | None = None,
     priors: list[np.ndarray] | None = None,
     miss_costs: list[float] | None = None,
+    anchors: dict[int, tuple[float, float]] | None = None,
+    anchor_radius_m: float = 8.0,
     config: RerankConfig | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Re-rank per-frame ball candidates by physics/context (see module docstring).
@@ -272,6 +274,13 @@ def rerank(
             ``-log P(no visible ball)`` here: missing becomes expensive exactly when a
             confident candidate exists (the near-excursion fix) and cheap when the ball is
             genuinely invisible. ``None`` keeps the flat cost.
+        anchors: optional IDENTITY anchors ``{frame_idx: (x, y) source px}`` — moments the
+            game ball's position is known with certainty (kickoff/2H center spot from the
+            game phases; restart spots later). At an anchored frame the path may only take a
+            candidate within ``anchor_radius_m`` of the anchor (miss forbidden), so identity
+            propagates bidirectionally from it. An anchor with NO candidate in radius is
+            ignored (the detector missed the moment — never break the path over it).
+        anchor_radius_m: world-meters gate around each anchor.
         config: :class:`RerankConfig`.
 
     Returns:
@@ -308,6 +317,8 @@ def rerank(
     pers = static_persistence(fw, cfg.cell_m)
 
     def emis(t: int, i: int) -> float:
+        if t in allowed and i not in allowed[t]:
+            return math.inf  # anchored frame: out-of-radius candidates forbidden
         e = (
             -cfg.alpha * fs[t][i]
             + cfg.static_w * pers[t][i]
@@ -317,7 +328,24 @@ def rerank(
             e += float(priors[t][i])
         return e
 
+    # identity anchors -> per-frame allowed-candidate sets (None = unconstrained)
+    allowed: dict[int, set[int]] = {}
+    if anchors:
+        for t, axy in anchors.items():
+            if not (0 <= t < n) or not len(fw[t]):
+                continue
+            aw = geom.image_to_world(np.asarray([axy], float))[0]
+            ok = {
+                int(i)
+                for i, w in enumerate(fw[t])
+                if float(np.linalg.norm(w - aw)) <= anchor_radius_m
+            }
+            if ok:  # detector missed the anchor moment -> leave the frame unconstrained
+                allowed[t] = ok
+
     def miss(t: int) -> float:
+        if t in allowed:
+            return math.inf  # anchored frame: the path must take an in-radius candidate
         return float(miss_costs[t]) if miss_costs is not None else cfg.miss_cost
 
     # Viterbi: state K = miss. cost[t][j], back[t][j].
