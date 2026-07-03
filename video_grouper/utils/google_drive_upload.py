@@ -1,5 +1,14 @@
-"""Google Drive file uploader using YouTube OAuth client credentials."""
+"""Google Drive file uploader using YouTube OAuth client credentials.
 
+Reuses the install's YouTube OAuth client (``{storage}/youtube/client_secret.json``).
+That client MUST be a Google Cloud **"Desktop app"** OAuth client: the interactive
+consent flow uses a loopback redirect (``http://localhost:<port>``), which Google
+only allows for Desktop clients. A "Web" client (its redirects are fixed, e.g. a
+Supabase callback) fails the browser flow with ``redirect_uri_mismatch``. See
+``authenticate`` for the pre-flight check that surfaces this clearly.
+"""
+
+import json
 import logging
 import mimetypes
 import os
@@ -37,7 +46,8 @@ class GoogleDriveUploader:
                 If False, raise an error when no valid token is available.
 
         Raises:
-            RuntimeError: If no valid token exists and interactive mode is disabled.
+            RuntimeError: If no valid token exists and interactive mode is disabled,
+                or if the OAuth client is a "Web" (not "Desktop app") client.
             FileNotFoundError: If the client_secret.json file is missing.
         """
         if not os.path.exists(self.client_secret_path):
@@ -74,6 +84,24 @@ class GoogleDriveUploader:
             raise RuntimeError(
                 "No valid Google Drive token available and interactive mode is disabled. "
                 "Run with interactive=True to authenticate via browser."
+            )
+
+        # The browser consent flow (run_local_server) uses a loopback redirect,
+        # which Google only allows for "Desktop app" OAuth clients. A "Web" client
+        # would fail deep inside the flow with a cryptic redirect_uri_mismatch —
+        # surface it here with an actionable message instead.
+        try:
+            with open(self.client_secret_path, encoding="utf-8") as fh:
+                client_type = next(iter(json.load(fh)), None)
+        except (OSError, ValueError, StopIteration):
+            client_type = None
+        if client_type == "web":
+            raise RuntimeError(
+                f"The OAuth client at {self.client_secret_path} is a 'Web' client, "
+                "but interactive Google Drive auth requires a 'Desktop app' client "
+                "(the browser flow's loopback redirect is only allowed for Desktop "
+                "clients). Create an OAuth client of type 'Desktop app' in your "
+                "Google Cloud project and use its client_secret.json."
             )
 
         logger.info("Starting interactive OAuth flow for Google Drive.")
