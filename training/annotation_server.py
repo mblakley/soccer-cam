@@ -1805,22 +1805,40 @@ async def get_far_strip(set_id: str, frame_idx: int):
 
 @app.post("/api/far-label/{set_id}/result")
 async def submit_far_label(set_id: str, result: dict):
-    """Store one far-ball label.
+    """Store one far-ball label (one row per frame).
 
-    Expected: {"frame_idx": int, "action": "ball"|"not_visible"|"out_of_play",
-    "x": float|null, "y": float|null}  — x/y are SOURCE pixels.
+    Expected: {"frame_idx": int,
+    "action": "ball"|"obscured"|"not_visible"|"out_of_play"|"none",
+    "x": float|null, "y": float|null,
+    "distractors": [[x, y], ...] (optional)} — all coords SOURCE pixels.
+
+    ``obscured`` = the game ball is hidden but the annotator marks where it is
+    (selector/occlusion GT). ``distractors`` = ball-like objects that are NOT the
+    game ball (identity GT); they ride on the frame's single row alongside any
+    primary action. ``none`` = only distractors marked so far, game ball unjudged.
     """
     _load_far_manifest(set_id)  # validate set
     labels = _load_far_labels(set_id)
     fi = int(result["frame_idx"])
-    labels[fi] = {
+    row = {
         "frame_idx": fi,
-        "action": result.get("action", "ball"),
+        "action": result.get("action") or "none",
         "x": result.get("x"),
         "y": result.get("y"),
         "source": result.get("source", "human"),
         "submitted_at": datetime.now(UTC).isoformat(),
     }
+    ds = result.get("distractors")
+    if isinstance(ds, list):
+        clean = []
+        for d in ds:
+            try:
+                clean.append([float(d[0]), float(d[1])])
+            except (TypeError, ValueError, IndexError):
+                continue
+        if clean:
+            row["distractors"] = clean
+    labels[fi] = row
     _save_far_labels(set_id, labels)
     return {"accepted": True, "labeled": len(labels)}
 

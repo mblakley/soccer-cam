@@ -26,6 +26,7 @@
   button.primary { background:var(--acc); color:#06210f; border-color:var(--acc); font-weight:700; }
   button.warn { background:#3a2230; color:#ffb3c6; }
   button.ghost { background:#1b212b; }
+  button.modeon { outline:3px solid var(--gap); }
   kbd { background:#0c0f14; border:1px solid #33414f; border-radius:4px; padding:0 5px; font-size:11px; color:var(--muted); }
   .hint { text-align:center; color:var(--muted); padding:0 10px 12px; max-width:1000px; margin:0 auto; }
   #done { display:none; text-align:center; padding:40px; }
@@ -55,6 +56,8 @@
   <button id="bConfirm" class="primary" title="Accept the marked hint as the ball">✓ Hint is correct <kbd>C</kbd></button>
   <button id="bNot" class="warn">Ball not visible <kbd>N</kbd></button>
   <button id="bOut" class="warn">Out of play / off field <kbd>O</kbd></button>
+  <button id="bObscured" class="warn" title="Ball hidden behind a player/object — click where it is">Obscured: click position <kbd>H</kbd></button>
+  <button id="bDistractor" class="warn" title="Mark ball-like things that are NOT the game ball (multiple clicks)">Not-game-ball: click each <kbd>D</kbd></button>
   <button id="bPrev" class="ghost">◀ Prev <kbd>←</kbd></button>
   <button id="bNext" class="ghost">Next ▶ <kbd>→</kbd></button>
   <button id="bFar" class="primary">▶ Next far to review <kbd>F</kbd></button>
@@ -66,7 +69,11 @@
   <b>far ball to review</b>. The arrow points at the marked ball from below-left (tip stops short so the ball
   stays visible): purple = AutoCam-seeded (unreviewed), pink = you confirmed.
   <b>Click</b> the ball to fix it, or <kbd>C</kbd> to accept AutoCam's guess (both auto-advance to the next far ball).
-  <kbd>N</kbd> not visible, <kbd>O</kbd> out of play. Scroll = zoom, drag = pan.
+  <kbd>N</kbd> not visible, <kbd>O</kbd> out of play.
+  <kbd>H</kbd> then click = ball <b>obscured</b> at that spot (blue dashed arrow; tracker GT for occlusion).
+  <kbd>D</kbd> toggles <b>not-game-ball</b> mode: each click marks a decoy ball (orange ✕, several allowed,
+  no auto-advance; press <kbd>D</kbd> or <kbd>Esc</kbd> to exit; then still label the game ball itself).
+  Scroll = zoom, drag = pan.
 </p>
 
 <div id="done">
@@ -162,14 +169,27 @@ function arrowMark(nx,ny,color,dashed,k){
   ctx.lineTo(tipx-head*Math.cos(a+0.45), tipy-head*Math.sin(a+0.45));
   ctx.closePath(); ctx.fill();
 }
+function xMark(nx,ny,color,k){
+  const s=16*k;
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(2,3.5*k); ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(nx-s,ny-s); ctx.lineTo(nx+s,ny+s);
+  ctx.moveTo(nx-s,ny+s); ctx.lineTo(nx+s,ny-s);
+  ctx.stroke();
+}
 function draw(){
   ctx.clearRect(0,0,ov.width,ov.height);
   const f=frame(); const k=baseScale/z;
   const lab=labels[f.frame_idx];
   if (lab && lab.action==="ball" && lab.x!=null){
     arrowMark(lab.x-f.crop_x0, lab.y-f.crop_y0, lab.source==="human"?"#ff3b6b":"#9b59ff", false, k);
-  } else if (!lab || lab.action==="ball"){   // no label yet -> point at AutoCam's guess (dashed)
+  } else if (lab && lab.action==="obscured" && lab.x!=null){
+    arrowMark(lab.x-f.crop_x0, lab.y-f.crop_y0, "#4db8ff", true, k);   // blue dashed = hidden ball position
+  } else if (!lab || lab.action==="ball" || lab.action==="none"){  // ball not judged yet -> AutoCam's guess (dashed)
     arrowMark(f.hint_x-f.crop_x0, f.hint_y-f.crop_y0, f.autocam?"#2ecc71":"#ff9f1a", true, k);
+  }
+  if (lab && lab.distractors){
+    for (const d of lab.distractors) xMark(d[0]-f.crop_x0, d[1]-f.crop_y0, "#ff9f1a", k);
   }
 }
 
@@ -205,30 +225,57 @@ view.addEventListener("pointerup",(e)=>{
   if (moved < 6){ // a click, not a pan
     const [nx,ny]=toNatural(e.clientX,e.clientY);
     if (nx>=0&&ny>=0&&nx<=img.naturalWidth&&ny<=img.naturalHeight){
-      const f=frame(); post("ball", f.crop_x0+nx, f.crop_y0+ny);
+      const f=frame(); const gx=f.crop_x0+nx, gy=f.crop_y0+ny;
+      if (mode==="distractor") addDistractor(gx, gy);
+      else if (mode==="obscured"){ post("obscured", gx, gy); setMode("ball"); }
+      else post("ball", gx, gy);
     }
   }
 });
 
-async function post(action,x,y){
-  const f=frame();
-  labels[f.frame_idx]={frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"}; draw();
+async function sendRow(row){
+  labels[row.frame_idx]=row; draw();
   try{ await fetch(`${API}/result`,{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"})}); }catch(err){ console.error(err); }
+    body:JSON.stringify(row)}); }catch(err){ console.error(err); }
+}
+// Primary game-ball state (ball / obscured / not_visible / out_of_play) — preserves
+// any distractor marks already on the frame, then auto-advances.
+async function post(action,x,y){
+  const f=frame(); const old=labels[f.frame_idx];
+  const row={frame_idx:f.frame_idx,action,x:x??null,y:y??null,source:"human"};
+  if (old && old.distractors && old.distractors.length) row.distractors=old.distractors;
+  await sendRow(row);
   setTimeout(gotoFar,120);
+}
+// A decoy-ball mark: appends to the frame's distractors, keeps the primary state
+// (action "none" = game ball not judged yet), never auto-advances.
+function addDistractor(x,y){
+  const f=frame(); const old=labels[f.frame_idx];
+  const row= old ? {...old} : {frame_idx:f.frame_idx,action:"none",x:null,y:null,source:"human"};
+  row.distractors=[...(row.distractors||[]), [Math.round(x*10)/10, Math.round(y*10)/10]];
+  sendRow(row);
 }
 function next(){ if(cur<frames.length-1){ cur++; show(); } else finish(); }
 function prev(){ if(cur>0){ cur--; show(); } }
 function gotoUnlabeled(){ const i=firstUnlabeled(); if(labels[frames[i].frame_idx]) finish(); else { cur=i; show(); } }
 function isFar(f){ return f.hint_y <= FARY; }
-function needsReview(f){ const l=labels[f.frame_idx]; return (!l || l.source!=="human") && (isFar(f) || f.autocam===false); }
+// action "none" = only distractors marked so far — the game ball still needs judging
+function needsReview(f){ const l=labels[f.frame_idx]; return (!l || l.source!=="human" || l.action==="none") && (isFar(f) || f.autocam===false); }
 function gotoFar(){ for(let k=1;k<=frames.length;k++){ const i=(cur+k)%frames.length; if(needsReview(frames[i])){ cur=i; show(); return; } } finish(); }
 function finish(){ document.getElementById("stage").style.display="none"; document.querySelector(".bar").style.display="none";
   document.getElementById("done").style.display="block"; document.getElementById("dlLink").href=`${API}`; }
 
-document.getElementById("bConfirm").onclick=()=>{ const f=frame(); post("ball",f.hint_x,f.hint_y); };
-document.getElementById("bNot").onclick=()=>post("not_visible",null,null);
-document.getElementById("bOut").onclick=()=>post("out_of_play",null,null);
+let mode="ball";
+function setMode(m){
+  mode=m;
+  document.getElementById("bObscured").classList.toggle("modeon", m==="obscured");
+  document.getElementById("bDistractor").classList.toggle("modeon", m==="distractor");
+}
+document.getElementById("bConfirm").onclick=()=>{ const f=frame(); setMode("ball"); post("ball",f.hint_x,f.hint_y); };
+document.getElementById("bNot").onclick=()=>{ setMode("ball"); post("not_visible",null,null); };
+document.getElementById("bOut").onclick=()=>{ setMode("ball"); post("out_of_play",null,null); };
+document.getElementById("bObscured").onclick=()=>setMode(mode==="obscured"?"ball":"obscured");
+document.getElementById("bDistractor").onclick=()=>setMode(mode==="distractor"?"ball":"distractor");
 document.getElementById("bPrev").onclick=prev;
 document.getElementById("bNext").onclick=next;
 document.getElementById("bFar").onclick=gotoFar;
@@ -238,6 +285,9 @@ addEventListener("keydown",(e)=>{
   if(e.key==="c"||e.key==="C") document.getElementById("bConfirm").click();
   else if(e.key==="n"||e.key==="N") document.getElementById("bNot").click();
   else if(e.key==="o"||e.key==="O") document.getElementById("bOut").click();
+  else if(e.key==="h"||e.key==="H") document.getElementById("bObscured").click();
+  else if(e.key==="d"||e.key==="D") document.getElementById("bDistractor").click();
+  else if(e.key==="Escape") setMode("ball");
   else if(e.key==="ArrowLeft") prev();
   else if(e.key==="ArrowRight") next();
   else if(e.key==="u"||e.key==="U") gotoUnlabeled();
