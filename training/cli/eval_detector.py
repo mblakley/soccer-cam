@@ -156,7 +156,6 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    import av
     import cv2
     import torch
 
@@ -166,7 +165,6 @@ def main() -> None:
         _native_iso_warp,
     )
     from training.data_prep.warped_dataset import (
-        apply_display_rotation,
         resolve_video_rotation,
     )
     from training.models.heatmap_net import HeatmapNet
@@ -218,42 +216,38 @@ def main() -> None:
     model.eval()
 
     vrot = resolve_video_rotation(video, gj.get("video_rotation"))
-    _hw = None
-    if not args.no_hwaccel:
-        try:
-            _hw = av.codec.hwaccel.HWAccel(
-                device_type="cuda", allow_software_fallback=True
-            )
-        except Exception:  # noqa: BLE001
-            _hw = None
-    container = av.open(video, hwaccel=_hw) if _hw else av.open(video)
-    stream = container.streams.video[0]
-    if _hw is None:
-        stream.thread_type = "AUTO"
-    sw, sh = stream.codec_context.width, stream.codec_context.height
-    far_poly = _far_margin_polygon(poly, 400.0)
-    warp = _native_iso_warp(far_poly, sw, sh, None)
-    bh, bw = warp.shape
-    mpoly = warp.points(far_poly).astype(np.int32)
-    mask = np.zeros((bh, bw), np.uint8)
-    cv2.fillPoly(mask, [mpoly], 255)
+    from training.data_prep.segment_decode import iter_frames_from_segments
 
+    game_dir = Path(video).parent
+    segments = gj["segments"]
     want = set(eval_frames)
+    # Stream the 3-frame band ({f-2,f-1,f}) for each eval frame from the RAW per-segment clips instead
+    # of decoding the whole combined video (which scored ~1500 stride-frames by grinding all ~13k
+    # frames). Frame-exact, corruption-isolated, memory-light (one frame at a time).
+    band_globals: set[int] = set()
+    for f in want:
+        band_globals.update((max(0, f - 2), max(0, f - 1), f))
+
     frames_cands: dict[int, list] = {}
-    buf: list = []
-    idx = -1
-    lo_dec = max(0, min(want) - 2)  # fill the 3-frame stack before the first eval frame
-    for fr in container.decode(stream):
-        idx += 1
-        if idx < lo_dec:
-            continue
-        img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
-        buf.append(_dewarp_mask_gray(img, warp, mask))
-        if len(buf) > 3:
-            buf.pop(0)
-        if idx in want:
-            grays = buf if len(buf) == 3 else [buf[0]] * (3 - len(buf)) + buf
-            stack = np.stack(grays, 0).astype(np.float32) / 255.0
+    band_gray: dict[int, np.ndarray] = {}
+    warp = None
+    mask = None
+    for f, img in iter_frames_from_segments(
+        game_dir, segments, band_globals, vrot, hwaccel=not args.no_hwaccel
+    ):
+        if warp is None:
+            sh, sw = img.shape[:2]
+            far_poly = _far_margin_polygon(poly, 400.0)
+            warp = _native_iso_warp(far_poly, sw, sh, None)
+            mpoly = warp.points(far_poly).astype(np.int32)
+            mask = np.zeros(warp.shape, np.uint8)
+            cv2.fillPoly(mask, [mpoly], 255)
+        band_gray[f] = _dewarp_mask_gray(img, warp, mask)
+        if f in want:
+            g0 = band_gray[f]
+            g1 = band_gray.get(f - 1, g0)
+            g2 = band_gray.get(f - 2, g1)
+            stack = np.stack((g2, g1, g0), 0).astype(np.float32) / 255.0
             hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
             cands = []
             for hx, hy, sc in extract_peaks(
@@ -268,7 +262,7 @@ def main() -> None:
                 ):
                     continue
                 observed = (
-                    _blob_diam(grays[-1], int(hx), int(hy), args.size_win)
+                    _blob_diam(g0, int(hx), int(hy), args.size_win)
                     / max(warp.scale, 1e-6)
                 )  # observed apparent diameter, source px (for the size gate + the dump)
                 if not args.no_size_gate:
@@ -278,10 +272,9 @@ def main() -> None:
                     if expected > 0 and observed > args.size_max_ratio * expected:
                         continue  # too big for its field location — a player/structure, not the ball
                 cands.append(Candidate(x=sx, y=sy, score=sc, size_px=observed))
-            frames_cands[idx] = cands
-        if idx >= max(want):
-            break
-    container.close()
+            frames_cands[f] = cands
+        for k in [k for k in band_gray if k < f - 2]:
+            del band_gray[k]
     print(f"ran detector on {len(frames_cands)} frames", flush=True)
 
     # existing tracker over OUR detector's candidates. frame_gaps[t] = gap INTO t (backward diff).
