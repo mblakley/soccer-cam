@@ -1,6 +1,30 @@
 # Current Status
 
-*Last updated: 2026-07-02*
+*Last updated: 2026-07-03*
+
+## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
+
+Full write-up (with the held-out numbers + external comparison, kept out of the repo per policy):
+`F:\archive\OnceAutocam\ball_tracking_findings_2026-07-03.md`. Repo-side takeaways:
+
+- **The detector is not the problem; selecting the game ball is.** Held-out candidate CEILING (ball in
+  the detector's peaks) is far ~0.91 / near ~1.00 — already at/above the target bar. But the tracker's
+  SELECTED pick is only far ~0.61 / near ~0.54. The ball is in the candidate set; the tracker latches a
+  distractor. **Always decompose eval into ceiling vs selected** — a single R15m number hides this.
+- **It's a precision/confidence problem, not recall.** score-argmax (top-scored peak = GT ball) is only
+  **0.24 far / 0.30 near**: the game ball is rarely the highest-scored candidate. Recall (ceiling) stays
+  high; confidence tails off as the ball gets far/faint, so distractors outrank it and Kalman keeps the
+  wrong lock. Fix = distractor suppression / distance-calibrated confidence, not more recall.
+- **The human far-labels are SELECTOR/tracker GT, not detector data.** `ball` xy = track anchor on hard
+  frames; `obscured` = where the game ball is while invisible (the detector *cannot* see it — only a
+  selector can carry the track through occlusion); `not_game_ball` = identity/distractor supervision.
+  This session mistakenly trained them into the detector (as crops) → no held-out gain, as expected.
+  Real target = **find THE game ball as ONE continuous track** (identity + continuity through occlusion),
+  measured by track length/continuity — not per-frame hit rate. → **task #17 (world-model/selector).**
+- **Raw-segment decode infra landed** (`data_prep/segment_decode.py`; see EXP-DIST-21 / DECISIONS
+  2026-07-02). Wired into `build_far_label_queue`, `build_human_crops`, `eval_detector`. STILL TODO:
+  `heatmap_dataset.build_heatmap_crops` + `mine_hard_negatives`; validate refactored `eval_detector`
+  against the old-code candidate dump; switch the two queue/crop builders from dict → streaming.
 
 ## AutoCam distillation → homegrown ball detector (2026-06-30)
 
