@@ -1,6 +1,17 @@
 # Current Status
 
-*Last updated: 2026-06-30 (untrimmed-KO / production-safety)*
+*Last updated: 2026-07-02 (game-start default = phase_detection confirmed live + verified)*
+
+## Game-start default = phase_detection — CONFIRMED LIVE + verified (2026-07-02, latest)
+
+The OPEN DECISION below (2026-06-30) is **resolved**: Mark confirmed the game-start / trim default is
+`phase_detection`, and it is already the shipped state on `main` (config default since S1 `e6a342d`;
+gate `ko_trustworthy`, 60s backup, Reolink-only, Dahua→NTFY fallback, truncated-start via option B). No
+code change was needed — the docs were stale, not the code. Verified 2026-07-02: **131 unit tests
+green** (`test_phase_game_start`, `test_phase_fusion`, `test_phase_ttt_push`, `test_phase_detect_step`,
+`test_ntfy_processor`, `test_configurable_end_trim`, `test_video_processor`,
+`test_reprocess_phase_correction`, `test_phase_verify_task`). See DECISIONS.md 2026-07-02; the
+"suspended / stays NTFY" note in PHASE_DETECTION_INTEGRATION.md (2026-06-18) is superseded.
 
 ## Game-phase detection — untrimmed-KO opt-in localize + PRODUCTION-SAFE (2026-06-30, latest)
 
@@ -35,9 +46,10 @@ S3 verify loop / a viewer — rather than interrupt every confident game. The ol
 levers (curve-onset, loosened-clear bench-dip, ball-refine, symmetric-trust) — all in EXP-PHASE-14.
 The 5 combined misses are genuinely signal-limited; 3 correctly untrusted (→NTFY), 2 early/trim-safe.
 
-**OPEN DECISION (Mark):** flip game-start default to phase-detection (proceed S1–S4/T2) accepting 64%
-display accuracy + human-verify, or keep game-start on NTFY and use phases for post-trim display only?
-Safety bar met; the accuracy gap is display-quality (human-verify catches it), not trim-safety.
+**RESOLVED 2026-07-02 (Mark): flip to phase-detection.** (was: flip game-start default to
+phase-detection accepting ~64% display accuracy + human-verify, or keep NTFY for post-trim display
+only.) Safety bar met; the accuracy gap is display-quality (human-verify catches it), not trim-safety.
+See the top-of-file entry + DECISIONS.md 2026-07-02.
 
 ## Game-phase detection — kickoff signature + GT review (2026-06-30, earlier)
 
