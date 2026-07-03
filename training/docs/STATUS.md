@@ -18,10 +18,29 @@ density head + ball-state machine + uncertainty-aware viewport; success bar unch
 flat at every threshold = saturated raw scores. Full numbers in EXPERIMENTS.md EXP-DIST-22.
 Also fixed 3 stale unit tests on the branch (Reolink image-setting count, field_detect fake signature).
 
-**Next (Phase 0 remainder):** 0a validate refactored eval_detector vs old dump (gate); 0c decode
-migration (`build_heatmap_crops`, `mine_hard_negatives`, dict→streaming); 0d viewport-loader alignment
-audit (vision) — gate for any viewport-vs-viewport comparison. Then Phase 1 kill test (go/no-go for
-the learned selector).
+**Phase 0c decode migration COMMITTED (338bd91):** `build_heatmap_crops` + `mine_hard_negatives` now
+stream label windows via `iter_frames_from_segments` (non-combined bases = one synthetic segment);
+`build_human_crops`/`build_far_label_queue` switched dict → streaming. ruff + 1501 unit tests green.
+STILL TO VERIFY server-side: rebuild one game's crops (Fairport) and compare vs the old store —
+queued behind the 0a eval job (GPU/decode contention).
+
+**Phase 0a RUNNING (server):** scheduled task `selector_eval_validate_0a` (ExecutionTimeLimit ZERO) —
+fresh `eval_detector --dump-cands` for Spencerport + Irondequoit with `hm_reolink_human`, then
+`G:\ballresearch\selector\compare_dumps.py` old-vs-new (PASS = counts identical, |dxy|≤0.5px,
+|dscore|≤2e-3). Log: `G:\ballresearch\selector\eval_validate_0a.log`.
+
+**Phase 0d viewport-loader audit — PASS on the untrimmed case (3/3):** vision-audited RNYFC
+(`G:\ballresearch\selector\viewport_audit.py` → `vp_audit_rnyfc\*.jpg`): source-panorama crop at
+`autocam_viewport.jsonl` (x,y) vs the `-once-processed.mp4` frame at the same global index — all 3
+samples pose-exact (same instant), crosshair on the framed action. So (seg,f)→global mapping +
+pan-center semantics are RIGHT for main-dir processed videos. **REMAINING:** the trimmed-basis case
+(Reolink games whose AutoCam render sits in the upload subdir on a start-trimmed axis, e.g. held-out
+Spencerport `bu14---...-05-31-2026.mp4` + `.jsonl`, `match_info.ini start_time_offset`) — audit after
+0a frees the Spencerport segments. Do NOT trust Spencerport viewport math until that passes.
+
+**Next:** read 0a verdict → if PASS, dump 2 training games with `hm_reolink_hn2` (kill-test inputs);
+0d trimmed-basis audit; Phase 2a far-label tool actions (`not_game_ball` + `obscured`); then Phase 1
+kill test (go/no-go for the learned selector).
 
 ## 2026-07-03 — SELECTION is the bottleneck, not detection (start here on resume)
 
