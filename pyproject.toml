@@ -372,6 +372,7 @@ torchvision = { index = "pytorch-cu126" }
 dev = [
     "aiohttp>=3.13.3",
     "mypy>=2.1.0",
+    "psycopg2-binary>=2.9.12",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
 ]
