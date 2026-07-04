@@ -1,6 +1,32 @@
 # Current Status
 
-*Last updated: 2026-07-03*
+*Last updated: 2026-07-04*
+
+## 2026-07-04 morning — hn series closed; labeling UX upgraded; static mining validated
+
+- **Detector: `hm_reolink_hn2` is the champion; the warm-restart fine-tune lever is CLOSED**
+  (EXP-DIST-25/26/27): hn1/hn2 "mining" never ran (index-format crash — fixed, 84d469d); their gains
+  were +epochs; epochs have peaked (control degraded); TRUE mined round helped vs its control but
+  8-ep and 2-ep variants both land under hn2. Mined crops (+2,391, vision-gated) stay in the store
+  for the next FULL training run (Dahua joint build).
+- **Labeling UX (Mark's asks):** (1) his single ball click (or not_visible) implies all other
+  candidates negative — listwise; manual `D` = MOVING decoys only. (2) `inject_set_candidates`
+  (d7cebbc) overlays OUR detector's top-K into set manifests' `context` (UI already renders dots;
+  blue=top-5) — RUNNING over the 15 priority sets (task `selector_inject_sets`, ETA ~10:30).
+  Labeling priorities for Mark: held-out Spencerport sets first (seg10/hard/seg3 + spc_hard_review +
+  spc_tracker_uncertain1), then the 7 training-game `__hard` sets + heat_0527_c + heat_0615_lowconf.
+- **Static-distractor mining (Mark's idea) VALIDATED** (`mine_static_distractors`, 9fdb7a1): on OUR
+  held-out Spc dump — **13 label-confirmed static distractor objects, top one in 98% of frames**
+  (1,717 dets) — a large share of the rank-11+ burial, confirmed by existing clicks alone. AutoCam's
+  own det stream has ~none (its precision IS the selection gap, localized). Tiered output; static
+  REAL balls are selector-negatives only (review crop per cluster).
+- **NEXT BIG ARTIFACT — full-game candidate dumps for the 14 Reolink training games.** One marathon
+  serves three consumers: static-distractor mining at scale, selection-level supervision at the
+  volume the shelved selector bet requires (EXP-DIST-24 re-open conditions), and hard-negative
+  sourcing for the Dahua-era full retrain. Cost estimate on the 1060: stride-8 active-play ≈ 12k
+  inferences/game ≈ 5–10 h/game ⇒ **3–6 days marathon** (resumable, marathon-class like the
+  detection marathon). Options: all 14, or start with 4–6 games (~2 days) to de-risk. Decision
+  pending; Dahua joint build is the parallel/alternative GPU commitment.
 
 ## 2026-07-03 (later) — ball-selector iteration STARTED (branch `feat/ball-selector`)
 
