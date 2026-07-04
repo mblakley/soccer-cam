@@ -2,7 +2,16 @@
 
 *Last updated: 2026-07-04*
 
-## 2026-07-04 morning — hn series closed; labeling UX upgraded; static mining validated
+## 2026-07-04 morning — PHASE 0 CLOSED; hn series closed; labeling UX upgraded; static mining validated
+
+- **Phase 0c decode migration FORMALLY VALIDATED (byte-exact):** streaming `build_human_crops`
+  rebuild of Fairport 05.30 == production store 137/137 crops, worst mean-abs 0.000/255
+  (`G:allresearch\selector\check_0c.log`). All four Phase-0 gates now PASS (0a byte-exact eval,
+  0b rank diagnostic, 0c crop rebuild, 0d viewport alignment both layouts).
+- **Candidate overlays LIVE on all 15 priority sets** (2,114 frames, 100% injected, API-verified) —
+  Mark labeling with dots; one click/frame = listwise identity supervision.
+- **EXP-DIST-28:** soft in-field prior ± airborne dome = no tracker effect (statics hurt RANKING,
+  not the path). Arc-fit gravity feature slotted for the aerial ball-state phase.
 
 - **Detector: `hm_reolink_hn2` is the champion; the warm-restart fine-tune lever is CLOSED**
   (EXP-DIST-25/26/27): hn1/hn2 "mining" never ran (index-format crash — fixed, 84d469d); their gains
