@@ -257,3 +257,46 @@ def test_context_entries_rank_colors_and_inverse_warp():
     assert ctx[0] == {"x": 100.0, "y": 125.0, "df": -1}
     assert cands[0] == [100.0, 125.0, 0.9]
     assert [c["df"] for c in ctx] == [-1] * 5 + [1] * 2
+
+
+class TestStaticDistractors:
+    def test_static_cluster_found_and_mover_ignored(self):
+        from training.cli.mine_static_distractors import find_static_clusters
+
+        rng = np.random.default_rng(0)
+        det = {}
+        for g in range(100):
+            pts = [[10.0 + rng.normal(0, 0.2), 20.0 + rng.normal(0, 0.2)]]  # static
+            pts.append([g * 1.0, 30.0])  # mover: new cell every other frame
+            det[g] = np.asarray(pts)
+        cl = find_static_clusters(det, min_occ=0.5)
+        assert len(cl) == 1
+        assert abs(cl[0]["wx"] - 10.0) < 0.5 and cl[0]["occupancy"] > 0.9
+
+    def test_restart_dwell_below_threshold(self):
+        from training.cli.mine_static_distractors import find_static_clusters
+
+        det = {g: np.asarray([[50.0, 30.0]]) for g in range(10)}  # short dwell
+        det.update({g: np.asarray([[g * 2.0, 5.0]]) for g in range(10, 100)})
+        assert find_static_clusters(det, min_occ=0.15) == []
+
+    def test_confirm_drops_ball_visited_cells(self):
+        from training.cli.mine_static_distractors import confirm_clusters
+
+        clusters = [
+            {"wx": 10.0, "wy": 20.0, "occupancy": 0.9, "n_dets": 90, "n_frames": 90},
+            {"wx": 40.0, "wy": 30.0, "occupancy": 0.5, "n_dets": 50, "n_frames": 50},
+        ]
+        ball = np.asarray([[40.5, 30.2]])  # the game ball visits the 2nd cell
+        out = confirm_clusters(clusters, ball, np.zeros((0, 2)))
+        assert len(out) == 1
+        assert out[0]["wx"] == 10.0 and out[0]["confirmed_by"] == "label_confirmed"
+
+    def test_teacher_only_tier(self):
+        from training.cli.mine_static_distractors import confirm_clusters
+
+        clusters = [
+            {"wx": 10.0, "wy": 20.0, "occupancy": 0.9, "n_dets": 90, "n_frames": 90}
+        ]
+        out = confirm_clusters(clusters, np.zeros((0, 2)), np.asarray([[70.0, 40.0]]))
+        assert out[0]["confirmed_by"] == "teacher_only"
