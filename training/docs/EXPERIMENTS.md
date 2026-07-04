@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-26: first TRUE mined-negatives round — mining is real but the 8-epoch recipe cancels it (2026-07-04)
+
+**Run:** `hm_reolink_hn3` = resume hn2 + 8 epochs on the store WITH +2,391 mined hard negatives
+(fixed miner; 14 games, 51–228/game; crops vision-gated: linesman-with-flag, spectator clusters,
+player heads, goal-mouths, sideline clutter — the intended distractor taxonomy). Minimal pair vs
+`hm_reolink_hn2ep8` (identical but NO mined crops; both stores also carry the 4× human-crop
+oversampling, which hn2 itself predates).
+
+**Held-out Spencerport three-way:**
+
+| metric | hn2 (peak) | +8ep control | hn3-true (mined+8ep) |
+|---|---|---|---|
+| ceiling ALL / far / near | 0.964 / 0.958 / 0.989 | 0.948 / 0.936 / 0.989 | 0.960 / **0.961** / 0.956 |
+| score-argmax near / far | **0.467** / 0.264 | 0.222 / 0.236 | 0.289 / 0.248 |
+| best SELECTED ALL / far | 0.60 / **0.703** | 0.545 / 0.624 | **0.614** / 0.691 |
+
+Irondequoit: hn3 strong-config far 0.727 (= hn2). Val recall flat ~0.40 throughout (still blind to
+all of this — EXP-DIST-25's val≠held-out caution again).
+
+**Read:** (1) **Mining works** — vs the clean control it recovers far ceiling (+0.025), far SELECTED
+(+0.067), near argmax (+0.067). (2) **The 8-epoch fine-tune destroys roughly what mining earns** —
+net vs hn2 is a wash on far and a clear near-argmax regression. The mined fraction is 3% of the
+store; 8 epochs of the other 97% re-overfits.
+
+**Next (launched 05:52): `hn3b` = same mined store, 2 EPOCHS.** hn3b far SELECTED > hn2 0.703 ⇒
+mining iterates with short fine-tunes (and possibly mined-crop upweighting); hn3b ≈ hn2 ⇒ the
+detector is venue-limited at the current corpus and VENUE DIVERSITY becomes the primary lever (the
+long-standing data-scaling diagnosis).
+
 ## EXP-DIST-25: hn1/hn2 mining NEVER RAN — gains were epochs; epochs-alone has now PEAKED (2026-07-03)
 
 **Discovery (from the logs, while relaunching round 3).** `hn_mine.log` and `hn2_mine.log` both end in
