@@ -301,7 +301,7 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
     Calls ``GET /api/device-link/me`` first; if the user already has any
     assignments we skip the register POST (idempotent on the server, but
     the GET is cheaper than re-walking the user's team_members rows).
-    When ``GET`` returns empty, POSTs ``/api/device-link/register-camera-manager``
+    When ``GET`` returns empty, POSTs ``/api/internal/device-link/register-camera-manager``
     so every team the signed-in user is approved on gets a camera_managers row.
 
     All failures are swallowed and logged at WARNING — this is a

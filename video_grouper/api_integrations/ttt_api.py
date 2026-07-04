@@ -369,7 +369,7 @@ class TTTApiClient:
     def register_as_camera_manager(self) -> list[dict[str, Any]]:
         """Auto-claim camera-manager status for every team the user belongs to.
 
-        POST {api_base_url}/api/device-link/register-camera-manager
+        POST {api_base_url}/api/internal/device-link/register-camera-manager
 
         Idempotent: the server iterates approved team_members rows for the
         caller, creates the missing camera_managers rows, and returns the
@@ -378,7 +378,7 @@ class TTTApiClient:
 
         Returns ``[]`` when the user has zero approved team memberships.
         """
-        url = f"{self.api_base_url}/api/device-link/register-camera-manager"
+        url = f"{self.api_base_url}/api/internal/device-link/register-camera-manager"
         logger.debug("Registering as camera manager via %s", url)
         result = self._request("POST", url)
         # 204 maps to None upstream; coerce so callers always get a list.
@@ -387,9 +387,9 @@ class TTTApiClient:
     def get_pending_clip_requests(self) -> Any:
         """Get pending clip requests for linked teams.
 
-        GET {api_base_url}/api/device-link/clip-requests
+        GET {api_base_url}/api/internal/device-link/clip-requests
         """
-        url = f"{self.api_base_url}/api/device-link/clip-requests"
+        url = f"{self.api_base_url}/api/internal/device-link/clip-requests"
         logger.debug("Fetching pending clip requests from %s", url)
         return self._request("GET", url)
 
@@ -591,9 +591,9 @@ class TTTApiClient:
     ) -> list[dict[str, Any]]:
         """Get team schedule within a date range.
 
-        GET {api_base_url}/api/device-link/schedule
+        GET {api_base_url}/api/internal/device-link/schedule
         """
-        url = f"{self.api_base_url}/api/device-link/schedule"
+        url = f"{self.api_base_url}/api/internal/device-link/schedule"
         params: dict[str, str] = {"team_id": team_id}
         if start_date:
             params["start_date"] = start_date
@@ -605,9 +605,9 @@ class TTTApiClient:
     def get_roster(self, team_id: str) -> list[dict[str, Any]]:
         """Get team roster.
 
-        GET {api_base_url}/api/device-link/roster
+        GET {api_base_url}/api/internal/device-link/roster
         """
-        url = f"{self.api_base_url}/api/device-link/roster"
+        url = f"{self.api_base_url}/api/internal/device-link/roster"
         params = {"team_id": team_id}
         logger.debug("Fetching roster for team %s", team_id)
         return self._request("GET", url, params=params)
@@ -617,9 +617,9 @@ class TTTApiClient:
     ) -> dict[str, Any]:
         """Auto-match a video to a game based on recording time.
 
-        POST {api_base_url}/api/device-link/auto-match-video
+        POST {api_base_url}/api/internal/device-link/auto-match-video
         """
-        url = f"{self.api_base_url}/api/device-link/auto-match-video"
+        url = f"{self.api_base_url}/api/internal/device-link/auto-match-video"
         body = {"team_id": team_id, "video_url": video_url, "recorded_at": recorded_at}
         logger.debug("Auto-matching video for team %s at %s", team_id, recorded_at)
         return self._request("POST", url, json=body)
@@ -840,9 +840,9 @@ class TTTApiClient:
     ) -> dict[str, Any] | None:
         """Report camera status to TTT.
 
-        PATCH {api_base_url}/api/device-link/camera-status
+        PATCH {api_base_url}/api/internal/device-link/camera-status
         """
-        url = f"{self.api_base_url}/api/device-link/camera-status"
+        url = f"{self.api_base_url}/api/internal/device-link/camera-status"
         data: dict[str, Any] = {"camera_id": camera_id, "status": status}
         if firmware_version:
             data["firmware_version"] = firmware_version
@@ -854,9 +854,9 @@ class TTTApiClient:
     def get_camera_config(self, camera_id: str) -> dict[str, Any] | None:
         """Fetch camera config from TTT.
 
-        GET {api_base_url}/api/device-link/camera-config
+        GET {api_base_url}/api/internal/device-link/camera-config
         """
-        url = f"{self.api_base_url}/api/device-link/camera-config"
+        url = f"{self.api_base_url}/api/internal/device-link/camera-config"
         logger.debug("Fetching camera config for %s", camera_id)
         return self._request("GET", url, params={"camera_id": camera_id})
 
@@ -880,13 +880,13 @@ class TTTApiClient:
     ) -> list[dict] | None:
         """Register newly discovered recording files with TTT.
 
-        POST {api_base_url}/api/device-link/recordings?camera_id={camera_id}&team_id={team_id}
+        POST {api_base_url}/api/internal/device-link/recordings?camera_id={camera_id}&team_id={team_id}
 
         files is a list of dicts with optional keys:
         file_name, file_group, file_size_bytes, duration_seconds,
         recording_start, recording_end
         """
-        url = f"{self.api_base_url}/api/device-link/recordings"
+        url = f"{self.api_base_url}/api/internal/device-link/recordings"
         params = {"camera_id": camera_id, "team_id": team_id}
         logger.debug("Registering %d recording(s) for camera %s", len(files), camera_id)
         return self._request("POST", url, params=params, json=files)
@@ -908,14 +908,14 @@ class TTTApiClient:
     ) -> dict[str, Any] | None:
         """Upsert one pipeline step for a recording.
 
-        PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
+        PATCH {api_base_url}/api/internal/device-link/recordings/{recording_id}/status
 
         TTT appends a new step if step_id is unknown, or updates in-place if
         already present, preserving insertion order. When step_type=="upload"
         and status is "complete", TTT reads youtube_url/youtube_video_id from
         artifacts.
         """
-        url = f"{self.api_base_url}/api/device-link/recordings/{recording_id}/status"
+        url = f"{self.api_base_url}/api/internal/device-link/recordings/{recording_id}/status"
         body: dict[str, Any] = {
             "step_id": step_id,
             "type": step_type,
@@ -942,9 +942,9 @@ class TTTApiClient:
     ) -> dict[str, Any] | None:
         """Send enhanced heartbeat with system metrics.
 
-        PATCH {api_base_url}/api/device-link/heartbeat-enhanced
+        PATCH {api_base_url}/api/internal/device-link/heartbeat-enhanced
         """
-        url = f"{self.api_base_url}/api/device-link/heartbeat-enhanced"
+        url = f"{self.api_base_url}/api/internal/device-link/heartbeat-enhanced"
         data = {"service_id": service_id, **metrics}
         logger.debug("Sending enhanced heartbeat for service %s", service_id)
         return self._request("PATCH", url, json=data)
@@ -952,46 +952,46 @@ class TTTApiClient:
     def get_auto_record_rules(self, camera_id: str) -> dict[str, Any] | None:
         """Get auto-record rules for a camera.
 
-        GET {api_base_url}/api/device-link/auto-record-rules?camera_id=
+        GET {api_base_url}/api/internal/device-link/auto-record-rules?camera_id=
         """
-        url = f"{self.api_base_url}/api/device-link/auto-record-rules"
+        url = f"{self.api_base_url}/api/internal/device-link/auto-record-rules"
         logger.debug("Fetching auto-record rules for camera %s", camera_id)
         return self._request("GET", url, params={"camera_id": camera_id})
 
     def get_pending_commands(self, camera_id: str) -> list[dict[str, Any]] | None:
         """Get pending commands for a camera.
 
-        GET {api_base_url}/api/device-link/pending-commands?camera_id=
+        GET {api_base_url}/api/internal/device-link/pending-commands?camera_id=
         """
-        url = f"{self.api_base_url}/api/device-link/pending-commands"
+        url = f"{self.api_base_url}/api/internal/device-link/pending-commands"
         logger.debug("Fetching pending commands for camera %s", camera_id)
         return self._request("GET", url, params={"camera_id": camera_id})
 
     def acknowledge_command(self, command_id: str) -> dict[str, Any] | None:
         """Acknowledge receipt of a command.
 
-        PATCH {api_base_url}/api/device-link/commands/{command_id}/acknowledge
+        PATCH {api_base_url}/api/internal/device-link/commands/{command_id}/acknowledge
         """
-        url = f"{self.api_base_url}/api/device-link/commands/{command_id}/acknowledge"
+        url = f"{self.api_base_url}/api/internal/device-link/commands/{command_id}/acknowledge"
         logger.debug("Acknowledging command %s", command_id)
         return self._request("PATCH", url)
 
     def complete_command(self, command_id: str, result: dict) -> dict[str, Any] | None:
         """Report command completion.
 
-        PATCH {api_base_url}/api/device-link/commands/{command_id}/complete
+        PATCH {api_base_url}/api/internal/device-link/commands/{command_id}/complete
         """
-        url = f"{self.api_base_url}/api/device-link/commands/{command_id}/complete"
+        url = f"{self.api_base_url}/api/internal/device-link/commands/{command_id}/complete"
         logger.debug("Completing command %s", command_id)
         return self._request("PATCH", url, json=result)
 
     def get_high_water_mark(self, camera_id: str) -> str | None:
         """Get the latest recording timestamp TTT knows about for this camera.
 
-        GET {api_base_url}/api/device-link/high-water-mark?camera_id={camera_id}
+        GET {api_base_url}/api/internal/device-link/high-water-mark?camera_id={camera_id}
         Returns ISO datetime string or None.
         """
-        url = f"{self.api_base_url}/api/device-link/high-water-mark"
+        url = f"{self.api_base_url}/api/internal/device-link/high-water-mark"
         params = {"camera_id": camera_id}
         logger.debug("Fetching high-water mark for camera %s", camera_id)
         result = self._request("GET", url, params=params)
@@ -1030,9 +1030,9 @@ class TTTApiClient:
     def register_service(self, machine_name: str, capabilities: dict) -> Any:
         """Register this service instance with TTT.
 
-        POST {api_base_url}/api/device-link/register-service
+        POST {api_base_url}/api/internal/device-link/register-service
         """
-        url = f"{self.api_base_url}/api/device-link/register-service"
+        url = f"{self.api_base_url}/api/internal/device-link/register-service"
         body = {"machine_name": machine_name, "capabilities": capabilities}
         logger.debug("Registering service '%s' at %s", machine_name, url)
         return self._request("POST", url, json=body)
@@ -1040,9 +1040,9 @@ class TTTApiClient:
     def send_heartbeat(self, service_id: str, status: str = "online") -> Any:
         """Send heartbeat to TTT.
 
-        PATCH {api_base_url}/api/device-link/heartbeat?service_id={service_id}
+        PATCH {api_base_url}/api/internal/device-link/heartbeat?service_id={service_id}
         """
-        url = f"{self.api_base_url}/api/device-link/heartbeat"
+        url = f"{self.api_base_url}/api/internal/device-link/heartbeat"
         params = {"service_id": service_id}
         logger.debug("Sending heartbeat for service %s", service_id)
         return self._request("PATCH", url, params=params)
@@ -1054,9 +1054,9 @@ class TTTApiClient:
     def get_pending_jobs(self) -> Any:
         """Get pending processing jobs assigned to this service.
 
-        GET {api_base_url}/api/device-link/processing-jobs
+        GET {api_base_url}/api/internal/device-link/processing-jobs
         """
-        url = f"{self.api_base_url}/api/device-link/processing-jobs"
+        url = f"{self.api_base_url}/api/internal/device-link/processing-jobs"
         logger.debug("Fetching pending processing jobs from %s", url)
         return self._request("GET", url)
 
@@ -1121,9 +1121,9 @@ class TTTApiClient:
     def save_device_config(self, data: dict[str, Any]) -> dict[str, Any]:
         """Create or update device config for this camera manager.
 
-        PUT {api_base_url}/api/device-link/config
+        PUT {api_base_url}/api/internal/device-link/config
         """
-        url = f"{self.api_base_url}/api/device-link/config"
+        url = f"{self.api_base_url}/api/internal/device-link/config"
         logger.debug("Saving device config to %s", url)
         return self._request("PUT", url, json=data)
 
@@ -1138,9 +1138,9 @@ class TTTApiClient:
     def list_schedule_providers(self, team_id: str) -> list[dict[str, Any]]:
         """List schedule providers for a team.
 
-        GET {api_base_url}/api/device-link/schedule-providers?team_id=...
+        GET {api_base_url}/api/internal/device-link/schedule-providers?team_id=...
         """
-        url = f"{self.api_base_url}/api/device-link/schedule-providers"
+        url = f"{self.api_base_url}/api/internal/device-link/schedule-providers"
         params = {"team_id": team_id}
         logger.debug("Fetching schedule providers for team %s", team_id)
         return self._request("GET", url, params=params)
@@ -1150,7 +1150,7 @@ class TTTApiClient:
     ) -> dict[str, Any]:
         """Create a schedule provider.
 
-        POST {api_base_url}/api/device-link/schedule-providers
+        POST {api_base_url}/api/internal/device-link/schedule-providers
 
         When ``dry_run=True``, the backend validates the credentials and
         returns the discoverable teams without persisting. The response
@@ -1158,7 +1158,7 @@ class TTTApiClient:
         Use this during onboarding to drive a team picker before the
         final create call.
         """
-        url = f"{self.api_base_url}/api/device-link/schedule-providers"
+        url = f"{self.api_base_url}/api/internal/device-link/schedule-providers"
         params = {"dry_run": "true"} if dry_run else None
         logger.debug(
             "Creating schedule provider (dry_run=%s): %s",
@@ -1170,7 +1170,7 @@ class TTTApiClient:
     def connect_playmetrics(self, email: str, password: str) -> dict[str, Any]:
         """Probe PlayMetrics credentials via TTT and return picker data.
 
-        POST {api_base_url}/api/device-link/schedule-providers/playmetrics/connect
+        POST {api_base_url}/api/internal/device-link/schedule-providers/playmetrics/connect
 
         TTT runs a one-time Firebase ``signInWithPassword`` and discovers
         the user's roles + teams, returning everything the tray wizard
@@ -1181,7 +1181,7 @@ class TTTApiClient:
 
         Response shape: ``{"refresh_token": str, "roles": [...], "teams": [...]}``.
         """
-        url = f"{self.api_base_url}/api/device-link/schedule-providers/playmetrics/connect"
+        url = f"{self.api_base_url}/api/internal/device-link/schedule-providers/playmetrics/connect"
         logger.debug("Connecting PlayMetrics for %s", email)
         return self._request("POST", url, json={"email": email, "password": password})
 
@@ -1190,9 +1190,9 @@ class TTTApiClient:
     ) -> dict[str, Any]:
         """Update a schedule provider.
 
-        PUT {api_base_url}/api/device-link/schedule-providers/{provider_id}
+        PUT {api_base_url}/api/internal/device-link/schedule-providers/{provider_id}
         """
-        url = f"{self.api_base_url}/api/device-link/schedule-providers/{provider_id}"
+        url = f"{self.api_base_url}/api/internal/device-link/schedule-providers/{provider_id}"
         logger.debug("Updating schedule provider %s", provider_id)
         return self._request("PUT", url, json=data)
 
@@ -1208,9 +1208,9 @@ class TTTApiClient:
     def register_machine(self, machine_id: str, machine_name: str) -> dict[str, Any]:
         """Register or update a machine during onboarding.
 
-        POST {api_base_url}/api/device-link/machines/register
+        POST {api_base_url}/api/internal/device-link/machines/register
         """
-        url = f"{self.api_base_url}/api/device-link/machines/register"
+        url = f"{self.api_base_url}/api/internal/device-link/machines/register"
         return self._request(
             "POST", url, json={"machine_id": machine_id, "machine_name": machine_name}
         )
@@ -1224,19 +1224,19 @@ class TTTApiClient:
         self, camera_id: str, machine_id: str
     ) -> dict[str, Any]:
         """Enable a camera on a machine. Returns conflict info."""
-        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/enable"
+        url = f"{self.api_base_url}/api/internal/device-link/machine-cameras/{camera_id}/enable"
         return self._request("PATCH", url, json={"machine_id": machine_id})
 
     def disable_camera_on_machine(self, camera_id: str, machine_id: str) -> None:
         """Disable a camera on a machine."""
-        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/disable"
+        url = f"{self.api_base_url}/api/internal/device-link/machine-cameras/{camera_id}/disable"
         self._request("PATCH", url, json={"machine_id": machine_id})
 
     def confirm_camera_transfer(
         self, camera_id: str, from_machine_id: str, to_machine_id: str
     ) -> None:
         """Transfer a camera: disable on old machine, enable on new."""
-        url = f"{self.api_base_url}/api/device-link/machine-cameras/{camera_id}/confirm-transfer"
+        url = f"{self.api_base_url}/api/internal/device-link/machine-cameras/{camera_id}/confirm-transfer"
         self._request(
             "POST",
             url,

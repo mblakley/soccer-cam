@@ -4,7 +4,7 @@ Consolidates the ad-hoc ``build_*farlabel*`` / ``build_0615_*`` one-off scripts 
 parameterized CLI. Selects the frames where AutoCam loses or doubts the ball — which is usually
 **occlusion** (the ball behind a player), plus far-field and distractor ambiguity — extracts
 full-frame strips, and writes the ``manifest.json`` the annotation server + ``far-label.html`` consume
-(``D:/training_data/far_label/<set>/{manifest.json, strips/f######.jpg}``). It NEVER writes
+(``D:/training_data/far_label/<set>/{manifest.json, strips/f######.png}``, lossless). It NEVER writes
 ``labels.json`` (server-owned). Self-contained: no dependency outside ``av`` / ``cv2`` / ``numpy``.
 
 Selection criteria (``--criteria``):
@@ -180,7 +180,7 @@ def select_frames(
     return [
         {
             "frame_idx": int(f),
-            "file": f"f{int(f):06d}.jpg",
+            "file": f"f{int(f):06d}.png",
             "hint_x": round(hx, 1),
             "hint_y": round(hy, 1),
             "autocam": bool(ac),
@@ -291,7 +291,7 @@ def main() -> None:
     out = Path(args.out) / set_name
     strips = out / "strips"
     strips.mkdir(parents=True, exist_ok=True)
-    for old in strips.glob("*.jpg"):
+    for old in list(strips.glob("*.jpg")) + list(strips.glob("*.png")):
         old.unlink()
 
     import av
@@ -321,8 +321,9 @@ def main() -> None:
         idx += 1
         if idx in want:
             img = apply_display_rotation(fr.to_ndarray(format="bgr24"), vrot)
+            # PNG = LOSSLESS: JPEG 4:2:0 chroma subsampling visibly smears a 3-8 px far ball
             cv2.imwrite(
-                str(strips / f"f{idx:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88]
+                str(strips / f"f{idx:06d}.png"), img, [cv2.IMWRITE_PNG_COMPRESSION, 3]
             )
             written += 1
             if written % 20 == 0:
