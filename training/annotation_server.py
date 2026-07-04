@@ -1741,8 +1741,15 @@ async def get_far_set(set_id: str):
 
 @app.get("/api/far-label/{set_id}/strip/{frame_idx}")
 async def get_far_strip(set_id: str, frame_idx: int):
-    """Serve a pre-extracted full-frame strip (native-res JPEG)."""
+    """Serve a pre-extracted full-frame strip at native resolution.
+
+    Prefers the LOSSLESS ``.png`` when present (JPEG's 4:2:0 chroma subsampling
+    visibly smears a 3-8 px far ball); falls back to the legacy ``.jpg``.
+    """
     d = _far_set_dir(set_id)
+    png = d / "strips" / f"f{frame_idx:06d}.png"
+    if png.exists():
+        return FileResponse(png, media_type="image/png")
     strip = d / "strips" / f"f{frame_idx:06d}.jpg"
     if not strip.exists():
         raise HTTPException(404, f"Strip not found: {frame_idx}")
