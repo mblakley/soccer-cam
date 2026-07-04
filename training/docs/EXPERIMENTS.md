@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-25: hn1/hn2 mining NEVER RAN — gains were epochs; epochs-alone has now PEAKED (2026-07-03)
+
+**Discovery (from the logs, while relaunching round 3).** `hn_mine.log` and `hn2_mine.log` both end in
+the same crash: `AttributeError: 'dict' object has no attribute 'append'` — the miner assumed the
+old bare-list `index.json` while the store has the `{"summary","items"}` form. **Zero mined hard
+negatives ever entered `crops_reolink`** (exactly 1 orphan `*hardmine*` .npy exists, from today's
+crash). CORRECTION to EXP-DIST-18/19/22: the "hard-neg" gains (near argmax 0.244→0.378→0.467, Spc
+far ceiling →0.958) were produced by **+8 training epochs per round** (hn2 additionally trained with
+the +1,526 human crops appended by the dict-aware `build_human_crops`, store 76,875→78,401). Miner
+fixed (`load_index`/`save_index`, both forms, round-trip-tested; commit 84d469d).
+
+**Epochs-only control (accidental but clean): `hm_reolink_hn2ep8`** = hn2 + 8 more epochs on the
+UNCHANGED store (tonight's first chain ran with the still-broken miner). Held-out Spencerport vs hn2:
+
+| metric | hn2 | hn2+8ep control |
+|---|---|---|
+| ceiling ALL / far | 0.964 / 0.958 | 0.948 / **0.936** |
+| score-argmax near / far | 0.467 / 0.264 | **0.222 / 0.236** |
+| best SELECTED ALL / far | 0.60 / 0.703 | 0.545 / 0.624 |
+| near med-rank | 6 | **11** |
+
+**The epochs lever has peaked at hn2 and is now degrading** (held-in Cleveland val recall stayed
+~0.40 — val does not track held-out; known caution, now quantified). Artifacts renamed
+(`hm_reolink_hn2ep8`, `cands_*_hn2ep8.pkl`, `sweep_hn2ep8.log`).
+
+**True round 3 (first honest mined-negatives run) launched 22:51** from the fixed miner
+(`selector_hn3_chain`, same recipe: resume hn2 + 8 epochs, only difference = mined crops in the
+store). Clean A/B against BOTH hn2 (the peak) and the epochs control: hn3 > hn2 ⇒ mining is a real
+lever; hn3 ≈ control ⇒ the detector lane is data-limited ⇒ venue diversity becomes primary.
+
 ## EXP-DIST-24: selector KILL TEST — NO-GO at 2-game supervision; depth-cal rescoring a wash (2026-07-03)
 
 **Setup (the pre-registered Phase-1 gate for the learned-selector bet).** Selection-level
