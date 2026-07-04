@@ -1723,6 +1723,9 @@ async def list_far_sets():
                 "n_frames": m.get("n_frames", len(m.get("frames", []))),
                 "labeled": len(labels),
                 "criteria": m.get("criteria"),
+                # manifest-assigned labeling priority (1 = do first); 999 = unranked.
+                # The landing page sorts by this so the annotator works top-down.
+                "priority": m.get("priority", 999),
             }
         )
     return out
@@ -1748,27 +1751,40 @@ async def get_far_strip(set_id: str, frame_idx: int):
 
 @app.post("/api/far-label/{set_id}/result")
 async def submit_far_label(set_id: str, result: dict):
-    """Store one far-ball label.
+    """Store one far-ball label (one row per frame).
 
-    Expected: ``{"frame_idx": int, "action": str, "x": float|null, "y": float|null}`` — x/y are
-    SOURCE pixels. ``action`` is one of ``ball`` (visible, at x/y), ``obscured`` (occluded behind a
-    player — x/y is the human's best-guess path position; used as tracker GT, NOT detector-positive),
-    ``not_game_ball`` (a distractor, e.g. sideline/adjacent-field ball — a hard negative),
-    ``out_of_play`` / ``not_visible`` (no findable game ball). ``reason`` (the set's selection reason)
-    is stored verbatim if sent.
+    Expected: ``{"frame_idx": int, "action": str, "x": float|null, "y": float|null,
+    "distractors": [[x, y], ...] (optional)}`` — all coords SOURCE pixels. ``action`` is one of
+    ``ball`` (visible, at x/y), ``obscured`` (occluded behind a player — x/y is the human's
+    best-guess position; tracker GT, NOT detector-positive), ``not_game_ball`` (legacy frame-level
+    distractor verdict), ``out_of_play`` / ``not_visible`` (no findable game ball), or ``none``
+    (only decoys marked so far — game ball unjudged). ``distractors`` = positions of ball-like
+    objects that are NOT the game ball (identity GT); they ride on the frame's single row alongside
+    any primary action. ``reason`` (the set's selection reason) is stored verbatim if sent.
     """
     _load_far_manifest(set_id)  # validate set
     labels = _load_far_labels(set_id)
     fi = int(result["frame_idx"])
-    labels[fi] = {
+    row = {
         "frame_idx": fi,
-        "action": result.get("action", "ball"),
+        "action": result.get("action") or "none",
         "x": result.get("x"),
         "y": result.get("y"),
         "reason": result.get("reason"),
         "source": result.get("source", "human"),
         "submitted_at": datetime.now(UTC).isoformat(),
     }
+    ds = result.get("distractors")
+    if isinstance(ds, list):
+        clean = []
+        for d in ds:
+            try:
+                clean.append([float(d[0]), float(d[1])])
+            except (TypeError, ValueError, IndexError):
+                continue
+        if clean:
+            row["distractors"] = clean
+    labels[fi] = row
     _save_far_labels(set_id, labels)
     return {"accepted": True, "labeled": len(labels)}
 
