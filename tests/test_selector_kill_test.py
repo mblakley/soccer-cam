@@ -242,3 +242,18 @@ def test_mine_index_roundtrip_both_forms(tmp_path):
         {"file": "a"},
         {"file": "b"},
     ]
+
+
+def test_context_entries_rank_colors_and_inverse_warp():
+    """Top-5 candidates render blue (df<0), rest orange; band->source mapping matches
+    the miner's inverse warp (sx = hx/scale, sy = hy/scale + y_top)."""
+    from types import SimpleNamespace
+
+    from training.cli.inject_set_candidates import context_entries
+
+    warp = SimpleNamespace(scale=2.0, y_top=100.0)
+    peaks = [(200.0, 50.0, 0.9)] + [(10.0 * i, 10.0, 0.5) for i in range(6)]
+    ctx, cands = context_entries(peaks, warp)
+    assert ctx[0] == {"x": 100.0, "y": 125.0, "df": -1}
+    assert cands[0] == [100.0, 125.0, 0.9]
+    assert [c["df"] for c in ctx] == [-1] * 5 + [1] * 2
