@@ -255,7 +255,7 @@ class TestTTTApiDeviceConfig:
         # Verify it called PUT on the right endpoint
         call_args = mock_http.request.call_args
         assert call_args[0][0] == "PUT"
-        assert "/api/device-link/config" in call_args[0][1]
+        assert "/api/internal/device-link/config" in call_args[0][1]
 
 
 # ---------------------------------------------------------------------------
