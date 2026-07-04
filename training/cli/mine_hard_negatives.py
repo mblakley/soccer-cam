@@ -33,6 +33,29 @@ from training.cli.build_distill_dataset import find_configs
 from training.data_prep import distill_dataset as dd
 
 
+def load_index(out: Path) -> tuple[list, dict | None]:
+    """Load a crop store's index. Two historical forms exist: a bare item LIST and the
+    ``{"summary": ..., "items": [...]}`` DICT that ``build_heatmap_crops`` writes. The
+    hn1/hn2 mining rounds CRASHED on the dict form (``index.append`` on a dict) and
+    silently added zero crops — support both, return ``(items, wrapper_or_None)``."""
+    raw = json.loads((out / "index.json").read_text())
+    if isinstance(raw, dict):
+        return raw["items"], raw
+    return raw, None
+
+
+def save_index(out: Path, items: list, wrapper: dict | None) -> None:
+    """Write the index back in the SAME form it was read (updating summary counts)."""
+    if wrapper is not None:
+        wrapper["items"] = items
+        summary = wrapper.get("summary")
+        if isinstance(summary, dict):
+            summary["samples"] = len(items)
+        (out / "index.json").write_text(json.dumps(wrapper))
+    else:
+        (out / "index.json").write_text(json.dumps(items))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--roots", nargs="+", required=True)
@@ -92,7 +115,7 @@ def main() -> None:
 
     out = Path(args.out)
     crops = out / "crops"
-    index = json.loads((out / "index.json").read_text())
+    index, wrapper = load_index(out)
     if not (
         out / "index.orig.json"
     ).exists():  # one-time backup so mining is revertible
@@ -203,7 +226,7 @@ def main() -> None:
         total += nadd
         print(f"{gid}: +{nadd} hard-neg crops", flush=True)
 
-    (out / "index.json").write_text(json.dumps(index))
+    save_index(out, index, wrapper)
     print(f"\nMINED: +{total} hard-negative crops appended to {out}", flush=True)
 
 

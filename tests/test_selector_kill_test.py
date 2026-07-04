@@ -210,3 +210,35 @@ class TestNet:
         assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-4)
         acc = (probs[:, :k].argmax(axis=1) == np.asarray(labels)).mean()
         assert acc > 0.9, f"separable toy task should be learned, got {acc}"
+
+
+def test_mine_index_roundtrip_both_forms(tmp_path):
+    """hn1/hn2 mining crashed on the dict-form index (append on a dict) and silently
+    added ZERO crops — both store forms must round-trip and preserve the summary."""
+    from training.cli.mine_hard_negatives import load_index, save_index
+
+    d = tmp_path / "store_dict"
+    d.mkdir()
+    (d / "index.json").write_text(
+        '{"summary": {"crop": 256, "samples": 2}, "items": [{"file": "a"}, {"file": "b"}]}'
+    )
+    items, wrapper = load_index(d)
+    items.append({"file": "c"})
+    save_index(d, items, wrapper)
+    import json
+
+    back = json.loads((d / "index.json").read_text())
+    assert back["summary"]["samples"] == 3
+    assert [r["file"] for r in back["items"]] == ["a", "b", "c"]
+
+    ls = tmp_path / "store_list"
+    ls.mkdir()
+    (ls / "index.json").write_text('[{"file": "a"}]')
+    items, wrapper = load_index(ls)
+    assert wrapper is None
+    items.append({"file": "b"})
+    save_index(ls, items, wrapper)
+    assert json.loads((ls / "index.json").read_text()) == [
+        {"file": "a"},
+        {"file": "b"},
+    ]
