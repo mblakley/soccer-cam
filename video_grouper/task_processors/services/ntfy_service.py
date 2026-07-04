@@ -1083,6 +1083,21 @@ class NtfyService:
                             f"Creating and executing next task for time {result.metadata['next_time_offset']}"
                         )
                         await next_task.execute()
+                    elif (
+                        input_type == "phase_verify"
+                        and result.metadata
+                        and "next_remaining" in result.metadata
+                    ):
+                        from ..tasks.ntfy.phase_verify_task import PhaseVerifyTask
+
+                        next_task = PhaseVerifyTask.create_next_task(
+                            task, result.metadata["next_remaining"]
+                        )
+                        logger.info(
+                            "Creating and executing next phase-verify task "
+                            f"({len(result.metadata['next_remaining'])} boundaries left)"
+                        )
+                        await next_task.execute()
                     else:
                         logger.info(
                             f"Task continuation not implemented for type {input_type}"

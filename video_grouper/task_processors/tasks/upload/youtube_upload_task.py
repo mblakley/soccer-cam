@@ -5,7 +5,7 @@ YouTube upload task for uploading videos to YouTube.
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from video_grouper.models import DirectoryState, MatchInfo
@@ -26,6 +26,9 @@ class YoutubeUploadTask(BaseUploadTask):
     """
 
     group_dir: str
+    # Set by execute() after a successful processed-video upload so the
+    # UploadProcessor can forward it to TTT as an artifact (best-effort).
+    youtube_video_id: str | None = field(default=None, compare=False, hash=False)
 
     def get_platform(self) -> str:
         """Return the platform identifier."""
@@ -189,6 +192,9 @@ class YoutubeUploadTask(BaseUploadTask):
                         f"Failed to upload processed video: {processed_video_path}"
                     )
                     success = False
+                else:
+                    # Expose for UploadProcessor → TTT step artifact reporting
+                    self.youtube_video_id = video_id
 
             # Upload raw (untrimmed) video
             if raw_video_path and os.path.exists(raw_video_path):

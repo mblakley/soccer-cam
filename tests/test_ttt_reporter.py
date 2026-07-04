@@ -1,6 +1,7 @@
 """Tests for the TTT reporter module."""
 
 import asyncio
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -283,40 +284,92 @@ class TestRecordingReporter:
         assert call_args.args[1] == "team-uuid-1"
 
     @pytest.mark.asyncio
-    async def test_update_recording_status_calls_client(self):
-        await self.reporter.update_recording_status("rec-1", "download", "downloaded")
-        self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "download", "downloaded", None, None, None
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_noop_when_no_id(self):
-        await self.reporter.update_recording_status(None, "download", "downloaded")
-        self.client.update_recording_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_noop_when_disabled(self):
-        reporter = TTTReporter(ttt_client=None, config=self.config)
-        await reporter.update_recording_status("rec-1", "download", "downloaded")
-        self.client.update_recording_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_handles_error(self):
-        self.client.update_recording_status.side_effect = Exception("network")
-        # Should not raise
-        await self.reporter.update_recording_status("rec-1", "download", "failed")
-
-    @pytest.mark.asyncio
-    async def test_update_recording_status_passes_optional_fields(self):
-        await self.reporter.update_recording_status(
+    async def test_update_recording_step_calls_client(self):
+        await self.reporter.update_recording_step(
             "rec-1",
-            "upload",
-            "complete",
-            youtube_url="https://youtu.be/abc",
-            youtube_video_id="abc",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
         )
-        self.client.update_recording_status.assert_called_once_with(
-            "rec-1", "upload", "complete", None, "https://youtu.be/abc", "abc"
+        self.client.update_recording_step.assert_called_once_with(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+            started_at=None,
+            completed_at=None,
+            error=None,
+            config=None,
+            artifacts=None,
+            pipeline_preset=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_noop_when_no_id(self):
+        await self.reporter.update_recording_step(
+            None,
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
+        self.client.update_recording_step.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        await reporter.update_recording_step(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="complete",
+        )
+        self.client.update_recording_step.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_handles_error(self):
+        self.client.update_recording_step.side_effect = Exception("network")
+        # Should not raise
+        await self.reporter.update_recording_step(
+            "rec-1",
+            step_id="download",
+            step_type="download",
+            label="Download",
+            status="failed",
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_recording_step_passes_optional_fields(self):
+        await self.reporter.update_recording_step(
+            "rec-1",
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="complete",
+            artifacts={
+                "youtube_url": "https://youtu.be/abc",
+                "youtube_video_id": "abc",
+            },
+            pipeline_preset="homegrown",
+        )
+        self.client.update_recording_step.assert_called_once_with(
+            "rec-1",
+            step_id="upload",
+            step_type="upload",
+            label="YouTube Upload",
+            status="complete",
+            started_at=None,
+            completed_at=None,
+            error=None,
+            config=None,
+            artifacts={
+                "youtube_url": "https://youtu.be/abc",
+                "youtube_video_id": "abc",
+            },
+            pipeline_preset="homegrown",
         )
 
     @pytest.mark.asyncio
@@ -599,3 +652,56 @@ class TestEnhancedHeartbeat:
             return_value={},
         ):
             await self.reporter.report_heartbeat()  # Should not raise
+
+
+class TestAutoMatchVideo:
+    """Tests for TTTReporter.auto_match_video."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.config = MagicMock()
+        self.config.ttt.camera_id = "cam-1"
+        self.config.ttt.heartbeat_interval = 30
+        self.reporter = TTTReporter(ttt_client=self.client, config=self.config)
+        # Pre-cache team_id so we don't need to mock get_team_assignments here
+        self.reporter._cached_team_id = "team-1"
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_calls_client_with_correct_args(self):
+        self.client.auto_match_video.return_value = {"matched": True, "message": "ok"}
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+        self.client.auto_match_video.assert_called_once_with(
+            "team-1",
+            "https://youtu.be/vid123",
+            recorded_at.isoformat(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_swallows_client_error(self):
+        self.client.auto_match_video.side_effect = Exception("network error")
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        # Must not raise
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_noop_when_disabled(self):
+        reporter = TTTReporter(ttt_client=None, config=self.config)
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        # Must not raise and must not call client
+        await reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+        self.client.auto_match_video.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_noop_when_no_team_id(self):
+        self.reporter._cached_team_id = None
+        self.client.get_team_assignments.return_value = []
+        recorded_at = datetime(2026, 6, 1, 10, 30, 0)
+
+        await self.reporter.auto_match_video("/tmp/group", "vid123", recorded_at)
+
+        self.client.auto_match_video.assert_not_called()

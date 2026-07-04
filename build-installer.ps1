@@ -92,6 +92,17 @@ if (-not (Test-Path $NSIS_PATH)) {
 # dist/VideoGrouperService/ and dist/VideoGrouperTray/ separately, leaving
 # the installer's `File /r` unable to find anything. CI uses the same
 # combined spec; keep this build in lockstep.
+# Ensure the LFS-tracked person model is materialized (not a pointer) so the
+# spec bundles the real weights; harmless if LFS is absent or already pulled.
+$MODEL_PATH = Join-Path $SCRIPT_DIR "video_grouper\models\person.onnx"
+Write-Host "Ensuring bundled model is pulled from Git LFS..."
+git lfs pull --include="video_grouper/models/*.onnx" 2>&1 | Out-Host
+if ((Test-Path $MODEL_PATH) -and ((Get-Item $MODEL_PATH).Length -gt 1MB)) {
+    Write-Host "  person model present ($((Get-Item $MODEL_PATH).Length) bytes)."
+} else {
+    Write-Warning "  person model missing/pointer; phase detection will degrade (ok=false)."
+}
+
 $MERGED_SPEC = Join-Path $SCRIPT_DIR "video_grouper\installer\VideoGrouper.spec"
 Write-Host "Building service + tray executables (merged spec)..."
 uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR $MERGED_SPEC

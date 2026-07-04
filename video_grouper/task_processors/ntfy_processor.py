@@ -442,14 +442,38 @@ class NtfyProcessor(QueueProcessor):
             tasks_added = True
             logger.info(f"Added team info task for {group_dir}")
 
-        # Add game start time task
-        from .tasks.ntfy import GameStartTask
+        # Game start: phase detection is the default. For a whistle-capable
+        # Reolink camera it sets match_info.start_time_offset from the detected
+        # kickoff and we SKIP the NTFY "did the game start?" walk. It falls back
+        # to the walk (returns False) for ntfy mode, a Dahua camera, or a
+        # rejected / absent fit (decisions 1, 7, 8) — so the fallback path is
+        # exactly today's behavior.
+        from .phase_game_start import maybe_resolve_phase_game_start
 
-        start_task = GameStartTask(
-            group_dir, self.config, self.ntfy_service, combined_video_path, "00:00", 0
+        start_handled = await maybe_resolve_phase_game_start(
+            group_dir, combined_video_path, self.config, self.storage_path
         )
-        await self.add_work(start_task)
-        tasks_added = True
+        if start_handled:
+            logger.info(
+                f"NTFY_QUEUE: phase detection set game start for {group_dir}; "
+                f"skipping the NTFY game-start walk"
+            )
+            # Re-read so the end-time / direct-trim checks below see the offset
+            # phase detection just wrote.
+            match_info, _ = MatchInfo.get_or_create(group_dir, self.storage_path)
+        else:
+            from .tasks.ntfy import GameStartTask
+
+            start_task = GameStartTask(
+                group_dir,
+                self.config,
+                self.ntfy_service,
+                combined_video_path,
+                "00:00",
+                0,
+            )
+            await self.add_work(start_task)
+            tasks_added = True
 
         # Check if we should also ask for end time (only when trim_end_enabled)
         trim_end_enabled = getattr(self.config.processing, "trim_end_enabled", False)
@@ -466,7 +490,112 @@ class NtfyProcessor(QueueProcessor):
             await self.add_work(end_task)
             tasks_added = True
 
+        # Phase detection supplied the start time and no NTFY task remains to
+        # drive trim queueing (team info was already present and end-trim is
+        # off) — queue the trim directly so the game isn't stranded waiting for
+        # a question that will never be asked. Mirrors the API-populated path.
+        if start_handled and not tasks_added:
+            await self._queue_trim_after_phase_start(group_dir, combined_video_path)
+            tasks_added = True
+
         return tasks_added
+
+    async def _queue_trim_after_phase_start(
+        self, group_dir: str, combined_video_path: str
+    ) -> None:
+        """Queue a trim once phase detection has filled the only missing field.
+
+        Reuses the same TrimTask path as ``_check_match_info_completion``; only
+        runs when match info is now fully populated and the combined video and a
+        video processor are both available.
+        """
+        if not (self.video_processor and os.path.exists(combined_video_path)):
+            logger.warning(
+                f"NTFY_QUEUE: cannot queue trim for {group_dir} after phase "
+                f"start (combined exists: {os.path.exists(combined_video_path)}, "
+                f"video processor: {self.video_processor is not None})"
+            )
+            return
+        match_info, _ = MatchInfo.get_or_create(group_dir, self.storage_path)
+        if not (match_info and match_info.is_populated()):
+            return
+        from .tasks.video import TrimTask
+
+        trim_end = getattr(self.config.processing, "trim_end_enabled", False)
+        trim_task = TrimTask.from_match_info(
+            group_dir, match_info, trim_end_enabled=trim_end
+        )
+        await self.video_processor.add_work(trim_task)
+        if self.ntfy_service:
+            self.ntfy_service.mark_as_processed(group_dir)
+        logger.info(
+            f"NTFY_QUEUE: queued trim for {group_dir} after phase-detection game start"
+        )
+
+    async def request_phase_verify(self, group_dir: str) -> bool:
+        """S3: start the phase verify-loop for a recording.
+
+        Reads the detected boundaries from state.json, then queues a
+        ``PhaseVerifyTask`` that walks each one (Correct / Not-Correct via NTFY,
+        screenshot at the transition in trimmed-video time) and writes the verdict
+        to the TTT ``phase_*_verified`` columns. Invoked from the reprocess
+        consumer when TTT enqueues a ``verify_phases`` request. Returns False (no
+        task queued) when there are no detected phases to verify."""
+        import os
+        from pathlib import Path
+
+        from video_grouper.models import DirectoryState
+        from video_grouper.task_processors.tasks.ntfy.phase_verify_task import (
+            PhaseVerifyTask,
+            sanitize_ttt_conn,
+        )
+
+        phases = DirectoryState(group_dir).get_game_phases() or {}
+        times = phases.get("times") or {} if isinstance(phases, dict) else {}
+        order = ("kickoff", "halftime", "second_half", "end")
+        remaining = [[k, float(times[k])] for k in order if times.get(k) is not None]
+        if not remaining:
+            logger.info(
+                "phase_verify: no detected phases for %s; nothing to verify", group_dir
+            )
+            return False
+
+        video_path = None
+        try:
+            from video_grouper.task_processors.tasks.pipeline.utils import (
+                get_ball_tracking_io_paths,
+            )
+
+            video_path, _ = get_ball_tracking_io_paths(Path(group_dir))
+        except Exception as e:  # noqa: BLE001 — screenshots are optional
+            logger.info(
+                "phase_verify: no trimmed video for screenshots (%s); "
+                "sending questions without images",
+                e,
+            )
+
+        ttt_conn: dict = {}
+        ttt_cfg = getattr(self.config, "ttt", None)
+        if ttt_cfg is not None and getattr(ttt_cfg, "enabled", False):
+            ttt_conn = sanitize_ttt_conn(ttt_cfg.model_dump())
+
+        task = PhaseVerifyTask(
+            group_dir=group_dir,
+            config=self.config,
+            ntfy_service=self.ntfy_service,
+            video_path=video_path,
+            remaining=remaining,
+            recording_group_dir=os.path.basename(group_dir.rstrip("/\\")),
+            storage_path=str(self.storage_path),
+            ttt_conn=ttt_conn,
+        )
+        await self.add_work(task)
+        logger.info(
+            "phase_verify: queued verification of %d boundaries for %s",
+            len(remaining),
+            group_dir,
+        )
+        return True
 
     async def remove_completed_task_from_queue(
         self, group_dir: str, task_type: str

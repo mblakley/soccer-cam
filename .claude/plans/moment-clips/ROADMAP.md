@@ -6,8 +6,16 @@ mobile app), this pipeline converts those wall-clock timestamps into 30-second
 video clips and optionally compiles them into highlight reels.
 
 **Started**: 2026-02-28
-**Last updated**: 2026-02-28
+**Last updated**: 2026-07-03
 **Depends on**: team-tech-tools `feature/moment-tagging` branch (DB schema, API)
+
+> **Reconciled 2026-07-03:** all four phases are **DONE and shipped on `main`** — the
+> `NOT STARTED` statuses below were stale. The moment-clip discovery/offsets loop was
+> verified end-to-end against a local TTT stack this session (matcher → `/api/internal/moment-tags`
+> offset PATCH → `moment_clips` create → real ffmpeg extract → clip `ready`). The one endpoint drift
+> to note: the worker tag-offset write is **`PATCH /api/internal/moment-tags/{id}`** (moved under the
+> `/api/internal/*` worker namespace), not `PATCH /api/moment-tags/{id}` as the "endpoints needed"
+> table below originally listed.
 
 ---
 
@@ -15,10 +23,10 @@ video clips and optionally compiles them into highlight reels.
 
 | # | Phase | Status | Target |
 |---|-------|--------|--------|
-| 1 | [API Client](phase-1-api-client.md) | NOT STARTED | HTTP client for team-tech-tools API + Supabase Storage |
-| 2 | [Timestamp Matching](phase-2-timestamp-matching.md) | NOT STARTED | Wall-clock → video offset algorithm |
-| 3 | [Clip Generation](phase-3-clip-generation.md) | NOT STARTED | ClipDiscovery + ClipExtraction pipeline |
-| 4 | [Highlight Compilation](phase-4-highlight-compilation.md) | NOT STARTED | Highlight reel concat + NTFY notifications |
+| 1 | [API Client](phase-1-api-client.md) | DONE | `video_grouper/api_integrations/moment_api_client.py` — HTTP client for team-tech-tools API |
+| 2 | [Timestamp Matching](phase-2-timestamp-matching.md) | DONE | `video_grouper/task_processors/services/timestamp_matcher.py` — wall-clock → video offset |
+| 3 | [Clip Generation](phase-3-clip-generation.md) | DONE | `video_grouper/task_processors/{clip_discovery_processor,clip_processor}.py` + `tasks/clips/clip_extraction_task.py` |
+| 4 | [Highlight Compilation](phase-4-highlight-compilation.md) | DONE | `video_grouper/task_processors/highlight_reel_processor.py` + `tasks/{clips/highlight_compilation_task,ttt/highlight_reel_task}.py` |
 
 ### Status key
 

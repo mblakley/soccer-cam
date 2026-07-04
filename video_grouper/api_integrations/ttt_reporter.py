@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime
 
 from video_grouper.utils.error_tracker import ErrorTracker
 from video_grouper.utils.system_metrics import get_system_metrics
@@ -464,16 +465,22 @@ class TTTReporter:
             logger.warning("TTT: Failed to register recordings: %s", e)
             return None
 
-    async def update_recording_status(
+    async def update_recording_step(
         self,
         recording_id: str | None,
-        stage: str,
+        *,
+        step_id: str,
+        step_type: str,
+        label: str,
         status: str,
+        started_at: str | None = None,
+        completed_at: str | None = None,
         error: str | None = None,
-        youtube_url: str | None = None,
-        youtube_video_id: str | None = None,
+        config: dict | None = None,
+        artifacts: dict | None = None,
+        pipeline_preset: str | None = None,
     ) -> None:
-        """Update pipeline stage status for a recording.
+        """Upsert one pipeline step for a recording.
 
         No-op if recording_id is None (TTT wasn't available during registration).
         """
@@ -482,18 +489,25 @@ class TTTReporter:
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.client.update_recording_status(
+                lambda: self.client.update_recording_step(
                     recording_id,
-                    stage,
-                    status,
-                    error,
-                    youtube_url,
-                    youtube_video_id,
+                    step_id=step_id,
+                    step_type=step_type,
+                    label=label,
+                    status=status,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    error=error,
+                    config=config,
+                    artifacts=artifacts,
+                    pipeline_preset=pipeline_preset,
                 ),
             )
-            logger.debug("TTT: Updated recording %s %s=%s", recording_id, stage, status)
+            logger.debug(
+                "TTT: Updated recording %s step %s=%s", recording_id, step_id, status
+            )
         except Exception as e:
-            logger.warning("TTT: Failed to update recording status: %s", e)
+            logger.warning("TTT: Failed to update recording step: %s", e)
 
     async def get_high_water_mark(self) -> str | None:
         """Get the latest recording timestamp TTT knows about for this camera.
@@ -511,3 +525,49 @@ class TTTReporter:
         except Exception as e:
             logger.warning("TTT: Failed to get high water mark: %s", e)
             return None
+
+    async def auto_match_video(
+        self,
+        group_dir: str,
+        youtube_video_id: str,
+        recorded_at: datetime,
+    ) -> None:
+        """Auto-match an uploaded video to a TTT game based on recording time.
+
+        Best-effort — swallows all errors, never raises, never blocks the caller.
+        """
+        if not self.enabled:
+            return
+        try:
+            team_id = await asyncio.get_event_loop().run_in_executor(
+                None, self._get_team_id_sync
+            )
+            if not team_id:
+                logger.debug(
+                    "TTT: No team_id available, skipping auto_match_video for %s",
+                    group_dir,
+                )
+                return
+            video_url = f"https://youtu.be/{youtube_video_id}"
+            recorded_at_str = recorded_at.isoformat()
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.auto_match_video(
+                    team_id, video_url, recorded_at_str
+                ),
+            )
+            if result:
+                matched = result.get("matched", False)
+                message = result.get("message", "")
+                logger.info(
+                    "TTT: auto_match_video for %s: matched=%s %s",
+                    group_dir,
+                    matched,
+                    message,
+                )
+            else:
+                logger.debug(
+                    "TTT: auto_match_video returned no result for %s", group_dir
+                )
+        except Exception as exc:
+            logger.warning("TTT: auto_match_video failed for %s: %s", group_dir, exc)

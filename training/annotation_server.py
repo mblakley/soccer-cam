@@ -1780,6 +1780,10 @@ async def list_far_sets():
                 "set": d.name,
                 "n_frames": m.get("n_frames", len(m.get("frames", []))),
                 "labeled": len(labels),
+                "criteria": m.get("criteria"),
+                # manifest-assigned labeling priority (1 = do first); 999 = unranked.
+                # The landing page sorts by this so the annotator works top-down.
+                "priority": m.get("priority", 999),
             }
         )
     return out
@@ -1807,15 +1811,14 @@ async def get_far_strip(set_id: str, frame_idx: int):
 async def submit_far_label(set_id: str, result: dict):
     """Store one far-ball label (one row per frame).
 
-    Expected: {"frame_idx": int,
-    "action": "ball"|"obscured"|"not_visible"|"out_of_play"|"none",
-    "x": float|null, "y": float|null,
-    "distractors": [[x, y], ...] (optional)} — all coords SOURCE pixels.
-
-    ``obscured`` = the game ball is hidden but the annotator marks where it is
-    (selector/occlusion GT). ``distractors`` = ball-like objects that are NOT the
-    game ball (identity GT); they ride on the frame's single row alongside any
-    primary action. ``none`` = only distractors marked so far, game ball unjudged.
+    Expected: ``{"frame_idx": int, "action": str, "x": float|null, "y": float|null,
+    "distractors": [[x, y], ...] (optional)}`` — all coords SOURCE pixels. ``action`` is one of
+    ``ball`` (visible, at x/y), ``obscured`` (occluded behind a player — x/y is the human's
+    best-guess position; tracker GT, NOT detector-positive), ``not_game_ball`` (legacy frame-level
+    distractor verdict), ``out_of_play`` / ``not_visible`` (no findable game ball), or ``none``
+    (only decoys marked so far — game ball unjudged). ``distractors`` = positions of ball-like
+    objects that are NOT the game ball (identity GT); they ride on the frame's single row alongside
+    any primary action. ``reason`` (the set's selection reason) is stored verbatim if sent.
     """
     _load_far_manifest(set_id)  # validate set
     labels = _load_far_labels(set_id)

@@ -88,8 +88,12 @@ class TestTrimTaskFromMatchInfo:
         task = TrimTask.from_match_info("/some/dir", match_info, trim_end_enabled=True)
         assert task.start_time == "00:05:00"
         assert task.end_time is not None
-        # 5 min start + 90 min duration = 95 min = 01:35:00
-        assert task.end_time == "01:35:00"
+        # end_time is the game DURATION (01:30:00 = 5400s), NOT the absolute
+        # end position in the combined video (01:35:00 = start + duration).
+        # _trim_video_sync receives this as its `duration` arg and internally
+        # computes end_pts = start_seconds + duration_seconds, so the actual
+        # cut lands at 00:05:00 + 01:30:00 = 01:35:00 in the combined video.
+        assert task.end_time == "01:30:00"
 
     def test_from_match_info_trim_end_disabled(self):
         match_info = self._make_match_info()
@@ -216,3 +220,131 @@ class TestNtfyProcessorEndTrimConfig:
         assert call_args[0][0] == "/some/dir", (
             "GameEndTask should be called with group_dir"
         )
+
+
+class TestTrimVideoEndCalculation:
+    """Verify that TrimTask passes a true duration (not an absolute end position)
+    to trim_video so _trim_video_sync does not double-count the start offset."""
+
+    def _make_match_info(self, start_offset="00:05:00", total_duration_seconds=5400):
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.get_start_offset.return_value = start_offset
+        mock.get_total_duration_seconds.return_value = total_duration_seconds
+        return mock
+
+    def test_end_time_is_duration_not_absolute_position(self):
+        """end_time must be the game duration so trim_video adds start internally."""
+        match_info = self._make_match_info(
+            start_offset="00:05:00", total_duration_seconds=5400
+        )
+        task = TrimTask.from_match_info("/d", match_info, trim_end_enabled=True)
+        # start is 300s, duration is 5400s, absolute end is 5700s = 01:35:00.
+        # end_time must be the DURATION (01:30:00), NOT the absolute end (01:35:00).
+        assert task.end_time == "01:30:00", (
+            "end_time should be the duration; trim_video adds the start offset internally"
+        )
+        assert task.end_time != "01:35:00", (
+            "absolute end position must not be passed as duration"
+        )
+
+    def test_zero_start_offset_duration_equals_end(self):
+        """When start offset is 0, duration == absolute end (no offset to add)."""
+        match_info = self._make_match_info(
+            start_offset="00:00:00", total_duration_seconds=5400
+        )
+        task = TrimTask.from_match_info("/d", match_info, trim_end_enabled=True)
+        assert task.end_time == "01:30:00"
+
+    def test_start_offset_does_not_appear_in_end_time(self):
+        """Changing start_offset should NOT change end_time (it is pure duration)."""
+        mi_early = self._make_match_info(
+            start_offset="00:02:00", total_duration_seconds=5400
+        )
+        mi_late = self._make_match_info(
+            start_offset="00:10:00", total_duration_seconds=5400
+        )
+        task_early = TrimTask.from_match_info("/d", mi_early, trim_end_enabled=True)
+        task_late = TrimTask.from_match_info("/d", mi_late, trim_end_enabled=True)
+        assert task_early.end_time == task_late.end_time, (
+            "end_time (duration) must be the same regardless of start offset"
+        )
+
+
+class TestGameEndTaskPersistsTotal:
+    """Verify GameEndTask.process_response writes total_duration via update_game_times."""
+
+    @staticmethod
+    def _make_task(
+        tmp_path,
+        start_time_offset="00:05:00",
+        time_offset="01:35:00",
+        time_seconds=5700,
+    ):
+        """Concrete GameEndTask subclass (implements abstract deserialize)."""
+        from unittest.mock import MagicMock
+
+        from video_grouper.task_processors.tasks.ntfy.game_end_task import GameEndTask
+
+        class _ConcreteGameEndTask(GameEndTask):
+            @classmethod
+            def deserialize(cls, data):
+                return cls(**data)
+
+        mock_config = MagicMock()
+        mock_config.ntfy.topic = "test"
+        mock_config.ntfy.server_url = "https://ntfy.sh"
+        mock_config.ntfy.enabled = True
+
+        return _ConcreteGameEndTask(
+            group_dir=str(tmp_path),
+            config=mock_config,
+            ntfy_service=MagicMock(),
+            combined_video_path=str(tmp_path / "combined.mp4"),
+            start_time_offset=start_time_offset,
+            time_offset=time_offset,
+            time_seconds=time_seconds,
+        )
+
+    @pytest.mark.asyncio
+    async def test_yes_response_persists_total_duration(self, tmp_path):
+        """A 'yes' response must compute and write total_duration to match_info.ini."""
+        from unittest.mock import patch
+
+        task = self._make_task(
+            tmp_path,
+            start_time_offset="00:05:00",  # 300s
+            time_offset="01:35:00",
+            time_seconds=5700,  # 300s start + 5400s game = 5700s end
+        )
+
+        captured = {}
+
+        def fake_update_game_times(gdir, *, total_duration=None, **kw):
+            captured["group_dir"] = gdir
+            captured["total_duration"] = total_duration
+
+        # MatchInfo is imported lazily inside process_response; patch at the
+        # point of lookup (video_grouper.models.MatchInfo).
+        with patch("video_grouper.models.MatchInfo") as mock_mi:
+            mock_mi.update_game_times.side_effect = fake_update_game_times
+            result = await task.process_response("Yes, game ended at 01:35:00")
+
+        assert result.success is True
+        assert "total_duration" in captured, "update_game_times was not called"
+        # duration = 5700 - 300 = 5400s = 01:30:00
+        assert captured["total_duration"] == "01:30:00", (
+            f"Expected total_duration='01:30:00', got {captured['total_duration']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_response_does_not_persist(self, tmp_path):
+        """A 'no' response must NOT call update_game_times."""
+        from unittest.mock import patch
+
+        task = self._make_task(tmp_path)
+
+        with patch("video_grouper.models.MatchInfo") as mock_mi:
+            await task.process_response("No, not yet at 01:35:00")
+            mock_mi.update_game_times.assert_not_called()

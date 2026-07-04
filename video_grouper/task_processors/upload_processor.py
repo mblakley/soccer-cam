@@ -64,8 +64,12 @@ class UploadProcessor(QueueProcessor):
                     from video_grouper.models import DirectoryState
 
                     dir_state = DirectoryState(group_dir)
-                    await self.ttt_reporter.update_recording_status(
-                        dir_state.ttt_recording_id, "upload", "in_progress"
+                    await self.ttt_reporter.update_recording_step(
+                        dir_state.ttt_recording_id,
+                        step_id="upload",
+                        step_type="upload",
+                        label="YouTube Upload",
+                        status="running",
                     )
                 except Exception:
                     pass  # Never block upload on TTT
@@ -127,11 +131,46 @@ class UploadProcessor(QueueProcessor):
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_status(
-                            dir_state.ttt_recording_id, "upload", "complete"
+                        yt_video_id = getattr(item, "youtube_video_id", None)
+                        yt_url = (
+                            f"https://youtu.be/{yt_video_id}" if yt_video_id else None
+                        )
+                        await self.ttt_reporter.update_recording_step(
+                            dir_state.ttt_recording_id,
+                            step_id="upload",
+                            step_type="upload",
+                            label="YouTube Upload",
+                            status="complete",
+                            artifacts=(
+                                {
+                                    "youtube_url": yt_url,
+                                    "youtube_video_id": yt_video_id,
+                                }
+                                if yt_video_id
+                                else None
+                            ),
                         )
                     except Exception:
                         pass  # Never block upload on TTT
+
+                # Auto-match uploaded video with TTT game schedule (best-effort)
+                if self.ttt_reporter:
+                    yt_video_id = getattr(item, "youtube_video_id", None)
+                    if yt_video_id:
+                        group_dir = item.get_item_path()
+                        try:
+                            from video_grouper.models import DirectoryState
+
+                            dir_state = DirectoryState(group_dir)
+                            files = list(dir_state.files.values())
+                            if files:
+                                files.sort(key=lambda f: f.start_time)
+                                recorded_at = files[0].start_time
+                                await self.ttt_reporter.auto_match_video(
+                                    group_dir, yt_video_id, recorded_at
+                                )
+                        except Exception:
+                            pass  # Never block upload on TTT
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
                 # Report upload failure to TTT (best-effort)
@@ -141,8 +180,12 @@ class UploadProcessor(QueueProcessor):
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_status(
-                            dir_state.ttt_recording_id, "upload", "failed"
+                        await self.ttt_reporter.update_recording_step(
+                            dir_state.ttt_recording_id,
+                            step_id="upload",
+                            step_type="upload",
+                            label="YouTube Upload",
+                            status="failed",
                         )
                     except Exception:
                         pass  # Never block upload on TTT

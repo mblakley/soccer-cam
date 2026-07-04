@@ -221,8 +221,8 @@ async def main() -> int:
         """
         INSERT INTO coaching_sessions.camera_recordings
             (id, camera_id, team_id, game_session_id, file_name,
-             recording_start, youtube_video_id, upload_status)
-        VALUES (%s, %s, %s, %s, %s, NOW(), %s, 'complete')
+             recording_start, youtube_video_id)
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s)
         """,
         (
             camera_recording_id,
@@ -295,18 +295,21 @@ async def main() -> int:
     # novel pipeline piece.
     banner("5. Simulate Phase A hook output: insert game_video + auto-create reel")
     game_video_id = str(uuid.uuid4())
+    media_video_id = str(uuid.uuid4())
+    db_exec(
+        """
+        INSERT INTO media.videos (id, source_url, source_type)
+        VALUES (%s, %s, 'youtube')
+        """,
+        (media_video_id, f"https://youtu.be/{youtube_video_id}"),
+    )
     db_exec(
         """
         INSERT INTO game_analysis.game_videos
-            (id, game_id, youtube_url, youtube_video_id, video_type, created_at)
-        VALUES (%s, %s, %s, %s, 'full', NOW())
+            (id, game_id, video_id, video_type, created_at)
+        VALUES (%s, %s, %s, 'full', NOW())
         """,
-        (
-            game_video_id,
-            game_id,
-            f"https://youtu.be/{youtube_video_id}",
-            youtube_video_id,
-        ),
+        (game_video_id, game_id, media_video_id),
     )
 
     reel_id = str(uuid.uuid4())
@@ -381,7 +384,6 @@ async def main() -> int:
         config=config,
         ttt_client=ttt_client,
         youtube_uploader=stub_uploader,
-        poll_interval=60,
     )
 
     # Fetch the reel via the polling endpoint (just to confirm the wire)
@@ -405,7 +407,7 @@ async def main() -> int:
     # Run the per-reel processor directly (skip the polling loop noise)
     print("  invoking _process_reel(...)")
     try:
-        await processor._process_reel(reel_payload)
+        await processor._process_reel(ttt_client, reel_payload)
     except Exception as e:
         print(f"  _process_reel RAISED: {e!r}")
         raise

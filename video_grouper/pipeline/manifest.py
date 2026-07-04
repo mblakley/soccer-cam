@@ -18,11 +18,14 @@ status the discovery/upload processors key on.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
 
 from video_grouper.utils.atomic_json import read_json, write_json
+
+logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "pipeline_state.json"
 MANIFEST_VERSION = 1
@@ -207,6 +210,37 @@ class PipelineManifest:
     def mark_awaiting_tray(self, step_id: str, step_type: str) -> None:
         """Back-compat shorthand for ``mark_awaiting(..., "tray")``."""
         self.mark_awaiting(step_id, step_type, "tray")
+
+    def invalidate_from(self, step_id: str) -> None:
+        """Reset *step_id* and every later step to ``"pending"``.
+
+        Earlier steps that are ``complete`` are left intact so the runner can
+        skip them on resume.  The ``config_fingerprint`` of each reset step is
+        cleared so :meth:`is_complete` returns ``False`` even when the config
+        hasn't changed — the runner must re-run the step to rebuild confidence.
+
+        If *step_id* has not been recorded yet (the pipeline never reached it)
+        this is a no-op; the runner will naturally start from there on the next
+        run.
+        """
+        steps = self.data["steps"]
+        target_index: int | None = None
+        for i, rec in enumerate(steps):
+            if rec["step_id"] == step_id:
+                target_index = i
+                break
+
+        if target_index is None:
+            logger.debug(
+                "invalidate_from: step %r not recorded in manifest; no-op", step_id
+            )
+            return
+
+        for rec in steps[target_index:]:
+            rec["status"] = "pending"
+            rec.pop("config_fingerprint", None)
+
+        self.save()
 
     def mark_failed(
         self, step_id: str, error: str, step_type: str | None = None

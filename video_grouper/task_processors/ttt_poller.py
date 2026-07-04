@@ -61,6 +61,7 @@ class TTTPoller(PollingProcessor):
         highlight_reel_processor: HighlightReelProcessor | None = None,
         ttt_job_processor: TTTJobProcessor | None = None,
         reprocess_request_processor: ReprocessRequestProcessor | None = None,
+        schedule_service=None,
         poll_interval: int = 60,
     ):
         super().__init__(storage_path, config, poll_interval)
@@ -69,6 +70,7 @@ class TTTPoller(PollingProcessor):
         self.highlight_reel_processor = highlight_reel_processor
         self.ttt_job_processor = ttt_job_processor
         self.reprocess_request_processor = reprocess_request_processor
+        self.schedule_service = schedule_service
         # TTT-job service registration + heartbeat live here.
         self._service_id: str | None = None
         # Reprocess-request lifecycle tracking — request_id -> group_dir.
@@ -81,6 +83,7 @@ class TTTPoller(PollingProcessor):
                 ("highlight_reels", highlight_reel_processor),
                 ("ttt_jobs", ttt_job_processor),
                 ("reprocess_requests", reprocess_request_processor),
+                ("schedule", schedule_service),
             )
             if p is not None
         ]
@@ -101,6 +104,7 @@ class TTTPoller(PollingProcessor):
         await self._safe_poll("highlight_reels", self._poll_highlight_reels)
         await self._safe_poll("ttt_jobs", self._poll_ttt_jobs)
         await self._safe_poll("reprocess_requests", self._poll_reprocess_requests)
+        await self._safe_poll("schedule", self._poll_schedule)
 
     async def _safe_poll(self, name: str, fn) -> None:
         try:
@@ -185,6 +189,11 @@ class TTTPoller(PollingProcessor):
                 # reporting inline. Light I/O, no queue needed.
                 await self._propagate_cancel_if_set(req)
                 await self._report_progress_if_changed(req)
+
+    async def _poll_schedule(self) -> None:
+        if self.schedule_service is None:
+            return
+        await asyncio.to_thread(self.schedule_service.refresh)
 
     # ------------------------------------------------------------------
     # TTTJob: service registration + heartbeat

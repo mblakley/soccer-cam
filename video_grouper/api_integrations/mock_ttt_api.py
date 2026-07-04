@@ -433,29 +433,40 @@ class MockTTTApiClient:
             registered.append(rec)
         return registered
 
-    def update_recording_status(
+    def update_recording_step(
         self,
         recording_id: str,
-        stage: str,
+        *,
+        step_id: str,
+        step_type: str,
+        label: str,
         status: str,
-        error_message: str | None = None,
-        youtube_url: str | None = None,
-        youtube_video_id: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        error: str | None = None,
+        config: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        pipeline_preset: str | None = None,
     ) -> dict[str, Any]:
         logger.debug(
-            "Mock update_recording_status %s: %s=%s", recording_id, stage, status
+            "Mock update_recording_step %s: %s=%s", recording_id, step_id, status
         )
-        entry = {
+        entry: dict[str, Any] = {
             "recording_id": recording_id,
-            "stage": stage,
+            "step_id": step_id,
+            "type": step_type,
+            "label": label,
             "status": status,
-            "error_message": error_message,
-            "youtube_url": youtube_url,
-            "youtube_video_id": youtube_video_id,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "error": error,
+            "config": config,
+            "artifacts": artifacts,
+            "pipeline_preset": pipeline_preset,
         }
         self._recording_statuses.append(entry)
         if recording_id in self._recordings:
-            self._recordings[recording_id][f"{stage}_status"] = status
+            self._recordings[recording_id][f"{step_id}_status"] = status
         return entry
 
     def get_high_water_mark(self, camera_id: str) -> str | None:

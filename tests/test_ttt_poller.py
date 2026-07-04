@@ -258,3 +258,35 @@ async def test_cancelled_error_propagates(tmp_path):
 
     with pytest.raises(asyncio.CancelledError):
         await poller.discover_work()
+
+
+# ---------------------------------------------------------------------------
+# Schedule polling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_poll_schedule_calls_refresh_when_set(tmp_path):
+    ttt = _mk_ttt()
+    schedule_service = MagicMock()
+    schedule_service.refresh.return_value = True
+    poller = TTTPoller(
+        storage_path=str(tmp_path),
+        config=_mk_config(),
+        ttt_client=ttt,
+        schedule_service=schedule_service,
+    )
+    await poller._poll_schedule()
+    schedule_service.refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_poll_schedule_noop_when_none(tmp_path):
+    ttt = _mk_ttt()
+    poller = TTTPoller(
+        storage_path=str(tmp_path),
+        config=_mk_config(),
+        ttt_client=ttt,
+    )
+    # Should not raise and should be a no-op
+    await poller._poll_schedule()

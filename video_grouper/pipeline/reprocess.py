@@ -122,6 +122,12 @@ class ReprocessRequest(BaseModel):
     # motion.json instead of re-running ONNX. Saves ~minutes per game.
     skip_detect: bool = False
 
+    # Config swap (e.g. autocam -> homegrown): when set, this run's processing
+    # pipeline is REBUILT from the named preset instead of the pipeline's global
+    # config. Lets a camera manager reprocess a video under a different provider
+    # from the status page. None = keep the global config.
+    config_preset: str | None = None
+
     # Provenance: ISO 8601 timestamp + who asked. Surfaced in logs only.
     requested_at: str | None = None
     requested_by: str | None = None  # e.g. "tray" or "ttt:user-uuid"
@@ -174,6 +180,28 @@ def apply_overrides(
     ``skip_detect`` this is the dropped detect step's id (so
     ``transform_detections`` sees the previous detection JSON).
     """
+    # A config-preset swap replaces the whole processing pipeline for this run
+    # (autocam <-> homegrown): the preset defines the new ordered step list and
+    # nothing is preseeded (a fresh run under the new provider). The manifest was
+    # already invalidated by the restart handler, so the new steps run clean.
+    if request.config_preset:
+        from video_grouper.pipeline.presets import get_preset
+
+        try:
+            rows = get_preset(request.config_preset)
+        except Exception as e:  # noqa: BLE001 — unknown preset -> keep global config
+            logger.warning(
+                "reprocess: unknown config_preset %r (%s); keeping global config",
+                request.config_preset,
+                e,
+            )
+        else:
+            swapped = [
+                StepSpec(step_id=sid, type=stype, config=dict(cfg))
+                for sid, stype, cfg in rows
+            ]
+            return swapped, []
+
     new_specs: list[StepSpec] = []
     preseed: list[str] = []
     for spec in specs:

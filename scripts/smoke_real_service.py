@@ -431,8 +431,8 @@ def seed_db(recording_dir_name: str, recording_start: datetime) -> dict[str, str
     db_exec(
         "INSERT INTO coaching_sessions.camera_recordings "
         "(id, camera_id, team_id, game_session_id, file_name, recording_start, "
-        "youtube_video_id, upload_status) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, 'complete')",
+        "youtube_video_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
         (
             cam_rec_id,
             cam_id,

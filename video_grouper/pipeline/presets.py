@@ -67,6 +67,16 @@ PRESETS: dict[str, list[_PresetStep]] = {
             },
         ),
         (
+            "phase_detect",
+            "phase_detect",
+            # Fuses kickoff/halftime/second-half/end from whistle + ball + the
+            # player-on-field curve. Runs right after field_detect (consumes its
+            # polygon). Its player curve uses a base YOLO person detector shipped
+            # with the install (override via model_path); if none resolves the
+            # step degrades to an ok=false artifact.
+            {"phase_step_seconds": 12.0},
+        ),
+        (
             "ball_detect",
             "ball_detect",
             # Model source intentionally omitted — user supplies model_key

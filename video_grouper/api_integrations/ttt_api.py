@@ -644,6 +644,21 @@ class TTTApiClient:
         logger.debug("Fetching game sessions for team %s", team_id)
         return self._request("GET", url, params=params)
 
+    def get_game_session_by_dir(
+        self, recording_group_dir: str
+    ) -> dict[str, Any] | None:
+        """Find a single game session by its recording_group_dir (no team_id needed).
+
+        GET {api_base_url}/api/game-sessions?recording_group_dir=... -> first match or None.
+        The sync-client counterpart of ``MomentApiClient.get_game_session_by_dir`` — used by
+        the phase-detect TTT push, which has the recording dir but not the team id.
+        """
+        url = f"{self.api_base_url}/api/game-sessions"
+        sessions = self._request(
+            "GET", url, params={"recording_group_dir": recording_group_dir}
+        )
+        return sessions[0] if sessions else None
+
     def create_game_session(
         self,
         team_id: str,
@@ -677,6 +692,22 @@ class TTTApiClient:
         """
         url = f"{self.api_base_url}/api/game-sessions/{session_id}"
         logger.debug("Updating game session %s", session_id)
+        return self._request("PATCH", url, json=fields)
+
+    def update_game_session_phases(
+        self, session_id: str, **fields: Any
+    ) -> dict[str, Any]:
+        """Push detected/verified game-phase fields to a game session.
+
+        Uses the camera-manager-authorized worker route, NOT the team-admin
+        gated user route: soccer-cam runs on the camera manager's hardware and
+        a camera manager need not be a team admin. Only phase_* fields are
+        accepted (TTT ``GameSessionPhaseUpdate``).
+
+        PATCH {api_base_url}/api/internal/game-sessions/{session_id}/phases
+        """
+        url = f"{self.api_base_url}/api/internal/game-sessions/{session_id}/phases"
+        logger.debug("Pushing phases to game session %s", session_id)
         return self._request("PATCH", url, json=fields)
 
     # ------------------------------------------------------------------
@@ -860,28 +891,50 @@ class TTTApiClient:
         logger.debug("Registering %d recording(s) for camera %s", len(files), camera_id)
         return self._request("POST", url, params=params, json=files)
 
-    def update_recording_status(
+    def update_recording_step(
         self,
         recording_id: str,
-        stage: str,
+        *,
+        step_id: str,
+        step_type: str,
+        label: str,
         status: str,
-        error_message: str | None = None,
-        youtube_url: str | None = None,
-        youtube_video_id: str | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        error: str | None = None,
+        config: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        pipeline_preset: str | None = None,
     ) -> dict[str, Any] | None:
-        """Update pipeline stage status for a recording.
+        """Upsert one pipeline step for a recording.
 
         PATCH {api_base_url}/api/device-link/recordings/{recording_id}/status
+
+        TTT appends a new step if step_id is unknown, or updates in-place if
+        already present, preserving insertion order. When step_type=="upload"
+        and status is "complete", TTT reads youtube_url/youtube_video_id from
+        artifacts.
         """
         url = f"{self.api_base_url}/api/device-link/recordings/{recording_id}/status"
-        body: dict[str, Any] = {"stage": stage, "status": status}
-        if error_message is not None:
-            body["error_message"] = error_message
-        if youtube_url is not None:
-            body["youtube_url"] = youtube_url
-        if youtube_video_id is not None:
-            body["youtube_video_id"] = youtube_video_id
-        logger.debug("Updating recording %s: %s=%s", recording_id, stage, status)
+        body: dict[str, Any] = {
+            "step_id": step_id,
+            "type": step_type,
+            "label": label,
+            "status": status,
+        }
+        if started_at is not None:
+            body["started_at"] = started_at
+        if completed_at is not None:
+            body["completed_at"] = completed_at
+        if error is not None:
+            body["error"] = error
+        if config is not None:
+            body["config"] = config
+        if artifacts is not None:
+            body["artifacts"] = artifacts
+        if pipeline_preset is not None:
+            body["pipeline_preset"] = pipeline_preset
+        logger.debug("Updating recording %s: step %s=%s", recording_id, step_id, status)
         return self._request("PATCH", url, json=body)
 
     def enhanced_heartbeat(

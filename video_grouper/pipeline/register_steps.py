@@ -46,6 +46,13 @@ except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step ball_detect unavailable (%s: %s)", type(e).__name__, e)
 
 try:
+    from video_grouper.pipeline.steps import phase_detect  # noqa: F401
+except Exception as e:  # noqa: BLE001
+    logger.debug(
+        "pipeline: step phase_detect unavailable (%s: %s)", type(e).__name__, e
+    )
+
+try:
     from video_grouper.pipeline.steps import track  # noqa: F401
 except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step track unavailable (%s: %s)", type(e).__name__, e)

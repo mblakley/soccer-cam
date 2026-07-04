@@ -388,3 +388,23 @@ async def test_runner_returns_cancelled_when_marker_present(tmp_path: Path):
     finally:
         _STEP_REGISTRY.clear()
         _STEP_REGISTRY.update(orig)
+
+
+def test_config_preset_swaps_specs_to_preset():
+    """A config_preset rebuilds this run's specs from the named preset (autocam
+    <-> homegrown), replacing the current specs; nothing is preseeded."""
+    from video_grouper.pipeline.presets import get_preset
+
+    new_specs, preseed = apply_overrides(
+        _base_specs(), ReprocessRequest(config_preset="autocam")
+    )
+    expected = [(sid, stype) for sid, stype, _cfg in get_preset("autocam")]
+    assert [(s.step_id, s.type) for s in new_specs] == expected
+    assert preseed == []
+
+
+def test_unknown_config_preset_keeps_specs():
+    """An unknown preset name is ignored — the current specs are kept."""
+    base = _base_specs()
+    new_specs, _ = apply_overrides(base, ReprocessRequest(config_preset="nope"))
+    assert [s.step_id for s in new_specs] == [s.step_id for s in base]
