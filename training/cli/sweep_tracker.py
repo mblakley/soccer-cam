@@ -50,14 +50,16 @@ def _prior_size(frames, geom, w, ramp=1.5):
     return out
 
 
-def _prior_support(frames, geom, w, margin=120.0):
+def _prior_support(frames, geom, w, margin=120.0, dome_px=0.0):
+    """Soft off-field COST (never a hard gate — airborne far balls sit above the far
+    line; ``dome_px`` carves out that zone so a flying ball is not penalised)."""
     out = []
     for cs in frames:
         if not cs:
             out.append(np.zeros(0))
             continue
         xy = np.asarray([(c.x, c.y) for c in cs], float)
-        inside = geom.is_in_support(xy, margin_px=margin)
+        inside = geom.is_in_support(xy, margin_px=margin, dome_px=dome_px)
         out.append(w * (~np.asarray(inside)).astype(float))
     return out
 
@@ -262,6 +264,10 @@ def main() -> None:
             pr = _prior_size(frames, geom, 2.0)
         elif prior == "support":
             pr = _prior_support(frames, geom, 2.0)
+        elif prior == "support_dome":
+            # soft off-field cost with the airborne dome carved out: penalise the
+            # far-margin/edge statics WITHOUT punishing a ball flying above the far line
+            pr = _prior_support(frames, geom, 2.0, dome_px=400.0)
         sel = rerank(frames, geom, frame_gaps=gaps, priors=pr, config=cfg)
         track = kalman_smooth(sel, geom) if use_kalman else sel
         line(name, *_score(track, frames, ef, balls, geom, far_px, stride))
@@ -278,6 +284,10 @@ def main() -> None:
     strong = replace(base, alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0)
     run("strong +kalman", strong, use_kalman=True)
     run("strong  NO-kalman", strong, use_kalman=False)
+    # soft in-field prior (EXP-DIST-17 found a HARD gate useless — distractors were
+    # in-field — but current-model statics leak in the far-margin/edge zones)
+    run("strong +support", strong, prior="support")
+    run("strong +support+dome", strong, prior="support_dome")
     # very loose (near-ungated) + trust detector — approaches argmax while keeping far coasting
     run(
         "a3 mj80 v30 +kal",

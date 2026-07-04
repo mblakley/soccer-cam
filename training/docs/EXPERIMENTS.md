@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-28: soft in-field prior (± airborne dome) — NO effect on the tracker (2026-07-04)
+
+Mark asked whether the field polygon eliminates off-field near distractors, and whether
+out-of-polygon far detections might be AIRBORNE balls. Facts + test:
+- The detector input is already hard-masked to polygon + 400 px far margin (kept open on purpose:
+  cropping at the far line dropped ~1/3 of very-far GT — airborne/far-corner balls sit above it).
+- EXP-DIST-17 showed a HARD in-field gate does nothing (0.24→0.24, distractors are in-field). Static
+  mining (EXP session 07-04) showed hn2's leaked statics cluster in the far-margin/edge zones — so
+  re-tested with a SOFT support cost (w=2.0, margin 120), with and without a 400 px airborne dome
+  carve-out (`sweep_tracker` rows `strong +support`, `+support+dome`), on both hn2 held-out dumps:
+  **identical to baseline on every metric, both games.** `static_persistence` already keeps the
+  Viterbi PATH off those objects; their damage is to per-frame RANKING (argmax/selector), not the
+  smoothed track. Rows kept in the sweep for future candidate regimes.
+- The airborne thread stays live as designed (§3b aerial ball-state): EXP-DIST-11's "impossible
+  67 m jumps" are ground-plane projections of flying balls; the concrete follow-up is an ARC-FIT
+  feature (quadratic y(t), linear x(t) over the symmetric dump window — gravity-consistency) as
+  selector evidence + dome-zone flying-ball rescue. Slotted for the ball-state phase.
+
 ## EXP-DIST-27: hn3b (mined, 2 epochs) — ALSO below hn2; the fine-tune lever is closed (2026-07-04)
 
 `hm_reolink_hn3b` = resume hn2 + mined store + **2 epochs**: held-out Spc best SELECTED far
