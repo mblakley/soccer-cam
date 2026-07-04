@@ -300,3 +300,23 @@ class TestStaticDistractors:
         ]
         out = confirm_clusters(clusters, np.zeros((0, 2)), np.asarray([[70.0, 40.0]]))
         assert out[0]["confirmed_by"] == "teacher_only"
+
+
+class TestFullGameDump:
+    def test_sample_grid_aligned_and_ranged(self):
+        from training.cli.dump_game_candidates import sample_grid
+
+        grid = sample_grid([(10, 50), (100, 120)], stride=8, total_frames=200)
+        assert all(g % 8 == 0 for g in grid)
+        assert grid[0] == 16 and grid[-1] == 112
+        assert all(10 <= g < 50 or 100 <= g < 120 for g in grid)
+        # no ranges -> whole game
+        assert sample_grid([], 8, 40) == [0, 8, 16, 24, 32]
+
+    def test_chunk_spans(self):
+        from training.cli.dump_game_candidates import chunk_spans
+
+        grid = list(range(0, 80, 8))
+        spans = chunk_spans(grid, chunk=4)
+        assert [(s, e) for s, e, _ in spans] == [(0, 24), (32, 56), (64, 72)]
+        assert sum(len(f) for _, _, f in spans) == len(grid)
