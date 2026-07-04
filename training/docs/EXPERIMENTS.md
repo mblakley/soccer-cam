@@ -4,6 +4,23 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-27: hn3b (mined, 2 epochs) — ALSO below hn2; the fine-tune lever is closed (2026-07-04)
+
+`hm_reolink_hn3b` = resume hn2 + mined store + **2 epochs**: held-out Spc best SELECTED far
+**0.624** (a1.0/mj40) vs hn2 0.703, near ceiling recovered to 1.0 but far ceiling 0.939 (−0.019);
+Iron far 0.636 vs 0.727. Combined with EXP-DIST-25/26: EVERY warm-restart fine-tune variant
+(8ep plain, 8ep mined, 2ep mined) lands BELOW the hn2 checkpoint on held-out, while mining only
+ever helps relative to its epoch-matched control.
+
+**Conclusions (hn series closed):**
+1. **`hm_reolink_hn2` is the production detector checkpoint.** Do not warm-restart fine-tune it
+   again on this corpus — the recipe is net-negative regardless of added negatives or epoch count.
+2. Mined negatives are kept in the store (they demonstrably counteract overfit); their right use is
+   the next FULL training run, not a fine-tune.
+3. Remaining within-corpus detector lever: **Dahua supplemental joint training** (camera-balanced,
+   warp-normalized — the original v4 cross-camera design; ~50 games / many venues never yet used).
+   Remaining eval lever: more held-out labels (sets queued for Mark, candidate overlays injected).
+
 ## EXP-DIST-26: first TRUE mined-negatives round — mining is real but the 8-epoch recipe cancels it (2026-07-04)
 
 **Run:** `hm_reolink_hn3` = resume hn2 + 8 epochs on the store WITH +2,391 mined hard negatives
