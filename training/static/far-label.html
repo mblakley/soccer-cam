@@ -340,14 +340,16 @@ async function showIndex(){
   try{ sets = await (await fetch("/api/far-label")).json(); }
   catch(err){ document.getElementById("idxSum").textContent="failed to load set list"; return; }
   const pct = s => s.n_frames ? Math.round(100*Math.min(s.labeled,s.n_frames)/s.n_frames) : 0;
-  sets.sort((a,b)=> pct(a)-pct(b) || a.set.localeCompare(b.set));  // least-labeled first
+  // priority first (1 = highest-value, work top-down), finished sets sink, then least-labeled
+  sets.sort((a,b)=> (pct(a)>=100)-(pct(b)>=100) || (a.priority??999)-(b.priority??999) || pct(a)-pct(b) || a.set.localeCompare(b.set));
   const todo = sets.filter(s=>pct(s)<100).length;
   const totF = sets.reduce((a,s)=>a+s.n_frames,0), totL = sets.reduce((a,s)=>a+Math.min(s.labeled,s.n_frames),0);
   document.getElementById("idxSum").textContent =
     `${sets.length} sets · ${todo} still need work · ${totL} / ${totF} frames labeled overall`;
   document.getElementById("setList").innerHTML = sets.map(s=>{
-    const p=pct(s), done=p>=100;
+    const p=pct(s), done=p>=100, pr=(s.priority??999)<999;
     return `<a class="setcard${done?' done':''}" href="?set=${encodeURIComponent(s.set)}">`+
+      (pr?`<span class="pill ac">P${s.priority}</span>`:"")+
       `<span class="nm">${s.set}</span>`+
       `<span class="pbar"><i style="width:${p}%"></i></span>`+
       `<span class="pill">${s.labeled} / ${s.n_frames}</span></a>`;

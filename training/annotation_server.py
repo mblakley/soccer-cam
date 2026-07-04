@@ -1780,6 +1780,9 @@ async def list_far_sets():
                 "set": d.name,
                 "n_frames": m.get("n_frames", len(m.get("frames", []))),
                 "labeled": len(labels),
+                # manifest-assigned labeling priority (1 = do first); 999 = unranked.
+                # The landing page sorts by this so the annotator works top-down.
+                "priority": m.get("priority", 999),
             }
         )
     return out
