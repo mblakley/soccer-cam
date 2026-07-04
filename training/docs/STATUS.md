@@ -2,6 +2,21 @@
 
 *Last updated: 2026-07-04*
 
+## 2026-07-04 midday — CANDIDATE MARATHON LAUNCHED (decision: A then B)
+
+- Mark: **A (full-game candidate marathon) → B (Dahua joint retrain)**; he labels top-down (set
+  priorities live: P1=Iron-0615 set first; 90 cross-set duplicate frames auto-deduped by copying
+  labels in; strips being regenerated as LOSSLESS PNG — JPEG 4:2:0 smeared small balls; PNG serve +
+  builder default committed to MAIN 854f0a4 and deployed).
+- **`selector_candidate_marathon` RUNNING** (task; waits for the PNG regen to free the decoder, then
+  15 games, labeled-first order): `training/cli/dump_game_candidates.py` (fccde2e) — active-play
+  stride-8 grid aligned 0-mod-8 (exact teacher-grid intersection), resumable 1500-frame chunks →
+  `G:allresearch\selectorullgame\<game_id>\{meta.json, part_*.pkl}`, detector = hn2 (frozen
+  champion). **ETA ~5-10 h/game ⇒ 3-6 days; ntfy every 3 games + completion.** Consumers when done:
+  static-distractor objects per game (+review galleries), selection-level supervision at scale
+  (selector re-open conditions, EXP-DIST-24), hard negatives for B.
+- **B (Dahua joint build) queues after the marathon.**
+
 ## 2026-07-04 morning — PHASE 0 CLOSED; hn series closed; labeling UX upgraded; static mining validated
 
 - **Phase 0c decode migration FORMALLY VALIDATED (byte-exact):** streaming `build_human_crops`
