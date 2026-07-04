@@ -94,7 +94,10 @@ class TestTTTApiClient(unittest.TestCase):
         call_args = self.client._http.request.call_args
         self.assertEqual(
             call_args[0],
-            ("POST", "https://api.test.com/api/device-link/register-camera-manager"),
+            (
+                "POST",
+                "https://api.test.com/api/internal/device-link/register-camera-manager",
+            ),
         )
         # Bearer auth header should be attached (standard POST pattern).
         headers = call_args[1]["headers"]
@@ -448,7 +451,7 @@ class TestTTTApiClient(unittest.TestCase):
             call_args[0],
             (
                 "POST",
-                "https://api.test.com/api/device-link/schedule-providers/playmetrics/connect",
+                "https://api.test.com/api/internal/device-link/schedule-providers/playmetrics/connect",
             ),
         )
         self.assertEqual(
