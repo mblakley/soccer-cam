@@ -147,9 +147,25 @@ def snap_teacher_to_candidates(
     return out, stats
 
 
+def load_fullgame_candidates(fullgame_dir: Path) -> tuple[list[int], dict, dict]:
+    """Load a `dump_game_candidates` artifact -> (ef, cands, meta). Candidate rows are
+    padded to the 4-tuple shape the snapper expects (size_px unknown -> None)."""
+    meta = json.loads((fullgame_dir / "meta.json").read_text(encoding="utf-8"))
+    cands: dict[int, list[tuple]] = {}
+    for p in sorted(fullgame_dir.glob("part_*.pkl")):
+        with open(p, "rb") as fh:
+            for g, rows in pickle.load(fh).items():
+                cands[int(g)] = [(x, y, s, None) for (x, y, s) in rows]
+    return sorted(cands), cands, meta
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dump", required=True, help="eval_detector --dump-cands pickle")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--dump", help="eval_detector --dump-cands pickle")
+    src.add_argument(
+        "--fullgame-dir", help="dump_game_candidates output dir (marathon artifact)"
+    )
     ap.add_argument("--game-dir", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--snap-m", type=float, default=2.0)
@@ -168,8 +184,14 @@ def main() -> None:
     offs = dd.seg_offsets(gj["segments"])
     play = dd.active_play_ranges(gj["segments"], gj.get("game_state"))
 
-    with open(args.dump, "rb") as fh:
-        d = pickle.load(fh)
+    if args.fullgame_dir:
+        ef, cands_by_g, _meta = load_fullgame_candidates(Path(args.fullgame_dir))
+        d = {"ef": ef, "cands": cands_by_g, "polygon": gj["field_polygon"]}
+        src_name = args.fullgame_dir
+    else:
+        with open(args.dump, "rb") as fh:
+            d = pickle.load(fh)
+        src_name = args.dump
     geom = build_field_geometry(np.asarray(d["polygon"], float))
     if not geom.valid:
         raise SystemExit("dump polygon does not fit a valid homography")
@@ -204,7 +226,7 @@ def main() -> None:
     )
     payload = {
         "schema": "selector_labels/1",
-        "dump": str(args.dump),
+        "dump": str(src_name),
         "game_dir": str(gd),
         "params": {
             "snap_m": args.snap_m,
