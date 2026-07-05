@@ -320,3 +320,21 @@ class TestFullGameDump:
         spans = chunk_spans(grid, chunk=4)
         assert [(s, e) for s, e, _ in spans] == [(0, 24), (32, 56), (64, 72)]
         assert sum(len(f) for _, _, f in spans) == len(grid)
+
+
+def test_gold_anchors_to_nearest_grid_frame():
+    """Cleveland regression: ALL its human labels sit ≡4 mod 8 — zero exact hits on a
+    stride-8 grid. Gold must anchor at the nearest grid frame within ±gold_tol."""
+    geom = _geom()
+    ef = [100, 108]
+    cands = {
+        100: [(1000.0, 900.0, 0.9, None)],
+        108: [(1020.0, 902.0, 0.8, None)],
+    }
+    teacher = {100: (1000.0, 900.0), 108: (1020.0, 902.0)}
+    # human ball click at 104 (off-grid), position matches the ball's path
+    labels, stats = snap_teacher_to_candidates(
+        ef, cands, teacher, {104: (1010.0, 901.0)}, set(), geom, [], stability_k=0
+    )
+    assert stats["gold"] == 1
+    assert labels[0][1] == 20.0 or labels[1][1] == 20.0

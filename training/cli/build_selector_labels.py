@@ -45,6 +45,7 @@ def snap_teacher_to_candidates(
     gap_frames: int = 12,
     gold_weight: float = 20.0,
     interp_max_span: int = 8,
+    gold_tol: int = 4,
 ) -> tuple[dict[int, tuple[int, float]], dict]:
     """Return ``({ef_index: (cand_index | -1 for none, weight)}, stats)``.
 
@@ -91,6 +92,34 @@ def snap_teacher_to_candidates(
     stride = int(np.median(np.diff(ef))) if len(ef) > 1 else 1
     pad = stability_k * stride
 
+    # Human labels sit on ARBITRARY frames (Cleveland: all ≡4 mod 8 -> ZERO exact hits
+    # on a stride-8 grid). Anchor each human label at its NEAREST grid frame within
+    # ``gold_tol`` (a ball moves <~0.7 m/frame, so the human xy stays inside snap_m).
+    ef_arr = np.asarray(ef, int)
+
+    def nearest_grid(g_h: int) -> int | None:
+        i = int(np.searchsorted(ef_arr, g_h))
+        best, bd = None, gold_tol + 1
+        for j in (i - 1, i):
+            if 0 <= j < len(ef_arr):
+                d = abs(int(ef_arr[j]) - g_h)
+                if d < bd:
+                    best, bd = int(ef_arr[j]), d
+        return best if bd <= gold_tol else None
+
+    gold_at: dict[int, tuple[float, float]] = {}
+    _gold_src: dict[int, int] = {}
+    for g_h, xy in human_balls.items():
+        g = nearest_grid(g_h)
+        if g is not None and (g not in gold_at or abs(g - g_h) < abs(g - _gold_src[g])):
+            gold_at[g] = xy
+            _gold_src[g] = g_h
+    none_at: set[int] = set()
+    for g_h in human_novis:
+        g = nearest_grid(g_h)
+        if g is not None and g not in gold_at:
+            none_at.add(g)
+
     tga = np.asarray(tg, int)
     tpx = np.asarray([teacher[g] for g in tg], float).reshape(-1, 2)
 
@@ -117,12 +146,13 @@ def snap_teacher_to_candidates(
         if not in_play(g):
             stats["skip_outofplay"] += 1
             continue
-        gold = g in human_balls
-        if g in human_novis:
+        gold = g in gold_at
+        if g in none_at:
             out[i] = (-1, gold_weight)
             stats["none"] += 1
             continue
-        t_xy = teacher_at(g)
+        # gold anchor: the human's xy is the target (authoritative over the teacher)
+        t_xy = gold_at[g] if gold else teacher_at(g)
         if t_xy is None:
             stats["skip_nocover"] += 1
             continue
