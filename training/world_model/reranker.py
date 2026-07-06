@@ -62,13 +62,27 @@ class RerankConfig:
     miss_cost: float = 0.9  # cost of the occlusion/miss state
     cell_m: float = 2.0  # world-cell size for the persistence map
     motion_radius_m: float = 3.0  # how near a motion blob counts as support
-    # AERIAL BRIDGE (EXP-DIST-30, v0 of the ball-state machine): the miss state
-    # remembers where the track left the ground; re-entering at a distance/time rate
-    # consistent with a flight (<= air_vmax_mpf) gets a BONUS (bridging a launch beats
-    # parking on a distractor), while faster-than-flight re-entries — true teleports —
+    # AERIAL BRIDGE (EXP-DIST-30/31, v0-v1 of the ball-state machine): the miss state
+    # remembers where the track left the ground AND its exit velocity (from the last
+    # detections before it left frame — the early-flight ones on a launch). Re-entry
+    # near the BALLISTIC PREDICTION ``exit + v * airtime`` (uncertainty growing with
+    # airtime) gets a strong bonus; re-entry merely at a flight-consistent RATE
+    # (<= air_vmax_mpf) a small one; faster-than-flight re-entries — true teleports —
     # are penalised quadratically. bridge_w=0 = legacy flat re-entry (0.6, distance-blind).
     bridge_w: float = 0.0  # aerial-bridge shaping weight (0 = off)
     air_vmax_mpf: float = 2.0  # max plausible flight speed, world m per SOURCE frame
+
+
+# aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
+# in flight, so the landing zone is exit + v_exit * airtime. The exit velocity comes
+# from the last two on-path detections; slower motion than _LAUNCH_MIN_MPF is rolling
+# noise, not a launch, so no direction is inferred. The landing cone widens with
+# airtime (unknown launch angle + apparent-velocity bias while the ball rises).
+_LAUNCH_MIN_MPF = 0.8  # min exit speed (m per source frame) to trust a direction
+_CONE_BASE_M = 6.0  # landing-zone radius at airtime 0
+_CONE_SPREAD_MPF = 0.4  # landing-zone growth per source frame in the air
+_CONE_BONUS = 0.75  # re-entry bonus (x bridge_w) inside the predicted landing zone
+_BAND_BONUS = 0.5  # re-entry bonus (x bridge_w) for rate-consistent, direction-blind
 
 
 def static_persistence(
@@ -365,6 +379,7 @@ def rerank(
     cost.append(np.array([emis(0, i) for i in range(k0)] + [miss(0)]))
     back.append(np.full(k0 + 1, -1, int))
     missw: list[np.ndarray | None] = [None]
+    missv: list[np.ndarray | None] = [None]
     missdur: list[float] = [0.0]
     for t in range(1, n):
         k = len(frames[t])
@@ -387,13 +402,21 @@ def rerank(
                         and cfg.bridge_w > 0
                         and missw[t - 1] is not None
                     ):
+                        dur = missdur[t - 1] + gap
                         d = math.hypot(*(fw[t][j] - missw[t - 1]))
-                        rate = d / max(missdur[t - 1] + gap, 1.0)
-                        x = rate / cfg.air_vmax_mpf
+                        x = (d / max(dur, 1.0)) / cfg.air_vmax_mpf
                         if x > 1.0:  # faster than any flight: a true teleport
                             trans += cfg.bridge_w * (x - 1.0) ** 2
-                        elif x >= 0.15:  # flight/fast-ground consistent landing
-                            trans -= cfg.bridge_w * 0.5
+                        elif missv[t - 1] is not None:
+                            # ballistic landing prediction: exit + v_exit * airtime
+                            land = missw[t - 1] + missv[t - 1] * dur
+                            dp = math.hypot(*(fw[t][j] - land))
+                            if dp <= _CONE_BASE_M + _CONE_SPREAD_MPF * dur:
+                                trans -= cfg.bridge_w * _CONE_BONUS
+                            elif x >= 0.15:
+                                trans -= cfg.bridge_w * _BAND_BONUS
+                        elif x >= 0.15:  # no direction known: rate-band only
+                            trans -= cfg.bridge_w * _BAND_BONUS
                 else:
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
                     if d > cfg.max_jump_m_per_frame * gap:
@@ -409,12 +432,28 @@ def rerank(
         bi_m = int(bt[k])
         if bi_m == kp:  # stayed in miss: keep the frozen exit point, extend duration
             missw.append(missw[t - 1])
+            missv.append(missv[t - 1])
             missdur.append(missdur[t - 1] + gap)
         elif 0 <= bi_m < kp:  # entered miss from a candidate: freeze where it left
             missw.append(fw[t - 1][bi_m].copy())
+            # exit velocity from the entering path's last step (its backpointer),
+            # capped at flight speed; sub-launch motion is rolling noise -> no direction
+            v = None
+            if t >= 2:
+                pv = int(back[t - 1][bi_m])
+                if 0 <= pv < len(fw[t - 2]):
+                    step = fw[t - 1][bi_m] - fw[t - 2][pv]
+                    v = step / max(gaps[t - 1], 1)
+                    speed = math.hypot(*v)
+                    if speed < _LAUNCH_MIN_MPF:
+                        v = None
+                    elif speed > cfg.air_vmax_mpf:
+                        v = v * (cfg.air_vmax_mpf / speed)
+            missv.append(v)
             missdur.append(float(gap))
         else:
             missw.append(None)
+            missv.append(None)
             missdur.append(float(gap))
 
     path = [int(np.argmin(cost[-1]))]

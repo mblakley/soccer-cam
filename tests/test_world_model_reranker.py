@@ -221,6 +221,69 @@ def test_rerank_aerial_bridge_prefers_flight_consistent_landing():
     assert bridged[8][0] == pytest.approx(B[0] + 16.0)
 
 
+def test_rerank_aerial_bridge_ballistic_cone_uses_launch_direction():
+    """EXP-DIST-31 physics upgrade (Mark): with detections of the early flight before
+    the ball leaves frame, momentum predicts the landing zone (exit + v * airtime).
+    Two re-entry candidates sit at the SAME distance from the exit point — identical
+    rate, indistinguishable to the direction-blind band — one along the launch
+    direction, one behind. The ballistic cone must land on the forward one even
+    though the backward one is brighter; without a trustable launch velocity the
+    band is direction-blind and the brighter backward candidate wins."""
+    geom = build_field_geometry(np.asarray(_POLY, float))
+
+    def w(p):
+        return geom.image_to_world(np.asarray([p], float))[0]
+
+    y = 1000.0
+    fast = [(3200.0 + 500.0 * t, y) for t in range(3)]  # visible early flight
+    exit_p = fast[-1]
+    v_step = (w(fast[2]) - w(fast[1])) / 8.0  # world m per source frame
+    speed = float(np.hypot(*v_step))
+    assert 0.8 <= speed <= 2.0  # a real launch: direction is trustable
+
+    land = w(exit_p) + v_step * 32.0  # 3 empty steps + landing step, gap 8
+    fwd = (exit_p[0] + 500.0 * 4.0, y)  # continues the flight line
+    bwd = (exit_p[0] - 500.0 * 4.0, y)  # same distance back the way it came
+    d_f, d_b = (float(np.linalg.norm(w(p) - w(exit_p))) for p in (fwd, bwd))
+    assert abs(d_f - d_b) / d_f < 0.35  # comparable rates (equal to the band)
+    assert float(np.linalg.norm(w(fwd) - land)) <= 6.0 + 0.4 * 32.0  # in the cone
+    assert float(np.linalg.norm(w(bwd) - land)) > 6.0 + 0.4 * 32.0  # out of it
+
+    frames: list[list[Candidate]] = [[Candidate(*p, 0.8)] for p in fast]
+    frames += [[], [], []]  # airborne, out of the camera's vertical FOV
+    for t in range(3):  # landing: backward phantom slightly brighter
+        frames.append(
+            [
+                Candidate(bwd[0] + 8.0 * t, bwd[1], 0.55),
+                Candidate(fwd[0] + 8.0 * t, fwd[1], 0.5),
+            ]
+        )
+    gaps = [8] * len(frames)
+    iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+
+    bridged = rerank(
+        frames, geom, frame_gaps=gaps, config=RerankConfig(**iso, bridge_w=2.0)
+    )
+    assert bridged[6][0] == pytest.approx(fwd[0])  # physics: lands ahead
+
+    # same geometry but a slow rolling exit (below the launch threshold): no
+    # direction to trust -> band-only, the brighter backward candidate wins
+    slow = [(3200.0 + 10.0 * t, y) for t in range(3)]
+    frames2 = [[Candidate(*p, 0.8)] for p in slow]
+    frames2 += [[], [], []]
+    for t in range(3):
+        frames2.append(
+            [
+                Candidate(bwd[0] + 8.0 * t, bwd[1], 0.55),
+                Candidate(fwd[0] + 8.0 * t, fwd[1], 0.5),
+            ]
+        )
+    blind = rerank(
+        frames2, geom, frame_gaps=gaps, config=RerankConfig(**iso, bridge_w=2.0)
+    )
+    assert blind[6][0] == pytest.approx(bwd[0] if 6 in blind else bwd[0])
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player
