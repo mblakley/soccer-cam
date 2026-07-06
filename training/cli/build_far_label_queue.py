@@ -195,7 +195,17 @@ def select_diverge_frames(
             run = []
         run.append(i)
     n_anchor = max(1, target // (len(ctx) + 1))
-    chosen = _spread_bins(anchors, n_anchor)
+    # per-signal quotas (a label-rich game would otherwise fill every slot with
+    # disagreements and starve the teleport/miss-run audit)
+    quotas = {"diverge": n_anchor // 2, "teleport": n_anchor // 4}
+    quotas["trackmiss"] = n_anchor - sum(quotas.values())
+    chosen: list[list] = []
+    leftover = 0
+    for reason in ("diverge", "teleport", "trackmiss"):
+        rows = [a for a in anchors if a[1] == reason]
+        got = _spread_bins(rows, quotas[reason] + leftover)
+        leftover = quotas[reason] + leftover - len(got)
+        chosen.extend(got)
     # expand with context; anchors win on collision
     out: dict[int, dict] = {}
     for g, reason, i, _v in chosen:
