@@ -71,6 +71,19 @@ class RerankConfig:
     # are penalised quadratically. bridge_w=0 = legacy flat re-entry (0.6, distance-blind).
     bridge_w: float = 0.0  # aerial-bridge shaping weight (0 = off)
     air_vmax_mpf: float = 2.0  # max plausible flight speed, world m per SOURCE frame
+    # PHYSICAL TRANSITIONS (EXP-DIST-31b): the legacy vmax/max_jump were raised to 12/25
+    # m-per-frame to survive far-band world jitter (EXP-DIST-11) — but at stride 8 that
+    # makes candidate hops nearly free (budget 96-200 m), so the path NEVER misses and
+    # the aerial machinery never engages (Chili full game: 0 miss entries, 1328
+    # teleports). Physical mode replaces the loose global budget with real ball physics
+    # plus DEPTH-DEPENDENT measurement noise: allowance = ball_vmax_mpf * gap +
+    # phys_sigma_px * (local m-per-px Jacobian at both endpoints). Far positions may
+    # jitter tens of meters (the homography is ill-conditioned there) without unlocking
+    # free teleports near the camera. phys_sigma_px = 0 keeps legacy transitions.
+    phys_sigma_px: float = (
+        0.0  # px jitter mapped through the local Jacobian (0 = legacy)
+    )
+    ball_vmax_mpf: float = 2.5  # real ball speed ceiling, world m per SOURCE frame
 
 
 # aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
@@ -316,13 +329,31 @@ def rerank(
         return {}
     gaps = frame_gaps or [1] * n
 
-    fw, fs, fsrc = [], [], []
+    fw, fs, fsrc, fsig = [], [], [], []
     for cands in frames:
         xy = np.array([[c.x, c.y] for c in cands], float).reshape(-1, 2)
         fsrc.append(xy)
         fw.append(geom.image_to_world(xy) if len(xy) else np.zeros((0, 2)))
         sc = np.array([c.score for c in cands], float)
         fs.append(sc / (sc.max() + 1e-9) if len(sc) else sc)
+        if cfg.phys_sigma_px > 0 and len(xy):
+            # measurement noise in METERS: px jitter through the local homography
+            # Jacobian (worst direction). Near candidates ~cm-m; far-line ones can
+            # legitimately jitter tens of meters — that noise, not ball speed, is
+            # what the loose legacy gate was absorbing.
+            d_px = 3.0
+            w0 = fw[-1]
+            wx = geom.image_to_world(xy + [d_px, 0.0])
+            wy = geom.image_to_world(xy + [0.0, d_px])
+            jac = (
+                np.maximum(
+                    np.linalg.norm(wx - w0, axis=1), np.linalg.norm(wy - w0, axis=1)
+                )
+                / d_px
+            )
+            fsig.append(cfg.phys_sigma_px * jac)
+        else:
+            fsig.append(np.zeros(len(xy)))
 
     if motion is not None:
         mw = [
@@ -417,6 +448,13 @@ def rerank(
                                 trans -= cfg.bridge_w * _BAND_BONUS
                         elif x >= 0.15:  # no direction known: rate-band only
                             trans -= cfg.bridge_w * _BAND_BONUS
+                elif cfg.phys_sigma_px > 0:
+                    # physical: real ball motion + depth-dependent measurement noise
+                    d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
+                    allow = cfg.ball_vmax_mpf * gap + fsig[t][j] + fsig[t - 1][i]
+                    if d > 3.0 * allow:
+                        continue  # not physical: route through the miss/bridge state
+                    trans = (d / allow) ** 2
                 else:
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
                     if d > cfg.max_jump_m_per_frame * gap:

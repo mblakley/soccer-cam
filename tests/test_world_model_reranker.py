@@ -284,6 +284,44 @@ def test_rerank_aerial_bridge_ballistic_cone_uses_launch_direction():
     assert blind[6][0] == pytest.approx(bwd[0] if 6 in blind else bwd[0])
 
 
+def test_rerank_physical_transitions_restore_ground_speed_budget():
+    """EXP-DIST-31b: legacy budgets (vmax 12 / max_jump 25 m-per-frame, scaled by the
+    stride gap) make a 41 m instant hop nearly free at gap 8, so the path chases any
+    bright distractor. Physical mode prices transitions by REAL ball speed plus
+    depth-dependent measurement noise — the hop becomes unaffordable, while a
+    plausible step at the far line stays allowed."""
+    geom = build_field_geometry(np.asarray(_POLY, float))
+    iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0}
+    A = (3000.0, 1350.0)
+    near = (3060.0, 1350.0)  # ~0.8 m: a rolling ball
+    B = (6000.0, 1300.0)  # ~41 m away, much brighter
+    frames = [
+        [Candidate(*A, 0.5)],
+        [Candidate(*near, 0.4), Candidate(*B, 0.9)],
+    ]
+    legacy = rerank(frames, geom, frame_gaps=[8, 8], config=RerankConfig(**iso))
+    assert legacy[1][0] == pytest.approx(B[0])  # loose budget: takes the bright hop
+
+    phys = rerank(
+        frames,
+        geom,
+        frame_gaps=[8, 8],
+        config=RerankConfig(**iso, phys_sigma_px=5.0),
+    )
+    assert phys[1][0] == pytest.approx(near[0])  # 41 m in 8 frames is not a ball
+
+    # far line: a 13 m step (world jitter + real motion) must remain affordable
+    f1, f2 = (3800.0, 260.0), (4200.0, 250.0)
+    far_frames = [[Candidate(*f1, 0.5)], [Candidate(*f2, 0.5)]]
+    far = rerank(
+        far_frames,
+        geom,
+        frame_gaps=[8, 8],
+        config=RerankConfig(**iso, phys_sigma_px=5.0),
+    )
+    assert 1 in far and far[1][0] == pytest.approx(f2[0])
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player
