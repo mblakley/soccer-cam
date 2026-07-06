@@ -338,3 +338,54 @@ def test_gold_anchors_to_nearest_grid_frame():
     )
     assert stats["gold"] == 1
     assert labels[0][1] == 20.0 or labels[1][1] == 20.0
+
+
+class TestLoadDumpAndGuards:
+    def test_load_dump_fullgame_dir(self, tmp_path):
+        """v2-scale training pairs are marathon DIRECTORIES: part_*.pkl + meta.json,
+        polygon pulled from the game.json that meta.game_dir points at."""
+        import pickle
+
+        from training.cli.kill_test_selector import _load_dump
+
+        game_dir = tmp_path / "game"
+        game_dir.mkdir()
+        near_x = np.linspace(100.0, 1900.0, 5)
+        far_x = np.linspace(1600.0, 400.0, 5)
+        poly = np.concatenate(
+            [
+                np.column_stack([near_x, np.full(5, 1000.0)]),
+                np.column_stack([far_x, np.full(5, 200.0)]),
+            ]
+        ).tolist()
+        (game_dir / "game.json").write_text(
+            __import__("json").dumps({"field_polygon": poly, "segments": []})
+        )
+        fg = tmp_path / "fullgame"
+        fg.mkdir()
+        (fg / "meta.json").write_text(
+            __import__("json").dumps(
+                {"schema": "fullgame_candidates/1", "game_dir": str(game_dir)}
+            )
+        )
+        with open(fg / "part_0000000_0000008.pkl", "wb") as fh:
+            pickle.dump({0: [(1000.0, 900.0, 0.9)], 8: [(1020.0, 902.0, 0.8)]}, fh)
+        d, frames, geom = _load_dump(str(fg))
+        assert d["ef"] == [0, 8]
+        assert geom.valid
+        assert len(frames) == 2 and frames[0][0].score == 0.9
+        assert frames[0][0].size_px is None  # padded, reads as "size unknown"
+
+    def test_held_out_guard(self):
+        from training.cli.kill_test_selector import check_not_held_out
+
+        with pytest.raises(SystemExit, match="HELD-OUT"):
+            check_not_held_out(
+                "G:/x/fullgame/spc", "F:/Heat_2012s/2026.05.31 - vs Spencerport"
+            )
+        with pytest.raises(SystemExit, match="HELD-OUT"):
+            check_not_held_out("G:/x/dump.pkl", "F:/x/2026.06.15 - vs Irondequoit")
+        # Irondequoit 06.04 is a legitimate training game — must NOT trip the guard
+        check_not_held_out(
+            "G:/x/fullgame/iron0604", "F:/Heat_2012s/2026.06.04 - vs Irondequoit (away)"
+        )

@@ -25,8 +25,25 @@ import argparse
 import json
 import pickle
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
+
+# Spencerport 05.31 + Irondequoit 06.15 are EVAL-ONLY, never trained (plan §6).
+# Matched against the label file's game_dir (lowercased). "irondequoit" alone is NOT
+# a held-out token — Irondequoit 06.04 is a legitimate training game.
+HELD_OUT_TOKENS = ("spencerport", "2026.06.15")
+
+
+def check_not_held_out(dump_path: str, game_dir: str) -> None:
+    """Refuse a training pair whose dump/game matches a held-out token."""
+    for hay in (dump_path.lower(), game_dir.lower()):
+        for t in HELD_OUT_TOKENS:
+            if t in hay:
+                raise SystemExit(
+                    f"HELD-OUT game in training set ({t!r}): {dump_path} — "
+                    "Spencerport 05.31 / Irondequoit 06.15 are eval-only"
+                )
 
 
 def split_train_pair(pair: str) -> tuple[str, str]:
@@ -39,11 +56,26 @@ def split_train_pair(pair: str) -> tuple[str, str]:
 
 
 def _load_dump(path):
+    """Load an ``eval_detector --dump-cands`` pickle OR a ``dump_game_candidates``
+    output DIRECTORY (marathon artifact; polygon comes from the game.json its
+    meta.json points at)."""
     from training.world_model.geometry import build_field_geometry
     from training.world_model.tbd import Candidate
 
-    with open(path, "rb") as fh:
-        d = pickle.load(fh)
+    p = Path(path)
+    if p.is_dir():
+        from training.cli.build_selector_labels import load_fullgame_candidates
+
+        ef, cands, meta = load_fullgame_candidates(p)
+        gj = json.loads(
+            (Path(meta["game_dir"]) / "game.json").read_text(
+                encoding="utf-8", errors="ignore"
+            )
+        )
+        d = {"ef": ef, "cands": cands, "polygon": gj["field_polygon"]}
+    else:
+        with open(path, "rb") as fh:
+            d = pickle.load(fh)
     frames = [
         [Candidate(x=x, y=y, score=s, size_px=sz) for (x, y, s, sz) in d["cands"][f]]
         for f in d["ef"]
@@ -108,8 +140,10 @@ def main() -> None:
     train_sets = []
     for pair in args.train:
         dump_path, labels_path = split_train_pair(pair)
+        payload = json.loads(open(labels_path, encoding="utf-8").read())
+        check_not_held_out(dump_path, str(payload.get("game_dir", "")))
         d, frames, geom = _load_dump(dump_path)
-        lab = json.loads(open(labels_path, encoding="utf-8").read())["labels"]
+        lab = payload["labels"]
         train_sets.append((d, frames, geom, lab, dump_path))
         print(f"train {dump_path}: {len(lab)} labeled frames")
     evals = [(p, *_load_dump(p)) for p in args.eval]
