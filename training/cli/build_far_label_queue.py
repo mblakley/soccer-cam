@@ -17,6 +17,12 @@ Selection criteria (``--criteria``):
     labels (``--fullgame-dir`` + ``--sel-labels``) for frames where the teacher's near ball is NOT
     the top-scored candidate (``near_misrank``) or has no teacher coverage (``near_unknown``);
     candidate overlays come straight from the dump (no re-inference).
+  * ``diverge``    — TRACK-AUDIT sets (Mark 2026-07-06): run the current tracker over the fullgame
+    dump and flag (a) human labels the track disagrees with (bad label OR bad track — re-verify),
+    (b) ``teleport`` world-jumps in the raw selection (identity switches the smoother hides), and
+    (c) sustained ``trackmiss`` runs (low-confidence stretches worth filling in). Every anchor is
+    expanded with before/after context frames so the annotator can SEE the track; the hint marker
+    is the track's own position at that frame.
 
 Frames are restricted to active play (``game_state``), temporally spread into ``--max-frames`` bins
 (most-ambiguous per bin, so no clustering), and any frames already in ``--exclude-sets`` are skipped.
@@ -131,6 +137,85 @@ def select_near_frames(
     ]
 
 
+def select_diverge_frames(
+    ef: list[int],
+    geom,
+    sel: dict[int, tuple[float, float]],
+    track: dict[int, tuple[float, float]],
+    human_balls: dict[int, tuple[float, float]],
+    *,
+    stride: int,
+    disagree_m: float = 10.0,
+    teleport_mpf: float = 2.5,
+    miss_run_min: int = 5,
+    target: int = 120,
+    ctx: tuple[int, ...] = (-2, -1, 1, 2),
+) -> list[dict]:
+    """Track-audit anchors + context frames (see module docstring, ``diverge``).
+
+    ``sel``/``track`` are :func:`~training.world_model.reranker.rerank` /
+    ``kalman_smooth`` outputs keyed by ef INDEX. Anchor value ranks disagreements
+    over teleports over miss runs; each anchor expands with ``ctx`` dump-step
+    offsets so the annotator sees the ball's motion around the flagged moment.
+    """
+
+    def w(p):
+        return geom.image_to_world(np.asarray([p], float))[0]
+
+    anchors: list[list] = []  # [g, reason, i, value]
+    ef_arr = np.asarray(ef, int)
+    # (a) human label vs smoothed track
+    for g_h, xy in human_balls.items():
+        k = int(np.searchsorted(ef_arr, g_h))
+        best, bd = None, stride // 2 + 1
+        for j in (k - 1, k):
+            if 0 <= j < len(ef_arr) and abs(int(ef_arr[j]) - g_h) < bd:
+                best, bd = j, abs(int(ef_arr[j]) - g_h)
+        if best is None or best not in track:
+            continue
+        d = float(np.linalg.norm(w(track[best]) - w(xy)))
+        if d > disagree_m:
+            anchors.append([ef[best], "diverge", best, 2000.0 + d])
+    # (b) teleports in the RAW selection (identity switches the smoother hides)
+    sk = sorted(sel)
+    for a, b in zip(sk, sk[1:], strict=False):
+        df = ef[b] - ef[a]
+        if df <= 3 * stride:
+            rate = float(np.linalg.norm(w(sel[b]) - w(sel[a]))) / max(df, 1)
+            if rate > teleport_mpf:
+                anchors.append([ef[b], "teleport", b, 1000.0 + rate])
+    # (c) sustained miss runs (low-confidence stretches -> fill-in candidates)
+    missing = [i for i in range(len(ef)) if i not in sel]
+    run: list[int] = []
+    for i in [*missing, -10]:  # sentinel flushes the last run
+        if run and i != run[-1] + 1:
+            if len(run) >= miss_run_min:
+                mid = run[len(run) // 2]
+                anchors.append([ef[mid], "trackmiss", mid, float(len(run))])
+            run = []
+        run.append(i)
+    n_anchor = max(1, target // (len(ctx) + 1))
+    chosen = _spread_bins(anchors, n_anchor)
+    # expand with context; anchors win on collision
+    out: dict[int, dict] = {}
+    for g, reason, i, _v in chosen:
+        for off in (0, *ctx):
+            j = i + off
+            if not (0 <= j < len(ef)) or (ef[j] in out and off != 0):
+                continue
+            hx, hy = track.get(j, (3840.0, 1080.0))
+            out[ef[j]] = {
+                "frame_idx": int(ef[j]),
+                "file": f"f{int(ef[j]):06d}.jpg",
+                "hint_x": round(float(hx), 1),
+                "hint_y": round(float(hy), 1),
+                "autocam": False,
+                "hint_conf": 0.0,
+                "reason": reason if off == 0 else f"{reason}_ctx",
+            }
+    return [out[g] for g in sorted(out)]
+
+
 def select_frames(
     dets: dict[int, list],
     poly_np: np.ndarray,
@@ -213,7 +298,7 @@ def main() -> None:
     ap.add_argument("--set-name", default=None, help="default: <game_id>__<criteria>")
     ap.add_argument(
         "--criteria",
-        choices=["hard", "lowconf", "lost", "distractor", "near"],
+        choices=["hard", "lowconf", "lost", "distractor", "near", "diverge"],
         default="hard",
     )
     ap.add_argument("--lc-lo", type=float, default=0.05)
@@ -228,7 +313,7 @@ def main() -> None:
     ap.add_argument(
         "--analyze", action="store_true", help="print stats, write nothing, no decode"
     )
-    # near-mode inputs (marathon artifact + its teacher-snap supervision)
+    # near/diverge-mode inputs (marathon artifact + its teacher-snap supervision)
     ap.add_argument("--fullgame-dir", default=None)
     ap.add_argument("--sel-labels", default=None)
     ap.add_argument(
@@ -237,6 +322,9 @@ def main() -> None:
         default=8.0,
         help="near band = expected diameter > this (eval dumps' far_size_px)",
     )
+    ap.add_argument("--disagree-m", type=float, default=10.0)
+    ap.add_argument("--teleport-mpf", type=float, default=2.5)
+    ap.add_argument("--miss-run-min", type=int, default=5)
     ap.add_argument(
         "--priority", type=int, default=None, help="landing-page sort order (1 = top)"
     )
@@ -263,9 +351,9 @@ def main() -> None:
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
     near_cands: dict[int, list] = {}
-    if args.criteria == "near":
-        if not (args.fullgame_dir and args.sel_labels):
-            raise SystemExit("--criteria near needs --fullgame-dir and --sel-labels")
+    if args.criteria in ("near", "diverge"):
+        if not args.fullgame_dir:
+            raise SystemExit(f"--criteria {args.criteria} needs --fullgame-dir")
         from training.cli.build_selector_labels import load_fullgame_candidates
         from training.world_model.geometry import build_field_geometry
 
@@ -273,13 +361,19 @@ def main() -> None:
         geom = build_field_geometry(np.asarray(poly, float))
         if not geom.valid:
             raise SystemExit("field polygon does not fit a valid homography")
+        hb, hn = (
+            dd.load_human_labels(vdir / "ball_labels.jsonl", offs)
+            if (vdir / "ball_labels.jsonl").exists()
+            else ({}, set())
+        )
+    if args.criteria == "near":
+        if not args.sel_labels:
+            raise SystemExit("--criteria near needs --sel-labels")
         sel = json.loads(Path(args.sel_labels).read_text(encoding="utf-8"))["labels"]
         labels = {int(k): (int(v[0]), float(v[1])) for k, v in sel.items()}
         # never re-ask for a frame a human already labeled (any set grid, ±4)
-        if (vdir / "ball_labels.jsonl").exists():
-            hb, hn = dd.load_human_labels(vdir / "ball_labels.jsonl", offs)
-            for g in list(hb) + list(hn):
-                excl.update(range(g - 4, g + 5))
+        for g in list(hb) + list(hn):
+            excl.update(range(g - 4, g + 5))
         frames = select_near_frames(
             ef,
             near_cands,
@@ -288,6 +382,33 @@ def main() -> None:
             near_px=args.near_px,
             target=args.max_frames,
             exclude=excl,
+        )
+    elif args.criteria == "diverge":
+        from training.world_model.reranker import kalman_smooth, rerank
+        from training.world_model.tbd import Candidate
+
+        cand_frames = [
+            [
+                Candidate(x=x, y=y, score=s, size_px=sz)
+                for (x, y, s, sz) in near_cands[g]
+            ]
+            for g in ef
+        ]
+        gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
+        sel_track = rerank(cand_frames, geom, frame_gaps=gaps)
+        track = kalman_smooth(sel_track, geom)
+        stride_fg = int(fg_meta.get("params", {}).get("stride", 8))
+        frames = select_diverge_frames(
+            ef,
+            geom,
+            sel_track,
+            track,
+            hb,
+            stride=stride_fg,
+            disagree_m=args.disagree_m,
+            teleport_mpf=args.teleport_mpf,
+            miss_run_min=args.miss_run_min,
+            target=args.max_frames,
         )
     else:
         frames = select_frames(
@@ -387,7 +508,7 @@ def main() -> None:
                 "band": "normal",
             }
         )
-    if args.criteria == "near":
+    if args.criteria in ("near", "diverge"):
         # candidate overlays straight from the dump (score-sorted; top-5 render blue)
         for e in kept:
             rows = (near_cands.get(int(e["frame_idx"])) or [])[:12]
@@ -421,7 +542,7 @@ def main() -> None:
     }
     if args.priority is not None:
         manifest["priority"] = int(args.priority)
-    if args.criteria == "near":
+    if args.criteria in ("near", "diverge"):
         manifest["candidates_ckpt"] = fg_meta.get("ckpt", "")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(

@@ -454,6 +454,44 @@ class TestNearQueue:
         assert [r[1] for r in out] == ["b", "c"]  # b beats a in the first bin
 
 
+class TestDivergeQueue:
+    def test_all_three_signals_and_context(self):
+        from training.cli.build_far_label_queue import select_diverge_frames
+
+        geom = _geom()
+        ef = list(range(0, 160, 8))  # 20 dump frames
+        near, far = (1000.0, 900.0), (300.0, 300.0)
+        # track on `near` everywhere it exists; teleport at i=3; miss run i=8..13
+        sel = {i: near for i in range(20) if not (8 <= i <= 13)}
+        sel[3] = far  # world jump in the raw selection
+        track = {i: sel.get(i, near) for i in range(20)}
+        # human label at g=41 (near ef=40, i=5) sits far from the track there
+        human = {41: far}
+        out = select_diverge_frames(
+            ef, geom, sel, track, human, stride=8, miss_run_min=4, target=40
+        )
+        reasons = {e["reason"] for e in out}
+        assert {"diverge", "teleport", "trackmiss"} <= reasons
+        anchors = [e for e in out if not e["reason"].endswith("_ctx")]
+        ctxs = [e for e in out if e["reason"].endswith("_ctx")]
+        assert anchors and ctxs  # every anchor travels with context frames
+        div = next(e for e in out if e["reason"] == "diverge")
+        assert div["frame_idx"] == 40
+        assert (div["hint_x"], div["hint_y"]) == near  # hint = the track's position
+
+    def test_no_signals_no_frames(self):
+        from training.cli.build_far_label_queue import select_diverge_frames
+
+        geom = _geom()
+        ef = list(range(0, 80, 8))
+        pos = (1000.0, 900.0)
+        sel = dict.fromkeys(range(10), pos)
+        out = select_diverge_frames(
+            ef, geom, sel, dict(sel), {8: pos}, stride=8, target=40
+        )
+        assert out == []
+
+
 class TestLoadDumpAndGuards:
     def test_load_dump_fullgame_dir(self, tmp_path):
         """v2-scale training pairs are marathon DIRECTORIES: part_*.pkl + meta.json,
