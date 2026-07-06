@@ -12,6 +12,11 @@ Selection criteria (``--criteria``):
   * ``lowconf``    — top on-field detection confidence in ``[lc_lo, lc_hi)`` (detector unsure).
   * ``distractor`` — 2+ on-field candidates of similar confidence (which one is the game ball?).
   * ``hard``       — the union (default): the frames AutoCam struggles with, the high-value tail.
+  * ``near``       — NEAR-band selector supervision (EXP-DIST-29: all existing gold is far-mined,
+    and the learned selector demotes near balls). Mines a marathon fullgame dump + its teacher-snap
+    labels (``--fullgame-dir`` + ``--sel-labels``) for frames where the teacher's near ball is NOT
+    the top-scored candidate (``near_misrank``) or has no teacher coverage (``near_unknown``);
+    candidate overlays come straight from the dump (no re-inference).
 
 Frames are restricted to active play (``game_state``), temporally spread into ``--max-frames`` bins
 (most-ambiguous per bin, so no clustering), and any frames already in ``--exclude-sets`` are skipped.
@@ -37,6 +42,93 @@ def _in_field(poly_np: np.ndarray, x: float, y: float, margin: float) -> bool:
     import cv2
 
     return cv2.pointPolygonTest(poly_np, (float(x), float(y)), True) >= margin
+
+
+def _spread_bins(pool: list[list], target: int) -> list[list]:
+    """Temporally spread ``pool`` rows ``[frame, ..., value]`` into ``target`` bins,
+    keeping the highest-value row per bin (no clustering)."""
+    if not pool:
+        return []
+    pool.sort(key=lambda r: r[0])
+    fmin, fmax = pool[0][0], pool[-1][0]
+    span = max(1, fmax - fmin)
+    bins: dict[int, list] = {}
+    for c in pool:
+        b = int((c[0] - fmin) / span * (target - 1))
+        if b not in bins or c[-1] > bins[b][-1]:
+            bins[b] = c
+    return sorted(bins.values(), key=lambda r: r[0])
+
+
+def select_near_frames(
+    ef: list[int],
+    cands: dict[int, list],
+    labels: dict[int, tuple[int, float]],
+    geom,
+    *,
+    near_px: float,
+    target: int,
+    exclude: set[int],
+) -> list[dict]:
+    """NEAR-band miner over a fullgame dump + teacher-snap ``labels`` ({ef_index:
+    (cand_idx, weight)}, -1 = none). ``near_misrank`` (teacher's near ball outscored by
+    another candidate — the demotions the learned selector copies, value = score rank)
+    beats ``near_unknown`` (near candidates but no teacher coverage, value 0.5) in a bin.
+    """
+    pool: list[list] = []  # [frame, reason, (hx, hy), conf, value]
+    for i, g in enumerate(ef):
+        if g in exclude:
+            continue
+        rows = cands.get(g) or []
+        if not rows:
+            continue
+        xy = np.asarray([(r[0], r[1]) for r in rows], float)
+        exp = geom.expected_ball_diameter_px(xy)
+        lab = labels.get(i)
+        if lab is not None:
+            j = int(lab[0])
+            if j < 0 or exp[j] <= near_px:  # none-frame or teacher ball not near
+                continue
+            scores = [float(r[2]) for r in rows]
+            rank = sum(1 for s in scores if s > scores[j])
+            if rank == 0:  # score already ranks it #1 — low labeling value
+                continue
+            pool.append(
+                [
+                    g,
+                    "near_misrank",
+                    (float(rows[j][0]), float(rows[j][1])),
+                    scores[j],
+                    float(rank),
+                ]
+            )
+        else:
+            nj = [k for k in range(len(rows)) if exp[k] > near_px]
+            if not nj:
+                continue
+            top = max(nj, key=lambda k: float(rows[k][2]))
+            pool.append(
+                [
+                    g,
+                    "near_unknown",
+                    (float(rows[top][0]), float(rows[top][1])),
+                    float(rows[top][2]),
+                    0.5,
+                ]
+            )
+    chosen = _spread_bins(pool, target)
+    return [
+        {
+            "frame_idx": int(f),
+            "file": f"f{int(f):06d}.jpg",
+            "hint_x": round(hx, 1),
+            "hint_y": round(hy, 1),
+            "autocam": reason == "near_misrank",  # teacher-backed hint
+            "hint_conf": round(conf, 3),
+            "reason": reason,
+        }
+        for (f, reason, (hx, hy), conf, _v) in chosen
+    ]
 
 
 def select_frames(
@@ -81,16 +173,10 @@ def select_frames(
             reason, score = "distractor", float(onfield[1][2]) / max(conf, 1e-6)
         if reason:
             pool.append([f, reason, (float(top[0]), float(top[1])), conf, score, True])
-    if not pool:
-        return []
-    fmin, fmax = pool[0][0], pool[-1][0]
-    span = max(1, fmax - fmin)
-    bins: dict[int, list] = {}
-    for c in pool:
-        b = int((c[0] - fmin) / span * (target - 1))
-        if b not in bins or c[4] > bins[b][4]:
-            bins[b] = c
-    chosen = sorted(bins.values(), key=lambda r: r[0])
+    # value is the LAST column for _spread_bins
+    chosen = _spread_bins(
+        [[f, r, xy, c, ac, s] for (f, r, xy, c, s, ac) in pool], target
+    )
     return [
         {
             "frame_idx": int(f),
@@ -101,7 +187,7 @@ def select_frames(
             "hint_conf": round(conf, 3),
             "reason": reason,
         }
-        for (f, reason, (hx, hy), conf, _score, ac) in chosen
+        for (f, reason, (hx, hy), conf, ac, _score) in chosen
     ]
 
 
@@ -127,7 +213,7 @@ def main() -> None:
     ap.add_argument("--set-name", default=None, help="default: <game_id>__<criteria>")
     ap.add_argument(
         "--criteria",
-        choices=["hard", "lowconf", "lost", "distractor"],
+        choices=["hard", "lowconf", "lost", "distractor", "near"],
         default="hard",
     )
     ap.add_argument("--lc-lo", type=float, default=0.05)
@@ -141,6 +227,18 @@ def main() -> None:
     ap.add_argument("--no-hwaccel", action="store_true")
     ap.add_argument(
         "--analyze", action="store_true", help="print stats, write nothing, no decode"
+    )
+    # near-mode inputs (marathon artifact + its teacher-snap supervision)
+    ap.add_argument("--fullgame-dir", default=None)
+    ap.add_argument("--sel-labels", default=None)
+    ap.add_argument(
+        "--near-px",
+        type=float,
+        default=8.0,
+        help="near band = expected diameter > this (eval dumps' far_size_px)",
+    )
+    ap.add_argument(
+        "--priority", type=int, default=None, help="landing-page sort order (1 = top)"
     )
     args = ap.parse_args()
 
@@ -164,18 +262,46 @@ def main() -> None:
             return True
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
-    frames = select_frames(
-        dets,
-        poly_np,
-        in_active,
-        criteria=args.criteria,
-        lc_lo=args.lc_lo,
-        lc_hi=args.lc_hi,
-        dist_ratio=args.dist_ratio,
-        target=args.max_frames,
-        exclude=excl,
-        margin=args.margin,
-    )
+    near_cands: dict[int, list] = {}
+    if args.criteria == "near":
+        if not (args.fullgame_dir and args.sel_labels):
+            raise SystemExit("--criteria near needs --fullgame-dir and --sel-labels")
+        from training.cli.build_selector_labels import load_fullgame_candidates
+        from training.world_model.geometry import build_field_geometry
+
+        ef, near_cands, fg_meta = load_fullgame_candidates(Path(args.fullgame_dir))
+        geom = build_field_geometry(np.asarray(poly, float))
+        if not geom.valid:
+            raise SystemExit("field polygon does not fit a valid homography")
+        sel = json.loads(Path(args.sel_labels).read_text(encoding="utf-8"))["labels"]
+        labels = {int(k): (int(v[0]), float(v[1])) for k, v in sel.items()}
+        # never re-ask for a frame a human already labeled (any set grid, ±4)
+        if (vdir / "ball_labels.jsonl").exists():
+            hb, hn = dd.load_human_labels(vdir / "ball_labels.jsonl", offs)
+            for g in list(hb) + list(hn):
+                excl.update(range(g - 4, g + 5))
+        frames = select_near_frames(
+            ef,
+            near_cands,
+            labels,
+            geom,
+            near_px=args.near_px,
+            target=args.max_frames,
+            exclude=excl,
+        )
+    else:
+        frames = select_frames(
+            dets,
+            poly_np,
+            in_active,
+            criteria=args.criteria,
+            lc_lo=args.lc_lo,
+            lc_hi=args.lc_hi,
+            dist_ratio=args.dist_ratio,
+            target=args.max_frames,
+            exclude=excl,
+            margin=args.margin,
+        )
     reasons: dict[str, int] = {}
     for e in frames:
         reasons[e["reason"]] = reasons.get(e["reason"], 0) + 1
@@ -214,7 +340,7 @@ def main() -> None:
     out = Path(args.out) / set_name
     strips = out / "strips"
     strips.mkdir(parents=True, exist_ok=True)
-    for old in strips.glob("*.jpg"):
+    for old in [*strips.glob("*.jpg"), *strips.glob("*.png")]:
         old.unlink()
 
     import cv2
@@ -236,7 +362,9 @@ def main() -> None:
     for f, img in iter_frames_from_segments(
         vdir, gj["segments"], want, vrot, hwaccel=not args.no_hwaccel
     ):
-        cv2.imwrite(str(strips / f"f{f:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        # lossless PNG on disk; manifest keeps .jpg names — the deployed server serves
+        # the .png when present (same layout the PNG regen left on every existing set)
+        cv2.imwrite(str(strips / f"f{f:06d}.png"), img)
         written += 1
     print(
         f"  wrote {written}/{len(want)} strips via raw-segment decode "
@@ -248,7 +376,7 @@ def main() -> None:
             f"no decodable strips for {gid} (video corrupt from the start)"
         )
 
-    kept = [e for e in frames if (strips / e["file"]).exists()]
+    kept = [e for e in frames if (strips / e["file"]).with_suffix(".png").exists()]
     for e in kept:
         e.update(
             {
@@ -259,6 +387,22 @@ def main() -> None:
                 "band": "normal",
             }
         )
+    if args.criteria == "near":
+        # candidate overlays straight from the dump (score-sorted; top-5 render blue)
+        for e in kept:
+            rows = (near_cands.get(int(e["frame_idx"])) or [])[:12]
+            e["context"] = [
+                {
+                    "x": round(float(r[0]), 1),
+                    "y": round(float(r[1]), 1),
+                    "df": -1 if k < 5 else 1,
+                }
+                for k, r in enumerate(rows)
+            ]
+            e["candidates"] = [
+                [round(float(r[0]), 1), round(float(r[1]), 1), round(float(r[2]), 4)]
+                for r in rows
+            ]
     manifest = {
         "set": set_name,
         "clip": video,
@@ -275,6 +419,10 @@ def main() -> None:
         "n_autocam": sum(1 for e in kept if e["autocam"]),
         "frames": kept,
     }
+    if args.priority is not None:
+        manifest["priority"] = int(args.priority)
+    if args.criteria == "near":
+        manifest["candidates_ckpt"] = fg_meta.get("ckpt", "")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(
         f"WROTE {out}/manifest.json: {len(kept)} frames, {manifest['n_autocam']} AutoCam-seeded "
