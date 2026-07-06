@@ -130,6 +130,11 @@ def main() -> None:
         default=[0.0],
         help="aerial-bridge weights to sweep (0 = legacy distance-blind re-entry)",
     )
+    ap.add_argument(
+        "--save-net",
+        default=None,
+        help="persist the FIRST run's trained net (+feature mask) for replay_fullgame",
+    )
     args = ap.parse_args()
 
     from training.cli.sweep_tracker import (
@@ -212,6 +217,11 @@ def main() -> None:
             f"trained: best val loss {hist['best']:.4f} @ {hist['epochs_run']} epochs, "
             f"T={float(net.temperature):.2f}"
         )
+        if args.save_net and knock == runs[0]:
+            from training.models.selector_net import save_selector
+
+            save_selector(net, keep, args.save_net)
+            print(f"saved net -> {args.save_net}")
 
         for path, d, frames, geom in evals:
             ef, gaps, balls = d["ef"], d["gaps"], d["balls"]

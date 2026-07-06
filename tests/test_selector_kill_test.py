@@ -454,6 +454,49 @@ class TestNearQueue:
         assert [r[1] for r in out] == ["b", "c"]  # b beats a in the first bin
 
 
+class TestReplayFullgame:
+    def test_net_save_load_roundtrip(self, tmp_path):
+        pytest.importorskip("torch")
+        from training.models.selector_net import (
+            build_selector_net,
+            load_selector,
+            pack_frames,
+            predict_probs,
+            save_selector,
+        )
+
+        keep = feature_mask(["size_ratio"])
+        net = build_selector_net(int(keep.sum()))
+        p = tmp_path / "net.pt"
+        save_selector(net, keep, p)
+        net2, keep2 = load_selector(p)
+        assert (keep2 == keep).all()
+        rng = np.random.default_rng(0)
+        feats, mask = pack_frames(
+            [rng.normal(size=(3, int(keep.sum()))).astype(np.float32)], top_k=4
+        )
+        assert np.allclose(
+            predict_probs(net, feats, mask), predict_probs(net2, feats, mask)
+        )
+
+    def test_viewport_agreement_windows(self):
+        from training.cli.replay_fullgame import viewport_agreement
+
+        ef = list(range(0, 800, 8))
+        vp = dict.fromkeys(range(0, 800, 4), (1000.0, 500.0))
+        # track inside the ellipse except a sustained 400-frame divergence
+        track = {
+            i: (1100.0, 520.0) if not (200 <= ef[i] < 600) else (5000.0, 500.0)
+            for i in range(len(ef))
+        }
+        va = viewport_agreement(track, ef, vp, min_run_s=2.0, fps=20.0)
+        assert va["n"] == len(ef)
+        assert 0.45 < va["agree"] < 0.55
+        assert len(va["divergence_windows"]) == 1
+        lo, hi = va["divergence_windows"][0]
+        assert lo == 200 and hi >= 560
+
+
 class TestSpanQueue:
     def test_contiguous_grid_with_autocam_hints(self):
         from training.cli.build_far_label_queue import select_span_frames

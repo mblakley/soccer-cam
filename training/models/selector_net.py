@@ -151,3 +151,27 @@ def predict_probs(net, feats: np.ndarray, mask: np.ndarray) -> np.ndarray:
     with torch.no_grad():
         logits = net(torch.as_tensor(feats), torch.as_tensor(mask))
         return torch.softmax(logits, dim=1).numpy()
+
+
+def save_selector(net, keep: np.ndarray, path) -> None:
+    """Persist a trained selector + its feature keep-mask (full-game replay needs
+    BOTH — the mask defines which FEATURE_NAMES columns the net was trained on)."""
+    torch, _nn = _torch()
+    torch.save(
+        {
+            "schema": "selector_net/1",
+            "state": net.state_dict(),
+            "keep": np.asarray(keep, bool),
+        },
+        path,
+    )
+
+
+def load_selector(path):
+    """Load a :func:`save_selector` file -> ``(net, keep_mask)``."""
+    torch, _nn = _torch()
+    d = torch.load(path, map_location="cpu", weights_only=False)
+    keep = np.asarray(d["keep"], bool)
+    net = build_selector_net(int(keep.sum()))
+    net.load_state_dict(d["state"])
+    return net, keep
