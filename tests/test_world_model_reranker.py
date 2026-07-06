@@ -172,6 +172,55 @@ def test_rerank_identity_anchor_propagates_bidirectionally():
     assert ignored[4] == a_track[4]
 
 
+def test_rerank_aerial_bridge_prefers_flight_consistent_landing():
+    """EXP-DIST-30 v0: a launched ball leaves the camera's view and lands far upfield.
+    The legacy miss re-entry is distance-blind (flat 0.6), so the path re-enters on the
+    brighter phantom near the launch point; the aerial bridge freezes the exit position
+    and gives the flight-consistent landing a bonus — the track must land with the ball."""
+    geom = build_field_geometry(np.asarray(_POLY, float))
+    A = (3200.0, 1000.0)  # rolling here, then launched at t=2
+    B = (4900.0, 820.0)  # landing zone, far upfield
+    E = (3300.0, 1010.0)  # phantom blob by the launch point (brighter than B)
+
+    def w(p):
+        return geom.image_to_world(np.asarray([p], float))[0]
+
+    a2 = (A[0] + 16.0, A[1])  # last on-ball position (t=2)
+    d_ab = float(np.linalg.norm(w(a2) - w(B)))
+    d_ae = float(np.linalg.norm(w(a2) - w(E)))
+    # 3 empty dump steps at gap 8 => 32 source frames in the air; air_vmax 2.0 m/f
+    assert 0.15 * 2.0 * 32 < d_ab < 1.0 * 2.0 * 32  # flight-consistent landing
+    assert d_ae < 0.15 * 2.0 * 32  # phantom re-entry is a near-park
+
+    frames: list[list[Candidate]] = []
+    for t in range(3):  # ball rolling at A
+        frames.append([Candidate(A[0] + 8.0 * t, A[1], 0.8)])
+    for _ in range(3):  # airborne, out of the camera's vertical FOV
+        frames.append([])
+    for t in range(3):  # landing frames: phantom E brighter than true ball B
+        frames.append(
+            [
+                Candidate(E[0] + 8.0 * t, E[1], 0.7),
+                Candidate(B[0] + 8.0 * t, B[1], 0.5),
+            ]
+        )
+    gaps = [8] * len(frames)
+    # isolate score + transitions; tight vmax so a mid-landing E<->B hop can't pay
+    iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+
+    legacy = rerank(frames, geom, frame_gaps=gaps, config=RerankConfig(**iso))
+    assert legacy[6][0] == pytest.approx(E[0])  # distance-blind: takes the phantom
+
+    bridged = rerank(
+        frames,
+        geom,
+        frame_gaps=gaps,
+        config=RerankConfig(**iso, bridge_w=2.0),
+    )
+    assert bridged[6][0] == pytest.approx(B[0])  # lands WITH the ball
+    assert bridged[8][0] == pytest.approx(B[0] + 16.0)
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player

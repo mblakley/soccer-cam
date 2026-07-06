@@ -115,6 +115,21 @@ def main() -> None:
     )
     ap.add_argument("--emission-weights", nargs="+", type=float, default=[1.0, 2.0])
     ap.add_argument("--miss-costs", nargs="+", type=float, default=[0.5, 0.9, 1.5])
+    ap.add_argument(
+        "--pnone-scales",
+        nargs="*",
+        type=float,
+        default=[],
+        help="ALSO replay with per-frame miss cost = scale * w * -log P(none) "
+        "(the learned selector's none-head driving the miss state)",
+    )
+    ap.add_argument(
+        "--bridge-w",
+        nargs="+",
+        type=float,
+        default=[0.0],
+        help="aerial-bridge weights to sweep (0 = legacy distance-blind re-entry)",
+    )
     args = ap.parse_args()
 
     from training.cli.sweep_tracker import (
@@ -232,6 +247,7 @@ def main() -> None:
             )
 
             base = replace(RerankConfig(), alpha=0.0, static_w=0.0, motion_w=0.0)
+            p_none = probs[:, -1]
             for w in args.emission_weights:
                 priors = [
                     w * -np.log(np.maximum(probs[i, : len(fr)], 1e-6))
@@ -239,22 +255,42 @@ def main() -> None:
                     else np.zeros(0)
                     for i, fr in enumerate(frames)
                 ]
-                for mc in args.miss_costs:
-                    cfg = replace(base, miss_cost=mc * w)
-                    sel = rerank(
-                        frames, geom, frame_gaps=gaps, priors=priors, config=cfg
-                    )
-                    track = kalman_smooth(sel, geom)
-                    line(
-                        f"tracker w={w} miss={mc}",
-                        *_score(track, frames, ef, balls, geom, far_px, stride),
-                    )
-                    print(
-                        "      "
-                        + continuity_line(
-                            track_continuity(track, ef, balls, geom, stride)
+                # miss variants: flat cost, and the learned none-head per frame
+                variants: list[tuple[str, float | None, list[float] | None]] = [
+                    (f"miss={mc}", mc, None) for mc in args.miss_costs
+                ]
+                for s in args.pnone_scales:
+                    mc_list = [
+                        float(s * w * -np.log(max(float(p_none[i]), 1e-6)))
+                        for i in range(len(frames))
+                    ]
+                    variants.append((f"pnone*{s}", None, mc_list))
+                for mlabel, mc, mc_list in variants:
+                    for bw in args.bridge_w:
+                        cfg = replace(
+                            base,
+                            miss_cost=(mc or 0.9) * w,
+                            bridge_w=bw,
                         )
-                    )
+                        sel = rerank(
+                            frames,
+                            geom,
+                            frame_gaps=gaps,
+                            priors=priors,
+                            miss_costs=mc_list,
+                            config=cfg,
+                        )
+                        track = kalman_smooth(sel, geom)
+                        line(
+                            f"tracker w={w} {mlabel} br={bw}",
+                            *_score(track, frames, ef, balls, geom, far_px, stride),
+                        )
+                        print(
+                            "      "
+                            + continuity_line(
+                                track_continuity(track, ef, balls, geom, stride)
+                            )
+                        )
 
 
 if __name__ == "__main__":

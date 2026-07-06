@@ -62,6 +62,13 @@ class RerankConfig:
     miss_cost: float = 0.9  # cost of the occlusion/miss state
     cell_m: float = 2.0  # world-cell size for the persistence map
     motion_radius_m: float = 3.0  # how near a motion blob counts as support
+    # AERIAL BRIDGE (EXP-DIST-30, v0 of the ball-state machine): the miss state
+    # remembers where the track left the ground; re-entering at a distance/time rate
+    # consistent with a flight (<= air_vmax_mpf) gets a BONUS (bridging a launch beats
+    # parking on a distractor), while faster-than-flight re-entries — true teleports —
+    # are penalised quadratically. bridge_w=0 = legacy flat re-entry (0.6, distance-blind).
+    bridge_w: float = 0.0  # aerial-bridge shaping weight (0 = off)
+    air_vmax_mpf: float = 2.0  # max plausible flight speed, world m per SOURCE frame
 
 
 def static_persistence(
@@ -348,12 +355,17 @@ def rerank(
             return math.inf  # anchored frame: the path must take an in-radius candidate
         return float(miss_costs[t]) if miss_costs is not None else cfg.miss_cost
 
-    # Viterbi: state K = miss. cost[t][j], back[t][j].
+    # Viterbi: state K = miss. cost[t][j], back[t][j]. The miss state additionally
+    # carries the world position where its (best-predecessor) path left a candidate
+    # plus the source-frames spent missing — a greedy approximation that lets re-entry
+    # transitions be distance/time-aware (the aerial bridge) without a state blow-up.
     cost: list[np.ndarray] = []
     back: list[np.ndarray] = []
     k0 = len(frames[0])
     cost.append(np.array([emis(0, i) for i in range(k0)] + [miss(0)]))
     back.append(np.full(k0 + 1, -1, int))
+    missw: list[np.ndarray | None] = [None]
+    missdur: list[float] = [0.0]
     for t in range(1, n):
         k = len(frames[t])
         kp = len(frames[t - 1])
@@ -369,6 +381,19 @@ def rerank(
                     continue
                 if j == k or i == kp:
                     trans = 0.6  # to/from miss: allow coasting an occlusion
+                    if (
+                        j != k
+                        and i == kp
+                        and cfg.bridge_w > 0
+                        and missw[t - 1] is not None
+                    ):
+                        d = math.hypot(*(fw[t][j] - missw[t - 1]))
+                        rate = d / max(missdur[t - 1] + gap, 1.0)
+                        x = rate / cfg.air_vmax_mpf
+                        if x > 1.0:  # faster than any flight: a true teleport
+                            trans += cfg.bridge_w * (x - 1.0) ** 2
+                        elif x >= 0.15:  # flight/fast-ground consistent landing
+                            trans -= cfg.bridge_w * 0.5
                 else:
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
                     if d > cfg.max_jump_m_per_frame * gap:
@@ -381,6 +406,16 @@ def rerank(
             bt[j] = bi
         cost.append(ct)
         back.append(bt)
+        bi_m = int(bt[k])
+        if bi_m == kp:  # stayed in miss: keep the frozen exit point, extend duration
+            missw.append(missw[t - 1])
+            missdur.append(missdur[t - 1] + gap)
+        elif 0 <= bi_m < kp:  # entered miss from a candidate: freeze where it left
+            missw.append(fw[t - 1][bi_m].copy())
+            missdur.append(float(gap))
+        else:
+            missw.append(None)
+            missdur.append(float(gap))
 
     path = [int(np.argmin(cost[-1]))]
     for t in range(n - 1, 0, -1):
