@@ -117,7 +117,13 @@ def main() -> None:
     ap.add_argument("--miss-costs", nargs="+", type=float, default=[0.5, 0.9, 1.5])
     args = ap.parse_args()
 
-    from training.cli.sweep_tracker import _ceiling, _hits, _score
+    from training.cli.sweep_tracker import (
+        _ceiling,
+        _hits,
+        _score,
+        continuity_line,
+        track_continuity,
+    )
     from training.models.selector_net import predict_probs, train_selector
     from training.world_model.reranker import RerankConfig, kalman_smooth, rerank
     from training.world_model.selector_features import (
@@ -220,6 +226,10 @@ def main() -> None:
                 "LEARNED argmax",
                 *_score(learned, frames, ef, balls, geom, far_px, stride),
             )
+            print(
+                "      "
+                + continuity_line(track_continuity(learned, ef, balls, geom, stride))
+            )
 
             base = replace(RerankConfig(), alpha=0.0, static_w=0.0, motion_w=0.0)
             for w in args.emission_weights:
@@ -238,6 +248,12 @@ def main() -> None:
                     line(
                         f"tracker w={w} miss={mc}",
                         *_score(track, frames, ef, balls, geom, far_px, stride),
+                    )
+                    print(
+                        "      "
+                        + continuity_line(
+                            track_continuity(track, ef, balls, geom, stride)
+                        )
                     )
 
 

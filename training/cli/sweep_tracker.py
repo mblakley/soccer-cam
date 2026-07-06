@@ -80,6 +80,67 @@ def _score(track, frames, ef, balls, geom, far_px, stride):
     return det, near, far
 
 
+def track_continuity(track, ef, balls, geom, stride, radius_m=15.0):
+    """Viewport-shaped eval: the RUN STRUCTURE of hits over the GT timeline, not the
+    per-frame hit rate. The render can absorb a one-frame misrank; it cannot absorb a
+    multi-second excursion — so what matters is how LONG the track stays on the ball
+    and how bad the worst off-ball stretch is (Mark 2026-07-06: the viewport looking
+    in the right area IS the goal; detection/tracking is the mechanism).
+
+    Returns ``{n, cov, frags, longest_frac, mean_run, worst_miss}`` where ``worst_miss``
+    is the top-3 consecutive-miss stretches as ``(g_start, g_end)`` global-frame spans
+    (directly adjudicable / clippable), or ``None`` with no scoreable GT. Runs break
+    across label-span gaps (> 6 * stride) so separate GT clips don't concatenate.
+    """
+    fidx = {f: i for i, f in enumerate(ef)}
+    events: list[tuple[int, bool]] = []
+    for g in sorted(balls):
+        nf = min(ef, key=lambda f: abs(f - g))
+        if abs(nf - g) > stride:
+            continue
+        i = fidx[nf]
+        hit = False
+        if i in track:
+            gw = geom.image_to_world(np.asarray([balls[g]], float))[0]
+            tw = geom.image_to_world(np.asarray([track[i]], float))[0]
+            hit = float(np.linalg.norm(tw - gw)) <= radius_m
+        events.append((g, hit))
+    if not events:
+        return None
+    span_gap = 6 * stride
+    runs: list[list] = []  # [hit, g_start, g_end, n_events]
+    for g, h in events:
+        if runs and h == runs[-1][0] and g - runs[-1][2] <= span_gap:
+            runs[-1][2] = g
+            runs[-1][3] += 1
+        else:
+            runs.append([h, g, g, 1])
+    hit_runs = [r for r in runs if r[0]]
+    miss_runs = sorted((r for r in runs if not r[0]), key=lambda r: r[1] - r[2])
+    n = len(events)
+    return {
+        "n": n,
+        "cov": sum(1 for _, h in events if h) / n,
+        "frags": len(hit_runs),
+        "longest_frac": max((r[3] for r in hit_runs), default=0) / n,
+        "mean_run": float(np.mean([r[3] for r in hit_runs])) if hit_runs else 0.0,
+        "worst_miss": [(r[1], r[2]) for r in miss_runs[:3]],
+    }
+
+
+def continuity_line(cont) -> str:
+    """One-line render of :func:`track_continuity` for eval printouts."""
+    if not cont:
+        return "continuity: no scoreable GT"
+    wm = cont["worst_miss"]
+    worst = f"{wm[0][1] - wm[0][0]}f @g{wm[0][0]}" if wm else "none"
+    return (
+        f"continuity: cov {cont['cov']:.2f}  frags {cont['frags']}  "
+        f"longest {cont['longest_frac']:.2f}  mean {cont['mean_run']:.0f}ev  "
+        f"worst-miss {worst}"
+    )
+
+
 def rank_table(frames, ef, balls, geom, far_px, stride, radius_m=15.0):
     """Score-RANK of the GT ball among its frame's candidates (the A-vs-B diagnostic).
 

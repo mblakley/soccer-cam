@@ -196,6 +196,48 @@ class TestSnap:
         assert stats["skip_unstable"] >= 1
 
 
+class TestContinuity:
+    def test_runs_fragments_and_worst_miss(self):
+        from training.cli.sweep_tracker import continuity_line, track_continuity
+
+        geom = _geom()
+        ef = [0, 8, 16, 24, 32, 40]
+        gt = (1000.0, 900.0)
+        balls = dict.fromkeys(ef, gt)
+        # on-ball for 0-8, off for 16-24 (world-far point), on again 32-40
+        far_off = (300.0, 300.0)
+        track = {0: gt, 1: gt, 2: far_off, 3: far_off, 4: gt, 5: gt}
+        c = track_continuity(track, ef, balls, geom, stride=8)
+        assert c["n"] == 6 and c["cov"] == pytest.approx(4 / 6)
+        assert c["frags"] == 2
+        assert c["longest_frac"] == pytest.approx(2 / 6)
+        assert c["worst_miss"] == [(16, 24)]
+        assert "frags 2" in continuity_line(c)
+
+    def test_span_gap_breaks_runs(self):
+        from training.cli.sweep_tracker import track_continuity
+
+        geom = _geom()
+        # two GT label spans far apart in time; all hits — but runs must NOT merge
+        ef = [0, 8, 1000, 1008]
+        gt = (1000.0, 900.0)
+        balls = dict.fromkeys(ef, gt)
+        track = dict.fromkeys(range(4), gt)
+        c = track_continuity(track, ef, balls, geom, stride=8)
+        assert c["cov"] == 1.0
+        assert c["frags"] == 2  # span gap (> 6*stride) splits the run
+
+    def test_missing_track_frames_are_misses(self):
+        from training.cli.sweep_tracker import track_continuity
+
+        geom = _geom()
+        ef = [0, 8]
+        balls = {0: (1000.0, 900.0), 8: (1000.0, 900.0)}
+        c = track_continuity({0: (1000.0, 900.0)}, ef, balls, geom, stride=8)
+        assert c["cov"] == pytest.approx(0.5)
+        assert c["worst_miss"] == [(8, 8)]
+
+
 def test_split_train_pair_windows_paths():
     """Drive colons must not be mistaken for the pair separator (the stage-2 crash)."""
     d, la = split_train_pair(r"G:\sel\cands_a.pkl;G:\sel\labels_a.json")
