@@ -4,6 +4,46 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-32: physics-based transitions — full-game teleports 1328 → 18 at no accuracy cost (2026-07-06)
+
+**Trigger (Mark):** "base it on physics — velocity + gravity predict where the ball comes down."
+Built two layers (code tags: bridge v1 + 31b):
+1. **Ballistic landing cone:** miss entry captures the exiting path's velocity (backpointer step,
+   >= 0.8 m/f to trust, capped at flight speed); re-entry inside ``exit + v*airtime`` (cone widening
+   0.4 m/f of airtime) gets 0.75*bridge_w bonus vs 0.5 for the direction-blind rate band. Unit test:
+   two landings at identical rate — only the cone lands ahead.
+2. **Physical transitions (`phys_sigma_px`):** full-game diagnosis showed the track NEVER missed —
+   legacy budgets scale with the stride gap (25 m/f × 8 = 200 m) so candidate hops were nearly free
+   (Chili: 0 miss entries, 1328 raw teleports; the aerial machinery never engaged; the eval-dump sweep
+   was blind to all of this because its GT spans are too short to contain a flight). Physical mode
+   prices hops with a REAL ball-speed ceiling (2.5 m/f) + depth-dependent measurement noise (px jitter
+   through the local homography Jacobian — measured: ~0.02 m/px near, ~0.13 m/px at the far line, so
+   far GROUND jitter is meters, not tens of meters; the huge far excursions are AIRBORNE projections,
+   which now route through the miss/bridge state).
+
+**Full-game A/B (Chili, hand-tuned emission, 587 human labels):**
+
+| config | human-R15 | raw teleports | miss frames | fragments |
+|---|---|---|---|---|
+| legacy | .494 | 1328 | 0 | 161 |
+| phys σ=5px | .479 | 22 | 5 | 158 |
+| phys σ=5px + bridge 1.0 | .475 | 18 | 0 | 156 |
+
+**Conclusions:**
+1. Physics removes 98.6% of raw-path teleports at ~no R15 cost — the raw path becomes render-plausible,
+   and the ~18-22 remaining fast events match the human-adjudicated count of REAL launches (~17
+   teleport anchors on this game). The transition model now agrees with the human.
+2. **Identity is unchanged (.48-.49)** — WHICH object the track holds is the EMISSION's job, and this
+   A/B ran the hand-tuned emission. The integration that matters next: learned selector emission ×
+   physical transitions × bridge on FULL games. Needs net persistence + a fullgame-replay mode in the
+   harness — scheduled with the 15-game retrain (marathon completes tonight).
+3. The stride-scaled legacy budget is a bug-shaped design: keep physical mode for all full-game work;
+   eval-dump sweeps must re-tune (their spans never contain a flight, so bridge/cone effects are
+   invisible there — EXP-DIST-31's gains came from rate-band shaping alone).
+
+**Code:** `d763f1e` (cone), `6b1b9e0` (physical transitions). Data: this table from the server inline
+A/B (Chili fullgame dump + consolidated labels).
+
 ## EXP-DIST-31: aerial bridge v0 — flight-consistent miss re-entry lifts held-out FAR +0.07..+0.20 (2026-07-06)
 
 **Hypothesis (from EXP-DIST-30):** making the miss state position/time-aware — re-entry at a
