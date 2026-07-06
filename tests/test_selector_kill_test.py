@@ -454,6 +454,19 @@ class TestNearQueue:
         assert [r[1] for r in out] == ["b", "c"]  # b beats a in the first bin
 
 
+class TestSpanQueue:
+    def test_contiguous_grid_with_autocam_hints(self):
+        from training.cli.build_far_label_queue import select_span_frames
+
+        dets = {16: [(100.0, 200.0, 0.4), (300.0, 400.0, 0.9)]}
+        out = select_span_frames([(10, 40), (100, 117)], dets, 0)
+        assert [e["frame_idx"] for e in out] == [16, 24, 32, 104, 112]
+        assert all(e["reason"] == "span" for e in out)
+        hinted = next(e for e in out if e["frame_idx"] == 16)
+        assert hinted["autocam"] and hinted["hint_x"] == 300.0  # top det wins
+        assert not out[1]["autocam"]  # no detection -> center hint
+
+
 class TestDivergeQueue:
     def test_all_three_signals_and_context(self):
         from training.cli.build_far_label_queue import select_diverge_frames

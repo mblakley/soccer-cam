@@ -23,6 +23,11 @@ Selection criteria (``--criteria``):
     (c) sustained ``trackmiss`` runs (low-confidence stretches worth filling in). Every anchor is
     expanded with before/after context frames so the annotator can SEE the track; the hint marker
     is the track's own position at that frame.
+  * ``spans``      — CONTIGUOUS eval spans (``--windows "lo-hi,lo-hi,..."`` global frames, stride-8
+    grid): run-structure GT for the continuity/viewport instrument. Isolated hard frames can score
+    per-frame hits but cannot measure fragments/excursions; contiguous spans can. Built for the
+    HELD-OUT games (eval-only — the training guard excludes them), so no dedupe against existing
+    labels: contiguity IS the point.
 
 Frames are restricted to active play (``game_state``), temporally spread into ``--max-frames`` bins
 (most-ambiguous per bin, so no clustering), and any frames already in ``--exclude-sets`` are skipped.
@@ -226,6 +231,34 @@ def select_diverge_frames(
     return [out[g] for g in sorted(out)]
 
 
+def select_span_frames(
+    windows: list[tuple[int, int]],
+    dets: dict[int, list],
+    total_frames: int,
+    *,
+    stride: int = 8,
+) -> list[dict]:
+    """Contiguous stride-aligned frames over explicit windows; hint = AutoCam's top
+    detection when one exists that frame (a head start, not ground truth)."""
+    out: list[dict] = []
+    for lo, hi in windows:
+        start = ((max(lo, 0) + stride - 1) // stride) * stride
+        for g in range(start, min(hi, total_frames or hi), stride):
+            top = max(dets.get(g, []), key=lambda c: float(c[2]), default=None)
+            out.append(
+                {
+                    "frame_idx": int(g),
+                    "file": f"f{g:06d}.jpg",
+                    "hint_x": round(float(top[0]), 1) if top else 3840.0,
+                    "hint_y": round(float(top[1]), 1) if top else 1080.0,
+                    "autocam": top is not None,
+                    "hint_conf": round(float(top[2]), 3) if top else 0.0,
+                    "reason": "span",
+                }
+            )
+    return out
+
+
 def select_frames(
     dets: dict[int, list],
     poly_np: np.ndarray,
@@ -308,8 +341,13 @@ def main() -> None:
     ap.add_argument("--set-name", default=None, help="default: <game_id>__<criteria>")
     ap.add_argument(
         "--criteria",
-        choices=["hard", "lowconf", "lost", "distractor", "near", "diverge"],
+        choices=["hard", "lowconf", "lost", "distractor", "near", "diverge", "spans"],
         default="hard",
+    )
+    ap.add_argument(
+        "--windows",
+        default=None,
+        help="spans mode: comma-separated global-frame windows 'lo-hi,lo-hi,...'",
     )
     ap.add_argument("--lc-lo", type=float, default=0.05)
     ap.add_argument("--lc-hi", type=float, default=0.25)
@@ -393,6 +431,14 @@ def main() -> None:
             target=args.max_frames,
             exclude=excl,
         )
+    elif args.criteria == "spans":
+        if not args.windows:
+            raise SystemExit("--criteria spans needs --windows 'lo-hi,lo-hi,...'")
+        wins = [
+            (int(a), int(bb))
+            for a, bb in (p.split("-", 1) for p in args.windows.split(","))
+        ]
+        frames = select_span_frames(wins, dets, int(gj.get("total_frames") or 0))
     elif args.criteria == "diverge":
         from training.world_model.reranker import kalman_smooth, rerank
         from training.world_model.tbd import Candidate
