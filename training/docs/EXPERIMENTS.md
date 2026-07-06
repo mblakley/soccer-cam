@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-33: viewport instrument CALIBRATED — 9 human-adjudicated windows, bimodal and decisive (2026-07-06)
+
+**Method:** contiguous stride-8 span sets on held-out Spencerport (`spans` criterion; eval-only, never
+trains), windows mined from AutoCam's own telemetry, Mark labeling same-day (360 span labels total).
+Metric = ball-in-viewport ELLIPSE (source px, half 1200x500 around the sidecar center) — raw far-band
+meters are projection-noise-dominated and were retired after a vision check (EXP-DIST-32 note).
+
+| window (how mined) | ball-in-viewport | reading |
+|---|---|---|
+| fast-pan excursion x2 (viewport speed >12x median) | 0.07 / 0.00 | LOSS (chasing) |
+| "normal" pan speed (turned out far-side play) | 0.14 | LOSS (far blindness) |
+| near-aimed, gentle pan x2 (viewport y high) | 0.00 / 0.00 | LOSS — **tracking the assistant referee** (vision-verified) |
+| viewport follows own dets, static ball | 1.00 | success (trivial) |
+| same, partial | 0.47 | partial tracking |
+| **+ motion floor >=60 m det travel x2 (Mark's fix)** | **0.94 / 1.00** | success, DYNAMIC (med offset 228-635 px) |
+
+**Conclusions:**
+1. The metric is **bimodal**: >=0.9 when AutoCam demonstrably tracks (static or dynamic), <=0.15 in
+   losses; a genuine partial reads mid. T3 window semantics: agree >= 0.9 both-tracking, <= 0.15 loss.
+2. Sampling AutoCam's behavior on Spencerport found loss modes EVERYWHERE the telemetry looked
+   interesting: fast-pan chases, far-side blindness, and a 16 s referee-follow. Its own VIEWPORT is far
+   weaker than its detections (the 0.845 far bar is dets->OUR tracker) — the viewport-vs-viewport
+   product comparison is a lower bar on this game than detection metrics implied.
+3. Mining lesson (Mark): "viewport follows own detections" self-selects parked balls; add a detection
+   PATH-LENGTH floor to find dynamic-tracking windows. The two found (250-270 m travel, 0.8-0.96
+   self-consistency) adjudicated 0.94/1.00 — they double as must-match windows for our system.
+
+**Data:** `spc_{eval,agreement,true_agree,dynamic_agree}_spans` label sets; consolidated into
+Spencerport ball_labels.jsonl (eval-only). Integration run auto-fires on the Spencerport fullgame dump
+(`selector_integration_run` task) with `replay_fullgame` + selector_v4.pt.
+
 ## EXP-DIST-32: physics-based transitions — full-game teleports 1328 → 18 at no accuracy cost (2026-07-06)
 
 **Trigger (Mark):** "base it on physics — velocity + gravity predict where the ball comes down."
