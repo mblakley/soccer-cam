@@ -4,6 +4,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-30: track-audit adjudication — labels vindicated; "teleports" are AERIAL balls the tracker fumbles (2026-07-06)
+
+**Method:** `build_far_label_queue --criteria diverge` (track-audit sets, Mark's design): per game, flag
+(a) human-label-vs-track disagreements >10 m, (b) raw-selection world jumps >2.5 m/frame (`teleport`),
+(c) sustained miss runs — each with ±2 dump-step context frames; hint marker = the track's own position.
+Mark labeled 3 full games (Chili, Pittsford 05.07, Lakefront) + 2 partial. Adjudication = meters between
+his fresh click and the track position, per signal type.
+
+**Results (fresh-click vs track, 'ball' frames):**
+
+| game | diverge: track-on-ball / med err | teleport: track-on-ball / med err |
+|---|---|---|
+| Chili | 0.06 / 61.5 m | 0.18 / 34.4 m |
+| Pittsford 05.07 | 0.06 / 43.9 m | 0.18 / 22.5 m |
+| Lakefront | 0.00 / 53.8 m | 0.16 / 50.8 m |
+
+**Conclusions:**
+1. **Label quality vindicated:** on disagreement frames Mark's re-clicks land back on his original
+   positions — the track is the one 40–60 m off (~95% of disagreements are TRACK faults). Human gold
+   can be trusted at weight ×20.
+2. **Mark's read from labeling: most flagged "teleports" are AERIAL balls** — the ball leaves the
+   camera's vertical FOV and re-enters far upfield. The jump is real motion, not a distractor switch.
+   AND the track handles those windows badly (~82% of teleport-window frames have the track >10 m off):
+   it parks on the launch point / a distractor during flight and re-acquires late. This is EXP-DIST-11's
+   "impossible 67 m jumps" adjudicated by a human: state-blindness, not detection failure.
+3. **The aerial ball-state (plan §3b) is promoted to the top tracker lever.** Concrete v0 to test on
+   cached dumps via the replay harness + continuity metric: a "relaunch" transition — long jumps whose
+   direction/magnitude are consistent with the pre-gap velocity (launch cone) get reduced cost, instead
+   of one global loosened teleport gate. Then: out-of-frame ballistic coast + re-acquisition cone.
+4. These windows are exactly where teacher supervision is BLANK (the stability filter drops frames near
+   teacher discontinuities) — Mark's clicks there are the only supervision that exists. The diverge-set
+   loop (label → consolidate → rebuild → retrain) is the mechanism to keep filling them.
+
+**Data:** `D:/training_data/far_label/*__diverge/labels.json`; supervision rebuilt (Chili gold 386,
+Lakefront 302, Pittsford 417+). **Code:** `fa2462a`, `1b87634`.
+
 ## EXP-DIST-29: selector v2 at 8-game scale — far GO bar cleared once two train/eval feature mismatches were fixed (2026-07-06)
 
 **Hypothesis:** The kill test's NO-GO was a supervision-volume problem (EXP-DIST-24 re-open conditions):

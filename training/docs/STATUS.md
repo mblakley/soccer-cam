@@ -1,6 +1,19 @@
 # Current Status
 
-*Last updated: 2026-07-06*
+*Last updated: 2026-07-06 (afternoon)*
+
+## 2026-07-06 afternoon — track-audit loop LIVE; aerial state promoted (EXP-DIST-30)
+
+- Mark's near sets (441 labels) + track-audit adjudication (~280 labels, 3 games full) landed the same
+  day they were built. Near delta from the first cycle: Iron best-config ALL .615 / N .500 / F .800;
+  Spc near .322 → .444. Label→consolidate→rebuild→retrain loop is proven; v3 retrain running.
+- **EXP-DIST-30:** audit says his labels are right and the track is wrong (~95% of disagreements =
+  track faults, 40–60 m off); flagged "teleports" are AERIAL balls (out of vertical FOV, re-enter far
+  upfield) that the tracker fumbles. **Aerial ball-state (plan §3b) promoted to the top tracker lever**;
+  v0 = launch-cone "relaunch" transition, testable off cached dumps in the replay harness.
+- Diverge sets P1–P8 live for all 8 dumped games (5 labeled so far). Viewport-first evaluation in place
+  (track_continuity in every replay row); held-out fullgame dumps queued behind the marathon →
+  viewport_compare (T3) next.
 
 ## 2026-07-06 morning — SELECTOR V2: far GO bar CLEARED on both held-out games (EXP-DIST-29)
 
