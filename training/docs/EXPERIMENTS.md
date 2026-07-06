@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-31: aerial bridge v0 — flight-consistent miss re-entry lifts held-out FAR +0.07..+0.20 (2026-07-06)
+
+**Hypothesis (from EXP-DIST-30):** making the miss state position/time-aware — re-entry at a
+flight-consistent rate gets a bonus, faster-than-flight re-entry a quadratic penalty — lets the track
+bridge launches instead of parking near the launch point, without the globally-loosened teleport gate.
+
+**Method:** `rerank()` miss state now carries the frozen exit position + missing duration (greedy
+backpointer approximation, no state blow-up). `bridge_w=0` = exact legacy. Unit test: launched ball
+lands far upfield vs a brighter phantom at the launch point — legacy takes the phantom, bridge lands
+with the ball. Replay sweep on both held-out dumps (v3 supervision net; learned emission, hand terms
+off): w × {flat miss 0.5/0.9, pnone×0.5/1.0} × bridge {0, 1, 2}.
+
+**Results (FAR R15, br=0 → best bridge, matched config):**
+- Spc: miss=0.5 .526→**.598** · miss=0.9 .492→**.583** · pnone×1.0 .442→**.580**
+- Iron: miss=0.9 .500→**.700** · pnone×0.5 .500→**.700**
+- Best ALL rows: Spc w=2 miss=0.5 br=1.0 **.550** (was .506); Iron w=1 miss=0.5 br=0 .538 vs
+  br-rows trading ALL for far. NEAR is the tradeoff: Spc near drops up to −0.19 on some bridge rows
+  (the bridge re-enters far more eagerly; near excursions get bridged too). br=1.0 is the sane default;
+  br=2.0 over-bridges.
+- **Learned p_none miss costs ≈ neutral in v1** (none supervision is sparse: 439/26k frames) — keep the
+  plumbing, revisit when none-volume grows.
+- Caution: Iron LEARNED argmax far swung .727→.364 across supervision versions (n=11 far GT — small
+  sample + near-heavy new gold). The tracker+bridge held far at .6–.7 regardless. LOGO at 15 games will
+  say whether the argmax swing is noise or a near/far training tradeoff.
+
+**Conclusions:** the aerial bridge is the first tracker-side change that moves held-out far R15 while
+leaving the candidate ceiling untouched; it directly addresses the human-adjudicated failure mode
+(parking through flights). Next: direction-aware bridge (launch velocity cone, not just rate), then the
+full candidate × ball-state Viterbi (§3b) with out-of-frame ballistic coast.
+
+**Code:** `e19e49a` (reranker bridge + kill_test `--bridge-w`/`--pnone-scales`).
+
 ## EXP-DIST-30: track-audit adjudication — labels vindicated; "teleports" are AERIAL balls the tracker fumbles (2026-07-06)
 
 **Method:** `build_far_label_queue --criteria diverge` (track-audit sets, Mark's design): per game, flag
