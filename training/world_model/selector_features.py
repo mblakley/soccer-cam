@@ -47,6 +47,7 @@ FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
 }
 
 _CONT_CAP_M = 50.0  # continuity distances capped here (a gap reads as "no support")
+_CONT_CAP_MPF = 6.0  # per-FRAME cap when ``ef`` is given (stride-invariant mode)
 _N_DEPTH_BANDS = 4
 
 
@@ -67,11 +68,15 @@ def build_features(
     frames: list[list],
     geom: FieldGeometry,
     top_k: int = 24,
+    ef: list[int] | None = None,
 ) -> list[np.ndarray]:
     """Per-frame ``(K_t, F)`` float32 feature arrays for ``frames`` (lists of
-    :class:`~training.world_model.tbd.Candidate`), aligned with the dump's ``ef`` order
-    (window features assume consecutive entries are consecutive dump frames — the same
-    stride at train and inference).
+    :class:`~training.world_model.tbd.Candidate`), aligned with the dump's ``ef`` order.
+
+    Pass ``ef`` (the dump's GLOBAL frame numbers) to make the window-continuity
+    features stride-invariant: distances are normalized to meters-PER-FRAME instead of
+    per dump step. Without it, a stride-8 training dump and a stride-4 eval dump
+    measure different physical quantities (the selector-v2 train/eval mismatch).
     """
     n = len(frames)
     xy = [np.asarray([(c.x, c.y) for c in cs], float).reshape(-1, 2) for cs in frames]
@@ -100,17 +105,22 @@ def build_features(
     ]
 
     def _cont(t: int, off: int) -> np.ndarray:
-        """log-scaled nearest-candidate distance (m) from frame t's candidates to t+off."""
+        """log-scaled nearest-candidate distance from frame t's candidates to t+off —
+        meters per dump step, or meters per FRAME when ``ef`` is given."""
         k = len(world[t])
         u = t + off
         if k == 0:
             return np.zeros(0)
+        cap = _CONT_CAP_MPF if ef is not None else _CONT_CAP_M
         if not (0 <= u < n) or len(world[u]) == 0:
-            d = np.full(k, _CONT_CAP_M)
+            d = np.full(k, cap)
         else:
             diff = world[t][:, None, :] - world[u][None, :, :]
-            d = np.minimum(np.sqrt((diff**2).sum(-1)).min(axis=1), _CONT_CAP_M)
-        return np.log1p(d) / np.log1p(_CONT_CAP_M)
+            d = np.sqrt((diff**2).sum(-1)).min(axis=1)
+            if ef is not None:
+                d = d / max(abs(int(ef[u]) - int(ef[t])), 1)
+            d = np.minimum(d, cap)
+        return np.log1p(d) / np.log1p(cap)
 
     out: list[np.ndarray] = []
     for t in range(n):
@@ -159,9 +169,16 @@ def build_features(
     return out
 
 
-def feature_mask(knockout_families: list[str]) -> np.ndarray:
-    """Boolean keep-mask over FEATURE_NAMES with the given families removed."""
+def feature_mask(knockouts: list[str]) -> np.ndarray:
+    """Boolean keep-mask over FEATURE_NAMES with the given FAMILIES or individual
+    FEATURES removed (a feature name drops just that column — e.g. ``size_ratio``
+    when one side of a train/eval pair has no sizes)."""
     drop: set[str] = set()
-    for fam in knockout_families:
-        drop.update(FEATURE_FAMILIES[fam])
+    for k in knockouts:
+        if k in FEATURE_FAMILIES:
+            drop.update(FEATURE_FAMILIES[k])
+        elif k in FEATURE_NAMES:
+            drop.add(k)
+        else:
+            raise KeyError(f"unknown feature family/name: {k!r}")
     return np.array([name not in drop for name in FEATURE_NAMES])

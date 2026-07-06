@@ -84,11 +84,11 @@ def _load_dump(path):
     return d, frames, geom
 
 
-def _features_packed(frames, geom, keep):
+def _features_packed(frames, geom, keep, ef):
     from training.models.selector_net import pack_frames
     from training.world_model.selector_features import build_features
 
-    feats = build_features(frames, geom)
+    feats = build_features(frames, geom, ef=ef)
     feats = [x[:, keep] for x in feats]
     return pack_frames(feats)
 
@@ -126,15 +126,15 @@ def main() -> None:
         feature_mask,
     )
 
-    runs = (
-        [[]]
-        if not args.knockouts
-        else (
-            [[], *[[f] for f in FEATURE_FAMILIES]]
-            if args.knockouts == ["sweep"]
-            else [args.knockouts]
-        )
-    )
+    # --knockouts sweep [extra...] = one run per family, with [extra...] features
+    # ALWAYS dropped (e.g. size_ratio when training dumps carry no sizes)
+    if args.knockouts and args.knockouts[0] == "sweep":
+        always = args.knockouts[1:]
+        runs = [always, *[[*always, f] for f in FEATURE_FAMILIES]]
+    elif args.knockouts:
+        runs = [args.knockouts]
+    else:
+        runs = [[]]
 
     # ---- load training pairs once -------------------------------------------------
     train_sets = []
@@ -164,7 +164,7 @@ def main() -> None:
         for _d, frames, geom, lab, _p in train_sets:
             if not lab:
                 print(f"WARNING: {_p} contributed 0 labels")
-            feats, mask = _features_packed(frames, geom, keep)
+            feats, mask = _features_packed(frames, geom, keep, _d["ef"])
             top_k = feats.shape[1]
             for i_str, (cand, w) in lab.items():
                 i = int(i_str)
@@ -208,7 +208,7 @@ def main() -> None:
                 *_score(raw, frames, ef, balls, geom, far_px, stride),
             )
 
-            efeats, emask = _features_packed(frames, geom, keep)
+            efeats, emask = _features_packed(frames, geom, keep, ef)
             probs = predict_probs(net, efeats, emask)
             learned = {}
             for i, fr in enumerate(frames):

@@ -75,11 +75,37 @@ class TestFeatures:
         assert f[0, i_p1] < f[1, i_p1]  # persistent candidate has support next frame
         assert f[0, i_m1] < f[1, i_m1]
 
+    def test_window_continuity_stride_invariant(self):
+        """selector-v2 regression: stride-8 training dumps vs stride-4 eval dumps must
+        produce the SAME continuity feature for the same physical motion when ef is
+        given (meters per FRAME, not per dump step)."""
+        geom = _geom()
+        # same ball drifting 10 px/frame along the near touchline, sampled two ways
+        s8 = [[_cand(1000 + 80 * i, 900, 0.5)] for i in range(3)]
+        s4 = [[_cand(1000 + 40 * i, 900, 0.5)] for i in range(3)]
+        f8 = build_features(s8, geom, ef=[0, 8, 16])[1]
+        f4 = build_features(s4, geom, ef=[0, 4, 8])[1]
+        i_p1 = FEATURE_NAMES.index("cont_p1")
+        i_m1 = FEATURE_NAMES.index("cont_m1")
+        assert np.isclose(f8[0, i_p1], f4[0, i_p1], rtol=1e-5)
+        assert np.isclose(f8[0, i_m1], f4[0, i_m1], rtol=1e-5)
+        # without ef the two strides disagree (the old, broken behavior)
+        g8 = build_features(s8, geom)[1]
+        g4 = build_features(s4, geom)[1]
+        assert not np.isclose(g8[0, i_p1], g4[0, i_p1], rtol=1e-2)
+
     def test_feature_mask(self):
         keep = feature_mask(["score"])
         assert keep.sum() == len(FEATURE_NAMES) - len(FEATURE_FAMILIES["score"])
         assert not keep[FEATURE_NAMES.index("pct_depth")]
         assert keep[FEATURE_NAMES.index("persistence")]
+
+    def test_feature_mask_single_feature(self):
+        keep = feature_mask(["size_ratio"])
+        assert not keep[FEATURE_NAMES.index("size_ratio")]
+        assert keep.sum() == len(FEATURE_NAMES) - 1
+        with pytest.raises(KeyError):
+            feature_mask(["not_a_feature"])
 
 
 class TestSnap:
