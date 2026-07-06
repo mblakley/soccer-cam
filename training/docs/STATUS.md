@@ -1,6 +1,23 @@
 # Current Status
 
-*Last updated: 2026-07-04*
+*Last updated: 2026-07-06*
+
+## 2026-07-06 morning — SELECTOR V2: far GO bar CLEARED on both held-out games (EXP-DIST-29)
+
+- **Marathon 9/15** (Pittsford 06.01 in flight; ~4-5 h/game, completion ETA July 7 evening; server-side
+  stall monitor `selector_marathon_monitor` ticking, 0 stalls). Supervision built for all 8 complete
+  games: **25,813 frames / 942 gold / 333 none** (`sel_labels_*_full.json`).
+- **Selector v2 trained at 8-game scale** (`kill_test_selector` now takes fullgame dirs; held-out guard
+  refuses Spencerport 05.31 / Irondequoit 06.15 in training pairs). First run was poisoned by TWO
+  train/eval feature mismatches — stride (cont_* per-step vs per-frame) and size_ratio (train lacks
+  sizes, eval has them). Both fixed (`feed7d5`, stride-invariant meters-per-frame + per-feature
+  knockouts) — see EXP-DIST-29.
+- **Result: far argmax +0.18/+0.45 over raw on Spc/Iron — GO bar met on far, both games.** Score family
+  = main carrier; geometry venue-overfit verdict reversed at 8-game scale. **NEAR is the open problem**
+  (Spc near argmax .322 vs raw .467). Replay tracker (emission-only) hits Iron far .80 (> .845 bar is
+  NOT met yet but close; Spc far .526).
+- Next: near-band supervision/balance, per-game hand-tuned baseline rows on the same dumps,
+  miss_costs + kickoff anchors in the replay, LOGO, 15-game retrain when the marathon lands.
 
 ## 2026-07-04 midday — CANDIDATE MARATHON LAUNCHED (decision: A then B)
 

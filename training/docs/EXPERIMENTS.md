@@ -4,6 +4,54 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-29: selector v2 at 8-game scale — far GO bar cleared once two train/eval feature mismatches were fixed (2026-07-06)
+
+**Hypothesis:** The kill test's NO-GO was a supervision-volume problem (EXP-DIST-24 re-open conditions):
+at ~26k frames / 942 gold / 333 none, the listwise selector should transfer.
+
+**Method:** 8 marathon fullgame dumps (stride 8) + `build_selector_labels` supervision → `kill_test_selector`
+(now accepts fullgame dirs; held-out guard added). Eval on `cands_{spc,iron}_hn2.pkl` (stride 4), decomposed.
+
+**Run 1 was poisoned by two train/eval mismatches (both caught by inspection before trusting results):**
+1. **Stride:** `cont_*` features measured meters-per-DUMP-STEP — stride-8 train vs stride-4 eval = 2×
+   systematic shift on the window family. Fix: `build_features(ef=...)` normalizes to meters-per-FRAME
+   (cap 6 m/f), stride-invariant by construction + regression test.
+2. **size_ratio:** fullgame dumps carry no sizes (constant 0 at train); eval dumps have real sizes on all
+   36k rows. Fix: feature dropped on BOTH sides (`feature_mask` now takes single features;
+   `--knockouts sweep <extras>`) until size_px is wired into the dump path.
+
+**Result (fixed run, LEARNED argmax vs raw argmax; raw = Spc N .467/F .264, Iron N .188/F .273):**
+
+| knockout | Spc argmax N/F | Iron argmax N/F | best replay-tracker FAR (Spc / Iron) |
+|---|---|---|---|
+| none (13 feats) | .322 / **.442** | **.375 / .727** | .526 / **.800** |
+| −score | .356 / .388 | .188 / .364 | .498 / .600 |
+| −persistence | .333 / .385 | .312 / .455 | .489 / .800 |
+| −geometry | .300 / .436 | .375 / .455 | .540 / .700 |
+| −window | .367 / **.485** | .250 / .727 | .620 / .700 |
+| −frame | .311 / .430 | .375 / .636 | .521 / .700 |
+
+**Conclusions:**
+- **The stride fix, not more data alone, unlocked far transfer**: far argmax +0.18 (Spc) / +0.45 (Iron)
+  over raw — the +0.15 far GO bar is met on BOTH held-out games. Volume also matters: same harness on the
+  same-family features failed at 2-game scale.
+- **Score family is the main carrier** (biggest drop when removed, val loss 1.61→2.28). Geometry no longer
+  venue-overfits at 8-game scale (kill-test v1's knockout verdict reversed by venue diversity).
+- **NEAR is the open problem**: Spc near argmax .322 vs raw .467 — the learned prior actively demotes near
+  balls the raw score already ranked #1. Iron near improves (+0.19). Suspects: far-biased gold (all
+  far-label sets), teacher-weight flatness, no near-specific features. Replay-tracker near collapses in
+  spots (−window Spc N .122) — the window family is what keeps near coherent.
+- Emission-only replay (alpha=0, static_w=0, hand terms off) is not yet at the production hand-tuned
+  SELECTED bar on Spc far (.526 vs .61 aggregate) but beats it decisively on Iron far (.80). Proper
+  comparison needs per-game hand-tuned rows on the same dumps + miss_costs/anchor integration.
+
+**Next:** near-band supervision (near gold / band-balanced loss), hand-tuned-vs-learned per-game baseline,
+`-log p_none` miss_costs + kickoff anchors in the replay, LOGO variance, retrain at 15 games when the
+marathon lands.
+
+**Data:** `G:\ballresearch\selector\v2_train.log` (+ `v2_train_run1_stridebug.log`); supervision
+`sel_labels_*_full.json` (8 games). **Code:** commits `c20284c`, `feed7d5`.
+
 ## EXP-DIST-28: soft in-field prior (± airborne dome) — NO effect on the tracker (2026-07-04)
 
 Mark asked whether the field polygon eliminates off-field near distractors, and whether
