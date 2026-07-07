@@ -384,7 +384,11 @@ def main() -> None:
     poly = gj["field_polygon"]
     poly_np = np.array(poly, np.float32)
     offs = dd.seg_offsets(gj["segments"])
-    dets = dd.load_detections(vdir / "autocam_detections.jsonl", offs)
+    dets = (
+        dd.load_detections(vdir / "autocam_detections.jsonl", offs)
+        if (vdir / "autocam_detections.jsonl").exists()
+        else {}
+    )  # held-out Irondequoit has no AutoCam artifacts; spans fall back to dump hints
 
     ranges = dd.active_play_ranges(gj["segments"], gj.get("game_state"))
     if ranges:
