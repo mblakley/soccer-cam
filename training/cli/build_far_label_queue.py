@@ -399,7 +399,9 @@ def main() -> None:
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
     near_cands: dict[int, list] = {}
-    if args.criteria in ("near", "diverge"):
+    if args.criteria in ("near", "diverge") or (
+        args.criteria == "spans" and args.fullgame_dir
+    ):
         if not args.fullgame_dir:
             raise SystemExit(f"--criteria {args.criteria} needs --fullgame-dir")
         from training.cli.build_selector_labels import load_fullgame_candidates
@@ -439,6 +441,16 @@ def main() -> None:
             for a, bb in (p.split("-", 1) for p in args.windows.split(","))
         ]
         frames = select_span_frames(wins, dets, int(gj.get("total_frames") or 0))
+        # games without AutoCam detections get hints + overlays from OUR dump
+        if args.fullgame_dir:
+            for e in frames:
+                rows = near_cands.get(int(e["frame_idx"])) or []
+                if rows and not e["autocam"]:
+                    e["hint_x"], e["hint_y"] = (
+                        round(float(rows[0][0]), 1),
+                        round(float(rows[0][1]), 1),
+                    )
+                    e["hint_conf"] = round(float(rows[0][2]), 3)
     elif args.criteria == "diverge":
         from training.world_model.reranker import kalman_smooth, rerank
         from training.world_model.tbd import Candidate
@@ -564,7 +576,9 @@ def main() -> None:
                 "band": "normal",
             }
         )
-    if args.criteria in ("near", "diverge"):
+    if args.criteria in ("near", "diverge") or (
+        args.criteria == "spans" and args.fullgame_dir
+    ):
         # candidate overlays straight from the dump (score-sorted; top-5 render blue)
         for e in kept:
             rows = (near_cands.get(int(e["frame_idx"])) or [])[:12]
