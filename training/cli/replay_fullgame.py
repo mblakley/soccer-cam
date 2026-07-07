@@ -106,6 +106,12 @@ def main() -> None:
     ap.add_argument("--bridge-w", nargs="+", type=float, default=[0.0, 1.0])
     ap.add_argument("--phys-sigma-px", nargs="+", type=float, default=[0.0, 5.0])
     ap.add_argument("--far-px", type=float, default=8.0)
+    ap.add_argument(
+        "--benchmark",
+        default=None,
+        help="viewport_benchmark.jsonl (best-of AutoCam + human) to score against "
+        "game-wide; defaults to the game dir's file when present",
+    )
     ap.add_argument("--out", default=None, help="also write a JSON report here")
     args = ap.parse_args()
 
@@ -131,6 +137,16 @@ def main() -> None:
         else ({}, set())
     )
     vp = load_viewport(gd, offs)
+    bench_path = (
+        Path(args.benchmark) if args.benchmark else gd / "viewport_benchmark.jsonl"
+    )
+    bench: dict[int, dict] = {}
+    if bench_path.exists():
+        for ln in bench_path.read_text(encoding="utf-8").splitlines():
+            if ln.strip():
+                r = json.loads(ln)
+                if r.get("tier") != "none":
+                    bench[int(r["g"])] = r
     frames = [
         [Candidate(x=x, y=y, score=s, size_px=None) for (x, y, s, _z) in cands[g]]
         for g in ef
@@ -206,6 +222,59 @@ def main() -> None:
                     hits[band][0] += 1
             cont = track_continuity(track, ef, hb, geom, stride=8)
             va = viewport_agreement(track, ef, vp)
+            # game-wide benchmark scoring: our pick inside the nominal viewport
+            # ellipse around the best-of reference, by tier
+            bm: dict = {}
+            if bench:
+                bk = np.asarray(sorted(bench), int)
+                hw2, hh2 = 1200.0, 500.0
+                tally = {"human": [0, 0], "autocam": [0, 0]}
+                bevents: list[tuple[int, bool]] = []
+                for i, g in enumerate(ef):
+                    if i not in track:
+                        continue
+                    j = int(np.clip(np.searchsorted(bk, g), 1, len(bk) - 1))
+                    gb = (
+                        int(bk[j - 1])
+                        if abs(int(bk[j - 1]) - g) <= abs(int(bk[j]) - g)
+                        else int(bk[j])
+                    )
+                    if abs(gb - g) > 4:
+                        continue
+                    r = bench[gb]
+                    x, y = track[i]
+                    inside = ((x - r["x"]) / hw2) ** 2 + (
+                        (y - r["y"]) / hh2
+                    ) ** 2 <= 1.0
+                    tally[r["tier"]][1] += 1
+                    tally[r["tier"]][0] += int(inside)
+                    bevents.append((g, inside))
+                miss_runs: list[tuple[int, int]] = []
+                run_s = None
+                prev_g = None
+                for g, ok in bevents:
+                    if not ok:
+                        if run_s is None or (prev_g is not None and g - prev_g > 48):
+                            if run_s is not None and prev_g - run_s >= 40:
+                                miss_runs.append((run_s, prev_g))
+                            run_s = g
+                    else:
+                        if (
+                            run_s is not None
+                            and prev_g is not None
+                            and prev_g - run_s >= 40
+                        ):
+                            miss_runs.append((run_s, prev_g))
+                        run_s = None
+                    prev_g = g
+                if run_s is not None and prev_g is not None and prev_g - run_s >= 40:
+                    miss_runs.append((run_s, prev_g))
+                bm = {
+                    "human": tally["human"],
+                    "autocam": tally["autocam"],
+                    "n": len(bevents),
+                    "our_loss_windows": miss_runs,
+                }
             n_n, n_f = hits["near"], hits["far"]
             row = {
                 "phys": phys,
@@ -216,6 +285,7 @@ def main() -> None:
                 "miss_frames": len(ef) - len(sel),
                 "continuity": cont,
                 "viewport": va,
+                "benchmark": bm,
             }
             report.append(row)
             print(
@@ -229,6 +299,14 @@ def main() -> None:
                     f"      viewport agree {va['agree']:.2f} (n={va['n']}), "
                     f"divergence windows {len(va['divergence_windows'])}: "
                     f"{va['divergence_windows'][:6]}"
+                )
+            if bm:
+                bh, ba = bm["human"], bm["autocam"]
+                print(
+                    f"      BENCHMARK ball-in-viewport: human {bh[0]}/{bh[1]} = "
+                    f"{bh[0] / max(bh[1], 1):.3f}  autocam-tier {ba[0]}/{ba[1]} = "
+                    f"{ba[0] / max(ba[1], 1):.3f}  | our-loss windows "
+                    f"{len(bm['our_loss_windows'])}: {bm['our_loss_windows'][:5]}"
                 )
     if args.out:
         Path(args.out).write_text(json.dumps(report, default=str))

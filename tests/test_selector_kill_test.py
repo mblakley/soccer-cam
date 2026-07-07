@@ -497,6 +497,26 @@ class TestReplayFullgame:
         assert lo == 200 and hi >= 560
 
 
+class TestViewportBenchmark:
+    def test_self_consistency_tiers(self):
+        from training.cli.build_viewport_benchmark import autocam_self_consistency
+
+        # viewport glued to its top detection for 400 frames, then 60 m away
+        vp, dets = {}, {}
+        for g in range(0, 800, 4):
+            ball = (1000.0 + g, 500.0)
+            vp[g] = ball if g < 400 else (6000.0, 500.0)
+            dets[g] = [(ball[0], ball[1], 0.9), (200.0, 200.0, 0.2)]
+        out = autocam_self_consistency(vp, dets, window=80, min_frac=0.8)
+        assert 100 in out and out[100] == (1100.0, 500.0)  # tracked stretch kept
+        assert 700 not in out  # lost stretch excluded
+        # low-confidence detections never anchor a tier-B frame
+        out2 = autocam_self_consistency(
+            {0: (100.0, 100.0)}, {0: [(100.0, 100.0, 0.1)]}, window=80
+        )
+        assert out2 == {}
+
+
 class TestSpanQueue:
     def test_contiguous_grid_with_autocam_hints(self):
         from training.cli.build_far_label_queue import select_span_frames
