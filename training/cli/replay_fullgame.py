@@ -101,6 +101,18 @@ def main() -> None:
     ap.add_argument("--fullgame-dir", required=True)
     ap.add_argument("--game-dir", required=True)
     ap.add_argument("--emission-weight", type=float, default=1.0)
+    ap.add_argument(
+        "--alpha",
+        type=float,
+        default=0.0,
+        help="hand-tuned detector-score emission term (hybrid with the learned prior)",
+    )
+    ap.add_argument(
+        "--static-w",
+        type=float,
+        default=0.0,
+        help="hand-tuned static-persistence emission term (hybrid)",
+    )
     ap.add_argument("--miss-cost", type=float, default=0.9)
     ap.add_argument("--pnone-scale", type=float, default=None)
     ap.add_argument("--bridge-w", nargs="+", type=float, default=[0.0, 1.0])
@@ -181,8 +193,8 @@ def main() -> None:
     report = []
     base = replace(
         RerankConfig(),
-        alpha=0.0,
-        static_w=0.0,
+        alpha=args.alpha,
+        static_w=args.static_w,
         motion_w=0.0,
         miss_cost=args.miss_cost * w,
     )
