@@ -219,10 +219,27 @@ class TestTTTApiClient(unittest.TestCase):
         self.assertEqual(params, {"team_id": "team-1"})
 
     def test_get_roster(self):
-        data = [{"user_id": "u1", "display_name": "Player One", "role": "player"}]
+        # player_id is the stable identity; user_id is optional (null for
+        # accountless youth players, present for login-backed staff).
+        data = [
+            {
+                "player_id": "p1",
+                "user_id": None,
+                "full_name": "Player One",
+                "role": "player",
+            },
+            {
+                "player_id": "p2",
+                "user_id": "u2",
+                "full_name": "Coach Smith",
+                "role": "coach",
+            },
+        ]
         self.client._http.request = Mock(return_value=_mock_response(200, data))
         result = self.client.get_roster("team-1")
         self.assertEqual(result, data)
+        # Passthrough must not choke on user_id=None entries.
+        self.assertIsNone(result[0]["user_id"])
         call_args = self.client._http.request.call_args
         self.assertEqual(call_args[1]["params"]["team_id"], "team-1")
 
