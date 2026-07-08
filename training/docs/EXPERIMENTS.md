@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-34: LOGO variance — v5 is corpus-wide, no game carries it, no game harms it (2026-07-08)
+
+**Method:** 15 leave-one-game-out retrains (full v5 recipe: 14 supervision sets each, size_ratio
+knocked out), each evaluated on both held-out eval dumps (learned argmax + champion tracker replay,
+pnone x1.0 / bridge 2.0).
+
+**Results (across the 15 drops):**
+
+| metric | mean ± std | min–max |
+|---|---|---|
+| Spc argmax FAR | .428 ± .010 | .412–.452 |
+| Spc argmax NEAR | .372 ± .027 | .333–.422 |
+| Spc tracker FAR | .496 ± .021 | .457–.540 |
+| Iron argmax FAR | .606 ± .086 | .364–.727 |
+| Iron tracker FAR | .586 ± .060 | .500–.700 |
+
+**Conclusions:**
+1. **Gate PASSED.** No drop collapses held-out performance; Spencerport far argmax varies by ±1%
+   (std .010) across all 15 drops — the far signal is distributed over the whole corpus.
+2. The visible variance sits exactly where GT is thinnest: Iron's eval dump has only 11 far / 16
+   near GT frames, so one frame = ±.06–.09 — instrument granularity, not supervision fragility.
+   (Mark's 270 new Iron labels fix this panel for future whole-game LOGO.)
+3. Largest single-game effect: dropping lakefront0607 dents Iron far argmax (.364 vs .606 mean) —
+   a 3-frame swing, noted but not overclaimed. No game is harmful; none is irreplaceable —
+   consistent with the flattening v4→v5 gains: supervision scaling is near its plateau, remaining
+   gap lives in the tracker/ball-state layer.
+
+**Data:** `G:\ballresearch\selector\logo.log`.
+
 ## EXP-DIST-33: viewport instrument CALIBRATED — 9 human-adjudicated windows, bimodal and decisive (2026-07-06)
 
 **Method:** contiguous stride-8 span sets on held-out Spencerport (`spans` criterion; eval-only, never
