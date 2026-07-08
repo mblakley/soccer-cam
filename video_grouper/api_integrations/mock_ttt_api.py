@@ -51,22 +51,29 @@ class MockTTTApiClient:
             },
         ]
 
+        # player_id is the stable identity for every row; user_id is only
+        # present for login-backed staff (coaches/managers) — accountless
+        # youth players have user_id=None. Mirrors TTT's roster contract
+        # (device-link/roster) post-PR #126.
         self._roster = [
             {
+                "player_id": str(uuid.uuid4()),
                 "user_id": MOCK_USER_ID,
-                "display_name": "Coach Smith",
+                "full_name": "Coach Smith",
                 "role": "coach",
                 "jersey_number": None,
             },
             {
-                "user_id": str(uuid.uuid4()),
-                "display_name": "Player One",
+                "player_id": str(uuid.uuid4()),
+                "user_id": None,
+                "full_name": "Player One",
                 "role": "player",
                 "jersey_number": 10,
             },
             {
-                "user_id": str(uuid.uuid4()),
-                "display_name": "Player Two",
+                "player_id": str(uuid.uuid4()),
+                "user_id": None,
+                "full_name": "Player Two",
                 "role": "player",
                 "jersey_number": 7,
             },
