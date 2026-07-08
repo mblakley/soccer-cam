@@ -1,6 +1,27 @@
 # Current Status
 
-*Last updated: 2026-07-06 (afternoon)*
+*Last updated: 2026-07-08 (morning)*
+
+## 2026-07-08 — MARATHON COMPLETE (15/15); v5 net; whole-game held-out: Spc near .60→.71
+
+- **Marathon finished 02:08** — all 15 training games dumped; held-out Spencerport + Irondequoit
+  dumped 07-06/07 (queue-swapped ahead per viewport-first priority). Supervision built for all 15
+  (~44k frames); **v5 net trained on 41.5k frames/14 games** (`selector_v5.pt`; pittsford0601
+  supervision landed one run late, in for v6).
+- **Whole-game held-out, champion config** (learned emission + static_w 2 hybrid + p_none miss +
+  phys σ5 + bridge 2): **Spc NEAR .602→.707 (v4→v5), FAR ~.58, benchmark-human .782, 23 loss
+  windows**. Iron re-scored on Mark's new 270-label our-loss GT (adversarially placed ON our failure
+  windows — expected to read low): bench-h .571, 10 loss windows.
+- **Best-of viewport benchmark live** (`build_viewport_benchmark` + `replay_fullgame --benchmark`,
+  Mark's design): tier-A human labels + tier-B AutoCam self-consistent detections (calibrated
+  .94-1.00, EXP-DIST-33); benchmarks + per-game scorecards across all 17 games; hybrid verdict:
+  static_w=2 free win, alpha rejected (doubles teleports).
+- Instrument calibration (EXP-DIST-33), physics transitions (EXP-DIST-32: teleports 1328→18),
+  aerial bridge/ballistic cone (EXP-DIST-30/31) all landed 07-06/07.
+- **Next:** v5 all-games scorecard (running); LOGO variance; adjudication gallery from union of
+  our-loss windows; then plan Phase 6/7 — ball-state machine + viewport adapter + comparison video
+  (needs AutoCam render on a held-out game for T4). B (Dahua joint retrain) + C (field_outline v3)
+  now unblocked on the free GPU.
 
 ## 2026-07-06 afternoon — track-audit loop LIVE; aerial state promoted (EXP-DIST-30)
 
