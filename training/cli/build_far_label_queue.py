@@ -296,18 +296,24 @@ def select_disagree_frames(
         mid_g, mid_r = run[len(run) // 2]
         pool.append([mid_g, mid_r, float(len(run))])
     chosen = _spread_bins(pool, target)
-    return [
-        {
-            "frame_idx": int(g),
-            "file": f"f{int(g):06d}.jpg",
-            "hint_x": round(float(r["x"]), 1),
-            "hint_y": round(float(r["y"]), 1),
-            "autocam": True,  # the hint IS AutoCam's claim
-            "hint_conf": 0.0,
-            "reason": "disagree",
-        }
-        for g, r, _v in chosen
-    ]
+    # flank every anchor with +-ctx frames so the annotator can read the ball's
+    # MOTION (Mark: a single out-of-context frame is often humanly unresolvable)
+    out: dict[int, dict] = {}
+    for g, r, _v in chosen:
+        for off, reason in ((-8, "disagree_ctx"), (0, "disagree"), (8, "disagree_ctx")):
+            gg = int(g) + off
+            if gg in out and off != 0:
+                continue
+            out[gg] = {
+                "frame_idx": gg,
+                "file": f"f{gg:06d}.jpg",
+                "hint_x": round(float(r["x"]), 1),
+                "hint_y": round(float(r["y"]), 1),
+                "autocam": True,  # the hint IS AutoCam's claim (at the anchor)
+                "hint_conf": 0.0,
+                "reason": reason,
+            }
+    return [out[g] for g in sorted(out)]
 
 
 def select_frames(
