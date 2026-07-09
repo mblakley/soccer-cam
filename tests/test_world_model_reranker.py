@@ -322,6 +322,55 @@ def test_rerank_physical_transitions_restore_ground_speed_budget():
     assert 1 in far and far[1][0] == pytest.approx(f2[0])
 
 
+def test_rerank_oob_pin_holds_the_boundary_and_reacquires_at_the_crossing():
+    """EXP-DIST-35 (Mark's physics): a ball crossing the mask boundary does not
+    disappear — the rules bring it back near where it left. The exit's velocity ray
+    pins the miss expectation at the boundary crossing; during the dead time a
+    brighter mid-field distractor must NOT steal the track, and the re-entry
+    candidate near the crossing must win."""
+    geom = build_field_geometry(np.asarray(_POLY, float))
+    # roll toward the near-left boundary and out: last two tracked frames close to it
+    a1, a2 = (700.0, 1150.0), (620.0, 1180.0)
+    frames: list[list[Candidate]] = [
+        [Candidate(*a1, 0.8)],
+        [Candidate(*a2, 0.8)],
+    ]
+    # ball out of the mask for 4 steps: ONLY a bright mid-field distractor visible
+    distract = (3800.0, 900.0)
+    for _ in range(4):
+        frames.append([Candidate(*distract, 0.7)])
+    reentry = (640.0, 1160.0)  # comes back in right where it left
+    frames.append([Candidate(*reentry, 0.5), Candidate(*distract, 0.7)])
+    gaps = [8] * len(frames)
+    # learned-emission stand-in: ball candidates are confident (-log p ~ 0.3), the
+    # distractor is not (~0.95) — the hand alpha term can't express this because a
+    # lone candidate always normalizes to frame-max
+    priors = []
+    for fr in frames:
+        priors.append(
+            np.asarray(
+                [0.3 if c.x < 1000 else 0.95 for c in fr],
+                float,
+            )
+        )
+    iso = {"alpha": 0.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+
+    free = rerank(
+        frames, geom, frame_gaps=gaps, priors=priors, config=RerankConfig(**iso)
+    )
+    assert free[3] == distract  # cheaper to park on the distractor than to miss
+
+    pinned = rerank(
+        frames,
+        geom,
+        frame_gaps=gaps,
+        priors=priors,
+        config=RerankConfig(**iso, oob_w=2.0),
+    )
+    assert 3 not in pinned  # coasts the dead time at the pinned crossing
+    assert pinned[6][0] == pytest.approx(reentry[0])  # re-acquires at the crossing
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player

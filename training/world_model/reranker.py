@@ -84,6 +84,7 @@ class RerankConfig:
         0.0  # px jitter mapped through the local Jacobian (0 = legacy)
     )
     ball_vmax_mpf: float = 2.5  # real ball speed ceiling, world m per SOURCE frame
+    oob_w: float = 0.0  # out-of-bounds pin weight (0 = off; see _OOB_* constants)
 
 
 # aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
@@ -96,6 +97,40 @@ _CONE_BASE_M = 6.0  # landing-zone radius at airtime 0
 _CONE_SPREAD_MPF = 0.4  # landing-zone growth per source frame in the air
 _CONE_BONUS = 0.75  # re-entry bonus (x bridge_w) inside the predicted landing zone
 _BAND_BONUS = 0.5  # re-entry bonus (x bridge_w) for rate-consistent, direction-blind
+
+# OUT-OF-BOUNDS state (EXP-DIST-35, Mark's physics): a ball crossing the mask boundary
+# does not disappear — the rules bring it back NEAR WHERE IT LEFT (throw-in at the
+# crossing point; measured on held-out GT: re-entry within 7-15 m of the extrapolated
+# crossing, after 7-20 s). When the track leaves toward/over the boundary, the miss
+# state pins its expectation at the BOUNDARY CROSSING POINT with a slow-growing cone —
+# instead of the ballistic continuation (which predicts downfield) or a free wander.
+_OOB_NEAR_BOUNDARY_M = 8.0  # exit position within this of the line counts as OOB
+_OOB_BASE_M = 8.0  # re-entry cone radius at exit time (median measured 7.4 m)
+_OOB_SPREAD_MPF = 0.03  # cone growth per source frame out of play
+_OOB_CAP_M = 20.0  # cone ceiling (p90 measured 15 m)
+
+
+def _world_polygon(geom: FieldGeometry) -> np.ndarray | None:
+    poly = getattr(geom, "polygon", None)
+    if poly is None:
+        return None
+    return geom.image_to_world(np.asarray(poly, float).reshape(-1, 2))
+
+
+def _nearest_on_polygon(pw: np.ndarray, wpoly: np.ndarray) -> np.ndarray:
+    """Nearest point to ``pw`` on the (world-space) polygon boundary."""
+    best, bd = wpoly[0], np.inf
+    n = len(wpoly)
+    for i in range(n):
+        a, bseg = wpoly[i], wpoly[(i + 1) % n]
+        ab = bseg - a
+        denom = float(ab @ ab)
+        t = 0.0 if denom == 0 else float(np.clip((pw - a) @ ab / denom, 0.0, 1.0))
+        q = a + t * ab
+        d = float(np.linalg.norm(pw - q))
+        if d < bd:
+            best, bd = q, d
+    return best
 
 
 def static_persistence(
@@ -411,7 +446,49 @@ def rerank(
     back.append(np.full(k0 + 1, -1, int))
     missw: list[np.ndarray | None] = [None]
     missv: list[np.ndarray | None] = [None]
+    missoob: list[np.ndarray | None] = [None]  # pinned boundary-crossing expectation
     missdur: list[float] = [0.0]
+    wpoly = _world_polygon(geom) if cfg.oob_w > 0 else None
+    img_poly = (
+        np.asarray(geom.polygon, np.float32).reshape(-1, 1, 2)
+        if (cfg.oob_w > 0 and getattr(geom, "polygon", None) is not None)
+        else None
+    )
+
+    def _oob_pin(exit_px, exit_w, v_px):
+        """Boundary-crossing expectation for an exit: the ray crossing when a usable
+        velocity exists, else the nearest boundary point when the exit hugs the line.
+        None = not an out-of-bounds exit (the aerial cone handles it)."""
+        if wpoly is None or img_poly is None:
+            return None
+        import cv2  # noqa: PLC0415
+
+        inside = (
+            cv2.pointPolygonTest(
+                img_poly, (float(exit_px[0]), float(exit_px[1])), False
+            )
+            >= 0
+        )
+        if not inside:
+            return _nearest_on_polygon(exit_w, wpoly)
+        if v_px is not None:
+            step = math.hypot(*v_px)
+            if step > 0.3:  # ~sub-noise px motion has no usable direction
+                for k in range(1, 61):
+                    q = (exit_px[0] + v_px[0] * k, exit_px[1] + v_px[1] * k)
+                    if (
+                        cv2.pointPolygonTest(
+                            img_poly, (float(q[0]), float(q[1])), False
+                        )
+                        < 0
+                    ):
+                        qw = geom.image_to_world(np.asarray([q], float))[0]
+                        return _nearest_on_polygon(qw, wpoly)
+        d_bound = float(np.linalg.norm(exit_w - _nearest_on_polygon(exit_w, wpoly)))
+        if d_bound <= _OOB_NEAR_BOUNDARY_M:
+            return _nearest_on_polygon(exit_w, wpoly)
+        return None
+
     for t in range(1, n):
         k = len(frames[t])
         kp = len(frames[t - 1])
@@ -428,6 +505,27 @@ def rerank(
                 if j == k or i == kp:
                     trans = 0.6  # to/from miss: allow coasting an occlusion
                     if (
+                        j == k
+                        and i == kp
+                        and cfg.oob_w > 0
+                        and missoob[t - 1] is not None
+                    ):
+                        # pinned OUT-OF-BOUNDS: waiting at the boundary is the correct
+                        # behavior, not a guilty miss — coasting is nearly free
+                        trans = 0.1
+                    if (
+                        j != k
+                        and i == kp
+                        and cfg.oob_w > 0
+                        and missoob[t - 1] is not None
+                    ):
+                        # out-of-bounds: expectation pinned at the boundary crossing
+                        dur = missdur[t - 1] + gap
+                        dp = math.hypot(*(fw[t][j] - missoob[t - 1]))
+                        cone = min(_OOB_BASE_M + _OOB_SPREAD_MPF * dur, _OOB_CAP_M)
+                        if dp <= cone:
+                            trans -= cfg.oob_w * _CONE_BONUS
+                    elif (
                         j != k
                         and i == kp
                         and cfg.bridge_w > 0
@@ -471,27 +569,36 @@ def rerank(
         if bi_m == kp:  # stayed in miss: keep the frozen exit point, extend duration
             missw.append(missw[t - 1])
             missv.append(missv[t - 1])
+            missoob.append(missoob[t - 1])
             missdur.append(missdur[t - 1] + gap)
         elif 0 <= bi_m < kp:  # entered miss from a candidate: freeze where it left
             missw.append(fw[t - 1][bi_m].copy())
             # exit velocity from the entering path's last step (its backpointer),
             # capped at flight speed; sub-launch motion is rolling noise -> no direction
             v = None
+            v_px = None
             if t >= 2:
                 pv = int(back[t - 1][bi_m])
                 if 0 <= pv < len(fw[t - 2]):
                     step = fw[t - 1][bi_m] - fw[t - 2][pv]
                     v = step / max(gaps[t - 1], 1)
+                    v_px = (fsrc[t - 1][bi_m] - fsrc[t - 2][pv]) / max(gaps[t - 1], 1)
                     speed = math.hypot(*v)
                     if speed < _LAUNCH_MIN_MPF:
                         v = None
                     elif speed > cfg.air_vmax_mpf:
                         v = v * (cfg.air_vmax_mpf / speed)
             missv.append(v)
+            missoob.append(
+                _oob_pin(fsrc[t - 1][bi_m], fw[t - 1][bi_m], v_px)
+                if cfg.oob_w > 0
+                else None
+            )
             missdur.append(float(gap))
         else:
             missw.append(None)
             missv.append(None)
+            missoob.append(None)
             missdur.append(float(gap))
 
     path = [int(np.argmin(cost[-1]))]
