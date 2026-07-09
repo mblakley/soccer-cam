@@ -23,6 +23,11 @@ Selection criteria (``--criteria``):
     (c) sustained ``trackmiss`` runs (low-confidence stretches worth filling in). Every anchor is
     expanded with before/after context frames so the annotator can SEE the track; the hint marker
     is the track's own position at that frame.
+  * ``disagree``   — ADJUDICATION frames (EXP-DIST-36): tier-B benchmark rows where OUR planned
+    camera and AutoCam's claimed ball position disagree (one anchor per disagreement run, longest
+    runs first). Hint = AutoCam's claim; context dots = our candidates + our camera center. The
+    human click decides who was actually right — measured tier-B contamination is ~6.6%, and we
+    were on the real ball in 31/36 contaminated frames sampled.
   * ``spans``      — CONTIGUOUS eval spans (``--windows "lo-hi,lo-hi,..."`` global frames, stride-8
     grid): run-structure GT for the continuity/viewport instrument. Isolated hard frames can score
     per-frame hits but cannot measure fragments/excursions; contiguous spans can. Built for the
@@ -259,6 +264,52 @@ def select_span_frames(
     return out
 
 
+def select_disagree_frames(
+    bench: dict[int, dict],
+    plan: list,
+    g_start: int,
+    *,
+    target: int,
+    hw: float = 1200.0,
+    hh: float = 500.0,
+) -> list[dict]:
+    """Tier-B rows where the planned camera does NOT contain AutoCam's claimed ball,
+    grouped into runs (one midpoint anchor per run, value = run length)."""
+    events: list[tuple[int, dict]] = []
+    for g, r in sorted(bench.items()):
+        if r.get("tier") != "autocam":
+            continue
+        i = g - g_start
+        if not (0 <= i < len(plan)):
+            continue
+        cx, cy = plan[i][0], plan[i][1]
+        if ((r["x"] - cx) / hw) ** 2 + ((r["y"] - cy) / hh) ** 2 > 1.0:
+            events.append((g, r))
+    runs: list[list[tuple[int, dict]]] = []
+    for g, r in events:
+        if runs and g - runs[-1][-1][0] <= 48:
+            runs[-1].append((g, r))
+        else:
+            runs.append([(g, r)])
+    pool = []
+    for run in runs:
+        mid_g, mid_r = run[len(run) // 2]
+        pool.append([mid_g, mid_r, float(len(run))])
+    chosen = _spread_bins(pool, target)
+    return [
+        {
+            "frame_idx": int(g),
+            "file": f"f{int(g):06d}.jpg",
+            "hint_x": round(float(r["x"]), 1),
+            "hint_y": round(float(r["y"]), 1),
+            "autocam": True,  # the hint IS AutoCam's claim
+            "hint_conf": 0.0,
+            "reason": "disagree",
+        }
+        for g, r, _v in chosen
+    ]
+
+
 def select_frames(
     dets: dict[int, list],
     poly_np: np.ndarray,
@@ -341,9 +392,19 @@ def main() -> None:
     ap.add_argument("--set-name", default=None, help="default: <game_id>__<criteria>")
     ap.add_argument(
         "--criteria",
-        choices=["hard", "lowconf", "lost", "distractor", "near", "diverge", "spans"],
+        choices=[
+            "hard",
+            "lowconf",
+            "lost",
+            "distractor",
+            "near",
+            "diverge",
+            "spans",
+            "disagree",
+        ],
         default="hard",
     )
+    ap.add_argument("--campath", default=None, help="camera_path/1 artifact (disagree)")
     ap.add_argument(
         "--windows",
         default=None,
@@ -403,7 +464,7 @@ def main() -> None:
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
     near_cands: dict[int, list] = {}
-    if args.criteria in ("near", "diverge") or (
+    if args.criteria in ("near", "diverge", "disagree") or (
         args.criteria == "spans" and args.fullgame_dir
     ):
         if not args.fullgame_dir:
@@ -437,6 +498,27 @@ def main() -> None:
             target=args.max_frames,
             exclude=excl,
         )
+    elif args.criteria == "disagree":
+        if not args.campath:
+            raise SystemExit("--criteria disagree needs --campath (+ --fullgame-dir)")
+        art = json.loads(Path(args.campath).read_text(encoding="utf-8"))
+        bench_p = vdir / "viewport_benchmark.jsonl"
+        if not bench_p.exists():
+            raise SystemExit("no viewport_benchmark.jsonl for this game")
+        bench: dict[int, dict] = {}
+        for _ln in bench_p.read_text(encoding="utf-8").splitlines():
+            if _ln.strip():
+                _r = json.loads(_ln)
+                if _r.get("tier") == "autocam":
+                    bench[int(_r["g"])] = _r
+        frames = select_disagree_frames(
+            bench, art["frames"], int(art["g_start"]), target=args.max_frames
+        )
+        # our camera center joins the overlay so the annotator sees BOTH claims
+        for e in frames:
+            i = int(e["frame_idx"]) - int(art["g_start"])
+            cx, cy = art["frames"][i][0], art["frames"][i][1]
+            e["our_cam"] = [round(float(cx), 1), round(float(cy), 1)]
     elif args.criteria == "spans":
         if not args.windows:
             raise SystemExit("--criteria spans needs --windows 'lo-hi,lo-hi,...'")
@@ -580,7 +662,7 @@ def main() -> None:
                 "band": "normal",
             }
         )
-    if args.criteria in ("near", "diverge") or (
+    if args.criteria in ("near", "diverge", "disagree") or (
         args.criteria == "spans" and args.fullgame_dir
     ):
         # candidate overlays straight from the dump (score-sorted; top-5 render blue)
@@ -598,6 +680,10 @@ def main() -> None:
                 [round(float(r[0]), 1), round(float(r[1]), 1), round(float(r[2]), 4)]
                 for r in rows
             ]
+            if e.get("our_cam"):
+                e["context"].append(
+                    {"x": e["our_cam"][0], "y": e["our_cam"][1], "df": 1}
+                )
     manifest = {
         "set": set_name,
         "clip": video,
