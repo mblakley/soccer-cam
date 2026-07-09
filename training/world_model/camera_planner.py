@@ -150,10 +150,15 @@ def upsample_track(
     ef: list[int],
     g_start: int,
     g_end: int,
+    *,
+    max_gap: int = 24,
 ) -> list[tuple[float, float] | None]:
     """Expand a stride-N track (keyed by ef INDEX) to per-source-frame positions on
     ``[g_start, g_end)`` by linear interpolation between consecutive tracked
-    entries; frames outside the tracked span are ``None``."""
+    entries. Frames outside the tracked span — or inside a grid DISCONTINUITY
+    wider than ``max_gap`` source frames (active-play range boundaries: halftime,
+    warmup gaps) — are ``None``: interpolating across minutes of dead time would
+    hand the planner a fake linear pan bridging the break."""
     pts = sorted((ef[i], xy) for i, xy in track.items() if 0 <= i < len(ef))
     out: list[tuple[float, float] | None] = [None] * (g_end - g_start)
     if not pts:
@@ -166,6 +171,12 @@ def upsample_track(
         x = float(np.interp(g, gs, xs))
         y = float(np.interp(g, gs, ys))
         out[g - g_start] = (x, y)
+    # blank the interiors of wide grid gaps (exclusive: endpoints stay tracked)
+    for k in range(1, len(gs)):
+        if int(gs[k]) - int(gs[k - 1]) > max_gap:
+            for g in range(int(gs[k - 1]) + 1, int(gs[k])):
+                if g_start <= g < g_end:
+                    out[g - g_start] = None
     return out
 
 

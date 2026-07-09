@@ -84,3 +84,15 @@ def test_upsample_track_linear_and_none_outside():
     assert out[12][0] == 140.0  # linear midpoint
     assert out[16] == (180.0, 50.0)
     assert out[17] is None  # after the span
+
+
+def test_upsample_track_blanks_wide_gaps():
+    """Never interpolate across an active-play discontinuity (halftime bridge bug:
+    labels inside the break scored against a fake linear pan)."""
+    track = {0: (100.0, 50.0), 1: (180.0, 50.0), 2: (2000.0, 60.0)}
+    ef = [8, 16, 3016]  # a ~2.5-minute grid gap after frame 16
+    out = upsample_track(track, ef, 0, 3020)
+    assert out[12][0] == 140.0  # normal stride interpolation intact
+    assert out[16] == (180.0, 50.0)
+    assert all(out[g] is None for g in range(17, 3016))  # the break is blank
+    assert out[3016] == (2000.0, 60.0)
