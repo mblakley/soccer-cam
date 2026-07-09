@@ -1,6 +1,15 @@
 # Current Status
 
-*Last updated: 2026-07-08 (morning)*
+*Last updated: 2026-07-09*
+
+## 2026-07-09 — loss-window ADJUDICATION: 26/28 covered windows are REAL losses of a visible ball
+
+- Auto-adjudication vs human GT (champion v5 track): **Spc 23 windows -> 13 REAL far + 3 REAL near +
+  2 marginal + 5 awaiting `spc_lastwindows_spans` (Mark 15/166 in)**; **Iron 10 windows -> 9 REAL near
+  + 1 REAL far**. ZERO windows where the ball was invisible — the tracker is losing balls a human can
+  see. Failure geography: Spencerport fails FAR, Irondequoit fails NEAR.
+- This is the Phase-6 ball-state target list: 26 confirmed windows, each with GT, each replayable in
+  seconds off cached dumps.
 
 ## 2026-07-08 — MARATHON COMPLETE (15/15); v5 net; whole-game held-out: Spc near .60→.71
 
