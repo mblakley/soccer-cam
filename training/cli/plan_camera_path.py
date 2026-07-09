@@ -50,14 +50,23 @@ def score_plan(
     bench: dict[int, dict],
     src_w: int,
     *,
+    traj: list | None = None,
     fixed: tuple[float, float] | None = (1200.0, 500.0),
 ) -> dict:
-    """Ball-in-planned-view rates by benchmark tier + sustained loss windows."""
+    """Ball-in-planned-view rates by benchmark tier + sustained loss windows.
+
+    Rows where the planner had NO input (``traj[i] is None`` — outside active
+    play / track coverage) are excluded and counted as ``uncovered``: the render
+    is phase-gated there, so the camera cannot be graded on them."""
     tally = {"human": [0, 0], "autocam": [0, 0]}
     events: list[tuple[int, bool]] = []
+    uncovered = 0
     for g, r in sorted(bench.items()):
         i = g - g_start
         if not (0 <= i < len(plan)):
+            continue
+        if traj is not None and traj[i] is None:
+            uncovered += 1
             continue
         cx, cy, hfov = plan[i]
         if fixed is not None:
@@ -76,7 +85,12 @@ def score_plan(
         else:
             runs.append([ok, g, g])
     loss = [(r[1], r[2]) for r in runs if not r[0] and (r[2] - r[1]) >= 40]
-    return {"human": tally["human"], "autocam": tally["autocam"], "loss": loss}
+    return {
+        "human": tally["human"],
+        "autocam": tally["autocam"],
+        "loss": loss,
+        "uncovered": uncovered,
+    }
 
 
 def main() -> None:
@@ -169,12 +183,12 @@ def main() -> None:
             if r.get("tier") != "none":
                 bench[int(r["g"])] = r
     for label, fixed in (("fixed 1200x500", (1200.0, 500.0)), ("planned-view", None)):
-        s = score_plan(plan, g_start, bench, src_w, fixed=fixed)
+        s = score_plan(plan, g_start, bench, src_w, traj=traj, fixed=fixed)
         bh, ba = s["human"], s["autocam"]
         print(
             f"  {label:14s} human {bh[0]}/{bh[1]} = {bh[0] / max(bh[1], 1):.3f}  "
             f"autocam-tier {ba[0]}/{ba[1]} = {ba[0] / max(ba[1], 1):.3f}  "
-            f"loss-windows {len(s['loss'])}: {s['loss'][:5]}"
+            f"loss-windows {len(s['loss'])}  uncovered {s['uncovered']}"
         )
 
 
