@@ -114,6 +114,13 @@ def main() -> None:
         help="hand-tuned static-persistence emission term (hybrid)",
     )
     ap.add_argument("--miss-cost", type=float, default=0.9)
+    ap.add_argument(
+        "--oob-w",
+        nargs="+",
+        type=float,
+        default=[0.0],
+        help="out-of-bounds pin weights to sweep (0 = off)",
+    )
     ap.add_argument("--pnone-scale", type=float, default=None)
     ap.add_argument("--bridge-w", nargs="+", type=float, default=[0.0, 1.0])
     ap.add_argument("--phys-sigma-px", nargs="+", type=float, default=[0.0, 5.0])
@@ -198,9 +205,13 @@ def main() -> None:
         motion_w=0.0,
         miss_cost=args.miss_cost * w,
     )
-    for phys in args.phys_sigma_px:
-        for bw in args.bridge_w:
-            cfg = replace(base, phys_sigma_px=phys, bridge_w=bw)
+    import itertools
+
+    for phys, bw, ow in itertools.product(
+        args.phys_sigma_px, args.bridge_w, args.oob_w
+    ):
+        if True:
+            cfg = replace(base, phys_sigma_px=phys, bridge_w=bw, oob_w=ow)
             sel = rerank(
                 frames,
                 geom,
@@ -301,7 +312,7 @@ def main() -> None:
             }
             report.append(row)
             print(
-                f"  phys={phys} br={bw}: NEAR {row['near']:.3f} ({n_n[1]}) "
+                f"  phys={phys} br={bw} oob={ow}: NEAR {row['near']:.3f} ({n_n[1]}) "
                 f"FAR {row['far']:.3f} ({n_f[1]}) | teleports {tele} "
                 f"miss {row['miss_frames']}"
             )
