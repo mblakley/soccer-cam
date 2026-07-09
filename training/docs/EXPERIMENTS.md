@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-35b: restart-spot priors — end-line exits re-enter at the goal kick / corners (2026-07-09)
+
+**Trigger:** Iron's OOB stretches are long retrievals past the END line (-300..-500 px) where the
+crossing pin is too naive — the rules place the restart at the goal area or corner arc, not the
+crossing. `_restart_spots`: end-line crossings (edges 4->5 / 9->0 of the 10-point outline) expand
+the pin to {crossing, goal-kick spot (mid-end-line + 6 m infield), both corners}; re-entry scores
+against the NEAREST spot. Touchline exits keep the throw-in crossing. Test: goal-kick re-entry far
+beyond the crossing cone beats a mid-field distractor.
+
+**Held-out A/B (champion v5 stack):**
+
+| game | oob off | crossing pin only | pin + restart spots |
+|---|---|---|---|
+| Iron bench-h | .571 (10 w) | .587 (10 w) | **.595 (9 w)** — first Iron window fixed; near -.07 |
+| Spc bench-h | .782 (23 w) | .839 (18 w) | .823 (18 w) |
+
+**Conclusions:** spots are the rules-correct design and win on the game they target (Iron); they
+give back ~.016 on Spc vs pin-only (extra spots occasionally bonus a wrong re-entry near corners).
+Adopted (principled over per-game tuning — refine later with crossing-to-corner distance gating if
+the render shows it). Iron's near-band regression under OOB remains the open thread — its 9
+remaining windows are near-band losses where the pin competes with genuine near play.
+
 ## EXP-DIST-35: out-of-bounds state — exit-crossing pin + free boundary wait; Spc benchmark .782 -> .839 (2026-07-09)
 
 **Trigger (Mark):** 23/31 adjudicated loss windows had the ball OUT OF BOUNDS — and the detector mask
