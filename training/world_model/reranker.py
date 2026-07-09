@@ -117,9 +117,9 @@ def _world_polygon(geom: FieldGeometry) -> np.ndarray | None:
     return geom.image_to_world(np.asarray(poly, float).reshape(-1, 2))
 
 
-def _nearest_on_polygon(pw: np.ndarray, wpoly: np.ndarray) -> np.ndarray:
-    """Nearest point to ``pw`` on the (world-space) polygon boundary."""
-    best, bd = wpoly[0], np.inf
+def _nearest_on_polygon(pw: np.ndarray, wpoly: np.ndarray) -> tuple[np.ndarray, int]:
+    """Nearest point to ``pw`` on the (world-space) polygon boundary + its edge index."""
+    best, bd, be = wpoly[0], np.inf, 0
     n = len(wpoly)
     for i in range(n):
         a, bseg = wpoly[i], wpoly[(i + 1) % n]
@@ -129,8 +129,31 @@ def _nearest_on_polygon(pw: np.ndarray, wpoly: np.ndarray) -> np.ndarray:
         q = a + t * ab
         d = float(np.linalg.norm(pw - q))
         if d < bd:
-            best, bd = q, d
-    return best
+            best, bd, be = q, d, i
+    return best, be
+
+
+def _restart_spots(cross_w: np.ndarray, edge_idx: int, wpoly: np.ndarray) -> np.ndarray:
+    """Rule-based re-entry spots for a boundary crossing (EXP-DIST-35b).
+
+    Touchline exit -> throw-in AT the crossing (the crossing alone). END-LINE exit
+    (edges 4->5 and 9->0 of the 10-point field outline, the same convention as
+    ``_far_margin_polygon``) -> the rules move the restart: GOAL KICK from the goal
+    area (end-line midpoint pushed ~6 m infield) or CORNER at either end of that
+    line — plus the crossing itself (quick keeper restarts). Returns ``(m, 2)``
+    world points."""
+    spots = [cross_w]
+    n = len(wpoly)
+    if n >= 10 and edge_idx in (4, n - 1):
+        a, bseg = wpoly[edge_idx], wpoly[(edge_idx + 1) % n]
+        mid = (a + bseg) / 2.0
+        inward = wpoly.mean(axis=0) - mid
+        nrm = float(np.linalg.norm(inward))
+        if nrm > 0:
+            spots.append(mid + inward / nrm * 6.0)  # goal-kick spot
+        spots.append(a)  # corner arcs
+        spots.append(bseg)
+    return np.asarray(spots, float)
 
 
 def static_persistence(
@@ -456,8 +479,10 @@ def rerank(
     )
 
     def _oob_pin(exit_px, exit_w, v_px):
-        """Boundary-crossing expectation for an exit: the ray crossing when a usable
-        velocity exists, else the nearest boundary point when the exit hugs the line.
+        """Re-entry expectation SPOTS for an exit (``(m, 2)`` world points): the
+        boundary crossing (ray-marched when a usable velocity exists, else the
+        nearest boundary point for line-hugging exits), expanded by the rule-based
+        restart spots when the crossing is on an END line (goal kick / corners).
         None = not an out-of-bounds exit (the aerial cone handles it)."""
         if wpoly is None or img_poly is None:
             return None
@@ -470,7 +495,8 @@ def rerank(
             >= 0
         )
         if not inside:
-            return _nearest_on_polygon(exit_w, wpoly)
+            cross, edge = _nearest_on_polygon(exit_w, wpoly)
+            return _restart_spots(cross, edge, wpoly)
         if v_px is not None:
             step = math.hypot(*v_px)
             if step > 0.3:  # ~sub-noise px motion has no usable direction
@@ -483,10 +509,11 @@ def rerank(
                         < 0
                     ):
                         qw = geom.image_to_world(np.asarray([q], float))[0]
-                        return _nearest_on_polygon(qw, wpoly)
-        d_bound = float(np.linalg.norm(exit_w - _nearest_on_polygon(exit_w, wpoly)))
-        if d_bound <= _OOB_NEAR_BOUNDARY_M:
-            return _nearest_on_polygon(exit_w, wpoly)
+                        cross, edge = _nearest_on_polygon(qw, wpoly)
+                        return _restart_spots(cross, edge, wpoly)
+        near_pt, edge = _nearest_on_polygon(exit_w, wpoly)
+        if float(np.linalg.norm(exit_w - near_pt)) <= _OOB_NEAR_BOUNDARY_M:
+            return _restart_spots(near_pt, edge, wpoly)
         return None
 
     for t in range(1, n):
@@ -519,9 +546,12 @@ def rerank(
                         and cfg.oob_w > 0
                         and missoob[t - 1] is not None
                     ):
-                        # out-of-bounds: expectation pinned at the boundary crossing
+                        # out-of-bounds: expectation pinned at the crossing +
+                        # rule-based restart spots (nearest one counts)
                         dur = missdur[t - 1] + gap
-                        dp = math.hypot(*(fw[t][j] - missoob[t - 1]))
+                        dp = float(
+                            np.linalg.norm(missoob[t - 1] - fw[t][j], axis=1).min()
+                        )
                         cone = min(_OOB_BASE_M + _OOB_SPREAD_MPF * dur, _OOB_CAP_M)
                         if dp <= cone:
                             trans -= cfg.oob_w * _CONE_BONUS

@@ -371,6 +371,61 @@ def test_rerank_oob_pin_holds_the_boundary_and_reacquires_at_the_crossing():
     assert pinned[6][0] == pytest.approx(reentry[0])  # re-acquires at the crossing
 
 
+def test_rerank_oob_endline_restart_spots_cover_goal_kick():
+    """EXP-DIST-35b: an END-LINE exit does not restart at the crossing — the rules
+    move the ball to the goal area (goal kick) or a corner. The restart spots must
+    let the track re-acquire at the goal-kick spot even though it is far beyond the
+    crossing cone (the Irondequoit retrieval failure mode)."""
+    import cv2
+
+    from training.world_model.reranker import (
+        _nearest_on_polygon,
+        _restart_spots,
+        _world_polygon,
+    )
+
+    geom = build_field_geometry(np.asarray(_POLY, float))
+    wpoly = _world_polygon(geom)
+    img_poly = np.asarray(geom.polygon, np.float32).reshape(-1, 1, 2)
+
+    exit_px = (7400.0, 1150.0)  # past the right end line, near the near-right corner
+    assert cv2.pointPolygonTest(img_poly, exit_px, False) < 0
+
+    def w(p):
+        return geom.image_to_world(np.asarray([p], float))[0]
+
+    cross, edge = _nearest_on_polygon(w(exit_px), wpoly)
+    assert edge == 4  # the 4->5 edge IS the right end line
+    spots = _restart_spots(cross, edge, wpoly)
+    assert len(spots) == 4  # crossing + goal-kick spot + both corners
+    goal_w = spots[1]
+    assert float(np.linalg.norm(goal_w - cross)) > 21.0  # beyond the crossing cone
+    gx, gy = geom.world_to_image(np.asarray([goal_w]))[0]
+
+    frames: list[list[Candidate]] = [
+        [Candidate(*exit_px, 0.8)],
+        [Candidate(*exit_px, 0.8)],
+    ]
+    distract = (3800.0, 900.0)
+    for _ in range(4):
+        frames.append([Candidate(*distract, 0.7)])
+    frames.append([Candidate(float(gx), float(gy), 0.6), Candidate(*distract, 0.7)])
+    priors = [
+        np.asarray([0.95 if c.x == distract[0] else 0.3 for c in fr], float)
+        for fr in frames
+    ]
+    iso = {"alpha": 0.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+    pinned = rerank(
+        frames,
+        geom,
+        frame_gaps=[8] * len(frames),
+        priors=priors,
+        config=RerankConfig(**iso, oob_w=2.0),
+    )
+    assert 3 not in pinned  # waits out the retrieval
+    assert pinned[6][0] == pytest.approx(float(gx))  # re-acquires at the goal kick
+
+
 def test_action_density_prior_favours_the_player_cluster():
     geom = build_field_geometry(np.asarray(_POLY, dtype=float))
     # each frame: a candidate in a dense player cluster (the action) vs a far lone-player
