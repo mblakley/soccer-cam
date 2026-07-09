@@ -2,6 +2,18 @@
 
 *Last updated: 2026-07-09*
 
+## 2026-07-09 (evening) — camera PLANNER built + planned path SCORED pre-render
+
+- Dumb-renderer split (Mark): planner owns ALL camera intelligence (AutoCam-calibrated aesthetics,
+  minus the render branch's defensive input-cleaning our track obsoletes); renderer will execute
+  {center_px, hfov_deg} with feasibility clamps only. `camera_planner.py` + `plan_camera_path.py`.
+- **The PLANNED camera scores as well as the raw track — cinematography cost ~zero:** Spc human-tier
+  .834 fixed-ellipse / .815 planned-view (n=1,261, now every label, not just grid-adjacent; 17-19
+  loss windows); Iron .609/.572 (n=573; 9-12 windows). Planner smoothing + coasted upsampling absorb
+  grid jitter; failure geography unchanged. Architecture validated end-to-end as pure data.
+- Next: dumb render driver (cylindrical primitives from the render branch worktree, clamps only) ->
+  first clips on the calibrated windows -> vertical-stack vs AutoCam's existing Spencerport render.
+
 ## 2026-07-09 — held-out failure surface FULLY adjudicated: 29 real losses, 4 excused
 
 - Mark completed `spc_lastwindows_spans` (166 labels: 97 ball / 55 not_visible / 14 obscured — the
