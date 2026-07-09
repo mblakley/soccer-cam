@@ -4,6 +4,34 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-35: out-of-bounds state — exit-crossing pin + free boundary wait; Spc benchmark .782 -> .839 (2026-07-09)
+
+**Trigger (Mark):** 23/31 adjudicated loss windows had the ball OUT OF BOUNDS — and the detector mask
+has zero margin on near/side lines, so the ball is architecturally invisible there. His physics: the
+ball leaves with velocity (extrapolate the crossing), MUST return (rules), and returns NEAR where it
+left (throw-in at the crossing). Measured on held-out GT (n=4 measurable exits): re-entry within
+7.4-11.5 m median (p90 15 m) of the extrapolated crossing after 7-20 s; re-acquisition latency at
+re-entry ZERO frames in 12/12 measurable cases; exits seen 7/11.
+
+**Implementation (`oob_w`):** at miss entry, if the exit ray crosses the polygon (or the exit hugs
+the line), pin the expectation at the boundary crossing; waiting there is nearly free (miss-to-miss
+trans 0.1 vs 0.6 — a throw-in wait is correct behavior, not a guilty miss); re-entry inside a
+slow-growing cone (8 m base, 20 m cap — from the measurements) gets the cone bonus. Behavior test:
+bright mid-field distractor during the dead time cannot steal the track.
+
+**Held-out A/B (champion v5 + phys 5 + bridge 2 + static 2 + pnone):**
+
+| game | oob=0 | oob=2 |
+|---|---|---|
+| Spc bench-human | .782 (23 windows) | **.839 (18 windows)**, near .672->.789, cov .58->.65 |
+| Iron bench-human | .571 (10 windows) | .587, far .466->.500, near -.05, teleports 258->346 |
+
+**Conclusions:** clear win on Spencerport (5 windows fixed outright, biggest single-change benchmark
+jump of the project); mixed-positive on Irondequoit — its OOB stretches are long retrievals far past
+the end line (measured -300..-500 px), where a crossing pin is too naive: needs the RESTART-SPOT
+priors (goal-kick box / corner arc) from the plan's ball-state design, plus its 4 lost-before-exit
+windows are aerial/fast-exit territory. oob_w=2 adopted into the champion config.
+
 ## EXP-DIST-34: LOGO variance — v5 is corpus-wide, no game carries it, no game harms it (2026-07-08)
 
 **Method:** 15 leave-one-game-out retrains (full v5 recipe: 14 supervision sets each, size_ratio
