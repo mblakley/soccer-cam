@@ -86,3 +86,27 @@ def test_load_commands_rejects_empty(tmp_path):
     p.write_text(json.dumps({"g_start": 0, "frames": []}))
     with pytest.raises(RuntimeError, match="no commands"):
         _load_commands(str(p))
+
+
+def test_crop_box_never_truncates_at_extreme_pans():
+    """End-field pans: the window SHIFTS to fit the pano, never truncates —
+    truncation + output resize stretched the picture (2026-07-10 defect)."""
+    from video_grouper.inference.cylindrical_view import crop_box
+    from video_grouper.pipeline.steps.render import _command_for  # noqa: F401
+
+    cfg = RenderStepConfig(render_zoom_scale=1.0)
+    geom = _geom(cfg)
+    assert geom.leveled_pano is not None
+    pano = geom.leveled_pano
+    ph, pw = pano.map_x.shape
+    deg_px_az = (pano.az_hi - pano.az_lo) / pw
+    deg_px_el = (pano.el_hi - pano.el_lo) / ph
+    for cx in (0.0, 300.0, _SRC_W / 2, _SRC_W - 300.0, float(_SRC_W)):
+        params, vy = _frame_view(
+            (cx, 1200.0, 52.0), geom, cfg, -90.0, 90.0, _SRC_W, _SRC_H, 1920, 1080
+        )
+        _x0, _y0, w, h = crop_box(pano, params, vy)
+        want_w = params.view_hfov_deg / deg_px_az
+        want_h = (params.view_hfov_deg * 1080 / 1920) / deg_px_el
+        assert w >= 0.98 * want_w, (cx, w, want_w)
+        assert h >= 0.98 * want_h, (cx, h, want_h)
