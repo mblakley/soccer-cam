@@ -12,11 +12,14 @@ Selection criteria (``--criteria``):
   * ``lowconf``    — top on-field detection confidence in ``[lc_lo, lc_hi)`` (detector unsure).
   * ``distractor`` — 2+ on-field candidates of similar confidence (which one is the game ball?).
   * ``hard``       — the union (default): the frames AutoCam struggles with, the high-value tail.
-  * ``near``       — NEAR-band selector supervision (EXP-DIST-29: all existing gold is far-mined,
-    and the learned selector demotes near balls). Mines a marathon fullgame dump + its teacher-snap
-    labels (``--fullgame-dir`` + ``--sel-labels``) for frames where the teacher's near ball is NOT
-    the top-scored candidate (``near_misrank``) or has no teacher coverage (``near_unknown``);
-    candidate overlays come straight from the dump (no re-inference).
+  * ``near``       — CLOSE-ball GT by POSITION relative to the field outline (Mark 2026-07-10:
+    "do it based on position, not size"). Selects the teacher-snap ball when it is near the NEAR
+    touchline (``--near-depth``) and toward the frame front (biggest, close balls — the near-detection
+    weak spot). ``--near-span`` expands each to a 2-4 frame arc. Reasons: ``near_misrank`` (also
+    demoted by our detector), ``near_close`` (teacher top-ranked), ``near_unknown`` (no teacher).
+  * ``kick``       — close-ball ARC miner: a fast in-field exit + a detection gap (a ball struck
+    into an arc the detector drops), served as a WIDE bracketed window (lead-up -> flight -> landing),
+    full-frame no-seed. Needs the full selector track (misses only appear under physical transitions).
   * ``diverge``    — TRACK-AUDIT sets (Mark 2026-07-06): run the current tracker over the fullgame
     dump and flag (a) human labels the track disagrees with (bad label OR bad track — re-verify),
     (b) ``teleport`` world-jumps in the raw selection (identity switches the smoother hides), and
@@ -82,56 +85,59 @@ def select_near_frames(
     labels: dict[int, tuple[int, float]],
     geom,
     *,
-    near_px: float,
+    near_depth: float,
     target: int,
     exclude: set[int],
 ) -> list[dict]:
-    """NEAR-band miner over a fullgame dump + teacher-snap ``labels`` ({ef_index:
-    (cand_idx, weight)}, -1 = none). ``near_misrank`` (teacher's near ball outscored by
-    another candidate — the demotions the learned selector copies, value = score rank)
-    beats ``near_unknown`` (near candidates but no teacher coverage, value 0.5) in a bin.
+    """CLOSE-ball miner by POSITION relative to the field outline (Mark 2026-07-10).
+
+    The geometric ball-SIZE estimate is useless here (an airborne ball reads tiny, and
+    it maxes at ~23px), so select close balls by POSITION: near the NEAR touchline and
+    toward the frame front. Gates the teacher-snap ball by ``depth`` (``(y-yf)/(yn-yf)``,
+    1 = near touchline) ``>= near_depth`` and ranks by image-y so the frontmost/closest
+    ball wins each temporal bin (the touchline meets the frame edge at the front, where
+    balls are biggest). ``near_misrank`` = the ball our detector also demoted below a
+    distractor; ``near_close`` = teacher-backed and top-ranked; ``near_unknown`` = a
+    near-touchline candidate with no teacher coverage.
     """
-    pool: list[list] = []  # [frame, reason, (hx, hy), conf, value]
+    poly = np.asarray(getattr(geom, "polygon", np.zeros((0, 2))), float)
+    if len(poly) >= 10:
+        yn = float(np.mean(poly[0:5, 1]))
+        yf = float(np.mean(poly[5:10, 1]))
+    else:
+        yn = float(poly[:, 1].max()) if len(poly) else 1.0
+        yf = float(poly[:, 1].min()) if len(poly) else 0.0
+    span = max(yn - yf, 1e-6)
+    pool: list[list] = []  # [frame, reason, (hx, hy), conf, value=image-y]
     for i, g in enumerate(ef):
         if g in exclude:
             continue
         rows = cands.get(g) or []
         if not rows:
             continue
-        xy = np.asarray([(r[0], r[1]) for r in rows], float)
-        exp = geom.expected_ball_diameter_px(xy)
         lab = labels.get(i)
-        if lab is not None:
+        if lab is not None and int(lab[0]) >= 0:
             j = int(lab[0])
-            if j < 0 or exp[j] <= near_px:  # none-frame or teacher ball not near
+            if j >= len(rows):
+                continue
+            x, y = float(rows[j][0]), float(rows[j][1])
+            if (y - yf) / span < near_depth:  # not close to the near touchline
                 continue
             scores = [float(r[2]) for r in rows]
             rank = sum(1 for s in scores if s > scores[j])
-            if rank == 0:  # score already ranks it #1 — low labeling value
-                continue
-            pool.append(
-                [
-                    g,
-                    "near_misrank",
-                    (float(rows[j][0]), float(rows[j][1])),
-                    scores[j],
-                    float(rank),
-                ]
-            )
+            reason = "near_misrank" if rank > 0 else "near_close"
+            pool.append([g, reason, (x, y), scores[j], y])
         else:
-            nj = [k for k in range(len(rows)) if exp[k] > near_px]
+            nj = [
+                k
+                for k in range(len(rows))
+                if (float(rows[k][1]) - yf) / span >= near_depth
+            ]
             if not nj:
                 continue
-            top = max(nj, key=lambda k: float(rows[k][2]))
-            pool.append(
-                [
-                    g,
-                    "near_unknown",
-                    (float(rows[top][0]), float(rows[top][1])),
-                    float(rows[top][2]),
-                    0.5,
-                ]
-            )
+            top = max(nj, key=lambda k: float(rows[k][1]))  # frontmost near candidate
+            x, y = float(rows[top][0]), float(rows[top][1])
+            pool.append([g, "near_unknown", (x, y), float(rows[top][2]), y])
     chosen = _spread_bins(pool, target)
     return [
         {
@@ -139,7 +145,7 @@ def select_near_frames(
             "file": f"f{int(f):06d}.jpg",
             "hint_x": round(hx, 1),
             "hint_y": round(hy, 1),
-            "autocam": reason == "near_misrank",  # teacher-backed hint
+            "autocam": reason != "near_unknown",  # teacher-backed hint
             "hint_conf": round(conf, 3),
             "reason": reason,
         }
@@ -151,9 +157,7 @@ def _expand_near_spans(
     frames: list[dict],
     ef: list[int],
     cands: dict[int, list],
-    geom,
     *,
-    near_px: float,
     span: int,
 ) -> list[dict]:
     """Expand each near ANCHOR into ``span`` consecutive dump frames (the anchor +
@@ -584,10 +588,10 @@ def main() -> None:
     ap.add_argument("--fullgame-dir", default=None)
     ap.add_argument("--sel-labels", default=None)
     ap.add_argument(
-        "--near-px",
+        "--near-depth",
         type=float,
-        default=8.0,
-        help="near band = expected diameter > this (eval dumps' far_size_px)",
+        default=0.55,
+        help="close band = ball depth >= this (1 = near touchline); position, not size",
     )
     ap.add_argument(
         "--near-span",
@@ -677,13 +681,11 @@ def main() -> None:
             near_cands,
             labels,
             geom,
-            near_px=args.near_px,
+            near_depth=args.near_depth,
             target=max(1, args.max_frames // span),
             exclude=excl,
         )
-        frames = _expand_near_spans(
-            frames, ef, near_cands, geom, near_px=args.near_px, span=span
-        )
+        frames = _expand_near_spans(frames, ef, near_cands, span=span)
     elif args.criteria == "disagree":
         if not args.campath:
             raise SystemExit("--criteria disagree needs --campath (+ --fullgame-dir)")
