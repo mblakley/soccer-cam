@@ -4,6 +4,31 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-38: blanket boundary margin HURTS (catches distractors); needs a state gate (2026-07-10)
+
+**Trigger (Mark, reviewing clip 1):** the end-line/dome detection margin (EXP-nearby, boundary
++250 px) made the render WORSE — it catches off-field distractors (the crowd/sideline).
+
+**A/B on the clip-1 window (g 3392-9392), same selector/config, scored ball-in-viewport vs HUMAN GT:**
+
+| detection mask | ball-in-viewport (vs GT) | selected detections OFF-field |
+|---|---|---|
+| **field-only (no margin)** | **119/130 = .915** | 86/326 (26%) |
+| boundary +250 margin | 78/130 = **.600** | 98/366 (27%) |
+
+**Conclusion — Mark is right, decisively.** The blanket margin drops ball-in-viewport 31 points
+(.915 -> .600): it exposes the far-side spectator row + sideline crowd, which win selection on the
+MANY in-field frames far more often than the margin saves a behind-goal ball on the FEW OOB frames.
+My earlier "confirmed" (EXP end-to-end on loss #1's window ALONE) was too narrow — a single OOB
+window looked good; the whole clip regressed. **Blanket margin reverted; clip planning is field-only.**
+
+**The right fix (Mark's design) — a STATE-GATED off-field search (the OOB ball-state, plan 3b):**
+default IN_FIELD -> only in-field candidates eligible for selection (off-field ignored). When the
+track exits the field near a boundary and finds no in-field ball -> OUT state -> off-field candidates
+near the exit become eligible (catch the ball behind the goal / over the line). When an in-field
+candidate is re-selected -> back to IN_FIELD (off-field ineligible again). Detection keeps the margin
+(candidates must EXIST off-field); SELECTION gates them by state. To build next.
+
 ## EXP-DIST-37: Dahua VIEWPORT-to-viewport — AutoCam's viewport is good, OURS drifts (the real gap is ours) (2026-07-10)
 
 **Trigger (Mark, the more important question):** forget the contaminated detector GT — does our
