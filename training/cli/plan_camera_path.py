@@ -170,13 +170,23 @@ def main() -> None:
         src_h=src_h,
         fps=float(gj.get("fps", 20.0)),
     )
-    # Debug sidecar: the dense per-frame BALL track (source px, null when uncovered),
-    # for the eval renderer's minimap ball marker + trail. Not a product artifact.
+    # Debug sidecar for the eval renderer. Two distinct signals:
+    #  - "detections": the RAW per-frame SELECTED ball (rerank's chosen candidate at
+    #    the detector-peak pixel), keyed by GLOBAL frame — where the ball was actually
+    #    found (stride-spaced). This is what the debug ball marker draws.
+    #  - "frames": the smoothed + upsampled dense track (what the camera path follows).
+    # Not a product artifact.
+    detections = {
+        str(int(ef[i])): [round(float(x), 1), round(float(y), 1)]
+        for i, (x, y) in sel.items()
+        if 0 <= i < len(ef)
+    }
     track_path = Path(args.out).with_suffix(".track.json")
     track_path.write_text(
         json.dumps(
             {
                 "g_start": g_start,
+                "detections": detections,
                 "frames": [
                     [round(float(p[0]), 1), round(float(p[1]), 1)] if p else None
                     for p in traj

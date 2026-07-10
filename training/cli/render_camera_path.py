@@ -224,16 +224,30 @@ def main() -> None:
                     if sg is not None:
                         ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
 
-    # tracked-ball sidecar (from plan_camera_path): the ball dot + trail, drawn on
-    # the full rendered frame AND the minimap.
-    track_frames: list | None = None
-    track_g0 = 0
+    # ball sidecar (from plan_camera_path): draw the RAW per-frame SELECTED DETECTION
+    # (where the ball was actually found), NOT the smoothed track — the smoothed track
+    # lags/leads and interpolates between the stride-spaced detections.
+    det_frames: np.ndarray = np.zeros(0, dtype=int)
+    det_pos: dict[int, list] = {}
     tp = Path(args.camera_path).with_suffix(".track.json")
     if tp.exists():
         td = json.loads(tp.read_text(encoding="utf-8"))
-        track_frames = td["frames"]
-        track_g0 = int(td.get("g_start", 0))
-    trail_len = int(round(fps))  # ~1 second
+        det_pos = {int(k): v for k, v in td.get("detections", {}).items()}
+        det_frames = np.array(sorted(det_pos), dtype=int)
+    trail_len = int(round(2 * fps))  # ~2 s (detections are stride-spaced)
+
+    def _nearest_det(g: int, tol: int = 4):
+        """The selected detection at the nearest sampled frame within +-tol."""
+        if len(det_frames) == 0:
+            return None
+        j = int(np.searchsorted(det_frames, g))
+        best, bd = None, tol + 1
+        for k in (j - 1, j):
+            if 0 <= k < len(det_frames):
+                d = abs(int(det_frames[k]) - g)
+                if d < bd:
+                    best, bd = int(det_frames[k]), d
+        return det_pos[best] if best is not None else None
 
     want = set(range(args.start_g, args.end_g))
     n_done = 0
@@ -278,17 +292,13 @@ def main() -> None:
                     continue
                 rendered, map_x, map_y = last_good
 
-            ball_xy = None
+            # RAW selected detection at (or nearest to) this frame + recent detections
+            ball_xy = _nearest_det(g)
             trail = None
-            if track_frames is not None:
-                bi = g - track_g0
-                if 0 <= bi < len(track_frames):
-                    ball_xy = track_frames[bi]
-                    trail = [
-                        track_frames[k]
-                        for k in range(max(0, bi - trail_len), bi + 1)
-                        if track_frames[k] is not None
-                    ]
+            if len(det_frames):
+                lo = np.searchsorted(det_frames, g - trail_len)
+                hi = np.searchsorted(det_frames, g + 1)
+                trail = [det_pos[int(det_frames[k])] for k in range(lo, hi)]
 
             if not args.no_ball_overlay or not args.no_minimap:
                 rendered = rendered.copy()  # keep last_good a clean warp
