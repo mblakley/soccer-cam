@@ -172,6 +172,10 @@ def _expand_near_spans(
                 seen.add(int(e["frame_idx"]))
                 out.append(e)
             continue
+        prev = (
+            float(e["hint_x"]),
+            float(e["hint_y"]),
+        )  # track the ball across the span
         for k in range(span):
             i = i0 + k
             if i >= len(ef):
@@ -183,23 +187,21 @@ def _expand_near_spans(
             if k == 0:
                 out.append(e)  # keep the anchor's own hint/reason
                 continue
+            # seed the neighbour hint by CONTINUITY — the candidate nearest the
+            # ball's last position — not the top near-candidate (which jumps to a
+            # distractor). Keeps the seed on the arc so the frame is worth labeling.
             rows = cands.get(g) or []
             if rows:
                 xy = np.asarray([(r[0], r[1]) for r in rows], float)
-                exp = geom.expected_ball_diameter_px(xy)
-                nj = [j for j in range(len(rows)) if exp[j] > near_px]
-                top = (
-                    max(nj, key=lambda j: float(rows[j][2]))
-                    if nj
-                    else int(np.argmax([float(r[2]) for r in rows]))
-                )
+                j = int(np.argmin(np.linalg.norm(xy - np.asarray(prev), axis=1)))
                 hx, hy, conf = (
-                    float(rows[top][0]),
-                    float(rows[top][1]),
-                    float(rows[top][2]),
+                    float(rows[j][0]),
+                    float(rows[j][1]),
+                    float(rows[j][2]),
                 )
             else:
-                hx, hy, conf = float(e["hint_x"]), float(e["hint_y"]), 0.0
+                hx, hy, conf = prev[0], prev[1], 0.0
+            prev = (hx, hy)
             out.append(
                 {
                     "frame_idx": g,
