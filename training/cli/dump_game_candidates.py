@@ -84,6 +84,15 @@ def main() -> None:
         "goals + dome above the far line) so out-of-play exits stay detectable "
         "and the OOB/aerial physics can engage. 0 = legacy far-touchline margin only",
     )
+    ap.add_argument(
+        "--start-g",
+        type=int,
+        default=None,
+        help="limit the dump to global frames >= this",
+    )
+    ap.add_argument(
+        "--end-g", type=int, default=None, help="limit the dump to global frames < this"
+    )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
@@ -113,6 +122,10 @@ def main() -> None:
     ranges = dd.active_play_ranges(gj["segments"], gj.get("game_state"))
     total = int(gj.get("total_frames") or 0)
     grid = sample_grid(ranges, args.stride, total)
+    if args.start_g is not None or args.end_g is not None:
+        lo = args.start_g if args.start_g is not None else -(10**12)
+        hi = args.end_g if args.end_g is not None else 10**12
+        grid = [g for g in grid if lo <= g < hi]  # window for fast per-clip iteration
     spans = chunk_spans(grid, args.chunk)
     print(
         f"{gd.name}: {len(grid)} frames (stride {args.stride}, "
