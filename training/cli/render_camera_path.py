@@ -107,16 +107,28 @@ def main() -> None:
     import time
 
     t0 = time.time()
+
+    def _open_stream(container):
+        for codec in (args.codec, "h264"):
+            try:
+                st = container.add_stream(codec, rate=int(round(fps)))
+                st.width = out_w
+                st.height = out_h
+                st.pix_fmt = "yuv420p"
+                st.codec_context.time_base = Fraction(1, int(round(fps)))
+                st.codec_context.bit_rate = _parse_bitrate(args.bitrate)
+                if codec == "h264":
+                    # software x264: fast preset — default 'medium' dominates CPU
+                    st.codec_context.options = {"preset": "veryfast"}
+                st.codec_context.open()  # force codec init NOW (NVENC probes here)
+                print(f"encoder: {codec}")
+                return st
+            except Exception as e:
+                print(f"encoder {codec} unavailable ({type(e).__name__}); falling back")
+        raise SystemExit("no usable encoder")
+
     with av.open(args.out, mode="w") as out_c:
-        try:
-            stream = out_c.add_stream(args.codec, rate=int(round(fps)))
-        except Exception:
-            stream = out_c.add_stream("h264", rate=int(round(fps)))
-        stream.width = out_w
-        stream.height = out_h
-        stream.pix_fmt = "yuv420p"
-        stream.codec_context.time_base = Fraction(1, int(round(fps)))
-        stream.codec_context.bit_rate = _parse_bitrate(args.bitrate)
+        stream = _open_stream(out_c)
         for g, img in iter_frames_from_segments(
             gd, gj["segments"], want, vrot, hwaccel=not args.no_hwaccel
         ):
