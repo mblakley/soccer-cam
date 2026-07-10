@@ -9,7 +9,12 @@ line of render math (``_frame_view`` + ``_warp_frame``):
   ``camera_path_file`` — byte-identical to the pipeline's render step output.
 - **clip window** (``--start-g/--end-g``): decodes exact global-frame ranges from
   the RAW segments (frame-exact, corruption-isolated) and executes the same
-  per-frame solve/warp — for fast iteration on adjudicated windows.
+  per-frame solve/warp — for fast iteration on adjudicated windows. This mode
+  also composites a REVIEW MINIMAP in the lower-right (full-frame thumbnail with
+  our viewport rectangle + AutoCam's focus marker) so ball losses / camera
+  disagreements are obvious at a glance. The minimap is an eval-only overlay
+  (needs AutoCam's viewport, a comparison artifact) — the shipped production
+  render never draws it.
 
     python -m training.cli.render_camera_path \
       --camera-path .../campath/spc.json \
@@ -26,6 +31,56 @@ from fractions import Fraction
 from pathlib import Path
 
 
+def _draw_minimap(
+    rendered,
+    src_bgr,
+    our_cx: float,
+    our_cy: float,
+    our_hfov: float,
+    ac_xy,
+    src_w: int,
+    src_h: int,
+    out_w: int,
+    out_h: int,
+):
+    """Composite a review minimap into the lower-right of ``rendered`` (RGB, mutated
+    in place): a dimmed full-frame thumbnail with OUR viewport rectangle (magenta)
+    and AutoCam's focus (green cross)."""
+    import cv2
+    import numpy as np
+
+    mw = out_w // 4
+    mh = max(1, int(round(mw * src_h / src_w)))
+    mini = cv2.cvtColor(cv2.resize(src_bgr, (mw, mh)), cv2.COLOR_BGR2RGB)
+    mini = (mini.astype(np.float32) * 0.65).astype(np.uint8)  # dim so overlays pop
+    sx, sy = mw / src_w, mh / src_h
+    hw = src_w * (our_hfov / 180.0) / 2.0 * sx
+    hh = hw * (out_h / out_w)
+    ox, oy = int(our_cx * sx), int(our_cy * sy)
+    cv2.rectangle(
+        mini,
+        (int(ox - hw), int(oy - hh)),
+        (int(ox + hw), int(oy + hh)),
+        (255, 0, 255),
+        2,
+    )
+    cv2.circle(mini, (ox, oy), 3, (255, 0, 255), -1)
+    if ac_xy is not None:
+        cv2.drawMarker(
+            mini,
+            (int(ac_xy[0] * sx), int(ac_xy[1] * sy)),
+            (0, 255, 0),
+            cv2.MARKER_TILTED_CROSS,
+            14,
+            2,
+        )
+    cv2.putText(mini, "OURS", (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
+    cv2.putText(mini, "AC", (66, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+    cv2.rectangle(mini, (0, 0), (mw - 1, mh - 1), (255, 255, 255), 2)
+    y0, x0 = out_h - mh - 12, out_w - mw - 12
+    rendered[y0 : y0 + mh, x0 : x0 + mw] = mini
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera-path", required=True)
@@ -35,6 +90,11 @@ def main() -> None:
     ap.add_argument("--end-g", type=int, default=None)
     ap.add_argument("--bitrate", default="8M")
     ap.add_argument("--codec", default="h264")
+    ap.add_argument(
+        "--no-minimap",
+        action="store_true",
+        help="disable the lower-right review minimap (clip-window mode)",
+    )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
@@ -44,6 +104,7 @@ def main() -> None:
 
     from training.data_prep.segment_decode import iter_frames_from_segments
     from training.data_prep.warped_dataset import resolve_video_rotation
+    from video_grouper.inference.cylindrical_view import yaw_pitch_to_pixel
     from video_grouper.inference.field_geometry import field_lateral_yaw_extent
     from video_grouper.pipeline.steps.render import (
         RenderStepConfig,
@@ -88,6 +149,21 @@ def main() -> None:
         gj.get("video_rotation"),
     )
 
+    # AutoCam viewport for the minimap marker (eval-only comparison artifact).
+    ac_vp: dict[int, tuple[float, float]] = {}
+    if not args.no_minimap:
+        from training.data_prep import distill_dataset as dd
+
+        offs = dd.seg_offsets(gj["segments"])
+        vpp = gd / "autocam_viewport.jsonl"
+        if vpp.exists():
+            for ln in vpp.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if ln.strip():
+                    r = json.loads(ln)
+                    sg = offs.get(r.get("seg"))
+                    if sg is not None:
+                        ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
+
     want = set(range(args.start_g, args.end_g))
     n_done = 0
     last_good = None
@@ -125,6 +201,28 @@ def main() -> None:
                 if last_good is None:
                     continue
                 rendered = last_good
+            if not args.no_minimap:
+                # draw on a fresh copy so last_good stays a clean warp
+                rendered = rendered.copy()
+                ocx, ocy = yaw_pitch_to_pixel(
+                    view_yaw,
+                    params.view_pitch_deg + params.view_pitch_offset_deg,
+                    src_w,
+                    src_h,
+                    params.src_hfov_deg,
+                )
+                _draw_minimap(
+                    rendered,
+                    img,
+                    ocx,
+                    ocy,
+                    float(cmds[i][2]),
+                    ac_vp.get(g),
+                    src_w,
+                    src_h,
+                    out_w,
+                    out_h,
+                )
             frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
             frame.pts = n_done
             for pkt in stream.encode(frame):
