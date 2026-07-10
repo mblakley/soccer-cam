@@ -147,6 +147,73 @@ def select_near_frames(
     ]
 
 
+def _expand_near_spans(
+    frames: list[dict],
+    ef: list[int],
+    cands: dict[int, list],
+    geom,
+    *,
+    near_px: float,
+    span: int,
+) -> list[dict]:
+    """Expand each near ANCHOR into ``span`` consecutive dump frames (the anchor +
+    the following span-1), so the near ball is labeled across the kick/arc (rising,
+    blurred, peak) rather than at one instant. Each added frame gets its own hint
+    from its dump candidates. Deduped by frame_idx; span<=1 is a no-op."""
+    if span <= 1:
+        return frames
+    efidx = {g: i for i, g in enumerate(ef)}
+    out: list[dict] = []
+    seen: set[int] = set()
+    for e in frames:
+        i0 = efidx.get(int(e["frame_idx"]))
+        if i0 is None:
+            if int(e["frame_idx"]) not in seen:
+                seen.add(int(e["frame_idx"]))
+                out.append(e)
+            continue
+        for k in range(span):
+            i = i0 + k
+            if i >= len(ef):
+                break
+            g = int(ef[i])
+            if g in seen:
+                continue
+            seen.add(g)
+            if k == 0:
+                out.append(e)  # keep the anchor's own hint/reason
+                continue
+            rows = cands.get(g) or []
+            if rows:
+                xy = np.asarray([(r[0], r[1]) for r in rows], float)
+                exp = geom.expected_ball_diameter_px(xy)
+                nj = [j for j in range(len(rows)) if exp[j] > near_px]
+                top = (
+                    max(nj, key=lambda j: float(rows[j][2]))
+                    if nj
+                    else int(np.argmax([float(r[2]) for r in rows]))
+                )
+                hx, hy, conf = (
+                    float(rows[top][0]),
+                    float(rows[top][1]),
+                    float(rows[top][2]),
+                )
+            else:
+                hx, hy, conf = float(e["hint_x"]), float(e["hint_y"]), 0.0
+            out.append(
+                {
+                    "frame_idx": g,
+                    "file": f"f{g:06d}.jpg",
+                    "hint_x": round(hx, 1),
+                    "hint_y": round(hy, 1),
+                    "autocam": False,
+                    "hint_conf": round(conf, 3),
+                    "reason": "near_span",
+                }
+            )
+    return out
+
+
 def select_diverge_frames(
     ef: list[int],
     geom,
@@ -437,6 +504,13 @@ def main() -> None:
         default=8.0,
         help="near band = expected diameter > this (eval dumps' far_size_px)",
     )
+    ap.add_argument(
+        "--near-span",
+        type=int,
+        default=1,
+        help="near mode: expand each anchor to N consecutive dump frames (2-4 = a "
+        "short arc, so the detector sees the near ball rising/blurred across the kick)",
+    )
     ap.add_argument("--disagree-m", type=float, default=10.0)
     ap.add_argument("--teleport-mpf", type=float, default=2.5)
     ap.add_argument("--miss-run-min", type=int, default=5)
@@ -495,14 +569,18 @@ def main() -> None:
         # never re-ask for a frame a human already labeled (any set grid, ±4)
         for g in list(hb) + list(hn):
             excl.update(range(g - 4, g + 5))
+        span = max(1, args.near_span)
         frames = select_near_frames(
             ef,
             near_cands,
             labels,
             geom,
             near_px=args.near_px,
-            target=args.max_frames,
+            target=max(1, args.max_frames // span),
             exclude=excl,
+        )
+        frames = _expand_near_spans(
+            frames, ef, near_cands, geom, near_px=args.near_px, span=span
         )
     elif args.criteria == "disagree":
         if not args.campath:
