@@ -216,6 +216,88 @@ def _expand_near_spans(
     return out
 
 
+def select_kick_frames(
+    ef: list[int],
+    geom,
+    sel: dict[int, tuple[float, float]],
+    gaps: list[int],
+    *,
+    lead: int,
+    trail: int,
+    min_exit_mpf: float,
+    min_miss: int,
+    max_miss: int,
+    target: int,
+) -> list[dict]:
+    """Kick/loss-event miner (Mark 2026-07-10): close-ball ARCS the detector drops.
+    A ball tracked on the ground, struck (fast in-field exit), then lost for the
+    flight (``min_miss..max_miss`` missed frames) — these are the airborne balls the
+    geometric size miner is blind to (they're not even in the candidate dump). Serve
+    a WIDE bracketed window per event: ``lead`` frames of lead-up (ball visible, its
+    direction readable) -> the flight -> the landing -> ``trail`` frames. Full-frame,
+    NO seed on the airborne frames (we genuinely don't know where the ball is — that
+    IS the failure); ground frames carry the track's own position as a soft seed.
+    ``target`` caps the number of EVENTS (each expands to a window)."""
+    present = set(sel)
+    n = len(ef)
+    cum = [0] * n
+    for t in range(1, n):
+        cum[t] = cum[t - 1] + gaps[t]
+
+    def wpos(i: int) -> np.ndarray:
+        return geom.image_to_world(np.asarray([sel[i]], float))[0]
+
+    events: list[list] = []  # [exit_speed, i, j]
+    for i in sorted(present):
+        if (i - 1) not in present or (i + 1) in present:
+            continue
+        j = i + 1
+        while j < n and j not in present:
+            j += 1
+        nmiss = j - i - 1
+        if j >= n or not (min_miss <= nmiss <= max_miss):
+            continue
+        exit_spd = float(np.linalg.norm(wpos(i) - wpos(i - 1))) / max(
+            1, cum[i] - cum[i - 1]
+        )
+        if exit_spd >= min_exit_mpf:
+            events.append([exit_spd, i, j])
+    events.sort(reverse=True)  # strongest kicks first, then cap
+    events = sorted(events[:target], key=lambda e: e[1])
+    out: list[dict] = []
+    seen: set[int] = set()
+    for _spd, i, j in events:
+        for k in range(max(0, i - lead), min(n - 1, j + trail) + 1):
+            g = int(ef[k])
+            if g in seen:
+                continue
+            seen.add(g)
+            phase = (
+                "kick_lead"
+                if k < i
+                else "kick_launch"
+                if k == i
+                else "kick_flight"
+                if k < j
+                else "kick_land"
+                if k == j
+                else "kick_trail"
+            )
+            hx, hy = sel[k] if k in present else sel[i]  # gap frames: neutral anchor
+            out.append(
+                {
+                    "frame_idx": g,
+                    "file": f"f{g:06d}.jpg",
+                    "hint_x": round(float(hx), 1),
+                    "hint_y": round(float(hy), 1),
+                    "autocam": False,
+                    "hint_conf": 0.0,
+                    "reason": phase,
+                }
+            )
+    return sorted(out, key=lambda e: e["frame_idx"])
+
+
 def select_diverge_frames(
     ef: list[int],
     geom,
@@ -473,6 +555,7 @@ def main() -> None:
             "lost",
             "distractor",
             "near",
+            "kick",
             "diverge",
             "spans",
             "disagree",
@@ -516,6 +599,23 @@ def main() -> None:
     ap.add_argument("--disagree-m", type=float, default=10.0)
     ap.add_argument("--teleport-mpf", type=float, default=2.5)
     ap.add_argument("--miss-run-min", type=int, default=5)
+    # kick/loss-event mining (close-ball arcs): a fast in-field exit + a detection
+    # gap, bracketed WIDE (lead-up -> flight -> landing), full-frame no-seed.
+    ap.add_argument(
+        "--kick-lead", type=int, default=10, help="dump frames before launch"
+    )
+    ap.add_argument(
+        "--kick-trail", type=int, default=10, help="dump frames after landing"
+    )
+    ap.add_argument(
+        "--kick-min-exit", type=float, default=1.2, help="min exit speed m/frame"
+    )
+    ap.add_argument(
+        "--kick-min-miss", type=int, default=3, help="min flight gap (missed frames)"
+    )
+    ap.add_argument(
+        "--kick-max-miss", type=int, default=24, help="max flight gap (missed frames)"
+    )
     ap.add_argument(
         "--priority", type=int, default=None, help="landing-page sort order (1 = top)"
     )
@@ -546,7 +646,7 @@ def main() -> None:
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
     near_cands: dict[int, list] = {}
-    if args.criteria in ("near", "diverge", "disagree") or (
+    if args.criteria in ("near", "kick", "diverge", "disagree") or (
         args.criteria == "spans" and args.fullgame_dir
     ):
         if not args.fullgame_dir:
@@ -623,6 +723,32 @@ def main() -> None:
                         round(float(rows[0][1]), 1),
                     )
                     e["hint_conf"] = round(float(rows[0][2]), 3)
+    elif args.criteria == "kick":
+        from training.world_model.reranker import rerank
+        from training.world_model.tbd import Candidate
+
+        cand_frames = [
+            [
+                Candidate(x=x, y=y, score=s, size_px=sz)
+                for (x, y, s, sz) in near_cands[g]
+            ]
+            for g in ef
+        ]
+        gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
+        sel_track = rerank(cand_frames, geom, frame_gaps=gaps)
+        ecap = max(1, args.max_frames // (args.kick_lead + args.kick_trail + 6))
+        frames = select_kick_frames(
+            ef,
+            geom,
+            sel_track,
+            gaps,
+            lead=args.kick_lead,
+            trail=args.kick_trail,
+            min_exit_mpf=args.kick_min_exit,
+            min_miss=args.kick_min_miss,
+            max_miss=args.kick_max_miss,
+            target=ecap,
+        )
     elif args.criteria == "diverge":
         from training.world_model.reranker import kalman_smooth, rerank
         from training.world_model.tbd import Candidate
