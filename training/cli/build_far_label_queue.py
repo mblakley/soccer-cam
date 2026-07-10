@@ -868,7 +868,14 @@ def main() -> None:
             f"no decodable strips for {gid} (video corrupt from the start)"
         )
 
-    kept = [e for e in frames if (strips / e["file"]).with_suffix(".png").exists()]
+    # ALWAYS emit frames in ascending frame_idx order — the annotator sweeps the
+    # manifest array in order (far-label.html advanceReview), so an out-of-order list
+    # (e.g. interleaved overlapping spans) shows near-identical frames non-adjacently
+    # and reads as duplicates (Mark 2026-07-10).
+    kept = sorted(
+        (e for e in frames if (strips / e["file"]).with_suffix(".png").exists()),
+        key=lambda e: int(e["frame_idx"]),
+    )
     for e in kept:
         e.update(
             {
