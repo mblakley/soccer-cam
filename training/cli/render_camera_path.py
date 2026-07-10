@@ -38,22 +38,37 @@ def _draw_minimap(
     our_cy: float,
     our_hfov: float,
     ac_xy,
+    ball_xy,
+    ball_trail,
     src_w: int,
     src_h: int,
     out_w: int,
     out_h: int,
 ):
     """Composite a review minimap into the lower-right of ``rendered`` (RGB, mutated
-    in place): a dimmed full-frame thumbnail with OUR viewport rectangle (magenta)
-    and AutoCam's focus (green cross)."""
+    in place): a dimmed full-frame thumbnail with OUR viewport rectangle (magenta),
+    AutoCam's focus (green cross), and the tracked BALL (cyan dot + past-second trail)."""
     import cv2
     import numpy as np
 
     mw = out_w // 4
     mh = max(1, int(round(mw * src_h / src_w)))
     mini = cv2.cvtColor(cv2.resize(src_bgr, (mw, mh)), cv2.COLOR_BGR2RGB)
-    mini = (mini.astype(np.float32) * 0.65).astype(np.uint8)  # dim so overlays pop
+    mini = (mini.astype(np.float32) * 0.6).astype(np.uint8)  # dim so overlays pop
     sx, sy = mw / src_w, mh / src_h
+
+    # ball trail (past ~1 s) — fade older segments toward dim, current is brightest
+    if ball_trail:
+        pts = [(int(x * sx), int(y * sy)) for (x, y) in ball_trail if x is not None]
+        for k in range(1, len(pts)):
+            f = k / max(len(pts) - 1, 1)  # 0 old -> 1 recent
+            col = (0, int(120 + 135 * f), int(120 + 135 * f))  # dim->bright cyan
+            cv2.line(mini, pts[k - 1], pts[k], col, 1)
+    if ball_xy is not None:
+        bx, by = int(ball_xy[0] * sx), int(ball_xy[1] * sy)
+        cv2.circle(mini, (bx, by), 4, (0, 255, 255), -1)
+        cv2.circle(mini, (bx, by), 4, (0, 0, 0), 1)
+
     hw = src_w * (our_hfov / 180.0) / 2.0 * sx
     hh = hw * (out_h / out_w)
     ox, oy = int(our_cx * sx), int(our_cy * sy)
@@ -76,6 +91,9 @@ def _draw_minimap(
         )
     cv2.putText(mini, "OURS", (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
     cv2.putText(mini, "AC", (66, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+    cv2.putText(
+        mini, "BALL", (108, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1
+    )
     cv2.rectangle(mini, (0, 0), (mw - 1, mh - 1), (255, 255, 255), 2)
     y0, x0 = out_h - mh - 12, out_w - mw - 12
     rendered[y0 : y0 + mh, x0 : x0 + mw] = mini
@@ -164,6 +182,17 @@ def main() -> None:
                     if sg is not None:
                         ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
 
+    # tracked-ball sidecar (from plan_camera_path) for the minimap dot + trail
+    track_frames: list | None = None
+    track_g0 = 0
+    if not args.no_minimap:
+        tp = Path(args.camera_path).with_suffix(".track.json")
+        if tp.exists():
+            td = json.loads(tp.read_text(encoding="utf-8"))
+            track_frames = td["frames"]
+            track_g0 = int(td.get("g_start", 0))
+    trail_len = int(round(fps))  # ~1 second
+
     want = set(range(args.start_g, args.end_g))
     n_done = 0
     last_good = None
@@ -211,6 +240,17 @@ def main() -> None:
                     src_h,
                     params.src_hfov_deg,
                 )
+                ball_xy = None
+                trail = None
+                if track_frames is not None:
+                    bi = g - track_g0
+                    if 0 <= bi < len(track_frames):
+                        ball_xy = track_frames[bi]
+                        trail = [
+                            track_frames[k]
+                            for k in range(max(0, bi - trail_len), bi + 1)
+                            if track_frames[k] is not None
+                        ]
                 _draw_minimap(
                     rendered,
                     img,
@@ -218,6 +258,8 @@ def main() -> None:
                     ocy,
                     float(cmds[i][2]),
                     ac_vp.get(g),
+                    ball_xy,
+                    trail,
                     src_w,
                     src_h,
                     out_w,

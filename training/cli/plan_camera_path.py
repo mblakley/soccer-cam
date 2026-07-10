@@ -170,6 +170,20 @@ def main() -> None:
         src_h=src_h,
         fps=float(gj.get("fps", 20.0)),
     )
+    # Debug sidecar: the dense per-frame BALL track (source px, null when uncovered),
+    # for the eval renderer's minimap ball marker + trail. Not a product artifact.
+    track_path = Path(args.out).with_suffix(".track.json")
+    track_path.write_text(
+        json.dumps(
+            {
+                "g_start": g_start,
+                "frames": [
+                    [round(float(p[0]), 1), round(float(p[1]), 1)] if p else None
+                    for p in traj
+                ],
+            }
+        )
+    )
     print(f"{gd.name}: camera path {len(plan)} frames -> {args.out}")
 
     bench_path = gd / "viewport_benchmark.jsonl"
