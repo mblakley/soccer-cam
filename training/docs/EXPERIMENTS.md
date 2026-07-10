@@ -27,7 +27,29 @@ default IN_FIELD -> only in-field candidates eligible for selection (off-field i
 track exits the field near a boundary and finds no in-field ball -> OUT state -> off-field candidates
 near the exit become eligible (catch the ball behind the goal / over the line). When an in-field
 candidate is re-selected -> back to IN_FIELD (off-field ineligible again). Detection keeps the margin
-(candidates must EXIST off-field); SELECTION gates them by state. To build next.
+(candidates must EXIST off-field); SELECTION gates them by state.
+
+**BUILT + RESOLVED (2026-07-10, same day) — the margin degrades DETECTION, not selection; NO gate
+fixes it.** A/B on the clip-1 window vs human GT:
+
+| variant | ball-in-viewport | off-field selections |
+|---|---|---|
+| **field-only** | **.915** | 26% |
+| margin +250, no gate | .600 | 27% |
+| margin + emission gate (p3/5/8) | .638 | 21% |
+| margin + edge-directional TRANSITION gate (p3/5/8) | .631 | 27% |
+
+Both gate variants failed. The transition gate (free continuation / OOB-reentry near the single
+pinned exit edge; penalise only fresh miss->offfield grabs) left off-field selection UNCHANGED at
+27% — because the harmful crowd sits ~7 px behind the far touchline, reachable as an in-field->
+off-field "crossing" indistinguishable from a real far-line ball. **Candidate recall settles it:
+ball-in-candidates R5m field-only .731 vs margin .679** (R10m .940 vs .903). Expanding the band
+REGRESSES detection — the detector was trained at far_margin=400 band height, so a taller band
+shifts its heatmap AND off-field junk fills the top-24, evicting real-ball candidates BEFORE
+selection runs. **DECISION: ship FIELD-ONLY (.915). `offfield_gate` stays in code (default off,
+tested) but is NOT the behind-goal fix.** The real fix would be a SECOND, targeted detection pass
+beyond the exit edge at the TRAINED scale, triggered by the OOB state — not band expansion. Parked:
+behind-goal is a small fraction of losses, field-only is strong; revisit after more GT / if priority.
 
 ## EXP-DIST-37: Dahua VIEWPORT-to-viewport — AutoCam's viewport is good, OURS drifts (the real gap is ours) (2026-07-10)
 
