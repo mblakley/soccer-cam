@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import shutil
 import time
 from pathlib import Path
@@ -84,6 +85,9 @@ async def _run(args) -> None:
 
 
 def main() -> None:
+    # The steps report progress via logging (detect: every 100 sampled frames);
+    # surface it on stdout so a redirected task log shows liveness.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="source video (copied to work dir)")
     poly = ap.add_mutually_exclusive_group(required=True)
