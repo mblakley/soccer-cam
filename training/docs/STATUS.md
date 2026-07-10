@@ -2,6 +2,22 @@
 
 *Last updated: 2026-07-10*
 
+## 2026-07-10 (evening) — side-pan STRETCH root-caused and fixed (crop truncation)
+
+- Mark on the first full-game render: "stretches/warps the picture when it scrolls to the side."
+  Measured over the whole Spencerport camera path: **10% of frames width-truncated (median ×1.18,
+  ×3.1 at the field ends), 33% height-truncated (up to ×5)** — `build_leveled_pano` spanned only the
+  field polygon + 8/12° margins and `crop_box` CLAMPED view windows at the pano boundary; the
+  clipped crop resized to 1920×1080 IS the stretch. Inherited verbatim from the render branch (the
+  byte-parity proof holds; the defect predates the port and every prior clip Mark reviewed sat in
+  untruncated mid-field windows).
+- Fix (bb6bbd8): pano az/el footprint from the SOURCE BORDER under the leveling rotation (∪
+  polygon), and `crop_box` SHIFTS windows to fit instead of truncating — the camera stops at the
+  source edge (broadcast behavior; the extreme corner shows the honest black source edge instead of
+  a ×3 smear). Numeric re-check: **0.0% truncated frames**; regression test added; suite 1545.
+- Vertical-stack A/B on the worst corner window (g 32600–32960) delivered to Mark; **v2 full-game
+  render launched** (parts → concat → auto-stage to F:\test = T:\spc_fullgame_ours_v2.mp4 + ntfy).
+
 ## 2026-07-10 (later) — ONE homegrown path: detect/select/plan/render are THE product pipeline
 
 - Mark: "ONE PATH THROUGH OUR HOMEGROWN CODE", modular via config — any step independently
