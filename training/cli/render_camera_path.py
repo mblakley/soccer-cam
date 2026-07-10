@@ -76,7 +76,10 @@ def main() -> None:
     seg0 = gj["segments"][0]
     src_w, src_h = int(seg0["w"]), int(seg0["h"])
 
-    cfg = RenderStepConfig(render_zoom_scale=1.0)  # planner pre-applied the 0.90
+    cfg = RenderStepConfig(
+        render_zoom_scale=1.0,  # planner pre-applied the AutoCam-matched 0.90
+        render_top_cap_deg=0.0,  # strict containment: never sample past the source top
+    )
     out_w, out_h = cfg.render_output_width, cfg.render_output_height
     geom = _resolve_geometry(src_w, src_h, cfg, polygon)
     try:
