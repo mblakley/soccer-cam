@@ -103,15 +103,18 @@ class RerankConfig:
     ball_vmax_mpf: float = 2.5  # real ball speed ceiling, world m per SOURCE frame
     oob_w: float = 0.0  # out-of-bounds pin weight (0 = off; see _OOB_* constants)
     # OFF-FIELD STATE GATE (Mark 2026-07-10, EXP-DIST-38): a blanket detection margin
-    # catches the crowd/sideline distractors sitting outside the field outline and they
-    # win selection during in-field play (.915 -> .600 ball-in-view). Instead, penalise
-    # off-field candidates in the emission so "stay in the miss state" is cheaper than
-    # grabbing an off-field distractor — UNLESS the ball genuinely exited: the OOB
-    # re-entry transition bonus (oob_w) offsets the penalty for candidates near the
-    # pinned exit, so a real behind-goal / over-the-line ball is still tracked. Pairs
-    # with the detection margin (candidates must EXIST off-field) + oob_w > 0.
+    # catches the crowd/sideline distractors outside the field outline and they win
+    # selection during in-field play (.915 -> .600 ball-in-view). Edge-directional gate:
+    # entering an off-field candidate is FREE as a continuation — the ball crossing out
+    # from an in-field predecessor, or continuing an already-off-field track (physics-
+    # gated) — or as an OOB re-entry near the pinned exit (any of the 4 edges); but a
+    # FRESH grab from the miss state with no active exit (a crowd distractor behind a
+    # line) costs offfield_penalty in the transition. Pairs with the detection margin
+    # (candidates must EXIST off-field) + oob_w > 0 (pins the exit).
     offfield_gate: bool = False
-    offfield_penalty: float = 4.0  # emission cost added to off-field candidates
+    offfield_penalty: float = (
+        6.0  # transition cost to freshly grab an off-field candidate
+    )
     offfield_margin_px: float = (
         30.0  # signed px OUTSIDE the polygon to count as off-field
     )
@@ -486,10 +489,6 @@ def rerank(
             + cfg.static_w * pers[t][i]
             - cfg.motion_w * fmot[t][i]
         )
-        if cfg.offfield_gate and offfield[t][i]:
-            e += (
-                cfg.offfield_penalty
-            )  # suppress off-field distractors during in-field play
         if priors is not None and len(priors[t]):
             e += float(priors[t][i])
         return e
@@ -632,6 +631,23 @@ def rerank(
                     if d > cfg.max_jump_m_per_frame * gap:
                         continue  # teleport forbidden
                     trans = (d / budget) ** 2
+                # OFF-FIELD STATE GATE (edge-directional): entering an off-field
+                # candidate is free as a CONTINUATION — the ball crossing out from an
+                # in-field predecessor, or continuing an already-off-field track
+                # (i < kp, physics-gated) — or as an OOB re-entry near the pinned exit
+                # (any of the 4 edges). But a FRESH grab from the miss state with no
+                # active exit is a distractor (crowd behind a line) and is blocked.
+                if cfg.offfield_gate and j < k and offfield[t][j] and i == kp:
+                    oob_reentry = False
+                    if cfg.oob_w > 0 and missoob[t - 1] is not None:
+                        dur_oob = missdur[t - 1] + gap
+                        cone = min(_OOB_BASE_M + _OOB_SPREAD_MPF * dur_oob, _OOB_CAP_M)
+                        dp = float(
+                            np.linalg.norm(missoob[t - 1] - fw[t][j], axis=1).min()
+                        )
+                        oob_reentry = dp <= cone
+                    if not oob_reentry:
+                        trans += cfg.offfield_penalty
                 v = cost[t - 1][i] + trans
                 if v < best:
                     best, bi = v, i
