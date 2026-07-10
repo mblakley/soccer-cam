@@ -92,3 +92,29 @@ def test_kalman_smooth_fills_gaps_and_dejitters():
     xs = [sm[t][0] for t in range(20)]
     steps = np.diff(xs)
     assert np.std(steps) < 10.0  # de-jittered vs the ±5 px input wobble
+
+
+def test_offfield_gate_suppresses_offfield_distractor():
+    """A bright STATIC distractor above the far touchline (off-field) must not be
+    selected during in-field play when the off-field state gate is on."""
+    geom = _geom()
+    frames = []
+    for t in range(30):
+        ball = Candidate(
+            x=400.0 + 30.0 * t, y=700.0, score=0.4
+        )  # in-field, moving, dim
+        distractor = Candidate(
+            x=960.0, y=200.0, score=0.95
+        )  # OFF-field, bright, static
+        frames.append([ball, distractor])
+    cfg = RerankConfig(offfield_gate=True, offfield_penalty=6.0, static_w=2.0)
+    preds = rerank(frames, geom, config=cfg)
+    at_distractor = sum(
+        1 for x, y in preds.values() if abs(x - 960.0) < 5 and abs(y - 200.0) < 5
+    )
+    assert at_distractor == 0
+    # and it still follows the in-field ball
+    on_ball = sum(
+        1 for t, (x, _y) in preds.items() if abs(x - (400.0 + 30.0 * t)) < 30.0
+    )
+    assert on_ball >= 0.8 * len(preds)

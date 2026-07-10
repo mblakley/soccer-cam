@@ -102,6 +102,19 @@ class RerankConfig:
     )
     ball_vmax_mpf: float = 2.5  # real ball speed ceiling, world m per SOURCE frame
     oob_w: float = 0.0  # out-of-bounds pin weight (0 = off; see _OOB_* constants)
+    # OFF-FIELD STATE GATE (Mark 2026-07-10, EXP-DIST-38): a blanket detection margin
+    # catches the crowd/sideline distractors sitting outside the field outline and they
+    # win selection during in-field play (.915 -> .600 ball-in-view). Instead, penalise
+    # off-field candidates in the emission so "stay in the miss state" is cheaper than
+    # grabbing an off-field distractor — UNLESS the ball genuinely exited: the OOB
+    # re-entry transition bonus (oob_w) offsets the penalty for candidates near the
+    # pinned exit, so a real behind-goal / over-the-line ball is still tracked. Pairs
+    # with the detection margin (candidates must EXIST off-field) + oob_w > 0.
+    offfield_gate: bool = False
+    offfield_penalty: float = 4.0  # emission cost added to off-field candidates
+    offfield_margin_px: float = (
+        30.0  # signed px OUTSIDE the polygon to count as off-field
+    )
 
 
 # aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
@@ -443,6 +456,28 @@ def rerank(
 
     pers = static_persistence(fw, cfg.cell_m)
 
+    # OFF-FIELD state gate: per-candidate flag = outside the field polygon by more than
+    # the margin. Off-field candidates get an emission penalty (default suppressed);
+    # the OOB re-entry transition bonus offsets it when the ball genuinely exited.
+    offfield: list[np.ndarray] = []
+    if cfg.offfield_gate and getattr(geom, "polygon", None) is not None:
+        import cv2  # noqa: PLC0415
+
+        pn = np.asarray(geom.polygon, np.float32).reshape(-1, 1, 2)
+        for src in fsrc:
+            if len(src):
+                sdist = np.array(
+                    [
+                        cv2.pointPolygonTest(pn, (float(x), float(y)), True)
+                        for x, y in src
+                    ]
+                )
+                offfield.append(sdist < -cfg.offfield_margin_px)
+            else:
+                offfield.append(np.zeros(0, bool))
+    else:
+        offfield = [np.zeros(len(cs), bool) for cs in frames]
+
     def emis(t: int, i: int) -> float:
         if t in allowed and i not in allowed[t]:
             return math.inf  # anchored frame: out-of-radius candidates forbidden
@@ -451,6 +486,10 @@ def rerank(
             + cfg.static_w * pers[t][i]
             - cfg.motion_w * fmot[t][i]
         )
+        if cfg.offfield_gate and offfield[t][i]:
+            e += (
+                cfg.offfield_penalty
+            )  # suppress off-field distractors during in-field play
         if priors is not None and len(priors[t]):
             e += float(priors[t][i])
         return e
