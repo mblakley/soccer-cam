@@ -32,6 +32,10 @@ from training.data_prep.field_warp import build_field_warp
 from training.data_prep.field_warp import warp_frame as _aniso_frame
 from training.data_prep.field_warp import warp_points as _aniso_points
 from training.data_prep.warped_pack import _pad_to_stride
+from video_grouper.inference.iso_warp import (  # noqa: F401  (product home)
+    CropIsoWarp,
+    field_band_from_polygon,
+)
 
 # Validated Reolink 05-27 ball-size gradient (EXPERIMENTS v2): far→near px by row.
 DEFAULT_REOLINK_GRADIENT = (
@@ -43,43 +47,6 @@ DEFAULT_REOLINK_GRADIENT = (
 # ---------------------------------------------------------------------------
 # Warp variants (common interface)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class CropIsoWarp:
-    """W0: crop the field band + isotropic resize to target_width (round balls)."""
-
-    src_w: int
-    src_h: int
-    y_top: int
-    y_bot: int
-    target_width: int
-
-    @property
-    def scale(self) -> float:
-        return self.target_width / self.src_w
-
-    @property
-    def final_h(self) -> int:
-        return max(1, int(round((self.y_bot - self.y_top + 1) * self.scale)))
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return (self.final_h, self.target_width)
-
-    def frame(self, img: np.ndarray) -> np.ndarray:
-        import cv2
-
-        band = img[self.y_top : self.y_bot + 1]
-        return cv2.resize(
-            band, (self.target_width, self.final_h), interpolation=cv2.INTER_AREA
-        )
-
-    def points(self, xy: np.ndarray) -> np.ndarray:
-        xy = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
-        return np.column_stack(
-            [xy[:, 0] * self.scale, (xy[:, 1] - self.y_top) * self.scale]
-        )
 
 
 class AnisoWarp:
@@ -122,12 +89,6 @@ def make_warp(kind: str, rows, sizes, src_w: int, src_h: int, target_width: int)
 # ---------------------------------------------------------------------------
 # Field band + label bootstrap
 # ---------------------------------------------------------------------------
-
-
-def field_band_from_polygon(polygon, margin: int = 20) -> tuple[int, int]:
-    """(y_top, y_bot) of the field band from the field-outline polygon (+margin)."""
-    ys = np.asarray(polygon, dtype=np.float64)[:, 1]
-    return int(max(0, np.floor(ys.min()) - margin)), int(np.ceil(ys.max()) + margin)
 
 
 def in_field(polygon, cx: float, cy: float) -> bool:

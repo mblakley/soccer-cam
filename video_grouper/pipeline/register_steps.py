@@ -6,10 +6,9 @@ the cameras-module convention.
 
 Each import is wrapped in try/except so a missing optional dependency for one
 step doesn't poison the others. In the tray bundle (which excludes the inference
-stack) only ``detect`` actually fails to import — it pulls in
+stack) only the detect/select steps actually fail to import — it pulls in
 ``onnxruntime``/``cv2`` at module top — and is omitted. ``stitch_correct`` and
-``render`` import ``av`` lazily (inside functions) and ``track`` is numpy-only,
-so all three still register in the tray; they're gated OUT at runtime instead,
+``render`` import ``av`` lazily (inside functions), so both still register in the tray; they're gated OUT at runtime instead,
 by their ``runtime="service"`` (the tray hands them off) and ``meta.available``.
 The imports are static ``from ... import`` so PyInstaller's analyzer detects and
 bundles them — a dynamic ``__import__`` would skip bundling.
@@ -46,9 +45,9 @@ except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step ball_detect unavailable (%s: %s)", type(e).__name__, e)
 
 try:
-    from video_grouper.pipeline.steps import track  # noqa: F401
+    from video_grouper.pipeline.steps import ball_select  # noqa: F401
 except Exception as e:  # noqa: BLE001
-    logger.debug("pipeline: step track unavailable (%s: %s)", type(e).__name__, e)
+    logger.debug("pipeline: step ball_select unavailable (%s: %s)", type(e).__name__, e)
 
 try:
     from video_grouper.pipeline.steps import plan_camera  # noqa: F401

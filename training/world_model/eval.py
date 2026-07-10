@@ -28,42 +28,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
 from training.world_model.tbd import TBDResult
-
-
-def extract_peaks(
-    heatmap: np.ndarray,
-    top_k: int = 24,
-    threshold: float = 0.1,
-    min_distance: int = 3,
-) -> list[tuple[float, float, float]]:
-    """Extract up to ``top_k`` local-maxima peaks from a 2-D heatmap.
-
-    Args:
-        heatmap: ``(H, W)`` detector response (e.g. sigmoid heatmap), float.
-        top_k: Max peaks to return (highest score first).
-        threshold: Minimum response to be a candidate (drops background).
-        min_distance: NMS radius — peaks closer than this are suppressed via a
-            ``(2*min_distance+1)`` dilation; only true local maxima survive.
-
-    Returns:
-        List of ``(x, y, score)`` in heatmap pixel coords, score-descending.
-    """
-    hm = np.asarray(heatmap, dtype=np.float32)
-    if hm.ndim != 2:
-        raise ValueError(f"heatmap must be 2-D, got shape {hm.shape}")
-    ksize = 2 * int(min_distance) + 1
-    dilated = cv2.dilate(hm, np.ones((ksize, ksize), np.uint8))
-    mask = (hm >= dilated) & (hm >= threshold)
-    ys, xs = np.where(mask)
-    if ys.size == 0:
-        return []
-    scores = hm[ys, xs]
-    order = np.argsort(scores)[::-1][:top_k]
-    return [(float(xs[i]), float(ys[i]), float(scores[i])) for i in order]
+from video_grouper.inference.ball_detector import (
+    extract_peaks,  # noqa: F401  (product home)
+)
 
 
 @dataclass

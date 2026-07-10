@@ -1,28 +1,15 @@
-"""Render step — broadcast-quality virtual camera over a cylindrical projection.
+"""Render step — execute the planner's camera path over a cylindrical projection.
 
-Ports the ball-following control logic specified in ``docs/VIRTUAL_CAMERA.md``
-(velocity lead-room, field-zone + speed zoom, asymmetric pan smoothing,
-dead-ball and missing-ball overrides, broadcast vs coach modes) onto the
-cylindrical renderer in :mod:`video_grouper.inference.cylindrical_view`. A flat
-2D crop of the stitched ~180° panorama curves goal lines and stretches players
-near the frame edge; the cylindrical render projects the source onto a virtual
-cylinder and renders a perspective view from inside it, so straight lines stay
-straight at every pan.
-
-Vertical framing. The source is a single side-mounted camera, so far-side play
-sits near the top edge. Two configurable strategies keep the ball in frame
-without a hard vertical crop:
-
-* ``render_vertical_tracking=True`` (default): the view pitch gently follows the
-  ball's pitch (heavily smoothed, clamped so the view never samples past the
-  source edge) — the natural broadcast feel.
-* ``render_vertical_tracking=False``: the pitch is fixed at the field's vertical
-  centre and the zoom is floored so the *whole* field height stays in view —
-  "zoom out to always show the ball", pan horizontally only.
-
-Either way a vertical-containment floor guarantees the ball's pitch stays inside
-the rendered vertical FOV: the zoom can never go tighter than what keeps the
-ball on screen.
+The DUMB half of the dumb-renderer split (2026-07-10, single homegrown path):
+ALL camera intelligence — pan, zoom, lead room, dead-ball behavior — lives
+upstream in the ``plan_camera`` step; this step EXECUTES the ``camera_path/1``
+command stream ``{center_px, hfov_deg}`` per frame and enforces ONLY projection
+feasibility: yaw clamped to the field's lateral extent, pitch clamped to the
+source's vertical FOV, cap-aware vertical framing (``_solve_framing``), and
+polygon world-up leveling. A flat 2D crop of the stitched ~180° panorama curves
+goal lines and stretches players near the frame edge; the cylindrical render
+projects the source onto a virtual cylinder and renders a perspective view from
+inside it, so straight lines stay straight at every pan.
 """
 
 from __future__ import annotations
@@ -30,8 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -83,21 +69,15 @@ viewport_logger = logging.getLogger(__name__ + ".viewport")
 
 
 class RenderStepConfig(BaseModel):
-    render_mode: str = "broadcast"  # "broadcast" | "coach"
-    # Gated + recency-windowed pan smoother (the experiment-tuned camera path). When False,
-    # falls back to the legacy instantaneous-target EMA + velocity lead-room (frantic on
-    # noisy/sparse tracks). See CameraMode.pan_* for the tunables.
-    render_pan_smoothing: bool = True
     render_output_width: int = 1920
     render_output_height: int = 1080
     # Source optics. The stitched Reolink/Dahua panorama is ~180° horizontal.
     render_src_hfov_deg: float = 180.0
     # Projection. "cylindrical" (default): build the world-up leveling warp ONCE as a
-    # constant panorama and crop a ball-following window per frame (cheap, no per-frame
-    # reprojection; a constant cylindrical warp + ball-following crop). "pinhole": full
-    # per-frame rectilinear reprojection (straightens lines, ~4x costlier). Both level the
-    # field via the same polygon world-up; cylindrical needs that world-up (else falls back
-    # to pinhole for the frame).
+    # constant panorama and crop a command-following window per frame (cheap, no per-frame
+    # reprojection). "pinhole": full per-frame rectilinear reprojection (straightens
+    # lines, ~4x costlier). Both level the field via the same polygon world-up;
+    # cylindrical needs that world-up (else falls back to pinhole for the frame).
     render_projection: str = "cylindrical"
     # Warp backend. "cv2" (default): CPU remap -- universally portable, no extra deps.
     # "opencl": zero-copy pyopencl kernel (constant leveling map + crop box, computed on the
@@ -105,160 +85,42 @@ class RenderStepConfig(BaseModel):
     # pyopencl + an OpenCL device and the cylindrical projection. Falls back to cv2 if the
     # OpenCL backend is unavailable.
     render_backend: str = "cv2"
-    # Camera mount tilt: the down-angle of the camera relative to world-level. The
-    # panorama's axis is tilted by this, so without correction the rendered horizon
-    # rolls proportional to pan (a diagonal field). The cylindrical view levels the
-    # panorama to world-up by this angle. Used only as a fallback when render_auto_level
-    # is off or no field polygon is available; otherwise the tilt is DERIVED from the
-    # field polygon per camera install. ~17-24° for the tripod-mounted Reolink Duo 3.
+    # Camera mount tilt fallback when render_auto_level is off or no field polygon is
+    # available; otherwise the tilt is DERIVED from the field polygon per install.
     render_mount_tilt_deg: float = 0.0
     # Residual roll trim (deg) about the optical axis. Fallback only — with auto-level
     # on, the per-frame leveling roll is derived from the field polygon instead.
     render_view_roll_deg: float = 0.0
     # Auto-leveling: when on AND a field polygon is available, derive the camera mount
     # tilt + per-frame leveling roll from the polygon's world-up (field-plane normal),
-    # so world-horizontal lines (goal crossbars, field lines) read horizontal at every
-    # pan and the geometry re-adapts to each camera placement. Falls back to the fixed
-    # render_mount_tilt_deg / render_view_roll_deg when off or no polygon.
+    # so world-horizontal lines read horizontal at every pan.
     render_auto_level: bool = True
     # Vertical framing offset applied after leveling (positive = look down / subject
-    # higher in frame), for the broadcast "lead room below the ball" look.
+    # higher in frame). Fallback when auto-level is off.
     render_view_pitch_offset_deg: float = 0.0
-    # Adaptive no-cap vertical framing (used when render_mount_tilt_deg != 0): aim to
-    # put the ball at this fraction from the top, but clamp the view so it never
-    # samples past the source edge (no black cap), zooming in only if the field is
-    # taller than the source allows.
-    # Calibrated against the AutoCam GUI output (cmp3 vision study): a higher ball fraction
-    # pitches the camera up for far-field play, cropping the near-touchline foreground that
-    # AutoCam excludes (0.45 sat too low and dumped spectators/grass into the bottom third).
+    # Cap-aware vertical framing: aim to put the command's aim-point at this fraction
+    # from the top, clamped so the view never samples past the source edge.
     render_target_ball_frac: float = 0.58
     render_cap_margin_deg: float = 1.5
-    # Allowed black top-cap (deg of source above the top edge). 0 = strict no-cap
-    # (the view never samples past the source top). A positive value lets the camera
-    # aim up into a bounded cap rather than dumping foreground when the ball is far
-    # upfield — matching a side-mounted broadcast camera that keeps a small sky cap.
+    # Allowed black top-cap (deg of source above the top edge). 0 = strict no-cap.
+    # A positive value lets the camera aim up into a bounded cap rather than dumping
+    # foreground when the ball is far upfield — matching a side-mounted broadcast
+    # camera that keeps a small sky cap (AutoCam's own renders show the same cap).
     render_top_cap_deg: float = 8.0
-    # Reject ball detections OUTSIDE the field polygon (treat the frame as missing → the
-    # camera holds its bearing and widens instead of lunging off-field). Off-field
-    # detections are false positives (sideline / foreground clusters) that would otherwise
-    # steer the camera onto empty space. No-op when no polygon is available.
-    render_mask_offfield: bool = True
-    # DUMB-RENDERER MODE: manifest key of a camera_path/1 artifact (from the
-    # plan_camera step). When set, the internal camera brain is bypassed and the
-    # step executes the planner's per-frame commands (feasibility clamps only).
-    render_camera_path_key: str | None = None
-    # Distance+velocity zoom curve (the calibrated broadcast zoom): far/slow → tight,
-    # near OR fast → wide. hfov = base + min(speed/norm,1)·speed_gain + depth·depth_gain,
-    # clamped. ``depth`` is the ball's field depth (0 far touchline → 1 near), ``speed``
-    # the ball's source px/frame. Used when render_auto_zoom is on (else the zone+speed
-    # zoom). Degrees are absolute view HFOV; defaults match the Reolink Duo 3 calibration.
-    render_auto_zoom: bool = True
-    render_zoom_base_deg: float = 47.0
-    render_zoom_min_deg: float = 46.0
-    render_zoom_max_deg: float = 58.0
-    render_zoom_speed_norm_px: float = 15.0
-    render_zoom_speed_gain_deg: float = 8.0
-    render_zoom_depth_gain_deg: float = 5.0
-    # Uniform scale on the final view HFOV (and derived VFOV). Multiplier so the distance/velocity
-    # curve's dynamics are preserved. Calibrated against the AutoCam GUI output (cmp3 vision study):
-    # 1.25 framed ~25% wider than AutoCam (play small, excess field), so the action read smaller and
-    # less broadcast-tight; 0.90 matches AutoCam's framing on the majority of sampled frames.
+    # Manifest key of the camera_path/1 artifact (from the plan_camera step). The
+    # command stream is REQUIRED — a configured key with no artifact in the manifest
+    # is a hard error, never a silent fallback.
+    render_camera_path_key: str = "camera_path_path"
+    # Uniform scale on the final view HFOV. The planner PRE-APPLIES this calibrated
+    # scale to its commands, so the command's hfov is divided by it before the
+    # params-stage multiply (round-trip: the planner's hfov is final).
     render_zoom_scale: float = 0.90
-    # Vertical framing.
-    render_vertical_tracking: bool = True
-    render_view_pitch_deg: float = 0.0  # fallback field-centre pitch (no polygon)
+    # Geometry fallbacks when no field polygon is available.
+    render_view_pitch_deg: float = 0.0  # fallback field-centre pitch
     render_field_half_pitch_deg: float = 19.0  # fallback field half-height in pitch
-    render_vertical_margin_deg: float = 6.0  # headroom kept above/below the ball
     # Pan clamp padding beyond the field's lateral extent.
     render_yaw_padding_deg: float = 8.0
     render_video_bitrate: str = "8M"
-
-
-# ---------------------------------------------------------------------------
-# Camera modes (parameter overrides) — tuned for broadcast framing.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class CameraMode:
-    """Tunables controlling how aggressively the camera tracks the ball.
-
-    Zoom values are crop-width fractions of the source horizontal FOV; the
-    renderer multiplies by ``src_hfov_deg`` to get the view's HFOV in degrees.
-    """
-
-    zone_box_boundary: float = 0.10
-    zone_third_boundary: float = 0.33
-
-    zoom_box: float = 0.13
-    zoom_third: float = 0.18
-    zoom_midfield: float = 0.22
-    zoom_speed_bias_max: float = 0.06
-
-    max_lead_room_fraction: float = 0.20
-
-    pan_smoothing_min: float = 0.04
-    pan_smoothing_max: float = 0.12
-    zoom_smoothing: float = 0.03
-    pitch_smoothing: float = 0.05  # vertical follow — slower than pan
-
-    deadball_box_zoom: float = 0.13
-    deadball_third_zoom: float = 0.20
-    deadball_midfield_zoom: float = 0.28
-
-    deadball_speed_threshold_px_per_frame: float = 4.0
-    deadball_frame_count: int = 15
-    max_expected_speed_px_per_frame: float = 100.0
-
-    missing_ball_short_frames: int = 15
-    missing_ball_medium_frames: int = 60
-    missing_ball_long_zoom: float = 0.30
-
-    velocity_ema: float = 0.3  # EMA on per-frame finite-difference velocity
-
-    # --- Gated + recency-windowed pan smoother (active when render_pan_smoothing=True) ---
-    # Reject detection teleports (gate), aim at a recency-weighted average of recent accepted
-    # yaws over a short window, and ease there with a low-gain EMA whose gain rises with recent
-    # spread. Tuned on real game footage to broadcast-quality steadiness (per-frame pan ~5 px
-    # median vs the legacy path's frequent >100 px lunges).
-    pan_gate_px: float = (
-        700.0  # reject a detection jumping farther than this (source px)
-    )
-    pan_reacq_frames: int = (
-        15  # frames lost before a far detection is accepted (reacquire)
-    )
-    pan_window_sec: float = 3.0  # recency-weighted averaging window (seconds)
-    pan_inertia: float = 0.985  # base camera EMA; alpha = 1 - this (higher = smoother)
-    pan_vf_gain: float = 1.0  # extra responsiveness from recent-detection spread
-    pan_vf_smooth: float = 0.75  # smoothing of the adaptive (spread) term
-    pan_vf_norm_deg: float = 9.375  # yaw spread (deg) mapping to vf=1 (~400 source px)
-
-
-BROADCAST_MODE = CameraMode()
-
-COACH_MODE = CameraMode(
-    zoom_box=0.22,
-    zoom_third=0.28,
-    zoom_midfield=0.32,
-    zoom_speed_bias_max=0.04,
-    max_lead_room_fraction=0.08,
-    pan_smoothing_min=0.03,
-    pan_smoothing_max=0.08,
-    zoom_smoothing=0.02,
-    pitch_smoothing=0.03,
-    deadball_box_zoom=0.30,
-    deadball_third_zoom=0.32,
-    deadball_midfield_zoom=0.35,
-    missing_ball_long_zoom=0.40,
-)
-
-
-def _resolve_mode(name: str) -> CameraMode:
-    if name == "coach":
-        return COACH_MODE
-    if name == "broadcast":
-        return BROADCAST_MODE
-    raise ValueError(f"render_mode must be 'broadcast' or 'coach', got {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -268,74 +130,6 @@ def _resolve_mode(name: str) -> CameraMode:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
-
-
-def _classify_zone(field_x: float, mode: CameraMode) -> str:
-    if field_x < mode.zone_box_boundary:
-        return "left_box"
-    if field_x < mode.zone_third_boundary:
-        return "left_third"
-    if field_x < 1.0 - mode.zone_third_boundary:
-        return "midfield"
-    if field_x < 1.0 - mode.zone_box_boundary:
-        return "right_third"
-    return "right_box"
-
-
-def _zone_base_zoom(zone: str, mode: CameraMode) -> float:
-    return {
-        "left_box": mode.zoom_box,
-        "right_box": mode.zoom_box,
-        "left_third": mode.zoom_third,
-        "right_third": mode.zoom_third,
-        "midfield": mode.zoom_midfield,
-    }[zone]
-
-
-def _deadball_zone_zoom(zone: str, mode: CameraMode) -> float:
-    if zone in ("left_box", "right_box"):
-        return mode.deadball_box_zoom
-    if zone in ("left_third", "right_third"):
-        return mode.deadball_third_zoom
-    return mode.deadball_midfield_zoom
-
-
-def _normalized_speed(vx: float, vy: float, max_expected: float) -> float:
-    return max(0.0, min(1.0, math.hypot(vx, vy) / max_expected))
-
-
-def _trajectory_xy(entry) -> tuple[float, float] | None:
-    """Normalize a trajectory.json row (``[x, y]`` or ``{"x","y"}``) to a pair."""
-    if entry is None:
-        return None
-    if isinstance(entry, dict):
-        return float(entry["x"]), float(entry["y"])
-    return float(entry[0]), float(entry[1])
-
-
-def compute_entries(
-    trajectory: list, velocity_ema: float
-) -> list[tuple[float, float, float, float] | None]:
-    """Turn a per-frame ``[x, y]`` trajectory into ``(x, y, vx, vy)`` rows.
-
-    Velocity is an EMA of the finite difference across populated frames, so the
-    lead-room / speed-zoom logic has motion even though the tracker only stores
-    positions. Gaps (``None``) are preserved; velocity carries across a gap.
-    """
-    out: list[tuple[float, float, float, float] | None] = []
-    vx = vy = 0.0
-    prev: tuple[float, float] | None = None
-    for entry in trajectory:
-        xy = _trajectory_xy(entry)
-        if xy is None:
-            out.append(None)
-            continue
-        if prev is not None:
-            vx = velocity_ema * (xy[0] - prev[0]) + (1 - velocity_ema) * vx
-            vy = velocity_ema * (xy[1] - prev[1]) + (1 - velocity_ema) * vy
-        out.append((xy[0], xy[1], vx, vy))
-        prev = xy
-    return out
 
 
 @dataclass
@@ -547,294 +341,24 @@ def _solve_framing(
 
 
 # ---------------------------------------------------------------------------
-# Per-frame state machine
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _CameraState:
-    smoothed_yaw: float | None = None
-    smoothed_pitch: float | None = None
-    smoothed_zoom: float | None = None
-    stationary_frames: int = 0
-    missing_frames: int = 0
-    # Video frame rate — set by the render loop so the pan window (seconds) maps to frames.
-    fps: float = 20.0
-    # Gated + recency-windowed pan smoother state (render_pan_smoothing).
-    pan_frame: int = 0
-    pan_last: tuple[float, float] | None = (
-        None  # last accepted ball (px, py) for gating
-    )
-    pan_lost: int = 0
-    pan_vf: float = 0.0
-    pan_buf: list = field(default_factory=list)  # (frame_idx, yaw_raw) recent accepted
-
-
-def _tick(
-    state: _CameraState,
-    entry: tuple[float, float, float, float] | None,
-    src_w: int,
-    src_h: int,
-    geom: _ViewGeom,
-    mode: CameraMode,
-    cfg: RenderStepConfig,
-    yaw_min: float,
-    yaw_max: float,
-    homography,
-) -> tuple[float, float, float]:
-    """Advance the camera by one frame → ``(yaw_deg, pitch_deg, view_hfov_deg)``."""
-    margin = cfg.render_vertical_margin_deg
-
-    def containment_zoom(ball_pitch: float, view_pitch: float) -> float:
-        """Min zoom (hfov fraction) keeping the ball's pitch inside the V-FOV."""
-        need_vfov = 2.0 * (abs(ball_pitch - view_pitch) + margin)
-        return (need_vfov * geom.aspect) / geom.src_hfov_deg
-
-    # Off-field detection rejection: a ball outside the field polygon is a detector false
-    # positive (sideline / foreground). Treat it as missing so the camera holds + widens
-    # rather than lunging off-field — the source of the worst edge wedges. The polygon is
-    # already a render input via the field-mark, even though we defer auto-detecting it.
-    if (
-        entry is not None
-        and cfg.render_mask_offfield
-        and geom.polygon is not None
-        and not _point_in_polygon(entry[0], entry[1], geom.polygon)
-    ):
-        entry = None
-
-    if entry is None:
-        state.missing_frames += 1
-        if state.smoothed_yaw is None:
-            state.smoothed_yaw = _clamp(0.0, yaw_min, yaw_max)
-        if state.smoothed_pitch is None:
-            state.smoothed_pitch = geom.base_pitch_deg
-        if state.smoothed_zoom is None:
-            state.smoothed_zoom = mode.zoom_midfield
-        if state.missing_frames >= mode.missing_ball_medium_frames:
-            # Long gap: HOLD the last pan bearing (where the ball was last seen)
-            # and widen to a stable wide shot. Do NOT recentre the pan to
-            # mid-field — that drifts the camera off the action onto empty
-            # grass, the single worst artefact of a sparse trajectory. Pitch
-            # eases back to the field centre for a steady wide hold; yaw is
-            # held so the action stays roughly framed until the ball reappears.
-            state.smoothed_zoom += mode.zoom_smoothing * (
-                mode.missing_ball_long_zoom - state.smoothed_zoom
-            )
-            state.smoothed_pitch += mode.zoom_smoothing * (
-                geom.base_pitch_deg - state.smoothed_pitch
-            )
-            # yaw intentionally held — no drift to centre.
-        elif state.missing_frames >= mode.missing_ball_short_frames:
-            # Medium gap: zoom out toward midfield, hold pan/pitch.
-            state.smoothed_zoom += mode.zoom_smoothing * (
-                mode.zoom_midfield - state.smoothed_zoom
-            )
-        return (
-            state.smoothed_yaw,
-            state.smoothed_pitch,
-            state.smoothed_zoom * geom.src_hfov_deg,
-        )
-
-    state.missing_frames = 0
-    px, py, vx, vy = entry
-    speed = math.hypot(vx, vy)
-    norm_speed = _normalized_speed(vx, vy, mode.max_expected_speed_px_per_frame)
-
-    if speed < mode.deadball_speed_threshold_px_per_frame:
-        state.stationary_frames += 1
-    else:
-        state.stationary_frames = 0
-    is_dead_ball = state.stationary_frames >= mode.deadball_frame_count
-
-    yaw_raw, ball_pitch = pixel_to_yaw_pitch(px, py, src_w, src_h, geom.src_hfov_deg)
-
-    # ---- vertical: track the ball's pitch (clamped) or hold field centre ----
-    if cfg.render_vertical_tracking:
-        if state.smoothed_pitch is None:
-            state.smoothed_pitch = ball_pitch
-        else:
-            state.smoothed_pitch += mode.pitch_smoothing * (
-                ball_pitch - state.smoothed_pitch
-            )
-    else:
-        state.smoothed_pitch = geom.base_pitch_deg
-    view_pitch = state.smoothed_pitch
-
-    # ---- zoom: zone + speed, then floor for vertical containment ----
-    if is_dead_ball:
-        field_x = _ball_field_x(px, py, src_w, homography)
-        target_zoom = _deadball_zone_zoom(_classify_zone(field_x, mode), mode)
-    elif cfg.render_auto_zoom:
-        # Distance+velocity curve: far/slow → tight, near OR fast → wide.
-        half = geom.field_half_pitch_deg or 1.0
-        depth = _clamp(
-            (ball_pitch - (geom.base_pitch_deg - half)) / (2.0 * half), 0.0, 1.0
-        )
-        spd = min(speed / cfg.render_zoom_speed_norm_px, 1.0)
-        hfov = _clamp(
-            cfg.render_zoom_base_deg
-            + spd * cfg.render_zoom_speed_gain_deg
-            + depth * cfg.render_zoom_depth_gain_deg,
-            cfg.render_zoom_min_deg,
-            cfg.render_zoom_max_deg,
-        )
-        target_zoom = hfov / geom.src_hfov_deg
-    else:
-        field_x = _ball_field_x(px, py, src_w, homography)
-        target_zoom = (
-            _zone_base_zoom(_classify_zone(field_x, mode), mode)
-            + norm_speed * mode.zoom_speed_bias_max
-        )
-    if cfg.render_vertical_tracking:
-        # Floor around the (tracked) view pitch — keeps the ball in frame if the
-        # smoothed pitch lags the ball.
-        target_zoom = max(target_zoom, containment_zoom(ball_pitch, view_pitch))
-    else:
-        # No tilt: floor so the whole field height stays in view, AND so the
-        # ball itself stays in view even if it leaves the field vertically
-        # (a high kick) — "zoom out to always show the ball".
-        whole_field = (
-            2.0 * (geom.field_half_pitch_deg + margin) * geom.aspect
-        ) / geom.src_hfov_deg
-        target_zoom = max(
-            target_zoom, whole_field, containment_zoom(ball_pitch, view_pitch)
-        )
-
-    # ---- pan ----
-    if cfg.render_pan_smoothing:
-        # Gated + recency-windowed pan (ported from the experiment camera tuner). Reject
-        # detection teleports (gate), aim at a recency-weighted average of recent accepted
-        # yaws over a short window, and ease there with a low-gain EMA whose gain rises with
-        # recent spread. This holds steady on noisy / sparse tracks instead of chasing the
-        # instantaneous ball yaw every frame — the fix for "frantic" pan.
-        state.pan_frame += 1
-        accept = (
-            state.pan_last is None
-            or state.pan_lost > mode.pan_reacq_frames
-            or math.hypot(px - state.pan_last[0], py - state.pan_last[1])
-            < mode.pan_gate_px
-        )
-        if accept:
-            state.pan_last = (px, py)
-            state.pan_lost = 0
-            state.pan_buf.append((state.pan_frame, yaw_raw))
-        else:
-            state.pan_lost += 1
-        cutoff = state.pan_frame - max(1, int(mode.pan_window_sec * state.fps))
-        while state.pan_buf and state.pan_buf[0][0] <= cutoff:
-            state.pan_buf.pop(0)
-        if state.pan_buf:
-            kmin = state.pan_buf[0][0]
-            wsum = ysum = 0.0
-            for kf, yw in state.pan_buf:
-                w = kf - kmin + 1.0
-                wsum += w
-                ysum += w * yw
-            target_yaw = ysum / wsum
-            if len(state.pan_buf) > 1:
-                mean = sum(yw for _, yw in state.pan_buf) / len(state.pan_buf)
-                spread = (
-                    sum((yw - mean) ** 2 for _, yw in state.pan_buf)
-                    / len(state.pan_buf)
-                ) ** 0.5
-            else:
-                spread = 0.0
-            state.pan_vf = mode.pan_vf_smooth * state.pan_vf + (
-                1 - mode.pan_vf_smooth
-            ) * min(1.0, spread / mode.pan_vf_norm_deg)
-            alpha = (1 - mode.pan_inertia) * (1 + state.pan_vf * mode.pan_vf_gain)
-            state.smoothed_yaw = (
-                target_yaw
-                if state.smoothed_yaw is None
-                else state.smoothed_yaw + alpha * (target_yaw - state.smoothed_yaw)
-            )
-        elif state.smoothed_yaw is None:
-            state.smoothed_yaw = yaw_raw
-    else:
-        # Legacy: chase the instantaneous ball yaw (+ velocity lead room) with a
-        # speed-adaptive EMA. Frantic on noisy / sparse trajectories.
-        if speed > 1e-6:
-            crop_width_px = target_zoom * src_w
-            max_lead_px = mode.max_lead_room_fraction * crop_width_px
-            lead_px = (vx / speed) * (norm_speed * max_lead_px)
-            target_yaw = yaw_raw + lead_px * (geom.src_hfov_deg / src_w)
-        else:
-            target_yaw = yaw_raw
-        pan_alpha = (
-            mode.pan_smoothing_min
-            + (mode.pan_smoothing_max - mode.pan_smoothing_min) * norm_speed
-        )
-        state.smoothed_yaw = (
-            target_yaw
-            if state.smoothed_yaw is None
-            else state.smoothed_yaw + pan_alpha * (target_yaw - state.smoothed_yaw)
-        )
-    state.smoothed_zoom = (
-        target_zoom
-        if state.smoothed_zoom is None
-        else state.smoothed_zoom
-        + mode.zoom_smoothing * (target_zoom - state.smoothed_zoom)
-    )
-
-    state.smoothed_yaw = _clamp(state.smoothed_yaw, yaw_min, yaw_max)
-    # Clamp pitch so the view's vertical extent never samples past the source.
-    view_hfov = state.smoothed_zoom * geom.src_hfov_deg
-    view_vfov = view_hfov * (cfg.render_output_height / cfg.render_output_width)
-    pitch_room = max(0.0, geom.pitch_limit_deg - view_vfov / 2.0)
-    state.smoothed_pitch = _clamp(state.smoothed_pitch, -pitch_room, pitch_room)
-
-    return state.smoothed_yaw, state.smoothed_pitch, view_hfov
-
-
-def _point_in_polygon(px: float, py: float, polygon) -> bool:
-    """Ray-casting point-in-polygon test; ``polygon`` is an (N,2) array of source pixels."""
-    n = len(polygon)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = float(polygon[i][0]), float(polygon[i][1])
-        xj, yj = float(polygon[j][0]), float(polygon[j][1])
-        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def _ball_field_x(px: float, py: float, src_w: int, homography) -> float:
-    if homography is not None:
-        from video_grouper.inference.field_geometry import pixel_to_field
-
-        fx, _fy = pixel_to_field(px, py, homography)
-        return max(0.0, min(1.0, fx))
-    return max(0.0, min(1.0, px / src_w))
-
-
-# ---------------------------------------------------------------------------
 # Field polygon loading
 # ---------------------------------------------------------------------------
 
 
 def _load_field(polygon_path: str | None):
-    """Return ``(polygon ndarray | None, homography ndarray | None)``."""
+    """Return the field polygon ndarray, or ``None`` when absent/unusable."""
     if not polygon_path:
-        return None, None
+        return None
     try:
         with open(polygon_path, encoding="utf-8") as f:
             payload = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("render: field polygon %s unusable (%s)", polygon_path, e)
-        return None, None
+        return None
     import numpy as np
 
     poly = payload.get("polygon")
-    polygon = np.array(poly, dtype=np.float32) if poly is not None else None
-    h = payload.get("homography")
-    homography = np.array(h, dtype=np.float32) if h is not None else None
-    if homography is None and "keypoints" in payload:
-        from video_grouper.inference.field_geometry import field_homography
-
-        homography = field_homography(payload["keypoints"])
-    return polygon, homography
+    return np.array(poly, dtype=np.float32) if poly is not None else None
 
 
 def _polygon_or_full_frame(polygon, src_w: int, src_h: int):
@@ -869,46 +393,33 @@ def _parse_bitrate(bitrate: str) -> int:
 
 
 def _frame_view(
-    state,
-    entry,
+    command: tuple[float, float, float],
     geom,
-    mode,
     cfg,
     yaw_min,
     yaw_max,
-    homography,
     src_w,
     src_h,
     out_w,
     out_h,
-    command: tuple[float, float, float] | None = None,
 ) -> tuple[CylindricalViewParams, float]:
     """One frame's camera solve → ``(CylindricalViewParams, view_yaw_deg)``.
 
-    Shared by the single-output and multi-output render loops so they stay identical:
-    ball-following pan/pitch/zoom (``_tick``), then polygon world-up leveling + cap-aware
-    vertical framing (``_solve_framing``) when auto-level is on.
-
-    ``command`` = a camera_path/1 row ``(center_x_px, center_y_px, hfov_deg)`` from the
-    upstream planner (dumb-renderer mode, 2026-07-09): the internal ball-following
-    brain (``_tick``) is bypassed entirely — the renderer executes the command and
-    enforces ONLY projection feasibility (yaw/pitch clamps, cap-aware framing,
-    leveling). The command's hfov is final: the planner pre-applies the calibrated
-    zoom scale, so it is divided back out of the params-stage multiply.
+    ``command`` = a camera_path/1 row ``(center_x_px, center_y_px, hfov_deg)`` from
+    the upstream planner. The renderer executes the command and enforces ONLY
+    projection feasibility: yaw/pitch clamps, cap-aware vertical framing
+    (``_solve_framing``), and polygon world-up leveling. The command's hfov is
+    final: the planner pre-applies the calibrated zoom scale, so it is divided
+    back out of the params-stage multiply.
     """
-    if command is not None:
-        cx, cy, cmd_hfov = command
-        yaw, pitch = pixel_to_yaw_pitch(
-            float(cx), float(cy), src_w, src_h, geom.src_hfov_deg
-        )
-        yaw = max(yaw_min, min(yaw_max, yaw))
-        lim = float(getattr(geom, "pitch_limit_deg", 90.0))
-        pitch = max(-lim, min(lim, pitch))
-        view_hfov = float(cmd_hfov) / max(cfg.render_zoom_scale, 1e-6)
-    else:
-        yaw, pitch, view_hfov = _tick(
-            state, entry, src_w, src_h, geom, mode, cfg, yaw_min, yaw_max, homography
-        )
+    cx, cy, cmd_hfov = command
+    yaw, pitch = pixel_to_yaw_pitch(
+        float(cx), float(cy), src_w, src_h, geom.src_hfov_deg
+    )
+    yaw = max(yaw_min, min(yaw_max, yaw))
+    lim = float(getattr(geom, "pitch_limit_deg", 90.0))
+    pitch = max(-lim, min(lim, pitch))
+    view_hfov = float(cmd_hfov) / max(cfg.render_zoom_scale, 1e-6)
     if geom.world_up is not None:
         ball_row = yaw_pitch_to_pixel(yaw, pitch, src_w, src_h, geom.src_hfov_deg)[1]
         view_pitch_offset, view_hfov = _solve_framing(
@@ -937,6 +448,24 @@ def _frame_view(
     return params, round(yaw, 1)
 
 
+def _load_commands(camera_path_file: str) -> tuple[list, int]:
+    """Load a camera_path/1 artifact -> (command rows, g_start)."""
+    with open(camera_path_file, encoding="utf-8") as f:
+        art = json.load(f)
+    commands = art["frames"]
+    if not commands:
+        raise RuntimeError(f"render: camera path {camera_path_file} has no commands")
+    return commands, int(art.get("g_start", 0))
+
+
+def _command_for(commands: list, g0: int, frame_idx: int) -> tuple[float, float, float]:
+    """The command for a source frame; frames outside the planned span hold the
+    nearest end command (a steady wide hold beats inventing camera motion)."""
+    i = min(max(frame_idx - g0, 0), len(commands) - 1)
+    c = commands[i]
+    return (float(c[0]), float(c[1]), float(c[2]))
+
+
 # ---------------------------------------------------------------------------
 # Render loop
 # ---------------------------------------------------------------------------
@@ -945,37 +474,20 @@ def _frame_view(
 def _render_video(
     input_path: str,
     output_path: str,
-    trajectory_path: str | None,
+    camera_path_file: str,
     field_polygon_path: str | None,
     cfg: RenderStepConfig,
-    camera_path_file: str | None = None,
 ) -> None:
-    """Sync helper: per-frame cylindrical render with the broadcast control logic —
-    or, when ``camera_path_file`` is given, pure execution of the planner's commands
-    (dumb-renderer mode)."""
+    """Sync helper: execute the planner's per-frame commands over the cylindrical
+    projection (feasibility clamps only) and encode the broadcast output."""
     import av
 
     from video_grouper.inference.field_geometry import field_lateral_yaw_extent
 
-    mode = _resolve_mode(cfg.render_mode)
     out_w = cfg.render_output_width
     out_h = cfg.render_output_height
-
-    commands: list | None = None
-    cmd_g0 = 0
-    if camera_path_file is not None:
-        with open(camera_path_file, encoding="utf-8") as f:
-            art = json.load(f)
-        commands = art["frames"]
-        cmd_g0 = int(art.get("g_start", 0))
-        entries = []
-    else:
-        assert trajectory_path is not None
-        with open(trajectory_path, encoding="utf-8") as f:
-            raw_trajectory = json.load(f)
-        entries = compute_entries(raw_trajectory, mode.velocity_ema)
-
-    polygon, homography = _load_field(field_polygon_path)
+    commands, cmd_g0 = _load_commands(camera_path_file)
+    polygon = _load_field(field_polygon_path)
 
     with av.open(input_path) as in_container:
         in_video = in_container.streams.video[0]
@@ -990,17 +502,15 @@ def _render_video(
         half_src = geom.src_hfov_deg / 2.0
         yaw_min = max(yaw_min, -half_src)
         yaw_max = min(yaw_max, half_src)
+        fps = float(in_video.average_rate) if in_video.average_rate else 20.0
         logger.info(
-            "render(%s): %dx%d src, yaw [%.0f,%.0f]°, base_pitch %.1f°, "
-            "field_half %.1f°, vertical_tracking=%s",
-            cfg.render_mode,
+            "render: %dx%d src, %d camera commands (g_start %d), yaw [%.0f,%.0f]°",
             src_w,
             src_h,
+            len(commands),
+            cmd_g0,
             yaw_min,
             yaw_max,
-            geom.base_pitch_deg,
-            geom.field_half_pitch_deg,
-            cfg.render_vertical_tracking,
         )
 
         # The s.type == "audio" filter guarantees an AudioStream; av types the
@@ -1011,8 +521,6 @@ def _render_video(
             next((s for s in in_container.streams if s.type == "audio"), None),
         )
 
-        state = _CameraState()
-        state.fps = float(in_video.average_rate) if in_video.average_rate else 20.0
         warper = _make_warper(geom, cfg, src_w, src_h, out_w, out_h)
 
         with av.open(output_path, mode="w") as out_container:
@@ -1055,26 +563,16 @@ def _render_video(
                     # returns the frame-type union; this branch only sees the video
                     # stream's packets, so the frames are VideoFrames.
                     for frame in cast("list[VideoFrame]", packet.decode()):
-                        entry = entries[frame_idx] if frame_idx < len(entries) else None
-                        command = None
-                        if commands is not None:
-                            ci = frame_idx - cmd_g0
-                            if 0 <= ci < len(commands):
-                                command = commands[ci]
                         params, view_yaw = _frame_view(
-                            state,
-                            entry,
+                            _command_for(commands, cmd_g0, frame_idx),
                             geom,
-                            mode,
                             cfg,
                             yaw_min,
                             yaw_max,
-                            homography,
                             src_w,
                             src_h,
                             out_w,
                             out_h,
-                            command=command,
                         )
                         # AutoCam-format per-frame viewport line: where the
                         # centre of this output frame points in source pixels.
@@ -1088,7 +586,7 @@ def _render_video(
                         t = (
                             float(frame.pts * in_video.time_base)
                             if frame.pts is not None and in_video.time_base
-                            else frame_idx / state.fps
+                            else frame_idx / fps
                         )
                         viewport_logger.info(
                             '{"xy": [%d, %d], "f": %d, "t": %.2f}',
@@ -1134,17 +632,17 @@ def _render_video(
 
 
 class RenderConsumerConfig(RenderStepConfig):
-    """A render variant inside a ``frame_fanout``: which trajectory to follow and where to
-    write. Inherits all render tuning so each variant can differ (here all three share it)."""
+    """A render variant inside a ``frame_fanout``: which camera path to execute and
+    where to write. Inherits all render tuning so each variant can differ."""
 
-    trajectory_key: str  # manifest key holding this variant's per-frame trajectory
+    camera_path_key: str  # manifest key holding this variant's camera_path/1 artifact
     output_key: str  # manifest key to record this variant's output path under
     output_name: str  # output filename, written under ctx.group_dir
 
 
 class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
-    """Renders the broadcast view for one trajectory, encoding to its own output, fed
-    decoded frames by the fan-out step (so the source is decoded once for all variants)."""
+    """Renders one camera path, encoding to its own output, fed decoded frames by
+    the fan-out step (so the source is decoded once for all variants)."""
 
     config_model = RenderConsumerConfig
 
@@ -1153,7 +651,7 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     # writeable->property override; it's the intended design here.
     @property
     def consumes(self) -> tuple[str, ...]:  # type: ignore[override]
-        return (self.config.trajectory_key,)
+        return (self.config.camera_path_key,)
 
     @property
     def produces(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -1163,12 +661,16 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         import av
 
         cfg = self.config
-        self._mode = _resolve_mode(cfg.render_mode)
         self._ow, self._oh = cfg.render_output_width, cfg.render_output_height
         self._sw, self._sh = source.width, source.height
-        with open(manifest.get(cfg.trajectory_key), encoding="utf-8") as f:
-            self._entries = compute_entries(json.load(f), self._mode.velocity_ema)
-        polygon, self._homography = _load_field(manifest.get("field_polygon_path"))
+        camera_path_file = manifest.get(cfg.camera_path_key)
+        if not camera_path_file:
+            raise RuntimeError(
+                f"render: no camera_path/1 artifact under manifest key "
+                f"{cfg.camera_path_key!r} — run plan_camera first."
+            )
+        self._commands, self._cmd_g0 = _load_commands(cast(str, camera_path_file))
+        polygon = _load_field(manifest.get("field_polygon_path"))
         polygon = _polygon_or_full_frame(polygon, source.width, source.height)
         self._geom = _resolve_geometry(source.width, source.height, cfg, polygon)
         from video_grouper.inference.field_geometry import field_lateral_yaw_extent
@@ -1179,8 +681,7 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
         half = self._geom.src_hfov_deg / 2.0
         self._yaw_min = max(ymin - cfg.render_yaw_padding_deg, -half)
         self._yaw_max = min(ymax + cfg.render_yaw_padding_deg, half)
-        self._state = _CameraState()
-        self._state.fps = float(source.average_rate) if source.average_rate else 20.0
+        self._fps = float(source.average_rate) if source.average_rate else 20.0
         self._out_path = ctx.group_dir / cfg.output_name
         self._oc = av.open(str(self._out_path), mode="w")
         st = self._oc.add_stream("h264", rate=source.average_rate)
@@ -1197,16 +698,12 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
     def consume(self, rgb, frame_pts: int | None, frame_idx: int) -> None:
         import av
 
-        entry = self._entries[frame_idx] if frame_idx < len(self._entries) else None
         params, view_yaw = _frame_view(
-            self._state,
-            entry,
+            _command_for(self._commands, self._cmd_g0, frame_idx),
             self._geom,
-            self._mode,
             self.config,
             self._yaw_min,
             self._yaw_max,
-            self._homography,
             self._sw,
             self._sh,
             self._ow,
@@ -1224,7 +721,7 @@ class RenderFrameConsumer(FrameConsumer[RenderConsumerConfig]):
             round(cx),
             round(cy),
             frame_idx + 1,
-            frame_idx / self._state.fps,
+            frame_idx / self._fps,
         )
         rendered = _warp_frame(
             rgb, self._geom, self.config, params, view_yaw, self._warper
@@ -1249,7 +746,7 @@ register_frame_consumer("render", RenderFrameConsumer, RenderConsumerConfig)
 class RenderStep(PipelineStep[RenderStepConfig]):
     name = "render"
     config_model = RenderStepConfig
-    consumes = ("input_path", "trajectory_path")
+    consumes = ("input_path", "camera_path_path")
     produces = ("output_path",)
     runtime = "service"
     requires = ("av", "cv2")
@@ -1258,31 +755,27 @@ class RenderStep(PipelineStep[RenderStepConfig]):
     async def run(self, manifest: PipelineManifest, ctx: StepContext) -> bool:
         in_path = Path(cast(str, manifest.get("input_path")))
         out_path = Path(cast(str, manifest.get("output_path")))
-        trajectory_path = cast(str, manifest.get("trajectory_path"))
         # Optional: a field-detect step upstream supplies the ROI polygon used
         # for pan clamping + vertical geometry. Absent ⇒ unconstrained pan.
         field_polygon_path = manifest.get("field_polygon_path")
-        # Dumb-renderer mode: execute the plan_camera step's command stream
-        camera_path_file = (
-            manifest.get(self.config.render_camera_path_key)
-            if self.config.render_camera_path_key
-            else None
-        )
+        # The camera path is REQUIRED — the renderer has no camera brain of its
+        # own. A missing artifact is a hard error, never a silent fallback.
+        camera_path_file = manifest.get(self.config.render_camera_path_key)
+        if not camera_path_file:
+            raise RuntimeError(
+                f"render: no camera_path/1 artifact under manifest key "
+                f"{self.config.render_camera_path_key!r} — run plan_camera first."
+            )
 
         await asyncio.to_thread(
             _render_video,
             str(in_path),
             str(out_path),
-            trajectory_path,
+            cast(str, camera_path_file),
             field_polygon_path,
             self.config,
-            camera_path_file,
         )
-        logger.info(
-            "render: wrote broadcast-style output to %s%s",
-            out_path,
-            " (camera-path mode)" if camera_path_file else "",
-        )
+        logger.info("render: wrote broadcast-style output to %s", out_path)
         return True
 
 

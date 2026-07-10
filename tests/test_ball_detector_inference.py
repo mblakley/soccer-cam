@@ -1,144 +1,103 @@
-"""Tests for video_grouper.inference.ball_detector."""
+"""Heatmap candidate detector (product): peaks, tiling, coordinate mapping."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 
-from video_grouper.inference import ball_detector
+from video_grouper.inference.ball_detector import (
+    _pad8,
+    extract_peaks,
+    infer_band,
+)
+from video_grouper.inference.iso_warp import (
+    CropIsoWarp,
+    band_mask,
+    far_margin_polygon,
+    field_band_from_polygon,
+    native_iso_warp,
+)
 
 
-class TestCreateSession:
-    def test_use_gpu_true_lists_cuda_first(self):
-        with patch.object(ball_detector.ort, "InferenceSession") as mock_cls:
-            mock_cls.return_value.get_providers.return_value = ["CPUExecutionProvider"]
-            ball_detector.create_session(Path("model.onnx"), use_gpu=True)
+class _StubSession:
+    """onnxruntime-session stand-in: heatmap = mean of the 3 input frames."""
 
-        _args, kwargs = mock_cls.call_args
-        assert kwargs["providers"] == [
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ]
+    calls: int = 0
 
-    def test_use_gpu_false_lists_cpu_only(self):
-        with patch.object(ball_detector.ort, "InferenceSession") as mock_cls:
-            mock_cls.return_value.get_providers.return_value = ["CPUExecutionProvider"]
-            ball_detector.create_session(Path("model.onnx"), use_gpu=False)
+    def get_inputs(self):
+        class _In:
+            name = "frames"
 
-        _args, kwargs = mock_cls.call_args
-        assert kwargs["providers"] == ["CPUExecutionProvider"]
+        return [_In()]
 
-    def test_returns_session_instance(self):
-        with patch.object(ball_detector.ort, "InferenceSession") as mock_cls:
-            sess = MagicMock()
-            sess.get_providers.return_value = ["CPUExecutionProvider"]
-            mock_cls.return_value = sess
-
-            result = ball_detector.create_session(Path("model.onnx"))
-
-        assert result is sess
+    def run(self, _outs, feeds):
+        x = feeds["frames"]  # (1, 3, H, W)
+        self.calls = getattr(self, "calls", 0) + 1
+        return [x.mean(axis=1, keepdims=True)]
 
 
-class TestPanoToTile:
-    def test_center_in_top_left_tile(self):
-        labels = ball_detector.pano_to_tile(cx=100.0, cy=100.0, w=20.0, h=20.0)
-        rows = {(label["row"], label["col"]) for label in labels}
-        assert (0, 0) in rows
-
-    def test_center_outside_all_tiles_returns_empty(self):
-        labels = ball_detector.pano_to_tile(
-            cx=ball_detector.PANO_W + 100,
-            cy=ball_detector.PANO_H + 100,
-            w=20,
-            h=20,
-        )
-        assert labels == []
-
-    def test_normalized_coords_within_unit_range(self):
-        labels = ball_detector.pano_to_tile(cx=100.0, cy=100.0, w=20.0, h=20.0)
-        for label in labels:
-            assert 0.0 <= label["cx_norm"] < 1.0
-            assert 0.0 <= label["cy_norm"] < 1.0
-            assert 0.0 < label["w_norm"] < 1.0
-            assert 0.0 < label["h_norm"] < 1.0
+def test_extract_peaks_finds_local_maxima_score_descending():
+    hm = np.zeros((64, 96), np.float32)
+    hm[10, 20] = 0.9
+    hm[40, 70] = 0.5
+    hm[41, 71] = 0.45  # suppressed: within the NMS radius of (40, 70)
+    peaks = extract_peaks(hm, top_k=8, threshold=0.1, min_distance=3)
+    assert [(x, y) for x, y, _s in peaks] == [(20.0, 10.0), (70.0, 40.0)]
+    assert peaks[0][2] > peaks[1][2]
 
 
-class TestFieldMaskFiltering:
-    """detect_balls drops candidates whose center falls outside the field
-    polygon — so off-field FPs (the camera's burned-in timestamp, spectators)
-    can't out-compete the real on-field ball."""
+def test_extract_peaks_threshold_and_topk():
+    hm = np.zeros((32, 32), np.float32)
+    hm[5, 5] = 0.05  # below floor
+    hm[20, 20] = 0.6
+    hm[10, 25] = 0.3
+    assert len(extract_peaks(hm, top_k=8, threshold=0.1)) == 2
+    assert len(extract_peaks(hm, top_k=1, threshold=0.1)) == 1
 
-    SQUARE = np.array(
-        [[100, 100], [300, 100], [300, 300], [100, 300]], dtype=np.float32
+
+def test_pad8_pads_to_multiples_of_8():
+    a = np.zeros((3, 30, 100), np.float32)
+    padded, h, w = _pad8(a)
+    assert (h, w) == (30, 100)
+    assert padded.shape == (3, 32, 104)
+
+
+def test_infer_band_tiles_and_stitches():
+    sess = _StubSession()
+    stack = np.random.default_rng(0).random((3, 40, 700), dtype=np.float32)
+    hm = infer_band(sess, stack, tile_w=256, overlap=64)
+    assert hm.shape == (40, 700)
+    assert sess.calls > 1  # actually tiled
+    np.testing.assert_allclose(hm, stack.mean(axis=0), atol=1e-6)
+
+
+def test_band_coordinate_round_trip():
+    """Band coords -> source px uses (scale, y_top) exactly like warp.points."""
+    poly = np.array(
+        [
+            [100, 1000],
+            [500, 1010],
+            [960, 1015],
+            [1420, 1010],
+            [1820, 1000],
+            [1600, 300],
+            [1280, 295],
+            [960, 290],
+            [640, 295],
+            [320, 300],
+        ],
+        float,
     )
-
-    @staticmethod
-    def _frame():
-        return np.zeros((640, 640, 3), dtype=np.uint8)  # one tile, scale 1.0
-
-    @staticmethod
-    def _session(rows):
-        sess = MagicMock()
-        sess.run.return_value = [np.array([rows], dtype=np.float32)]
-        return sess
-
-    def test_off_field_detection_dropped(self):
-        # in-field (200,200) kept; off-field (500,500) dropped
-        sess = self._session(
-            [[190, 190, 210, 210, 0.9, 0.0], [490, 490, 510, 510, 0.8, 0.0]]
-        )
-        res = ball_detector.detect_balls(
-            self._frame(),
-            sess,
-            conf_threshold=0.5,
-            field_polygon=self.SQUARE,
-            field_margin=0.0,
-        )
-        centers = {(round(r["cx"]), round(r["cy"])) for r in res}
-        assert centers == {(200, 200)}
-
-    def test_no_polygon_keeps_all(self):
-        sess = self._session(
-            [[190, 190, 210, 210, 0.9, 0.0], [490, 490, 510, 510, 0.8, 0.0]]
-        )
-        res = ball_detector.detect_balls(self._frame(), sess, conf_threshold=0.5)
-        centers = {(round(r["cx"]), round(r["cy"])) for r in res}
-        assert centers == {(200, 200), (500, 500)}
-
-    def test_margin_keeps_near_edge_drops_far(self):
-        # center (320,200): 20px right of the square's right edge (x=300)
-        sess = self._session([[310, 190, 330, 210, 0.9, 0.0]])
-        kept = ball_detector.detect_balls(
-            self._frame(),
-            sess,
-            conf_threshold=0.5,
-            field_polygon=self.SQUARE,
-            field_margin=50.0,
-        )
-        dropped = ball_detector.detect_balls(
-            self._frame(),
-            sess,
-            conf_threshold=0.5,
-            field_polygon=self.SQUARE,
-            field_margin=5.0,
-        )
-        assert len(kept) == 1  # 20px outside, within 50px margin
-        assert len(dropped) == 0  # 20px outside, beyond 5px margin
-
-
-class TestModuleHasNoHeavyImports:
-    """Top-level imports must stay dep-light so PyInstaller doesn't pull
-    torch / ultralytics / scipy into the bundled exes."""
-
-    def test_no_torch_or_ultralytics_in_module(self):
-        import sys
-
-        # Reload the module to be sure we're inspecting fresh state.
-        ball_detector_mod = sys.modules["video_grouper.inference.ball_detector"]
-        attrs = set(dir(ball_detector_mod))
-        assert "torch" not in attrs
-        assert "ultralytics" not in attrs
-        assert "filterpy" not in attrs
-        assert "scipy" not in attrs
+    far = far_margin_polygon(poly, 100.0)
+    assert far[5:, 1].max() <= 200.0
+    warp = native_iso_warp(far, 1920, 1080, target_width=960)
+    assert isinstance(warp, CropIsoWarp)
+    yt, yb = field_band_from_polygon(far)
+    assert (warp.y_top, warp.y_bot) == (yt, yb)
+    src_pt = np.array([[700.0, 800.0]])
+    bx, by = warp.points(src_pt)[0]
+    # the detector maps peaks back with x / scale, y / scale + y_top
+    assert bx / warp.scale == 700.0
+    assert by / warp.scale + warp.y_top == 800.0
+    mask = band_mask(warp, far)
+    assert mask.shape == warp.shape
+    assert mask.max() == 255

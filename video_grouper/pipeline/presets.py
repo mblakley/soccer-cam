@@ -10,7 +10,8 @@ nothing from the step plugin modules (so it stays cheap to import in every
 bundle, including the tray bundle that lacks the inference stack).
 
 Each preset's step ``type`` is a registered built-in step name
-(``stitch_correct`` / ``detect`` / ``track`` / ``render`` / ``autocam``); the
+(``stitch_correct`` / ``field_detect`` / ``ball_detect`` / ``ball_select`` /
+``plan_camera`` / ``render`` / ``autocam``); the
 ``step_id`` is set equal to the type for the single-instance presets here.
 
 The model source for the ``detect`` step is intentionally left **unset** in the
@@ -56,9 +57,10 @@ PRESETS: dict[str, list[_PresetStep]] = {
         (
             "field_detect",
             "field_detect",
-            # Model source intentionally omitted (same policy as detect). With
-            # no model configured the step still produces a polygon — the
-            # neutral full-frame rectangle — so track/render always have one.
+            # Model source intentionally omitted (same policy as ball_detect).
+            # The 10-point field outline is REQUIRED downstream: ball_detect
+            # crops the field band from it and ball_select's physics run in
+            # world meters through its homography.
             {
                 "device": "cuda:0",
                 "field_score_threshold": 0.5,
@@ -69,31 +71,48 @@ PRESETS: dict[str, list[_PresetStep]] = {
         (
             "ball_detect",
             "ball_detect",
-            # Model source intentionally omitted — user supplies model_key
-            # (via TTT login) or model_path (local .onnx). Only inference
-            # tunables get defaults here.
+            # The heatmap candidate detector. Model source intentionally
+            # omitted — user supplies model_key (via TTT login) or model_path
+            # (local .onnx). Only inference tunables get defaults here.
             {
                 "device": "cuda:0",
-                "detect_confidence": 0.45,
-                "detect_frame_interval": 4,
+                "detect_confidence": 0.1,
+                "detect_frame_interval": 8,
             },
         ),
         (
-            "track",
-            "track",
+            "ball_select",
+            "ball_select",
+            # The learned game-ball selector + physics Viterbi + RTS smoother.
+            # select_model_path intentionally omitted — supplied like the
+            # detector model (TTT login or a local selector .npz).
             {
-                "track_kalman_gate": 200.0,
-                "track_max_missing": 15,
+                "select_static_w": 2.0,
+                "select_phys_sigma_px": 5.0,
+                "select_bridge_w": 2.0,
+                "select_oob_w": 2.0,
+            },
+        ),
+        (
+            "plan_camera",
+            "plan_camera",
+            # AutoCam-calibrated cinematography (zoom curve, lead room,
+            # dead-ball widening) — ALL camera intelligence lives here.
+            {
+                "plan_zoom_scale": 0.90,
+                "plan_lead_frames": 8.0,
+                "plan_deadball_hfov_deg": 52.0,
+                "plan_missing_hfov_deg": 58.0,
             },
         ),
         (
             "render",
             "render",
+            # The dumb renderer: executes plan_camera's command stream with
+            # projection-feasibility clamps only.
             {
-                "render_mode": "broadcast",
                 "render_output_width": 1920,
                 "render_output_height": 1080,
-                "render_vertical_tracking": True,
             },
         ),
     ],

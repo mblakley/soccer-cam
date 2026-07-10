@@ -46,24 +46,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from training.world_model.geometry import FieldGeometry
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """One per-frame ball candidate (e.g. a heatmap peak or motion blob).
-
-    Attributes:
-        x: Source-pixel x.
-        y: Source-pixel y.
-        score: Detector confidence in ``(0, 1]`` (or any positive saliency).
-        size_px: Observed blob diameter in px, or ``None`` if unknown. When
-            present it is checked against the geometric size prior.
-    """
-
-    x: float
-    y: float
-    score: float
-    size_px: float | None = None
+from video_grouper.inference.ball_tracker import Candidate  # noqa: F401  (product home)
 
 
 @dataclass

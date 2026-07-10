@@ -4,6 +4,36 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-10: ONE homegrown path — detect/select/plan/render as swappable product steps; internal render camera brain DELETED
+
+**The decision (Mark, verbatim intent).** "I want ONE PATH THROUGH OUR HOMEGROWN CODE ... modular and
+configurable through config file updates ... the single homegrown detect/select/plan/render path",
+where "any pipeline step should be able to be replaced independently" (detector, selector, planner,
+renderer). Implemented as four registered pipeline steps with artifact contracts between them:
+
+| step | in -> out | swap unit |
+|---|---|---|
+| `ball_detect` | video + field polygon -> `candidates/1` (raw top-K heatmap peaks/frame) | detector (ONNX heatmap net) |
+| `ball_select` | `candidates/1` + polygon -> `trajectory.json` (dense [x,y]/null per frame) | selection stack (selector .npz + physics Viterbi + RTS) |
+| `plan_camera` | trajectory + polygon -> `camera_path/1` ({center, hfov}/frame) | cinematography |
+| `render` | video + `camera_path/1` -> broadcast mp4 | projection/encode |
+
+**What moved/died.**
+- The champion selection stack moved INTO the product (`video_grouper/inference/`:
+  `world_geometry`, `iso_warp`, `ball_detector`, `ball_selector`, `ball_tracker`); the training
+  modules are now re-export shims, so the harness exercises the exact shipped implementation.
+- The renderer's internal camera brain (`_tick`: pan smoother, zone/speed zoom, dead-ball logic,
+  off-field rejection — the render branch's follow-the-track controller) is DELETED, along with the
+  old YOLO-tile detector and the plain Kalman `track` step. The `render` step consumes the camera
+  path as a REQUIRED artifact — a missing artifact is a hard error, never a silent fallback (this
+  forks `feat/broadcast-camera-render`'s render.py; accepted knowingly).
+- Product runtime stays torch-free: HeatmapNet exports to ONNX (sigmoid baked in), the selector to
+  numpy `.npz` — both export CLIs parity-check torch vs product inference before writing.
+
+**Why.** Two camera brains (planner + `_tick` fallback) and two tracker generations in the shipped
+code meant reviewable output could silently come from a path we don't ship. Post-parity-proof
+(2026-07-10, px-max=0), the dumb-renderer chain IS the product; everything else is drift risk.
+
 ## 2026-07-02: Decode raw per-segment clips, not the combined video, for crop/strip extraction
 
 **Context.** The per-game `combined.mp4` is a stream-copy concat of the raw camera segments with

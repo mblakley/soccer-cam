@@ -175,3 +175,61 @@ def load_selector(path):
     net = build_selector_net(int(keep.sum()))
     net.load_state_dict(d["state"])
     return net, keep
+
+
+def export_selector_npz(pt_path, npz_path) -> None:
+    """Export a :func:`save_selector` checkpoint to the product's numpy format
+    (``selector_net_npz/1``, consumed by ``video_grouper.inference.ball_selector``)
+    and PARITY-CHECK the two forwards on random inputs before writing.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    from video_grouper.inference.ball_selector import (  # noqa: PLC0415
+        SelectorNet as NpSelectorNet,
+    )
+    from video_grouper.inference.ball_selector import (
+        predict_probs as np_predict_probs,
+    )
+
+    net, keep = load_selector(pt_path)
+    sd = {k: v.detach().cpu().numpy() for k, v in net.state_dict().items()}
+    arrays = {
+        "schema": "selector_net_npz/1",
+        "w0": sd["phi.0.weight"],
+        "b0": sd["phi.0.bias"],
+        "w1": sd["phi.2.weight"],
+        "b1": sd["phi.2.bias"],
+        "w2": sd["phi.4.weight"],
+        "b2": sd["phi.4.bias"],
+        "head_w": sd["head.weight"],
+        "head_b": sd["head.bias"],
+        "none_w": sd["none_head.weight"],
+        "none_b": sd["none_head.bias"],
+        "temperature": np.float32(sd["temperature"].reshape(())),
+        "keep": np.asarray(keep, bool),
+    }
+    np_net = NpSelectorNet(
+        w0=arrays["w0"],
+        b0=arrays["b0"],
+        w1=arrays["w1"],
+        b1=arrays["b1"],
+        w2=arrays["w2"],
+        b2=arrays["b2"],
+        head_w=arrays["head_w"],
+        head_b=arrays["head_b"],
+        none_w=arrays["none_w"],
+        none_b=arrays["none_b"],
+        temperature=float(arrays["temperature"]),
+        keep=arrays["keep"],
+    )
+    rng = np.random.default_rng(0)
+    feats = rng.normal(size=(64, 24, int(keep.sum()))).astype(np.float32)
+    mask = rng.random((64, 24)) < 0.8
+    mask[:, 0] = True  # at least one candidate per frame
+    ref = predict_probs(net, feats, mask)
+    got = np_predict_probs(np_net, feats, mask)
+    err = float(np.abs(ref - got).max())
+    if err > 1e-5:
+        raise RuntimeError(f"selector npz export parity FAILED: max |dp| = {err:g}")
+    np.savez(npz_path, **arrays)
+    print(f"exported {npz_path} (parity max |dp| = {err:.2e})")

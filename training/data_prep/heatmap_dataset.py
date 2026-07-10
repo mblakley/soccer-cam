@@ -30,9 +30,14 @@ import numpy as np
 
 from training.data_prep.segment_decode import iter_frames_from_segments
 from training.data_prep.warped_dataset import (
-    CropIsoWarp,
-    field_band_from_polygon,
+    CropIsoWarp,  # noqa: F401  (re-export for existing callers)
+    field_band_from_polygon,  # noqa: F401
     resolve_video_rotation,
+)
+from video_grouper.inference.iso_warp import (
+    dewarp_mask_gray,
+    far_margin_polygon,
+    native_iso_warp,
 )
 
 
@@ -43,33 +48,21 @@ def gaussian_heatmap(h: int, w: int, cx: float, cy: float, sigma: float) -> np.n
     return g.astype(np.float32)
 
 
+# The band/dewarp geometry is PRODUCT code now (video_grouper.inference.iso_warp,
+# Mark 2026-07-10: single homegrown path). Underscore aliases kept for the
+# existing training callers.
+
+
 def _far_margin_polygon(polygon, far_margin: float) -> np.ndarray:
-    """Push the far sideline (points 5-9) up by ``far_margin`` so the mask keeps a
-    margin above the far touchline."""
-    poly = np.asarray(polygon, dtype=np.float64).copy()
-    if len(poly) >= 10:
-        poly[5:10, 1] = np.maximum(poly[5:10, 1] - far_margin, 0.0)
-    return poly
+    return far_margin_polygon(polygon, far_margin)
 
 
 def _native_iso_warp(polygon, src_w: int, src_h: int, target_width: int | None = None):
-    """Isotropic field-band crop: the 'dewarp'. ``target_width`` sets the warped width
-    (default = ``src_w`` → native scale 1). Lower values downscale the band isotropically
-    — the speed/accuracy knob: fewer pixels (cheaper inference) but a smaller ball."""
-    yt, yb = field_band_from_polygon(polygon)
-    return CropIsoWarp(
-        int(src_w), int(src_h), int(yt), int(yb), int(target_width or src_w)
-    )
+    return native_iso_warp(polygon, src_w, src_h, target_width)
 
 
 def _dewarp_mask_gray(frame_bgr, warp, mask):
-    """Iso-dewarp (band crop) + grayscale + apply the precomputed band mask."""
-    import cv2
-
-    band = warp.frame(frame_bgr)  # native band crop (scale 1)
-    gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
-    gray[mask == 0] = 0
-    return gray
+    return dewarp_mask_gray(frame_bgr, warp, mask)
 
 
 def build_heatmap_crops(

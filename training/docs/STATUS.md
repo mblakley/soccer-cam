@@ -2,6 +2,25 @@
 
 *Last updated: 2026-07-10*
 
+## 2026-07-10 (later) — ONE homegrown path: detect/select/plan/render are THE product pipeline
+
+- Mark: "ONE PATH THROUGH OUR HOMEGROWN CODE", modular via config — any step independently
+  swappable. Landed (see DECISIONS 2026-07-10): the champion stack moved into
+  `video_grouper/inference/` (`world_geometry`, `iso_warp`, `ball_detector` = ONNX heatmap net,
+  `ball_selector` = features + numpy listwise net, `ball_tracker` = physics Viterbi + RTS);
+  training modules are re-export shims. New `ball_select` step replaces the old Kalman `track`
+  step; `ball_detect` internals swapped from the YOLO-tile detector to the heatmap candidate
+  detector (licensing plumbing unchanged); the renderer's internal camera brain (`_tick` + camera
+  modes + pan smoother) is DELETED — `render` requires the `camera_path/1` artifact, hard error
+  if missing. `homegrown` preset = stitch_correct → field_detect → ball_detect → ball_select →
+  plan_camera → render; legacy `[BALL_TRACKING]` configs migrate.
+- Export CLIs with built-in torch-vs-product parity checks: `export_ball_detector` (ckpt → .onnx,
+  sigmoid baked in, dynamic H/W) and `export_ball_selector` (.pt → selector_net_npz/1).
+- Suite rebuilt around the new surfaces: 1,544 passed (old `_tick`/YOLO/Kalman tests replaced by
+  command-mode render, heatmap detector, physics tracker, numpy selector, ball_select step tests).
+- NEXT: export hn2 + selector_v5 on the server, run the four-step chain end-to-end on Spencerport,
+  and compare the chain's trajectory/camera-path against the replay-harness champion artifacts.
+
 ## 2026-07-10 — PRODUCTION renderer shipped + parity-PROVEN (aab7633)
 
 - Per Mark's directive the dumb-renderer architecture is now product code on `feat/ball-selector`,

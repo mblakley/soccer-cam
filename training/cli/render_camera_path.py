@@ -47,13 +47,11 @@ def main() -> None:
     from video_grouper.inference.field_geometry import field_lateral_yaw_extent
     from video_grouper.pipeline.steps.render import (
         RenderStepConfig,
-        _CameraState,
         _frame_view,
         _make_warper,
         _parse_bitrate,
         _render_video,
         _resolve_geometry,
-        _resolve_mode,
         _warp_frame,
     )
 
@@ -65,7 +63,7 @@ def main() -> None:
         field_file = Path(args.out).with_suffix(".field.json")
         field_file.write_text(json.dumps({"polygon": gj["field_polygon"]}))
         src = gd / (gj.get("combined_video") or "combined.mp4")
-        _render_video(str(src), args.out, None, str(field_file), cfg, args.camera_path)
+        _render_video(str(src), args.out, args.camera_path, str(field_file), cfg)
         print(f"rendered full video -> {args.out}")
         return
 
@@ -78,7 +76,6 @@ def main() -> None:
     src_w, src_h = int(seg0["w"]), int(seg0["h"])
     out_w, out_h = cfg.render_output_width, cfg.render_output_height
     geom = _resolve_geometry(src_w, src_h, cfg, polygon)
-    mode = _resolve_mode(cfg.render_mode)
     try:
         warper = _make_warper(geom, cfg, src_w, src_h, out_w, out_h)
     except Exception:
@@ -91,7 +88,6 @@ def main() -> None:
         gj.get("video_rotation"),
     )
 
-    state = _CameraState()
     want = set(range(args.start_g, args.end_g))
     n_done = 0
     last_good = None
@@ -111,19 +107,15 @@ def main() -> None:
             if not (0 <= i < len(cmds)):
                 continue
             params, view_yaw = _frame_view(
-                state,
-                None,
+                tuple(cmds[i]),
                 geom,
-                mode,
                 cfg,
                 yaw_min,
                 yaw_max,
-                None,
                 src_w,
                 src_h,
                 out_w,
                 out_h,
-                command=tuple(cmds[i]),
             )
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             try:

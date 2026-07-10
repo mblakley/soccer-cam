@@ -1,20 +1,26 @@
-"""RenderStep camera-path mode: commands executed verbatim, feasibility only.
+"""The dumb renderer executes camera_path/1 commands with feasibility clamps only.
 
-The dumb-renderer contract (2026-07-09/10): with a command present, the internal
-ball-following brain must have NO influence — the view centers where the planner
-said (clamped to projection feasibility) at the planner's hfov."""
+The dumb-renderer contract (2026-07-09/10, single homegrown path): the renderer
+has NO camera brain — the view centers where the planner said (clamped to
+projection feasibility) at the planner's hfov."""
+
+from __future__ import annotations
+
+import json
 
 import numpy as np
+import pytest
 
 from video_grouper.inference.cylindrical_view import pixel_to_yaw_pitch
 from video_grouper.pipeline.steps.render import (
     RenderStepConfig,
-    _CameraState,
+    _command_for,
     _frame_view,
+    _load_commands,
     _resolve_geometry,
-    _resolve_mode,
 )
 
+_SRC_W, _SRC_H = 7680, 2160
 _POLY = np.asarray(
     [
         [270.8, 1071.9],
@@ -32,77 +38,51 @@ _POLY = np.asarray(
 )
 
 
-def _setup(cfg=None):
-    cfg = cfg or RenderStepConfig(render_zoom_scale=1.0)
-    geom = _resolve_geometry(7680, 2160, cfg, _POLY)
-    mode = _resolve_mode(cfg.render_mode)
-    return cfg, geom, mode
+def _geom(cfg: RenderStepConfig):
+    return _resolve_geometry(_SRC_W, _SRC_H, cfg, _POLY)
 
 
-def test_command_bypasses_internal_brain():
-    cfg, geom, mode = _setup()
-    state = _CameraState()
-    cmd = (3200.0, 1000.0, 44.0)
-    params, view_yaw = _frame_view(
-        state,
-        None,
-        geom,
-        mode,
-        cfg,
-        -80.0,
-        80.0,
-        None,
-        7680,
-        2160,
-        1920,
-        1080,
-        command=cmd,
+def test_command_drives_view_yaw():
+    cfg = RenderStepConfig(render_zoom_scale=1.0)
+    geom = _geom(cfg)
+    cx, cy, hfov = 5000.0, 1200.0, 50.0
+    _params, view_yaw = _frame_view(
+        (cx, cy, hfov), geom, cfg, -90.0, 90.0, _SRC_W, _SRC_H, 1920, 1080
     )
-    want_yaw, _ = pixel_to_yaw_pitch(3200.0, 1000.0, 7680, 2160, geom.src_hfov_deg)
-    assert abs(view_yaw - want_yaw) < 0.2  # centered where commanded
-    # hfov survives the params-stage zoom-scale multiply as commanded (or was
-    # tightened by the containment solver, never widened)
-    assert params.view_hfov_deg <= 44.0 + 0.1
+    want_yaw, _ = pixel_to_yaw_pitch(cx, cy, _SRC_W, _SRC_H, geom.src_hfov_deg)
+    assert view_yaw == pytest.approx(want_yaw, abs=0.11)
 
 
 def test_command_yaw_clamped_to_feasible_range():
-    cfg, geom, mode = _setup()
-    state = _CameraState()
-    params, view_yaw = _frame_view(
-        state,
-        None,
-        geom,
-        mode,
-        cfg,
-        -10.0,
-        10.0,
-        None,
-        7680,
-        2160,
-        1920,
-        1080,
-        command=(7600.0, 1000.0, 47.0),  # far right edge: infeasible center
+    cfg = RenderStepConfig(render_zoom_scale=1.0)
+    geom = _geom(cfg)
+    _params, view_yaw = _frame_view(
+        (-2000.0, 1200.0, 50.0), geom, cfg, -10.0, 10.0, _SRC_W, _SRC_H, 1920, 1080
     )
-    assert view_yaw <= 10.0  # clamped, not executed blindly
+    assert view_yaw == pytest.approx(-10.0, abs=0.11)
 
 
 def test_zoom_scale_round_trip():
-    cfg, geom, mode = _setup(RenderStepConfig(render_zoom_scale=0.9))
-    state = _CameraState()
-    params, _ = _frame_view(
-        state,
-        None,
-        geom,
-        mode,
-        cfg,
-        -80.0,
-        80.0,
-        None,
-        7680,
-        2160,
-        1920,
-        1080,
-        command=(3800.0, 1200.0, 45.0),
-    )
-    # planner hfov is final: the internal *0.9 must not shrink it to 40.5
-    assert abs(params.view_hfov_deg - 45.0) < 1.0 or params.view_hfov_deg < 45.0
+    """The planner pre-applies the calibrated zoom scale: the encoded view hfov
+    must equal the command's hfov regardless of render_zoom_scale."""
+    for scale in (0.9, 1.0, 1.25):
+        cfg = RenderStepConfig(render_zoom_scale=scale, render_auto_level=False)
+        geom = _geom(cfg)
+        params, _ = _frame_view(
+            (3840.0, 1200.0, 52.0), geom, cfg, -90.0, 90.0, _SRC_W, _SRC_H, 1920, 1080
+        )
+        assert params.view_hfov_deg == pytest.approx(52.0, abs=0.11)
+
+
+def test_command_for_holds_span_ends():
+    commands = [[100.0, 200.0, 50.0], [110.0, 210.0, 51.0], [120.0, 220.0, 52.0]]
+    assert _command_for(commands, 10, 0) == (100.0, 200.0, 50.0)  # before span
+    assert _command_for(commands, 10, 11) == (110.0, 210.0, 51.0)  # inside
+    assert _command_for(commands, 10, 500) == (120.0, 220.0, 52.0)  # after span
+
+
+def test_load_commands_rejects_empty(tmp_path):
+    p = tmp_path / "cam.json"
+    p.write_text(json.dumps({"g_start": 0, "frames": []}))
+    with pytest.raises(RuntimeError, match="no commands"):
+        _load_commands(str(p))

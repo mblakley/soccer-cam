@@ -83,21 +83,23 @@ def test_preset_round_trips_through_save_load(tmp_path, name):
         assert {k: str(v) for k, v in o.config.items()} == b.config
 
 
-def test_homegrown_preset_has_expected_five_steps_in_order():
+def test_homegrown_preset_has_expected_six_steps_in_order():
     pc = apply_preset("homegrown")
     ordered = pc.ordered_steps()
     assert [s.type for s in ordered] == [
         "stitch_correct",
         "field_detect",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
     assert [s.step_id for s in ordered] == [
         "stitch_correct",
         "field_detect",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
 
