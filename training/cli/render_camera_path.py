@@ -38,6 +38,11 @@ def main() -> None:
     ap.add_argument("--start-g", type=int, required=True)
     ap.add_argument("--end-g", type=int, required=True)
     ap.add_argument("--bitrate", default="8M")
+    ap.add_argument(
+        "--codec",
+        default="h264_nvenc",
+        help="output codec; falls back to libx264 when NVENC is unavailable",
+    )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
@@ -99,8 +104,14 @@ def main() -> None:
     want = set(range(args.start_g, args.end_g))
     n_done = 0
     last_good = None
+    import time
+
+    t0 = time.time()
     with av.open(args.out, mode="w") as out_c:
-        stream = out_c.add_stream("h264", rate=int(round(fps)))
+        try:
+            stream = out_c.add_stream(args.codec, rate=int(round(fps)))
+        except Exception:
+            stream = out_c.add_stream("h264", rate=int(round(fps)))
         stream.width = out_w
         stream.height = out_h
         stream.pix_fmt = "yuv420p"
@@ -169,11 +180,20 @@ def main() -> None:
             for pkt in stream.encode(frame):
                 out_c.mux(pkt)
             n_done += 1
+            if n_done % 500 == 0:
+                el = time.time() - t0
+                print(
+                    f"{n_done} frames in {el:.0f}s = {n_done / el:.1f} fps", flush=True
+                )
         for pkt in stream.encode():
             out_c.mux(pkt)
     if warper is not None:
         warper.close()
-    print(f"rendered {n_done} frames -> {args.out}")
+    el = time.time() - t0
+    print(
+        f"rendered {n_done} frames in {el:.0f}s = {n_done / max(el, 1):.1f} fps "
+        f"-> {args.out}"
+    )
 
 
 if __name__ == "__main__":
