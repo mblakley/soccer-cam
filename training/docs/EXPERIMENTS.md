@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-37: Dahua VIEWPORT-to-viewport — AutoCam's viewport is good, OURS drifts (the real gap is ours) (2026-07-10)
+
+**Trigger (Mark, the more important question):** forget the contaminated detector GT — does our
+FINAL viewport match AutoCam's viewport on Dahua? Both are per-frame source-pixel camera centers,
+verified 1:1 aligned (EXP-DIST-36); compare directly over active play. No ball GT needed.
+
+**Result — NO, and the gap is ours.** Chili-Dahua, active play, n=77,513 overlapping frames:
+our-native-vs-AutoCam-viewport center distance **median 41 m (765 px)**, only 8.3% within 15 m
+(norm-7680 slightly worse: 49 m). Vision-adjudicated (both viewports drawn as boxes): AutoCam's
+viewport is on the play in every sampled frame; OURS matches on ~1/3 (e.g. g=108074 both dead-on)
+but on the rest DRIFTS onto the far-side crowd / tents (g=65093, 76720 — our box aimed at empty
+grass/spectators while the play is elsewhere).
+
+**Reconciliation of the Dahua picture (all three findings together):**
+1. AutoCam's raw per-frame DETECTOR is noisy on Dahua (confident grass FPs, EXP-DIST-36) — BUT
+2. AutoCam's final VIEWPORT is GOOD (its tracking/smoothing overcomes the detector noise, stays on
+   the play) — so the AutoCam viewport is a VALID product-level reference even though its raw
+   detections are not a valid GT.
+3. OUR viewport is genuinely WORSE on Dahua: our detector candidates land on the far-side crowd/
+   tents (the bright distractors), the tracker follows them, the viewport drifts. **This is a real
+   product gap on Dahua, not a benchmark artifact.**
+
+**Conclusion / action.** The Dahua deficit is ours and it's real at the viewport level. Fix path =
+improve the Dahua detector/tracker, which needs trustworthy Dahua ball GT. **Queued
+`chili_dahua_spans` far-label set** (200 active-play frames, 10 windows across both halves,
+stride-8, hints from our dump not AutoCam; served at the far-label landing) — the first real Dahua
+ball GT. Angular-norm stays parked (EXP-DIST-36). Dahua remains Reolink-minority
+([[reolink_primary_dahua_artifacts]]); this quantifies the gap so the label investment is a
+deliberate choice.
+
+---
+
 ## EXP-DIST-36: Dahua investigation — angular-norm is a wash + the Dahua benchmark is MISALIGNED (2026-07-10)
 
 **Trigger (Mark):** Dahua campath scores are poor (Chili planned-view .297, Spencerport-Dahua .416
