@@ -40,14 +40,16 @@ def _draw_minimap(
     ac_xy,
     ball_xy,
     ball_trail,
+    gt_xy,
     src_w: int,
     src_h: int,
     out_w: int,
     out_h: int,
 ):
     """Composite a review minimap into the lower-right of ``rendered`` (RGB, mutated
-    in place): a dimmed full-frame thumbnail with OUR viewport rectangle (magenta),
-    AutoCam's focus (green cross), and the tracked BALL (cyan dot + past-second trail)."""
+    in place): dimmed full-frame thumbnail with OUR viewport rectangle (magenta),
+    AutoCam's focus (green cross), the raw ball DETECTION (cyan dot + trail), and the
+    human GT ball (green arrow) when labeled."""
     import cv2
     import numpy as np
 
@@ -89,41 +91,46 @@ def _draw_minimap(
             14,
             2,
         )
+    if gt_xy is not None:
+        gx, gy = int(gt_xy[0] * sx), int(gt_xy[1] * sy)
+        cv2.arrowedLine(
+            mini, (gx - 13, gy - 13), (gx, gy), (0, 255, 0), 2, tipLength=0.4
+        )
     cv2.putText(mini, "OURS", (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
     cv2.putText(mini, "AC", (66, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
     cv2.putText(
         mini, "BALL", (108, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1
     )
+    cv2.putText(mini, "GT", (170, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 0), 1)
     cv2.rectangle(mini, (0, 0), (mw - 1, mh - 1), (255, 255, 255), 2)
     y0, x0 = out_h - mh - 12, out_w - mw - 12
     rendered[y0 : y0 + mh, x0 : x0 + mw] = mini
 
 
-def _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail, sub: int = 4):
-    """Draw the tracked BALL (cyan dot) + past-second trail on the RENDERED view.
-
-    The view is a warp of the source; ``map_x``/``map_y`` give, per output pixel,
-    the source pixel it samples. So a source-space ball position projects to the
-    output pixel whose map entry is nearest it — found on a ``sub``-subsampled map
-    for speed. A ball outside the current view has no near map entry (skipped)."""
-    import cv2
+def _project_src_to_out(map_x, map_y, pt, sub: int = 4):
+    """Project a SOURCE pixel ``pt`` to the output pixel that samples nearest it
+    (via the warp maps, ``sub``-subsampled for speed). None if ``pt`` is outside
+    the current view (no map entry within tolerance)."""
     import numpy as np
 
-    mxs, mys = map_x[::sub, ::sub], map_y[::sub, ::sub]
-    max_src_dist = 6.0 * sub  # "in view" tolerance in source px at this subsample
-
-    def proj(pt):
-        if pt is None or pt[0] is None:
-            return None
-        d2 = (mxs - float(pt[0])) ** 2 + (mys - float(pt[1])) ** 2
-        j = int(np.argmin(d2))
-        v, u = np.unravel_index(j, d2.shape)
-        if d2[v, u] <= max_src_dist**2:
-            return (int(u * sub), int(v * sub))
+    if pt is None or pt[0] is None:
         return None
+    mxs, mys = map_x[::sub, ::sub], map_y[::sub, ::sub]
+    d2 = (mxs - float(pt[0])) ** 2 + (mys - float(pt[1])) ** 2
+    j = int(np.argmin(d2))
+    v, u = np.unravel_index(j, d2.shape)
+    if d2[v, u] <= (6.0 * sub) ** 2:
+        return (int(u * sub), int(v * sub))
+    return None
+
+
+def _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail):
+    """Draw the raw SELECTED DETECTION (cyan ring) + recent-detections trail on the
+    RENDERED view. A detection outside the current view is skipped."""
+    import cv2
 
     if trail:
-        proj_pts = [proj(p) for p in trail]
+        proj_pts = [_project_src_to_out(map_x, map_y, p) for p in trail]
         prev = None
         for k, pp in enumerate(proj_pts):
             if prev is not None and pp is not None:
@@ -132,11 +139,34 @@ def _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail, sub: int = 4):
                     rendered, prev, pp, (0, int(140 + 115 * f), int(140 + 115 * f)), 2
                 )
             prev = pp
-    bp = proj(ball_xy)
+    bp = _project_src_to_out(map_x, map_y, ball_xy)
     if bp is not None:
         cv2.circle(rendered, bp, 14, (0, 0, 0), 3)
         cv2.circle(rendered, bp, 14, (0, 255, 255), 2)
         cv2.circle(rendered, bp, 3, (0, 255, 255), -1)
+
+
+def _draw_gt_arrow(rendered, map_x, map_y, gt_xy):
+    """Draw a green arrow pointing at the HUMAN GT ball position (truth) on the
+    rendered view, when the labeled point is within the current frame."""
+    import cv2
+
+    gp = _project_src_to_out(map_x, map_y, gt_xy)
+    if gp is None:
+        return
+    tip = (int(gp[0]), int(gp[1]))
+    tail = (int(gp[0]) - 46, int(gp[1]) - 46)  # arrow from upper-left into the point
+    cv2.arrowedLine(rendered, tail, tip, (0, 0, 0), 5, tipLength=0.35)
+    cv2.arrowedLine(rendered, tail, tip, (0, 255, 0), 3, tipLength=0.35)
+    cv2.putText(
+        rendered,
+        "GT",
+        (tail[0] - 30, tail[1]),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+    )
 
 
 def main() -> None:
@@ -157,6 +187,11 @@ def main() -> None:
         "--no-ball-overlay",
         action="store_true",
         help="disable the tracked-ball dot + trail drawn on the full frame",
+    )
+    ap.add_argument(
+        "--no-gt-overlay",
+        action="store_true",
+        help="disable the human-GT green arrow (drawn on labeled frames)",
     )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
@@ -249,6 +284,20 @@ def main() -> None:
                     best, bd = int(det_frames[k]), d
         return det_pos[best] if best is not None else None
 
+    # human GT ball labels (truth): exact per-frame -> green arrow when labeled
+    gt: dict[int, tuple[float, float]] = {}
+    if not args.no_gt_overlay:
+        from training.data_prep import distill_dataset as dd
+
+        hb, _ = (
+            dd.load_human_labels(
+                gd / "ball_labels.jsonl", dd.seg_offsets(gj["segments"])
+            )
+            if (gd / "ball_labels.jsonl").exists()
+            else ({}, set())
+        )
+        gt = {int(k): (float(v[0]), float(v[1])) for k, v in hb.items()}
+
     want = set(range(args.start_g, args.end_g))
     n_done = 0
     last_good = None
@@ -300,10 +349,13 @@ def main() -> None:
                 hi = np.searchsorted(det_frames, g + 1)
                 trail = [det_pos[int(det_frames[k])] for k in range(lo, hi)]
 
-            if not args.no_ball_overlay or not args.no_minimap:
+            gt_xy = gt.get(g)
+            if not args.no_ball_overlay or not args.no_minimap or gt_xy is not None:
                 rendered = rendered.copy()  # keep last_good a clean warp
             if not args.no_ball_overlay and ball_xy is not None:
                 _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail)
+            if gt_xy is not None:
+                _draw_gt_arrow(rendered, map_x, map_y, gt_xy)
             if not args.no_minimap:
                 ocx, ocy = yaw_pitch_to_pixel(
                     view_yaw,
@@ -321,6 +373,7 @@ def main() -> None:
                     ac_vp.get(g),
                     ball_xy,
                     trail,
+                    gt_xy,
                     src_w,
                     src_h,
                     out_w,
