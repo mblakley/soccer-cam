@@ -21,6 +21,22 @@ def main() -> None:
 
     import av
 
+    def _stream_from_template(out_c, vs):
+        """PyAV-version-tolerant template stream: add_stream_from_template (>=12),
+        add_stream(template=) (10-11), else manual codec-context copy (older)."""
+        if hasattr(out_c, "add_stream_from_template"):
+            return out_c.add_stream_from_template(vs)
+        try:
+            return out_c.add_stream(template=vs)
+        except TypeError:
+            cc = vs.codec_context
+            st = out_c.add_stream(cc.name, rate=vs.average_rate)
+            st.width, st.height, st.pix_fmt = cc.width, cc.height, cc.pix_fmt
+            st.codec_context.time_base = vs.time_base
+            if cc.extradata:  # SPS/PPS — required for an h264 packet remux
+                st.codec_context.extradata = cc.extradata
+            return st
+
     with av.open(args.out, mode="w") as out_c:
         out_stream = None
         offset = 0
@@ -28,7 +44,7 @@ def main() -> None:
             with av.open(part) as in_c:
                 vs = in_c.streams.video[0]
                 if out_stream is None:
-                    out_stream = out_c.add_stream(template=vs)
+                    out_stream = _stream_from_template(out_c, vs)
                 span = 0
                 for packet in in_c.demux(vs):
                     if packet.dts is None:
