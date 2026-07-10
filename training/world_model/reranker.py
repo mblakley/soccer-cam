@@ -12,6 +12,7 @@ from video_grouper.inference.ball_tracker import (  # noqa: F401
     _restart_spots,
     _world_polygon,
     action_density_prior,
+    bridge_aerial_gaps,
     coast_occlusions,
     kalman_smooth,
     rerank,

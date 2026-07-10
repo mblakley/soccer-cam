@@ -115,7 +115,12 @@ def main() -> None:
         upsample_track,
     )
     from training.world_model.geometry import build_field_geometry
-    from training.world_model.reranker import RerankConfig, kalman_smooth, rerank
+    from training.world_model.reranker import (
+        RerankConfig,
+        bridge_aerial_gaps,
+        kalman_smooth,
+        rerank,
+    )
     from training.world_model.selector_features import build_features
     from training.world_model.tbd import Candidate
 
@@ -156,6 +161,7 @@ def main() -> None:
     sel = rerank(
         frames, geom, frame_gaps=gaps, priors=priors, miss_costs=mc, config=cfg
     )
+    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=cfg)
     track = kalman_smooth(sel, geom)
 
     g_start, g_end = int(ef[0]), int(ef[-1]) + 1

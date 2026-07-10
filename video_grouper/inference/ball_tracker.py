@@ -131,6 +131,24 @@ class RerankConfig:
     reacq_free_m: float = (
         6.0  # free re-acquisition radius around the in-field loss point
     )
+    # AERIAL LOOK-AHEAD BRIDGE (Mark 2026-07-10): a long punt/clearance leaves the
+    # ground for seconds; the ball shrinks/leaves frame so the detector can't see it
+    # for the whole flight, and the forward ballistic bridge is MISLED because a
+    # clearance reverses the pre-launch DRIBBLE velocity (Spencerport 0:48 punt: exit
+    # velocity pointed left, so the bridge grabbed a coach's cap on the left while the
+    # ball flew downfield-right). This is an OFFLINE post-pass on the selected path:
+    # a detection gap the forward tracker can't fill nearby is bridged by looking
+    # AHEAD to the next STABLE in-field re-acquisition (>= aerial_stable_k continuous
+    # in-field detections — one-off distractors don't qualify) and interpolating the
+    # viewport straight from the launch point to that landing, overwriting any
+    # in-flight distractor grab. No stable landing within aerial_max_air_frames ->
+    # HOLD at the launch point (a still camera beats a wrong-direction swing).
+    aerial_bridge_lookahead: bool = True
+    aerial_min_gap_frames: int = (
+        6  # min airborne gap (source frames) to treat as a flight
+    )
+    aerial_max_air_frames: int = 160  # cap on look-ahead airtime (source frames)
+    aerial_stable_k: int = 3  # consecutive continuous in-field frames = a real landing
 
 
 # aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
@@ -730,6 +748,116 @@ def rerank(
     return preds
 
 
+def _infield_test(geom: FieldGeometry):
+    """Return an ``(x, y) -> bool`` source-pixel in-field test, or ``None`` if the
+    geometry carries no polygon (then everything counts as in-field)."""
+    poly = getattr(geom, "polygon", None)
+    if poly is None:
+        return None
+    pg = np.asarray(poly, float).reshape(-1, 2)
+    n = len(pg)
+
+    def inside(x: float, y: float) -> bool:
+        c = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = pg[i]
+            xj, yj = pg[j]
+            if ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / (yj - yi + 1e-9) + xi
+            ):
+                c = not c
+            j = i
+        return c
+
+    return inside
+
+
+def bridge_aerial_gaps(
+    sel: dict[int, tuple[float, float]],
+    geom: FieldGeometry,
+    *,
+    frame_gaps: list[int] | None = None,
+    config: RerankConfig | None = None,
+) -> dict[int, tuple[float, float]]:
+    """OFFLINE look-ahead bridge for AERIAL gaps (Mark 2026-07-10) — see the
+    ``aerial_bridge_lookahead`` config block.
+
+    Post-processes :func:`rerank`'s selected path. A miss gap of at least
+    ``aerial_min_gap_frames`` (the ball left the ground and the detector lost it for
+    the flight) is bridged by looking AHEAD to the next STABLE in-field re-acquisition
+    (``aerial_stable_k`` consecutive, physically-continuous, in-field detections — a
+    one-off distractor grab does not qualify) and interpolating the viewport position
+    straight from the launch point to that landing, OVERWRITING any distractor grabs
+    inside the bridged span. If no stable landing is found within
+    ``aerial_max_air_frames``, the track HOLDS at the launch point through the gap
+    (a still camera beats swinging the wrong way). Returns an augmented ``{t: (x, y)}``
+    with the previously-missing flight frames filled — feed it to :func:`kalman_smooth`.
+    """
+    cfg = config or RerankConfig()
+    if not cfg.aerial_bridge_lookahead or len(sel) < 3:
+        return sel
+    idx = sorted(sel)
+    nmax = idx[-1]
+    gaps = frame_gaps or [1] * (nmax + 1)
+    cum = [0] * (nmax + 1)
+    for t in range(1, nmax + 1):
+        cum[t] = cum[t - 1] + max(1, gaps[t] if t < len(gaps) else 1)
+    present = set(idx)
+    infield = _infield_test(geom)
+
+    def W(t: int) -> np.ndarray:
+        p = sel[t]
+        return geom.image_to_world(np.asarray([[p[0], p[1]]], float))[0]
+
+    world = {t: W(t) for t in idx}
+
+    def speed(a: int, b: int) -> float:
+        dt = max(1, cum[b] - cum[a])
+        return float(np.linalg.norm(world[b] - world[a])) / dt
+
+    def stable(p: int) -> bool:
+        """p starts >= K consecutive present frames, continuous in world (a real
+        ground track), all in-field — i.e. the play has genuinely resumed here."""
+        for t in range(p, p + cfg.aerial_stable_k):
+            if t not in present:
+                return False
+            if infield is not None and not infield(*sel[t]):
+                return False
+            if t > p and speed(t - 1, t) > cfg.ball_vmax_mpf * 1.5:
+                return False
+        return True
+
+    out = dict(sel)
+    i = 0
+    while i < len(idx) - 1:
+        a = idx[i]
+        b = idx[i + 1]
+        if b - a <= 1 or (cum[b] - cum[a]) < cfg.aerial_min_gap_frames:
+            i += 1
+            continue
+        # look ahead for the first STABLE in-field landing within the airtime cap
+        land = None
+        for j in range(i + 1, len(idx)):
+            if (cum[idx[j]] - cum[a]) > cfg.aerial_max_air_frames:
+                break
+            if stable(idx[j]):
+                land = idx[j]
+                break
+        if land is not None:
+            pa, pb = sel[a], sel[land]
+            ta, tb = cum[a], cum[land]
+            for t in range(a + 1, land):  # fill misses + overwrite in-flight grabs
+                f = (cum[t] - ta) / max(1, tb - ta)
+                out[t] = (pa[0] + (pb[0] - pa[0]) * f, pa[1] + (pb[1] - pa[1]) * f)
+            i = idx.index(land)
+        else:  # no stable landing in window: hold the camera at the launch point
+            for t in range(a + 1, b):
+                out[t] = sel[a]
+            i += 1
+    return out
+
+
 def track_ball(
     frames: list[list[Candidate]],
     geom: FieldGeometry,
@@ -778,4 +906,5 @@ def track_ball(
         miss_costs=miss_costs,
         config=config,
     )
+    sel = bridge_aerial_gaps(sel, geom, frame_gaps=frame_gaps, config=config)
     return kalman_smooth(sel, geom)

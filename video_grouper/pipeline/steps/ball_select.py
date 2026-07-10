@@ -33,6 +33,7 @@ from video_grouper.inference.ball_selector import (
 from video_grouper.inference.ball_tracker import (
     Candidate,
     RerankConfig,
+    bridge_aerial_gaps,
     kalman_smooth,
     rerank,
 )
@@ -128,6 +129,7 @@ def _run_selection(
         miss_costs=miss_costs,
         config=rr_cfg,
     )
+    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=rr_cfg)
     track = kalman_smooth(sel, geom)
 
     # Dense per-source-frame trajectory from frame 0 (the plan_camera contract).
