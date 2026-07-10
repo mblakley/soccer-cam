@@ -18,8 +18,17 @@
   sigmoid baked in, dynamic H/W) and `export_ball_selector` (.pt → selector_net_npz/1).
 - Suite rebuilt around the new surfaces: 1,544 passed (old `_tick`/YOLO/Kalman tests replaced by
   command-mode render, heatmap detector, physics tracker, numpy selector, ball_select step tests).
-- NEXT: export hn2 + selector_v5 on the server, run the four-step chain end-to-end on Spencerport,
-  and compare the chain's trajectory/camera-path against the replay-harness champion artifacts.
+- **E2E VERIFIED (same day):** hn2 → `ball_detector_hn2.onnx` (parity 1.3e-07) and selector_v5 →
+  `selector_v5.npz` (parity 3.6e-07) exported on the server; `run_pipeline_chain` drove the four
+  REGISTERED steps on Spencerport segment 6 (raw 8K segment → broadcast.mp4, exit 0: detect 29 min
+  via DirectML, select 3 s, plan <1 s, render 13 min). Cross-check vs the champion replay
+  artifacts on the same global frames: **benchmark containment IDENTICAL (human 41/42 = .976,
+  autocam-tier 75/75 = 1.000 for both), adjudicated-window camera centers differ median 4 px**;
+  divergence exists only in unmeasured dead-ball stretches (expected — features normalize over the
+  dump scope: full game vs one segment). Rendered frame vision-checked. The shipped chain
+  reproduces champion viewport quality.
+- Server venv note: onnxruntime → onnxruntime-directml 1.24.4 (uv pip, ad-hoc — declare properly
+  when the runtime deps are formalized); `create_session` provider chain is CUDA → DML → CPU.
 
 ## 2026-07-10 — PRODUCTION renderer shipped + parity-PROVEN (aab7633)
 
