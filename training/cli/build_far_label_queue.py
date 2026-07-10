@@ -115,29 +115,24 @@ def select_near_frames(
         rows = cands.get(g) or []
         if not rows:
             continue
+        # POSITION-based on the TEACHER'S ball only — AutoCam is reliable near/mid, so
+        # its near-touchline balls are real close balls (verified). A no-teacher frame
+        # in the near band is almost always a near PLAYER, not a ball, so skip it.
         lab = labels.get(i)
-        if lab is not None and int(lab[0]) >= 0:
-            j = int(lab[0])
-            if j >= len(rows):
-                continue
-            x, y = float(rows[j][0]), float(rows[j][1])
-            if (y - yf) / span < near_depth:  # not close to the near touchline
-                continue
-            scores = [float(r[2]) for r in rows]
-            rank = sum(1 for s in scores if s > scores[j])
-            reason = "near_misrank" if rank > 0 else "near_close"
-            pool.append([g, reason, (x, y), scores[j], y])
-        else:
-            nj = [
-                k
-                for k in range(len(rows))
-                if (float(rows[k][1]) - yf) / span >= near_depth
-            ]
-            if not nj:
-                continue
-            top = max(nj, key=lambda k: float(rows[k][1]))  # frontmost near candidate
-            x, y = float(rows[top][0]), float(rows[top][1])
-            pool.append([g, "near_unknown", (x, y), float(rows[top][2]), y])
+        if lab is None or int(lab[0]) < 0:
+            continue
+        j = int(lab[0])
+        if j >= len(rows):
+            continue
+        x, y = float(rows[j][0]), float(rows[j][1])
+        if (y - yf) / span < near_depth:  # not close to the near touchline
+            continue
+        scores = [float(r[2]) for r in rows]
+        rank = sum(1 for s in scores if s > scores[j])
+        reason = "near_misrank" if rank > 0 else "near_close"
+        pool.append(
+            [g, reason, (x, y), scores[j], y]
+        )  # value = image-y (frontmost first)
     chosen = _spread_bins(pool, target)
     return [
         {
