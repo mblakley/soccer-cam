@@ -1,6 +1,28 @@
 # Current Status
 
-*Last updated: 2026-07-09*
+*Last updated: 2026-07-10*
+
+## 2026-07-10 — PRODUCTION renderer shipped + parity-PROVEN (aab7633)
+
+- Per Mark's directive the dumb-renderer architecture is now product code on `feat/ball-selector`,
+  not eval scaffolding: `camera_planner` moved to `video_grouper/inference/` (training shim
+  re-exports), new `plan_camera` pipeline step (trajectory → `camera_path/1` artifact, registered:
+  detect → track → plan_camera → render), and the shipped `RenderStep` gained
+  `render_camera_path_key` — with a command stream present, `_frame_view(command=...)` bypasses the
+  internal camera brain entirely and executes {center_px, hfov_deg} with feasibility clamps only
+  (yaw/pitch limits, zoom-scale round-trip so the planner's hfov is final).
+  `training/cli/render_camera_path.py` is now a thin wrapper over the production module (full-video
+  mode IS `_render_video`; clip mode shares `_frame_view`/`_warp_frame`). 6 new tests; suite 1555.
+- **Parity proven byte-for-byte:** the adjudicated Spencerport window 36668–36988 rendered through
+  the old render-branch worktree path vs the new production path (both CPU-decode) diffs at
+  **px-max=0 across all 320 frames** — the production renderer is exactly the code that produced
+  every clip Mark has reviewed. (An earlier avg-1.66 diff was isolated to NVDEC-vs-CPU decode
+  color conversion: raw source frames differ 0.11 mean between decoders; render math contributes
+  zero.)
+- Full-game Spencerport render (3-way parallel, restarted 06:23) in flight ≈4.7 fps/part, concat +
+  staging watchers armed; YouTube upload still blocked on Mark's OAuth re-consent (both tokens
+  expired — Testing-mode 7-day limit). Dahua angular-norm A/B re-dump alive but CPU-starved behind
+  the render (~60 min/chunk); resumes full speed when the render drains.
 
 ## 2026-07-09 (evening) — camera PLANNER built + planned path SCORED pre-render
 
