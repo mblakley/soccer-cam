@@ -40,8 +40,8 @@ def main() -> None:
     ap.add_argument("--bitrate", default="8M")
     ap.add_argument(
         "--codec",
-        default="h264_nvenc",
-        help="output codec; falls back to libx264 when NVENC is unavailable",
+        default="h264",
+        help="output codec (PyAV pip wheels ship without NVENC; x264 veryfast)",
     )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
