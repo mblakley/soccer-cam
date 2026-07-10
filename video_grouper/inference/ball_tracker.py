@@ -118,6 +118,17 @@ class RerankConfig:
     offfield_margin_px: float = (
         30.0  # signed px OUTSIDE the polygon to count as off-field
     )
+    # RE-ACQUISITION DISTANCE BIAS (Mark 2026-07-10): the goal is the VIEWPORT in
+    # roughly the right area, not perfect per-frame detection — a ball lost in-field
+    # (not OOB, not aerial) reappears NEAR where it was lost, so re-acquiring FAR is
+    # almost always a distant distractor (the far-side crowd). Penalise far
+    # re-acquisition so the track HOLDS near the loss point (viewport stays in the
+    # right area) and the game ball comes back to it. Does not touch the OOB / aerial
+    # re-entry (those are genuine travel with their own bonuses).
+    reacq_dist_w: float = 0.0  # cost per meter re-acquiring beyond reacq_free_m
+    reacq_free_m: float = (
+        8.0  # free re-acquisition radius around the in-field loss point
+    )
 
 
 # aerial-bridge launch model (EXP-DIST-31): horizontal momentum is roughly conserved
@@ -648,6 +659,20 @@ def rerank(
                         oob_reentry = dp <= cone
                     if not oob_reentry:
                         trans += cfg.offfield_penalty
+                # RE-ACQUISITION distance bias: re-acquiring a ball lost IN-FIELD (not
+                # OOB, not aerial) far from where it was lost is a distant-distractor
+                # grab — penalise it so the track holds near the loss point.
+                if (
+                    j != k
+                    and i == kp
+                    and cfg.reacq_dist_w > 0
+                    and mw_prev is not None
+                    and moob_prev is None
+                    and mv_prev is None
+                ):
+                    reacq_d = math.hypot(*(fw[t][j] - mw_prev))
+                    if reacq_d > cfg.reacq_free_m:
+                        trans += cfg.reacq_dist_w * (reacq_d - cfg.reacq_free_m)
                 v = cost[t - 1][i] + trans
                 if v < best:
                     best, bi = v, i
