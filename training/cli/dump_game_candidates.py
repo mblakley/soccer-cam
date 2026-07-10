@@ -67,6 +67,14 @@ def main() -> None:
     ap.add_argument("--thr", type=float, default=0.1)
     ap.add_argument("--min-distance", type=int, default=3)
     ap.add_argument("--tile-w", type=int, default=2560)
+    ap.add_argument(
+        "--angular-norm-width",
+        type=int,
+        default=None,
+        help="normalize the warped band to this width (constant px-per-degree "
+        "across cameras: a Dahua 4096 px pano at 7680 shows the detector "
+        "training-scale balls; coordinates map back through warp.scale)",
+    )
     ap.add_argument("--overlap", type=int, default=256)
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
@@ -119,7 +127,7 @@ def main() -> None:
         vs = probe.streams.video[0]
         sw, sh = vs.codec_context.width, vs.codec_context.height
     far_poly = _far_margin_polygon(gj["field_polygon"], 400.0)
-    warp = _native_iso_warp(far_poly, sw, sh, None)
+    warp = _native_iso_warp(far_poly, sw, sh, args.angular_norm_width)
     bh, bw = warp.shape
     mpoly = warp.points(far_poly).astype(np.int32)
     mask = np.zeros((bh, bw), np.uint8)

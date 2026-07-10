@@ -51,13 +51,15 @@ class PlannerConfig:
     zoom_base_deg: float = 47.0
     zoom_min_deg: float = 46.0
     zoom_max_deg: float = 58.0
-    zoom_speed_norm_px: float = 15.0
+    # angular units so the feel is camera-independent (15 px/f on the 7680-wide
+    # Reolink calibration = 0.35 deg/f; a 4096-wide Dahua frame maps px differently)
+    zoom_speed_norm_degf: float = 0.35
     zoom_speed_gain_deg: float = 8.0
     zoom_depth_gain_deg: float = 5.0
     zoom_scale: float = 0.90
     zoom_smoothing: float = 0.03  # incremental zoom (AutoCam's slow ease)
     # dead ball: sustained slow ball -> ease wider (restarts, keeper holds)
-    deadball_speed_px: float = 4.0
+    deadball_speed_degf: float = 0.094  # 4 px/f at the Reolink calibration
     deadball_frames: int = 15
     deadball_hfov_deg: float = 52.0
     # no input at all (outside the track span): hold bearing, ease to widest
@@ -106,14 +108,17 @@ def plan_camera(
                 vy = cfg.velocity_ema * (y - prev[1]) + (1 - cfg.velocity_ema) * vy
             prev = (x, y)
             speed = float(np.hypot(vx, vy))
-            slow_run = slow_run + 1 if speed < cfg.deadball_speed_px else 0
+            slow = speed / (src_w / 180.0) < cfg.deadball_speed_degf
+            slow_run = slow_run + 1 if slow else 0
 
             # ---- zoom target: calibrated curve, then dead-ball override ----
             d = 0.5
             if depth01 is not None and depth01[t] is not None:
                 d = float(depth01[t])
+            speed_degf = speed / (src_w / 180.0)
             target_hfov = cfg.zoom_base_deg + (
-                min(speed / cfg.zoom_speed_norm_px, 1.0) * cfg.zoom_speed_gain_deg
+                min(speed_degf / cfg.zoom_speed_norm_degf, 1.0)
+                * cfg.zoom_speed_gain_deg
             )
             target_hfov += d * cfg.zoom_depth_gain_deg
             target_hfov = float(
