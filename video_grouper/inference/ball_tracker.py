@@ -143,11 +143,18 @@ class RerankConfig:
     # in-field detections — one-off distractors don't qualify) and interpolating the
     # viewport straight from the launch point to that landing, overwriting any
     # in-flight distractor grab. No stable landing within aerial_max_air_frames ->
-    # HOLD at the launch point (a still camera beats a wrong-direction swing). The
-    # exit-speed gate is load-bearing: WITHOUT it the pass fires on every fragmented
-    # miss (500+ on Spencerport) and manufactures far swings (SET-A 76 -> 116); gated
-    # to real launches it is a small net win on both held-out games (EXP-DIST-40).
-    aerial_bridge_lookahead: bool = True
+    # HOLD at the launch point (a still camera beats a wrong-direction swing).
+    # DEFAULT OFF (EXP-DIST-40, negative result): interpolation needs a trustworthy
+    # LANDING, but for a long punt the detector offers none — the only "stable"
+    # post-gap track is a distractor (the Spencerport 0:48 punt lands on a coach's cap),
+    # and the pre-launch velocity points the wrong way. Ungated the pass fires on every
+    # fragmented miss (500+ on Spencerport) and manufactures far swings (SET-A 76->116);
+    # gated to real launches it does not even fire on the target 0:48 punt (a short,
+    # slow-exit gap indistinguishable from an occlusion) yet still nets SET-A 76->84,
+    # with the metric fragile to the look-ahead cap. The real fix is to DETECT the ball
+    # in flight (or its ground SHADOW, which stays on the field plane so the world-model
+    # works on it) so the track is not lost the instant the ball leaves the ground.
+    aerial_bridge_lookahead: bool = False
     aerial_min_exit_mpf: float = 1.0  # min launch exit speed (world m/SOURCE frame)
     aerial_min_misses: int = 4  # min consecutive missed detections = a flight gap
     aerial_max_air_frames: int = 200  # cap on look-ahead airtime (source frames)

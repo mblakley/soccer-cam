@@ -4,6 +4,39 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-40: aerial look-ahead interpolation bridge — NEGATIVE (no trustworthy landing) (2026-07-10)
+
+**Case (Spencerport ~0:48, verified on the YouTube source + decoded frames):** a keeper
+punts the ball high and long (airborne 0:48 -> >0:51, players looking up, ball leaves the
+top of frame). The detector can't see the airborne ball; its ground candidates are the ball's
+SHADOW (0.77), players, coaches, and a real spare ball on the ADJACENT field (0.845). The ball
+IS in the candidate set only when on the ground; while airborne the track goes to MISS, then
+re-acquires a coach's cap on the left (0.84). Root cause = both a detection hole (no airborne
+ball) AND a world-model break (an aerial ball projected to the ground plane teleports).
+
+**Fix attempted (Mark's idea):** OFFLINE look-ahead — bridge the flight by interpolating the
+viewport from the launch point to the next STABLE in-field re-acquisition found downstream
+(`bridge_aerial_gaps`, config `aerial_*`). Swept gate (consecutive-miss count, exit-speed) x
+mode (hold/interp) x stability-K on both held-out games.
+
+**Result — NEGATIVE, default OFF:**
+- Ungated (any >=6-frame gap): fires on 500+ fragmented misses -> Spencerport SET-A 76->116,
+  ball-in-view .830->.791. Helps Irondequoit (.616->.66) only because it replaces the Kalman
+  coast on many gaps, not because it finds real landings.
+- Gated to real launches (exit>=1.0 m/f, >=4 misses): does NOT fire on the 0:48 punt at all
+  (short, slow-exit gap indistinguishable from an occlusion) yet still nets Spencerport SET-A
+  76->84; metric fragile to the look-ahead cap (200 vs 240 frames swings SET-A 84<->72).
+- The interpolation TARGET is the problem: for a long punt the only "stable" post-gap track is
+  a distractor (coach's cap), and the pre-launch DRIBBLE velocity points opposite the punt.
+  There is nothing trustworthy to interpolate to.
+
+**Takeaway (Mark 2026-07-10, "we lose the ball once it leaves the ground"):** the real fix is
+to STOP losing it — DETECT the ball in flight, or its ground SHADOW (which stays on the field
+plane, so the homography/world-model works on it directly, and Mark spotted it in-frame). That
+is a detection-level change, not a tracker post-process. `bridge_aerial_gaps` kept behind the
+default-off `aerial_bridge_lookahead` flag for when a trustworthy landing signal exists
+(player-convergence / shadow track).
+
 ## EXP-DIST-39: re-acquisition distance bias — hold near the loss point; SET-A far-swings-we-lose 52->36 (2026-07-10)
 
 **Trigger (Mark):** the goal is the VIEWPORT in basically the right direction, not perfect detection
