@@ -124,10 +124,12 @@ class RerankConfig:
     # almost always a distant distractor (the far-side crowd). Penalise far
     # re-acquisition so the track HOLDS near the loss point (viewport stays in the
     # right area) and the game ball comes back to it. Does not touch the OOB / aerial
-    # re-entry (those are genuine travel with their own bonuses).
-    reacq_dist_w: float = 0.0  # cost per meter re-acquiring beyond reacq_free_m
+    # re-entry (those are genuine travel with their own bonuses). Cross-validated on
+    # both held-out games: Spencerport ball-in-view .799->.830, far-swings-we-lose
+    # (SET A vs AutoCam) 52->36; Irondequoit neutral (no regression). ON by default.
+    reacq_dist_w: float = 0.07  # cost per meter re-acquiring beyond reacq_free_m
     reacq_free_m: float = (
-        8.0  # free re-acquisition radius around the in-field loss point
+        6.0  # free re-acquisition radius around the in-field loss point
     )
 
 

@@ -4,6 +4,34 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-39: re-acquisition distance bias — hold near the loss point; SET-A far-swings-we-lose 52->36 (2026-07-10)
+
+**Trigger (Mark):** the goal is the VIEWPORT in basically the right direction, not perfect detection
+— a near distractor is fine (ball comes back to where the camera points); a FAR swing to the wrong
+area (far-side crowd) is the real failure. 3-way partition (ours/AutoCam/GT): SET A = far swing where
+we disagree with AutoCam (93 frames, 52 of them AutoCam-is-right = we lose); SET B = we agree with
+AutoCam but ball elsewhere (85, both wrong).
+
+**Lever:** a ball lost IN-FIELD (not OOB, not aerial) reappears NEAR where it was lost, so re-acquiring
+FAR from the miss state is almost always a distant distractor. Penalise re-acquisition distance beyond
+`reacq_free_m` so the track HOLDS near the loss point (viewport stays in the right area) and the ball
+comes back to it. New `reacq_dist_w` / `reacq_free_m`, applied only to non-OOB/non-aerial miss->cand
+transitions.
+
+**Sweep + cross-validation (full-game, scored vs human GT + AutoCam):**
+
+| | ball-in-view | right-dir | SET_A | SET_A AutoCam-right (we lose) |
+|---|---|---|---|---|
+| Spencerport baseline | .799 | .919 | 93 | **52** |
+| Spencerport reacq 0.07/free6 | **.830** | **.932** | **76** | **36** |
+| Irondequoit baseline | .614 | .827 | (no AC data) | - |
+| Irondequoit reacq 0.07/free6 | .616 | .824 | - | - |
+
+**Result:** Spencerport ball-in-view +.031, right-dir +.013, far-swings-we-lose **-31% (52->36)**;
+Irondequoit neutral (no regression). **Adopted as the default** (reacq_dist_w=0.07, reacq_free_m=6).
+The champion config in plan_camera_path / ball_select inherits it. NOTE: this shifts the champion
+baseline for future comparisons.
+
 ## EXP-DIST-38: blanket boundary margin HURTS (catches distractors); needs a state gate (2026-07-10)
 
 **Trigger (Mark, reviewing clip 1):** the end-line/dome detection margin (EXP-nearby, boundary
