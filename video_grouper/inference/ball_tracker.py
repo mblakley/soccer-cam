@@ -131,23 +131,26 @@ class RerankConfig:
     reacq_free_m: float = (
         6.0  # free re-acquisition radius around the in-field loss point
     )
-    # AERIAL LOOK-AHEAD BRIDGE (Mark 2026-07-10): a long punt/clearance leaves the
-    # ground for seconds; the ball shrinks/leaves frame so the detector can't see it
-    # for the whole flight, and the forward ballistic bridge is MISLED because a
-    # clearance reverses the pre-launch DRIBBLE velocity (Spencerport 0:48 punt: exit
-    # velocity pointed left, so the bridge grabbed a coach's cap on the left while the
-    # ball flew downfield-right). This is an OFFLINE post-pass on the selected path:
-    # a detection gap the forward tracker can't fill nearby is bridged by looking
-    # AHEAD to the next STABLE in-field re-acquisition (>= aerial_stable_k continuous
+    # AERIAL LOOK-AHEAD BRIDGE (Mark 2026-07-10): a punt/clearance leaves the ground
+    # for seconds; the ball shrinks/leaves frame so the detector can't see it in
+    # flight and the track goes to MISS, and the forward ballistic bridge is MISLED
+    # because a clearance reverses the pre-launch DRIBBLE velocity (Spencerport 0:48
+    # punt: exit velocity pointed left, so the bridge grabbed a coach's cap on the
+    # left). This is an OFFLINE post-pass on the selected path: a LAUNCH (fast in-field
+    # exit — >= aerial_min_exit_mpf world m/frame — followed by >= aerial_min_misses
+    # consecutive missed detections) is bridged by looking AHEAD to the next STABLE
+    # in-field re-acquisition (aerial_stable_k continuous, physically-continuous,
     # in-field detections — one-off distractors don't qualify) and interpolating the
     # viewport straight from the launch point to that landing, overwriting any
     # in-flight distractor grab. No stable landing within aerial_max_air_frames ->
-    # HOLD at the launch point (a still camera beats a wrong-direction swing).
+    # HOLD at the launch point (a still camera beats a wrong-direction swing). The
+    # exit-speed gate is load-bearing: WITHOUT it the pass fires on every fragmented
+    # miss (500+ on Spencerport) and manufactures far swings (SET-A 76 -> 116); gated
+    # to real launches it is a small net win on both held-out games (EXP-DIST-40).
     aerial_bridge_lookahead: bool = True
-    aerial_min_gap_frames: int = (
-        6  # min airborne gap (source frames) to treat as a flight
-    )
-    aerial_max_air_frames: int = 160  # cap on look-ahead airtime (source frames)
+    aerial_min_exit_mpf: float = 1.0  # min launch exit speed (world m/SOURCE frame)
+    aerial_min_misses: int = 4  # min consecutive missed detections = a flight gap
+    aerial_max_air_frames: int = 200  # cap on look-ahead airtime (source frames)
     aerial_stable_k: int = 3  # consecutive continuous in-field frames = a real landing
 
 
@@ -783,9 +786,10 @@ def bridge_aerial_gaps(
     """OFFLINE look-ahead bridge for AERIAL gaps (Mark 2026-07-10) — see the
     ``aerial_bridge_lookahead`` config block.
 
-    Post-processes :func:`rerank`'s selected path. A miss gap of at least
-    ``aerial_min_gap_frames`` (the ball left the ground and the detector lost it for
-    the flight) is bridged by looking AHEAD to the next STABLE in-field re-acquisition
+    Post-processes :func:`rerank`'s selected path. A LAUNCH (a fast in-field exit,
+    ``>= aerial_min_exit_mpf``, followed by ``>= aerial_min_misses`` consecutive missed
+    detections — the ball left the ground and the detector lost it for the flight) is
+    bridged by looking AHEAD to the next STABLE in-field re-acquisition
     (``aerial_stable_k`` consecutive, physically-continuous, in-field detections — a
     one-off distractor grab does not qualify) and interpolating the viewport position
     straight from the launch point to that landing, OVERWRITING any distractor grabs
@@ -833,7 +837,12 @@ def bridge_aerial_gaps(
     while i < len(idx) - 1:
         a = idx[i]
         b = idx[i + 1]
-        if b - a <= 1 or (cum[b] - cum[a]) < cfg.aerial_min_gap_frames:
+        # gate to a real LAUNCH: a fast in-field exit (the kick) followed by a run of
+        # missed detections (the flight). The exit-speed gate is load-bearing — without
+        # it every fragmented miss is bridged and manufactures far swings.
+        nmiss = b - a - 1
+        exit_speed = speed(idx[i - 1], a) if i >= 1 else 0.0
+        if nmiss < cfg.aerial_min_misses or exit_speed < cfg.aerial_min_exit_mpf:
             i += 1
             continue
         # look ahead for the first STABLE in-field landing within the airtime cap
