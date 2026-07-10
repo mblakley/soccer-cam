@@ -46,12 +46,17 @@ FAR_MARGIN_PX = 400.0
 def create_session(model_path: Path, use_gpu: bool = True) -> ort.InferenceSession:
     """Create an ONNX inference session.
 
-    Provider order: ``[CUDAExecutionProvider, CPUExecutionProvider]`` when
-    ``use_gpu`` is True (matches ``onnxruntime-gpu`` wheel), else CPU only.
+    Provider order when ``use_gpu`` is True: CUDA (onnxruntime-gpu wheel), then
+    DirectML (onnxruntime-directml wheel — the norm on customer Windows installs,
+    where the GPU is whatever the machine has), then CPU. Only providers the
+    installed wheel actually offers are requested.
     """
+    available = set(ort.get_available_providers())
     providers: list[str] = []
     if use_gpu:
-        providers.append("CUDAExecutionProvider")
+        for p in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+            if p in available:
+                providers.append(p)
     providers.append("CPUExecutionProvider")
 
     sess = ort.InferenceSession(str(model_path), providers=providers)
