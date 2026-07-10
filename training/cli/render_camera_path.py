@@ -41,15 +41,16 @@ def _draw_minimap(
     ball_xy,
     ball_trail,
     gt_xy,
+    polygon,
     src_w: int,
     src_h: int,
     out_w: int,
     out_h: int,
 ):
     """Composite a review minimap into the lower-right of ``rendered`` (RGB, mutated
-    in place): dimmed full-frame thumbnail with OUR viewport rectangle (magenta),
-    AutoCam's focus (green cross), the raw ball DETECTION (cyan dot + trail), and the
-    human GT ball (green arrow) when labeled."""
+    in place): dimmed full-frame thumbnail with the field outline (yellow), OUR
+    viewport rectangle (magenta), AutoCam's focus (green cross), the raw ball
+    DETECTION (cyan dot + trail), and the human GT ball (green arrow) when labeled."""
     import cv2
     import numpy as np
 
@@ -58,6 +59,10 @@ def _draw_minimap(
     mini = cv2.cvtColor(cv2.resize(src_bgr, (mw, mh)), cv2.COLOR_BGR2RGB)
     mini = (mini.astype(np.float32) * 0.6).astype(np.uint8)  # dim so overlays pop
     sx, sy = mw / src_w, mh / src_h
+
+    if polygon is not None:
+        pp = (np.asarray(polygon, float) * np.array([sx, sy])).astype(np.int32)
+        cv2.polylines(mini, [pp], True, (255, 255, 0), 1)
 
     # ball trail (past ~1 s) — fade older segments toward dim, current is brightest
     if ball_trail:
@@ -146,6 +151,27 @@ def _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail):
         cv2.circle(rendered, bp, 3, (0, 255, 255), -1)
 
 
+def _draw_field_outline(rendered, map_x, map_y, polygon):
+    """Draw the field outline (yellow) on the rendered view. Each polygon edge is
+    interpolated + projected so the touchlines curve correctly in the warp."""
+    import cv2
+    import numpy as np
+
+    poly = np.asarray(polygon, float)
+    n = len(poly)
+    proj = []
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        for t in np.linspace(0.0, 1.0, 16, endpoint=False):
+            p = a + t * (b - a)
+            proj.append(_project_src_to_out(map_x, map_y, (p[0], p[1])))
+    prev = proj[-1]
+    for pp in proj:
+        if prev is not None and pp is not None:
+            cv2.line(rendered, prev, pp, (255, 255, 0), 2)
+        prev = pp
+
+
 def _draw_gt_arrow(rendered, map_x, map_y, gt_xy):
     """Draw a green arrow pointing at the HUMAN GT ball position (truth) on the
     rendered view, when the labeled point is within the current frame."""
@@ -192,6 +218,11 @@ def main() -> None:
         "--no-gt-overlay",
         action="store_true",
         help="disable the human-GT green arrow (drawn on labeled frames)",
+    )
+    ap.add_argument(
+        "--no-field-outline",
+        action="store_true",
+        help="disable the yellow field-outline overlay",
     )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
@@ -350,8 +381,11 @@ def main() -> None:
                 trail = [det_pos[int(det_frames[k])] for k in range(lo, hi)]
 
             gt_xy = gt.get(g)
-            if not args.no_ball_overlay or not args.no_minimap or gt_xy is not None:
-                rendered = rendered.copy()  # keep last_good a clean warp
+            rendered = (
+                rendered.copy()
+            )  # overlays draw here; keep last_good a clean warp
+            if not args.no_field_outline:
+                _draw_field_outline(rendered, map_x, map_y, polygon)
             if not args.no_ball_overlay and ball_xy is not None:
                 _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail)
             if gt_xy is not None:
@@ -374,6 +408,7 @@ def main() -> None:
                     ball_xy,
                     trail,
                     gt_xy,
+                    polygon,
                     src_w,
                     src_h,
                     out_w,
