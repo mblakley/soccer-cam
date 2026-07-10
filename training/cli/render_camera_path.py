@@ -99,6 +99,46 @@ def _draw_minimap(
     rendered[y0 : y0 + mh, x0 : x0 + mw] = mini
 
 
+def _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail, sub: int = 4):
+    """Draw the tracked BALL (cyan dot) + past-second trail on the RENDERED view.
+
+    The view is a warp of the source; ``map_x``/``map_y`` give, per output pixel,
+    the source pixel it samples. So a source-space ball position projects to the
+    output pixel whose map entry is nearest it — found on a ``sub``-subsampled map
+    for speed. A ball outside the current view has no near map entry (skipped)."""
+    import cv2
+    import numpy as np
+
+    mxs, mys = map_x[::sub, ::sub], map_y[::sub, ::sub]
+    max_src_dist = 6.0 * sub  # "in view" tolerance in source px at this subsample
+
+    def proj(pt):
+        if pt is None or pt[0] is None:
+            return None
+        d2 = (mxs - float(pt[0])) ** 2 + (mys - float(pt[1])) ** 2
+        j = int(np.argmin(d2))
+        v, u = np.unravel_index(j, d2.shape)
+        if d2[v, u] <= max_src_dist**2:
+            return (int(u * sub), int(v * sub))
+        return None
+
+    if trail:
+        proj_pts = [proj(p) for p in trail]
+        prev = None
+        for k, pp in enumerate(proj_pts):
+            if prev is not None and pp is not None:
+                f = k / max(len(proj_pts) - 1, 1)
+                cv2.line(
+                    rendered, prev, pp, (0, int(140 + 115 * f), int(140 + 115 * f)), 2
+                )
+            prev = pp
+    bp = proj(ball_xy)
+    if bp is not None:
+        cv2.circle(rendered, bp, 14, (0, 0, 0), 3)
+        cv2.circle(rendered, bp, 14, (0, 255, 255), 2)
+        cv2.circle(rendered, bp, 3, (0, 255, 255), -1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera-path", required=True)
@@ -112,6 +152,11 @@ def main() -> None:
         "--no-minimap",
         action="store_true",
         help="disable the lower-right review minimap (clip-window mode)",
+    )
+    ap.add_argument(
+        "--no-ball-overlay",
+        action="store_true",
+        help="disable the tracked-ball dot + trail drawn on the full frame",
     )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
@@ -127,11 +172,10 @@ def main() -> None:
     from video_grouper.pipeline.steps.render import (
         RenderStepConfig,
         _frame_view,
-        _make_warper,
         _parse_bitrate,
+        _project_maps,
         _render_video,
         _resolve_geometry,
-        _warp_frame,
     )
 
     gd = Path(args.game_dir)
@@ -155,10 +199,8 @@ def main() -> None:
     src_w, src_h = int(seg0["w"]), int(seg0["h"])
     out_w, out_h = cfg.render_output_width, cfg.render_output_height
     geom = _resolve_geometry(src_w, src_h, cfg, polygon)
-    try:
-        warper = _make_warper(geom, cfg, src_w, src_h, out_w, out_h)
-    except Exception:
-        warper = None
+    # clip-window debug renderer uses the cv2 map path (_project_maps + remap) so the
+    # ball can be projected source->output; the opencl warper is skipped here.
     yaw_min, yaw_max = field_lateral_yaw_extent(polygon, src_w, geom.src_hfov_deg)
     yaw_min = max(yaw_min - cfg.render_yaw_padding_deg, -geom.src_hfov_deg / 2)
     yaw_max = min(yaw_max + cfg.render_yaw_padding_deg, geom.src_hfov_deg / 2)
@@ -182,15 +224,15 @@ def main() -> None:
                     if sg is not None:
                         ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
 
-    # tracked-ball sidecar (from plan_camera_path) for the minimap dot + trail
+    # tracked-ball sidecar (from plan_camera_path): the ball dot + trail, drawn on
+    # the full rendered frame AND the minimap.
     track_frames: list | None = None
     track_g0 = 0
-    if not args.no_minimap:
-        tp = Path(args.camera_path).with_suffix(".track.json")
-        if tp.exists():
-            td = json.loads(tp.read_text(encoding="utf-8"))
-            track_frames = td["frames"]
-            track_g0 = int(td.get("g_start", 0))
+    tp = Path(args.camera_path).with_suffix(".track.json")
+    if tp.exists():
+        td = json.loads(tp.read_text(encoding="utf-8"))
+        track_frames = td["frames"]
+        track_g0 = int(td.get("g_start", 0))
     trail_len = int(round(fps))  # ~1 second
 
     want = set(range(args.start_g, args.end_g))
@@ -223,16 +265,36 @@ def main() -> None:
                 out_h,
             )
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # compute the warp maps explicitly (same cv2 remap the production render
+            # uses) so the ball can be projected source->output onto the full frame.
             try:
-                rendered = _warp_frame(rgb, geom, cfg, params, view_yaw, warper)
-                last_good = rendered
+                map_x, map_y = _project_maps(geom, cfg, params, view_yaw)
+                rendered = cv2.remap(
+                    rgb, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
+                )
+                last_good = (rendered, map_x, map_y)
             except cv2.error:
                 if last_good is None:
                     continue
-                rendered = last_good
+                rendered, map_x, map_y = last_good
+
+            ball_xy = None
+            trail = None
+            if track_frames is not None:
+                bi = g - track_g0
+                if 0 <= bi < len(track_frames):
+                    ball_xy = track_frames[bi]
+                    trail = [
+                        track_frames[k]
+                        for k in range(max(0, bi - trail_len), bi + 1)
+                        if track_frames[k] is not None
+                    ]
+
+            if not args.no_ball_overlay or not args.no_minimap:
+                rendered = rendered.copy()  # keep last_good a clean warp
+            if not args.no_ball_overlay and ball_xy is not None:
+                _draw_ball_on_frame(rendered, map_x, map_y, ball_xy, trail)
             if not args.no_minimap:
-                # draw on a fresh copy so last_good stays a clean warp
-                rendered = rendered.copy()
                 ocx, ocy = yaw_pitch_to_pixel(
                     view_yaw,
                     params.view_pitch_deg + params.view_pitch_offset_deg,
@@ -240,17 +302,6 @@ def main() -> None:
                     src_h,
                     params.src_hfov_deg,
                 )
-                ball_xy = None
-                trail = None
-                if track_frames is not None:
-                    bi = g - track_g0
-                    if 0 <= bi < len(track_frames):
-                        ball_xy = track_frames[bi]
-                        trail = [
-                            track_frames[k]
-                            for k in range(max(0, bi - trail_len), bi + 1)
-                            if track_frames[k] is not None
-                        ]
                 _draw_minimap(
                     rendered,
                     img,
@@ -277,8 +328,6 @@ def main() -> None:
                 )
         for pkt in stream.encode():
             out_c.mux(pkt)
-    if warper is not None:
-        warper.close()
     el = time.time() - t0
     print(
         f"rendered {n_done} frames in {el:.0f}s = {n_done / max(el, 1):.1f} fps "
