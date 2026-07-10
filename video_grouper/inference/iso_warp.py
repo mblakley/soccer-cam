@@ -70,6 +70,27 @@ def far_margin_polygon(polygon, far_margin: float) -> np.ndarray:
     return poly
 
 
+def expand_polygon(polygon, margin: float) -> np.ndarray:
+    """Expand a polygon OUTWARD from its centroid by ``margin`` px — a tolerance
+    band around ALL boundaries (end lines behind the goals, the near touchline,
+    and extra dome above the far line).
+
+    Balls leaving the field-of-play region — a corner popped behind the goal, a
+    goal kick arcing out the top — are OUTSIDE the raw field outline and get
+    masked out of detection, so the tracker loses them and the OOB/aerial physics
+    can never engage (verified 2026-07-10 on held-out Spencerport). Widening the
+    detection mask keeps them detectable through the exit + re-entry. ``far_margin``
+    only lifts the far touchline; this adds the missing end-line + dome margin.
+    """
+    p = np.asarray(polygon, dtype=np.float64)
+    if margin <= 0 or len(p) < 3:
+        return p
+    c = p.mean(axis=0)
+    v = p - c
+    n = np.linalg.norm(v, axis=1, keepdims=True)
+    return c + v * (1.0 + margin / np.maximum(n, 1e-6))
+
+
 def native_iso_warp(
     polygon, src_w: int, src_h: int, target_width: int | None = None
 ) -> CropIsoWarp:

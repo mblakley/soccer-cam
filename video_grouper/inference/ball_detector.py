@@ -28,6 +28,7 @@ from video_grouper.inference.iso_warp import (
     CropIsoWarp,
     band_mask,
     dewarp_mask_gray,
+    expand_polygon,
     far_margin_polygon,
     native_iso_warp,
 )
@@ -41,6 +42,10 @@ PEAK_MIN_DISTANCE = 3
 TILE_W = 2560
 TILE_OVERLAP = 256
 FAR_MARGIN_PX = 400.0
+# Extra tolerance around ALL boundaries (end lines behind goals + dome above the
+# far line) so out-of-play exits stay detectable and the OOB/aerial physics can
+# engage. 0 = legacy (far-touchline margin only). See expand_polygon.
+BOUNDARY_MARGIN_PX = 0.0
 
 
 def create_session(model_path: Path, use_gpu: bool = True) -> ort.InferenceSession:
@@ -142,6 +147,7 @@ def detect_video_candidates(
     tile_w: int = TILE_W,
     overlap: int = TILE_OVERLAP,
     far_margin: float = FAR_MARGIN_PX,
+    boundary_margin: float = BOUNDARY_MARGIN_PX,
     target_width: int | None = None,
 ) -> tuple[dict[int, list[tuple[float, float, float]]], dict]:
     """Run the heatmap detector over a video at ``stride`` -> per-frame candidates.
@@ -159,7 +165,9 @@ def detect_video_candidates(
     """
     import av  # noqa: PLC0415
 
-    far_poly = far_margin_polygon(polygon, far_margin)
+    # far-touchline margin, then (optionally) a uniform outward margin around all
+    # boundaries so behind-goal / high-aerial exits stay in-band.
+    mask_poly = expand_polygon(far_margin_polygon(polygon, far_margin), boundary_margin)
     cands: dict[int, list[tuple[float, float, float]]] = {}
     t0 = time.time()
 
@@ -168,8 +176,8 @@ def detect_video_candidates(
         src_w = vs.codec_context.width
         src_h = vs.codec_context.height
         fps = float(vs.average_rate) if vs.average_rate else 20.0
-        warp: CropIsoWarp = native_iso_warp(far_poly, src_w, src_h, target_width)
-        mask = band_mask(warp, far_poly)
+        warp: CropIsoWarp = native_iso_warp(mask_poly, src_w, src_h, target_width)
+        mask = band_mask(warp, mask_poly)
         grays: list[np.ndarray] = []
 
         frame_idx = 0

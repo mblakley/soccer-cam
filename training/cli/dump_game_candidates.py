@@ -76,6 +76,14 @@ def main() -> None:
         "training-scale balls; coordinates map back through warp.scale)",
     )
     ap.add_argument("--overlap", type=int, default=256)
+    ap.add_argument(
+        "--boundary-margin",
+        type=float,
+        default=0.0,
+        help="uniform px tolerance around ALL field boundaries (end lines behind "
+        "goals + dome above the far line) so out-of-play exits stay detectable "
+        "and the OOB/aerial physics can engage. 0 = legacy far-touchline margin only",
+    )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
@@ -94,6 +102,7 @@ def main() -> None:
     from training.data_prep.warped_dataset import resolve_video_rotation
     from training.models.heatmap_net import HeatmapNet
     from training.world_model.eval import extract_peaks
+    from video_grouper.inference.iso_warp import expand_polygon
 
     gd = Path(args.game_dir)
     out = Path(args.out)
@@ -126,7 +135,9 @@ def main() -> None:
     with av.open(str(probe_path)) as probe:
         vs = probe.streams.video[0]
         sw, sh = vs.codec_context.width, vs.codec_context.height
-    far_poly = _far_margin_polygon(gj["field_polygon"], 400.0)
+    far_poly = expand_polygon(
+        _far_margin_polygon(gj["field_polygon"], 400.0), args.boundary_margin
+    )
     warp = _native_iso_warp(far_poly, sw, sh, args.angular_norm_width)
     bh, bw = warp.shape
     mpoly = warp.points(far_poly).astype(np.int32)

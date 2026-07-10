@@ -68,6 +68,11 @@ class BallDetectStepConfig(BaseModel):
     # the optional isotropic band width (cross-camera ball-size normalization;
     # None = native resolution).
     detect_far_margin: float = 400.0
+    # Uniform tolerance around ALL field boundaries (end lines behind the goals +
+    # dome above the far line) so out-of-play exits — corners popped behind the
+    # goal, goal kicks arcing out the top — stay detectable and the OOB/aerial
+    # physics can engage. 0 = legacy (far-touchline margin only).
+    detect_boundary_margin: float = 0.0
     detect_target_width: int | None = None
 
 
@@ -105,6 +110,7 @@ def _run_detection_with_session(
         tile_w=cfg.detect_tile_w,
         overlap=cfg.detect_overlap,
         far_margin=cfg.detect_far_margin,
+        boundary_margin=cfg.detect_boundary_margin,
         target_width=cfg.detect_target_width,
     )
     artifact = {

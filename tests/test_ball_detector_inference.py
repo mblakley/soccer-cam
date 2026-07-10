@@ -12,6 +12,7 @@ from video_grouper.inference.ball_detector import (
 from video_grouper.inference.iso_warp import (
     CropIsoWarp,
     band_mask,
+    expand_polygon,
     far_margin_polygon,
     field_band_from_polygon,
     native_iso_warp,
@@ -101,3 +102,38 @@ def test_band_coordinate_round_trip():
     mask = band_mask(warp, far)
     assert mask.shape == warp.shape
     assert mask.max() == 255
+
+
+def test_expand_polygon_widens_boundaries_for_oob():
+    """The end-line/dome margin: a behind-goal point outside the raw polygon lands
+    INSIDE the expanded polygon (so the detector can see out-of-play exits)."""
+    import cv2
+
+    poly = np.array(
+        [
+            [100, 1000],
+            [500, 1010],
+            [960, 1015],
+            [1420, 1010],
+            [1820, 1000],
+            [1600, 300],
+            [1280, 295],
+            [960, 290],
+            [640, 295],
+            [320, 300],
+        ],
+        float,
+    )
+    # a point just outside the right end line (behind the goal)
+    behind_goal = (1880.0, 950.0)
+    raw = cv2.pointPolygonTest(
+        poly.astype(np.float32).reshape(-1, 1, 2), behind_goal, False
+    )
+    assert raw < 0  # outside today
+    exp = expand_polygon(poly, 150.0)
+    now = cv2.pointPolygonTest(
+        exp.astype(np.float32).reshape(-1, 1, 2), behind_goal, False
+    )
+    assert now >= 0  # inside after the margin
+    # margin 0 is a no-op (legacy)
+    np.testing.assert_allclose(expand_polygon(poly, 0.0), poly)
