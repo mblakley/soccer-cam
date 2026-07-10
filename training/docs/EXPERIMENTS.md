@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-36: Dahua investigation — angular-norm is a wash + the Dahua benchmark is MISALIGNED (2026-07-10)
+
+**Trigger (Mark):** Dahua campath scores are poor (Chili planned-view .297, Spencerport-Dahua .416
+vs Reolink ~.82). Two hypotheses on the table: (a) far-side balls are sub-training-scale on the
+4096-wide Dahua pano, fixable by isotropic up-scaling ("angular normalization"); (b) it's venue
+diversity, not scale (the distill finding). Experiments on Chili-Dahua, off cached dumps + a
+16-frame sample.
+
+**Result 1 — angular norm ≈ wash at the CANDIDATE level.** Decomposing the campath score into
+detector-recall vs selection, on the tier-B GT frames: native 4096 candidate recall R5m **.179**
+(R2m .072, GT-candidate median score-rank 11); norm-7680 R5m **.170** (R2m .081, median rank **7**).
+Upscaling helps rank + tight-recall marginally but does NOT raise R5m — the ball is absent from the
+candidate set either way ~82% of the time. Campath planned-view .297 -> .203 with norm (small
+sample). **Angular normalization is not the Dahua fix** (supports hypothesis b).
+
+**Result 2 — the Dahua tier-B benchmark is temporally MISALIGNED (the load-bearing finding).**
+Offset sweep of GT-vs-candidate recall: global peak at delta ~= -300 frames (.206) not 0 (.177),
+and PER-SEGMENT best offsets vary wildly (+256, -104, +320, +296) — i.e. no single global shift
+fixes it; the autocam-viewport sidecar and our segment-decode index diverge per segment. Vision
+gate: tier-B GT dots frequently sit on EMPTY GRASS (frames 79224/86008/106088), not a visible ball.
+Orientation flips (h/v/rot180) all score WORSE than identity, so it is not a coordinate-frame flip.
+**Conclusion: every Dahua score to date (.29/.41) is substantially a benchmark artifact, not a pure
+detector deficit** — consistent with the EXP-DIST-16 viewport-alignment caveat, now confirmed on
+Dahua specifically. No Dahua detector/selector number is trustworthy until the per-segment benchmark
+alignment is rebuilt.
+
+**Conclusion / next.** Park angular-norm (no candidate-level win). Dahua remains Reolink-minority
+(policy: [[reolink_primary_dahua_artifacts]]); a Dahua push is only worth it AFTER the per-segment
+benchmark realignment — otherwise we optimize against noise. (External-detector face-off ran on the
+same 16 frames; kept in F:rchive\OnceAutocam per the no-RE-in-repo rule.)
+
 ## EXP-DIST-35b: restart-spot priors — end-line exits re-enter at the goal kick / corners (2026-07-09)
 
 **Trigger:** Iron's OOB stretches are long retrievals past the END line (-300..-500 px) where the
