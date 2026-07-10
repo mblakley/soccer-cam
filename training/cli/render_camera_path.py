@@ -78,7 +78,9 @@ def main() -> None:
 
     cfg = RenderStepConfig(
         render_zoom_scale=1.0,  # planner pre-applied the AutoCam-matched 0.90
-        render_top_cap_deg=0.0,  # strict containment: never sample past the source top
+        # default 8-deg top cap RETAINED: AutoCam's own renders show the same bounded
+        # black cap when aiming up at far play — the alternative (strict containment)
+        # pins the ball to the frame top edge, which reads worse (Mark, first clip)
     )
     out_w, out_h = cfg.render_output_width, cfg.render_output_height
     geom = _resolve_geometry(src_w, src_h, cfg, polygon)
