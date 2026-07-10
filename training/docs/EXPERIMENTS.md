@@ -19,21 +19,33 @@ Upscaling helps rank + tight-recall marginally but does NOT raise R5m — the ba
 candidate set either way ~82% of the time. Campath planned-view .297 -> .203 with norm (small
 sample). **Angular normalization is not the Dahua fix** (supports hypothesis b).
 
-**Result 2 — the Dahua tier-B benchmark is temporally MISALIGNED (the load-bearing finding).**
-Offset sweep of GT-vs-candidate recall: global peak at delta ~= -300 frames (.206) not 0 (.177),
-and PER-SEGMENT best offsets vary wildly (+256, -104, +320, +296) — i.e. no single global shift
-fixes it; the autocam-viewport sidecar and our segment-decode index diverge per segment. Vision
-gate: tier-B GT dots frequently sit on EMPTY GRASS (frames 79224/86008/106088), not a visible ball.
-Orientation flips (h/v/rot180) all score WORSE than identity, so it is not a coordinate-frame flip.
-**Conclusion: every Dahua score to date (.29/.41) is substantially a benchmark artifact, not a pure
-detector deficit** — consistent with the EXP-DIST-16 viewport-alignment caveat, now confirmed on
-Dahua specifically. No Dahua detector/selector number is trustworthy until the per-segment benchmark
-alignment is rebuilt.
+**Result 2 [CORRECTED 2026-07-10 same day — my first read was wrong].** I initially reported the
+Dahua benchmark as "temporally misaligned" from an offset sweep. **That was an error: noise-fitting a
+0.17-recall signal.** Direct indexing check settles it — the AutoCam sidecars map 1:1 onto our
+segments: seg NAMES match exactly (0 unmatched), and every segment's sidecar max frame index = our
+game.json frame count - 1 (25214 vs 25215, ...), i.e. clean 0-index-vs-count. **No offset, no
+per-segment drift.**
 
-**Conclusion / next.** Park angular-norm (no candidate-level win). Dahua remains Reolink-minority
-(policy: [[reolink_primary_dahua_artifacts]]); a Dahua push is only worth it AFTER the per-segment
-benchmark realignment — otherwise we optimize against noise. (External-detector face-off ran on the
-same 16 frames; kept in F:rchive\OnceAutocam per the no-RE-in-repo rule.)
+**The real finding — AutoCam's DETECTOR is itself unreliable on Dahua, so every AutoCam-derived GT is
+contaminated.** Same-frame head-to-head (Mark's method: AutoCam's decrypted-model detections from the
+marathon vs our candidate dump, verified-aligned global frames — no viewport, no benchmark):
+- AutoCam emits ~15.8 detections/frame (mean conf 0.13 = mostly junk); 14,899 frames carry a
+  high-conf(>0.5) detection, 37% of them OUTSIDE active play (guaranteed FPs — no ball in play).
+- Vision-adjudicated: AutoCam's confident + temporally-consistent "ball" sits on EMPTY GRASS at conf
+  **0.84 and 0.90**, even DURING active play (frames 61072, 77768) — the far-side Dahua ball is near-
+  invisible, so AutoCam locks onto grass/texture artifacts. Our detector correctly did NOT fire there.
+- So the low "recall/agreement" (candidate-set-contains-AutoCam-ball R5m .15) is partly US being
+  RIGHT (not matching AutoCam's hallucinations), not a detector deficit. The tier-B viewport
+  benchmark is built from these same AutoCam detections -> same contamination.
+
+**Conclusion.** (1) The angular-norm wash (Result 1) stands — it's a RELATIVE native-vs-norm A/B
+against the same GT, so "no improvement" holds even though the absolute numbers are contaminated.
+(2) We CANNOT evaluate our detector's true Dahua quality with existing data: both AutoCam-derived GT
+sources are unreliable because AutoCam itself fails on Dahua. (3) The ONLY path to a real Dahua
+answer is a small HUMAN far-label set on Dahua active-play frames (same tool as the Reolink sets).
+Dahua stays Reolink-minority ([[reolink_primary_dahua_artifacts]]); invest in Dahua labels only if
+Dahua support becomes a priority. (Head-to-head + external-detector artifacts in
+F:rchive\OnceAutocam per the no-RE-in-repo rule.)
 
 ## EXP-DIST-35b: restart-spot priors — end-line exits re-enter at the goal kick / corners (2026-07-09)
 
