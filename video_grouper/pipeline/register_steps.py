@@ -51,6 +51,13 @@ except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step track unavailable (%s: %s)", type(e).__name__, e)
 
 try:
+    from video_grouper.pipeline.steps import plan_camera  # noqa: F401
+except Exception as e:  # noqa: BLE001
+    logging.getLogger(__name__).warning(
+        "pipeline step 'plan_camera' unavailable: %s", e
+    )
+
+try:
     from video_grouper.pipeline.steps import render  # noqa: F401
 except Exception as e:  # noqa: BLE001
     logger.debug("pipeline: step render unavailable (%s: %s)", type(e).__name__, e)

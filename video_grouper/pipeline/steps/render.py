@@ -143,6 +143,10 @@ class RenderStepConfig(BaseModel):
     # detections are false positives (sideline / foreground clusters) that would otherwise
     # steer the camera onto empty space. No-op when no polygon is available.
     render_mask_offfield: bool = True
+    # DUMB-RENDERER MODE: manifest key of a camera_path/1 artifact (from the
+    # plan_camera step). When set, the internal camera brain is bypassed and the
+    # step executes the planner's per-frame commands (feasibility clamps only).
+    render_camera_path_key: str | None = None
     # Distance+velocity zoom curve (the calibrated broadcast zoom): far/slow → tight,
     # near OR fast → wide. hfov = base + min(speed/norm,1)·speed_gain + depth·depth_gain,
     # clamped. ``depth`` is the ball's field depth (0 far touchline → 1 near), ``speed``
@@ -877,16 +881,34 @@ def _frame_view(
     src_h,
     out_w,
     out_h,
+    command: tuple[float, float, float] | None = None,
 ) -> tuple[CylindricalViewParams, float]:
     """One frame's camera solve → ``(CylindricalViewParams, view_yaw_deg)``.
 
     Shared by the single-output and multi-output render loops so they stay identical:
     ball-following pan/pitch/zoom (``_tick``), then polygon world-up leveling + cap-aware
     vertical framing (``_solve_framing``) when auto-level is on.
+
+    ``command`` = a camera_path/1 row ``(center_x_px, center_y_px, hfov_deg)`` from the
+    upstream planner (dumb-renderer mode, 2026-07-09): the internal ball-following
+    brain (``_tick``) is bypassed entirely — the renderer executes the command and
+    enforces ONLY projection feasibility (yaw/pitch clamps, cap-aware framing,
+    leveling). The command's hfov is final: the planner pre-applies the calibrated
+    zoom scale, so it is divided back out of the params-stage multiply.
     """
-    yaw, pitch, view_hfov = _tick(
-        state, entry, src_w, src_h, geom, mode, cfg, yaw_min, yaw_max, homography
-    )
+    if command is not None:
+        cx, cy, cmd_hfov = command
+        yaw, pitch = pixel_to_yaw_pitch(
+            float(cx), float(cy), src_w, src_h, geom.src_hfov_deg
+        )
+        yaw = max(yaw_min, min(yaw_max, yaw))
+        lim = float(getattr(geom, "pitch_limit_deg", 90.0))
+        pitch = max(-lim, min(lim, pitch))
+        view_hfov = float(cmd_hfov) / max(cfg.render_zoom_scale, 1e-6)
+    else:
+        yaw, pitch, view_hfov = _tick(
+            state, entry, src_w, src_h, geom, mode, cfg, yaw_min, yaw_max, homography
+        )
     if geom.world_up is not None:
         ball_row = yaw_pitch_to_pixel(yaw, pitch, src_w, src_h, geom.src_hfov_deg)[1]
         view_pitch_offset, view_hfov = _solve_framing(
@@ -923,11 +945,14 @@ def _frame_view(
 def _render_video(
     input_path: str,
     output_path: str,
-    trajectory_path: str,
+    trajectory_path: str | None,
     field_polygon_path: str | None,
     cfg: RenderStepConfig,
+    camera_path_file: str | None = None,
 ) -> None:
-    """Sync helper: per-frame cylindrical render with the broadcast control logic."""
+    """Sync helper: per-frame cylindrical render with the broadcast control logic —
+    or, when ``camera_path_file`` is given, pure execution of the planner's commands
+    (dumb-renderer mode)."""
     import av
 
     from video_grouper.inference.field_geometry import field_lateral_yaw_extent
@@ -936,9 +961,19 @@ def _render_video(
     out_w = cfg.render_output_width
     out_h = cfg.render_output_height
 
-    with open(trajectory_path, encoding="utf-8") as f:
-        raw_trajectory = json.load(f)
-    entries = compute_entries(raw_trajectory, mode.velocity_ema)
+    commands: list | None = None
+    cmd_g0 = 0
+    if camera_path_file is not None:
+        with open(camera_path_file, encoding="utf-8") as f:
+            art = json.load(f)
+        commands = art["frames"]
+        cmd_g0 = int(art.get("g_start", 0))
+        entries = []
+    else:
+        assert trajectory_path is not None
+        with open(trajectory_path, encoding="utf-8") as f:
+            raw_trajectory = json.load(f)
+        entries = compute_entries(raw_trajectory, mode.velocity_ema)
 
     polygon, homography = _load_field(field_polygon_path)
 
@@ -1021,6 +1056,11 @@ def _render_video(
                     # stream's packets, so the frames are VideoFrames.
                     for frame in cast("list[VideoFrame]", packet.decode()):
                         entry = entries[frame_idx] if frame_idx < len(entries) else None
+                        command = None
+                        if commands is not None:
+                            ci = frame_idx - cmd_g0
+                            if 0 <= ci < len(commands):
+                                command = commands[ci]
                         params, view_yaw = _frame_view(
                             state,
                             entry,
@@ -1034,6 +1074,7 @@ def _render_video(
                             src_h,
                             out_w,
                             out_h,
+                            command=command,
                         )
                         # AutoCam-format per-frame viewport line: where the
                         # centre of this output frame points in source pixels.
@@ -1221,6 +1262,12 @@ class RenderStep(PipelineStep[RenderStepConfig]):
         # Optional: a field-detect step upstream supplies the ROI polygon used
         # for pan clamping + vertical geometry. Absent ⇒ unconstrained pan.
         field_polygon_path = manifest.get("field_polygon_path")
+        # Dumb-renderer mode: execute the plan_camera step's command stream
+        camera_path_file = (
+            manifest.get(self.config.render_camera_path_key)
+            if self.config.render_camera_path_key
+            else None
+        )
 
         await asyncio.to_thread(
             _render_video,
@@ -1229,8 +1276,13 @@ class RenderStep(PipelineStep[RenderStepConfig]):
             trajectory_path,
             field_polygon_path,
             self.config,
+            camera_path_file,
         )
-        logger.info("render: wrote broadcast-style output to %s", out_path)
+        logger.info(
+            "render: wrote broadcast-style output to %s%s",
+            out_path,
+            " (camera-path mode)" if camera_path_file else "",
+        )
         return True
 
 
