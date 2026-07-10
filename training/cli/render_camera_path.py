@@ -98,6 +98,7 @@ def main() -> None:
 
     want = set(range(args.start_g, args.end_g))
     n_done = 0
+    last_good = None
     with av.open(args.out, mode="w") as out_c:
         stream = out_c.add_stream("h264", rate=int(round(fps)))
         stream.width = out_w
@@ -116,6 +117,11 @@ def main() -> None:
                 float(cx), float(cy), src_w, src_h, geom.src_hfov_deg
             )
             yaw = float(np.clip(yaw, yaw_min, yaw_max))  # feasibility clamp
+            # pitch clamp: the render branch does this inside its control loop; a
+            # dumb renderer must enforce it itself or extreme commands aim the
+            # crop box fully off-pano (empty-slice cv2.resize crash, full render)
+            lim = float(getattr(geom, "pitch_limit_deg", 90.0))
+            pitch = float(np.clip(pitch, -lim, lim))
             view_hfov = float(hfov)
             if geom.world_up is not None:
                 ball_row = yaw_pitch_to_pixel(
@@ -151,7 +157,13 @@ def main() -> None:
                 view_roll_deg=round(float(view_roll), 2),
             )
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            rendered = _warp_frame(rgb, geom, cfg, params, round(yaw, 1), warper)
+            try:
+                rendered = _warp_frame(rgb, geom, cfg, params, round(yaw, 1), warper)
+                last_good = rendered
+            except cv2.error:
+                if last_good is None:
+                    continue  # nothing to freeze yet
+                rendered = last_good  # freeze-frame beats killing an hours-long render
             frame = av.VideoFrame.from_ndarray(rendered, format="rgb24")
             frame.pts = n_done
             for pkt in stream.encode(frame):
