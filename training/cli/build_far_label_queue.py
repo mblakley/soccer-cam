@@ -724,7 +724,9 @@ def main() -> None:
                     )
                     e["hint_conf"] = round(float(rows[0][2]), 3)
     elif args.criteria == "kick":
-        from training.world_model.reranker import rerank
+        from dataclasses import replace
+
+        from training.world_model.reranker import RerankConfig, rerank
         from training.world_model.tbd import Candidate
 
         cand_frames = [
@@ -735,7 +737,13 @@ def main() -> None:
             for g in ef
         ]
         gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
-        sel_track = rerank(cand_frames, geom, frame_gaps=gaps)
+        # physical transitions (phys_sigma_px>0) so the track actually MISSES on a
+        # fast kick — the default loose budget never misses (the whole flight is one
+        # free hop), which is why a plain rerank finds zero kick/loss events.
+        kcfg = replace(
+            RerankConfig(), alpha=1.0, static_w=2.0, motion_w=0.0, phys_sigma_px=5.0
+        )
+        sel_track = rerank(cand_frames, geom, frame_gaps=gaps, config=kcfg)
         ecap = max(1, args.max_frames // (args.kick_lead + args.kick_trail + 6))
         frames = select_kick_frames(
             ef,
