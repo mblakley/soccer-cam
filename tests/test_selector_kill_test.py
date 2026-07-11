@@ -412,39 +412,36 @@ class TestNearQueue:
     def test_select_near_frames(self):
         from training.cli.build_far_label_queue import select_near_frames
 
-        geom = _geom()
-        # near touchline (y~950) has a big expected diameter, far line (y~250) small
-        exp_near = float(
-            geom.expected_ball_diameter_px(np.asarray([[1000.0, 950.0]]))[0]
-        )
-        exp_far = float(
-            geom.expected_ball_diameter_px(np.asarray([[1000.0, 250.0]]))[0]
-        )
-        assert exp_near > exp_far
-        near_px = (exp_near + exp_far) / 2.0
+        geom = _geom()  # near touchline y=1000, far line y=200 (depth span 800)
         ef = [0, 8, 16, 24, 32]
         cands = {
-            # teacher ball (idx 1) OUTSCORED by a distractor -> near_misrank
+            # teacher ball (idx 1) near the touchline, OUTSCORED by a distractor
+            # -> near_misrank
             0: [(500.0, 950.0, 0.9), (1000.0, 950.0, 0.6)],
-            # teacher ball already top-scored -> skipped
+            # teacher ball near AND already top-scored -> near_close
             8: [(1000.0, 950.0, 0.9), (500.0, 950.0, 0.5)],
-            # no teacher coverage, near candidates exist -> near_unknown
+            # no teacher coverage (a near PLAYER, not a ball) -> skipped
             16: [(900.0, 950.0, 0.7)],
-            # teacher ball is FAR -> skipped
+            # teacher ball is FAR (low depth) -> skipped
             24: [(1000.0, 250.0, 0.4), (900.0, 950.0, 0.3)],
-            # misrank but excluded (already human-labeled)
+            # near-touchline misrank but excluded (already human-labeled)
             32: [(500.0, 950.0, 0.9), (1000.0, 950.0, 0.6)],
         }
+        # labels keyed by INDEX into ef: (candidate_index, conf)
         labels = {0: (1, 1.0), 1: (0, 1.0), 3: (0, 1.0), 4: (1, 1.0)}
         out = select_near_frames(
-            ef, cands, labels, geom, near_px=near_px, target=10, exclude={32}
+            ef, cands, labels, geom, near_depth=0.55, target=10, exclude={32}
         )
         by_reason = {e["reason"]: e for e in out}
-        assert set(by_reason) == {"near_misrank", "near_unknown"}
+        # position-based: teacher ball near the touchline is surfaced; a demoted
+        # ball is near_misrank, a top-scored one near_close. no-teacher (16) and
+        # far (24) frames are dropped, 32 is excluded.
+        assert set(by_reason) == {"near_misrank", "near_close"}
+        assert {e["frame_idx"] for e in out} == {0, 8}
         mr = by_reason["near_misrank"]
         assert mr["frame_idx"] == 0 and mr["hint_x"] == 1000.0  # hint = teacher ball
         assert mr["autocam"] is True
-        assert by_reason["near_unknown"]["frame_idx"] == 16
+        assert by_reason["near_close"]["frame_idx"] == 8
 
     def test_spread_bins_keeps_best_per_bin(self):
         from training.cli.build_far_label_queue import _spread_bins

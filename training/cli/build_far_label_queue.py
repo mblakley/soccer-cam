@@ -97,8 +97,9 @@ def select_near_frames(
     1 = near touchline) ``>= near_depth`` and ranks by image-y so the frontmost/closest
     ball wins each temporal bin (the touchline meets the frame edge at the front, where
     balls are biggest). ``near_misrank`` = the ball our detector also demoted below a
-    distractor; ``near_close`` = teacher-backed and top-ranked; ``near_unknown`` = a
-    near-touchline candidate with no teacher coverage.
+    distractor; ``near_close`` = teacher-backed and top-ranked. A near-band frame
+    with no teacher coverage is almost always a near PLAYER, not a ball, so it is
+    dropped rather than queued.
     """
     poly = np.asarray(getattr(geom, "polygon", np.zeros((0, 2))), float)
     if len(poly) >= 10:
