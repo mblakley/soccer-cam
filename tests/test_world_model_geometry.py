@@ -154,3 +154,28 @@ def test_support_works_on_real_human_polygon_regardless_of_homography():
     if not geom.valid:
         px = geom.expected_ball_diameter_px(np.array([[3800.0, 1100.0]]))[0]
         assert px == DEFAULT_FALLBACK_BALL_PX
+
+
+def test_realistic_detector_noise_stays_valid():
+    # Real detector touchline points are not exactly equally spaced, so a good
+    # polygon fits the idealized rectangle only coarsely. A good polygon with
+    # modest pixel noise must NOT be rejected — rejecting a real polygon collapses
+    # the whole metric tracker. Guards against re-tightening the reproj gate.
+    rng = np.random.RandomState(3)
+    poly = _make_polygon() + rng.uniform(-40.0, 40.0, (10, 2))
+    geom = build_field_geometry(poly, field_length_m=L, field_width_m=W)
+    assert geom.valid
+
+
+def test_reproj_gate_rejects_catastrophic_fit():
+    # A grossly-inconsistent polygon (one point flung far off the field plane)
+    # must be rejected and degrade to neutral geometry WITHOUT raising — proving
+    # the reprojection gate actually discriminates. It was previously a no-op
+    # self-inverse round-trip (poly->world->poly through h and inv(h)) that always
+    # passed regardless of fit.
+    poly = _make_polygon()
+    poly[7] = [poly[7, 0] + 4500.0, poly[7, 1] - 1200.0]
+    geom = build_field_geometry(poly, field_length_m=L, field_width_m=W)
+    assert not geom.valid
+    sizes = geom.expected_ball_diameter_px(np.array([[2000.0, 900.0]]))
+    assert np.allclose(sizes, DEFAULT_FALLBACK_BALL_PX)

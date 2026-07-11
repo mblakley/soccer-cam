@@ -59,9 +59,21 @@ DEFAULT_FALLBACK_BALL_PX = 8.0
 # sliver from a bad detection.
 MIN_POLYGON_AREA_PX = 50_000.0
 
-# Max acceptable mean reprojection error (px) of the 10 boundary points through
-# the fitted homography; above this the fit is rejected as unreliable.
-MAX_REPROJ_ERROR_PX = 60.0
+# Max acceptable mean reprojection error (px) of the assumed equal-spaced world
+# rectangle mapped back through the fitted homography vs the actual polygon; above
+# this the fit is rejected as unusable and geometry degrades to neutral.
+#
+# CALIBRATION (measured on real held-out polygons, 2026-07-11): the detector's 10
+# touchline points are NOT at exact 0.25 intervals, so even a GOOD polygon fits the
+# idealized equal-spaced rectangle only coarsely — ~250-500 px mean error — and
+# least-squares absorbs moderate corruption (heavy jitter still ~350-450 px). The
+# reprojection error therefore cannot separate a good polygon from a subtly-bad one;
+# it is a CATASTROPHE gate only. The threshold is set well above the good+corrupted
+# band so a real polygon is never wrongly rejected (which would collapse the whole
+# metric tracker), while singular / non-finite / absurd (>1000 px) fits still fall
+# back gracefully. A precise geometric sanity check (polygon ordering/convexity) is
+# a possible future upgrade if stronger rejection is needed.
+MAX_REPROJ_ERROR_PX = 1000.0
 
 
 def _apply_homography(h: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -270,12 +282,25 @@ def build_field_geometry(
         world = _touchline_world_points(field_length_m, field_width_m)
         h, _ = cv2.findHomography(poly_support, world, 0)
         if h is not None:
-            h_inv = np.linalg.inv(h)
-            reproj = _apply_homography(h_inv, _apply_homography(h, poly_support))
-            if np.all(np.isfinite(reproj)):
-                err = float(np.mean(np.linalg.norm(reproj - poly_support, axis=1)))
-                if err <= MAX_REPROJ_ERROR_PX:
-                    h_img2world, h_world2img = h, h_inv
+            try:
+                h_inv = np.linalg.inv(h)
+            except np.linalg.LinAlgError:
+                h_inv = None
+            if h_inv is not None:
+                # Measure the FIT quality: map the assumed equal-spaced world
+                # rectangle back to image through the fitted inverse and compare to
+                # the actual polygon (pixels, matching MAX_REPROJ_ERROR_PX). A
+                # crooked / mis-ordered / foreshortened polygon cannot match the
+                # rectangle, so its fit error is large and the homography is
+                # rejected (-> neutral geometry + uniform size prior).
+                # NB: round-tripping poly -> world -> poly through h and its own
+                # algebraic inverse is the identity (err ~ 1e-11) and measures
+                # nothing — it made this gate a no-op that always passed.
+                reproj = _apply_homography(h_inv, world)
+                if np.all(np.isfinite(reproj)):
+                    err = float(np.mean(np.linalg.norm(reproj - poly_support, axis=1)))
+                    if err <= MAX_REPROJ_ERROR_PX:
+                        h_img2world, h_world2img = h, h_inv
 
     return FieldGeometry(
         polygon=None if poly_support is None else poly_support.astype(np.float32),
