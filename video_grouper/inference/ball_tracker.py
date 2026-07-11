@@ -672,6 +672,42 @@ def rerank(
                                 trans -= cfg.bridge_w * _BAND_BONUS
                         elif x >= 0.15:  # no direction known: rate-band only
                             trans -= cfg.bridge_w * _BAND_BONUS
+                    # HARD teleport cap on ANY re-acquisition (Mark 2026-07-11): a ball
+                    # can't cross the field during a miss. Forbid re-acquiring beyond the
+                    # physics bound UNLESS it's a legit OOB re-entry (near the pinned exit)
+                    # or aerial landing (within the ballistic cone). Without this, an OOB
+                    # miss (exit ray hit one edge) leaves a FAR grab on the OPPOSITE side
+                    # at only the base cost (Spencerport 0:28: an 81 m near-touchline grab).
+                    if (
+                        j != k
+                        and i == kp
+                        and mw_prev is not None
+                        and cfg.reacq_cap_max_m > 0
+                    ):
+                        rd = math.hypot(*(fw[t][j] - mw_prev))
+                        cap = min(
+                            cfg.ball_vmax_mpf * (mdur_prev + gap)
+                            + cfg.reacq_cap_base_m,
+                            cfg.reacq_cap_max_m,
+                        )
+                        if rd > cap:
+                            legit = False
+                            if moob_prev is not None:
+                                cone = min(
+                                    _OOB_BASE_M + _OOB_SPREAD_MPF * (mdur_prev + gap),
+                                    _OOB_CAP_M,
+                                )
+                                dpin = float(
+                                    np.linalg.norm(moob_prev - fw[t][j], axis=1).min()
+                                )
+                                legit = dpin <= cone
+                            if not legit and mv_prev is not None:
+                                land = mw_prev + mv_prev * (mdur_prev + gap)
+                                legit = math.hypot(*(fw[t][j] - land)) <= (
+                                    _CONE_BASE_M + _CONE_SPREAD_MPF * (mdur_prev + gap)
+                                )
+                            if not legit:
+                                continue  # teleport forbidden
                 elif cfg.phys_sigma_px > 0:
                     # physical: real ball motion + depth-dependent measurement noise
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
@@ -701,28 +737,19 @@ def rerank(
                         oob_reentry = dp <= cone
                     if not oob_reentry:
                         trans += cfg.offfield_penalty
-                # RE-ACQUISITION of a ball lost IN-FIELD (not OOB, not aerial). A ground
-                # ball reappears NEAR where it was lost, so (1) hard-forbid a far
-                # re-acquisition — a distractor TELEPORT the physical gate misses because
-                # it routes through the miss state — and (2) softly bias toward the loss
-                # point within the cap.
+                # RE-ACQUISITION distance BIAS for a ball lost in-field (not OOB, not
+                # aerial): softly hold near the loss point (the hard teleport cap above
+                # already forbade the far grabs).
                 if (
                     j != k
                     and i == kp
+                    and cfg.reacq_dist_w > 0
                     and mw_prev is not None
                     and moob_prev is None
                     and mv_prev is None
                 ):
                     reacq_d = math.hypot(*(fw[t][j] - mw_prev))
-                    if cfg.reacq_cap_max_m > 0:
-                        cap = min(
-                            cfg.ball_vmax_mpf * (mdur_prev + gap)
-                            + cfg.reacq_cap_base_m,
-                            cfg.reacq_cap_max_m,
-                        )
-                        if reacq_d > cap:
-                            continue  # teleport forbidden -> stay MISS / take a nearer cand
-                    if cfg.reacq_dist_w > 0 and reacq_d > cfg.reacq_free_m:
+                    if reacq_d > cfg.reacq_free_m:
                         trans += cfg.reacq_dist_w * (reacq_d - cfg.reacq_free_m)
                 v = cost[t - 1][i] + trans
                 if v < best:
