@@ -655,6 +655,10 @@ def rerank(
             for i in range(kp + 1):
                 if not np.isfinite(cost[t - 1][i]):
                     continue
+                # set when the aerial bridge judges this re-entry flight-consistent
+                # (a real landing, not a near reappearance) -> exempt from the
+                # hold-near-loss reacq distance penalty below.
+                aerial_consistent = False
                 if j == k or i == kp:
                     # to/from miss: allow coasting an occlusion
                     trans = _MISS_TRANS_COST
@@ -684,10 +688,13 @@ def rerank(
                             dp = math.hypot(*(fw[t][j] - land))
                             if dp <= _CONE_BASE_M + _CONE_SPREAD_MPF * dur:
                                 trans -= cfg.bridge_w * _CONE_BONUS
+                                aerial_consistent = True
                             elif x >= 0.15:
                                 trans -= cfg.bridge_w * _BAND_BONUS
+                                aerial_consistent = True
                         elif x >= 0.15:  # no direction known: rate-band only
                             trans -= cfg.bridge_w * _BAND_BONUS
+                            aerial_consistent = True
                     # HARD teleport cap on ANY re-acquisition (Mark 2026-07-11): a ball
                     # can't cross the field during a miss. Forbid re-acquiring beyond the
                     # physics bound UNLESS it's a legit OOB re-entry (near the pinned exit)
@@ -761,6 +768,7 @@ def rerank(
                     and mw_prev is not None
                     and moob_prev is None
                     and mv_prev is None
+                    and not aerial_consistent
                 ):
                     reacq_d = math.hypot(*(fw[t][j] - mw_prev))
                     if reacq_d > cfg.reacq_free_m:
