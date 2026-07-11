@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-41: position-based CLOSE-ball GT — 500 human labels across 14 venues (2026-07-10)
+
+**Trigger (Mark):** the aerial ball-loss at Spencerport 0:48 is a NEAR-detection failure — the
+detector drops big close balls (out of its far-trained scale). Fix = more near GT, "based on
+POSITION relative to the field outline, not size."
+
+**Miner (`build_far_label_queue --criteria near`, rewritten):** the geometric ball-size estimate is
+useless (an airborne ball reads 7.6px; the metric maxes ~23px game-wide and doesn't track visual
+size — the dump stores no actual blob size). Replaced with POSITION: gate the teacher-snap ball by
+depth to the near touchline (`--near-depth 0.55`, 1=touchline) and rank by image-y (frontmost=biggest,
+where the touchline meets the frame edge). Teacher-backed only (a no-teacher near candidate is a near
+PLAYER, not a ball). `--near-span` (default 1) — spans were tried but read as duplicates (near-identical
+consecutive frames, worsened by an out-of-order manifest bug, now fixed: frames always emitted in
+ascending frame_idx). A separate `--criteria kick` (fast in-field exit + gap, wide bracketed window)
+is wired for the pure-aerial arcs but needs the full selector track.
+
+**Result:** Mark labeled **500 close balls + 15 not_visible + 6 obscured + 2 out_of_play across 14
+training venues** (12 sets 100%), ~207 of them `near_misrank` (the detector demoted the ball below a
+distractor — the exact failure). "I love those, they are so easy." Held-out Spencerport/Iron-06.15
+excluded (validation). NEXT (EXP-DIST-42): retrain selector/detector with this gold and measure the
+held-out NEAR-band metric — does it move? Baseline near SELECTED is the open problem (EXP-DIST-19/20/29).
+
 ## EXP-DIST-40: aerial look-ahead interpolation bridge — NEGATIVE (no trustworthy landing) (2026-07-10)
 
 **Case (Spencerport ~0:48, verified on the YouTube source + decoded frames):** a keeper
