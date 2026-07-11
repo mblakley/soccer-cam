@@ -59,17 +59,30 @@ class Candidate:
 class RerankConfig:
     """Re-ranker weights.
 
-    Teleport defaults RAISED 2026-07-01/02 (EXP-DIST-17/20, cli/sweep_tracker on the distilled detector).
-    The old (vmax 2.5, max_jump 6.0) gate hard-EXCLUDED the true far candidate (meters-space is
-    ill-conditioned near the far touchline, so the real ball's world position jitters past a tight gate —
-    EXP-DIST-11's 82.5% far-exclusion); loosening it lifted far R15m 0.288 -> ~0.65 and cut median error
-    51 m -> 12 m. **Cross-validated on TWO held-out games** (Spencerport + Irondequoit): the first
-    single-game optimum (a0.3, mj40, v20) was Spencerport-overfit (Iron far 0.455 vs 0.727 at the tighter
-    a1.0/mj25); the robust choice across both is **alpha=1.0, max_jump=25, vmax=12** (Spc far 0.648/near
-    0.189; Iron far 0.727-0.545/near 0.312). alpha RAISED 0.3->1.0 because the hard-neg detector's scores
-    are now worth trusting (a0.3 underperforms on held-out Iron); a3.0 overshoots. static_w=2.0 unchanged
-    (cutting it hurt on both). Far target (AutoCam-dets->tracker 0.845) not yet reached; near (target
-    0.978) is the open problem — see EXP-DIST-19/20."""
+    SHIPPED CONFIG (what steps/ball_select.py runs and plan_camera_path replays):
+    a LEARNED emission (per-candidate ``-log p`` from the selector, passed in as
+    ``priors``) + static persistence + PHYSICAL transitions + aerial bridge +
+    out-of-bounds pin —
+        alpha=0.0, static_w=2.0, motion_w=0.0, phys_sigma_px=5.0, bridge_w=2.0,
+        oob_w=2.0  (plus the class defaults reacq_dist_w=0.07, reacq_cap_max_m=60).
+    The bare ``RerankConfig()`` DEFAULTS below are NOT that config: the step
+    overrides alpha/motion_w/phys_sigma_px/bridge_w/oob_w. In particular ``alpha``
+    defaults to 1.0 (the legacy detector-score reranker) while the shipped stack
+    sets ``alpha=0.0`` and lets the learned selector prior drive selection. Tune
+    the product via the ball_select step config / plan_camera_path flags, not
+    these defaults.
+
+    LEGACY-ONLY: ``vmax_m_per_frame`` / ``max_jump_m_per_frame`` are read ONLY on
+    the ``phys_sigma_px == 0`` branch (the pre-physics transition budget). With the
+    shipped ``phys_sigma_px=5.0`` the physical-transition branch always runs (gated
+    by ``ball_vmax_mpf`` + depth-dependent measurement noise), so those two fields
+    are inert in production.
+
+    History (EXP-DIST-11/17/20): the old (vmax 2.5, max_jump 6.0) legacy gate
+    hard-excluded the true far candidate (meters-space is ill-conditioned near the
+    far touchline — 82.5% far-exclusion); loosening to vmax=12/max_jump=25 lifted
+    far R15m 0.288 -> ~0.65. That whole budget was then superseded by the physical
+    transitions (``phys_sigma_px``), which model the far-field jitter directly."""
 
     vmax_m_per_frame: float = 12.0  # smoothness budget (scaled by the frame gap)
     max_jump_m_per_frame: float = 25.0  # hard teleport ceiling
@@ -634,7 +647,6 @@ def rerank(
         ct = np.full(k + 1, np.inf)
         bt = np.full(k + 1, -1, int)
         gap = max(1, gaps[t])
-        budget = cfg.vmax_m_per_frame * gap
         # local bindings so mypy can narrow the Optional miss-state reads at t-1
         mw_prev, mv_prev = missw[t - 1], missv[t - 1]
         moob_prev, mdur_prev = missoob[t - 1], missdur[t - 1]
@@ -720,6 +732,8 @@ def rerank(
                         continue  # not physical: route through the miss/bridge state
                     trans = (d / allow) ** 2
                 else:
+                    # legacy transition budget (only when phys_sigma_px == 0)
+                    budget = cfg.vmax_m_per_frame * gap
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
                     if d > cfg.max_jump_m_per_frame * gap:
                         continue  # teleport forbidden
