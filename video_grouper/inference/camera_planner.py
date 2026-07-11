@@ -145,7 +145,13 @@ def plan_camera(
             cx += a_pan * (tx - cx)
             cy += cfg.pitch_smoothing * (ty - cy)
         else:
-            # no information at all: hold bearing, ease to the widest view
+            # no information at all: hold bearing, ease to the widest view. Reset
+            # the velocity/prev state: upsample_track emits None across a wide
+            # blanked gap (e.g. halftime), and without this the first real frame
+            # after the gap reads the whole-break displacement (x - prev[0]) as a
+            # single frame's velocity and lurches the lead term to its cap.
+            prev = None
+            vx = vy = 0.0
             target_hfov = cfg.missing_hfov_deg
         hfov += cfg.zoom_smoothing * (target_hfov - hfov)
         out.append((float(cx), float(cy), float(hfov)))
