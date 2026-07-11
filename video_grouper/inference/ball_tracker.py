@@ -205,6 +205,12 @@ _OOB_BASE_M = 8.0  # re-entry cone radius at exit time (median measured 7.4 m)
 _OOB_SPREAD_MPF = 0.03  # cone growth per source frame out of play
 _OOB_CAP_M = 20.0  # cone ceiling (p90 measured 15 m)
 
+# MISS-STATE TRANSITION COSTS (Viterbi): base cost to enter/leave/extend the miss
+# state. Coasting a brief occlusion is cheap but not free; waiting out a pinned
+# out-of-bounds excursion is the correct behavior, not a guilty miss, so cheaper still.
+_MISS_TRANS_COST = 0.6  # to/from the miss state (allow coasting an occlusion)
+_OOB_COAST_TRANS_COST = 0.1  # holding at a pinned OOB crossing is nearly free
+
 
 def _world_polygon(geom: FieldGeometry) -> np.ndarray | None:
     poly = getattr(geom, "polygon", None)
@@ -650,11 +656,12 @@ def rerank(
                 if not np.isfinite(cost[t - 1][i]):
                     continue
                 if j == k or i == kp:
-                    trans = 0.6  # to/from miss: allow coasting an occlusion
+                    # to/from miss: allow coasting an occlusion
+                    trans = _MISS_TRANS_COST
                     if j == k and i == kp and cfg.oob_w > 0 and moob_prev is not None:
                         # pinned OUT-OF-BOUNDS: waiting at the boundary is the correct
                         # behavior, not a guilty miss — coasting is nearly free
-                        trans = 0.1
+                        trans = _OOB_COAST_TRANS_COST
                     if j != k and i == kp and cfg.oob_w > 0 and moob_prev is not None:
                         # out-of-bounds: expectation pinned at the crossing +
                         # rule-based restart spots (nearest one counts)
