@@ -139,9 +139,13 @@ class RerankConfig:
     # physical candidate->candidate gate does NOT cover miss->re-acquisition, so this
     # hard-forbids it. Cap = ball_vmax * miss-duration + base, ceilinged at cap_max.
     # OOB / aerial travel is exempt (their own re-entry cones handle legit far travel).
+    # cap_max tuned on the AutoCam-containment metric (Spencerport v6, stride-4): 30 was
+    # too tight (over-blocks legit far re-acquisitions after long misses — AutoCam-agree
+    # .334->.252); 60 kills the 0:28 teleport swing (13474px->1085px, off-field 58->0)
+    # while nudging agreement up (.334->.340). Duration-scaled below the ceiling.
     reacq_cap_base_m: float = 8.0  # slack over the ball-speed bound (m)
     reacq_cap_max_m: float = (
-        30.0  # absolute ceiling on in-field re-acquisition (0 = off)
+        60.0  # absolute ceiling on in-field re-acquisition (0 = off)
     )
     # AERIAL LOOK-AHEAD BRIDGE (Mark 2026-07-10): a punt/clearance leaves the ground
     # for seconds; the ball shrinks/leaves frame so the detector can't see it in
