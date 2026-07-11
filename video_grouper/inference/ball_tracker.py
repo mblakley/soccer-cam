@@ -66,26 +66,19 @@ class RerankConfig:
         alpha=0.0, static_w=2.0, motion_w=0.0, phys_sigma_px=5.0, bridge_w=2.0,
         oob_w=2.0  (plus the class defaults reacq_dist_w=0.07, reacq_cap_max_m=60).
     The bare ``RerankConfig()`` DEFAULTS below are NOT that config: the step
-    overrides alpha/motion_w/phys_sigma_px/bridge_w/oob_w. In particular ``alpha``
-    defaults to 1.0 (the legacy detector-score reranker) while the shipped stack
-    sets ``alpha=0.0`` and lets the learned selector prior drive selection. Tune
-    the product via the ball_select step config / plan_camera_path flags, not
-    these defaults.
+    overrides alpha/motion_w/bridge_w/oob_w. In particular ``alpha`` defaults to
+    1.0 (a plain detector-score reranker) while the shipped stack sets ``alpha=0.0``
+    and lets the learned selector prior drive selection. Tune the product via the
+    ball_select step config / plan_camera_path flags, not these defaults.
 
-    LEGACY-ONLY: ``vmax_m_per_frame`` / ``max_jump_m_per_frame`` are read ONLY on
-    the ``phys_sigma_px == 0`` branch (the pre-physics transition budget). With the
-    shipped ``phys_sigma_px=5.0`` the physical-transition branch always runs (gated
-    by ``ball_vmax_mpf`` + depth-dependent measurement noise), so those two fields
-    are inert in production.
+    TRANSITIONS: the sole candidate->candidate model is physical — a step is legal
+    only when its world distance fits real ball speed (``ball_vmax_mpf``) plus
+    depth-dependent measurement noise (``phys_sigma_px`` mapped through the local
+    homography Jacobian at both endpoints). Far positions may jitter tens of meters
+    (the homography is ill-conditioned near the far touchline) without unlocking
+    free teleports near the camera. ``phys_sigma_px=0`` drops the noise term, leaving
+    a pure ball-speed gate."""
 
-    History (EXP-DIST-11/17/20): the old (vmax 2.5, max_jump 6.0) legacy gate
-    hard-excluded the true far candidate (meters-space is ill-conditioned near the
-    far touchline — 82.5% far-exclusion); loosening to vmax=12/max_jump=25 lifted
-    far R15m 0.288 -> ~0.65. That whole budget was then superseded by the physical
-    transitions (``phys_sigma_px``), which model the far-field jitter directly."""
-
-    vmax_m_per_frame: float = 12.0  # smoothness budget (scaled by the frame gap)
-    max_jump_m_per_frame: float = 25.0  # hard teleport ceiling
     alpha: float = 1.0  # detector-score weight (raised 0.3->1.0 for the distilled detector, EXP-DIST-20)
     static_w: float = 2.0  # static-persistence penalty weight (the dominant lever)
     motion_w: float = 0.5  # motion-blob support bonus weight
@@ -101,17 +94,17 @@ class RerankConfig:
     # are penalised quadratically. bridge_w=0 = legacy flat re-entry (0.6, distance-blind).
     bridge_w: float = 0.0  # aerial-bridge shaping weight (0 = off)
     air_vmax_mpf: float = 2.0  # max plausible flight speed, world m per SOURCE frame
-    # PHYSICAL TRANSITIONS (EXP-DIST-31b): the legacy vmax/max_jump were raised to 12/25
-    # m-per-frame to survive far-band world jitter (EXP-DIST-11) — but at stride 8 that
-    # makes candidate hops nearly free (budget 96-200 m), so the path NEVER misses and
-    # the aerial machinery never engages (Chili full game: 0 miss entries, 1328
-    # teleports). Physical mode replaces the loose global budget with real ball physics
-    # plus DEPTH-DEPENDENT measurement noise: allowance = ball_vmax_mpf * gap +
-    # phys_sigma_px * (local m-per-px Jacobian at both endpoints). Far positions may
-    # jitter tens of meters (the homography is ill-conditioned there) without unlocking
-    # free teleports near the camera. phys_sigma_px = 0 keeps legacy transitions.
+    # PHYSICAL TRANSITIONS (EXP-DIST-31b): the sole candidate->candidate model. A
+    # loose global speed budget at stride 8 makes candidate hops nearly free (budget
+    # 96-200 m), so the path NEVER misses and the aerial machinery never engages
+    # (Chili full game: 0 miss entries, 1328 teleports). Instead this prices
+    # transitions by real ball physics plus DEPTH-DEPENDENT measurement noise:
+    # allowance = ball_vmax_mpf * gap + phys_sigma_px * (local m-per-px Jacobian at
+    # both endpoints). Far positions may jitter tens of meters (the homography is
+    # ill-conditioned there) without unlocking free teleports near the camera.
+    # phys_sigma_px = 0 drops the noise term (a pure ball-speed gate).
     phys_sigma_px: float = (
-        0.0  # px jitter mapped through the local Jacobian (0 = legacy)
+        5.0  # px jitter mapped through the local Jacobian (0 = pure ball-speed gate)
     )
     ball_vmax_mpf: float = 2.5  # real ball speed ceiling, world m per SOURCE frame
     oob_w: float = 0.0  # out-of-bounds pin weight (0 = off; see _OOB_* constants)
@@ -724,20 +717,16 @@ def rerank(
                                 )
                             if not legit:
                                 continue  # teleport forbidden
-                elif cfg.phys_sigma_px > 0:
+                else:
                     # physical: real ball motion + depth-dependent measurement noise
+                    # — the sole candidate->candidate model. allow = ball_vmax_mpf *
+                    # gap + fsig at both endpoints; fsig == 0 when phys_sigma_px == 0,
+                    # leaving a pure no-jitter ball-speed gate.
                     d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
                     allow = cfg.ball_vmax_mpf * gap + fsig[t][j] + fsig[t - 1][i]
                     if d > 3.0 * allow:
                         continue  # not physical: route through the miss/bridge state
                     trans = (d / allow) ** 2
-                else:
-                    # legacy transition budget (only when phys_sigma_px == 0)
-                    budget = cfg.vmax_m_per_frame * gap
-                    d = math.hypot(*(fw[t][j] - fw[t - 1][i]))
-                    if d > cfg.max_jump_m_per_frame * gap:
-                        continue  # teleport forbidden
-                    trans = (d / budget) ** 2
                 # OFF-FIELD STATE GATE (edge-directional): entering an off-field
                 # candidate is free as a CONTINUATION — the ball crossing out from an
                 # in-field predecessor, or continuing an already-off-field track

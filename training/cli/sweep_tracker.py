@@ -305,14 +305,12 @@ def main() -> None:
         "DEPTH-CAL argmax",
         *_score(dc_argmax, frames, ef, balls, geom, far_px, stride),
     )
-    dc_cfg = replace(
-        RerankConfig(), alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0
-    )
+    dc_cfg = replace(RerankConfig(), alpha=1.0, phys_sigma_px=5.0, ball_vmax_mpf=2.5)
     dc_track = kalman_smooth(
         rerank(dc_frames, geom, frame_gaps=gaps, config=dc_cfg), geom
     )
     line(
-        "DEPTH-CAL tracker a1 mj25 v12",
+        "DEPTH-CAL tracker a1 sig5 vmax2.5",
         *_score(dc_track, frames, ef, balls, geom, far_px, stride),
     )
 
@@ -333,16 +331,17 @@ def main() -> None:
         track = kalman_smooth(sel, geom) if use_kalman else sel
         line(name, *_score(track, frames, ef, balls, geom, far_px, stride))
 
-    run("baseline a0.3 mj6 v2.5", base)
-    # teleport x alpha grid (static_w kept at 2.0 — reducing it hurt)
+    run("baseline (defaults)", base)
+    # physics x alpha grid (static_w kept at 2.0 — reducing it hurt): sweep the
+    # measurement-noise jitter (phys_sigma_px) x real ball-speed ceiling (ball_vmax_mpf)
     for a in (0.3, 1.0, 3.0):
-        for mj, vm in ((15, 8), (25, 12), (40, 20)):
+        for sig, vmax in ((3.0, 2.5), (5.0, 2.5), (8.0, 3.5)):
             run(
-                f"a{a} mj{mj} v{vm}",
-                replace(base, alpha=a, max_jump_m_per_frame=mj, vmax_m_per_frame=vm),
+                f"a{a} sig{sig} vmax{vmax}",
+                replace(base, alpha=a, phys_sigma_px=sig, ball_vmax_mpf=vmax),
             )
     # Kalman ablation on a strong config — does the CV smoother drag NEAR picks off the ball?
-    strong = replace(base, alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0)
+    strong = replace(base, alpha=1.0, phys_sigma_px=5.0, ball_vmax_mpf=2.5)
     run("strong +kalman", strong, use_kalman=True)
     run("strong  NO-kalman", strong, use_kalman=False)
     # soft in-field prior (EXP-DIST-17 found a HARD gate useless — distractors were
@@ -351,12 +350,12 @@ def main() -> None:
     run("strong +support+dome", strong, prior="support_dome")
     # very loose (near-ungated) + trust detector — approaches argmax while keeping far coasting
     run(
-        "a3 mj80 v30 +kal",
-        replace(base, alpha=3.0, max_jump_m_per_frame=80.0, vmax_m_per_frame=30.0),
+        "a3 vmax30 +kal",
+        replace(base, alpha=3.0, phys_sigma_px=5.0, ball_vmax_mpf=30.0),
     )
     run(
-        "a3 mj80 v30 NO-kal",
-        replace(base, alpha=3.0, max_jump_m_per_frame=80.0, vmax_m_per_frame=30.0),
+        "a3 vmax30 NO-kal",
+        replace(base, alpha=3.0, phys_sigma_px=5.0, ball_vmax_mpf=30.0),
         use_kalman=False,
     )
 
@@ -364,7 +363,7 @@ def main() -> None:
     # argmax nails near, the global-smooth tracker drags it off), trust argmax; else the tracker (weak
     # far balls need continuity). Tests the near fix without a rerank change.
     print("\nconfidence-hybrid (argmax where max-score>=T, else tracker):")
-    strong = replace(base, alpha=1.0, max_jump_m_per_frame=25.0, vmax_m_per_frame=12.0)
+    strong = replace(base, alpha=1.0, phys_sigma_px=5.0, ball_vmax_mpf=2.5)
     strong_track = kalman_smooth(
         rerank(frames, geom, frame_gaps=gaps, config=strong), geom
     )

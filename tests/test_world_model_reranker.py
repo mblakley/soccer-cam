@@ -147,11 +147,12 @@ def test_rerank_identity_anchor_propagates_bidirectionally():
         frames.append([Candidate(*a, 0.9), Candidate(*b, 0.4)])
         a_track.append(a)
         b_track.append(b)
-    # the tracks are farther apart than the teleport gate allows -> switching mid-path
-    # is impossible, so an anchor decides the WHOLE path's identity
+    # the tracks are an order of magnitude farther apart than any legal one-frame
+    # continuation (ball_vmax + far-line jitter, gap 1) -> switching mid-path is gated
+    # out by the physical transition model, so an anchor decides the WHOLE path's identity
     aw = geom.image_to_world(np.asarray(a_track, float))
     bw = geom.image_to_world(np.asarray(b_track, float))
-    assert float(np.linalg.norm(aw[3] - bw[4])) > RerankConfig().max_jump_m_per_frame
+    assert float(np.linalg.norm(aw[3] - bw[4])) > 10.0 * RerankConfig().ball_vmax_mpf
 
     # unanchored, trusting score: the path follows the bright decoy
     # (persistence/motion off — this test isolates score + smoothness + anchor)
@@ -206,7 +207,13 @@ def test_rerank_aerial_bridge_prefers_flight_consistent_landing():
         )
     gaps = [8] * len(frames)
     # isolate score + transitions; tight vmax so a mid-landing E<->B hop can't pay
-    iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+    iso = {
+        "alpha": 1.0,
+        "static_w": 0.0,
+        "motion_w": 0.0,
+        "phys_sigma_px": 0.0,
+        "ball_vmax_mpf": 3.0,
+    }
 
     legacy = rerank(frames, geom, frame_gaps=gaps, config=RerankConfig(**iso))
     assert legacy[6][0] == pytest.approx(E[0])  # distance-blind: takes the phantom
@@ -259,7 +266,13 @@ def test_rerank_aerial_bridge_ballistic_cone_uses_launch_direction():
             ]
         )
     gaps = [8] * len(frames)
-    iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+    iso = {
+        "alpha": 1.0,
+        "static_w": 0.0,
+        "motion_w": 0.0,
+        "phys_sigma_px": 0.0,
+        "ball_vmax_mpf": 3.0,
+    }
 
     bridged = rerank(
         frames, geom, frame_gaps=gaps, config=RerankConfig(**iso, bridge_w=2.0)
@@ -284,12 +297,12 @@ def test_rerank_aerial_bridge_ballistic_cone_uses_launch_direction():
     assert blind[6][0] == pytest.approx(bwd[0] if 6 in blind else bwd[0])
 
 
-def test_rerank_physical_transitions_restore_ground_speed_budget():
-    """EXP-DIST-31b: legacy budgets (vmax 12 / max_jump 25 m-per-frame, scaled by the
-    stride gap) make a 41 m instant hop nearly free at gap 8, so the path chases any
-    bright distractor. Physical mode prices transitions by REAL ball speed plus
-    depth-dependent measurement noise — the hop becomes unaffordable, while a
-    plausible step at the far line stays allowed."""
+def test_rerank_physical_transitions_reject_impossible_ground_hop():
+    """EXP-DIST-31b: the sole candidate->candidate model prices transitions by REAL ball
+    speed plus depth-dependent measurement noise. A 41 m instant hop at gap 8 is not a
+    ball: the default gate rejects it (the path takes the ~1 m rolling step), whereas a
+    loose ball-speed ceiling would chase the bright distractor. A plausible ~13 m step at
+    the far line (world jitter + real motion) stays affordable under the default gate."""
     geom = build_field_geometry(np.asarray(_POLY, float))
     iso = {"alpha": 1.0, "static_w": 0.0, "motion_w": 0.0}
     A = (3000.0, 1350.0)
@@ -299,26 +312,20 @@ def test_rerank_physical_transitions_restore_ground_speed_budget():
         [Candidate(*A, 0.5)],
         [Candidate(*near, 0.4), Candidate(*B, 0.9)],
     ]
-    legacy = rerank(frames, geom, frame_gaps=[8, 8], config=RerankConfig(**iso))
-    assert legacy[1][0] == pytest.approx(B[0])  # loose budget: takes the bright hop
-
-    phys = rerank(
-        frames,
-        geom,
-        frame_gaps=[8, 8],
-        config=RerankConfig(**iso, phys_sigma_px=5.0),
+    # a loose ball-speed ceiling makes the 41 m hop affordable -> chases the bright one
+    loose = rerank(
+        frames, geom, frame_gaps=[8, 8], config=RerankConfig(**iso, ball_vmax_mpf=30.0)
     )
-    assert phys[1][0] == pytest.approx(near[0])  # 41 m in 8 frames is not a ball
+    assert loose[1][0] == pytest.approx(B[0])
+
+    # the default physical gate: 41 m in 8 frames is not a ball -> takes the rolling step
+    phys = rerank(frames, geom, frame_gaps=[8, 8], config=RerankConfig(**iso))
+    assert phys[1][0] == pytest.approx(near[0])
 
     # far line: a 13 m step (world jitter + real motion) must remain affordable
     f1, f2 = (3800.0, 260.0), (4200.0, 250.0)
     far_frames = [[Candidate(*f1, 0.5)], [Candidate(*f2, 0.5)]]
-    far = rerank(
-        far_frames,
-        geom,
-        frame_gaps=[8, 8],
-        config=RerankConfig(**iso, phys_sigma_px=5.0),
-    )
+    far = rerank(far_frames, geom, frame_gaps=[8, 8], config=RerankConfig(**iso))
     assert 1 in far and far[1][0] == pytest.approx(f2[0])
 
 
@@ -353,7 +360,13 @@ def test_rerank_oob_pin_holds_the_boundary_and_reacquires_at_the_crossing():
                 float,
             )
         )
-    iso = {"alpha": 0.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+    iso = {
+        "alpha": 0.0,
+        "static_w": 0.0,
+        "motion_w": 0.0,
+        "phys_sigma_px": 0.0,
+        "ball_vmax_mpf": 3.0,
+    }
 
     free = rerank(
         frames, geom, frame_gaps=gaps, priors=priors, config=RerankConfig(**iso)
@@ -414,7 +427,13 @@ def test_rerank_oob_endline_restart_spots_cover_goal_kick():
         np.asarray([0.95 if c.x == distract[0] else 0.3 for c in fr], float)
         for fr in frames
     ]
-    iso = {"alpha": 0.0, "static_w": 0.0, "motion_w": 0.0, "vmax_m_per_frame": 3.0}
+    iso = {
+        "alpha": 0.0,
+        "static_w": 0.0,
+        "motion_w": 0.0,
+        "phys_sigma_px": 0.0,
+        "ball_vmax_mpf": 3.0,
+    }
     pinned = rerank(
         frames,
         geom,
