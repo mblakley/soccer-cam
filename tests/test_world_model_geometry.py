@@ -179,3 +179,14 @@ def test_reproj_gate_rejects_catastrophic_fit():
     assert not geom.valid
     sizes = geom.expected_ball_diameter_px(np.array([[2000.0, 900.0]]))
     assert np.allclose(sizes, DEFAULT_FALLBACK_BALL_PX)
+
+
+def test_apply_homography_negative_near_zero_w_is_finite():
+    # A tiny NEGATIVE denominator previously collapsed to exactly 0.0
+    # (np.sign(w)*1e-12 + 1e-12) -> inf/nan, the failure the guard exists to
+    # prevent. The guard must preserve sign and keep the result finite.
+    from video_grouper.inference.world_geometry import _apply_homography
+
+    h = np.array([[1.0, 0.0, 10.0], [0.0, 1.0, 20.0], [0.0, 0.0, -5e-13]])
+    out = _apply_homography(h, np.array([[0.0, 0.0]]))
+    assert np.all(np.isfinite(out))

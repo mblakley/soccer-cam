@@ -86,8 +86,10 @@ def _apply_homography(h: np.ndarray, pts: np.ndarray) -> np.ndarray:
     hom = np.concatenate([pts, np.ones((pts.shape[0], 1))], axis=1) @ h.T
     w = hom[:, 2:3]
     # Guard against division by ~0 at the horizon (points on the field never hit
-    # this, but a caller may probe outside the field).
-    w = np.where(np.abs(w) < 1e-12, np.sign(w) * 1e-12 + 1e-12, w)
+    # this, but a caller may probe outside the field). Preserve sign: for a small
+    # NEGATIVE w, np.sign(w)*1e-12 + 1e-12 collapsed to exactly 0.0 -> inf/nan,
+    # the very failure this guard exists to prevent.
+    w = np.where(np.abs(w) < 1e-12, np.where(w < 0.0, -1e-12, 1e-12), w)
     return hom[:, :2] / w
 
 
