@@ -184,6 +184,9 @@ def export_selector_npz(pt_path, npz_path) -> None:
     """
     import numpy as np  # noqa: PLC0415
 
+    from video_grouper.inference.ball_selector import (
+        FEATURE_NAMES,
+    )
     from video_grouper.inference.ball_selector import (  # noqa: PLC0415
         SelectorNet as NpSelectorNet,
     )
@@ -207,6 +210,9 @@ def export_selector_npz(pt_path, npz_path) -> None:
         "none_b": sd["none_head.bias"],
         "temperature": np.float32(sd["temperature"].reshape(())),
         "keep": np.asarray(keep, bool),
+        # Embed the feature schema so load_selector can reject a same-length
+        # FEATURE_NAMES reorder that would silently misalign the keep mask.
+        "feature_names": np.asarray(FEATURE_NAMES),
     }
     np_net = NpSelectorNet(
         w0=arrays["w0"],

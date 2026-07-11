@@ -124,3 +124,40 @@ def test_load_selector_round_trip(tmp_path):
     np.testing.assert_allclose(
         predict_probs(loaded, feats, mask), predict_probs(net, feats, mask), atol=1e-6
     )
+
+
+def _save_net(p, net, **extra):
+    np.savez(
+        p,
+        schema="selector_net_npz/1",
+        w0=net.w0,
+        b0=net.b0,
+        w1=net.w1,
+        b1=net.b1,
+        w2=net.w2,
+        b2=net.b2,
+        head_w=net.head_w,
+        head_b=net.head_b,
+        none_w=net.none_w,
+        none_b=net.none_b,
+        temperature=np.float32(net.temperature),
+        keep=net.keep,
+        **extra,
+    )
+
+
+def test_load_selector_accepts_matching_feature_schema(tmp_path):
+    net = _tiny_net()
+    p = tmp_path / "ok.npz"
+    _save_net(p, net, feature_names=np.asarray(FEATURE_NAMES))
+    assert load_selector(p).keep.shape == net.keep.shape  # matching schema loads
+
+
+def test_load_selector_rejects_reordered_feature_schema(tmp_path):
+    # A same-length REORDER of FEATURE_NAMES would silently misalign the keep mask;
+    # the embedded feature_names must make it a hard error.
+    net = _tiny_net()
+    p = tmp_path / "reordered.npz"
+    _save_net(p, net, feature_names=np.asarray(tuple(reversed(FEATURE_NAMES))))
+    with pytest.raises(ValueError, match="feature schema|drift|re-export"):
+        load_selector(p)

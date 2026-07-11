@@ -246,6 +246,20 @@ def load_selector(path) -> SelectorNet:
     schema = str(d["schema"]) if "schema" in d else ""
     if schema != "selector_net_npz/1":
         raise ValueError(f"{path}: expected selector_net_npz/1, got {schema!r}")
+    # Feature-schema guard: build_features emits columns in FEATURE_NAMES order and
+    # `keep` selects from them, so a same-length REORDER of FEATURE_NAMES would
+    # silently feed mislabeled features into a model trained on the old order (the
+    # module docstring's "features must match exactly" failure). Newer exports
+    # embed the feature schema; assert it matches. (A feature COUNT change is
+    # already caught downstream when the boolean `keep` index length-mismatches.)
+    if "feature_names" in d:
+        names = tuple(str(x) for x in d["feature_names"])
+        if names != FEATURE_NAMES:
+            raise ValueError(
+                f"{path}: selector was trained on a different feature schema "
+                f"({len(names)} features) than the current FEATURE_NAMES "
+                f"({len(FEATURE_NAMES)}); order/set drift -> re-export the selector"
+            )
     return SelectorNet(
         w0=d["w0"].astype(np.float32),
         b0=d["b0"].astype(np.float32),
