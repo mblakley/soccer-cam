@@ -58,8 +58,12 @@ class BallDetectStepConfig(BaseModel):
     # downstream where re-tuning is cheap.
     detect_confidence: float = 0.1
     # Inference runs every Nth source frame (every frame is still decoded — the
-    # detector consumes a 3-consecutive-frame temporal stack).
-    detect_frame_interval: int = 8
+    # detector consumes a 3-consecutive-frame temporal stack). Stride 4 (0.2s @ 20fps),
+    # not 8: at stride 8 a kicked/arcing ball travels ~2x as far between candidates,
+    # widening the miss-gaps and coarsening the track (the aerial/near-ball failures).
+    # ~2x detection cost, but detection is offline post-processing and the tracker
+    # features are stride-invariant (meters-per-frame). Mark 2026-07-11.
+    detect_frame_interval: int = 4
     detect_top_k: int = 24
     detect_min_distance: int = 3
     detect_tile_w: int = 2560

@@ -77,7 +77,7 @@ PRESETS: dict[str, list[_PresetStep]] = {
             {
                 "device": "cuda:0",
                 "detect_confidence": 0.1,
-                "detect_frame_interval": 8,
+                "detect_frame_interval": 4,
             },
         ),
         (

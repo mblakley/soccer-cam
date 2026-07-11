@@ -61,7 +61,7 @@ def main() -> None:
     ap.add_argument("--game-dir", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--base", type=int, default=24)
-    ap.add_argument("--stride", type=int, default=8)
+    ap.add_argument("--stride", type=int, default=4)
     ap.add_argument("--chunk", type=int, default=1500)
     ap.add_argument("--top-k", type=int, default=24)
     ap.add_argument("--thr", type=float, default=0.1)

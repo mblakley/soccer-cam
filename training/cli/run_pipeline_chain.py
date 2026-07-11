@@ -99,7 +99,7 @@ def main() -> None:
     ap.add_argument("--selector-npz", required=True)
     ap.add_argument("--work-dir", required=True)
     ap.add_argument("--out-name", default="broadcast.mp4")
-    ap.add_argument("--stride", type=int, default=8)
+    ap.add_argument("--stride", type=int, default=4)
     ap.add_argument("--target-width", type=int, default=None)
     args = ap.parse_args()
     asyncio.run(_run(args))
