@@ -371,7 +371,13 @@ def test_rerank_oob_pin_holds_the_boundary_and_reacquires_at_the_crossing():
     free = rerank(
         frames, geom, frame_gaps=gaps, priors=priors, config=RerankConfig(**iso)
     )
-    assert free[3] == distract  # cheaper to park on the distractor than to miss
+    # The reacq teleport cap (on by default) forbids parking on the far distractor
+    # — 43.6 m from the exit, past the ~32 m one-step cap — so the bright mid-field
+    # blob never steals the track: it misses the dead time and re-acquires the ball
+    # at the crossing, even without the OOB pin.
+    assert all(round(free[t][0]) != round(distract[0]) for t in free)
+    assert 3 not in free
+    assert free[6][0] == pytest.approx(reentry[0])
 
     pinned = rerank(
         frames,
