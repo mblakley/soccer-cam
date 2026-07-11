@@ -131,6 +131,18 @@ class RerankConfig:
     reacq_free_m: float = (
         6.0  # free re-acquisition radius around the in-field loss point
     )
+    # HARD teleport cap on IN-FIELD (non-OOB, non-aerial) re-acquisition (Mark
+    # 2026-07-11): a ground ball physically cannot cross the field during a brief
+    # miss, so re-acquiring beyond a physics bound is a distractor TELEPORT (the
+    # near-retrained selector scores a far near-touchline grab so high it blew past
+    # the soft reacq penalty — Spencerport 0:28: x5716 -> x1961 near-touchline). The
+    # physical candidate->candidate gate does NOT cover miss->re-acquisition, so this
+    # hard-forbids it. Cap = ball_vmax * miss-duration + base, ceilinged at cap_max.
+    # OOB / aerial travel is exempt (their own re-entry cones handle legit far travel).
+    reacq_cap_base_m: float = 8.0  # slack over the ball-speed bound (m)
+    reacq_cap_max_m: float = (
+        30.0  # absolute ceiling on in-field re-acquisition (0 = off)
+    )
     # AERIAL LOOK-AHEAD BRIDGE (Mark 2026-07-10): a punt/clearance leaves the ground
     # for seconds; the ball shrinks/leaves frame so the detector can't see it in
     # flight and the track goes to MISS, and the forward ballistic bridge is MISLED
@@ -689,19 +701,28 @@ def rerank(
                         oob_reentry = dp <= cone
                     if not oob_reentry:
                         trans += cfg.offfield_penalty
-                # RE-ACQUISITION distance bias: re-acquiring a ball lost IN-FIELD (not
-                # OOB, not aerial) far from where it was lost is a distant-distractor
-                # grab — penalise it so the track holds near the loss point.
+                # RE-ACQUISITION of a ball lost IN-FIELD (not OOB, not aerial). A ground
+                # ball reappears NEAR where it was lost, so (1) hard-forbid a far
+                # re-acquisition — a distractor TELEPORT the physical gate misses because
+                # it routes through the miss state — and (2) softly bias toward the loss
+                # point within the cap.
                 if (
                     j != k
                     and i == kp
-                    and cfg.reacq_dist_w > 0
                     and mw_prev is not None
                     and moob_prev is None
                     and mv_prev is None
                 ):
                     reacq_d = math.hypot(*(fw[t][j] - mw_prev))
-                    if reacq_d > cfg.reacq_free_m:
+                    if cfg.reacq_cap_max_m > 0:
+                        cap = min(
+                            cfg.ball_vmax_mpf * (mdur_prev + gap)
+                            + cfg.reacq_cap_base_m,
+                            cfg.reacq_cap_max_m,
+                        )
+                        if reacq_d > cap:
+                            continue  # teleport forbidden -> stay MISS / take a nearer cand
+                    if cfg.reacq_dist_w > 0 and reacq_d > cfg.reacq_free_m:
                         trans += cfg.reacq_dist_w * (reacq_d - cfg.reacq_free_m)
                 v = cost[t - 1][i] + trans
                 if v < best:
