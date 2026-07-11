@@ -60,6 +60,10 @@ class BallSelectStepConfig(BaseModel):
     select_phys_sigma_px: float = 5.0
     select_bridge_w: float = 2.0
     select_oob_w: float = 2.0
+    # Minimum candidate-pack width. The step auto-expands this to fit the actual
+    # per-frame candidate count so it can never truncate candidates; it does NOT
+    # affect feature normalization (that is pinned to the training top_k inside
+    # build_features).
     select_top_k: int = 24
     # Dense-trajectory upsampling: interpolate between selected samples, but blank
     # gaps longer than this many source frames (play discontinuities).
@@ -101,7 +105,15 @@ def _run_selection(
 
     net = load_selector(cfg.select_model_path)
     feats = [x[:, net.keep] for x in build_features(frames, geom, ef=ef)]
-    packed, mask = pack_frames(feats, top_k=cfg.select_top_k)
+    # The pack width must fit EVERY frame's candidate count. If select_top_k is
+    # below it, pack_frames silently TRUNCATES candidates while the priors below
+    # are sliced by the full candidate count (len(fr)) -> a priors row shorter
+    # than the frame's candidates, which misaligns / overruns the emission in
+    # rerank. build_features' feature normalization is pinned to the TRAINING
+    # top_k (its own default) and is deliberately independent of this packing
+    # width, so expanding to fit here cannot perturb the learned features.
+    pack_k = max(cfg.select_top_k, max((len(x) for x in feats), default=1))
+    packed, mask = pack_frames(feats, top_k=pack_k)
     probs = predict_probs(net, packed, mask)
     w = cfg.select_emission_weight
     priors = [

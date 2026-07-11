@@ -69,6 +69,20 @@ def test_pack_frames_pads_and_masks():
     assert feats[1, 3, 0] == 1.0  # 5 candidates truncated to top_k=4
 
 
+def test_pack_width_must_fit_candidates_to_avoid_priors_misalignment():
+    # If the pack width is below a frame's candidate count, pack_frames truncates
+    # while the downstream priors are sliced by the full candidate count -> a
+    # shorter priors row than the frame's candidates -> misaligned/overrun
+    # emission in rerank. ball_select expands the pack width to fit; this locks the
+    # invariant that the fit width retains every candidate.
+    feats = [np.zeros((3, 4), np.float32)]
+    _, mask_small = pack_frames(feats, top_k=2)
+    assert mask_small[0].sum() == 2  # HAZARD: 3rd candidate dropped
+    pack_k = max(2, max(len(x) for x in feats))  # the step's expand-to-fit rule
+    _, mask_fit = pack_frames(feats, top_k=pack_k)
+    assert mask_fit[0].sum() == 3  # every candidate retained -> priors align
+
+
 def test_feature_mask_family_and_single():
     m = feature_mask(["size_ratio"])
     assert m.sum() == len(FEATURE_NAMES) - 1
