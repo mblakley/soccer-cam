@@ -64,10 +64,25 @@ width, a product/framing choice with a zoom-out cost — NOT a tracking improvem
 in selection coverage (the 58% coast) and the both-missed 13%, which need better detections/selector
 (EXP-DIST-42-retrain), not planner tuning.
 
-**Data:** F: aim sidecars (05.31); harness `G:\ballresearch\selector\may31_compare.py`.
-**NEXT:** same comparison on 05-27 (candidate dump in progress) for a second game vs the archived
-AutoCam detections; then batch-render + F:-preserve fresh aim for the remaining games (Mark: "we need
-that file for ALL videos").
+**Second game — 05-27 Chili Vortex (held-out, PRELIMINARY 2/16 dump chunks, early first half
+frames 11196-23192):** the 05-27 aim was recovered from the archived `autocam.jsonl` stdout capture
+(118,227 `{xy}`), preserved to F:, and aligned to our global frames at offset -1153 (corr **0.880** —
+a ~1153-frame trim, fps ~20 matches). Current-code champion on the partial: RENDERING containment
+**0.796**, RAW coverage **0.584**, localization 362px, GT-in-view 0.865. vs the OLD-CODE 05-27
+baseline (coverage 0.32 / rendering 0.598) this is a large jump — coverage nearly doubled. This
+window is EASY play (aim agrees with GT 0.973, zero "we're right to diverge" frames), so 0.796 is an
+upper-ish bound; the full-game 05-27 number will fall toward May-31's 0.69 once hard/far frames enter.
+The full dump is decode-bound on the GTX 1060 (~43 min/chunk, ~11am ETA); the full run reruns
+`may31_compare.py` with `OFF_RANGE=1300` when `meta.json` lands.
+
+**Data:** F: aim sidecars (05.31 autocam_aim.jsonl+ballboxes; 05.27 autocam_aim.jsonl); harness
+`G:\ballresearch\selector\may31_compare.py` (env: GAME_DIR/AIM_PATH/DUMP_DIR/OFF_RANGE, CFG=json).
+**NEXT:** complete the full-game 05-27 run when the dump finishes; retrain selector/detector to attack
+the 13% both-missed + 58% coast (the real headroom, not planner tuning); for the "aim for ALL games"
+batch (#35), a per-game coordinate-validation gate is REQUIRED — the `-once-processed *.mp4.jsonl`
+sidecars are heterogeneous (Dahua ~4096-px source; at least one, 05.18 Buffalo Empire, is crop-space
+x[66,1213]) so blind extraction would write corrupt aims; validate each sidecar's range vs game.json
+source dims + on-ball corr vs that game's `autocam_detections.jsonl` before writing `autocam_aim.jsonl`.
 
 ## EXP-DIST-41: position-based CLOSE-ball GT — 500 human labels across 14 venues (2026-07-10)
 
