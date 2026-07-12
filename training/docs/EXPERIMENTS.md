@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-45: cross-game detector difficulty — the hard games are 3 DISTINCT causes, not "lighting" (2026-07-12)
+
+**Method:** `crossgame_diag.py` — per game with a candidate dump, our-detector-finds-AutoCam-ball rate
+(any of our top-24 within 100px of AutoCam's top detection = our ceiling proxy) + AutoCam median
+confidence (AutoCam emits a detection on ~100% of frames, so COVERAGE is uninformative — only its
+CONFIDENCE discriminates). Then VISION-inspected a sample frame from the 4 hardest.
+
+**Ranking (our_finds_AC / AC_conf):** worst Lakefront-Sullivan 06.06 (0.633/0.464), Cleveland 05.09
+(0.688/0.381), Pittsford 06.01 (0.703/0.439), West Seneca 05.31 (0.706/0.501), Cuyahoga 03.21
+(0.722/**0.298** — lowest conf of any game), Fairport 05.30 (0.753/0.385); easiest Pittsford 05.07
+(0.902/0.714). Held-out Iron 06.15 is ABSENT (AutoCam crashed 06-15 → no detections) but is the true
+worst by GT (ceiling 0.35).
+
+**Visual diagnosis — low confidence is THREE distinct causes, and only ONE is lighting:**
+1. **Background distractors / far play (biggest bucket, most games):** Lakefront-Sullivan + Fairport
+   05.30 are multi-field TOURNAMENT complexes shot with play at the FAR touchline — the frame contains
+   OTHER games' soccer balls, parked cars, tents, crowds right where the tiny far ball is; Cleveland
+   adds a painted midfield logo + mottled turf. → hard-negative mining (adjacent balls, cars, logos,
+   line intersections), the classic B-track.
+2. **Out-of-distribution surface:** Cuyahoga 03.21 = indoor dome, deep-blue turf, flat artificial
+   light, extreme fisheye → grass-trained detector is off-domain (drives AutoCam's 0.298 too). Indoor
+   is IN SCOPE (DECISIONS 2026-07-12) → needs turf/dome labels in DETECTOR training.
+3. **Backlight:** Iron 06.15 golden-hour (the only pure lighting case) → lighting robustness /
+   pre-detection tone normalization.
+
+**Takeaway:** CORRECTS the earlier "find the rough-lighting games" framing — lighting is 1 of 3, and
+the dominant, most-fixable cause is DISTRACTOR-heavy tournament venues (hard-neg mining), not sun. All
+three are DETECTOR-track (raise the candidate ceiling), orthogonal to the SELECTOR track (v7/mid gold),
+and confirmed by Mark against his venue memory. **Data:** `crossgame_diag.py`; frames inspected
+2026-07-12. **NEXT (detector roadmap, ranked by leverage):** (a) hard-neg mining on adjacent-field
+balls + clutter; (b) indoor/turf labels + training; (c) backlight tone-normalization / golden-hour data.
+
 ## EXP-DIST-44: v7 selector retrain (+226 mid, +63 near gold) — beats v5 on EVERY band, PROMOTE (2026-07-12)
 
 **Trigger:** EXP-DIST-43 showed v6 lifted near/mid but traded ~5pts Spencerport far, and mid was the

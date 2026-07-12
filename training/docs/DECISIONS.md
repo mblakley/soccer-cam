@@ -4,6 +4,15 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-12: Indoor/dome venues (blue turf) ARE in scope for the ball detector
+
+Mark confirmed indoor games are in scope, so the grass-trained detector cannot simply exclude
+blue-turf/dome surfaces — it must learn them. Cuyahoga 03.21 (indoor dome, deep-blue turf, flat
+artificial light, extreme fisheye) is the out-of-distribution surface case behind the lowest AutoCam
+confidence of any game (median 0.298); see EXP-DIST-45. Implication: indoor/turf games need ball
+labels + inclusion in DETECTOR training (not just the green-grass corpus) — a domain-diversity gap
+tracked on the detector B-track, orthogonal to the selector.
+
 ## 2026-07-10: ONE homegrown path — detect/select/plan/render as swappable product steps; internal render camera brain DELETED
 
 **The decision (Mark, verbatim intent).** "I want ONE PATH THROUGH OUR HOMEGROWN CODE ... modular and
