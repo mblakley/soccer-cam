@@ -4,6 +4,57 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-42: homegrown viewport vs AutoCam ball-target — aim-matching validation (2026-07-11)
+
+**Trigger (Mark):** stop leaning on sparse human GT — the real question is whether OUR viewport
+looks the same DIRECTION as AutoCam's per-frame ball target (captures the action). Validate against
+AutoCam's dense coordinates; human GT overrides where it exists.
+
+**The reference (fresh aim, not the broken legacy file):** the per-game `autocam_viewport.jsonl`
+is corrupt (near-constant center, corr 0.28 vs GT). Instead generated a FRESH per-frame external
+ball-target track for held-out Spencerport 05.31, output-video discarded (render recipe kept in
+`F:\archive\OnceAutocam`, per the no-external-refs-in-repo rule): 80,464 per-frame `{xy}` targets
+in source px (7680×2160). Validation: **aim↔GT corr 0.773** (offset 5) — the fresh target genuinely
+tracks the ball, unlike the legacy viewport file. **Preserved to F: next to the video**
+(`autocam_aim.jsonl` + `autocam_ballboxes.txt` + provenance README), matching the
+`autocam_detections.jsonl` sidecar convention. Idempotent.
+
+**Harness (`may31_compare.py`):** reference per frame = human GT if labeled else AutoCam aim.
+Metrics — RENDERING containment (reference ball inside our planned viewport rect); GT-only
+ball-in-view (human override subset); RAW selection coverage + localization (FOV-independent
+tracking quality: how often we select a REAL ball, not coasted, and how close it sits to the ball).
+
+**Baseline (champion config, current code `55112a7`, full 80k-frame aim):**
+RENDERING containment **0.689**, GT-in-view **0.830**, RAW selection coverage **0.421**
+(up from old-code 05-27's ~0.32), localization **median 319px** (48% <300px, 62% <500px). So when
+we select, the track sits on the ball; ~58% of stride-4 frames have no confident ball and coast.
+
+**Sweep 1 — viewport FOV (raises containment but it's a framing knob, not a tracking gain):**
+widening zoom + missing/deadball HFOV lifts BOTH containment and GT-in-view monotonically with NO
+regression — `zoom 52/50/66` → 0.706/0.844; `zoom 56/52/72 + missing80/deadball70` → **0.729/0.854**.
+RAW coverage + localization are unchanged (FOV doesn't touch selection), so the gain is just zooming
+out to cover the same tracking error. `select_max_gap_frames` (coast length) has ZERO effect on
+containment.
+
+**Sweep 2 — miss_scale (coverage cannot be cheated; champion is the optimum):**
+scaling the learned per-frame miss cost — 0.6 → cov 0.311, loc 265px, but containment/GT DROP to
+0.655/0.780 (coasts too much); 1.5/2.5/4.0 → cov climbs 0.54/0.74/0.89 but localization DEGRADES
+319→379→517→571px and containment/GT FALL (the forced "selections" are distractors dragging the
+viewport off the ball). **miss_scale=1.0 (champion) is the sweet spot** — the selector's learned
+`p_none` is well-calibrated; the honest 42% coverage is right, and coasting beats guessing.
+
+**Conclusion:** on the dense AutoCam-aim reference the homegrown viewport already "looks the right
+direction" ~69% of all frames / 83% of human-GT frames, matching AutoCam's aim without regressing
+GT. The current selector/rerank config is validated as the tracking-accuracy optimum (both directions
+of the miss-cost lever are worse). The only clean containment lever is FOV width, a product/framing
+choice with a zoom-out cost — NOT a tracking improvement. Real headroom is in selection coverage
+(the 58% coast), which needs better detections/selector (EXP-DIST-42-retrain), not planner tuning.
+
+**Data:** F: aim sidecars (05.31); harness `G:\ballresearch\selector\may31_compare.py`.
+**NEXT:** same comparison on 05-27 (candidate dump in progress) for a second game vs the archived
+AutoCam detections; then batch-render + F:-preserve fresh aim for the remaining games (Mark: "we need
+that file for ALL videos").
+
 ## EXP-DIST-41: position-based CLOSE-ball GT — 500 human labels across 14 venues (2026-07-10)
 
 **Trigger (Mark):** the aerial ball-loss at Spencerport 0:48 is a NEAR-detection failure — the
