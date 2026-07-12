@@ -4,6 +4,46 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-43: v6 selector retrain — band-decomposed; near/mid WIN, far trade masked by far-heavy GT (2026-07-12)
+
+**Context (+ a process failure to record):** `selector_v6` (`kill_test_selector` on the 15-game
+adjudication gold, incl. EXP-DIST-41's ~500 near/close-ball labels; built 07-10 22:50 from
+`ball_labels` consolidated 07-10 22:37, so it DID ingest the recent labels) was trained but never
+written up. As a result an overnight aim-matching pass (EXP-DIST-42) ran on v5, and v6 was first
+mis-read as a REGRESSION from the Spencerport aggregate alone (0.830→0.799). Decomposing by depth band
+on BOTH held-out games flips that read. Lesson: a trained model with no EXPERIMENTS entry is invisible
+and will be re-litigated — write up every retrain.
+
+**Method:** `band_diag.py` — champion tracker/planner, GT-in-viewport per depth band
+(far d01<0.34 / mid 0.34–0.67 / near >0.67) + detector ceiling (nearest candidate ≤100px) +
+selected-on-ball, selector v5 vs v6, on held-out Spencerport 05.31 and Irondequoit 06.15.
+
+**Result — GT-in-viewport (v5 → v6):**
+
+| band | Spencerport (n) | Irondequoit (n) |
+|---|---|---|
+| near | 0.702→0.787 (47) | 0.578→0.681 (166) |
+| mid  | 0.731→0.852 (108) | 0.747→0.869 (99) |
+| far  | 0.844→0.795 (1196) | 0.701→0.772 (311) |
+| ALL  | 0.830→0.799 | 0.674→0.762 |
+
+v6 improves NEAR and MID on BOTH games (mid +.12 each) and is a net win on Irondequoit (+.088). The
+Spencerport aggregate dips ONLY because its GT is 88% far (1196/1351) and v6 traded ~5 pts of far —
+the band where v5 was already strongest — for the near/mid gains. v6 is a near/mid WIN with a far
+trade, not a regression.
+
+**Detector ceiling = the other, venue-dependent wall:** Spencerport ceiling@100 ~0.68–0.77 (ball
+usually IS a candidate → SELECTION-limited); Irondequoit ceiling@100 near 0.277 / mid 0.424 / far
+0.379 (ball rarely a candidate → DETECTOR-limited). Selection labels lift selection-limited venues;
+detector-limited venues need detector work (hard-neg / ROI detection), not selection gold.
+
+**Conclusion / NEXT:** (1) v6's near/mid gains are real and label-driven → promote v6 or retrain v7,
+but WEIGHT THE FAR GOLD so Spencerport far doesn't regress. (2) **MID is the highest-value next label
+set** — weakest band (v5 0.73–0.75), the ONLY band with no dedicated GT, already +.12 from adjacent
+near labels; Mark to label mid-range. (3) The bottleneck is per-venue: Spencerport=selection,
+Irondequoit=detector. (4) EXP-DIST-42's aim-matching numbers were on v5; re-run on the promoted
+selector once chosen. **Data:** `band_diag.py`, `v5v6.py` (server); `selector_v6.npz`.
+
 ## EXP-DIST-42: homegrown viewport vs AutoCam ball-target — aim-matching validation (2026-07-11)
 
 **Trigger (Mark):** stop leaning on sparse human GT — the real question is whether OUR viewport
