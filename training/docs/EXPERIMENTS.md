@@ -43,12 +43,26 @@ scaling the learned per-frame miss cost — 0.6 → cov 0.311, loc 265px, but co
 viewport off the ball). **miss_scale=1.0 (champion) is the sweet spot** — the selector's learned
 `p_none` is well-calibrated; the honest 42% coverage is right, and coasting beats guessing.
 
+**Divergence — WHO IS RIGHT when we and AutoCam disagree (Mark's key question):** on the 1351
+May-31 frames that have BOTH human GT and an aim value — aim&GT-both-in-viewport 785 (58%);
+**aim-OUT but GT-IN 336 (25%) — we diverge from AutoCam's aim yet sit on the TRUE ball**;
+aim-in/GT-out 51 (4%); both-missed 179 (13%). So of the 515 frames where our viewport does NOT
+contain AutoCam's aim, on **336 (65%) we are on the real ball** — the divergence is AutoCam being
+off, not us. And the **aim itself agrees with GT only 0.693** of the time, while OUR viewport
+contains the true ball 0.830 — i.e. we are closer to truth than AutoCam's own target is. The 0.689
+aim-containment therefore UNDERSTATES quality: chasing aim past ~0.69 would pull us OFF the real ball.
+(Caveat: this GT subset was mined at hard/AutoCam-failure points, so it over-samples divergent frames;
+on easy frames we and the aim agree — that is the 58% aim&GT-both-in bucket.)
+
 **Conclusion:** on the dense AutoCam-aim reference the homegrown viewport already "looks the right
-direction" ~69% of all frames / 83% of human-GT frames, matching AutoCam's aim without regressing
-GT. The current selector/rerank config is validated as the tracking-accuracy optimum (both directions
-of the miss-cost lever are worse). The only clean containment lever is FOV width, a product/framing
-choice with a zoom-out cost — NOT a tracking improvement. Real headroom is in selection coverage
-(the 58% coast), which needs better detections/selector (EXP-DIST-42-retrain), not planner tuning.
+direction" ~69% of all frames / 83% of human-GT frames. But the divergence breakdown shows the aim
+is NOT ground truth (0.69 GT-agreement on hard frames), and where we diverge from it we are on the
+real ball 65% of the time — so the target is human GT, not aim-parity, and we already exceed the
+aim's own truth-agreement. The current selector/rerank config is validated as the tracking-accuracy
+optimum (both directions of the miss-cost lever are worse). The only clean containment lever is FOV
+width, a product/framing choice with a zoom-out cost — NOT a tracking improvement. Real headroom is
+in selection coverage (the 58% coast) and the both-missed 13%, which need better detections/selector
+(EXP-DIST-42-retrain), not planner tuning.
 
 **Data:** F: aim sidecars (05.31); harness `G:\ballresearch\selector\may31_compare.py`.
 **NEXT:** same comparison on 05-27 (candidate dump in progress) for a second game vs the archived
