@@ -195,3 +195,19 @@ Per-game observations about quality, orientation, and quirks. Machine-readable m
   `F:\archive\ball_distill\<game>\{ball_track.json,detections\segNN.json}` pipeline), **or** human
   far-labels with the canonical far-label tool. Do NOT run that on the shared GPU while the distill
   curve is using CUDA.
+- **Update 2026-07-12 — GOLDEN HOUR is a DETECTOR wall (EXP-DIST-43; supersedes the "no detections /
+  not labeled" status above):** this is now a HELD-OUT eval game. Our HeatmapNet candidate dump exists
+  (`G:\ballresearch\selector\fullgame_heldout\heat__2026.06.15_vs_Irondequoit_away`, stride-4, 8 parts)
+  and it has **702 human ball labels** (576 positioned), used in the v5/v6 band analysis. Firsthand
+  finding (raw strips + candidate ceiling, verified): kickoff **~18:28 mid-June = golden hour**, low sun
+  backlighting the far (upper) half of the panorama with a bright glare/haze band across the
+  upper-center-right. Measured cost — our detector **ceiling** (GT ball within 100px of ANY candidate)
+  is only **~0.35 across the whole frame** vs **~0.75 on held-out Spencerport 05.31**, worst on the
+  RIGHT (median 111px to nearest candidate, toward the sun) where ~60% of the labeled play sits. So the
+  ball is frequently **not even a candidate**: a DETECTOR-domain (lighting) failure, NOT a selection
+  problem — selection gold cannot recover a ball the detector never proposed. This IS the far-ball
+  contrast comparison this entry asked for, and the answer is that the 2026-06-15 WDR/high-contrast
+  calibration did **not** overcome extreme golden-hour backlight. Fix is detector-side: lighting-diverse
+  detector training (more backlit/low-sun games) and/or pre-detection tone/contrast normalization.
+  Selector retrains lift Iron's GT-in-view via better tracking/coasting (v5 0.674 → v6 0.762) but cannot
+  raise the ceiling.
