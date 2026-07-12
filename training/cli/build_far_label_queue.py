@@ -149,6 +149,74 @@ def select_near_frames(
     ]
 
 
+def select_mid_frames(
+    ef: list[int],
+    cands: dict[int, list],
+    labels: dict[int, tuple[int, float]],
+    geom,
+    *,
+    mid_lo: float,
+    mid_hi: float,
+    target: int,
+    exclude: set[int],
+) -> list[dict]:
+    """MID-band ball miner (Mark 2026-07-12, EXP-DIST-43). Mid is the weakest, only
+    un-labeled depth band (held-out GT-in-view ~0.73-0.75) and the frames where the ball
+    is IN our candidate set but the selector picks a distractor are the recoverable gap.
+    Gates the teacher-snap ball to the mid band (``mid_lo <= depth < mid_hi``,
+    ``depth = (y - yf) / (yn - yf)``, 1 = near touchline) and ranks by MISRANK depth (the
+    count of distractors the detector scored ABOVE the ball), so the hardest selection
+    cases win each temporal bin. Teacher-backed only — a no-teacher mid candidate is
+    usually a player. ``mid_misrank`` = a distractor outscored the ball; ``mid_ball`` =
+    teacher-backed, top-scored.
+    """
+    poly = np.asarray(getattr(geom, "polygon", np.zeros((0, 2))), float)
+    if len(poly) >= 10:
+        yn = float(np.mean(poly[0:5, 1]))
+        yf = float(np.mean(poly[5:10, 1]))
+    else:
+        yn = float(poly[:, 1].max()) if len(poly) else 1.0
+        yf = float(poly[:, 1].min()) if len(poly) else 0.0
+    span = max(yn - yf, 1e-6)
+    pool: list[list] = []  # [frame, reason, (hx, hy), conf, value=misrank-depth]
+    for i, g in enumerate(ef):
+        if g in exclude:
+            continue
+        rows = cands.get(g) or []
+        if not rows:
+            continue
+        lab = labels.get(i)
+        if lab is None or int(lab[0]) < 0:
+            continue
+        j = int(lab[0])
+        if j >= len(rows):
+            continue
+        x, y = float(rows[j][0]), float(rows[j][1])
+        d = (y - yf) / span
+        if not (mid_lo <= d < mid_hi):  # not in the mid band
+            continue
+        scores = [float(r[2]) for r in rows]
+        rank = sum(
+            1 for s in scores if s > scores[j]
+        )  # distractors scored above the ball
+        reason = "mid_misrank" if rank > 0 else "mid_ball"
+        # value = rank so _spread_bins keeps the most-demoted (hardest) ball per bin
+        pool.append([g, reason, (x, y), scores[j], float(rank)])
+    chosen = _spread_bins(pool, target)
+    return [
+        {
+            "frame_idx": int(f),
+            "file": f"f{int(f):06d}.jpg",
+            "hint_x": round(hx, 1),
+            "hint_y": round(hy, 1),
+            "autocam": True,  # teacher-backed hint
+            "hint_conf": round(conf, 3),
+            "reason": reason,
+        }
+        for (f, reason, (hx, hy), conf, _v) in chosen
+    ]
+
+
 def _expand_near_spans(
     frames: list[dict],
     ef: list[int],
@@ -555,6 +623,7 @@ def main() -> None:
             "lost",
             "distractor",
             "near",
+            "mid",
             "kick",
             "diverge",
             "spans",
@@ -595,6 +664,18 @@ def main() -> None:
         default=1,
         help="near mode: expand each anchor to N consecutive dump frames (2-4 = a "
         "short arc, so the detector sees the near ball rising/blurred across the kick)",
+    )
+    ap.add_argument(
+        "--mid-lo",
+        type=float,
+        default=0.34,
+        help="mid band lower depth bound (0 = far endline, 1 = near touchline)",
+    )
+    ap.add_argument(
+        "--mid-hi",
+        type=float,
+        default=0.67,
+        help="mid band upper depth bound; mid ball = mid-lo <= depth < mid-hi",
     )
     ap.add_argument("--disagree-m", type=float, default=10.0)
     ap.add_argument("--teleport-mpf", type=float, default=2.5)
@@ -646,7 +727,7 @@ def main() -> None:
 
     excl = _load_exclusions(Path(args.out), args.exclude_sets)
     near_cands: dict[int, list] = {}
-    if args.criteria in ("near", "kick", "diverge", "disagree") or (
+    if args.criteria in ("near", "mid", "kick", "diverge", "disagree") or (
         args.criteria == "spans" and args.fullgame_dir
     ):
         if not args.fullgame_dir:
@@ -682,6 +763,24 @@ def main() -> None:
             exclude=excl,
         )
         frames = _expand_near_spans(frames, ef, near_cands, span=span)
+    elif args.criteria == "mid":
+        if not args.sel_labels:
+            raise SystemExit("--criteria mid needs --sel-labels")
+        sel = json.loads(Path(args.sel_labels).read_text(encoding="utf-8"))["labels"]
+        labels = {int(k): (int(v[0]), float(v[1])) for k, v in sel.items()}
+        # never re-ask for a frame a human already labeled (any set grid, ±4)
+        for g in list(hb) + list(hn):
+            excl.update(range(g - 4, g + 5))
+        frames = select_mid_frames(
+            ef,
+            near_cands,
+            labels,
+            geom,
+            mid_lo=args.mid_lo,
+            mid_hi=args.mid_hi,
+            target=max(1, args.max_frames),
+            exclude=excl,
+        )
     elif args.criteria == "disagree":
         if not args.campath:
             raise SystemExit("--criteria disagree needs --campath (+ --fullgame-dir)")
@@ -887,7 +986,7 @@ def main() -> None:
                 "band": "normal",
             }
         )
-    if args.criteria in ("near", "diverge", "disagree") or (
+    if args.criteria in ("near", "mid", "diverge", "disagree") or (
         args.criteria == "spans" and args.fullgame_dir
     ):
         # candidate overlays straight from the dump (score-sorted; top-5 render blue)
@@ -927,7 +1026,7 @@ def main() -> None:
     }
     if args.priority is not None:
         manifest["priority"] = int(args.priority)
-    if args.criteria in ("near", "diverge"):
+    if args.criteria in ("near", "mid", "diverge"):
         manifest["candidates_ckpt"] = fg_meta.get("ckpt", "")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(
