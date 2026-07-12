@@ -95,6 +95,14 @@ def main() -> None:
     ap.add_argument("--overlap", type=int, default=256)
     ap.add_argument("--infield-margin", type=float, default=120.0)
     ap.add_argument("--no-hwaccel", action="store_true")
+    ap.add_argument(
+        "--use-gt",
+        action="store_true",
+        help="GUARD: mine only on HUMAN-GT frames, using the GT ball position as the "
+        "exclusion centre — never crops the real ball even when AutoCam was wrong "
+        "(the teacher guard mines the real ball on AutoCam-error frames). Reads each "
+        "game's ball_labels.jsonl.",
+    )
     args = ap.parse_args()
 
     import av
@@ -142,6 +150,21 @@ def main() -> None:
         if g.get("split") == "val":
             continue
         labels = {int(k): v for k, v in g["labels"].items()}
+        if args.use_gt:
+            # GT GUARD: replace the teacher labels with HUMAN ball GT so the exclusion
+            # centre is the true ball, not AutoCam's (possibly wrong) pick. Same global
+            # frame space (global_offset + f) as the teacher labels.
+            gdir = Path(g["video"]).parent
+            blp, gjp2 = gdir / "ball_labels.jsonl", gdir / "game.json"
+            if not (blp.exists() and gjp2.exists()):
+                continue
+            offs = dd.seg_offsets(
+                json.loads(gjp2.read_text(encoding="utf-8", errors="ignore"))[
+                    "segments"
+                ]
+            )
+            hb, _ = dd.load_human_labels(blp, offs)
+            labels = {int(k): (float(v[0]), float(v[1])) for k, v in hb.items()}
         if not labels:
             continue
         geom = build_field_geometry(np.asarray(g["polygon"], float))
@@ -219,7 +242,12 @@ def main() -> None:
                     fname = f"{gid}_f{idx:06d}_hardmine{kept}.npy"
                     np.save(crops / fname, cstack)
                     index.append(
-                        {"file": fname, "x": None, "y": None, "split": "train"}
+                        {
+                            "file": fname,
+                            "x": float(sx),
+                            "y": float(sy),
+                            "split": "train",
+                        }
                     )
                     kept += 1
                     nadd += 1
