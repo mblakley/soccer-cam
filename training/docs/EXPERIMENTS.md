@@ -64,16 +64,23 @@ width, a product/framing choice with a zoom-out cost — NOT a tracking improvem
 in selection coverage (the 58% coast) and the both-missed 13%, which need better detections/selector
 (EXP-DIST-42-retrain), not planner tuning.
 
-**Second game — 05-27 Chili Vortex (held-out, PRELIMINARY 2/16 dump chunks, early first half
-frames 11196-23192):** the 05-27 aim was recovered from the archived `autocam.jsonl` stdout capture
-(118,227 `{xy}`), preserved to F:, and aligned to our global frames at offset -1153 (corr **0.880** —
-a ~1153-frame trim, fps ~20 matches). Current-code champion on the partial: RENDERING containment
-**0.796**, RAW coverage **0.584**, localization 362px, GT-in-view 0.865. vs the OLD-CODE 05-27
-baseline (coverage 0.32 / rendering 0.598) this is a large jump — coverage nearly doubled. This
-window is EASY play (aim agrees with GT 0.973, zero "we're right to diverge" frames), so 0.796 is an
-upper-ish bound; the full-game 05-27 number will fall toward May-31's 0.69 once hard/far frames enter.
-The full dump is decode-bound on the GTX 1060 (~43 min/chunk, ~11am ETA); the full run reruns
-`may31_compare.py` with `OFF_RANGE=1300` when `meta.json` lands.
+**Second game — 05-27 Chili Vortex (held-out, 10/16 dump chunks = ~66% of the game by frame,
+11196-79024; full dump still decode-bound, ETA ~10:20am):** the 05-27 aim was recovered from the
+archived `autocam.jsonl` stdout capture (118,227 `{xy}`), preserved to F:, aligned to our global
+frames at offset -1153 (corr **0.880** — a ~1153-frame trim, fps ~20 matches). Current-code champion
+(10 chunks, GT n=421): RENDERING containment **0.707**, RAW coverage **0.685**, localization 326px,
+GT-in-view **0.701**; DIVERGENCE aim&GT-in 265, aim-OUT&GT-IN 30 (we right), aim-in&GT-out 39,
+both-out 87; **aim agrees GT 0.855**. As the dump grew, containment/GT settled from the easy-window
+0.80/0.85 down to ~0.71/0.70 as far/hard frames entered — do NOT quote the early-window number.
+
+**HONEST two-game read (do not overclaim "we beat AutoCam"):** vs our OWN old-code 05-27 baseline
+(rendering 0.598 / coverage 0.32) the new code is a big jump on both games (coverage ~2x). vs AUTOCAM
+it is SPLIT: on May-31 our viewport is closer to the true ball than AutoCam's aim (GT-in 0.830 vs aim's
+0.693 GT-agreement; divergence 336 vs 51 in our favor); on 05-27 AutoCam's aim is CLOSER to the true
+ball than us (0.855 vs our 0.701; divergence 30 vs 39 against us). We win where AutoCam struggles
+(far/hard frames, May-31) and trail where its detector is solid (05-27; both-out ~21%, and its aim is
+genuinely good at 0.86). The gap is detector COVERAGE on hard far balls, not planner/selection tuning.
+Rerun the definitive full 05-27 with `DUMP_DIR=g0527_s4` when the dump finishes ~10:20am.
 
 **Data:** F: aim sidecars (05.31 autocam_aim.jsonl+ballboxes; 05.27 autocam_aim.jsonl); harness
 `G:\ballresearch\selector\may31_compare.py` (env: GAME_DIR/AIM_PATH/DUMP_DIR/OFF_RANGE, CFG=json).
