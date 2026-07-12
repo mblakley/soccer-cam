@@ -244,9 +244,13 @@ def main() -> None:
                     index.append(
                         {
                             "file": fname,
-                            "x": float(sx),
-                            "y": float(sy),
+                            "x": None,  # NEGATIVE: no ball target (the trainer marker)
+                            "y": None,
                             "split": "train",
+                            "mine_x": float(
+                                sx
+                            ),  # audit only: source-px distractor centre
+                            "mine_y": float(sy),
                         }
                     )
                     kept += 1
