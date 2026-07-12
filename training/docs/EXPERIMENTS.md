@@ -4,6 +4,45 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-44: v7 selector retrain (+226 mid, +63 near gold) — beats v5 on EVERY band, PROMOTE (2026-07-12)
+
+**Trigger:** EXP-DIST-43 showed v6 lifted near/mid but traded ~5pts Spencerport far, and mid was the
+weakest + only un-labeled band. Mark labeled 5 mid venues (240 frames) + more near. v7 retrains on the
+consolidated gold (`overnight_selector_v7.py`: +226 mid / +63 near into ball_labels.jsonl ->
+build_selector_labels x15 -> kill_test_selector -> export; held-out excluded; far gold at default weight).
+
+**Result — per-band GT-in-view (`band_diag.py`, R=100px viewport containment), v5 / v6 / v7:**
+
+SPENCERPORT 05.31 (n=1351: near 47 / mid 108 / far 1196)
+| band | v5 | v6 | v7 |
+|---|---|---|---|
+| near | 0.702 | 0.787 | 0.723 |
+| mid  | 0.731 | 0.852 | **0.870** |
+| far  | 0.844 | 0.795 | **0.868** |
+| ALL  | 0.830 | 0.799 | **0.863** |
+
+IRONDEQUOIT 06.15 (n=576: near 166 / mid 99 / far 311; DETECTOR-limited, ceiling ~0.35, golden-hour)
+| band | v5 | v6 | v7 |
+|---|---|---|---|
+| near | 0.578 | 0.681 | 0.627 |
+| mid  | 0.747 | 0.869 | **0.869** |
+| far  | 0.701 | 0.772 | **0.823** |
+| ALL  | 0.674 | 0.762 | **0.774** |
+
+**v7 beats v5 (current champion) on EVERY band on BOTH games** — near +.02/+.05, mid +.14/+.12,
+far +.02/+.12, ALL +.033/+.100. The mid gold did what the band analysis predicted: MID 0.73->0.87
+(Spc) / 0.75->0.87 (Iron). And v7 RECOVERED v6's far trade (Spencerport far 0.795 v6 -> 0.868 v7,
+now ABOVE v5's 0.844). vs v6: v7 keeps mid, fixes far, best ALL; the only give-back is NEAR (v7
+0.723/0.627 < v6 0.787/0.681, but still > v5) — v6 over-fit near, v7 balances. Irondequoit ALL rose
+0.674->0.774 (+.10) despite an unchanged detector ceiling (same dump) — the selector coasts/selects
+better through the golden-hour gaps but cannot exceed the 0.35 ceiling (DETECTOR-domain, GAMES.md).
+
+**DECISION: PROMOTE v7** (strictly dominates v5 across all bands/games; mid gold transfers cleanly).
+**NEXT:** (a) deploy v7 into the ball_select step (copy to models/, register, re-run EXP-DIST-42
+aim-matching on v7); (b) human render-watch on a held-out clip through v7; (c) optional v8 to recover
+near vs v6 by up-weighting near gold; (d) Irondequoit-type venues need the DETECTOR/lighting track,
+not more selection gold. **Data:** `band_diag.py`, `selector_v7.npz` (parity 3.87e-07).
+
 ## EXP-DIST-43: v6 selector retrain — band-decomposed; near/mid WIN, far trade masked by far-heavy GT (2026-07-12)
 
 **Context (+ a process failure to record):** `selector_v6` (`kill_test_selector` on the 15-game
