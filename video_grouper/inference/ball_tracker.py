@@ -81,6 +81,13 @@ class RerankConfig:
 
     alpha: float = 1.0  # detector-score weight (raised 0.3->1.0 for the distilled detector, EXP-DIST-20)
     static_w: float = 2.0  # static-persistence penalty weight (the dominant lever)
+    size_cont_w: float = (
+        0.0  # size-CONTINUITY penalty (Mark 2026-07-13). A ball's apparent
+    )
+    # size can only change as fast as PERSPECTIVE allows; penalise candidate->candidate
+    # transitions where the (smoothed) object size jumps beyond the position-implied change.
+    # Catches a small-ball -> big-person handoff (the AR-flag teleport) while ALLOWING an aerial
+    # ball's smooth growth (aerial-safe by construction). 0 = OFF; needs Candidate.size_px set.
     motion_w: float = 0.5  # motion-blob support bonus weight
     miss_cost: float = 0.9  # cost of the occlusion/miss state
     cell_m: float = 2.0  # world-cell size for the persistence map
@@ -528,6 +535,20 @@ def rerank(
 
     pers = static_persistence(fw, cfg.cell_m)
 
+    # size-continuity inputs (Mark 2026-07-13): per-candidate object size (source px, from
+    # Candidate.size_px) + the perspective-EXPECTED ball diameter at each candidate. Their
+    # ratio should stay ~constant frame-to-frame for a real ball (both scale with position);
+    # a small-ball -> big-person jump breaks it. Only used when cfg.size_cont_w > 0.
+    # size-continuity inputs are populated ONLY when the term is on (empty lists =
+    # byte-identical to the pre-feature path; the transition guards on size_cont_w).
+    sz: list[np.ndarray] = []
+    edia: list[np.ndarray] = []
+    if cfg.size_cont_w > 0.0:
+        sz = [np.array([(c.size_px or 0.0) for c in cs], float) for cs in frames]
+        edia = [
+            geom.expected_ball_diameter_px(s) if len(s) else np.zeros(0) for s in fsrc
+        ]
+
     # OFF-FIELD state gate: per-candidate flag = outside the field polygon by more than
     # the margin. Off-field candidates get an emission penalty (default suppressed);
     # the OOB re-entry transition bonus offsets it when the ball genuinely exited.
@@ -734,6 +755,16 @@ def rerank(
                     if d > 3.0 * allow:
                         continue  # not physical: route through the miss/bridge state
                     trans = (d / allow) ** 2
+                    if cfg.size_cont_w > 0.0:
+                        si, sj = sz[t - 1][i], sz[t][j]
+                        ei, ej = edia[t - 1][i], edia[t][j]
+                        if si > 0 and sj > 0 and ei > 0 and ej > 0:
+                            # size/expected should be ~constant for a ball; penalise the
+                            # DEVIATION of the frame-to-frame size ratio from the
+                            # perspective-implied (expected-diameter) ratio.
+                            act = math.log(sj / si)
+                            exp = math.log(ej / ei)
+                            trans += cfg.size_cont_w * (act - exp) ** 2
                 # OFF-FIELD STATE GATE (edge-directional): entering an off-field
                 # candidate is free as a CONTINUATION — the ball crossing out from an
                 # in-field predecessor, or continuing an already-off-field track

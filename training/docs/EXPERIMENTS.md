@@ -63,6 +63,45 @@ on all inspected frames the ball was in candidates. **Data:** `frames_308.py`, `
 `band_g7192.png` (sent to Mark). Cross-ref EXP-DIST-45 (distractor bucket), EXP-DIST-46 (hn4/hn5 mining).
 **Next:** re-check this window with hn5 candidates on CHAIN DONE; wire `size_px` and re-eval selection.
 
+### Size-lever prototype — the arc (2026-07-13, Mark-driven)
+
+Prototyped the size idea on the cached flag (0:33 AR) + coach (3:08) windows. Four corrections, each
+from Mark, each verified with numbers — the PRINCIPLE is right, the MEASUREMENT is the bottleneck:
+
+1. **`size_px` from the detector heatmap is useless** (my first attempt). The heatmap is a trained
+   fixed-σ gaussian, so its blob is ~constant ~13px for *everything* it fires on; `blob/expected` just
+   penalised FAR candidates (tiny expected) and ignored the near distractors. Wrong signal.
+2. **Measure the ACTUAL object blob in the dewarped image, not the heatmap** (Mark). Corrected
+   `object_size()` (foreground-vs-grass connected component). Then the AR reads 60-82px and the coach a
+   clean **210-225px** vs a ball's ~13-16px — size IS informative.
+3. **The `size/expected_GROUND` ratio is aerial-unsafe** (Mark): a near AIRBORNE ball projects high in
+   frame → ground homography says "far" → tiny expected → big ratio → a real aerial ball would be
+   rejected (the exact far balls we want to win). So the gate must be **absolute size + shape**, not
+   relative-to-position.
+4. **Wire size CONTINUITY** (Mark): a ball's apparent size can only change as fast as perspective
+   allows, so penalise size JUMPS — catches a small-ball→big-person handoff while ALLOWING an aerial
+   ball's smooth growth (aerial-safe by construction). Added `RerankConfig.size_cont_w` (default 0;
+   transition penalty on the deviation of the frame-to-frame size ratio from the expected-diameter
+   ratio; smoothed per-candidate sizes to fight measurement noise).
+
+**Results (replay on cached windows, v7 selector + champion config):**
+- **Coach (in-field, clean measurement):** `size_cont_w=8` correctly REJECTS the jump to a 224px person
+  (selected→None, 11/32 frames changed) while leaving size-continuous tracks alone. **Mechanism
+  validated.**
+- **Flag (AR at the field-edge corner):** ~no effect (1/39). Two reasons: (a) the AR reacquires through
+  the MISS state and `size_cont_w` only covers direct candidate→candidate transitions (not
+  miss→reacquisition); (b) the AR's object size is UNreliable at the mask edge (reads 59→14→86 even
+  smoothed — at some frames it measures ball-sized).
+
+**Conclusion:** the size-continuity mechanism works where the size is measurable; the blocker is a
+**reliable image size-measurement at field edges** (foreground thresholding fails there). Real fix =
+a person/object detector for size (plan Phase 4 person head), which is also the aerial-safe
+"is-this-a-person" signal. Plus `size_cont_w` needs extending through miss→reacquisition (carry pre-miss
+size in the miss state) and a held-out aerial-recall check before adoption. `size_cont_w` committed
+default-OFF (dormant until `Candidate.size_px` is populated). The size-free alternative for the flag
+remains the ANCHOR approach. **Data:** `redetect_size.py`, `replay_size.py`, `replay_coach.py`,
+`resize_windows.pkl`/`resize_coach.pkl`.
+
 ## EXP-DIST-46: detector hard-neg retrain — hn4 (GT-guard) BEATS hn2 on held-out; the poison-bug arc + corroboration negatives; hn5 in progress (2026-07-13)
 
 **The poison bug (caught by Mark).** `mine_hard_negatives` originally kept peaks FAR from AutoCam's
