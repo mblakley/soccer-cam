@@ -103,6 +103,14 @@ def main() -> None:
         "(the teacher guard mines the real ball on AutoCam-error frames). Reads each "
         "game's ball_labels.jsonl.",
     )
+    ap.add_argument(
+        "--corroboration-dir",
+        default=None,
+        help="GUARD (scalable): mine on CORROBORATION frames where AutoCam and our v7 "
+        "selector independently agree on the ball (2 sources ~= GT, no human label). "
+        "Reads <dir>/<game_id>.json {global_frame: [x,y]} from build_corrob_labels.py. "
+        "Overrides --use-gt/teacher labels for that game.",
+    )
     args = ap.parse_args()
 
     import av
@@ -165,6 +173,14 @@ def main() -> None:
             )
             hb, _ = dd.load_human_labels(blp, offs)
             labels = {int(k): (float(v[0]), float(v[1])) for k, v in hb.items()}
+        if args.corroboration_dir:
+            cf = Path(args.corroboration_dir) / f"{gid}.json"
+            if not cf.exists():
+                continue
+            labels = {
+                int(k): (float(v[0]), float(v[1]))
+                for k, v in json.loads(cf.read_text(encoding="utf-8")).items()
+            }
         if not labels:
             continue
         geom = build_field_geometry(np.asarray(g["polygon"], float))
