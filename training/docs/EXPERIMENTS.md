@@ -46,6 +46,9 @@ mediocre recall.
 Per-GT-frame, ball-in-view @ R15m (shipped oob_w=2): Spencerport OURS **0.71** vs AutoCam **0.44**
 (net +362 frames; far 0.68 vs 0.46); Iron OURS **0.71** far 0.56 (AutoCam crashed 06-15 -> no aim).
 The selector (v7) + tracker is well ahead of AutoCam's own ball target on the metric that matters.
+CAVEAT: the human GT skews toward HARD/far frames (some divergence-mined on AutoCam failures), so 0.71
+vs 0.44 is the head-to-head ON THE EVAL SET, not the uniform whole-game rate — but it IS a fair
+same-frames comparison, and we're clearly ahead where it's hard.
 **Data:** `adjudicate.py`, `adj_iron.py` (planned viewport vs GT); `oob_eval.py` (raw-selected, the
 misleading proxy); `sweep_viewport.py` (AutoCam-agreement).
 
