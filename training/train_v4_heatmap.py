@@ -147,6 +147,12 @@ def main():
     ap.add_argument("--out", default="G:/v4bench/hm_ds")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="DataLoader workers; raise to feed a data-starved GPU (was hardcoded 4)",
+    )
     ap.add_argument("--crop", type=int, default=256)
     ap.add_argument("--sigma", type=float, default=4.0)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -256,7 +262,14 @@ def main():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     dl = DataLoader(
-        tr, batch_size=args.batch, shuffle=True, num_workers=4, drop_last=True
+        tr,
+        batch_size=args.batch,
+        shuffle=True,
+        num_workers=args.workers,
+        drop_last=True,
+        persistent_workers=args.workers > 0,
+        prefetch_factor=4 if args.workers > 0 else None,
+        pin_memory=True,
     )
     model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
     if args.resume:
