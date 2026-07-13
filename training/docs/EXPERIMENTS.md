@@ -4,6 +4,46 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-47: "detector misses near-aerial ball at 3:08-3:10" = near-range PERSON distractors outrank the in-candidate ball (2026-07-13)
+
+**Trigger:** Mark's review of `spc_hn4_clip` (hn4+v7, Spencerport 05.31): "misses near-range balls in the
+air directly in front of the camera — e.g. ~3:08-3:10 the ball crosses L->R and the detector doesn't
+fire at all."
+
+**Method:** mapped clip 3:08-3:10 -> global frames 7152-7232 (fps 20, camera-path g_start 3392); rendered
+the detector's DEWARPED+MASKED band input (what hn4 actually sees) with all 24 candidates overlaid
+(red=#1, orange=rank 1-4, green=5+), frame-by-frame (`frames_308.py`/`probe_308.py`). No human GT in this
+window -> adjudicated by vision.
+
+**Finding — NOT a recall miss; a RANKING/precision miss.** On every inspected frame the ball WAS in the
+candidate set (rank ~2-4). The detector's #1 score repeatedly went to NEAR-RANGE false positives directly
+in front of the camera: the COACH standing at the near touchline (his head = a big, confident, ball-like
+blob — g7192 #1 pick (3047,1399) sits on him at score 0.82) + near-grass/shadow peaks
+((7248,1167),(5822,1424),(3047,1399)) + recurring STATIC right-sideline distractors ((6303,68x),
+(5514,362)). The ball tracks as #1 during the center-left dribble (g7152-7168), then drops to orange once
+it's played L->R and a near-person peak outscores it.
+
+**Why it reads as "camera loses the ball":** the viewport is pulled toward the confident near peak
+(coach), not the ball. Compounded because the coach is STATIC and the selector's `static_persistence`
+term (`static_w=2.0`) REWARDS a stationary candidate — designed for a ball at rest, it also rewards a
+standing person.
+
+**Levers (all aimed at this exact mode):**
+1. **Hard-negative mining (hn4/hn5)** — near-range person/shadow peaks are confident IN-FIELD distractors
+   = the mining target; hn5's 782 corroboration negs include them. Direct fix: lower their score -> ball
+   returns to #1.
+2. **`size_px` prior is DORMANT** — a near coach-head peak is far larger than the perspective-expected
+   near-ball diameter; the size-vs-expected penalty (`sweep_tracker._prior_size`) exists but `size_px` is
+   never populated (candidates carry `None`). Wiring `size_px` through `extract_peaks` (plan Phase 3)
+   would cheaply kill oversized near peaks.
+3. **Selector** — consider penalizing static+near+large so the `static_persistence` bonus can't reward a
+   standing person.
+
+**Caveat:** can't rule out true recall misses on the fastest airborne frames without GT labels there; but
+on all inspected frames the ball was in candidates. **Data:** `frames_308.py`, `probe_308.py`,
+`band_g7192.png` (sent to Mark). Cross-ref EXP-DIST-45 (distractor bucket), EXP-DIST-46 (hn4/hn5 mining).
+**Next:** re-check this window with hn5 candidates on CHAIN DONE; wire `size_px` and re-eval selection.
+
 ## EXP-DIST-46: detector hard-neg retrain — hn4 (GT-guard) BEATS hn2 on held-out; the poison-bug arc + corroboration negatives; hn5 in progress (2026-07-13)
 
 **The poison bug (caught by Mark).** `mine_hard_negatives` originally kept peaks FAR from AutoCam's
