@@ -24,9 +24,25 @@ blob — g7192 #1 pick (3047,1399) sits on him at score 0.82) + near-grass/shado
 it's played L->R and a near-person peak outscores it.
 
 **Why it reads as "camera loses the ball":** the viewport is pulled toward the confident near peak
-(coach), not the ball. Compounded because the coach is STATIC and the selector's `static_persistence`
-term (`static_w=2.0`) REWARDS a stationary candidate — designed for a ball at rest, it also rewards a
-standing person.
+(coach), not the ball.
+
+**CORRECTION (2026-07-13, later — grounded in `static_diag.py` over the full Spencerport game):** an
+earlier draft here claimed `static_persistence` (`static_w=2.0`) REWARDS a stationary candidate. That is
+BACKWARDS — the emission is `+ static_w * pers` (a COST the Viterbi minimizes), so persistent candidates
+are PENALIZED (`pers` = fraction of frames a candidate's ~2m WORLD cell is occupied, computed over the
+whole game). What the occupancy map actually shows:
+- It DOES catch genuinely-fixed distractors: goals/corners/far-sideline cells hit occ **0.6-0.94** (e.g.
+  the recurring `(6303,686)`, `(1612,467)` peaks) -> penalized ~1.9 nats. Mark's "don't reward static"
+  is already implemented for these.
+- It does NOT catch the 3:08 coach: `(3047,1399)` occ = **0.012 at 2m, 0.007 in image-space** — the
+  detector only false-fires on him ~1% of frames, so he is a TRANSIENT false peak, not a persistent
+  object; persistence can't apply. (Coarsening to 10m makes it worse: coach 0.11 vs GT-ball regional occ
+  median 0.22 / mean 0.33 — the ball legitimately dwells in busy regions/goalmouths, occ up to 0.94, so
+  a hard high-occupancy veto would kill the ball AT GOALS.)
+- So the coach needs the DETECTOR to stop firing on him (mining) + the size prior — NOT persistence.
+- Real persistence improvement (Mark's idea, refined): a LOCATION-AWARE penalty — penalise persistent
+  candidates at the SIDELINE / technical-area (where the ball never dwells) hard, stay gentle at
+  goalmouths (where the ball scores). Testable on cached dumps (no retrain).
 
 **Levers (all aimed at this exact mode):**
 1. **Hard-negative mining (hn4/hn5)** — near-range person/shadow peaks are confident IN-FIELD distractors
@@ -36,8 +52,11 @@ standing person.
    near-ball diameter; the size-vs-expected penalty (`sweep_tracker._prior_size`) exists but `size_px` is
    never populated (candidates carry `None`). Wiring `size_px` through `extract_peaks` (plan Phase 3)
    would cheaply kill oversized near peaks.
-3. **Selector** — consider penalizing static+near+large so the `static_persistence` bonus can't reward a
-   standing person.
+3. **Selector location-aware persistence** — `static_persistence` already penalises persistent FIXED
+   distractors (goals/corners/sidelines, occ 0.6-0.94) but (a) the near-range coach isn't persistently
+   detected so it can't help him, and (b) it can't be a hard veto because the ball visits busy goalmouths
+   (occ up to 0.94). Refinement: weight the persistence penalty by how rarely the BALL dwells at that
+   location (hard on sideline/technical-area, gentle at goalmouths). See CORRECTION above.
 
 **Caveat:** can't rule out true recall misses on the fastest airborne frames without GT labels there; but
 on all inspected frames the ball was in candidates. **Data:** `frames_308.py`, `probe_308.py`,
