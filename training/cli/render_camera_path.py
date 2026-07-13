@@ -49,8 +49,9 @@ def _draw_minimap(
 ):
     """Composite a review minimap into the lower-right of ``rendered`` (RGB, mutated
     in place): dimmed full-frame thumbnail with the field outline (yellow), OUR
-    viewport rectangle (magenta), AutoCam's focus (green cross), the raw ball
-    DETECTION (cyan dot + trail), and the human GT ball (green arrow) when labeled."""
+    viewport rectangle (magenta), AutoCam's VIEWPORT box + focus dot (yellow, from the
+    corrected ``autocam_aim.jsonl``), the raw ball DETECTION (cyan dot + trail), and the
+    human GT ball (green arrow) when labeled."""
     import cv2
     import numpy as np
 
@@ -88,21 +89,25 @@ def _draw_minimap(
     )
     cv2.circle(mini, (ox, oy), 3, (255, 0, 255), -1)
     if ac_xy is not None:
-        cv2.drawMarker(
+        acx, acy = int(ac_xy[0] * sx), int(ac_xy[1] * sy)
+        # AutoCam VIEWPORT box (matched zoom = same hfov as ours, so the box is a pure
+        # AIM comparison) + yellow focus dot = "where AutoCam is looking".
+        cv2.rectangle(
             mini,
-            (int(ac_xy[0] * sx), int(ac_xy[1] * sy)),
-            (0, 255, 0),
-            cv2.MARKER_TILTED_CROSS,
-            14,
+            (int(acx - hw), int(acy - hh)),
+            (int(acx + hw), int(acy + hh)),
+            (255, 255, 0),
             2,
         )
+        cv2.circle(mini, (acx, acy), 5, (255, 255, 0), -1)
+        cv2.circle(mini, (acx, acy), 5, (0, 0, 0), 1)
     if gt_xy is not None:
         gx, gy = int(gt_xy[0] * sx), int(gt_xy[1] * sy)
         cv2.arrowedLine(
             mini, (gx - 13, gy - 13), (gx, gy), (0, 255, 0), 2, tipLength=0.4
         )
     cv2.putText(mini, "OURS", (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
-    cv2.putText(mini, "AC", (66, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+    cv2.putText(mini, "AC", (66, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
     cv2.putText(
         mini, "BALL", (108, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1
     )
@@ -275,20 +280,35 @@ def main() -> None:
         gj.get("video_rotation"),
     )
 
-    # AutoCam viewport for the minimap marker (eval-only comparison artifact).
+    # AutoCam focus for the minimap (eval-only comparison artifact). Prefer the CORRECTED
+    # aim (autocam_aim.jsonl, keyed by combined-frame == global g, corr ~0.77) over the
+    # legacy autocam_viewport.jsonl (seg/f keyed, corr ~0.28 — bad).
     ac_vp: dict[int, tuple[float, float]] = {}
     if not args.no_minimap:
         from training.data_prep import distill_dataset as dd
 
-        offs = dd.seg_offsets(gj["segments"])
-        vpp = gd / "autocam_viewport.jsonl"
-        if vpp.exists():
-            for ln in vpp.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if ln.strip():
+        aimp = gd / "autocam_aim.jsonl"
+        if aimp.exists():
+            for ln in aimp.read_text(encoding="utf-8", errors="ignore").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
                     r = json.loads(ln)
-                    sg = offs.get(r.get("seg"))
-                    if sg is not None:
-                        ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(r, dict) and "f" in r and r.get("x") is not None:
+                    ac_vp[int(r["f"])] = (float(r["x"]), float(r["y"]))
+        else:
+            offs = dd.seg_offsets(gj["segments"])
+            vpp = gd / "autocam_viewport.jsonl"
+            if vpp.exists():
+                for ln in vpp.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if ln.strip():
+                        r = json.loads(ln)
+                        sg = offs.get(r.get("seg"))
+                        if sg is not None:
+                            ac_vp[sg + int(r["f"])] = (float(r["x"]), float(r["y"]))
 
     # ball sidecar (from plan_camera_path): draw the RAW per-frame SELECTED DETECTION
     # (where the ball was actually found), NOT the smoothed track — the smoothed track
