@@ -181,8 +181,26 @@ archive and `torch.load` chokes on it: `file in archive is not in a subdirectory
 min-ball-dist 80px) yielded 782 crops (~52/game) — MODEST, because agreement frames are the EASY frames
 with few minable distractors; the value is poison-free + venue-diverse (15 games), not raw count. hn5 =
 clean positives + 782 corroboration negs, from-scratch, 20 epochs (best.pt on val-recall improvement).
-Training 06:00→~14:40 (2026-07-13), epoch 1 val recall 0.332. Judge on held-out ceiling non-regression
-+ argmax ≥ hn4 on BOTH held-out games.
+Training done 14:46, best.pt=epoch 13 (val-crop recall 0.389, marginally above hn4's 0.386).
+
+**hn5 RESULT — REGRESSION, DO NOT ADOPT.** 3-way held-out ceiling/argmax on the Spencerport clip
+(3392-9388, R15m):
+
+| metric | hn5 | hn4 | hn2 |
+|---|---|---|---|
+| CEILING far | 0.939 | **0.965** | 0.948 |
+| ARGMAX all | 0.254 | **0.418** | 0.351 |
+| ARGMAX far | 0.148 | **0.339** | 0.296 |
+| RANK far absent | 0.06 | 0.03 | 0.05 |
+
+hn5 is the WORST of the three — ceiling BELOW baseline hn2, and argmax-far (0.148) roughly HALF of hn2's
+(0.296). The 782 corroboration negatives OVER-SUPPRESSED, especially far balls — the opposite of the
+GT-guarded hn4. Note hn5's val-crop recall (0.389) was the HIGHEST of the family yet it's the worst
+held-out detector — a second, stronger confirmation that val-crop recall does NOT predict held-out
+(cf. hn4, where the reverse held). Likely cause: corroboration frames are the EASY (agreed) frames, so
+their mined "distractors" sit near ball-like far detections and teach the net to suppress them.
+**Verdict:** hn4 (GT-guarded) remains the best detector; the corroboration-negatives approach failed.
+Adopt hn4 over hn2 pending an Iron-clip confirmation; drop hn5.
 
 **Takeaway:** the SELECTOR (v7, EXP-DIST-44) is still the biggest win, but the detector B-track is NOT
 dead — GT-guarded hard-neg mining gives a real (small) held-out gain (hn4 > hn2). hn5 tests whether
