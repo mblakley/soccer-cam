@@ -59,7 +59,7 @@ class BallSelectStepConfig(BaseModel):
     select_static_w: float = 2.0
     select_phys_sigma_px: float = 5.0
     select_bridge_w: float = 2.0
-    select_oob_w: float = 2.0
+    select_oob_w: float = 0.0  # off-field pin OFF (EXP-DIST-48: hurt held-out recall; oob0 wins both games)
     # Minimum candidate-pack width. The step auto-expands this to fit the actual
     # per-frame candidate count so it can never truncate candidates; it does NOT
     # affect feature normalization (that is pinned to the training top_k inside

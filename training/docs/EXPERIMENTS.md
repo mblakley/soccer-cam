@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-48: off-field pin (oob_w) HURTS held-out selected recall — adopt oob_w=0 (2026-07-13)
+
+**Trigger:** the new multi-game viewport-vs-AutoCam sweep (`sweep_viewport.py`, scores our planned
+viewport vs AutoCam's corrected aim across games/configs) flagged `oob0` (oob_w=0) as the best config
+on BOTH Spencerport + Chili — higher AutoCam-agreement AND fewer divergence windows.
+
+**Method:** validated against HUMAN GT (not just AutoCam-agreement) via `oob_eval.py` — rerank's SELECTED
+pick vs `ball_labels` at R15m, far/near bands, oob_w in {0,1,2,4}, on both held-out games.
+
+**Result (selected recall vs GT):**
+
+| game | band | oob_w=2 (old champion) | oob_w=0 |
+|---|---|---|---|
+| Spencerport 05.31 | far / near | 0.384 / 0.385 | **0.412 / 0.431** |
+| Irondequoit 06.15 | far / near | 0.301 / 0.433 | **0.318 / 0.523** |
+
+Monotonic on Spencerport (oob_w 0 best → 4 worst) with fewer miss frames (7552 vs 9281). The off-field
+pin (added EXP-DIST-38 for genuine ball-exits / restart spots) was pulling the track toward field
+boundaries during NORMAL play → wrong picks + misses + off-frame viewport centers (the symptom that blew
+up on the BU14/Chili out-of-distribution game: plan centers ran to x=-433/7960, off-frame).
+
+**Decision:** set `select_oob_w = 0.0` (shipped preset + `ball_select` step + `plan_camera_path`
+default). Double-confirmed win on both held-out games, both bands, on GT recall AND AutoCam-agreement.
+This REVERSES the EXP-DIST-38 default (oob_w=2) — the pin's in-play harm outweighs its exit-handling
+benefit on the metric we optimize (selected recall).
+
+**Caveat (monitor):** in-play GT does not measure GENUINE out-of-play handling (throw-ins/corners where
+the ball truly left) — the pin's original purpose. Verify no exit-framing regression via the
+divergence-window adjudication (next harness step). Trivially reversible (one config value).
+**Data:** `sweep_viewport.py`, `oob_eval.py`, `oob_eval_iron.py`.
+
 ## EXP-DIST-47: "detector misses near-aerial ball at 3:08-3:10" = near-range PERSON distractors outrank the in-candidate ball (2026-07-13)
 
 **Trigger:** Mark's review of `spc_hn4_clip` (hn4+v7, Spencerport 05.31): "misses near-range balls in the

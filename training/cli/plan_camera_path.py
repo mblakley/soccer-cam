@@ -103,7 +103,9 @@ def main() -> None:
     ap.add_argument("--pnone-scale", type=float, default=1.0)
     ap.add_argument("--phys-sigma-px", type=float, default=5.0)
     ap.add_argument("--bridge-w", type=float, default=2.0)
-    ap.add_argument("--oob-w", type=float, default=2.0)
+    ap.add_argument(
+        "--oob-w", type=float, default=0.0
+    )  # off-field pin OFF (EXP-DIST-48: oob0 wins both held-out games)
     ap.add_argument("--static-w", type=float, default=2.0)
     args = ap.parse_args()
 
