@@ -616,6 +616,10 @@ def rerank(
     missv: list[np.ndarray | None] = [None]
     missoob: list[np.ndarray | None] = [None]  # pinned boundary-crossing expectation
     missdur: list[float] = [0.0]
+    misssz: list[float | None] = [None]  # object size where the ball entered miss
+    missedia: list[float | None] = [
+        None
+    ]  # expected ball diameter there (perspective ref)
     wpoly = _world_polygon(geom) if cfg.oob_w > 0 else None
     img_poly = (
         np.asarray(geom.polygon, np.float32).reshape(-1, 1, 2)
@@ -670,6 +674,7 @@ def rerank(
         # local bindings so mypy can narrow the Optional miss-state reads at t-1
         mw_prev, mv_prev = missw[t - 1], missv[t - 1]
         moob_prev, mdur_prev = missoob[t - 1], missdur[t - 1]
+        msz_prev, media_prev = misssz[t - 1], missedia[t - 1]
         for j in range(k + 1):
             e = miss(t) if j == k else emis(t, j)
             best, bi = np.inf, -1
@@ -796,6 +801,24 @@ def rerank(
                     reacq_d = math.hypot(*(fw[t][j] - mw_prev))
                     if reacq_d > cfg.reacq_free_m:
                         trans += cfg.reacq_dist_w * (reacq_d - cfg.reacq_free_m)
+                # SIZE-CONTINUITY across the miss (Mark 2026-07-13): reacquiring a candidate
+                # whose object size jumps from the PRE-MISS size beyond the perspective-
+                # implied change is a distractor grab (small ball -> big person). Aerial-safe:
+                # a ball that grew smoothly before the miss keeps a near-1 ratio. Needs
+                # Candidate.size_px (else msz_prev is None -> skipped).
+                if (
+                    cfg.size_cont_w > 0.0
+                    and j != k
+                    and i == kp
+                    and msz_prev is not None
+                    and media_prev
+                    and sz
+                    and sz[t][j] > 0
+                    and edia[t][j] > 0
+                ):
+                    act = math.log(sz[t][j] / msz_prev)
+                    exp = math.log(edia[t][j] / media_prev)
+                    trans += cfg.size_cont_w * (act - exp) ** 2
                 v = cost[t - 1][i] + trans
                 if v < best:
                     best, bi = v, i
@@ -809,6 +832,8 @@ def rerank(
             missv.append(missv[t - 1])
             missoob.append(missoob[t - 1])
             missdur.append(missdur[t - 1] + gap)
+            misssz.append(misssz[t - 1])
+            missedia.append(missedia[t - 1])
         elif 0 <= bi_m < kp:  # entered miss from a candidate: freeze where it left
             missw.append(fw[t - 1][bi_m].copy())
             # exit velocity from the entering path's last step (its backpointer),
@@ -833,11 +858,19 @@ def rerank(
                 else None
             )
             missdur.append(float(gap))
+            if cfg.size_cont_w > 0.0 and sz and len(sz[t - 1]) and len(edia[t - 1]):
+                misssz.append(float(sz[t - 1][bi_m]))
+                missedia.append(float(edia[t - 1][bi_m]))
+            else:
+                misssz.append(None)
+                missedia.append(None)
         else:
             missw.append(None)
             missv.append(None)
             missoob.append(None)
             missdur.append(float(gap))
+            misssz.append(None)
+            missedia.append(None)
 
     path = [int(np.argmin(cost[-1]))]
     for t in range(n - 1, 0, -1):
