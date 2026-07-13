@@ -59,7 +59,7 @@ class BallSelectStepConfig(BaseModel):
     select_static_w: float = 2.0
     select_phys_sigma_px: float = 5.0
     select_bridge_w: float = 2.0
-    select_oob_w: float = 0.0  # off-field pin OFF (EXP-DIST-48: hurt held-out recall; oob0 wins both games)
+    select_oob_w: float = 2.0  # EXP-DIST-48: oob0 helped raw-selected but planned-viewport-vs-GT favors 2.0
     # Minimum candidate-pack width. The step auto-expands this to fit the actual
     # per-frame candidate count so it can never truncate candidates; it does NOT
     # affect feature normalization (that is pinned to the training top_k inside

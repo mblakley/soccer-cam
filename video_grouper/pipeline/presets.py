@@ -90,11 +90,9 @@ PRESETS: dict[str, list[_PresetStep]] = {
                 "select_static_w": 2.0,
                 "select_phys_sigma_px": 5.0,
                 "select_bridge_w": 2.0,
-                # off-field pin OFF (EXP-DIST-48): oob_w=2 pinned the track to field
-                # boundaries during normal play, hurting selected recall. oob_w=0 beat it
-                # on BOTH held-out games (Spencerport far 0.384->0.412 near 0.385->0.431;
-                # Iron far 0.301->0.318 near 0.433->0.523) + AutoCam-agreement.
-                "select_oob_w": 0.0,
+                # KEPT at 2.0: EXP-DIST-48 tried oob0 (helped raw-selected recall) but the
+                # PLANNED-VIEWPORT-vs-GT metric (what ships) favors oob_w=2 on BOTH held-out games.
+                "select_oob_w": 2.0,
             },
         ),
         (

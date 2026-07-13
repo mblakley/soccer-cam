@@ -4,7 +4,7 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-DIST-48: off-field pin (oob_w) HURTS held-out selected recall — adopt oob_w=0 (2026-07-13)
+## EXP-DIST-48: oob_w — oob0 tried then REVERTED (wrong metric); + we already BEAT AutoCam 0.71 vs 0.44 (2026-07-13)
 
 **Trigger:** the new multi-game viewport-vs-AutoCam sweep (`sweep_viewport.py`, scores our planned
 viewport vs AutoCam's corrected aim across games/configs) flagged `oob0` (oob_w=0) as the best config
@@ -25,15 +25,29 @@ pin (added EXP-DIST-38 for genuine ball-exits / restart spots) was pulling the t
 boundaries during NORMAL play → wrong picks + misses + off-frame viewport centers (the symptom that blew
 up on the BU14/Chili out-of-distribution game: plan centers ran to x=-433/7960, off-frame).
 
-**Decision:** set `select_oob_w = 0.0` (shipped preset + `ball_select` step + `plan_camera_path`
-default). Double-confirmed win on both held-out games, both bands, on GT recall AND AutoCam-agreement.
-This REVERSES the EXP-DIST-38 default (oob_w=2) — the pin's in-play harm outweighs its exit-handling
-benefit on the metric we optimize (selected recall).
+**Adopted oob_w=0, then REVERTED — I'd measured the wrong stage.** The `oob_eval.py` above scored
+the RAW rerank-selected pick. But the product is the PLANNED VIEWPORT (rerank -> bridge_aerial_gaps ->
+kalman -> upsample -> plan_camera). Scoring that vs GT (`adjudicate.py`, R15m, on the SHIPPED pipeline)
+FLIPS the result — oob_w=2 wins on BOTH held-out games:
 
-**Caveat (monitor):** in-play GT does not measure GENUINE out-of-play handling (throw-ins/corners where
-the ball truly left) — the pin's original purpose. Verify no exit-framing regression via the
-divergence-window adjudication (next harness step). Trivially reversible (one config value).
-**Data:** `sweep_viewport.py`, `oob_eval.py`, `oob_eval_iron.py`.
+| planned-viewport recall vs GT | oob_w=2 | oob_w=0 |
+|---|---|---|
+| Spencerport all / far | **0.707 / 0.682** | 0.654 / 0.615 |
+| Irondequoit all / far | **0.714 / 0.562** | 0.689 / 0.523 |
+
+So `oob_w` reverted to **2.0** (the EXP-DIST-38 default stands). The oob pin's boundary "misses" are
+GOOD — the bridge/kalman coast through them onto the ball; oob0's fewer-but-wronger raw picks smooth into
+worse viewport centers. **METHODOLOGY LESSON (load-bearing): evaluate configs on the PLANNED VIEWPORT vs
+human GT (`adjudicate.py`), NOT raw-selected recall (`oob_eval.py`) and NOT AutoCam-agreement
+(`sweep_viewport.py`).** AutoCam-agreement is an actively bad objective — it pulls toward AutoCam's
+mediocre recall.
+
+**BUT the adjudication surfaced the headline win: we ALREADY BEAT AutoCam on both held-out games.**
+Per-GT-frame, ball-in-view @ R15m (shipped oob_w=2): Spencerport OURS **0.71** vs AutoCam **0.44**
+(net +362 frames; far 0.68 vs 0.46); Iron OURS **0.71** far 0.56 (AutoCam crashed 06-15 -> no aim).
+The selector (v7) + tracker is well ahead of AutoCam's own ball target on the metric that matters.
+**Data:** `adjudicate.py`, `adj_iron.py` (planned viewport vs GT); `oob_eval.py` (raw-selected, the
+misleading proxy); `sweep_viewport.py` (AutoCam-agreement).
 
 ## EXP-DIST-47: "detector misses near-aerial ball at 3:08-3:10" = near-range PERSON distractors outrank the in-candidate ball (2026-07-13)
 
