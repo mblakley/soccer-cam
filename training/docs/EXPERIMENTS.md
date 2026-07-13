@@ -4,6 +4,63 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-46: detector hard-neg retrain — hn4 (GT-guard) BEATS hn2 on held-out; the poison-bug arc + corroboration negatives; hn5 in progress (2026-07-13)
+
+**The poison bug (caught by Mark).** `mine_hard_negatives` originally kept peaks FAR from AutoCam's
+ball as negatives. On frames where AutoCam is WRONG (its own failure frames — exactly the frames the
+far-label sets were mined from), the true ball sits far from AutoCam's pick, so the miner cropped the
+REAL BALL as a "negative." Mark caught real game balls in the mined set. Poison: a from-scratch train
+on that store teaches the detector to SUPPRESS the ball.
+
+**Two guards added (both verified before any training).**
+- `--use-gt` (GT-guard): mine only on HUMAN-GT frames, using the true ball as the exclusion centre.
+  Verified min 83px from GT, 0 violations, 480 clean crops; vision-gated.
+- `--corroboration-dir` (scalable, poison-free): mine on frames where AutoCam AND our v7 selector
+  INDEPENDENTLY agree on the ball (≤50px, `build_corrob_labels.py`) — 2 sources ≈ GT with no human
+  label. Far more safe frames than human GT alone (Cleveland 2124 agreement frames vs 54 human-GT),
+  15 training games. Held-out Spencerport/Irondequoit excluded.
+
+**hn4 = from-scratch on `crops_reolink` (old teacher-mined `hardmine` negs REMOVED) + 480 GT-guarded
+negs.** (Fine-tune rejected — hn3/hn3b regressed, EXP-DIST-27: hard negs belong in a FULL retrain, not
+a warm-start.) 40 epochs, early-stopped ep9, best=ep5. Val-CROP recall 0.386(ep5)→0.368(ep9),
+fp_on_bg 333→127 — this LOOKED like over-suppression.
+
+**But held-out says hn4 BEATS hn2.** Candidate ceiling + score-argmax on the held-out Spencerport 05.31
+clip (frames 3392–9388, 134 GT: 115 far / 19 near), R15m, via `ceiling_hn4hn2.py`:
+
+| metric (R15m) | hn4 (best=ep5) | hn2 |
+|---|---|---|
+| CEILING all | **0.970** | 0.955 |
+| CEILING far | **0.965** | 0.948 |
+| CEILING near | 1.000 | 1.000 |
+| ARGMAX all | **0.418** | 0.351 |
+| ARGMAX far | **0.339** | 0.296 |
+| ARGMAX near | **0.895** | 0.684 |
+| RANK far absent | 0.03 | 0.05 |
+
+Hard-neg training did exactly what it should: distractors score lower → the true ball is the top peak
+more often (argmax up in EVERY band) AND the ceiling ROSE (ball still in candidates). **Lesson:
+val-CROP recall ≠ held-out detector quality — judge detectors on held-out ceiling/argmax, not the
+crop-val recall curve.** (An overnight "hn4 is a wash" read from the recall curve was WRONG.) Caveat:
+1 clip / 1 game / mostly-far — needs the full both-games eval (Irondequoit too) to confirm.
+
+**Viewport check:** plan-scored hn4+v7 = 0.716 human-tier ball-in-fixed-viewport, 3 loss-windows; clip
+rendered + sent to Mark. (Render/plan consume the selector `.pt`, NOT the `.npz` — the `.npz` is a numpy
+archive and `torch.load` chokes on it: `file in archive is not in a subdirectory: schema.npy`.)
+
+**hn5 (in progress).** Corroboration-mine over 15 games (sample-stride 10, max-per-frame 2,
+min-ball-dist 80px) yielded 782 crops (~52/game) — MODEST, because agreement frames are the EASY frames
+with few minable distractors; the value is poison-free + venue-diverse (15 games), not raw count. hn5 =
+clean positives + 782 corroboration negs, from-scratch, 20 epochs (best.pt on val-recall improvement).
+Training 06:00→~14:40 (2026-07-13), epoch 1 val recall 0.332. Judge on held-out ceiling non-regression
++ argmax ≥ hn4 on BOTH held-out games.
+
+**Takeaway:** the SELECTOR (v7, EXP-DIST-44) is still the biggest win, but the detector B-track is NOT
+dead — GT-guarded hard-neg mining gives a real (small) held-out gain (hn4 > hn2). hn5 tests whether
+scaling clean, venue-diverse negatives helps further. **Data:** `ceiling_hn4hn2.py`,
+`build_corrob_labels.py`, `mine_hard_negatives.py --use-gt/--corroboration-dir`. Cross-ref EXP-DIST-27
+(fine-tune regression), EXP-DIST-44 (v7 selector), EXP-DIST-45 (3-cause detector diagnosis).
+
 ## EXP-DIST-45: cross-game detector difficulty — the hard games are 3 DISTINCT causes, not "lighting" (2026-07-12)
 
 **Method:** `crossgame_diag.py` — per game with a candidate dump, our-detector-finds-AutoCam-ball rate
