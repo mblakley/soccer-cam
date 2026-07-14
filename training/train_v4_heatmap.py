@@ -29,16 +29,18 @@ DEFAULT_POLY_IRON = "D:/detect_work/v4_test_clips/irondequoit_field_polygon.json
 # name/clip is Spencerport is the evaluation ground truth (spc_normal* = NORMAL
 # split, spc_clip*/spc_diverge = HARD far split); training on it would leak the
 # eval and silently inflate every recall number. Enforced by assert below.
-HELD_OUT_TOKENS = ("spc", "spencerport")
+# Iron 06.15 is ALSO held-out: `heat_0615_*` and `iron_ourloss_spans` are both the
+# 2026.06.15-vs-Irondequoit game — the clip token `2026.06.15` catches them via the
+# manifest clip path (06.04 Irondequoit stays trainable), `0615` catches the set names.
+HELD_OUT_TOKENS = ("spc", "spencerport", "2026.06.15", "0615")
 
 # Per-far-label-set field polygons keyed by a token in the set's dir name. A set
 # whose name contains one of these keys uses the mapped human-verified polygon;
 # anything else falls back to DEFAULT_POLY_0527. This is the generic "wire a new
 # game in as a training set" hook — add a (token, polygon_path) pair to onboard a
-# game. ``heat_0615_*`` (6/15 Irondequoit @ Parma) uses the human-tightened
-# polygon Mark edited in the v4 field editor.
+# game. (``heat_0615_*`` was mapped here, but 6/15 Irondequoit is HELD-OUT eval —
+# see HELD_OUT_TOKENS — so those sets are excluded before this map is consulted.)
 SET_POLYGONS = {
-    "heat_0615": "G:/ballresearch/distill/det0615/field_polygon_0615.json",
     "irondequoit": DEFAULT_POLY_IRON,
 }
 
@@ -105,7 +107,7 @@ def assemble_games(
             }
         )
     assert not any(_is_held_out(g["game_id"], g["video"]) for g in games), (
-        "held-out Spencerport set leaked into training games"
+        "held-out set leaked into training games (Spencerport 05.31 / Iron 06.15)"
     )
     return games
 
@@ -192,9 +194,11 @@ def main():
     ap.add_argument(
         "--dynamic-sigma",
         action="store_true",
-        help="Experiment A (dynamic ball size): per-sample target gaussian sigma scales with "
-        "the ball's field DEPTH (tight for far/small balls, broad for near/big) so the detector "
-        "learns a location-aware size prior. Records depth (like --far-weight); train from scratch.",
+        help="Experiment A (dynamic ball size). DOMINATED / DEAD END — see EXP-DIST-49: the "
+        "detector trains on `_native_iso_warp` crops where the isometric warp NORMALIZES apparent "
+        "ball size to a constant ~6px (measured flat across depth, n=4712), so a depth-scaled sigma "
+        "paints oversized targets on near balls that aren't actually bigger. Kept default-off for "
+        "reference; use a fixed --sigma instead. Records depth (like --far-weight); train from scratch.",
     )
     ap.add_argument(
         "--sigma-far",

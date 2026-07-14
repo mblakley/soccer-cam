@@ -4,6 +4,63 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-49: dynamic-σ (Flavor A) has NO basis — the iso-warp normalizes ball size to a constant ~6px in the detector's crops (2026-07-13)
+
+**Trigger:** Mark — "the heatmap blob should NOT be a constant size; the ball gets bigger/smaller with
+depth" → try dynamic-σ (Experiment A: per-sample target σ scaling with field depth) as a separate
+"flavor" vs a size head (Experiment B), and keep the GPU busy overnight.
+
+**Method:** BEFORE spending GPU-hours, measure the premise directly on the champion store
+(`crops_reolink`, the hn4 data). Key realization: the detector does NOT see the source panorama — it
+sees `_native_iso_warp` dewarped BAND crops. Recompute each positive crop's faithful field depth exactly
+as `build_heatmap_crops` records it (`depth = clip(warp.points([(bx,by)])[0][1] / bh, 0, 1)` — the
+ball's warped band-y; a pure geometric transform, no decode), then measure the ball's apparent diameter
+in the crop, binned by depth (n=4712 matched positive crops across Cleveland/Cuyahoga/Pittsford).
+
+**Result — ball diameter is FLAT across field depth:**
+
+| dby/bh depth band | n | mean diam | median |
+|---|---|---|---|
+| 0.00–0.20 (far) | 836 | 5.83 | 5.97 |
+| 0.20–0.30 | 1331 | 5.97 | 6.18 |
+| 0.30–0.40 | 402 | 6.30 | 6.68 |
+| 0.40–0.55 | 297 | 5.66 | 6.08 |
+| 0.55–0.90 (near) | 326 | 5.41 | 5.53 |
+
+If anything the FAR balls are slightly BIGGER than near — the opposite of dynamic-σ's assumption.
+Vision-confirmed on rendered crops (far→near): the ball is a ~6px blob everywhere; the high-depth
+"near" crops mostly contain large white PLAYERS (~80px), not a bigger ball. Depth is also heavily
+concentrated (median 0.255; ~95% in 0.1–0.4), so dynamic-σ (σ 2→8 over depth 0→1) would emit σ≈3.3 for
+virtually every ball regardless.
+
+**Conclusion:** Mark's intuition holds in the SOURCE panorama, but the `iso` in `_native_iso_warp` is
+literal — the isometric field-plane warp NORMALIZES apparent ball size before the detector sees it. So a
+FIXED σ is correct and **dynamic-σ is not just unhelpful, it is counterproductive** (it would paint
+oversized targets on near balls that aren't actually bigger). Flavor A is DEAD. The `--dynamic-sigma`
+code (fb01b64) is kept default-off with a "dominated — see EXP-DIST-49" note (not reverted: preserves
+the machinery + the documented negative result).
+
+**Evidence-motivated replacement (running — `sigma_exp` task):** the ball is ~6px but fixed σ=4 paints a
+~16px target blob — too broad. The real lever is target SHARPNESS, not depth-dependence → a fixed-σ
+sweep (σ=3, σ=2.5 vs hn4's σ=4), from scratch, same recipe (`--base 24 --epochs 40`), dumped + swept on
+held-out Spencerport. Chained after the Iron dump. [results pending]
+
+**Also this session (verification, not new experiments):**
+- **Eval-integrity re-verified (hn4/hn5 CLEAN):** direct scan of `crops_reolink` for held-out
+  contamination → **0** crops from Spencerport 05.31 and **0** from Iron 06.15 (the 5207 "05.31" and
+  5149 "irond" hits are same-date West-Seneca and trainable 06.04-Irondequoit — date/name collisions,
+  not the held-out games). The "we beat AutoCam on both held-out games" claim is NOT
+  detector-contaminated.
+- **Latent leak FIXED in `train_v4_heatmap`:** its far_label `--rebuild` path guarded only Spencerport;
+  `heat_0615_*` + `iron_ourloss_spans` (both = held-out Iron 06.15) would have leaked into a rebuild.
+  Added `2026.06.15` + `0615` to `HELD_OUT_TOKENS`, removed the `heat_0615` training-polygon entry.
+  hn4/hn5 used the DISTILL path (`build_distill_dataset`/`mine_hard_negatives --holdout`), so no
+  existing model is affected — this only hardens the far_label trainer.
+- **AutoCam is CPU/RAM-bound, NOT GPU-bound** (Mark's correction — verified): `autocam.exe` = 2281
+  CPU-s / ~4 GB RSS; GPU memory-util 1–9% / 595 MiB / ~30 W on a 120 W card; it appears in
+  `nvidia-smi` only as a `C+G` GUI context (same tag as dwm/explorer). So a GPU training coexists with
+  the CPU-bound aim batch — which is the parallelism the overnight plan uses.
+
 ## EXP-DIST-48: oob_w — oob0 tried then REVERTED (wrong metric); + we already BEAT AutoCam 0.71 vs 0.44 (2026-07-13)
 
 **Trigger:** the new multi-game viewport-vs-AutoCam sweep (`sweep_viewport.py`, scores our planned
