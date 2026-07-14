@@ -189,6 +189,25 @@ def main():
         help="warm-start model weights from this checkpoint (fine-tune, e.g. a hard-neg pass "
         "on top of best.pt) instead of training from scratch.",
     )
+    ap.add_argument(
+        "--dynamic-sigma",
+        action="store_true",
+        help="Experiment A (dynamic ball size): per-sample target gaussian sigma scales with "
+        "the ball's field DEPTH (tight for far/small balls, broad for near/big) so the detector "
+        "learns a location-aware size prior. Records depth (like --far-weight); train from scratch.",
+    )
+    ap.add_argument(
+        "--sigma-far",
+        type=float,
+        default=2.0,
+        help="target sigma at depth=0 (far touchline) when --dynamic-sigma",
+    )
+    ap.add_argument(
+        "--sigma-near",
+        type=float,
+        default=8.0,
+        help="target sigma at depth=1 (near touchline) when --dynamic-sigma",
+    )
     args = ap.parse_args()
 
     import torch
@@ -202,6 +221,7 @@ def main():
     from training.models.heatmap_net import HeatmapNet
 
     far_on = args.far_weight > 0.0
+    dyn_on = args.dynamic_sigma
 
     out = Path(args.out)
     if args.rebuild or not (out / "index.json").exists():
@@ -214,7 +234,7 @@ def main():
             crop=args.crop,
             sigma=args.sigma,
             val_game_ids=val_ids,
-            record_depth=far_on,
+            record_depth=far_on or dyn_on,
         )
         print("dataset:", summary, flush=True)
 
@@ -250,8 +270,44 @@ def main():
                 torch.tensor(far, dtype=torch.float32),
             )
 
-    ds_cls = _DepthDataset if far_on else HeatmapCropDataset
+    class _DynSigmaDataset(HeatmapCropDataset):
+        """Experiment A: per-sample target sigma = sigma_far + (sigma_near - sigma_far) * depth
+        (depth 0=far -> tight gaussian; 1=near -> broad) so the target encodes the ball's
+        location-dependent apparent size. Negatives stay all-zero. Returns (stack, tgt)."""
+
+        sigma_far: float = 2.0
+        sigma_near: float = 8.0
+
+        def __getitem__(self, i):
+            import random
+
+            import numpy as _np
+
+            r = self.items[i]
+            stack = (
+                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+            )
+            if r["x"] is None:
+                tgt = _np.zeros((self.crop, self.crop), _np.float32)
+            else:
+                depth = float(r.get("depth", 0.5))
+                sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
+                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
+            if self.augment and random.random() < 0.5:
+                stack = _np.ascontiguousarray(stack[:, :, ::-1])
+                tgt = _np.ascontiguousarray(tgt[:, ::-1])
+            return torch.from_numpy(stack), torch.from_numpy(tgt[None])
+
+    if dyn_on:
+        ds_cls: type = _DynSigmaDataset
+    elif far_on:
+        ds_cls = _DepthDataset
+    else:
+        ds_cls = HeatmapCropDataset
     tr = ds_cls(out, "train", args.crop, args.sigma)
+    if dyn_on:
+        tr.sigma_far = args.sigma_far
+        tr.sigma_near = args.sigma_near
     va = HeatmapCropDataset(out, "val", args.crop, args.sigma)
     print(
         f"train crops={len(tr)} val crops={len(va)} far_weight={args.far_weight}",
