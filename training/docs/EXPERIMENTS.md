@@ -4,7 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-DIST-49: dynamic-σ (Flavor A) has NO basis — the iso-warp normalizes ball size to a constant ~6px in the detector's crops (2026-07-13)
+## EXP-DIST-49 [CORRECTED 2026-07-14]: dynamic-σ WAS wrongly dismissed — ball size DOES vary ~4→17px with depth; my "constant size" was a flawed measurement (2026-07-13/14)
+
+**CORRECTION (2026-07-14, after Mark challenged the constant-size claim — he was right):** the
+conclusion in the original entry below (dynamic-σ dead, ball size constant) is **WRONG**. Two errors:
+1. **Wrong warp.** I explained `FieldWarp` (`training/data_prep/field_warp.py`, which normalizes ball
+   size from a size-vs-row gradient) — but that is unused training code. The ACTUAL product warp is
+   `CropIsoWarp` (`video_grouper/inference/iso_warp.py`): a plain field-band crop
+   (`img[y_top:y_bot]`) + a single **isotropic** `cv2.resize` by `scale=target_width/src_w` (same
+   factor both axes). It does NOT depth-normalize — its size normalization is CROSS-CAMERA angular
+   scale only (Dahua vs Reolink panorama width). Perspective is preserved, so far balls ARE smaller.
+2. **Flawed measurement.** My "constant ~6px" area-threshold blob measure captured the ball's
+   ~constant bright specular CORE, not its true extent — it badly under-measured near balls (17px→5px).
+
+Geometry (a projected 22 cm ball via the field homography — exact, not a pixel measure) shows the real
+gradient:
+
+| depth (far→near) | 0.0 | 0.2 | 0.4 | 0.6 | 0.8 | 1.0 |
+|---|---|---|---|---|---|---|
+| Cleveland diam px | 3.8 | 6.0 | 8.5 | 11.2 | 14.2 | 17.5 |
+| Spencerport diam px | 3.8 | 5.7 | 7.9 | 10.3 | 13.0 | 15.9 |
+
+A **4–4.6× range**. So **dynamic-σ IS motivated**: fixed σ=4 (target blob ≈16px) fits NEAR balls
+(~17px) but is ~4× too big for FAR balls (~4px) — exactly the weak band. A depth-scaled target σ
+(tight far ~1.5, broad near ~5) matches the ball. The eval-integrity + AutoCam-GPU findings below stand;
+only the dynamic-σ conclusion is reversed. Next: analyze the in-flight σ=3 fixed sweep (a half-measure —
+a sharper *constant* σ helps far but hurts near), then run dynamic-σ properly (depth-scaled, tuned).
+Original (wrong) analysis kept below for the record.
+
+---
+
+**[SUPERSEDED — the reasoning below reached the wrong conclusion; see CORRECTION above]**
 
 **Trigger:** Mark — "the heatmap blob should NOT be a constant size; the ball gets bigger/smaller with
 depth" → try dynamic-σ (Experiment A: per-sample target σ scaling with field depth) as a separate

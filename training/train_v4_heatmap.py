@@ -194,23 +194,23 @@ def main():
     ap.add_argument(
         "--dynamic-sigma",
         action="store_true",
-        help="Experiment A (dynamic ball size). DOMINATED / DEAD END — see EXP-DIST-49: the "
-        "detector trains on `_native_iso_warp` crops where the isometric warp NORMALIZES apparent "
-        "ball size to a constant ~6px (measured flat across depth, n=4712), so a depth-scaled sigma "
-        "paints oversized targets on near balls that aren't actually bigger. Kept default-off for "
-        "reference; use a fixed --sigma instead. Records depth (like --far-weight); train from scratch.",
+        help="Experiment A (dynamic ball size): per-sample target gaussian sigma scales with the "
+        "ball's field DEPTH to match the real perspective size gradient. CropIsoWarp preserves "
+        "perspective (see EXP-DIST-49 correction), so ball apparent size runs ~4px (far) -> ~17px "
+        "(near) — fixed sigma=4 fits near but is ~4x too broad for far. Suggested --sigma-far ~1.5, "
+        "--sigma-near ~5. Records depth (like --far-weight); train from scratch.",
     )
     ap.add_argument(
         "--sigma-far",
         type=float,
-        default=2.0,
-        help="target sigma at depth=0 (far touchline) when --dynamic-sigma",
+        default=1.5,
+        help="target sigma at depth=0 (far touchline, ~4px ball) when --dynamic-sigma",
     )
     ap.add_argument(
         "--sigma-near",
         type=float,
-        default=8.0,
-        help="target sigma at depth=1 (near touchline) when --dynamic-sigma",
+        default=5.0,
+        help="target sigma at depth=1 (near touchline, ~17px ball) when --dynamic-sigma",
     )
     args = ap.parse_args()
 
