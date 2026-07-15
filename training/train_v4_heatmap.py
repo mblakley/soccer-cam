@@ -112,6 +112,24 @@ def assemble_games(
     return games
 
 
+def require_positive_depth(items: list[dict], store, flag: str) -> None:
+    """Hard-fail when a depth-consuming flag runs on a store whose positives lack depth.
+
+    The depth datasets used to substitute a silent mid-field default for a missing
+    ``depth`` key, so ``--dynamic-sigma`` on a depth-less (or PARTIALLY recorded)
+    store trained those positives at one constant σ without erroring. Partial
+    stores are the dangerous case — they look depth-ready but aren't.
+    """
+    pos = [r for r in items if r.get("x") is not None]
+    missing = sum(1 for r in pos if "depth" not in r)
+    if missing:
+        raise SystemExit(
+            f"{flag}: {missing}/{len(pos)} positive crops in {store} have no 'depth' "
+            "field. Rebuild with record_depth=True or backfill depth first — a "
+            "partial store would silently train those positives at a default depth."
+        )
+
+
 def center_distance_eval(model, ds, device, radius=20, thr=0.5):
     """Recall/precision by peak-vs-target center distance on a crop dataset."""
     import torch
@@ -156,7 +174,15 @@ def main():
         help="DataLoader workers; raise to feed a data-starved GPU (was hardcoded 4)",
     )
     ap.add_argument("--crop", type=int, default=256)
-    ap.add_argument("--sigma", type=float, default=4.0)
+    ap.add_argument(
+        "--sigma",
+        type=float,
+        default=None,
+        help="target gaussian sigma. Default None = the store's build-time σ (index "
+        "summary; 4.0 on a fresh build). An EXPLICIT value wins over the store "
+        "summary — previously the summary silently overrode this flag, so a "
+        "--sigma 3 run on a σ=4 store trained at σ=4.",
+    )
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--rebuild", action="store_true", help="re-render crops")
     ap.add_argument(
@@ -236,7 +262,7 @@ def main():
             games,
             out,
             crop=args.crop,
-            sigma=args.sigma,
+            sigma=4.0 if args.sigma is None else args.sigma,
             val_game_ids=val_ids,
             record_depth=far_on or dyn_on,
         )
@@ -264,7 +290,9 @@ def main():
                 far = 0.0
             else:
                 tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
-                far = float(1.0 - r.get("depth", 0.0))  # far touchline -> 1.0
+                # depth is guaranteed by require_positive_depth() at startup; a
+                # KeyError here means the guard was bypassed — fail loudly.
+                far = float(1.0 - r["depth"])  # far touchline -> 1.0
             if self.augment and random.random() < 0.5:
                 stack = _np.ascontiguousarray(stack[:, :, ::-1])
                 tgt = _np.ascontiguousarray(tgt[:, ::-1])
@@ -294,7 +322,9 @@ def main():
             if r["x"] is None:
                 tgt = _np.zeros((self.crop, self.crop), _np.float32)
             else:
-                depth = float(r.get("depth", 0.5))
+                # depth is guaranteed by require_positive_depth() at startup; a
+                # KeyError here means the guard was bypassed — fail loudly.
+                depth = float(r["depth"])
                 sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
                 tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
             if self.augment and random.random() < 0.5:
@@ -309,6 +339,10 @@ def main():
     else:
         ds_cls = HeatmapCropDataset
     tr = ds_cls(out, "train", args.crop, args.sigma)
+    if dyn_on or far_on:
+        require_positive_depth(
+            tr.items, out, "--dynamic-sigma" if dyn_on else "--far-weight"
+        )
     if dyn_on:
         tr.sigma_far = args.sigma_far
         tr.sigma_near = args.sigma_near

@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-50: the σ sweep is VOID — a CLI-σ precedence footgun trained hm_sig30 at σ=4; fixed (2026-07-15)
+
+**Trigger:** pre-flight verification of the "in-flight σ sweep" (EXP-DIST-49's `sigma_exp` task) before
+reading its results.
+
+**Finding — the footgun:** `HeatmapCropDataset.__init__` did
+`self.sigma = data.get("summary", {}).get("sigma", sigma)` — the store summary **always** won over the
+constructor/CLI σ, so `train_v4_heatmap --sigma X` on a prebuilt store silently trained at the store's
+build-time σ. Verified against the actual sweep launcher (`G:\ballresearch\selector\sigma_exp.ps1`): it
+ran `training.train_v4_heatmap --out G:/ballresearch/distill/crops_reolink --sigma 3.0` with **no
+rebuild**, and `crops_reolink`'s summary records `"sigma": 4.0`.
+
+**Verdict on the sweep:**
+- **`hm_sig30` trained at σ=4.0, not 3.0 — it is an hn4-recipe replica** (val-crop recall ~0.39 matches
+  the hn4 family) and says nothing about target sharpness. Do not read `cands_spc_sig30` as a σ=3 result.
+- The sweep never completed anyway: `sigma_exp.status` stuck at "dump sig30" since 07-14 17:41, the σ=2.5
+  arm never started, no `sigma_exp.done`.
+
+**Second footgun in the same family (fixed together):** `_DynSigmaDataset`/`_DepthDataset` silently
+substituted a mid-field default for a missing per-item `depth` (`r.get("depth", 0.5)` / `0.0`), so
+`--dynamic-sigma` on a depth-less store would have trained EVERY positive at one constant σ≈3.25 without
+erroring. The live risk is real: `crops_reolink_dyn` is **partially** depth-recorded (21,133 of 45,164
+positives) — it looks depth-ready and isn't.
+
+**Fix (this commit):** (1) σ precedence — `--sigma`/constructor σ default is now a `None` sentinel; an
+explicit value WINS over the store summary, `None` defers to it (fresh builds default 4.0); (2)
+`require_positive_depth()` hard-fails `--dynamic-sigma`/`--far-weight` when any positive lacks `depth`,
+and the datasets read `r["depth"]` strictly. Unit tests cover both.
+
+**Next:** re-run the sweep corrected (σ=3, σ=2.5 + dynamic-σ after completing `crops_reolink_dyn` depth
+coverage) — scheduled after the current multi-game hn2/4/5 dump batch drains the GPU.
+
 ## EXP-DIST-49 [CORRECTED 2026-07-14]: dynamic-σ WAS wrongly dismissed — ball size DOES vary ~4→17px with depth; my "constant size" was a flawed measurement (2026-07-13/14)
 
 **CORRECTION (2026-07-14, after Mark challenged the constant-size claim — he was right):** the

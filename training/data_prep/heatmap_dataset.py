@@ -260,13 +260,20 @@ class HeatmapCropDataset:
         root,
         split: str = "train",
         crop: int = 256,
-        sigma: float = 4.0,
+        sigma: float | None = None,
         augment: bool | None = None,
     ):
         self.root = Path(root)
         data = json.loads((self.root / "index.json").read_text())
         self.crop = data.get("summary", {}).get("crop", crop)
-        self.sigma = data.get("summary", {}).get("sigma", sigma)
+        # σ precedence: an EXPLICIT sigma wins; None defers to the store summary
+        # (the build-time σ). Targets are built at load time, so overriding σ on a
+        # prebuilt store is valid — the old summary-always-wins rule silently turned
+        # a `--sigma 3` run on a σ=4 store into an exact σ=4 replica.
+        if sigma is None:
+            self.sigma = data.get("summary", {}).get("sigma", 4.0)
+        else:
+            self.sigma = float(sigma)
         self.items = [r for r in data["items"] if r["split"] == split]
         # Horizontal-flip augmentation (train only): a mirrored field strip is a valid, different
         # soccer scene, so it adds real variety — cheaper diversity than pure oversampling.
