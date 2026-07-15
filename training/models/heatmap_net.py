@@ -88,6 +88,88 @@ class HeatmapNet(nn.Module):
         return self.head(y)  # logits
 
 
+class EncodingPrelude(nn.Module):
+    """Parameter-free input encoding applied IN FRONT of the net (and baked into
+    the ONNX graph at export), so the external input contract stays raw stacked
+    grayscale frames ``[g_{t-2}, g_{t-1}, g_t]`` everywhere — training, eval
+    CLIs, and the product runtime never diverge on the encoding math.
+
+    Encodings:
+      - ``gray3``: identity — the legacy contract (3 raw gray frames).
+      - ``diff3``: ``(g_t, g_{t-1}-g_{t-2}, g_t-g_{t-1})`` — SIGNED frame
+        differences replacing the two redundant history frames. A ball moving
+        farther than its own diameter per frame leaves a direction-preserving
+        ± lobe pair at its CURRENT position in the diff channels — a pixel-level
+        motion signature no receptive field has to assemble. Signed (not |Δ|,
+        which is polarity-blind and failed as an additive 4th channel — Jmot),
+        and REPLACING the raw history so the temporal signal is load-bearing.
+        Appearance stays frame t: labels and runtime candidates are keyed to t.
+    """
+
+    ENCODINGS = ("gray3", "diff3")
+
+    def __init__(self, encoding: str = "gray3"):
+        super().__init__()
+        if encoding not in self.ENCODINGS:
+            raise ValueError(f"unknown encoding {encoding!r} (want {self.ENCODINGS})")
+        self.encoding = encoding
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.encoding == "gray3":
+            return x
+        g0, g1, g2 = x[:, 0:1], x[:, 1:2], x[:, 2:3]
+        return torch.cat([g2, g1 - g0, g2 - g1], dim=1)
+
+
+class DetectorWithEncoding(nn.Module):
+    """``net(prelude(x))`` — raw frames in, logits out (drop-in for a bare net)."""
+
+    def __init__(self, prelude: EncodingPrelude, net: HeatmapNet):
+        super().__init__()
+        self.prelude = prelude
+        self.net = net
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(self.prelude(x))
+
+
+def load_detector_checkpoint(
+    ckpt_path,
+    base: int | None = None,
+    device: str = "cpu",
+) -> tuple[DetectorWithEncoding, dict]:
+    """Load a detector checkpoint -> ``(model, meta)``; model takes RAW frames.
+
+    Geometry (base width, out_ch, input channels) is inferred from the state
+    dict itself; checkpoint metadata supplies the input ``encoding`` (legacy
+    checkpoints without metadata are ``gray3``). An explicit ``base`` that
+    contradicts the state dict is a hard error — the silent alternative is a
+    mis-built net that loads nothing or the wrong shapes.
+    """
+    ck = torch.load(ckpt_path, map_location=device)
+    state = ck["model"] if isinstance(ck, dict) and "model" in ck else ck
+    inferred_base = state["d1.net.0.weight"].shape[0]
+    in_ch = state["d1.net.0.weight"].shape[1]
+    out_ch = state["head.weight"].shape[0]
+    if base is not None and base != inferred_base:
+        raise ValueError(
+            f"checkpoint {ckpt_path} was trained at base={inferred_base}, "
+            f"but base={base} was requested"
+        )
+    encoding = (
+        ck.get("encoding", "gray3")
+        if isinstance(ck, dict) and "model" in ck
+        else "gray3"
+    )
+    net = HeatmapNet(
+        in_frames=in_ch, in_ch_per_frame=1, base=inferred_base, out_ch=out_ch
+    )
+    net.load_state_dict(state)
+    model = DetectorWithEncoding(EncodingPrelude(encoding), net).to(device).eval()
+    meta = {"encoding": encoding, "base": int(inferred_base), "out_ch": int(out_ch)}
+    return model, meta
+
+
 def peak_xy(heatmap: torch.Tensor) -> tuple[int, int, float]:
     """Argmax peak of a single ``(H, W)`` heatmap (logits or probs) -> (x, y, score).
 

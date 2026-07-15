@@ -20,19 +20,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--base", type=int, default=24)
+    ap.add_argument(
+        "--base",
+        type=int,
+        default=None,
+        help="expected base width; inferred from the checkpoint, mismatch = error",
+    )
     ap.add_argument("--opset", type=int, default=17)
     args = ap.parse_args()
 
     import numpy as np
     import torch
 
-    from training.models.heatmap_net import HeatmapNet
+    from training.models.heatmap_net import load_detector_checkpoint
 
-    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base)
-    ck = torch.load(args.ckpt, map_location="cpu")
-    model.load_state_dict(ck["model"] if "model" in ck else ck)
-    model.eval()
+    # model = prelude + net (raw frames in, logits out). The prelude's encoding
+    # math is traced INTO the graph, so the ONNX input contract stays raw gray
+    # frames for every encoding and the runtime needs no encoding knowledge.
+    model, meta = load_detector_checkpoint(args.ckpt, base=args.base)
 
     class _WithSigmoid(torch.nn.Module):
         def __init__(self, net: torch.nn.Module):
@@ -66,7 +71,25 @@ def main() -> None:
     err = float(np.abs(ref - got).max())
     if err > 1e-4:
         raise RuntimeError(f"ONNX export parity FAILED: max |dh| = {err:g}")
-    print(f"exported {args.out} (parity max |dh| = {err:.2e})")
+
+    # Stamp provenance into the graph so a model file is self-describing.
+    import onnx
+
+    m = onnx.load(args.out)
+    for k, v in (
+        ("encoding", meta["encoding"]),
+        ("base", meta["base"]),
+        (
+            "out_ch",
+            meta["out_ch"],
+        ),
+    ):
+        p = m.metadata_props.add()
+        p.key, p.value = k, str(v)
+    onnx.save(m, args.out)
+    print(
+        f"exported {args.out} (encoding={meta['encoding']}, parity max |dh| = {err:.2e})"
+    )
 
 
 if __name__ == "__main__":

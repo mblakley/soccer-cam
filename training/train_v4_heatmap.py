@@ -238,6 +238,15 @@ def main():
         default=5.0,
         help="target sigma at depth=1 (near touchline, ~17px ball) when --dynamic-sigma",
     )
+    ap.add_argument(
+        "--input-encoding",
+        choices=("gray3", "diff3"),
+        default="gray3",
+        help="input encoding applied in front of the net (and baked into the ONNX "
+        "graph at export — the external contract stays raw gray frames). gray3 = "
+        "identity (legacy, byte-identical). diff3 = (g_t, g_{t-1}-g_{t-2}, "
+        "g_t-g_{t-1}) signed frame differences — see EncodingPrelude.",
+    )
     args = ap.parse_args()
 
     import torch
@@ -365,9 +374,23 @@ def main():
         prefetch_factor=4 if args.workers > 0 else None,
         pin_memory=True,
     )
+    from training.models.heatmap_net import DetectorWithEncoding, EncodingPrelude
+
     model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
+    # gray3 prelude is the identity, so the default path is byte-identical to the
+    # pre-encoding trainer (guarded by test). The prelude runs in front of the net
+    # here AND inside the exported ONNX graph — one module, no train/infer skew.
+    prelude = EncodingPrelude(args.input_encoding).to(dev)
+    eval_model = DetectorWithEncoding(prelude, model)
     if args.resume:
         rck = torch.load(args.resume, map_location=dev)
+        rck_enc = rck.get("encoding", "gray3") if "model" in rck else "gray3"
+        if rck_enc != args.input_encoding:
+            raise SystemExit(
+                f"--resume checkpoint was trained with encoding={rck_enc!r} but this "
+                f"run is --input-encoding {args.input_encoding!r} — warm-starting "
+                "across encodings silently mismatches what layer 1 learned."
+            )
         model.load_state_dict(rck["model"] if "model" in rck else rck)
         print(f"resumed (warm-start) from {args.resume}", flush=True)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -384,7 +407,7 @@ def main():
             else:
                 x, tgt = batch
             x, tgt = x.to(dev), tgt.to(dev)
-            pred = torch.sigmoid(model(x))
+            pred = torch.sigmoid(model(prelude(x)))
             # emphasize the (rare) ball pixels: weighted MSE.
             w = 1.0 + 30.0 * tgt
             if far_on:
@@ -398,7 +421,9 @@ def main():
             loss.backward()
             opt.step()
             tot += float(loss)
-        metrics = center_distance_eval(model, va, dev) if len(va) else {"recall": 0.0}
+        metrics = (
+            center_distance_eval(eval_model, va, dev) if len(va) else {"recall": 0.0}
+        )
         print(
             f"epoch {ep + 1}/{args.epochs} loss={tot / max(len(dl), 1):.4f} "
             f"val={metrics}",
@@ -406,7 +431,16 @@ def main():
         )
         if metrics["recall"] >= best:
             best = metrics["recall"]
-            torch.save({"model": model.state_dict(), "epoch": ep}, runs / "best.pt")
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "epoch": ep,
+                    "encoding": args.input_encoding,
+                    "base": args.base,
+                    "out_ch": 1,
+                },
+                runs / "best.pt",
+            )
     print(f"DONE best_val_recall={best}", flush=True)
 
 

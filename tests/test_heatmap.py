@@ -7,6 +7,16 @@ import pytest
 from training.data_prep.heatmap_dataset import HeatmapCropDataset, gaussian_heatmap
 from training.train_v4_heatmap import require_positive_depth
 
+# torch MUST be imported at collection time: conftest's autouse mock_file_system
+# patches os.path.exists globally, and torch's Windows DLL-path setup calls it
+# during first import — importing torch inside a test therefore crashes.
+try:
+    import torch
+except ImportError:
+    torch = None
+
+needs_torch = pytest.mark.skipif(torch is None, reason="torch not installed")
+
 
 def test_gaussian_heatmap_peak_at_center():
     g = gaussian_heatmap(64, 64, 30, 20, sigma=4.0)
@@ -16,8 +26,8 @@ def test_gaussian_heatmap_peak_at_center():
     assert g[0, 0] < 0.01  # far corner ~0
 
 
+@needs_torch
 def test_heatmapnet_forward_and_peak():
-    torch = pytest.importorskip("torch")
     from training.models.heatmap_net import HeatmapNet, peak_xy
 
     net = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=8).eval()
@@ -76,3 +86,84 @@ def test_require_positive_depth_accepts_full_coverage():
         {"file": "c.npy", "x": None, "y": None, "split": "train"},  # negatives exempt
     ]
     require_positive_depth(items, "store", "--dynamic-sigma")
+
+
+@needs_torch
+def test_encoding_prelude_gray3_is_identity():
+    from training.models.heatmap_net import EncodingPrelude
+
+    x = torch.rand(2, 3, 16, 16)
+    out = EncodingPrelude("gray3")(x)
+    assert out is x  # exact identity — the byte-identical default path
+
+
+@needs_torch
+def test_encoding_prelude_diff3_math():
+    from training.models.heatmap_net import EncodingPrelude
+
+    x = torch.rand(2, 3, 16, 16)
+    g0, g1, g2 = x[:, 0:1], x[:, 1:2], x[:, 2:3]
+    out = EncodingPrelude("diff3")(x)
+    assert torch.equal(out[:, 0:1], g2)  # appearance = frame t
+    assert torch.equal(out[:, 1:2], g1 - g0)
+    assert torch.equal(out[:, 2:3], g2 - g1)
+
+
+@needs_torch
+def test_encoding_prelude_rejects_unknown():
+    from training.models.heatmap_net import EncodingPrelude
+
+    with pytest.raises(ValueError, match="unknown encoding"):
+        EncodingPrelude("rgb9")
+
+
+@needs_torch
+def test_default_encoding_byte_identical_to_bare_net():
+    from training.models.heatmap_net import (
+        DetectorWithEncoding,
+        EncodingPrelude,
+        HeatmapNet,
+    )
+
+    net = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=8).eval()
+    x = torch.rand(1, 3, 32, 32)
+    with torch.no_grad():
+        assert torch.equal(
+            DetectorWithEncoding(EncodingPrelude("gray3"), net)(x), net(x)
+        )
+
+
+@needs_torch
+def test_load_detector_checkpoint_roundtrip(tmp_path):
+    from training.models.heatmap_net import HeatmapNet, load_detector_checkpoint
+
+    net = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=8).eval()
+    ck = tmp_path / "best.pt"
+    torch.save(
+        {
+            "model": net.state_dict(),
+            "epoch": 3,
+            "encoding": "diff3",
+            "base": 8,
+            "out_ch": 1,
+        },
+        ck,
+    )
+    model, meta = load_detector_checkpoint(ck)
+    assert meta == {"encoding": "diff3", "base": 8, "out_ch": 1}
+    x = torch.rand(1, 3, 32, 32)
+    with torch.no_grad():
+        # composed model = net(prelude(x)), on raw frames
+        assert torch.equal(model(x), net(model.prelude(x)))
+
+    # legacy checkpoint (bare state dict, no metadata) -> gray3
+    ck2 = tmp_path / "legacy.pt"
+    torch.save(net.state_dict(), ck2)
+    model2, meta2 = load_detector_checkpoint(ck2)
+    assert meta2["encoding"] == "gray3"
+    with torch.no_grad():
+        assert torch.equal(model2(x), net(x))
+
+    # explicit base contradicting the state dict is a hard error
+    with pytest.raises(ValueError, match="base=8"):
+        load_detector_checkpoint(ck, base=24)
