@@ -20,6 +20,8 @@ import argparse
 import json
 from pathlib import Path
 
+from training.data_prep.heatmap_dataset import HeatmapCropDataset
+
 # 05-27 sets share the (human-corrected) autocam-keypoint polygon; Irondequoit
 # has its own. Override via --polygon-* if these move.
 DEFAULT_POLY_0527 = "D:/detect_work/field_polygon_autocam.json"
@@ -127,6 +129,119 @@ def require_positive_depth(items: list[dict], store, flag: str) -> None:
             f"{flag}: {missing}/{len(pos)} positive crops in {store} have no 'depth' "
             "field. Rebuild with record_depth=True or backfill depth first — a "
             "partial store would silently train those positives at a default depth."
+        )
+
+
+# Dataset variants live at MODULE level: Windows DataLoader workers use spawn,
+# which pickles the dataset by qualified name — a class defined inside main()
+# dies with "Can't get local object" the moment num_workers > 0.
+class _DepthDataset(HeatmapCropDataset):
+    """Adds per-sample field depth (positives) so the loss can far-band weight.
+
+    Returns ``(stack, tgt, far_factor)`` where ``far_factor = 1-depth`` for
+    positives (1 at the far touchline, 0 near) and 0 for negatives. Only used
+    when ``--far-weight > 0``; the default path uses the unchanged
+    ``HeatmapCropDataset`` (byte-identical to the curve)."""
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import gaussian_heatmap
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+            far = 0.0
+        else:
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+            # depth is guaranteed by require_positive_depth() at startup; a
+            # KeyError here means the guard was bypassed — fail loudly.
+            far = float(1.0 - r["depth"])  # far touchline -> 1.0
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+        return (
+            torch.from_numpy(stack),
+            torch.from_numpy(tgt[None]),
+            torch.tensor(far, dtype=torch.float32),
+        )
+
+
+class _DynSigmaDataset(HeatmapCropDataset):
+    """Experiment A: per-sample target sigma = sigma_far + (sigma_near - sigma_far) * depth
+    (depth 0=far -> tight gaussian; 1=near -> broad) so the target encodes the ball's
+    location-dependent apparent size. Negatives stay all-zero. Returns (stack, tgt)."""
+
+    sigma_far: float = 2.0
+    sigma_near: float = 8.0
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import gaussian_heatmap
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+        else:
+            # depth is guaranteed by require_positive_depth() at startup; a
+            # KeyError here means the guard was bypassed — fail loudly.
+            depth = float(r["depth"])
+            sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+        return torch.from_numpy(stack), torch.from_numpy(tgt[None])
+
+
+class _PersonDataset(HeatmapCropDataset):
+    """ph1: adds a person-center target channel from the yolo26n sidecar.
+
+    Returns ``(stack, tgt_2ch, person_valid)``: channel 0 = the unchanged ball
+    Gaussian, channel 1 = max-composited person Gaussians (σ from box height).
+    ``person_valid`` is 1.0 for crops PRESENT in the sidecar (an annotated
+    empty crop is a real "no person" label) and 0.0 for absent crops, which
+    the loss masks out — partial sidecars train cleanly."""
+
+    persons: dict = {}
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import (
+            gaussian_heatmap,
+            person_center_heatmap,
+        )
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+        else:
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+        boxes = self.persons.get(r["file"])
+        pvalid = 0.0 if boxes is None else 1.0
+        ptgt = person_center_heatmap(self.crop, self.crop, boxes or [])
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+            ptgt = _np.ascontiguousarray(ptgt[:, ::-1])
+        return (
+            torch.from_numpy(stack),
+            torch.from_numpy(_np.stack([tgt, ptgt], 0)),
+            torch.tensor(pvalid, dtype=torch.float32),
         )
 
 
@@ -271,7 +386,6 @@ def main():
     from training.data_prep.heatmap_dataset import (
         HeatmapCropDataset,
         build_heatmap_crops,
-        gaussian_heatmap,
     )
     from training.models.heatmap_net import HeatmapNet
 
@@ -292,109 +406,6 @@ def main():
             record_depth=far_on or dyn_on,
         )
         print("dataset:", summary, flush=True)
-
-    class _DepthDataset(HeatmapCropDataset):
-        """Adds per-sample field depth (positives) so the loss can far-band weight.
-
-        Returns ``(stack, tgt, far_factor)`` where ``far_factor = 1-depth`` for
-        positives (1 at the far touchline, 0 near) and 0 for negatives. Only used
-        when ``--far-weight > 0``; the default path uses the unchanged
-        ``HeatmapCropDataset`` (byte-identical to the curve)."""
-
-        def __getitem__(self, i):
-            import random
-
-            import numpy as _np
-
-            r = self.items[i]
-            stack = (
-                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
-            )
-            if r["x"] is None:
-                tgt = _np.zeros((self.crop, self.crop), _np.float32)
-                far = 0.0
-            else:
-                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
-                # depth is guaranteed by require_positive_depth() at startup; a
-                # KeyError here means the guard was bypassed — fail loudly.
-                far = float(1.0 - r["depth"])  # far touchline -> 1.0
-            if self.augment and random.random() < 0.5:
-                stack = _np.ascontiguousarray(stack[:, :, ::-1])
-                tgt = _np.ascontiguousarray(tgt[:, ::-1])
-            return (
-                torch.from_numpy(stack),
-                torch.from_numpy(tgt[None]),
-                torch.tensor(far, dtype=torch.float32),
-            )
-
-    class _DynSigmaDataset(HeatmapCropDataset):
-        """Experiment A: per-sample target sigma = sigma_far + (sigma_near - sigma_far) * depth
-        (depth 0=far -> tight gaussian; 1=near -> broad) so the target encodes the ball's
-        location-dependent apparent size. Negatives stay all-zero. Returns (stack, tgt)."""
-
-        sigma_far: float = 2.0
-        sigma_near: float = 8.0
-
-        def __getitem__(self, i):
-            import random
-
-            import numpy as _np
-
-            r = self.items[i]
-            stack = (
-                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
-            )
-            if r["x"] is None:
-                tgt = _np.zeros((self.crop, self.crop), _np.float32)
-            else:
-                # depth is guaranteed by require_positive_depth() at startup; a
-                # KeyError here means the guard was bypassed — fail loudly.
-                depth = float(r["depth"])
-                sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
-                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
-            if self.augment and random.random() < 0.5:
-                stack = _np.ascontiguousarray(stack[:, :, ::-1])
-                tgt = _np.ascontiguousarray(tgt[:, ::-1])
-            return torch.from_numpy(stack), torch.from_numpy(tgt[None])
-
-    class _PersonDataset(HeatmapCropDataset):
-        """ph1: adds a person-center target channel from the yolo26n sidecar.
-
-        Returns ``(stack, tgt_2ch, person_valid)``: channel 0 = the unchanged ball
-        Gaussian, channel 1 = max-composited person Gaussians (σ from box height).
-        ``person_valid`` is 1.0 for crops PRESENT in the sidecar (an annotated
-        empty crop is a real "no person" label) and 0.0 for absent crops, which
-        the loss masks out — partial sidecars train cleanly."""
-
-        persons: dict = {}
-
-        def __getitem__(self, i):
-            import random
-
-            import numpy as _np
-
-            from training.data_prep.heatmap_dataset import person_center_heatmap
-
-            r = self.items[i]
-            stack = (
-                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
-            )
-            if r["x"] is None:
-                tgt = _np.zeros((self.crop, self.crop), _np.float32)
-            else:
-                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
-            boxes = self.persons.get(r["file"])
-            pvalid = 0.0 if boxes is None else 1.0
-            ptgt = person_center_heatmap(self.crop, self.crop, boxes or [])
-            if self.augment and random.random() < 0.5:
-                stack = _np.ascontiguousarray(stack[:, :, ::-1])
-                tgt = _np.ascontiguousarray(tgt[:, ::-1])
-                ptgt = _np.ascontiguousarray(ptgt[:, ::-1])
-            return (
-                torch.from_numpy(stack),
-                torch.from_numpy(_np.stack([tgt, ptgt], 0)),
-                torch.tensor(pvalid, dtype=torch.float32),
-            )
 
     person_on = args.person_sidecar is not None
     if person_on and (dyn_on or far_on):

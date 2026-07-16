@@ -213,3 +213,21 @@ def test_heatmapnet_out_ch2_forward_and_loader(tmp_path):
     with torch.no_grad():
         out = model(x)
     assert tuple(out.shape) == (1, 2, 32, 32)
+
+
+def test_dataset_variants_are_picklable(tmp_path):
+    # Windows DataLoader workers spawn + pickle the dataset: a class defined
+    # inside main() dies with "Can't get local object". Guard module-level-ness.
+    import pickle
+
+    from training.train_v4_heatmap import (
+        _DepthDataset,
+        _DynSigmaDataset,
+        _PersonDataset,
+    )
+
+    store = _mk_store(tmp_path, {"crop": 64, "sigma": 4.0})
+    for cls in (_DepthDataset, _DynSigmaDataset, _PersonDataset):
+        ds = cls(store, "train")
+        blob = pickle.dumps(ds)
+        assert pickle.loads(blob).crop == 64
