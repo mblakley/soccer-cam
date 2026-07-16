@@ -247,6 +247,22 @@ def main():
         "identity (legacy, byte-identical). diff3 = (g_t, g_{t-1}-g_{t-2}, "
         "g_t-g_{t-1}) signed frame differences — see EncodingPrelude.",
     )
+    ap.add_argument(
+        "--person-sidecar",
+        default=None,
+        help="ph1: JSON sidecar {crop_file: [[x1,y1,x2,y2,conf], ...]} of yolo26n "
+        "person boxes on the stored crops (no store rebuild). Enables the out_ch=2 "
+        "ball+person multi-task head: channel 1 learns person centers so shared "
+        "features separate a 22cm ball from a 22cm head (EXP-DIST-47). Crops "
+        "absent from the sidecar are MASKED out of the person loss; the ball "
+        "channel/loss is unchanged. Runtime slices channel 0 — no product change.",
+    )
+    ap.add_argument(
+        "--person-weight",
+        type=float,
+        default=0.5,
+        help="λ on the person-channel loss (only with --person-sidecar)",
+    )
     args = ap.parse_args()
 
     import torch
@@ -341,10 +357,57 @@ def main():
                 tgt = _np.ascontiguousarray(tgt[:, ::-1])
             return torch.from_numpy(stack), torch.from_numpy(tgt[None])
 
+    class _PersonDataset(HeatmapCropDataset):
+        """ph1: adds a person-center target channel from the yolo26n sidecar.
+
+        Returns ``(stack, tgt_2ch, person_valid)``: channel 0 = the unchanged ball
+        Gaussian, channel 1 = max-composited person Gaussians (σ from box height).
+        ``person_valid`` is 1.0 for crops PRESENT in the sidecar (an annotated
+        empty crop is a real "no person" label) and 0.0 for absent crops, which
+        the loss masks out — partial sidecars train cleanly."""
+
+        persons: dict = {}
+
+        def __getitem__(self, i):
+            import random
+
+            import numpy as _np
+
+            from training.data_prep.heatmap_dataset import person_center_heatmap
+
+            r = self.items[i]
+            stack = (
+                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+            )
+            if r["x"] is None:
+                tgt = _np.zeros((self.crop, self.crop), _np.float32)
+            else:
+                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+            boxes = self.persons.get(r["file"])
+            pvalid = 0.0 if boxes is None else 1.0
+            ptgt = person_center_heatmap(self.crop, self.crop, boxes or [])
+            if self.augment and random.random() < 0.5:
+                stack = _np.ascontiguousarray(stack[:, :, ::-1])
+                tgt = _np.ascontiguousarray(tgt[:, ::-1])
+                ptgt = _np.ascontiguousarray(ptgt[:, ::-1])
+            return (
+                torch.from_numpy(stack),
+                torch.from_numpy(_np.stack([tgt, ptgt], 0)),
+                torch.tensor(pvalid, dtype=torch.float32),
+            )
+
+    person_on = args.person_sidecar is not None
+    if person_on and (dyn_on or far_on):
+        raise SystemExit(
+            "--person-sidecar cannot combine with --dynamic-sigma/--far-weight yet "
+            "(dataset variants are not composed); run them as separate experiments."
+        )
     if dyn_on:
         ds_cls: type = _DynSigmaDataset
     elif far_on:
         ds_cls = _DepthDataset
+    elif person_on:
+        ds_cls = _PersonDataset
     else:
         ds_cls = HeatmapCropDataset
     tr = ds_cls(out, "train", args.crop, args.sigma)
@@ -355,6 +418,15 @@ def main():
     if dyn_on:
         tr.sigma_far = args.sigma_far
         tr.sigma_near = args.sigma_near
+    if person_on:
+        sidecar = json.loads(Path(args.person_sidecar).read_text())
+        tr.persons = sidecar
+        n_annot = sum(1 for r in tr.items if r["file"] in sidecar)
+        print(
+            f"person sidecar: {len(sidecar)} annotated crops "
+            f"({n_annot}/{len(tr.items)} of train; rest masked)",
+            flush=True,
+        )
     va = HeatmapCropDataset(out, "val", args.crop, args.sigma)
     print(
         f"train crops={len(tr)} val crops={len(va)} far_weight={args.far_weight}",
@@ -376,7 +448,9 @@ def main():
     )
     from training.models.heatmap_net import DetectorWithEncoding, EncodingPrelude
 
-    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
+    model = HeatmapNet(
+        in_frames=3, in_ch_per_frame=1, base=args.base, out_ch=2 if person_on else 1
+    ).to(dev)
     # gray3 prelude is the identity, so the default path is byte-identical to the
     # pre-encoding trainer (guarded by test). The prelude runs in front of the net
     # here AND inside the exported ONNX graph — one module, no train/infer skew.
@@ -401,22 +475,38 @@ def main():
         model.train()
         tot = 0.0
         for batch in dl:
+            pv = None
             if far_on:
                 x, tgt, far = batch
                 far = far.to(dev).view(-1, 1, 1, 1)
+            elif person_on:
+                x, tgt, pv = batch
+                pv = pv.to(dev).view(-1, 1, 1, 1)
             else:
                 x, tgt = batch
             x, tgt = x.to(dev), tgt.to(dev)
             pred = torch.sigmoid(model(prelude(x)))
-            # emphasize the (rare) ball pixels: weighted MSE.
-            w = 1.0 + 30.0 * tgt
-            if far_on:
-                # Far-band up-weighting: scale ONLY the positive (ball-pixel) weight
-                # by (1 + K*far_factor) so far balls dominate the loss. tgt acts as
-                # the positive mask, so background weight (the leading 1.0) is
-                # untouched. K=0 collapses this to exactly w=1+30*tgt.
-                w = 1.0 + 30.0 * tgt * (1.0 + args.far_weight * far)
-            loss = (w * (pred - tgt) ** 2).mean()
+            if person_on:
+                # ball channel: the unchanged weighted MSE. person channel: same
+                # form, masked to sidecar-annotated samples (pv), scaled by λ —
+                # unannotated crops contribute NOTHING to channel 1.
+                bt, pt = tgt[:, 0:1], tgt[:, 1:2]
+                loss = ((1.0 + 30.0 * bt) * (pred[:, 0:1] - bt) ** 2).mean()
+                loss = (
+                    loss
+                    + args.person_weight
+                    * (pv * (1.0 + 30.0 * pt) * (pred[:, 1:2] - pt) ** 2).mean()
+                )
+            else:
+                # emphasize the (rare) ball pixels: weighted MSE.
+                w = 1.0 + 30.0 * tgt
+                if far_on:
+                    # Far-band up-weighting: scale ONLY the positive (ball-pixel)
+                    # weight by (1 + K*far_factor) so far balls dominate the loss.
+                    # tgt acts as the positive mask, so background weight (the
+                    # leading 1.0) is untouched. K=0 collapses to exactly w=1+30*tgt.
+                    w = 1.0 + 30.0 * tgt * (1.0 + args.far_weight * far)
+                loss = (w * (pred - tgt) ** 2).mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -437,7 +527,7 @@ def main():
                     "epoch": ep,
                     "encoding": args.input_encoding,
                     "base": args.base,
-                    "out_ch": 1,
+                    "out_ch": 2 if person_on else 1,
                 },
                 runs / "best.pt",
             )

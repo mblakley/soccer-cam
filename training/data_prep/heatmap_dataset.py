@@ -48,6 +48,28 @@ def gaussian_heatmap(h: int, w: int, cx: float, cy: float, sigma: float) -> np.n
     return g.astype(np.float32)
 
 
+def person_center_heatmap(
+    h: int,
+    w: int,
+    boxes: list,
+    sigma_div: float = 8.0,
+    sigma_min: float = 4.0,
+    sigma_max: float = 12.0,
+) -> np.ndarray:
+    """Max-composited person-center Gaussians from ``[x1, y1, x2, y2, conf]`` boxes.
+
+    σ scales with the person's box height (persons are 30–150 px, unlike the
+    ball, so one fixed σ would mis-size most of them). Boxes partly outside the
+    crop still contribute their in-crop mass.
+    """
+    hm = np.zeros((h, w), np.float32)
+    for x1, y1, x2, y2, *_ in boxes:
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        sig = float(np.clip((y2 - y1) / sigma_div, sigma_min, sigma_max))
+        np.maximum(hm, gaussian_heatmap(h, w, cx, cy, sig), out=hm)
+    return hm
+
+
 # The band/dewarp geometry is PRODUCT code now (video_grouper.inference.iso_warp,
 # Mark 2026-07-10: single homegrown path). Underscore aliases kept for the
 # existing training callers.

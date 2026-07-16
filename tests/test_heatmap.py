@@ -2,6 +2,7 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from training.data_prep.heatmap_dataset import HeatmapCropDataset, gaussian_heatmap
@@ -167,3 +168,48 @@ def test_load_detector_checkpoint_roundtrip(tmp_path):
     # explicit base contradicting the state dict is a hard error
     with pytest.raises(ValueError, match="base=8"):
         load_detector_checkpoint(ck, base=24)
+
+
+def test_person_center_heatmap():
+    from training.data_prep.heatmap_dataset import person_center_heatmap
+
+    # empty -> zeros
+    assert person_center_heatmap(64, 64, []).max() == 0.0
+    # one 40px-tall box -> peak 1.0 at its center, sigma = 40/8 = 5
+    hm = person_center_heatmap(64, 64, [[20.0, 10.0, 40.0, 50.0, 0.9]])
+    assert hm[30, 30] == pytest.approx(1.0, abs=1e-5)  # center (30, 30) = (y, x)
+    g = gaussian_heatmap(64, 64, 30, 30, 5.0)
+    assert np.allclose(hm, g, atol=1e-6)
+    # two boxes max-composite: both peaks are 1.0
+    hm2 = person_center_heatmap(64, 64, [[0, 0, 10, 16, 0.5], [40, 40, 60, 62, 0.8]])
+    assert hm2[8, 5] == pytest.approx(1.0, abs=1e-5)
+    assert hm2[51, 50] == pytest.approx(1.0, abs=1e-5)
+    # tiny box: sigma clamps at 4; huge box clamps at 12
+    tiny = person_center_heatmap(64, 64, [[0, 0, 8, 8, 0.5]])
+    assert np.allclose(tiny, gaussian_heatmap(64, 64, 4, 4, 4.0), atol=1e-6)
+
+
+@needs_torch
+def test_heatmapnet_out_ch2_forward_and_loader(tmp_path):
+    from training.models.heatmap_net import HeatmapNet, load_detector_checkpoint
+
+    net = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=8, out_ch=2).eval()
+    x = torch.rand(1, 3, 32, 32)
+    assert tuple(net(x).shape) == (1, 2, 32, 32)
+
+    ck = tmp_path / "ph.pt"
+    torch.save(
+        {
+            "model": net.state_dict(),
+            "epoch": 1,
+            "encoding": "diff3",
+            "base": 8,
+            "out_ch": 2,
+        },
+        ck,
+    )
+    model, meta = load_detector_checkpoint(ck)
+    assert meta["out_ch"] == 2
+    with torch.no_grad():
+        out = model(x)
+    assert tuple(out.shape) == (1, 2, 32, 32)
