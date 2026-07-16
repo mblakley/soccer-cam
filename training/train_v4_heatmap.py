@@ -333,6 +333,14 @@ def main():
         "on top of best.pt) instead of training from scratch.",
     )
     ap.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="early-stop after N epochs without a val-recall improvement (default off). "
+        "best.pt is checkpointed at the peak either way, so this only saves wall-clock "
+        "— df3 spent 23 of 40 epochs past its ep-17 peak; hn4 peaked at ep 5.",
+    )
+    ap.add_argument(
         "--dynamic-sigma",
         action="store_true",
         help="Experiment A (dynamic ball size): per-sample target gaussian sigma scales with the "
@@ -482,6 +490,7 @@ def main():
     runs = Path(args.runs) if args.runs else (out / "runs")
     runs.mkdir(parents=True, exist_ok=True)
     best = -1.0
+    best_ep = -1
     for ep in range(args.epochs):
         model.train()
         tot = 0.0
@@ -532,6 +541,7 @@ def main():
         )
         if metrics["recall"] >= best:
             best = metrics["recall"]
+            best_ep = ep
             torch.save(
                 {
                     "model": model.state_dict(),
@@ -542,6 +552,13 @@ def main():
                 },
                 runs / "best.pt",
             )
+        elif args.patience is not None and ep - best_ep >= args.patience:
+            print(
+                f"EARLY STOP at epoch {ep + 1}: no val improvement in "
+                f"{args.patience} epochs (best {best} @ epoch {best_ep + 1})",
+                flush=True,
+            )
+            break
     print(f"DONE best_val_recall={best}", flush=True)
 
 
