@@ -4,6 +4,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-51: df3 signed-diff encoding — G1 FAIL; far discrimination REGRESSES vs hn4 (2026-07-16)
+
+**Hypothesis (external brief + Jmot re-analysis):** replacing the two redundant gray history frames
+with signed differences `(g_t, g_{t-1}-g_{t-2}, g_t-g_{t-1})` hands layer 1 a pixel-level,
+direction-preserving motion signature (a ball moving > its diameter/frame leaves a clean ± lobe
+pair), un-stranding the temporal signal and improving ball-vs-distractor discrimination — the thing
+hn2/hn4/hn5 hard negatives have been patching.
+
+**Method:** `hm_df3` = from-scratch hn4 recipe (crops_reolink + GT-guarded negs, base 24, 40 ep,
+σ=4) + `--input-encoding diff3` (EncodingPrelude, in-graph — see the exp/detector-diff-encoding
+branch). Val-crop peak 0.403 @ep17 (best in family on the weak proxy; new bests at eps 1,2,3,4,8,17
+— gaps 1,1,1,4,9 — then 23 dry epochs; loss still falling = crop memorization). Dump + sweep on the
+held-out Spencerport clip (134 GT: 115 far / 19 near), frame-aligned with the hn4 protocol.
+
+**Result (R15m) vs hn4 (EXP-DIST-46):**
+
+| metric | df3 | hn4 | verdict |
+|---|---|---|---|
+| ceiling ALL / FAR / NEAR | 0.948 / 0.939 / 1.0 | 0.970 / 0.965 / 1.0 | FAIL (bar: far ≥ .955) |
+| score-argmax ALL / FAR / NEAR | 0.291 / **0.209** / 0.789 | 0.418 / **0.339** / 0.895 | FAIL (bar: far ≥ .32) |
+| far rank: r1 / P(≤3) / med-rank / absent | 0.15 / 0.26 / 7 / 0.06 | (hn4 better across) | — |
+
+**Conclusion: NEGATIVE, both gates failed.** The encoding didn't just fail to move far-argmax — it
+regressed it ~40% relative (0.339→0.209), with near-argmax also down (0.895→0.789) and ceiling-far
+slightly down. The val-crop proxy (0.403, family-best) was again anti-correlated with held-out
+quality — third confirmation of the EXP-DIST-46 lesson. Plausible mechanism for the regression:
+collapsing appearance to ONE gray frame costs more far-band discrimination than the diff channels
+return (far balls are slow in most GT frames → weak diff signature; compression flicker lives at
+ball scale → noisy diffs; and the GT-guarded hard negatives were mined against gray3 models'
+confusions). **Per the plan gate: the motion/color thesis is re-examined before any superstore /
+chroma build — the 55 GB store is NOT justified on this evidence.** A softer variant (replace only
+one history frame, keep two appearance frames) is a possible cheap follow-up but is NOT queued.
+The diff3 machinery stays (default-off, byte-identical, tested) — the negative result is the value.
+Data: `G:\ballresearch\distill\cands_spc_df3.pkl`, `G:\ballresearch\encoding\{train_df3.log,
+sweep_encoding.log}`; checkpoint `runs/hm_df3/best.pt` (ep17).
+
 ## EXP-DIST-50: the σ sweep is VOID — a CLI-σ precedence footgun trained hm_sig30 at σ=4; fixed (2026-07-15)
 
 **Trigger:** pre-flight verification of the "in-flight σ sweep" (EXP-DIST-49's `sigma_exp` task) before
