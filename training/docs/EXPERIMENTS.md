@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-52: sig30b (fixed σ=3, CORRECTED sweep) — G1 FAIL; σ=4 stays champion (2026-07-17)
+
+**Hypothesis (EXP-DIST-49 follow-up):** the ball is ~4–17 px but σ=4 paints a ~16 px target blob;
+a sharper fixed σ=3 should stop training the net to fire on head-sized blobs (a "half-measure"
+toward dynamic-σ). This redoes the run the σ-precedence footgun voided (EXP-DIST-50) — the first
+training where `--sigma` actually took effect.
+
+**Method:** `hm_sig30b` = from-scratch hn4 recipe + `--sigma 3.0` + `--patience 10` (new flag; run
+early-stopped at ep33, peak val 0.379 @ep23 — patience saved ~4 h). Same held-out dump + sweep
+protocol as df3/hn4.
+
+**Result (R15m, 134 GT: 115 far / 19 near) vs hn4:**
+
+| metric | sig30b | df3 (51) | hn4 | verdict |
+|---|---|---|---|---|
+| ceiling ALL / FAR | 0.94 / 0.93 | 0.948 / 0.939 | 0.970 / 0.965 | FAIL (far bar .955) |
+| score-argmax ALL / FAR / NEAR | 0.321 / **0.235** / 0.842 | 0.291 / 0.209 / 0.789 | 0.418 / **0.339** / 0.895 | FAIL (far bar .32) |
+| far rank r1 / P(≤3) / med / absent | 0.18 / 0.35 / 6 / 0.07 | 0.15 / 0.26 / 7 / 0.06 | (hn4 better) | — |
+
+**Conclusion: NEGATIVE.** σ=3 regressed far argmax ~30% relative vs σ=4 (0.339→0.235) and shaved
+the ceiling too — sharper targets did NOT sharpen far discrimination; they cost recall across the
+board (a 3–4 px far ball may simply need the broader supervisory blob to accumulate gradient).
+Both of the brief-driven levers (diff encoding, target sharpness) have now failed the same gate in
+the same direction; **the hn4 recipe (gray3, σ=4, GT-guarded hard negatives) remains champion.**
+Depth-scaled dynamic-σ (σ≈ball radius: ~1.5 far / ~5 near) is a DIFFERENT claim than fixed σ=3 and
+remains runnable after `crops_reolink_dyn` depth completion — but two same-family failures argue
+for letting the ph1 person-head result (and its held-out eval, running now) pick the direction
+before more σ spend. Data: `cands_spc_sig30b.pkl`, `G:\ballresearch\encoding\{train_sig30b.log,
+sweep_encoding.log}` (incl. same-protocol hn4 baseline rows appended by the chain).
+
 ## EXP-DIST-51: df3 signed-diff encoding — G1 FAIL; far discrimination REGRESSES vs hn4 (2026-07-16)
 
 **Hypothesis (external brief + Jmot re-analysis):** replacing the two redundant gray history frames
