@@ -1,8 +1,19 @@
 # Current Status
 
-*Last updated: 2026-07-17*
+*Last updated: 2026-07-17 (control running)*
 
-## 2026-07-16/17 — brief-lever batch COMPLETE: df3 / sig30b / ph1 ALL fail G1; hn4 stays champion
+## 2026-07-17 — CONFOUND FOUND: the batch trained on hn5-mutated data; CONTROL running (EXP-DIST-55)
+
+Mark flagged the 0.93-cluster as systematic, not scatter. Root cause: the hn5 chain MUTATED
+crops_reolink IN PLACE (-480 GT-guarded negs, +782 corroboration negs) — df3/sig30b/ph1 all trained
+on hn5-poisoned data, not hn4 recipe data. Control (hm_ctrl) now training: exact hn4 protocol on the
+restored hn4-era store view (train=77,916 verified = hn4 log). ~0.965 far ceiling => batch VOID,
+re-run levers on clean store; ~0.93 => investigate seed/code. Readout ~07:00 07-18. Also EXP-DIST-54:
+the val-crop proxy fully INVERTS on this batch (0.410 proxy = mid held-out; 0.368 = best) — demoted
+to training-health signal only; never select/promote on it. Durable fix queued: versioned store
+indexes, no in-place mutation.
+
+## 2026-07-16/17 — brief-lever batch (results PENDING control validation, see EXP-DIST-55): df3 / sig30b / ph1 all below hn4
 
 Three single-lever experiments off the external brief, all trained + held-out-swept in ~36 h
 (EXP-DIST-51/52/53, full table in 53): **diff3 encoding** (far argmax 0.339→0.209), **fixed σ=3**

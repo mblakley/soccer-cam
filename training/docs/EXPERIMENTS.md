@@ -4,6 +4,58 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-55: the batch's confound FOUND — crops_reolink was MUTATED IN PLACE by the hn5 chain; df3/sig30b/ph1 all trained on hn5's data, not hn4's; CONTROL running (2026-07-17)
+
+**Trigger (Mark):** three unrelated levers landing within 0.009 of each other and below BOTH
+baselines is systematic, not scatter — design the control to DISCRIMINATE. Candidate 1 (hn4 was
+warm-started) is ELIMINATED: `train_hn4.ps1` shows from-scratch, full 40 ep, no `--resume` (the
+external brief's "warm-start lineage" description was wrong). Candidate 2 (patience undertraining)
+cannot explain df3, which ran the full 40. Digging further found candidate 3:
+
+**The store hn4 trained on is NOT the store the batch trained on.** `crops_reolink` index snapshots:
+- `index.prehn5.json` (hn4's store): 83,459 items, train **77,916** (= hn4's training log exactly),
+  480 GT-guarded negs present, **0 corroboration negs**.
+- `index.json` (current — what df3/sig30b/ph1/ph1b ALL trained on): the hn5 chain **removed the 480
+  GT-guarded negatives and added 782 corroboration negatives in place** → train 78,218. That is
+  hn5's data configuration — the negative set EXP-DIST-46 proved over-suppresses far balls (hn5
+  far-argmax 0.148, family worst). Every batch run inherited it silently.
+
+**CONTROL (running, `hm_ctrl`):** exact hn4 protocol — from-scratch, FULL 40 epochs, NO patience,
+default σ/encoding, same box/venv, our branch code (default path proven byte-identical) — on a
+restored hn4-era store VIEW (`crops_reolink_hn4era`: prehn5 index + junction to the shared crops
+dir; all 83,459 files verified present; train=77,916 confirmed at startup). Readout ~07:00 07-18.
+Interpretation: ceiling-far ≈0.965 → code path clean, store mutation was the confound, **the whole
+lever batch (51/52/53) is VOID** and levers re-run on the hn4-era view; ≈0.93 → confound is
+elsewhere (seed/code) — investigate before any re-run.
+
+**Durable fix this mandates (queued):** stores must stop being mutated in place — mining writes a
+NEW index version (`index_vN.json`) + the trainer takes an explicit index/version argument, so every
+run records which data it saw. The silent-mutation hazard cost this batch ~3 GPU-days.
+
+## EXP-DIST-54: the val-crop proxy INVERTS on this batch — worse than no metric (2026-07-17)
+
+**Finding (Mark: worth its own entry):** across the five-run batch, val-crop recall ordering has NO
+positive relationship to held-out quality — it inverts at the extremes:
+
+| run | val proxy | held-out far argmax |
+|---|---|---|
+| ph1b | **0.410** (best) | 0.270 |
+| df3 | 0.403 | **0.209** (worst) |
+| ph1 | 0.397 | 0.226 |
+| sig30b | 0.379 | 0.235 |
+| hn4 | 0.368 (worst) | **0.339** (best) |
+
+This is the third and decisive confirmation of the EXP-DIST-46 lesson ("val-crop recall ≠ held-out
+quality") — now with a full anti-correlated table. **Implication: the proxy has been steering
+`best.pt` checkpoint selection, the new `--patience` early-stop, and possibly earlier decisions —
+an inverted metric is worse than no metric.** (The EXP-DIST-55 store confound may explain part of
+this batch's inversion — the proxy val split lives in the same mutated store — but hn4-vs-hn2 era
+data already showed the same sign.) Mitigations until a better selector exists: (a) treat val-crop
+recall as a TRAINING-HEALTH signal only; (b) patience stays acceptable for wall-clock but
+checkpoint SELECTION should prefer late/multiple candidates dumped against held-out (e.g.
+`--save-every` + a cheap held-out mini-dump per candidate — queued); (c) never promote on proxy
+numbers — G1/G2 only.
+
 ## EXP-DIST-53: ph1 person head (out_ch=2, yolo26n sidecar) — G1 FAIL on far; near preserved; val proxy now fully discredited (2026-07-17)
 
 **Hypothesis (EXP-DIST-47 Phase-4 / external brief):** a 22 cm ball ≡ a 22 cm head, so a person-center
