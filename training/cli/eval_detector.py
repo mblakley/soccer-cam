@@ -96,7 +96,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--game-dir", required=True)
-    ap.add_argument("--base", type=int, default=24)
+    ap.add_argument(
+        "--base",
+        type=int,
+        default=None,
+        help="expected base width; inferred from the checkpoint, mismatch = error",
+    )
     ap.add_argument(
         "--stride",
         type=int,
@@ -167,7 +172,7 @@ def main() -> None:
     from training.data_prep.warped_dataset import (
         resolve_video_rotation,
     )
-    from training.models.heatmap_net import HeatmapNet
+    from training.models.heatmap_net import load_detector_checkpoint
     from training.world_model.eval import extract_peaks
     from training.world_model.geometry import build_field_geometry
     from training.world_model.reranker import track_ball
@@ -210,10 +215,9 @@ def main() -> None:
     )
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
-    ck = torch.load(args.ckpt, map_location=dev)
-    model.load_state_dict(ck["model"] if "model" in ck else ck)
-    model.eval()
+    # prelude + net (raw frames in, logits out); geometry inferred from the ckpt,
+    # encoding from its metadata — an explicit --base mismatch is a hard error.
+    model, _meta = load_detector_checkpoint(args.ckpt, base=args.base, device=dev)
 
     vrot = resolve_video_rotation(video, gj.get("video_rotation"))
     from training.data_prep.segment_decode import iter_frames_from_segments

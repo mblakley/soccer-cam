@@ -4,6 +4,55 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-17: Two-box compute policy — server is the reliable/data-local queue, FORTNITE-OP harvests its own idle windows
+
+**Context:** two GPU boxes with opposite profiles — the server (GTX 1060: slow, always on,
+data-local to F:/G:) and FORTNITE-OP (RTX 3060 Ti: ~2.5x faster, sporadically available — it is a
+family gaming PC and games preempt everything, incl. one crash under combined load).
+
+**Policy:**
+- **Training runs → FORTNITE-OP job queue** (`\server	raining\deploy\queue\{pending,running,done}`,
+  FIFO json job specs `{desc, cmd, resume_cmd}`). The `Ph1GameGuard` scheduled task (runs as the
+  `training` user, at-startup, auto-restart) polls every 20 s: any GPU-heavy game (worker
+  `idle_games` list + Epic/Steam/Riot-path processes >500 MB) → training procs KILLED immediately
+  (suspend would pin VRAM and starve the game) and the job returns to `pending` in its resume form;
+  5 game-free minutes → oldest pending job dispatched. Interruption cost ≈ epochs since last
+  checkpoint; the box turns school hours and overnights into training time unattended.
+- **Precision runs (controls, protocol-exact experiments) + all data-touching work (dumps, sweeps,
+  store builds, mining) → server**: deterministic timing, no preemption, F:/G: local.
+- Cross-box data identity is verifiable via the store index shas (see the versioned-store decision
+  above): a FORTNITE-OP job must state the same index sha as its server-side comparators.
+- Roblox measured at only 37% GPU / 1.2 GB but STAYS a yield trigger: the criterion is "a kid is
+  interactively using the machine", not raw wattage (contention stutters the game; the box already
+  crashed once under combined load).
+
+## 2026-07-17: Crop-store indexes are IMMUTABLE and VERSIONED — no in-place mutation, every run records its data (Mark: blocking, before all further experiments)
+
+**Trigger:** EXP-DIST-55 — the hn5 chain mutated `crops_reolink/index.json` in place (−480
+GT-guarded negatives, +782 corroboration negatives), so an entire three-lever experiment batch
+(EXP-DIST-51/52/53) silently trained on hn5's data while comparing itself against hn4's baseline.
+~3 GPU-days of results voided; recovery was only possible because the miner happened to leave an
+ad-hoc backup (`index.prehn5.json`).
+
+**Decision (mechanism in `training/data_prep/store_versions.py`):**
+- `index_vN.json` snapshots are IMMUTABLE and content-addressed (16-hex sha of the canonical
+  JSON); freezing identical content twice returns the same version. Never edited, never deleted.
+- `index.json` remains the CURRENT alias (all existing readers keep working), but every mutator
+  (`mine_hard_negatives`, `build_human_crops`) pins the store BEFORE and AFTER its write, and
+  `build_heatmap_crops` freezes v1 at creation — both sides of any change are recoverable forever.
+- Every consumer pins provenance automatically: `HeatmapCropDataset` freezes+records
+  `(index_version, index_sha)` on construction; `train_v4_heatmap` prints a `DATA:` line at startup
+  and writes `{store, index_version, index_sha}` into every checkpoint; `--index-version N` trains
+  on an exact historical snapshot regardless of later mutations.
+- Crop `.npy` files are never deleted (de-indexing is the only removal mechanism — which is what
+  made the hn4-era restore possible).
+- Live stores retro-versioned on the server: `crops_reolink` v1=pre-hn4-mining, v2=hn4-era
+  (=`index.prehn5.json`, the control's data), v3=current/hn5-era; `crops_reolink_hn4era` and
+  `crops_reolink_dyn` pinned v1. (Shas recorded in the retro-freeze output attached to EXP-DIST-55.)
+
+**Rule going forward:** an experiment that cannot state its store + index version + sha did not
+happen. Comparisons across runs must compare index shas first.
+
 ## 2026-07-12: Indoor/dome venues (blue turf) ARE in scope for the ball detector
 
 Mark confirmed indoor games are in scope, so the grass-trained detector cannot simply exclude

@@ -4,6 +4,193 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-55: the batch's confound FOUND — crops_reolink was MUTATED IN PLACE by the hn5 chain; df3/sig30b/ph1 all trained on hn5's data, not hn4's; CONTROL running (2026-07-17)
+
+**Trigger (Mark):** three unrelated levers landing within 0.009 of each other and below BOTH
+baselines is systematic, not scatter — design the control to DISCRIMINATE. Candidate 1 (hn4 was
+warm-started) is ELIMINATED: `train_hn4.ps1` shows from-scratch, full 40 ep, no `--resume` (the
+external brief's "warm-start lineage" description was wrong). Candidate 2 (patience undertraining)
+cannot explain df3, which ran the full 40. Digging further found candidate 3:
+
+**The store hn4 trained on is NOT the store the batch trained on.** `crops_reolink` index snapshots:
+- `index.prehn5.json` (hn4's store): 83,459 items, train **77,916** (= hn4's training log exactly),
+  480 GT-guarded negs present, **0 corroboration negs**.
+- `index.json` (current — what df3/sig30b/ph1/ph1b ALL trained on): the hn5 chain **removed the 480
+  GT-guarded negatives and added 782 corroboration negatives in place** → train 78,218. That is
+  hn5's data configuration — the negative set EXP-DIST-46 proved over-suppresses far balls (hn5
+  far-argmax 0.148, family worst). Every batch run inherited it silently.
+
+**CONTROL (running, `hm_ctrl`):** exact hn4 protocol — from-scratch, FULL 40 epochs, NO patience,
+default σ/encoding, same box/venv, our branch code (default path proven byte-identical) — on a
+restored hn4-era store VIEW (`crops_reolink_hn4era`: prehn5 index + junction to the shared crops
+dir; all 83,459 files verified present; train=77,916 confirmed at startup). Readout ~07:00 07-18.
+Interpretation: ceiling-far ≈0.965 → code path clean, store mutation was the confound, **the whole
+lever batch (51/52/53) is VOID** and levers re-run on the hn4-era view; ≈0.93 → confound is
+elsewhere (seed/code) — investigate before any re-run.
+
+**Durable fix this mandates (queued):** stores must stop being mutated in place — mining writes a
+NEW index version (`index_vN.json`) + the trainer takes an explicit index/version argument, so every
+run records which data it saw. The silent-mutation hazard cost this batch ~3 GPU-days.
+
+## EXP-DIST-54: the val-crop proxy INVERTS on this batch — worse than no metric (2026-07-17)
+
+**Finding (Mark: worth its own entry):** across the five-run batch, val-crop recall ordering has NO
+positive relationship to held-out quality — it inverts at the extremes:
+
+| run | val proxy | held-out far argmax |
+|---|---|---|
+| ph1b | **0.410** (best) | 0.270 |
+| df3 | 0.403 | **0.209** (worst) |
+| ph1 | 0.397 | 0.226 |
+| sig30b | 0.379 | 0.235 |
+| hn4 | 0.368 (worst) | **0.339** (best) |
+
+This is the third and decisive confirmation of the EXP-DIST-46 lesson ("val-crop recall ≠ held-out
+quality") — now with a full anti-correlated table. **Implication: the proxy has been steering
+`best.pt` checkpoint selection, the new `--patience` early-stop, and possibly earlier decisions —
+an inverted metric is worse than no metric.** (The EXP-DIST-55 store confound may explain part of
+this batch's inversion — the proxy val split lives in the same mutated store — but hn4-vs-hn2 era
+data already showed the same sign.) Mitigations until a better selector exists: (a) treat val-crop
+recall as a TRAINING-HEALTH signal only; (b) patience stays acceptable for wall-clock but
+checkpoint SELECTION should prefer late/multiple candidates dumped against held-out (e.g.
+`--save-every` + a cheap held-out mini-dump per candidate — queued); (c) never promote on proxy
+numbers — G1/G2 only.
+
+## EXP-DIST-53: ph1 person head (out_ch=2, yolo26n sidecar) — G1 FAIL on far; near preserved; val proxy now fully discredited (2026-07-17)
+
+**Hypothesis (EXP-DIST-47 Phase-4 / external brief):** a 22 cm ball ≡ a 22 cm head, so a person-center
+channel on the shared backbone is the only context that can separate them; ball channel should stop
+firing on heads.
+
+**Method:** person supervision WITHOUT a store rebuild — yolo26n over the STORED gray crops
+(vision-calibrated recipe: never upscale + two-scale union @ thr 0.20; naive 1280-letterbox upscaling
+detected NOTHING), annotated on FORTNITE-OP's 3060 Ti (79,183 crops, 100% of train covered, 1.85 h).
+`--person-sidecar` + masked person loss (λ=0.5), out_ch=2. Two legs: `hm_ph1` (crashed at ep26 when
+the box was game-loaded — peak ep20 rescued) and `hm_ph1b` (resumed overnight from ep20, early-stopped
+ep25, val 0.410 @ep15 — the family's highest-ever proxy). Both dumped + swept, same protocol.
+
+**Result (R15m, 115 far / 19 near) — the full batch:**
+
+| run | ceiling FAR | argmax FAR | argmax NEAR | val-proxy peak |
+|---|---|---|---|---|
+| **hn4 (champion)** | **0.965** | **0.339** | 0.895 | 0.368 |
+| df3 (EXP-51) | 0.939 | 0.209 | 0.789 | 0.403 |
+| sig30b (EXP-52) | 0.93 | 0.235 | 0.842 | 0.379 |
+| ph1 (ep20) | 0.93 | 0.226 | **0.895** | 0.397 |
+| ph1b (resumed) | 0.93 | 0.270 | 0.684 | 0.410 |
+
+**Conclusion: FAIL on the far gate; the least-bad of the batch.** ph1 ties hn4 on near-argmax (the
+person head costs nothing near) and posts the batch-best far ranking (P(rank≤3) 0.42); ph1b's far
+argmax 0.270 is the batch best but its near collapsed (0.684) — the extra proxy-val epochs traded
+near ranking away. **The val-crop proxy is now fully discredited for model selection:** its ordering
+across this batch (0.410 > 0.403 > 0.397 > 0.379 > hn4's 0.368) has NO relationship to held-out
+quality (hn4 best, df3 worst). Person-channel value likely lives at the SELECTOR (centroids/size
+gate — the original EXP-DIST-47 Phase-4 plan), not in the ball channel itself.
+
+**Open question the whole batch raises — RUN VARIANCE:** every new run (three different single
+levers) landed ceiling-far 0.93–0.939, below even hn2's 0.948. Either all three levers coincidentally
+cost ceiling, or hn4's 0.965 is partly a favorable unseeded draw. **Next: a seeded/plain hn4-recipe
+CONTROL re-run under patience (~6 h) to size run-to-run variance before interpreting any of these
+gaps as real** — and before spending on the next lever.
+
+## EXP-DIST-52: sig30b (fixed σ=3, CORRECTED sweep) — G1 FAIL; σ=4 stays champion (2026-07-17)
+
+**Hypothesis (EXP-DIST-49 follow-up):** the ball is ~4–17 px but σ=4 paints a ~16 px target blob;
+a sharper fixed σ=3 should stop training the net to fire on head-sized blobs (a "half-measure"
+toward dynamic-σ). This redoes the run the σ-precedence footgun voided (EXP-DIST-50) — the first
+training where `--sigma` actually took effect.
+
+**Method:** `hm_sig30b` = from-scratch hn4 recipe + `--sigma 3.0` + `--patience 10` (new flag; run
+early-stopped at ep33, peak val 0.379 @ep23 — patience saved ~4 h). Same held-out dump + sweep
+protocol as df3/hn4.
+
+**Result (R15m, 134 GT: 115 far / 19 near) vs hn4:**
+
+| metric | sig30b | df3 (51) | hn4 | verdict |
+|---|---|---|---|---|
+| ceiling ALL / FAR | 0.94 / 0.93 | 0.948 / 0.939 | 0.970 / 0.965 | FAIL (far bar .955) |
+| score-argmax ALL / FAR / NEAR | 0.321 / **0.235** / 0.842 | 0.291 / 0.209 / 0.789 | 0.418 / **0.339** / 0.895 | FAIL (far bar .32) |
+| far rank r1 / P(≤3) / med / absent | 0.18 / 0.35 / 6 / 0.07 | 0.15 / 0.26 / 7 / 0.06 | (hn4 better) | — |
+
+**Conclusion: NEGATIVE.** σ=3 regressed far argmax ~30% relative vs σ=4 (0.339→0.235) and shaved
+the ceiling too — sharper targets did NOT sharpen far discrimination; they cost recall across the
+board (a 3–4 px far ball may simply need the broader supervisory blob to accumulate gradient).
+Both of the brief-driven levers (diff encoding, target sharpness) have now failed the same gate in
+the same direction; **the hn4 recipe (gray3, σ=4, GT-guarded hard negatives) remains champion.**
+Depth-scaled dynamic-σ (σ≈ball radius: ~1.5 far / ~5 near) is a DIFFERENT claim than fixed σ=3 and
+remains runnable after `crops_reolink_dyn` depth completion — but two same-family failures argue
+for letting the ph1 person-head result (and its held-out eval, running now) pick the direction
+before more σ spend. Data: `cands_spc_sig30b.pkl`, `G:\ballresearch\encoding\{train_sig30b.log,
+sweep_encoding.log}` (incl. same-protocol hn4 baseline rows appended by the chain).
+
+## EXP-DIST-51: df3 signed-diff encoding — G1 FAIL; far discrimination REGRESSES vs hn4 (2026-07-16)
+
+**Hypothesis (external brief + Jmot re-analysis):** replacing the two redundant gray history frames
+with signed differences `(g_t, g_{t-1}-g_{t-2}, g_t-g_{t-1})` hands layer 1 a pixel-level,
+direction-preserving motion signature (a ball moving > its diameter/frame leaves a clean ± lobe
+pair), un-stranding the temporal signal and improving ball-vs-distractor discrimination — the thing
+hn2/hn4/hn5 hard negatives have been patching.
+
+**Method:** `hm_df3` = from-scratch hn4 recipe (crops_reolink + GT-guarded negs, base 24, 40 ep,
+σ=4) + `--input-encoding diff3` (EncodingPrelude, in-graph — see the exp/detector-diff-encoding
+branch). Val-crop peak 0.403 @ep17 (best in family on the weak proxy; new bests at eps 1,2,3,4,8,17
+— gaps 1,1,1,4,9 — then 23 dry epochs; loss still falling = crop memorization). Dump + sweep on the
+held-out Spencerport clip (134 GT: 115 far / 19 near), frame-aligned with the hn4 protocol.
+
+**Result (R15m) vs hn4 (EXP-DIST-46):**
+
+| metric | df3 | hn4 | verdict |
+|---|---|---|---|
+| ceiling ALL / FAR / NEAR | 0.948 / 0.939 / 1.0 | 0.970 / 0.965 / 1.0 | FAIL (bar: far ≥ .955) |
+| score-argmax ALL / FAR / NEAR | 0.291 / **0.209** / 0.789 | 0.418 / **0.339** / 0.895 | FAIL (bar: far ≥ .32) |
+| far rank: r1 / P(≤3) / med-rank / absent | 0.15 / 0.26 / 7 / 0.06 | (hn4 better across) | — |
+
+**Conclusion: NEGATIVE, both gates failed.** The encoding didn't just fail to move far-argmax — it
+regressed it ~40% relative (0.339→0.209), with near-argmax also down (0.895→0.789) and ceiling-far
+slightly down. The val-crop proxy (0.403, family-best) was again anti-correlated with held-out
+quality — third confirmation of the EXP-DIST-46 lesson. Plausible mechanism for the regression:
+collapsing appearance to ONE gray frame costs more far-band discrimination than the diff channels
+return (far balls are slow in most GT frames → weak diff signature; compression flicker lives at
+ball scale → noisy diffs; and the GT-guarded hard negatives were mined against gray3 models'
+confusions). **Per the plan gate: the motion/color thesis is re-examined before any superstore /
+chroma build — the 55 GB store is NOT justified on this evidence.** A softer variant (replace only
+one history frame, keep two appearance frames) is a possible cheap follow-up but is NOT queued.
+The diff3 machinery stays (default-off, byte-identical, tested) — the negative result is the value.
+Data: `G:\ballresearch\distill\cands_spc_df3.pkl`, `G:\ballresearch\encoding\{train_df3.log,
+sweep_encoding.log}`; checkpoint `runs/hm_df3/best.pt` (ep17).
+
+## EXP-DIST-50: the σ sweep is VOID — a CLI-σ precedence footgun trained hm_sig30 at σ=4; fixed (2026-07-15)
+
+**Trigger:** pre-flight verification of the "in-flight σ sweep" (EXP-DIST-49's `sigma_exp` task) before
+reading its results.
+
+**Finding — the footgun:** `HeatmapCropDataset.__init__` did
+`self.sigma = data.get("summary", {}).get("sigma", sigma)` — the store summary **always** won over the
+constructor/CLI σ, so `train_v4_heatmap --sigma X` on a prebuilt store silently trained at the store's
+build-time σ. Verified against the actual sweep launcher (`G:\ballresearch\selector\sigma_exp.ps1`): it
+ran `training.train_v4_heatmap --out G:/ballresearch/distill/crops_reolink --sigma 3.0` with **no
+rebuild**, and `crops_reolink`'s summary records `"sigma": 4.0`.
+
+**Verdict on the sweep:**
+- **`hm_sig30` trained at σ=4.0, not 3.0 — it is an hn4-recipe replica** (val-crop recall ~0.39 matches
+  the hn4 family) and says nothing about target sharpness. Do not read `cands_spc_sig30` as a σ=3 result.
+- The sweep never completed anyway: `sigma_exp.status` stuck at "dump sig30" since 07-14 17:41, the σ=2.5
+  arm never started, no `sigma_exp.done`.
+
+**Second footgun in the same family (fixed together):** `_DynSigmaDataset`/`_DepthDataset` silently
+substituted a mid-field default for a missing per-item `depth` (`r.get("depth", 0.5)` / `0.0`), so
+`--dynamic-sigma` on a depth-less store would have trained EVERY positive at one constant σ≈3.25 without
+erroring. The live risk is real: `crops_reolink_dyn` is **partially** depth-recorded (21,133 of 45,164
+positives) — it looks depth-ready and isn't.
+
+**Fix (this commit):** (1) σ precedence — `--sigma`/constructor σ default is now a `None` sentinel; an
+explicit value WINS over the store summary, `None` defers to it (fresh builds default 4.0); (2)
+`require_positive_depth()` hard-fails `--dynamic-sigma`/`--far-weight` when any positive lacks `depth`,
+and the datasets read `r["depth"]` strictly. Unit tests cover both.
+
+**Next:** re-run the sweep corrected (σ=3, σ=2.5 + dynamic-σ after completing `crops_reolink_dyn` depth
+coverage) — scheduled after the current multi-game hn2/4/5 dump batch drains the GPU.
+
 ## EXP-DIST-49 [CORRECTED 2026-07-14]: dynamic-σ WAS wrongly dismissed — ball size DOES vary ~4→17px with depth; my "constant size" was a flawed measurement (2026-07-13/14)
 
 **CORRECTION (2026-07-14, after Mark challenged the constant-size claim — he was right):** the

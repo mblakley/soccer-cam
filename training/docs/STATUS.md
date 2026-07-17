@@ -1,6 +1,69 @@
 # Current Status
 
-*Last updated: 2026-07-10*
+*Last updated: 2026-07-17 (control running)*
+
+## 2026-07-17 — CONFOUND FOUND: the batch trained on hn5-mutated data; CONTROL running (EXP-DIST-55)
+
+Mark flagged the 0.93-cluster as systematic, not scatter. Root cause: the hn5 chain MUTATED
+crops_reolink IN PLACE (-480 GT-guarded negs, +782 corroboration negs) — df3/sig30b/ph1 all trained
+on hn5-poisoned data, not hn4 recipe data. Control (hm_ctrl) now training: exact hn4 protocol on the
+restored hn4-era store view (train=77,916 verified = hn4 log). ~0.965 far ceiling => batch VOID,
+re-run levers on clean store; ~0.93 => investigate seed/code. Readout ~07:00 07-18. Also EXP-DIST-54:
+the val-crop proxy fully INVERTS on this batch (0.410 proxy = mid held-out; 0.368 = best) — demoted
+to training-health signal only; never select/promote on it. Durable fix queued: versioned store
+indexes, no in-place mutation.
+
+## 2026-07-16/17 — brief-lever batch (results PENDING control validation, see EXP-DIST-55): df3 / sig30b / ph1 all below hn4
+
+Three single-lever experiments off the external brief, all trained + held-out-swept in ~36 h
+(EXP-DIST-51/52/53, full table in 53): **diff3 encoding** (far argmax 0.339→0.209), **fixed σ=3**
+(→0.235), **ph1 person head** (→0.226 ep20 / 0.270 resumed; near preserved at 0.895). None beats
+hn4; the val-crop proxy is now fully discredited (its ordering anti-correlates with held-out).
+Every new run's ceiling (0.93–0.939) sits below hn2's 0.948 → **next: a plain hn4-recipe CONTROL
+re-run to size unseeded run-variance before interpreting lever costs or funding the next lever.**
+
+Infrastructure landed on `exp/detector-diff-encoding` (PR #111, ready to merge): σ-precedence fix +
+depth guard (EXP-DIST-50: the old σ sweep was void), EncodingPrelude (in-graph, ONNX contract
+unchanged — 0.0-delta parity vs shipped hn2 on real frames), `load_detector_checkpoint` everywhere,
+`--patience` (saved ~4 h on its first run), `--person-sidecar` masked multi-task loss, module-level
+dataset variants (Windows spawn pickling — would have killed dyn-σ too), conftest torch/ort import
+fixes (2 latent failures). ph1 sidecar built WITHOUT a store rebuild (yolo26n on stored gray crops,
+never-upscale + two-scale recipe, vision-calibrated; 100% train coverage; D:\ph1 on FORTNITE-OP +
+staged copies). FORTNITE-OP recommissioned as a second trainer (3060 Ti, ~12 min/epoch; crashed once
+under kid-gaming load — WinRM listener rebuilt via SMB service trick; idle-gated night training
+works). Customer-iGPU floor measured (Iris Xe, DirectML, native band): **75 h/game = 3.1× OVER the
+24 h budget** — FP16 is the first lever when speed work resumes (per Mark: after accuracy).
+
+## 2026-07-15 — σ-footgun fix (PR #110), σ sweep VOID, diff3 encoding landed + POC-verified
+
+External optimization brief (archived to F:) reviewed against the repo; accuracy items adopted,
+speed items dropped per Mark (offline batch product; capacity cuts rejected — recall is the problem).
+
+- **PR #110 (`fix/sigma-cli-precedence` → `fix/selector-planner-review`):** CLI `--sigma` now WINS over
+  the store summary (was silently overridden — EXP-DIST-50); `--dynamic-sigma`/`--far-weight` hard-fail
+  on stores whose positives lack `depth` (`crops_reolink_dyn` is only partially depth-recorded:
+  21,133/45,164). **The σ sweep is VOID:** `hm_sig30` trained at σ=4 (an hn4 replica); σ=2.5 never ran.
+  Re-run corrected after the multi-game hn2/4/5 dump batch drains the GPU.
+- **diff3 input encoding landed on `exp/detector-diff-encoding`** (stacked on the σ-fix branch):
+  `EncodingPrelude` computes `(g_t, g_{t-1}-g_{t-2}, g_t-g_{t-1})` IN-GRAPH — the ONNX contract stays
+  raw gray frames, `ball_detector.py` untouched; `load_detector_checkpoint()` (geometry inferred from
+  the state dict, encoding from ckpt metadata, `--base` mismatch = hard error) now used by trainer
+  resume, export, eval_detector, dump_game_candidates, mine_hard_negatives. `--input-encoding
+  {gray3,diff3}`, default byte-identical (tested: gray3 prelude is the literal identity).
+- **POCs (laptop, real Spencerport footage):** (1) export CLI round-trip of a diff3 ckpt — parity
+  5.96e-08, Sub/Concat ops in-graph, input still `frames (1,3,h,w)` dynamic, metadata_props stamped;
+  (2) vision-checked diff panel at f553 seg-2 (struck ball, ~45 px/frame vs the tree line): ball nearly
+  invisible in gray_t, isolated high-contrast ± blobs in both diff channels
+  (`C:\Users\markb\Videos\soccer-cam-eval\spencerport\poc_diff3_f553.png`). Jmot is NOT re-trodden:
+  it was |Δ|(polarity-blind) ADDED as a 4th channel and ignored (≈J); diff3 is signed and REPLACES the
+  redundant frames. Motion is informative at ball scale (MOG2: ball in 89% of unlearned motion blobs).
+- **Customer-iGPU floor measured (Iris Xe i7-1270P, DirectML, native 1552×7680 band, shipped hn2):**
+  ~7-8.5 s/inference, ~10 s end-to-end per inferred frame → **75 h per 90-min game vs the 24 h budget
+  (3.1× OVER)**. Decode is fine (106 ms/src-frame). Speed levers (FP16 first) queued AFTER the accuracy
+  waves per Mark; target-tier question open.
+- **Next:** train df3 from scratch on the hn4 recipe when a GPU frees (multi_dump running) → G1
+  (Spc-clip ceiling/argmax vs cached cand_hn4, frame-aligned grid). Then ph1 (person head via sidecar
+  annotations on stored crops — no store rebuild; supervision from yolo26n on crop patches, masked loss).
 
 ## 2026-07-10 (evening) — side-pan STRETCH root-caused and fixed (crop truncation)
 

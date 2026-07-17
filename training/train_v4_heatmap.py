@@ -20,6 +20,8 @@ import argparse
 import json
 from pathlib import Path
 
+from training.data_prep.heatmap_dataset import HeatmapCropDataset
+
 # 05-27 sets share the (human-corrected) autocam-keypoint polygon; Irondequoit
 # has its own. Override via --polygon-* if these move.
 DEFAULT_POLY_0527 = "D:/detect_work/field_polygon_autocam.json"
@@ -112,6 +114,137 @@ def assemble_games(
     return games
 
 
+def require_positive_depth(items: list[dict], store, flag: str) -> None:
+    """Hard-fail when a depth-consuming flag runs on a store whose positives lack depth.
+
+    The depth datasets used to substitute a silent mid-field default for a missing
+    ``depth`` key, so ``--dynamic-sigma`` on a depth-less (or PARTIALLY recorded)
+    store trained those positives at one constant σ without erroring. Partial
+    stores are the dangerous case — they look depth-ready but aren't.
+    """
+    pos = [r for r in items if r.get("x") is not None]
+    missing = sum(1 for r in pos if "depth" not in r)
+    if missing:
+        raise SystemExit(
+            f"{flag}: {missing}/{len(pos)} positive crops in {store} have no 'depth' "
+            "field. Rebuild with record_depth=True or backfill depth first — a "
+            "partial store would silently train those positives at a default depth."
+        )
+
+
+# Dataset variants live at MODULE level: Windows DataLoader workers use spawn,
+# which pickles the dataset by qualified name — a class defined inside main()
+# dies with "Can't get local object" the moment num_workers > 0.
+class _DepthDataset(HeatmapCropDataset):
+    """Adds per-sample field depth (positives) so the loss can far-band weight.
+
+    Returns ``(stack, tgt, far_factor)`` where ``far_factor = 1-depth`` for
+    positives (1 at the far touchline, 0 near) and 0 for negatives. Only used
+    when ``--far-weight > 0``; the default path uses the unchanged
+    ``HeatmapCropDataset`` (byte-identical to the curve)."""
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import gaussian_heatmap
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+            far = 0.0
+        else:
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+            # depth is guaranteed by require_positive_depth() at startup; a
+            # KeyError here means the guard was bypassed — fail loudly.
+            far = float(1.0 - r["depth"])  # far touchline -> 1.0
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+        return (
+            torch.from_numpy(stack),
+            torch.from_numpy(tgt[None]),
+            torch.tensor(far, dtype=torch.float32),
+        )
+
+
+class _DynSigmaDataset(HeatmapCropDataset):
+    """Experiment A: per-sample target sigma = sigma_far + (sigma_near - sigma_far) * depth
+    (depth 0=far -> tight gaussian; 1=near -> broad) so the target encodes the ball's
+    location-dependent apparent size. Negatives stay all-zero. Returns (stack, tgt)."""
+
+    sigma_far: float = 2.0
+    sigma_near: float = 8.0
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import gaussian_heatmap
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+        else:
+            # depth is guaranteed by require_positive_depth() at startup; a
+            # KeyError here means the guard was bypassed — fail loudly.
+            depth = float(r["depth"])
+            sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+        return torch.from_numpy(stack), torch.from_numpy(tgt[None])
+
+
+class _PersonDataset(HeatmapCropDataset):
+    """ph1: adds a person-center target channel from the yolo26n sidecar.
+
+    Returns ``(stack, tgt_2ch, person_valid)``: channel 0 = the unchanged ball
+    Gaussian, channel 1 = max-composited person Gaussians (σ from box height).
+    ``person_valid`` is 1.0 for crops PRESENT in the sidecar (an annotated
+    empty crop is a real "no person" label) and 0.0 for absent crops, which
+    the loss masks out — partial sidecars train cleanly."""
+
+    persons: dict = {}
+
+    def __getitem__(self, i):
+        import random
+
+        import numpy as _np
+        import torch
+
+        from training.data_prep.heatmap_dataset import (
+            gaussian_heatmap,
+            person_center_heatmap,
+        )
+
+        r = self.items[i]
+        stack = _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
+        if r["x"] is None:
+            tgt = _np.zeros((self.crop, self.crop), _np.float32)
+        else:
+            tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
+        boxes = self.persons.get(r["file"])
+        pvalid = 0.0 if boxes is None else 1.0
+        ptgt = person_center_heatmap(self.crop, self.crop, boxes or [])
+        if self.augment and random.random() < 0.5:
+            stack = _np.ascontiguousarray(stack[:, :, ::-1])
+            tgt = _np.ascontiguousarray(tgt[:, ::-1])
+            ptgt = _np.ascontiguousarray(ptgt[:, ::-1])
+        return (
+            torch.from_numpy(stack),
+            torch.from_numpy(_np.stack([tgt, ptgt], 0)),
+            torch.tensor(pvalid, dtype=torch.float32),
+        )
+
+
 def center_distance_eval(model, ds, device, radius=20, thr=0.5):
     """Recall/precision by peak-vs-target center distance on a crop dataset."""
     import torch
@@ -156,7 +289,15 @@ def main():
         help="DataLoader workers; raise to feed a data-starved GPU (was hardcoded 4)",
     )
     ap.add_argument("--crop", type=int, default=256)
-    ap.add_argument("--sigma", type=float, default=4.0)
+    ap.add_argument(
+        "--sigma",
+        type=float,
+        default=None,
+        help="target gaussian sigma. Default None = the store's build-time σ (index "
+        "summary; 4.0 on a fresh build). An EXPLICIT value wins over the store "
+        "summary — previously the summary silently overrode this flag, so a "
+        "--sigma 3 run on a σ=4 store trained at σ=4.",
+    )
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--rebuild", action="store_true", help="re-render crops")
     ap.add_argument(
@@ -192,6 +333,22 @@ def main():
         "on top of best.pt) instead of training from scratch.",
     )
     ap.add_argument(
+        "--index-version",
+        type=int,
+        default=None,
+        help="train on this exact immutable index_vN.json snapshot of the store "
+        "(default None = pin + use the CURRENT index.json). EXP-DIST-55: stores "
+        "were mutated in place between runs; every run now records its data.",
+    )
+    ap.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="early-stop after N epochs without a val-recall improvement (default off). "
+        "best.pt is checkpointed at the peak either way, so this only saves wall-clock "
+        "— df3 spent 23 of 40 epochs past its ep-17 peak; hn4 peaked at ep 5.",
+    )
+    ap.add_argument(
         "--dynamic-sigma",
         action="store_true",
         help="Experiment A (dynamic ball size): per-sample target gaussian sigma scales with the "
@@ -212,6 +369,31 @@ def main():
         default=5.0,
         help="target sigma at depth=1 (near touchline, ~17px ball) when --dynamic-sigma",
     )
+    ap.add_argument(
+        "--input-encoding",
+        choices=("gray3", "diff3"),
+        default="gray3",
+        help="input encoding applied in front of the net (and baked into the ONNX "
+        "graph at export — the external contract stays raw gray frames). gray3 = "
+        "identity (legacy, byte-identical). diff3 = (g_t, g_{t-1}-g_{t-2}, "
+        "g_t-g_{t-1}) signed frame differences — see EncodingPrelude.",
+    )
+    ap.add_argument(
+        "--person-sidecar",
+        default=None,
+        help="ph1: JSON sidecar {crop_file: [[x1,y1,x2,y2,conf], ...]} of yolo26n "
+        "person boxes on the stored crops (no store rebuild). Enables the out_ch=2 "
+        "ball+person multi-task head: channel 1 learns person centers so shared "
+        "features separate a 22cm ball from a 22cm head (EXP-DIST-47). Crops "
+        "absent from the sidecar are MASKED out of the person loss; the ball "
+        "channel/loss is unchanged. Runtime slices channel 0 — no product change.",
+    )
+    ap.add_argument(
+        "--person-weight",
+        type=float,
+        default=0.5,
+        help="λ on the person-channel loss (only with --person-sidecar)",
+    )
     args = ap.parse_args()
 
     import torch
@@ -220,7 +402,6 @@ def main():
     from training.data_prep.heatmap_dataset import (
         HeatmapCropDataset,
         build_heatmap_crops,
-        gaussian_heatmap,
     )
     from training.models.heatmap_net import HeatmapNet
 
@@ -236,85 +417,53 @@ def main():
             games,
             out,
             crop=args.crop,
-            sigma=args.sigma,
+            sigma=4.0 if args.sigma is None else args.sigma,
             val_game_ids=val_ids,
             record_depth=far_on or dyn_on,
         )
         print("dataset:", summary, flush=True)
 
-    class _DepthDataset(HeatmapCropDataset):
-        """Adds per-sample field depth (positives) so the loss can far-band weight.
-
-        Returns ``(stack, tgt, far_factor)`` where ``far_factor = 1-depth`` for
-        positives (1 at the far touchline, 0 near) and 0 for negatives. Only used
-        when ``--far-weight > 0``; the default path uses the unchanged
-        ``HeatmapCropDataset`` (byte-identical to the curve)."""
-
-        def __getitem__(self, i):
-            import random
-
-            import numpy as _np
-
-            r = self.items[i]
-            stack = (
-                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
-            )
-            if r["x"] is None:
-                tgt = _np.zeros((self.crop, self.crop), _np.float32)
-                far = 0.0
-            else:
-                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], self.sigma)
-                far = float(1.0 - r.get("depth", 0.0))  # far touchline -> 1.0
-            if self.augment and random.random() < 0.5:
-                stack = _np.ascontiguousarray(stack[:, :, ::-1])
-                tgt = _np.ascontiguousarray(tgt[:, ::-1])
-            return (
-                torch.from_numpy(stack),
-                torch.from_numpy(tgt[None]),
-                torch.tensor(far, dtype=torch.float32),
-            )
-
-    class _DynSigmaDataset(HeatmapCropDataset):
-        """Experiment A: per-sample target sigma = sigma_far + (sigma_near - sigma_far) * depth
-        (depth 0=far -> tight gaussian; 1=near -> broad) so the target encodes the ball's
-        location-dependent apparent size. Negatives stay all-zero. Returns (stack, tgt)."""
-
-        sigma_far: float = 2.0
-        sigma_near: float = 8.0
-
-        def __getitem__(self, i):
-            import random
-
-            import numpy as _np
-
-            r = self.items[i]
-            stack = (
-                _np.load(self.root / "crops" / r["file"]).astype(_np.float32) / 255.0
-            )
-            if r["x"] is None:
-                tgt = _np.zeros((self.crop, self.crop), _np.float32)
-            else:
-                depth = float(r.get("depth", 0.5))
-                sig = self.sigma_far + (self.sigma_near - self.sigma_far) * depth
-                tgt = gaussian_heatmap(self.crop, self.crop, r["x"], r["y"], sig)
-            if self.augment and random.random() < 0.5:
-                stack = _np.ascontiguousarray(stack[:, :, ::-1])
-                tgt = _np.ascontiguousarray(tgt[:, ::-1])
-            return torch.from_numpy(stack), torch.from_numpy(tgt[None])
-
+    person_on = args.person_sidecar is not None
+    if person_on and (dyn_on or far_on):
+        raise SystemExit(
+            "--person-sidecar cannot combine with --dynamic-sigma/--far-weight yet "
+            "(dataset variants are not composed); run them as separate experiments."
+        )
     if dyn_on:
         ds_cls: type = _DynSigmaDataset
     elif far_on:
         ds_cls = _DepthDataset
+    elif person_on:
+        ds_cls = _PersonDataset
     else:
         ds_cls = HeatmapCropDataset
-    tr = ds_cls(out, "train", args.crop, args.sigma)
+    tr = ds_cls(out, "train", args.crop, args.sigma, index_version=args.index_version)
+    if dyn_on or far_on:
+        require_positive_depth(
+            tr.items, out, "--dynamic-sigma" if dyn_on else "--far-weight"
+        )
     if dyn_on:
         tr.sigma_far = args.sigma_far
         tr.sigma_near = args.sigma_near
-    va = HeatmapCropDataset(out, "val", args.crop, args.sigma)
+    if person_on:
+        sidecar = json.loads(Path(args.person_sidecar).read_text())
+        tr.persons = sidecar
+        n_annot = sum(1 for r in tr.items if r["file"] in sidecar)
+        print(
+            f"person sidecar: {len(sidecar)} annotated crops "
+            f"({n_annot}/{len(tr.items)} of train; rest masked)",
+            flush=True,
+        )
+    va = HeatmapCropDataset(
+        out, "val", args.crop, args.sigma, index_version=args.index_version
+    )
     print(
         f"train crops={len(tr)} val crops={len(va)} far_weight={args.far_weight}",
+        flush=True,
+    )
+    print(
+        f"DATA: store={out} index_v{tr.index_version} sha={tr.index_sha}"
+        + (" (UNPINNED - store not writable)" if tr.index_version == 0 else ""),
         flush=True,
     )
     if len(tr) == 0:
@@ -331,40 +480,75 @@ def main():
         prefetch_factor=4 if args.workers > 0 else None,
         pin_memory=True,
     )
-    model = HeatmapNet(in_frames=3, in_ch_per_frame=1, base=args.base).to(dev)
+    from training.models.heatmap_net import DetectorWithEncoding, EncodingPrelude
+
+    model = HeatmapNet(
+        in_frames=3, in_ch_per_frame=1, base=args.base, out_ch=2 if person_on else 1
+    ).to(dev)
+    # gray3 prelude is the identity, so the default path is byte-identical to the
+    # pre-encoding trainer (guarded by test). The prelude runs in front of the net
+    # here AND inside the exported ONNX graph — one module, no train/infer skew.
+    prelude = EncodingPrelude(args.input_encoding).to(dev)
+    eval_model = DetectorWithEncoding(prelude, model)
     if args.resume:
         rck = torch.load(args.resume, map_location=dev)
+        rck_enc = rck.get("encoding", "gray3") if "model" in rck else "gray3"
+        if rck_enc != args.input_encoding:
+            raise SystemExit(
+                f"--resume checkpoint was trained with encoding={rck_enc!r} but this "
+                f"run is --input-encoding {args.input_encoding!r} — warm-starting "
+                "across encodings silently mismatches what layer 1 learned."
+            )
         model.load_state_dict(rck["model"] if "model" in rck else rck)
         print(f"resumed (warm-start) from {args.resume}", flush=True)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     runs = Path(args.runs) if args.runs else (out / "runs")
     runs.mkdir(parents=True, exist_ok=True)
     best = -1.0
+    best_ep = -1
     for ep in range(args.epochs):
         model.train()
         tot = 0.0
         for batch in dl:
+            pv = None
             if far_on:
                 x, tgt, far = batch
                 far = far.to(dev).view(-1, 1, 1, 1)
+            elif person_on:
+                x, tgt, pv = batch
+                pv = pv.to(dev).view(-1, 1, 1, 1)
             else:
                 x, tgt = batch
             x, tgt = x.to(dev), tgt.to(dev)
-            pred = torch.sigmoid(model(x))
-            # emphasize the (rare) ball pixels: weighted MSE.
-            w = 1.0 + 30.0 * tgt
-            if far_on:
-                # Far-band up-weighting: scale ONLY the positive (ball-pixel) weight
-                # by (1 + K*far_factor) so far balls dominate the loss. tgt acts as
-                # the positive mask, so background weight (the leading 1.0) is
-                # untouched. K=0 collapses this to exactly w=1+30*tgt.
-                w = 1.0 + 30.0 * tgt * (1.0 + args.far_weight * far)
-            loss = (w * (pred - tgt) ** 2).mean()
+            pred = torch.sigmoid(model(prelude(x)))
+            if person_on:
+                # ball channel: the unchanged weighted MSE. person channel: same
+                # form, masked to sidecar-annotated samples (pv), scaled by λ —
+                # unannotated crops contribute NOTHING to channel 1.
+                bt, pt = tgt[:, 0:1], tgt[:, 1:2]
+                loss = ((1.0 + 30.0 * bt) * (pred[:, 0:1] - bt) ** 2).mean()
+                loss = (
+                    loss
+                    + args.person_weight
+                    * (pv * (1.0 + 30.0 * pt) * (pred[:, 1:2] - pt) ** 2).mean()
+                )
+            else:
+                # emphasize the (rare) ball pixels: weighted MSE.
+                w = 1.0 + 30.0 * tgt
+                if far_on:
+                    # Far-band up-weighting: scale ONLY the positive (ball-pixel)
+                    # weight by (1 + K*far_factor) so far balls dominate the loss.
+                    # tgt acts as the positive mask, so background weight (the
+                    # leading 1.0) is untouched. K=0 collapses to exactly w=1+30*tgt.
+                    w = 1.0 + 30.0 * tgt * (1.0 + args.far_weight * far)
+                loss = (w * (pred - tgt) ** 2).mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
             tot += float(loss)
-        metrics = center_distance_eval(model, va, dev) if len(va) else {"recall": 0.0}
+        metrics = (
+            center_distance_eval(eval_model, va, dev) if len(va) else {"recall": 0.0}
+        )
         print(
             f"epoch {ep + 1}/{args.epochs} loss={tot / max(len(dl), 1):.4f} "
             f"val={metrics}",
@@ -372,7 +556,27 @@ def main():
         )
         if metrics["recall"] >= best:
             best = metrics["recall"]
-            torch.save({"model": model.state_dict(), "epoch": ep}, runs / "best.pt")
+            best_ep = ep
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "epoch": ep,
+                    "encoding": args.input_encoding,
+                    "base": args.base,
+                    "out_ch": 2 if person_on else 1,
+                    "store": str(out),
+                    "index_version": tr.index_version,
+                    "index_sha": tr.index_sha,
+                },
+                runs / "best.pt",
+            )
+        elif args.patience is not None and ep - best_ep >= args.patience:
+            print(
+                f"EARLY STOP at epoch {ep + 1}: no val improvement in "
+                f"{args.patience} epochs (best {best} @ epoch {best_ep + 1})",
+                flush=True,
+            )
+            break
     print(f"DONE best_val_recall={best}", flush=True)
 
 

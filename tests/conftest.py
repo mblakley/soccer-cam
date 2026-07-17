@@ -1,10 +1,24 @@
+import importlib.machinery
 import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 # pytest-qt (loaded at plugin discovery) imports PyQt6, whose DLLs collide
 # with onnxruntime-gpu's DLL load on Windows. Stub onnxruntime before any
 # test module tries to import it — unit tests already mock InferenceSession.
-sys.modules.setdefault("onnxruntime", MagicMock())
+# The stub needs a real __spec__: importlib.util.find_spec("onnxruntime")
+# raises ValueError on a spec-less sys.modules entry.
+_ort_stub = MagicMock()
+_ort_stub.__spec__ = importlib.machinery.ModuleSpec("onnxruntime", loader=None)
+sys.modules.setdefault("onnxruntime", _ort_stub)
+
+# torch's first import probes DLL directories via os.path.exists; the autouse
+# mock_file_system fixture patches os.path.exists globally, so a torch import
+# that first happens INSIDE a test crashes (add_dll_directory on phantom
+# paths). Import it here, while the real filesystem is still visible.
+try:
+    import torch  # noqa: F401
+except ImportError:  # torch is an optional extra; tests skip without it
+    pass
 
 import asyncio  # noqa: E402
 import configparser  # noqa: E402
