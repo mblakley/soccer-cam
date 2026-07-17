@@ -4,6 +4,28 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-17: Two-box compute policy — server is the reliable/data-local queue, FORTNITE-OP harvests its own idle windows
+
+**Context:** two GPU boxes with opposite profiles — the server (GTX 1060: slow, always on,
+data-local to F:/G:) and FORTNITE-OP (RTX 3060 Ti: ~2.5x faster, sporadically available — it is a
+family gaming PC and games preempt everything, incl. one crash under combined load).
+
+**Policy:**
+- **Training runs → FORTNITE-OP job queue** (`\server	raining\deploy\queue\{pending,running,done}`,
+  FIFO json job specs `{desc, cmd, resume_cmd}`). The `Ph1GameGuard` scheduled task (runs as the
+  `training` user, at-startup, auto-restart) polls every 20 s: any GPU-heavy game (worker
+  `idle_games` list + Epic/Steam/Riot-path processes >500 MB) → training procs KILLED immediately
+  (suspend would pin VRAM and starve the game) and the job returns to `pending` in its resume form;
+  5 game-free minutes → oldest pending job dispatched. Interruption cost ≈ epochs since last
+  checkpoint; the box turns school hours and overnights into training time unattended.
+- **Precision runs (controls, protocol-exact experiments) + all data-touching work (dumps, sweeps,
+  store builds, mining) → server**: deterministic timing, no preemption, F:/G: local.
+- Cross-box data identity is verifiable via the store index shas (see the versioned-store decision
+  above): a FORTNITE-OP job must state the same index sha as its server-side comparators.
+- Roblox measured at only 37% GPU / 1.2 GB but STAYS a yield trigger: the criterion is "a kid is
+  interactively using the machine", not raw wattage (contention stutters the game; the box already
+  crashed once under combined load).
+
 ## 2026-07-17: Crop-store indexes are IMMUTABLE and VERSIONED — no in-place mutation, every run records its data (Mark: blocking, before all further experiments)
 
 **Trigger:** EXP-DIST-55 — the hn5 chain mutated `crops_reolink/index.json` in place (−480
