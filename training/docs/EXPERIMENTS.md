@@ -4,6 +4,43 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-53: ph1 person head (out_ch=2, yolo26n sidecar) — G1 FAIL on far; near preserved; val proxy now fully discredited (2026-07-17)
+
+**Hypothesis (EXP-DIST-47 Phase-4 / external brief):** a 22 cm ball ≡ a 22 cm head, so a person-center
+channel on the shared backbone is the only context that can separate them; ball channel should stop
+firing on heads.
+
+**Method:** person supervision WITHOUT a store rebuild — yolo26n over the STORED gray crops
+(vision-calibrated recipe: never upscale + two-scale union @ thr 0.20; naive 1280-letterbox upscaling
+detected NOTHING), annotated on FORTNITE-OP's 3060 Ti (79,183 crops, 100% of train covered, 1.85 h).
+`--person-sidecar` + masked person loss (λ=0.5), out_ch=2. Two legs: `hm_ph1` (crashed at ep26 when
+the box was game-loaded — peak ep20 rescued) and `hm_ph1b` (resumed overnight from ep20, early-stopped
+ep25, val 0.410 @ep15 — the family's highest-ever proxy). Both dumped + swept, same protocol.
+
+**Result (R15m, 115 far / 19 near) — the full batch:**
+
+| run | ceiling FAR | argmax FAR | argmax NEAR | val-proxy peak |
+|---|---|---|---|---|
+| **hn4 (champion)** | **0.965** | **0.339** | 0.895 | 0.368 |
+| df3 (EXP-51) | 0.939 | 0.209 | 0.789 | 0.403 |
+| sig30b (EXP-52) | 0.93 | 0.235 | 0.842 | 0.379 |
+| ph1 (ep20) | 0.93 | 0.226 | **0.895** | 0.397 |
+| ph1b (resumed) | 0.93 | 0.270 | 0.684 | 0.410 |
+
+**Conclusion: FAIL on the far gate; the least-bad of the batch.** ph1 ties hn4 on near-argmax (the
+person head costs nothing near) and posts the batch-best far ranking (P(rank≤3) 0.42); ph1b's far
+argmax 0.270 is the batch best but its near collapsed (0.684) — the extra proxy-val epochs traded
+near ranking away. **The val-crop proxy is now fully discredited for model selection:** its ordering
+across this batch (0.410 > 0.403 > 0.397 > 0.379 > hn4's 0.368) has NO relationship to held-out
+quality (hn4 best, df3 worst). Person-channel value likely lives at the SELECTOR (centroids/size
+gate — the original EXP-DIST-47 Phase-4 plan), not in the ball channel itself.
+
+**Open question the whole batch raises — RUN VARIANCE:** every new run (three different single
+levers) landed ceiling-far 0.93–0.939, below even hn2's 0.948. Either all three levers coincidentally
+cost ceiling, or hn4's 0.965 is partly a favorable unseeded draw. **Next: a seeded/plain hn4-recipe
+CONTROL re-run under patience (~6 h) to size run-to-run variance before interpreting any of these
+gaps as real** — and before spending on the next lever.
+
 ## EXP-DIST-52: sig30b (fixed σ=3, CORRECTED sweep) — G1 FAIL; σ=4 stays champion (2026-07-17)
 
 **Hypothesis (EXP-DIST-49 follow-up):** the ball is ~4–17 px but σ=4 paints a ~16 px target blob;

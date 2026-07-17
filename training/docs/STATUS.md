@@ -1,6 +1,27 @@
 # Current Status
 
-*Last updated: 2026-07-15*
+*Last updated: 2026-07-17*
+
+## 2026-07-16/17 — brief-lever batch COMPLETE: df3 / sig30b / ph1 ALL fail G1; hn4 stays champion
+
+Three single-lever experiments off the external brief, all trained + held-out-swept in ~36 h
+(EXP-DIST-51/52/53, full table in 53): **diff3 encoding** (far argmax 0.339→0.209), **fixed σ=3**
+(→0.235), **ph1 person head** (→0.226 ep20 / 0.270 resumed; near preserved at 0.895). None beats
+hn4; the val-crop proxy is now fully discredited (its ordering anti-correlates with held-out).
+Every new run's ceiling (0.93–0.939) sits below hn2's 0.948 → **next: a plain hn4-recipe CONTROL
+re-run to size unseeded run-variance before interpreting lever costs or funding the next lever.**
+
+Infrastructure landed on `exp/detector-diff-encoding` (PR #111, ready to merge): σ-precedence fix +
+depth guard (EXP-DIST-50: the old σ sweep was void), EncodingPrelude (in-graph, ONNX contract
+unchanged — 0.0-delta parity vs shipped hn2 on real frames), `load_detector_checkpoint` everywhere,
+`--patience` (saved ~4 h on its first run), `--person-sidecar` masked multi-task loss, module-level
+dataset variants (Windows spawn pickling — would have killed dyn-σ too), conftest torch/ort import
+fixes (2 latent failures). ph1 sidecar built WITHOUT a store rebuild (yolo26n on stored gray crops,
+never-upscale + two-scale recipe, vision-calibrated; 100% train coverage; D:\ph1 on FORTNITE-OP +
+staged copies). FORTNITE-OP recommissioned as a second trainer (3060 Ti, ~12 min/epoch; crashed once
+under kid-gaming load — WinRM listener rebuilt via SMB service trick; idle-gated night training
+works). Customer-iGPU floor measured (Iris Xe, DirectML, native band): **75 h/game = 3.1× OVER the
+24 h budget** — FP16 is the first lever when speed work resumes (per Mark: after accuracy).
 
 ## 2026-07-15 — σ-footgun fix (PR #110), σ sweep VOID, diff3 encoding landed + POC-verified
 
