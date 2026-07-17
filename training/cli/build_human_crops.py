@@ -191,12 +191,17 @@ def main() -> None:
             continue
         print(f"  {sd.name}: +{n} crops (raw-segment)", flush=True)
 
+    from training.data_prep.store_versions import freeze_index
+
+    v0, s0 = freeze_index(out)
     idx_obj["items"] = items
     idx_obj.setdefault("summary", {})
     idx_obj["summary"]["samples"] = len(items)
     idx_obj["summary"]["human_pos"] = totals["pos"]
     idx_obj["summary"]["human_neg"] = totals["neg"]
     (out / "index.json").write_text(json.dumps(idx_obj))
+    v1, s1 = freeze_index(out)
+    print(f"STORE VERSIONED: pre=v{v0}({s0}) -> post=v{v1}({s1})", flush=True)
     print(
         f"\nHUMAN CROPS appended: +{totals['pos']} positives, +{totals['neg']} negatives "
         f"(store now {len(items)} crops) -> {out}",

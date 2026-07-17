@@ -231,3 +231,53 @@ def test_dataset_variants_are_picklable(tmp_path):
         ds = cls(store, "train")
         blob = pickle.dumps(ds)
         assert pickle.loads(blob).crop == 64
+
+
+def test_store_versioning_freeze_and_resolve(tmp_path):
+    import json as _json
+
+    from training.data_prep.store_versions import (
+        canonical_sha,
+        freeze_index,
+        resolve_index,
+    )
+
+    # sha is key-order independent
+    assert canonical_sha({"a": 1, "b": 2}) == canonical_sha({"b": 2, "a": 1})
+
+    store = _mk_store(tmp_path, {"crop": 64, "sigma": 4.0})
+    v1, s1 = freeze_index(store)
+    assert v1 == 1
+    # idempotent: same content -> same version
+    assert freeze_index(store) == (v1, s1)
+
+    # mutate the store in place (the EXP-DIST-55 hazard) -> next freeze = v2
+    d = _json.loads((store / "index.json").read_text())
+    d["items"].append({"file": "b.npy", "x": None, "y": None, "split": "train"})
+    (store / "index.json").write_text(_json.dumps(d))
+    v2, s2 = freeze_index(store)
+    assert v2 == 2 and s2 != s1
+
+    # v1 is immutable and still resolvable to the PRE-mutation content
+    old, ver, sha = resolve_index(store, version=1)
+    assert ver == 1 and sha == s1
+    assert len(old["items"]) == 1
+
+
+def test_dataset_records_and_honors_index_version(tmp_path):
+    import json as _json
+
+    store = _mk_store(tmp_path, {"crop": 64, "sigma": 4.0})
+    ds = HeatmapCropDataset(store, "train")
+    assert ds.index_version == 1 and len(ds.index_sha) == 16
+    assert len(ds.items) == 1
+
+    # mutate the store; a pinned-version dataset must still see the OLD data
+    d = _json.loads((store / "index.json").read_text())
+    d["items"].append({"file": "c.npy", "x": None, "y": None, "split": "train"})
+    (store / "index.json").write_text(_json.dumps(d))
+
+    ds_new = HeatmapCropDataset(store, "train")  # current -> v2, sees 2 items
+    assert ds_new.index_version == 2 and len(ds_new.items) == 2
+    ds_pinned = HeatmapCropDataset(store, "train", index_version=1)
+    assert ds_pinned.index_version == 1 and len(ds_pinned.items) == 1

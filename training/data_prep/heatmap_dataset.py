@@ -271,6 +271,10 @@ def build_heatmap_crops(
     (out_dir / "index.json").write_text(
         json.dumps({"summary": summary, "items": index})
     )
+    from training.data_prep.store_versions import freeze_index
+
+    v, sha = freeze_index(out_dir)
+    print(f"STORE VERSIONED: created as v{v} ({sha})", flush=True)
     return summary
 
 
@@ -284,9 +288,17 @@ class HeatmapCropDataset:
         crop: int = 256,
         sigma: float | None = None,
         augment: bool | None = None,
+        index_version: int | None = None,
     ):
+        from training.data_prep.store_versions import resolve_index
+
         self.root = Path(root)
-        data = json.loads((self.root / "index.json").read_text())
+        # Provenance is pinned on EVERY construction (EXP-DIST-55: the store was
+        # silently mutated between runs). None = freeze + use the current index;
+        # an explicit version trains on that exact immutable snapshot.
+        data, self.index_version, self.index_sha = resolve_index(
+            self.root, index_version
+        )
         self.crop = data.get("summary", {}).get("crop", crop)
         # σ precedence: an EXPLICIT sigma wins; None defers to the store summary
         # (the build-time σ). Targets are built at load time, so overriding σ on a

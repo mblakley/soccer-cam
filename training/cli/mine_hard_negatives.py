@@ -45,7 +45,14 @@ def load_index(out: Path) -> tuple[list, dict | None]:
 
 
 def save_index(out: Path, items: list, wrapper: dict | None) -> None:
-    """Write the index back in the SAME form it was read (updating summary counts)."""
+    """Write the index back in the SAME form it was read (updating summary counts).
+
+    EXP-DIST-55: the store is pinned BEFORE and AFTER the write, so both the
+    pre-mining and post-mining states are immutable, recoverable versions —
+    in-place mutation cost a full experiment batch its baseline."""
+    from training.data_prep.store_versions import freeze_index
+
+    v0, s0 = freeze_index(out)
     if wrapper is not None:
         wrapper["items"] = items
         summary = wrapper.get("summary")
@@ -54,6 +61,8 @@ def save_index(out: Path, items: list, wrapper: dict | None) -> None:
         (out / "index.json").write_text(json.dumps(wrapper))
     else:
         (out / "index.json").write_text(json.dumps(items))
+    v1, s1 = freeze_index(out)
+    print(f"STORE VERSIONED: pre=v{v0}({s0}) -> post=v{v1}({s1})", flush=True)
 
 
 def main() -> None:

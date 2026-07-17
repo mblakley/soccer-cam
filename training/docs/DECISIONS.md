@@ -4,6 +4,33 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-17: Crop-store indexes are IMMUTABLE and VERSIONED — no in-place mutation, every run records its data (Mark: blocking, before all further experiments)
+
+**Trigger:** EXP-DIST-55 — the hn5 chain mutated `crops_reolink/index.json` in place (−480
+GT-guarded negatives, +782 corroboration negatives), so an entire three-lever experiment batch
+(EXP-DIST-51/52/53) silently trained on hn5's data while comparing itself against hn4's baseline.
+~3 GPU-days of results voided; recovery was only possible because the miner happened to leave an
+ad-hoc backup (`index.prehn5.json`).
+
+**Decision (mechanism in `training/data_prep/store_versions.py`):**
+- `index_vN.json` snapshots are IMMUTABLE and content-addressed (16-hex sha of the canonical
+  JSON); freezing identical content twice returns the same version. Never edited, never deleted.
+- `index.json` remains the CURRENT alias (all existing readers keep working), but every mutator
+  (`mine_hard_negatives`, `build_human_crops`) pins the store BEFORE and AFTER its write, and
+  `build_heatmap_crops` freezes v1 at creation — both sides of any change are recoverable forever.
+- Every consumer pins provenance automatically: `HeatmapCropDataset` freezes+records
+  `(index_version, index_sha)` on construction; `train_v4_heatmap` prints a `DATA:` line at startup
+  and writes `{store, index_version, index_sha}` into every checkpoint; `--index-version N` trains
+  on an exact historical snapshot regardless of later mutations.
+- Crop `.npy` files are never deleted (de-indexing is the only removal mechanism — which is what
+  made the hn4-era restore possible).
+- Live stores retro-versioned on the server: `crops_reolink` v1=pre-hn4-mining, v2=hn4-era
+  (=`index.prehn5.json`, the control's data), v3=current/hn5-era; `crops_reolink_hn4era` and
+  `crops_reolink_dyn` pinned v1. (Shas recorded in the retro-freeze output attached to EXP-DIST-55.)
+
+**Rule going forward:** an experiment that cannot state its store + index version + sha did not
+happen. Comparisons across runs must compare index shas first.
+
 ## 2026-07-12: Indoor/dome venues (blue turf) ARE in scope for the ball detector
 
 Mark confirmed indoor games are in scope, so the grass-trained detector cannot simply exclude

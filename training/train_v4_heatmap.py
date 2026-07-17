@@ -333,6 +333,14 @@ def main():
         "on top of best.pt) instead of training from scratch.",
     )
     ap.add_argument(
+        "--index-version",
+        type=int,
+        default=None,
+        help="train on this exact immutable index_vN.json snapshot of the store "
+        "(default None = pin + use the CURRENT index.json). EXP-DIST-55: stores "
+        "were mutated in place between runs; every run now records its data.",
+    )
+    ap.add_argument(
         "--patience",
         type=int,
         default=None,
@@ -429,7 +437,7 @@ def main():
         ds_cls = _PersonDataset
     else:
         ds_cls = HeatmapCropDataset
-    tr = ds_cls(out, "train", args.crop, args.sigma)
+    tr = ds_cls(out, "train", args.crop, args.sigma, index_version=args.index_version)
     if dyn_on or far_on:
         require_positive_depth(
             tr.items, out, "--dynamic-sigma" if dyn_on else "--far-weight"
@@ -446,9 +454,16 @@ def main():
             f"({n_annot}/{len(tr.items)} of train; rest masked)",
             flush=True,
         )
-    va = HeatmapCropDataset(out, "val", args.crop, args.sigma)
+    va = HeatmapCropDataset(
+        out, "val", args.crop, args.sigma, index_version=args.index_version
+    )
     print(
         f"train crops={len(tr)} val crops={len(va)} far_weight={args.far_weight}",
+        flush=True,
+    )
+    print(
+        f"DATA: store={out} index_v{tr.index_version} sha={tr.index_sha}"
+        + (" (UNPINNED - store not writable)" if tr.index_version == 0 else ""),
         flush=True,
     )
     if len(tr) == 0:
@@ -549,6 +564,9 @@ def main():
                     "encoding": args.input_encoding,
                     "base": args.base,
                     "out_ch": 2 if person_on else 1,
+                    "store": str(out),
+                    "index_version": tr.index_version,
+                    "index_sha": tr.index_sha,
                 },
                 runs / "best.pt",
             )
