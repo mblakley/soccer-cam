@@ -128,6 +128,12 @@ def main() -> None:
         action="store_true",
         help="disable NVDEC hardware decode (default: on; ~3.3x faster on this box)",
     )
+    ap.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="wind-align every band to the game's first frame before cropping "
+        "(BandStabilizer; labels corrected by the per-frame shift — EXP-DIST-57)",
+    )
     args = ap.parse_args()
 
     holdout, val = set(args.holdout), set(args.val)
@@ -167,6 +173,7 @@ def main() -> None:
         val_game_ids=val_ids,
         target_width=args.target_width,
         hwaccel=not args.no_hwaccel,
+        stabilize=args.stabilize,
     )
     print("\nDATASET:", summary, flush=True)
 

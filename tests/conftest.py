@@ -20,6 +20,13 @@ try:
 except ImportError:  # torch is an optional extra; tests skip without it
     pass
 
+# cv2's lazy bootstrap walks config-file candidates with os.path.exists too —
+# same phantom-path crash when its first import happens inside a test.
+try:
+    import cv2  # noqa: F401
+except ImportError:
+    pass
+
 import asyncio  # noqa: E402
 import configparser  # noqa: E402
 import tempfile  # noqa: E402

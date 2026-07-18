@@ -125,6 +125,13 @@ def main() -> None:
         "Reads <dir>/<game_id>.json {global_frame: [x,y]} from build_corrob_labels.py. "
         "Overrides --use-gt/teacher labels for that game.",
     )
+    ap.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="wind-align bands to each game's first decoded frame; label/exclusion "
+        "coords corrected by the per-frame shift (EXP-DIST-57). Use iff the store "
+        "being mined into was built with --stabilize.",
+    )
     args = ap.parse_args()
 
     import av
@@ -142,6 +149,7 @@ def main() -> None:
     from training.models.heatmap_net import load_detector_checkpoint
     from training.world_model.eval import extract_peaks
     from training.world_model.geometry import build_field_geometry
+    from video_grouper.inference.iso_warp import BandStabilizer
 
     out = Path(args.out)
     crops = out / "crops"
@@ -233,11 +241,12 @@ def main() -> None:
         for f in infer_set:
             need.update(k for k in (f, f - 1, f - 2) if k >= 0)
         warped: dict[int, np.ndarray] = {}
+        stab = BandStabilizer() if args.stabilize else None
         nadd = 0
         for idx, img in iter_frames_from_segments(
             video_p.parent, segments, sorted(need), vrot, hwaccel=not args.no_hwaccel
         ):
-            warped[idx] = _dewarp_mask_gray(img, warp, mask)
+            warped[idx] = _dewarp_mask_gray(img, warp, mask, stab)
             if idx in infer_set:
                 seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
                 seq = [s for s in seq if s is not None]
@@ -247,6 +256,11 @@ def main() -> None:
                 stack = np.stack(grays, 0).astype(np.float32) / 255.0
                 hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
                 bx, by = warp.points([labels[idx]])[0]
+                if stab is not None:
+                    # label lives on the RAW frame -> aligned-band coords; the
+                    # peaks are already aligned coords (inference ran on the
+                    # aligned band), as is the polygon-registered geometry.
+                    bx, by = bx - stab.last[0], by - stab.last[1]
                 kept = 0
                 for hx, hy, _sc in extract_peaks(
                     hm, top_k=args.top_k, threshold=args.score_thr, min_distance=6

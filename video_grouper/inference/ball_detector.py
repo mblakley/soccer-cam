@@ -25,6 +25,7 @@ import numpy as np
 import onnxruntime as ort
 
 from video_grouper.inference.iso_warp import (
+    BandStabilizer,
     CropIsoWarp,
     band_mask,
     dewarp_mask_gray,
@@ -183,6 +184,7 @@ def detect_video_candidates(
     far_margin: float = FAR_MARGIN_PX,
     boundary_margin: float = BOUNDARY_MARGIN_PX,
     target_width: int | None = None,
+    stabilize: bool = False,
 ) -> tuple[dict[int, list[tuple[float, float, float, float]]], dict]:
     """Run the heatmap detector over a video at ``stride`` -> per-frame candidates.
 
@@ -192,6 +194,11 @@ def detect_video_candidates(
     normalization — None = native). Each sampled frame is inferred from its
     3-frame grayscale history (consecutive SOURCE frames, so every frame is
     decoded; only inference runs at ``stride``).
+
+    ``stabilize`` runs :class:`BandStabilizer` wind alignment on every band
+    before masking/inference — the anchor is the video's first frame, and
+    candidate coordinates are mapped back through the per-frame shift so they
+    stay positions on the RAW source frame (EXP-DIST-57).
 
     Returns ``({global_frame: [(x, y, score, size_px), ...]}, info)`` with
     candidate coordinates + observed blob diameter mapped back to SOURCE pixels
@@ -204,6 +211,7 @@ def detect_video_candidates(
     mask_poly = expand_polygon(far_margin_polygon(polygon, far_margin), boundary_margin)
     cands: dict[int, list[tuple[float, float, float, float]]] = {}
     t0 = time.time()
+    stab = BandStabilizer() if stabilize else None
 
     with av.open(str(video_path)) as container:
         vs = container.streams.video[0]
@@ -217,7 +225,7 @@ def detect_video_candidates(
         frame_idx = 0
         for frame in container.decode(video=0):
             bgr = frame.to_ndarray(format="bgr24")
-            grays.append(dewarp_mask_gray(bgr, warp, mask))
+            grays.append(dewarp_mask_gray(bgr, warp, mask, stab))
             if len(grays) > 3:
                 grays.pop(0)
             if frame_idx % stride == 0:
@@ -227,13 +235,17 @@ def detect_video_candidates(
                 stack = np.stack(seq, 0).astype(np.float32) / 255.0
                 hm = infer_band(sess, stack, tile_w, overlap)
                 peaks = extract_peaks(hm, top_k, threshold, min_distance)
+                # aligned-band peak -> raw-band coords (+ the frame's wind shift)
+                # -> SOURCE px, so downstream consumers get positions on the
+                # frame as recorded.
+                sdx, sdy = stab.last if stab is not None else (0.0, 0.0)
                 # 4th element = observed blob diameter in SOURCE px (band
                 # measure / warp.scale — the eval_detector convention), feeding
                 # Candidate.size_px downstream. Schema: candidates/2.
                 cands[frame_idx] = [
                     (
-                        round(float(hx) / warp.scale, 1),
-                        round(float(hy) / warp.scale + warp.y_top, 1),
+                        round((float(hx) + sdx) / warp.scale, 1),
+                        round((float(hy) + sdy) / warp.scale + warp.y_top, 1),
                         round(float(sc), 4),
                         round(
                             blob_diameter(grays[-1], int(hx), int(hy))

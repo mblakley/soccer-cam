@@ -40,6 +40,12 @@ def main() -> None:
     ap.add_argument("--crop", type=int, default=256)
     ap.add_argument("--far-margin", type=float, default=400.0)
     ap.add_argument("--no-hwaccel", action="store_true")
+    ap.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="wind-align bands to each set's first decoded frame; label coords "
+        "corrected by the per-frame shift (EXP-DIST-57)",
+    )
     args = ap.parse_args()
 
     import cv2
@@ -51,6 +57,7 @@ def main() -> None:
     )
     from training.data_prep.segment_decode import iter_frames_from_segments
     from training.data_prep.warped_dataset import resolve_video_rotation
+    from video_grouper.inference.iso_warp import BandStabilizer
 
     out = Path(args.out)
     crops = out / "crops"
@@ -140,6 +147,7 @@ def main() -> None:
         warp = mask = None
         bh = bw = 0
         band_gray: dict[int, np.ndarray] = {}
+        stab = BandStabilizer() if args.stabilize else None
         n = 0
         try:
             for f, img in iter_frames_from_segments(
@@ -152,10 +160,12 @@ def main() -> None:
                     mpoly = warp.points(far_poly).astype(np.int32)
                     mask = np.zeros((bh, bw), np.uint8)
                     cv2.fillPoly(mask, [mpoly], 255)
-                band_gray[f] = _dewarp_mask_gray(img, warp, mask)
+                band_gray[f] = _dewarp_mask_gray(img, warp, mask, stab)
                 if f in want:
                     sx, sy, is_pos = want[f]
                     bx, by = warp.points([(sx, sy)])[0]
+                    if stab is not None:
+                        bx, by = bx - stab.last[0], by - stab.last[1]
                     x0 = int(np.clip(round(bx) - half, 0, max(0, bw - args.crop)))
                     y0 = int(np.clip(round(by) - half, 0, max(0, bh - args.crop)))
                     lx, ly = bx - x0, by - y0

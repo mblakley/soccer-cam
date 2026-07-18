@@ -102,6 +102,7 @@ def build_heatmap_crops(
     hard_neg_crops: dict[str, list] | None = None,
     record_depth: bool = False,
     hwaccel: bool = False,
+    stabilize: bool = False,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -124,9 +125,20 @@ def build_heatmap_crops(
     signal a far-band loss up-weighting term consumes; it is purely additive
     metadata and never alters which crops are written, so a depth-recorded crop
     store trains identically to a legacy store under the default (uniform) loss.
+
+    ``stabilize`` (default ``False`` → byte-identical legacy path) runs
+    :class:`video_grouper.inference.iso_warp.BandStabilizer` wind alignment on
+    every band before masking — anchor = the game's first decoded frame — and
+    corrects each label's band coordinates by that frame's measured shift, so
+    the 3-frame stack is jitter-free and the ball/mask geometry is registered
+    to one reference (EXP-DIST-57: wind excursions put ~21% of windy-game ball
+    positions outside the static mask). Recorded in the summary → a stabilized
+    store gets its own index sha and can never masquerade as a legacy store.
     """
     import av
     import cv2
+
+    from video_grouper.inference.iso_warp import BandStabilizer
 
     out_dir = Path(out_dir)
     (out_dir / "crops").mkdir(parents=True, exist_ok=True)
@@ -215,10 +227,14 @@ def build_heatmap_crops(
         for _t in want:
             need.update(k for k in (_t, _t - 1, _t - 2) if k >= 0)
         warped: dict[int, np.ndarray] = {}
+        stab = BandStabilizer() if stabilize else None
+        shifts: dict[int, tuple[float, float]] = {}
         for idx, img in iter_frames_from_segments(
             video_p.parent, segments, sorted(need), vrot, hwaccel=hwaccel
         ):
-            warped[idx] = _dewarp_mask_gray(img, warp, mask)
+            warped[idx] = _dewarp_mask_gray(img, warp, mask, stab)
+            if stab is not None:
+                shifts[idx] = stab.last
             if idx in want:
                 bx, by = labels[idx]
                 seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
@@ -226,8 +242,12 @@ def build_heatmap_crops(
                 grays = seq if len(seq) == 3 else [seq[0]] * (3 - len(seq)) + seq
                 for _k in [k for k in warped if k < idx - 2]:
                     del warped[_k]
+                    shifts.pop(_k, None)
                 dxy = warp.points([(bx, by)])[0]
-                dbx, dby = float(dxy[0]), float(dxy[1])
+                # the label lives on the RAW frame; pull it into aligned-band
+                # coords by this frame's measured wind shift
+                sdx, sdy = shifts.get(idx, (0.0, 0.0))
+                dbx, dby = float(dxy[0]) - sdx, float(dxy[1]) - sdy
                 t = idx
                 jx = rng.integers(-jitter, jitter + 1)
                 jy = rng.integers(-jitter, jitter + 1)
@@ -268,6 +288,9 @@ def build_heatmap_crops(
         "val": n_val,
         "positives": sum(1 for r in index if r["x"] is not None),
     }
+    if stabilize:
+        # only when on — legacy stores stay byte-identical
+        summary["stabilize"] = True
     (out_dir / "index.json").write_text(
         json.dumps({"summary": summary, "items": index})
     )

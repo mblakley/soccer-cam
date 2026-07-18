@@ -99,6 +99,13 @@ def main() -> None:
         "--end-g", type=int, default=None, help="limit the dump to global frames < this"
     )
     ap.add_argument("--no-hwaccel", action="store_true")
+    ap.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="wind-align bands before inference (anchor = each chunk's first "
+        "decoded frame); candidate coords are mapped BACK through the per-frame "
+        "shift, so the dump contract stays raw-frame source px (EXP-DIST-57)",
+    )
     args = ap.parse_args()
 
     import av
@@ -117,7 +124,7 @@ def main() -> None:
     from training.models.heatmap_net import load_detector_checkpoint
     from training.world_model.eval import extract_peaks
     from video_grouper.inference.ball_detector import blob_diameter
-    from video_grouper.inference.iso_warp import expand_polygon
+    from video_grouper.inference.iso_warp import BandStabilizer, expand_polygon
 
     gd = Path(args.game_dir)
     out = Path(args.out)
@@ -173,10 +180,11 @@ def main() -> None:
         warped: dict[int, np.ndarray] = {}
         cands: dict[int, list[tuple[float, float, float]]] = {}
         wanted = set(frames_want)
+        stab = BandStabilizer() if args.stabilize else None
         for idx, img in iter_frames_from_segments(
             gd, gj["segments"], sorted(need), vrot, hwaccel=not args.no_hwaccel
         ):
-            warped[idx] = _dewarp_mask_gray(img, warp, mask)
+            warped[idx] = _dewarp_mask_gray(img, warp, mask, stab)
             if idx in wanted:
                 seq = [warped.get(idx - 2), warped.get(idx - 1), warped.get(idx)]
                 seq = [s for s in seq if s is not None]
@@ -189,13 +197,16 @@ def main() -> None:
                     threshold=args.thr,
                     min_distance=args.min_distance,
                 )
+                # aligned-band peak -> raw-band (+ wind shift) -> SOURCE px:
+                # the dump contract is positions on the frame as recorded.
+                sdx, sdy = stab.last if stab is not None else (0.0, 0.0)
                 # 4th element = observed blob diameter, SOURCE px (the
                 # eval_detector convention) — fullgame dumps previously carried
                 # no sizes, keeping size_cont_w dormant (EXP-DIST-32/47).
                 cands[idx] = [
                     (
-                        round(float(hx) / warp.scale, 1),
-                        round(float(hy) / warp.scale + warp.y_top, 1),
+                        round((float(hx) + sdx) / warp.scale, 1),
+                        round((float(hy) + sdy) / warp.scale + warp.y_top, 1),
                         round(float(sc), 4),
                         round(
                             blob_diameter(grays[-1], int(hx), int(hy))
@@ -222,6 +233,7 @@ def main() -> None:
             "top_k": args.top_k,
             "thr": args.thr,
             "min_distance": args.min_distance,
+            "stabilize": bool(args.stabilize),
         },
         "ranges": ranges,
         "n_frames": len(grid),

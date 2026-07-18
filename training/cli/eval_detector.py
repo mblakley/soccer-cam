@@ -139,6 +139,13 @@ def main() -> None:
         default=None,
         help="also pickle raw candidates (+observed size) + GT here for cli/sweep_tracker",
     )
+    ap.add_argument(
+        "--stabilize",
+        action="store_true",
+        help="wind-align bands to the first decoded frame before inference; OUR "
+        "metrics + the dump score against shift-corrected GT (AutoCam reference "
+        "rows keep raw GT — they ran on raw frames). EXP-DIST-57.",
+    )
     args = ap.parse_args()
 
     import cv2
@@ -157,6 +164,7 @@ def main() -> None:
     from training.world_model.geometry import build_field_geometry
     from training.world_model.reranker import track_ball
     from training.world_model.tbd import Candidate
+    from video_grouper.inference.iso_warp import BandStabilizer
 
     vdir = Path(args.game_dir)
     gj = json.loads((vdir / "game.json").read_text(encoding="utf-8", errors="ignore"))
@@ -216,6 +224,8 @@ def main() -> None:
     band_gray: dict[int, np.ndarray] = {}
     warp = None
     mask = None
+    stab = BandStabilizer() if args.stabilize else None
+    shifts: dict[int, tuple[float, float]] = {}
     for f, img in iter_frames_from_segments(
         game_dir, segments, band_globals, vrot, hwaccel=not args.no_hwaccel
     ):
@@ -226,7 +236,9 @@ def main() -> None:
             mpoly = warp.points(far_poly).astype(np.int32)
             mask = np.zeros(warp.shape, np.uint8)
             cv2.fillPoly(mask, [mpoly], 255)
-        band_gray[f] = _dewarp_mask_gray(img, warp, mask)
+        band_gray[f] = _dewarp_mask_gray(img, warp, mask, stab)
+        if stab is not None:
+            shifts[f] = stab.last
         if f in want:
             g0 = band_gray[f]
             g1 = band_gray.get(f - 1, g0)
@@ -267,6 +279,15 @@ def main() -> None:
     track = track_ball([frames_cands[f] for f in ef], geom, frame_gaps=gaps)
     fidx = {f: i for i, f in enumerate(ef)}
 
+    def _reg_gt(g, gt):
+        """GT (raw-frame source px) -> anchor-registered coords via the nearest
+        decoded eval frame's wind shift (wind moves slowly vs the stride)."""
+        if stab is None or warp is None or not ef:
+            return (float(gt[0]), float(gt[1]))
+        nf = min(ef, key=lambda f: abs(f - g))
+        sdx, sdy = shifts.get(nf, (0.0, 0.0))
+        return (float(gt[0]) - sdx / warp.scale, float(gt[1]) - sdy / warp.scale)
+
     if args.dump_cands:
         # Cache raw candidates (+ observed size) + GT so cli/sweep_tracker can replay track_ball
         # under many configs in seconds — decode is the 40-min cost; tracking is milliseconds.
@@ -279,10 +300,16 @@ def main() -> None:
             "cands": {
                 f: [(c.x, c.y, c.score, c.size_px) for c in frames_cands[f]] for f in ef
             },
-            "balls": balls,
+            # stabilized runs: candidates are anchor-registered, so ship GT in the
+            # same space — sweep_tracker replays unchanged either way
+            "balls": {g: _reg_gt(g, gt) for g, gt in balls.items()}
+            if stab is not None
+            else balls,
             "far_size_px": args.far_size_px,
             "stride": args.stride,
         }
+        if stab is not None:
+            dump["stabilize"] = True
         with open(args.dump_cands, "wb") as fh:
             pickle.dump(dump, fh)
         print(
@@ -313,14 +340,17 @@ def main() -> None:
         near = min(ef, key=lambda f: abs(f - g)) if ef else None
         if near is None or abs(near - g) > args.stride or fidx[near] not in track:
             continue
-        gw = geom.image_to_world(np.asarray([gt], float))[0]
+        # OUR metrics score in the (possibly) anchor-registered space the detector
+        # ran in; the AutoCam references ran on raw frames and keep raw GT.
+        gw = geom.image_to_world(np.asarray([_reg_gt(g, gt)], float))[0]
+        gw_raw = geom.image_to_world(np.asarray([gt], float))[0]
         tw = geom.image_to_world(np.asarray([track[fidx[near]]], float))[0]
         our = float(np.linalg.norm(tw - gw))
         size = float(geom.expected_ball_diameter_px(np.asarray(gt))[0])
         vpe = None
         if g in vps:
             vw = geom.image_to_world(np.asarray([vps[g]], float))[0]
-            vpe = float(np.linalg.norm(vw - gw))
+            vpe = float(np.linalg.norm(vw - gw_raw))
         cands = frames_cands.get(near, [])
         ce = (
             min(
@@ -337,7 +367,7 @@ def main() -> None:
         ace = None
         if fidx[near] in ac_track:
             aw = geom.image_to_world(np.asarray([ac_track[fidx[near]]], float))[0]
-            ace = float(np.linalg.norm(aw - gw))
+            ace = float(np.linalg.norm(aw - gw_raw))
         rows.append((size, our, vpe, ce, ace))
 
     def _col(rws, i):
