@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-57: wind sway MEASURED — episodic 10-13px roll gusts, 5-60px cumulative excursions, and ~6x mask-clipping on windy games; band-alignment experiment APPROVED (2026-07-18)
+
+**Trigger:** Mark — would feat/camera-stabilization help the detection experiments? First pass
+(300 consecutive mid-segment frames, center patch) said no: sub-pixel sway on calm AND windy games.
+**Mark rejected it (correctly): gusts are episodic and the effect is cumulative.** Redone properly
+on the windy 06.06 Fairport morning game (Mark: camera visibly moving "a foot side to side"):
+
+1. **Audio-guided gust sampling** (loudest second per segment, L/C/R band patches): peak windows hit
+   **10-13 px single-frame shifts at the band EDGES** (L 12.8 / R 10.2 vs C 4.2 = mast ROLL — the
+   center-patch measure was structurally blind to it). Whole-game exposure (337 windows): 38% of
+   moments >2 px, 5.6% >4 px, max 18.2 px — material diff-channel halo contamination.
+2. **Cumulative excursion vs segment-start reference** (Mark's point — the polygon/homography are
+   fitted ONCE): median 5-6 px, p90 11-18 px, p99 ~50 px, max 62 px; >5 px more than HALF the game,
+   >10 px a quarter of it. Every geometry consumer (mask, in-field gates, expected-size, METERS) is
+   silently off by the excursion for most of a windy game.
+3. **Mask-clipping rate** (does drift actually cost recall?): teacher balls outside the static
+   far-margin mask = **21.2% windy Fairport vs 3.66% calm Spencerport** (calm baseline = genuine
+   aerial/OOB exits; windy figure includes some teacher junk but the gap is ~6x). Masked pixels are
+   ZEROED before detection — a clipped ball is undetectable by construction, and windy-game TRAINING
+   crops may contain zeroed balls with Gaussian targets painted on black (store-quality implication,
+   unquantified).
+
+**Decision (delegated by Mark): the experiment is WORTH IT — per-frame band-alignment correction,**
+not the full feat/camera-stabilization port: estimate global band shift vs the polygon's reference
+frame (phase-correlation, ~ms/frame) and offset the band-crop window before masking/detection.
+A/B on the windy game: masked-ball rate + candidate ceiling with vs without correction, scored on a
+sanity-filtered teacher track. Scheduled AFTER the current lever round (diff5/sig50/ph1v2) drains
+the GPUs. Method lesson recorded: episodic phenomena need signal-guided sampling (audio→wind) and
+edge-sensitive spatial coverage; two consecutive "clean" thin samples were wrong.
+
 ## EXP-DIST-56: size_cont_w with REAL measured sizes — catastrophic collapse; term unusable as implemented (2026-07-18)
 
 **Setup:** EXP-DIST-47 Phase-4 wiring landed (candidates/2: `blob_diameter` in product code;
