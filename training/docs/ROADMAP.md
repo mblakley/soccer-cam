@@ -163,9 +163,12 @@ person channel in the detector, person centroids as framing fallback). Planned e
 - Sequencing: ph1v2 validation -> person-channel selector feature -> color band plumbing
   (shared with the parked chroma/ball-encoding work — one color store serves both) -> jersey
   classification as the first analytics consumer.
-- Related measurement (2026-07-18): camera sway is NOT a blocker for any of this — measured
-  median 0.63 px / p90 1.06 px inter-frame shift on Spencerport; the feat/camera-stabilization
-  port is not needed for detection experiments.
+- Related measurement (2026-07-18): camera sway is NOT a blocker — inter-frame shift measured
+  sub-pixel median even on the WINDIEST games (Mark: June 6-7 tournament): Spencerport (calm)
+  0.63 px median / 1.91 max; 06.06 Fairport (windy) 0.56 / 1.67; 06.07 BU15 (windy) 0.31 / 2.18.
+  The Duo 3 mount is rigid; wind damage is audio (+ possibly intra-exposure BLUR, unmeasured —
+  revisit blur if windy games underperform per-game detector metrics). feat/camera-stabilization
+  port not needed; cheap fallback = per-triplet phase-correlate alignment.
 
 ## Video Inventory System (Future)
 
