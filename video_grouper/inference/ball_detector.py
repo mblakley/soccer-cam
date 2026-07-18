@@ -97,6 +97,40 @@ def extract_peaks(
     return [(float(xs[i]), float(ys[i]), float(scores[i])) for i in order]
 
 
+def blob_diameter(gray: np.ndarray, hx: int, hy: int, win: int = 61) -> float:
+    """Observed apparent diameter (px) of the contrast blob at ``(hx, hy)``.
+
+    A real ball is a compact bright/dark blob; a player or line intersection is
+    much bigger. Threshold the local window at the midpoint between the peak
+    value and the local median (handles bright-on-grass AND dark-on-line), take
+    the connected component holding the peak, return its equivalent-circle
+    diameter. Feeds ``Candidate.size_px`` so the tracker's size-continuity term
+    and the selector's size features can engage (EXP-DIST-47 Phase 4: a coach's
+    head at ~210 px outranking an 8 px ball is exactly what size context kills).
+    Moved here from ``training/cli/eval_detector.py`` — product home, so the
+    runtime, eval CLIs, and dumps all measure size identically.
+    """
+    import cv2  # noqa: PLC0415
+
+    h, w = gray.shape
+    x0, y0 = max(0, hx - win), max(0, hy - win)
+    x1, y1 = min(w, hx + win + 1), min(h, hy + win + 1)
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
+    if patch.size == 0:
+        return 0.0
+    cy, cx = hy - y0, hx - x0
+    c = float(patch[cy, cx])
+    med = float(np.median(patch))
+    thr = (c + med) / 2.0
+    mask = (patch >= thr if c >= med else patch <= thr).astype(np.uint8)
+    _n, lbl = cv2.connectedComponents(mask)
+    lab = int(lbl[cy, cx])
+    if lab == 0:
+        return 0.0
+    area = int((lbl == lab).sum())
+    return 2.0 * (area / np.pi) ** 0.5
+
+
 def _pad8(a: np.ndarray) -> tuple[np.ndarray, int, int]:
     """Pad a ``(C, H, W)`` stack so H, W are multiples of 8 (the net's 3 downsamples)."""
     _, h, w = a.shape
@@ -149,7 +183,7 @@ def detect_video_candidates(
     far_margin: float = FAR_MARGIN_PX,
     boundary_margin: float = BOUNDARY_MARGIN_PX,
     target_width: int | None = None,
-) -> tuple[dict[int, list[tuple[float, float, float]]], dict]:
+) -> tuple[dict[int, list[tuple[float, float, float, float]]], dict]:
     """Run the heatmap detector over a video at ``stride`` -> per-frame candidates.
 
     The band is cropped from the far-margin-expanded ``polygon`` (a 10-point
@@ -159,16 +193,16 @@ def detect_video_candidates(
     3-frame grayscale history (consecutive SOURCE frames, so every frame is
     decoded; only inference runs at ``stride``).
 
-    Returns ``({global_frame: [(x, y, score), ...]}, info)`` with candidate
-    coordinates mapped back to SOURCE pixels and ``info`` carrying
-    ``{src_w, src_h, fps, n_frames}``.
+    Returns ``({global_frame: [(x, y, score, size_px), ...]}, info)`` with
+    candidate coordinates + observed blob diameter mapped back to SOURCE pixels
+    and ``info`` carrying ``{src_w, src_h, fps, n_frames}``.
     """
     import av  # noqa: PLC0415
 
     # far-touchline margin, then (optionally) a uniform outward margin around all
     # boundaries so behind-goal / high-aerial exits stay in-band.
     mask_poly = expand_polygon(far_margin_polygon(polygon, far_margin), boundary_margin)
-    cands: dict[int, list[tuple[float, float, float]]] = {}
+    cands: dict[int, list[tuple[float, float, float, float]]] = {}
     t0 = time.time()
 
     with av.open(str(video_path)) as container:
@@ -193,11 +227,19 @@ def detect_video_candidates(
                 stack = np.stack(seq, 0).astype(np.float32) / 255.0
                 hm = infer_band(sess, stack, tile_w, overlap)
                 peaks = extract_peaks(hm, top_k, threshold, min_distance)
+                # 4th element = observed blob diameter in SOURCE px (band
+                # measure / warp.scale — the eval_detector convention), feeding
+                # Candidate.size_px downstream. Schema: candidates/2.
                 cands[frame_idx] = [
                     (
                         round(float(hx) / warp.scale, 1),
                         round(float(hy) / warp.scale + warp.y_top, 1),
                         round(float(sc), 4),
+                        round(
+                            blob_diameter(grays[-1], int(hx), int(hy))
+                            / max(warp.scale, 1e-6),
+                            1,
+                        ),
                     )
                     for (hx, hy, sc) in peaks
                 ]

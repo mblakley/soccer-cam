@@ -141,7 +141,7 @@ async def test_detect_step_local_path(tmp_path, monkeypatch):
     det_path = tmp_path / "detections.json"
     assert det_path.exists()
     art = json.loads(det_path.read_text(encoding="utf-8"))
-    assert art["schema"] == "candidates/1"
+    assert art["schema"] == "candidates/2"  # rows now carry size_px (EXP-DIST-47)
     assert art["frames"]["0"][0][2] == 0.9
     assert manifest.get("detections_path") == str(det_path)
     # config threaded through to the detector

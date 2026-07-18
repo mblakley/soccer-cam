@@ -7,9 +7,11 @@ P(candidate) / P(none visible)) -> the physics Viterbi
 depth-aware measurement noise, aerial bridge, out-of-bounds pin) -> the
 constant-velocity Kalman RTS smoother -> dense per-frame upsampling.
 
-Reads the ``ball_detect`` step's ``candidates/1`` artifact + the field polygon,
-writes ``trajectory.json`` (one ``[x, y]`` row per source frame, ``null`` when
-the ball has no estimate — the same contract ``plan_camera`` consumes).
+Reads the ``ball_detect`` step's candidates artifact (``candidates/2`` rows are
+``(x, y, score, size_px)``; legacy ``candidates/1`` 3-tuples still accepted) +
+the field polygon, writes ``trajectory.json`` (one ``[x, y]`` row per source
+frame, ``null`` when the ball has no estimate — the same contract
+``plan_camera`` consumes).
 """
 
 from __future__ import annotations
@@ -70,6 +72,18 @@ class BallSelectStepConfig(BaseModel):
     select_max_gap_frames: int = 24
 
 
+def _rows_to_candidates(rows: list) -> list[Candidate]:
+    """Artifact rows -> Candidates. candidates/2 rows are (x, y, score, size_px);
+    legacy candidates/1 rows are (x, y, score) -> size_px stays None (the
+    tracker's size-continuity term simply stays dormant for those artifacts)."""
+    out = []
+    for row in rows:
+        x, y, s = row[0], row[1], row[2]
+        sz = float(row[3]) if len(row) > 3 and row[3] else None
+        out.append(Candidate(x=float(x), y=float(y), score=float(s), size_px=sz))
+    return out
+
+
 def _run_selection(
     detections_path: str,
     polygon_path: str,
@@ -97,10 +111,7 @@ def _run_selection(
     ef = sorted(by_g)
     if not ef:
         raise RuntimeError("select: candidates artifact has no frames")
-    frames = [
-        [Candidate(x=float(x), y=float(y), score=float(s)) for (x, y, s) in by_g[g]]
-        for g in ef
-    ]
+    frames = [_rows_to_candidates(by_g[g]) for g in ef]
     gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
 
     net = load_selector(cfg.select_model_path)

@@ -23,33 +23,13 @@ from training.data_prep import distill_dataset as dd
 
 
 def _blob_diam(gray: np.ndarray, hx: int, hy: int, win: int = 61) -> float:
-    """Observed apparent diameter (band px) of the contrast blob at ``(hx, hy)`` in a band-gray frame.
+    """Observed apparent blob diameter — delegates to the PRODUCT implementation
+    (``video_grouper.inference.ball_detector.blob_diameter``) so the runtime,
+    eval CLIs, and dumps all measure size identically. Kept under the old name
+    for the existing call sites."""
+    from video_grouper.inference.ball_detector import blob_diameter
 
-    A real ball is a compact bright/dark blob; a player / line intersection / large structure the
-    detector false-fires on is much bigger. Threshold the local window at the midpoint between the peak
-    value and the local median (handles a bright ball on grass OR a dark ball on a bright line), take the
-    connected component holding the peak, return its equivalent-circle diameter. Used only to reject
-    candidates whose size is geometrically impossible for their field location — never to add any.
-    """
-    import cv2
-
-    h, w = gray.shape
-    x0, y0 = max(0, hx - win), max(0, hy - win)
-    x1, y1 = min(w, hx + win + 1), min(h, hy + win + 1)
-    patch = gray[y0:y1, x0:x1].astype(np.float32)
-    if patch.size == 0:
-        return 0.0
-    cy, cx = hy - y0, hx - x0
-    c = float(patch[cy, cx])
-    med = float(np.median(patch))
-    thr = (c + med) / 2.0
-    mask = (patch >= thr if c >= med else patch <= thr).astype(np.uint8)
-    _n, lbl = cv2.connectedComponents(mask)
-    lab = int(lbl[cy, cx])
-    if lab == 0:
-        return 0.0
-    area = int((lbl == lab).sum())
-    return 2.0 * (area / np.pi) ** 0.5
+    return blob_diameter(gray, hx, hy, win)
 
 
 def _pad8(a: np.ndarray) -> tuple[np.ndarray, int, int]:

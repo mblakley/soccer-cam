@@ -304,3 +304,31 @@ def test_encoding_prelude_diff5_keeps_grays_and_adds_diffs():
     model = DetectorWithEncoding(p, net)
     with torch.no_grad():
         assert tuple(model(x).shape) == (2, 1, 16, 16)
+
+
+def test_blob_diameter_synthetic():
+    from video_grouper.inference.ball_detector import blob_diameter
+
+    g = np.full((100, 100), 100, np.uint8)
+    # bright compact 5px-radius disc at (50, 50)
+    ys, xs = np.ogrid[:100, :100]
+    g[(xs - 50) ** 2 + (ys - 50) ** 2 <= 25] = 250
+    d = blob_diameter(g, 50, 50)
+    assert 8.0 <= d <= 13.0  # ~10px equivalent-circle diameter
+    # dark blob on bright background also works
+    g2 = np.full((100, 100), 200, np.uint8)
+    g2[(xs - 30) ** 2 + (ys - 40) ** 2 <= 9] = 20
+    d2 = blob_diameter(g2, 30, 40)
+    assert 4.0 <= d2 <= 8.0
+
+
+def test_rows_to_candidates_both_schemas():
+    from video_grouper.pipeline.steps.ball_select import _rows_to_candidates
+
+    out = _rows_to_candidates(
+        [[10.0, 20.0, 0.9], [11.0, 21.0, 0.8, 7.5], [12.0, 22.0, 0.7, 0]]
+    )
+    assert out[0].size_px is None  # candidates/1 row
+    assert out[1].size_px == 7.5  # candidates/2 row
+    assert out[2].size_px is None  # size 0 = unmeasured -> None
+    assert out[1].x == 11.0 and out[1].score == 0.8

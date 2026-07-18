@@ -116,6 +116,7 @@ def main() -> None:
     from training.data_prep.warped_dataset import resolve_video_rotation
     from training.models.heatmap_net import load_detector_checkpoint
     from training.world_model.eval import extract_peaks
+    from video_grouper.inference.ball_detector import blob_diameter
     from video_grouper.inference.iso_warp import expand_polygon
 
     gd = Path(args.game_dir)
@@ -188,11 +189,19 @@ def main() -> None:
                     threshold=args.thr,
                     min_distance=args.min_distance,
                 )
+                # 4th element = observed blob diameter, SOURCE px (the
+                # eval_detector convention) — fullgame dumps previously carried
+                # no sizes, keeping size_cont_w dormant (EXP-DIST-32/47).
                 cands[idx] = [
                     (
                         round(float(hx) / warp.scale, 1),
                         round(float(hy) / warp.scale + warp.y_top, 1),
                         round(float(sc), 4),
+                        round(
+                            blob_diameter(grays[-1], int(hx), int(hy))
+                            / max(warp.scale, 1e-6),
+                            1,
+                        ),
                     )
                     for (hx, hy, sc) in peaks
                 ]

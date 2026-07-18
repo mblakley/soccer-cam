@@ -118,7 +118,10 @@ def _run_detection_with_session(
         target_width=cfg.detect_target_width,
     )
     artifact = {
-        "schema": "candidates/1",
+        # candidates/2: rows are (x, y, score, size_px) — size feeds the
+        # tracker's size-continuity term + selector size features. ball_select
+        # accepts candidates/1 3-tuples too (older artifacts on disk).
+        "schema": "candidates/2",
         "stride": cfg.detect_frame_interval,
         "src_w": info["src_w"],
         "src_h": info["src_h"],
