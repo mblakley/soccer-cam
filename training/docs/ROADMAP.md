@@ -150,6 +150,23 @@ Replace all Copy-Item with robocopy in `machine_manager.py`.
 
 ---
 
+## Player Analytics via Person Detection (Future — Mark, 2026-07-18)
+
+The ph1 person-head work produced reusable player-detection foundations (yolo26n sidecar corpus,
+person channel in the detector, person centroids as framing fallback). Planned extension:
+
+- [ ] Person boxes over full COLOR bands at dump time (multi_dump-style pass)
+- [ ] Torso-region jersey-color descriptor per box -> per-game 2-3-way clustering
+      (team A / team B / referee+keepers)
+- [ ] Team-labeled player positions per frame -> possession estimates, per-team heatmaps,
+      formation views (TTT coaching-platform features)
+- Sequencing: ph1v2 validation -> person-channel selector feature -> color band plumbing
+  (shared with the parked chroma/ball-encoding work — one color store serves both) -> jersey
+  classification as the first analytics consumer.
+- Related measurement (2026-07-18): camera sway is NOT a blocker for any of this — measured
+  median 0.63 px / p90 1.06 px inter-frame shift on Spencerport; the feat/camera-stabilization
+  port is not needed for detection experiments.
+
 ## Video Inventory System (Future)
 
 Build `training/data_prep/video_inventory.py`:
