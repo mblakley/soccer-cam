@@ -4,6 +4,34 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-55 VERDICT (2026-07-18 01:26): CONFOUND CONFIRMED — the control reproduces hn4's ceiling TO THE DIGIT; the lever batch is VOID; plus a new finding: far-argmax has large seed variance
+
+**`hm_ctrl`** (exact hn4 protocol — from-scratch, 40 ep, no patience, same box/venv — on the restored
+hn4-era store view, index sha `abb28320dd23cc08`):
+
+| metric (R15m) | ctrl | hn4 (EXP-DIST-46) | batch (51/52/53) |
+|---|---|---|---|
+| ceiling ALL / FAR / NEAR | **0.970 / 0.965 / 1.0** | 0.970 / 0.965 / 1.0 | 0.93–0.948 far |
+| score-argmax NEAR | **0.895** | 0.895 | 0.684–0.895 |
+| score-argmax FAR | 0.261 | 0.339 | 0.209–0.270 |
+
+1. **Ceiling and near-argmax reproduce hn4 EXACTLY** → the code path is clean and the in-place store
+   mutation (−480 GT negs, +782 corrnegs) fully explains the batch's ceiling cluster.
+   **EXP-DIST-51/52/53's lever conclusions are VOID as comparisons vs hn4** — the levers were never
+   tested on hn4's data. Re-runs (diff5 / sig50 / ph1v2, all `--index-version 2`) queued on FORTNITE-OP.
+2. **NEW FINDING — far-argmax seed variance is large:** identical protocol + identical data produced
+   far-argmax 0.261 (ctrl) vs 0.339 (hn4) — a ±0.04–0.08 band from the unseeded draw alone, while
+   ceiling-far reproduced to 3 digits. Implication: **single-run far-argmax deltas smaller than ~0.08
+   are not interpretable**; ceiling-far is the stable per-run gate metric; argmax comparisons need
+   either seeds or replicates. The batch's far-argmax spread (0.209–0.270) vs the hn4/ctrl anchor pair
+   (0.261–0.339) overlaps — the levers' far-argmax "regressions" were likely mostly store + noise.
+3. **Log hygiene:** the "##### SPC hn4 (baseline)" section in `sweep_encoding.log` is UNRELIABLE —
+   its source pkl (`cands_spc_hn4.pkl`) does not exist and its rows duplicate df3's (stale artifact of
+   the 07-17 aborted-chain window). hn4's anchor numbers remain EXP-DIST-46's, from `hn4_spc_clip`.
+4. **1060 characterization (task follow-up):** batch-1 = 2,465 ms per 1552×2560 tile on the shipped
+   hn2 ONNX; **batch>1 is impossible with the current export** (batch dim is static — "Expected: 1").
+   If dump turnaround ever matters, re-export with a dynamic batch axis first, then re-measure.
+
 ## EXP-DIST-55: the batch's confound FOUND — crops_reolink was MUTATED IN PLACE by the hn5 chain; df3/sig30b/ph1 all trained on hn5's data, not hn4's; CONTROL running (2026-07-17)
 
 **Trigger (Mark):** three unrelated levers landing within 0.009 of each other and below BOTH
