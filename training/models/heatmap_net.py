@@ -104,21 +104,34 @@ class EncodingPrelude(nn.Module):
         which is polarity-blind and failed as an additive 4th channel — Jmot),
         and REPLACING the raw history so the temporal signal is load-bearing.
         Appearance stays frame t: labels and runtime candidates are keyed to t.
+      - ``diff5``: ``(g_{t-2}, g_{t-1}, g_t, g_{t-1}-g_{t-2}, g_t-g_{t-1})`` —
+        keep ALL gray frames, ADD the signed diffs (Mark's ablation of the
+        EXP-DIST-51 result: diff3's "the raw frames are redundant" was an
+        assumption — 3 frames at 0.07 bpp plausibly give implicit temporal
+        denoising that replacement deleted, and diff channels are ~zero for
+        slow balls, exactly the frames far-argmax is dominated by. diff5 ≥
+        baseline while diff3 < baseline means the diffs were fine and the
+        REPLACEMENT was the bug). Net input widens to 5 ch (~1.6% FLOPs); the
+        external contract is STILL 3 raw frames — diffs derive in-graph.
     """
 
-    ENCODINGS = ("gray3", "diff3")
+    ENCODINGS = ("gray3", "diff3", "diff5")
+    OUT_CHANNELS = {"gray3": 3, "diff3": 3, "diff5": 5}
 
     def __init__(self, encoding: str = "gray3"):
         super().__init__()
         if encoding not in self.ENCODINGS:
             raise ValueError(f"unknown encoding {encoding!r} (want {self.ENCODINGS})")
         self.encoding = encoding
+        self.out_channels = self.OUT_CHANNELS[encoding]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.encoding == "gray3":
             return x
         g0, g1, g2 = x[:, 0:1], x[:, 1:2], x[:, 2:3]
-        return torch.cat([g2, g1 - g0, g2 - g1], dim=1)
+        if self.encoding == "diff3":
+            return torch.cat([g2, g1 - g0, g2 - g1], dim=1)
+        return torch.cat([g0, g1, g2, g1 - g0, g2 - g1], dim=1)
 
 
 class DetectorWithEncoding(nn.Module):

@@ -371,7 +371,7 @@ def main():
     )
     ap.add_argument(
         "--input-encoding",
-        choices=("gray3", "diff3"),
+        choices=("gray3", "diff3", "diff5"),
         default="gray3",
         help="input encoding applied in front of the net (and baked into the ONNX "
         "graph at export — the external contract stays raw gray frames). gray3 = "
@@ -482,13 +482,19 @@ def main():
     )
     from training.models.heatmap_net import DetectorWithEncoding, EncodingPrelude
 
+    # net input width follows the encoding (diff5 widens to 5 ch); the EXTERNAL
+    # contract stays 3 raw gray frames — the prelude derives extra channels
+    # in-graph (same trick load_detector_checkpoint uses to rebuild from ckpts).
+    prelude = EncodingPrelude(args.input_encoding).to(dev)
     model = HeatmapNet(
-        in_frames=3, in_ch_per_frame=1, base=args.base, out_ch=2 if person_on else 1
+        in_frames=prelude.out_channels,
+        in_ch_per_frame=1,
+        base=args.base,
+        out_ch=2 if person_on else 1,
     ).to(dev)
     # gray3 prelude is the identity, so the default path is byte-identical to the
     # pre-encoding trainer (guarded by test). The prelude runs in front of the net
     # here AND inside the exported ONNX graph — one module, no train/infer skew.
-    prelude = EncodingPrelude(args.input_encoding).to(dev)
     eval_model = DetectorWithEncoding(prelude, model)
     if args.resume:
         rck = torch.load(args.resume, map_location=dev)

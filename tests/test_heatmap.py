@@ -281,3 +281,26 @@ def test_dataset_records_and_honors_index_version(tmp_path):
     assert ds_new.index_version == 2 and len(ds_new.items) == 2
     ds_pinned = HeatmapCropDataset(store, "train", index_version=1)
     assert ds_pinned.index_version == 1 and len(ds_pinned.items) == 1
+
+
+@needs_torch
+def test_encoding_prelude_diff5_keeps_grays_and_adds_diffs():
+    from training.models.heatmap_net import (
+        DetectorWithEncoding,
+        EncodingPrelude,
+        HeatmapNet,
+    )
+
+    x = torch.rand(2, 3, 16, 16)
+    p = EncodingPrelude("diff5")
+    out = p(x)
+    assert p.out_channels == 5 and out.shape[1] == 5
+    assert torch.equal(out[:, 0:3], x)  # all gray frames preserved
+    assert torch.equal(out[:, 3:4], x[:, 1:2] - x[:, 0:1])
+    assert torch.equal(out[:, 4:5], x[:, 2:3] - x[:, 1:2])
+
+    # 5-ch net composes on RAW 3-frame input, and round-trips via the loader
+    net = HeatmapNet(in_frames=5, in_ch_per_frame=1, base=8).eval()
+    model = DetectorWithEncoding(p, net)
+    with torch.no_grad():
+        assert tuple(model(x).shape) == (2, 1, 16, 16)
