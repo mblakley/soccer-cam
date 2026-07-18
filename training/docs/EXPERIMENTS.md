@@ -4,6 +4,26 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-56: size_cont_w with REAL measured sizes — catastrophic collapse; term unusable as implemented (2026-07-18)
+
+**Setup:** EXP-DIST-47 Phase-4 wiring landed (candidates/2: `blob_diameter` in product code;
+runtime + dumps emit per-candidate size in source px; ball_select reads both schemas). First live
+test: sweep `size_cont_w ∈ {2,4,8}` on the strong physics family against `cands_spc_ctrl.pkl`
+(which carries real measured sizes).
+
+**Result:** collapse at every weight — `a0.3 sig8 vmax3.5` goes FAR **0.861 → 0.009** the moment
+szc>0 (ALL 0.754 → 0.02–0.07). **Mechanism:** the term charges `w·(act−exp)²` on RAW pixel sizes,
+and auto-measured blob diameters are extremely noisy (a far ball flickers ~3→15 px under 0.07 bpp
+compression), so every legitimate transition pays a huge penalty and the track freezes onto
+statics. EXP-DIST-47's szc=8 coach-rejection was a clean hand-measured case — it does not transfer
+to measured sizes.
+
+**Conclusion:** do NOT enable `size_cont_w` in the shipped config. The size PLUMBING stays (sizes
+in candidates/2 are cheap and feed selector features/diagnostics); the continuity TERM needs a
+noise-robust redesign before retry (ratio/log-scale penalty + Huber/cap, or a smoothed size
+estimate). The person-CHANNEL route (ph1v2, training now) is the more promising anti-head lever.
+Data: szc rows appended under "##### SPC ctrl szc sweep #####" in sweep_encoding.log.
+
 ## EXP-DIST-55 VERDICT (2026-07-18 01:26): CONFOUND CONFIRMED — the control reproduces hn4's ceiling TO THE DIGIT; the lever batch is VOID; plus a new finding: far-argmax has large seed variance
 
 **`hm_ctrl`** (exact hn4 protocol — from-scratch, 40 ep, no patience, same box/venv — on the restored
