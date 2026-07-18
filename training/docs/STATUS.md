@@ -1,8 +1,20 @@
 # Current Status
 
-*Last updated: 2026-07-17 (control running)*
+*Last updated: 2026-07-18*
 
-## 2026-07-17 — CONFOUND FOUND: the batch trained on hn5-mutated data; CONTROL running (EXP-DIST-55)
+## 2026-07-18 — CONTROL VERDICT: confound CONFIRMED (ceiling reproduced to the digit); re-runs live
+
+hm_ctrl on the restored v2 store: ceiling 0.970/0.965-far/1.0-near = hn4 EXACTLY; near-argmax 0.895
+exact. Batch (EXP-DIST-51/52/53) formally VOID. NEW: far-argmax seed variance is +-0.04-0.08
+(ctrl 0.261 vs hn4 0.339, identical protocol+data) -> ceiling-far is the stable gate; argmax claims
+need seeds/replicates (--seed flag added; seed recorded in ckpt metadata). Re-runs on v2 data
+dispatching through the FORTNITE-OP queue (diff5 running, sig50 + ph1v2 behind); server = evals
+(eval_tag.ps1) + multi_dump corpus filler. Also: 1060 dump batching impossible with current export
+(static batch dim); sweep_encoding.log hn4-baseline section is stale/unreliable — hn4 anchors come
+from EXP-DIST-46. Guard v4: activity-based game detection (zombie Roblox client blocked the queue
+overnight — name-match alone insufficient).
+
+## 2026-07-17 — CONFOUND FOUND: the batch trained on hn5-mutated data; CONTROL was queued (EXP-DIST-55)
 
 Mark flagged the 0.93-cluster as systematic, not scatter. Root cause: the hn5 chain MUTATED
 crops_reolink IN PLACE (-480 GT-guarded negs, +782 corroboration negs) — df3/sig30b/ph1 all trained
