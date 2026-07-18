@@ -265,3 +265,38 @@ def test_dewarp_mask_gray_stabilized_pulls_content_back():
     inner = cv2.erode(mask, np.ones((25, 25), np.uint8)) > 0
     diff = np.abs(out.astype(np.float32) - ref.astype(np.float32))[inner]
     assert float(diff.mean()) < 6.0
+
+
+def test_training_dewarp_wrapper_accepts_stabilizer():
+    """Every training CLI imports heatmap_dataset._dewarp_mask_gray, not the
+    product function — the wrapper must pass the stabilizer through (the wind
+    A/B chain crashed on exactly this)."""
+    from training.data_prep.heatmap_dataset import _dewarp_mask_gray
+    from video_grouper.inference.iso_warp import BandStabilizer
+
+    poly = np.array(
+        [
+            [100, 1000],
+            [500, 1010],
+            [960, 1015],
+            [1420, 1010],
+            [1820, 1000],
+            [1600, 300],
+            [1280, 295],
+            [960, 290],
+            [640, 295],
+            [320, 300],
+        ],
+        float,
+    )
+    far = far_margin_polygon(poly, 100.0)
+    warp = native_iso_warp(far, 1920, 1080, target_width=None)
+    mask = band_mask(warp, far)
+    frame = _textured_band(1080, 1920)[..., None].repeat(3, axis=2)
+    stab = BandStabilizer()
+    out = _dewarp_mask_gray(frame, warp, mask, stab)
+    assert out.shape == warp.shape
+    assert stab.last == (0.0, 0.0)  # first frame became the anchor
+    # legacy 3-arg call still works
+    out2 = _dewarp_mask_gray(frame, warp, mask)
+    assert out2.shape == warp.shape

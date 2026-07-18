@@ -83,8 +83,8 @@ def _native_iso_warp(polygon, src_w: int, src_h: int, target_width: int | None =
     return native_iso_warp(polygon, src_w, src_h, target_width)
 
 
-def _dewarp_mask_gray(frame_bgr, warp, mask):
-    return dewarp_mask_gray(frame_bgr, warp, mask)
+def _dewarp_mask_gray(frame_bgr, warp, mask, stabilizer=None):
+    return dewarp_mask_gray(frame_bgr, warp, mask, stabilizer)
 
 
 def build_heatmap_crops(
