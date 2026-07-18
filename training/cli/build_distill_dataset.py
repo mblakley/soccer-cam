@@ -103,6 +103,13 @@ def main() -> None:
         help="restrict to one camera (e.g. reolink) — Reolink is the clean primary",
     )
     ap.add_argument(
+        "--games",
+        nargs="+",
+        default=None,
+        help="restrict to exactly these game_ids (twin builds: replicate a "
+        "reference store's game set even after the registry has grown)",
+    )
+    ap.add_argument(
         "--base-stride",
         type=int,
         default=4,
@@ -140,6 +147,12 @@ def main() -> None:
     cfgs = [c for c in find_configs(args.roots) if c["game_id"] not in holdout]
     if args.camera:
         cfgs = [c for c in cfgs if c.get("camera") == args.camera]
+    if args.games:
+        keep = set(args.games)
+        cfgs = [c for c in cfgs if c["game_id"] in keep]
+        missing = keep - {c["game_id"] for c in cfgs}
+        if missing:
+            raise SystemExit(f"--games not found in registry: {sorted(missing)}")
     if args.normalize:
         by_cam = {"reolink": 5120, "dahua": 3900}
         for c in cfgs:

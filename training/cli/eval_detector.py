@@ -135,6 +135,18 @@ def main() -> None:
         "--max-frames", type=int, default=6000, help="cap the eval span (frames)"
     )
     ap.add_argument(
+        "--span-lo",
+        type=int,
+        default=None,
+        help="only use GT at global frames >= this (target a specific GT cluster)",
+    )
+    ap.add_argument(
+        "--span-hi",
+        type=int,
+        default=None,
+        help="only use GT at global frames <= this",
+    )
+    ap.add_argument(
         "--dump-cands",
         default=None,
         help="also pickle raw candidates (+observed size) + GT here for cli/sweep_tracker",
@@ -183,6 +195,12 @@ def main() -> None:
     )
     if not balls:
         raise SystemExit("no human GT (ball_labels.jsonl) in the held-out game")
+    if args.span_lo is not None or args.span_hi is not None:
+        slo = args.span_lo if args.span_lo is not None else -(10**12)
+        shi = args.span_hi if args.span_hi is not None else 10**12
+        balls = {f: xy for f, xy in balls.items() if slo <= f <= shi}
+        if not balls:
+            raise SystemExit("no GT in the requested --span-lo/--span-hi window")
     video = gj.get("combined_video")
     if not video or not Path(video).exists():
         cands = list(vdir.glob("combined*.mp4")) or list(vdir.glob("*-raw.mp4"))
