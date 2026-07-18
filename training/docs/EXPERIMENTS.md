@@ -29,10 +29,31 @@ on the windy 06.06 Fairport morning game (Mark: camera visibly moving "a foot si
 **Decision (delegated by Mark): the experiment is WORTH IT — per-frame band-alignment correction,**
 not the full feat/camera-stabilization port: estimate global band shift vs the polygon's reference
 frame (phase-correlation, ~ms/frame) and offset the band-crop window before masking/detection.
-A/B on the windy game: masked-ball rate + candidate ceiling with vs without correction, scored on a
-sanity-filtered teacher track. Scheduled AFTER the current lever round (diff5/sig50/ph1v2) drains
-the GPUs. Method lesson recorded: episodic phenomena need signal-guided sampling (audio→wind) and
+Method lesson recorded: episodic phenomena need signal-guided sampling (audio→wind) and
 edge-sensitive spatial coverage; two consecutive "clean" thin samples were wrong.
+
+**Mark upgraded the scope (2026-07-18): stabilize-first for everything camera-motion-sensitive** —
+build the correction into the pipeline (`BandStabilizer` in `iso_warp`, `--stabilize` through
+detect/build/mine/eval/dump, all committed), re-run the lever round on stabilized data, run the
+store build on the server while FORTNITE-OP works the unstabilized twins.
+
+**A/B #1 result (same-day): hn4 raw vs `--stabilize`, windy Fairport seg8 — 175 human GT, NO
+effect at moderate wind.** Candidate ceiling IDENTICAL to the digit (0.954/0.971/0.983 @R5/10/15m);
+tracker argmax far 0.310 raw vs 0.293 stab (inside the ±0.078 argmax variance band). Seg8's
+excursions (≤17 px vs the 400 px far margin) never push balls out of the mask. Two implications:
+(1) the deploy-time geometry benefit concentrates in the extreme tail, not typical wind;
+(2) the whole-game 21% teacher-track clipping figure was inflated by teacher junk + extreme
+segments. Side-finding: AutoCam's own viewport collapses on the windy span (far R15m 0.063 vs our
+0.310) — wind hurts AutoCam far more than our detector→tracker.
+
+**A/B #2 pending — the extreme tail, with real GT (Mark labeling):** gust scan (1 Hz phase-corr
+excursion series) found seg16 sits at a SUSTAINED ~50 px displacement from its segment start
+(median 50.1, max 92.9) with its first 1300 frames in active second-half play; seg15 gusts to
+16 px. Far-label sets built + served: `wind_fair0606_seg16_50px` (163 frames, the decisive set)
+and `wind_fair0606_seg15_gusts` (278 frames, displacement-stratified bonus). Once labeled, re-run
+both arms over 89200-96418 → ceiling-vs-excursion curve decides whether deploy-time stabilization
+ships. Training-data effect (jitter-free stacks for diff encodings) is tested separately by the
+`crops_reolink_stab` twin round regardless.
 
 ## EXP-DIST-56: size_cont_w with REAL measured sizes — catastrophic collapse; term unusable as implemented (2026-07-18)
 
