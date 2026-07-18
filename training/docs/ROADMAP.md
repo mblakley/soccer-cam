@@ -163,12 +163,15 @@ person channel in the detector, person centroids as framing fallback). Planned e
 - Sequencing: ph1v2 validation -> person-channel selector feature -> color band plumbing
   (shared with the parked chroma/ball-encoding work — one color store serves both) -> jersey
   classification as the first analytics consumer.
-- Related measurement (2026-07-18): camera sway is NOT a blocker — inter-frame shift measured
-  sub-pixel median even on the WINDIEST games (Mark: June 6-7 tournament): Spencerport (calm)
-  0.63 px median / 1.91 max; 06.06 Fairport (windy) 0.56 / 1.67; 06.07 BU15 (windy) 0.31 / 2.18.
-  The Duo 3 mount is rigid; wind damage is audio (+ possibly intra-exposure BLUR, unmeasured —
-  revisit blur if windy games underperform per-game detector metrics). feat/camera-stabilization
-  port not needed; cheap fallback = per-triplet phase-correlate alignment.
+- Sway measurement (2026-07-18, CORRECTED after Mark challenged the first pass): BASELINE sway is
+  sub-pixel (Spencerport 0.63 px median; windy-game mid-segments similar) BUT gusts are episodic
+  and ROLL-dominated — audio-guided sampling of the windy 06.06 Fairport game found peak windows
+  with 10-13 px single-frame shifts on the BAND EDGES (L 12.8 / R 10.2 vs center 4.2 = mast
+  twist), i.e. multi-ball-diameter diff halos exactly where far-corner balls live. First
+  unsampled center-patch pass missed both effects — episodic phenomena need signal-guided
+  sampling. Exposure fraction (frames affected) being quantified; if material, the cheap fix is
+  per-tile phase-correlate alignment of the 3-frame window (not the full stabilize-step port).
+  Wind blur (intra-exposure) still unmeasured.
 
 ## Video Inventory System (Future)
 
