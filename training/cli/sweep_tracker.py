@@ -340,6 +340,21 @@ def main() -> None:
                 f"a{a} sig{sig} vmax{vmax}",
                 replace(base, alpha=a, phys_sigma_px=sig, ball_vmax_mpf=vmax),
             )
+    # size-continuity (EXP-DIST-47 Phase 4): candidates/2 dumps carry per-candidate
+    # blob sizes, making the tracker's size_cont_w term live — sweep it on the
+    # strongest physics family (a small ball must not hand off to a 200px person).
+    for szc in (2.0, 4.0, 8.0):
+        for a in (0.3, 1.0):
+            run(
+                f"a{a} sig8.0 vmax3.5 szc{szc}",
+                replace(
+                    base,
+                    alpha=a,
+                    phys_sigma_px=8.0,
+                    ball_vmax_mpf=3.5,
+                    size_cont_w=szc,
+                ),
+            )
     # Kalman ablation on a strong config — does the CV smoother drag NEAR picks off the ball?
     strong = replace(base, alpha=1.0, phys_sigma_px=5.0, ball_vmax_mpf=2.5)
     run("strong +kalman", strong, use_kalman=True)
