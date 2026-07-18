@@ -333,6 +333,15 @@ def main():
         "on top of best.pt) instead of training from scratch.",
     )
     ap.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="seed torch/numpy/python RNGs for reproducible runs. EXP-DIST-55: an "
+        "unseeded identical-protocol pair differed by 0.078 far-argmax on held-out "
+        "— argmax comparisons need seeds or replicates. Default None = unseeded "
+        "(legacy behavior).",
+    )
+    ap.add_argument(
         "--index-version",
         type=int,
         default=None,
@@ -398,6 +407,16 @@ def main():
 
     import torch
     from torch.utils.data import DataLoader
+
+    if args.seed is not None:
+        import random as _random
+
+        import numpy as _np
+
+        torch.manual_seed(args.seed)
+        _np.random.seed(args.seed)
+        _random.seed(args.seed)
+        print(f"SEED: {args.seed}", flush=True)
 
     from training.data_prep.heatmap_dataset import (
         HeatmapCropDataset,
@@ -573,6 +592,7 @@ def main():
                     "store": str(out),
                     "index_version": tr.index_version,
                     "index_sha": tr.index_sha,
+                    "seed": args.seed,
                 },
                 runs / "best.pt",
             )
