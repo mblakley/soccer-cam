@@ -1847,6 +1847,105 @@ async def submit_far_label(set_id: str, result: dict):
 
 
 # ------------------------------------------------------------------
+# Viewport labeling API — label the EXPECTED RENDERED OUTPUT (Mark, 2026-07-19)
+# ------------------------------------------------------------------
+# Instead of labeling balls, the annotator sees the currently planned viewport
+# (+ AutoCam's aim + GT ball when known) on a full-frame strip and places the
+# focal point the broadcast SHOULD be looking at, sizing the view around it.
+# Sets are built by cli/build_viewport_label_queue.py from the worst
+# swing/divergence segments of a planned camera path. Same set-dir layout as
+# far-label: manifest.json + strips/ + labels.json.
+
+VIEWPORT_LABEL_DIR = Path("D:/training_data/viewport_label")
+
+
+def _vp_set_dir(set_id: str) -> Path:
+    d = VIEWPORT_LABEL_DIR / set_id
+    if not (d / "manifest.json").exists():
+        raise HTTPException(404, f"Viewport-label set not found: {set_id}")
+    return d
+
+
+def _load_vp_labels(set_id: str) -> dict[int, dict]:
+    p = VIEWPORT_LABEL_DIR / set_id / "labels.json"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return {int(r["frame_idx"]): r for r in json.load(f)}
+
+
+def _save_vp_labels(set_id: str, labels: dict[int, dict]) -> None:
+    p = VIEWPORT_LABEL_DIR / set_id / "labels.json"
+    with open(p, "w") as f:
+        json.dump([labels[k] for k in sorted(labels)], f, indent=2)
+
+
+@app.get("/api/viewport-label")
+async def list_viewport_sets():
+    out = []
+    if not VIEWPORT_LABEL_DIR.exists():
+        return out
+    for d in sorted(VIEWPORT_LABEL_DIR.iterdir()):
+        if not (d / "manifest.json").exists():
+            continue
+        with open(d / "manifest.json") as f:
+            m = json.load(f)
+        labels = _load_vp_labels(d.name)
+        out.append(
+            {
+                "set": d.name,
+                "n_frames": m.get("n_frames", len(m.get("frames", []))),
+                "labeled": len(labels),
+                "priority": m.get("priority", 999),
+            }
+        )
+    return out
+
+
+@app.get("/api/viewport-label/{set_id}")
+async def get_viewport_set(set_id: str):
+    with open(_vp_set_dir(set_id) / "manifest.json") as f:
+        m = json.load(f)
+    labels = _load_vp_labels(set_id)
+    return {**m, "labels": [labels[k] for k in sorted(labels)], "labeled": len(labels)}
+
+
+@app.get("/api/viewport-label/{set_id}/strip/{frame_idx}")
+async def get_viewport_strip(set_id: str, frame_idx: int):
+    d = _vp_set_dir(set_id)
+    strip = d / "strips" / f"f{frame_idx:06d}.jpg"
+    if not strip.exists():
+        raise HTTPException(404, f"Strip not found: {frame_idx}")
+    return FileResponse(strip, media_type="image/jpeg")
+
+
+@app.post("/api/viewport-label/{set_id}/result")
+async def submit_viewport_label(set_id: str, result: dict):
+    """One row per frame: {"frame_idx": int,
+    "action": "view"|"unsure"|"skip",
+    "fx": float|null, "fy": float|null,   # intended focal point, SOURCE px
+    "hfov_deg": float|null,               # intended view width
+    "agree": "ours"|"ac"|null}            # shortcut verdicts (A/C keys)
+    """
+    _vp_set_dir(set_id)
+    labels = _load_vp_labels(set_id)
+    fi = int(result["frame_idx"])
+    row = {
+        "frame_idx": fi,
+        "action": result.get("action") or "skip",
+        "fx": result.get("fx"),
+        "fy": result.get("fy"),
+        "hfov_deg": result.get("hfov_deg"),
+        "agree": result.get("agree"),
+        "source": result.get("source", "human"),
+        "submitted_at": datetime.now(UTC).isoformat(),
+    }
+    labels[fi] = row
+    _save_vp_labels(set_id, labels)
+    return {"accepted": True, "labeled": len(labels)}
+
+
+# ------------------------------------------------------------------
 # Field polygon editor (v4) — drag the 10-point field outline on a full-res
 # frame from a v4 clip and save it back to the canonical polygon JSON the warp +
 # field-mask use. Independent of the tiled-pipeline field-boundary editor (which
