@@ -4,6 +4,67 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-60: the v2 twin is UNREPRODUCIBLE — label drift, hidden 4x human upweighting, archive corruption; pivot to the stab/cur PAIR design (2026-07-19)
+
+Building `crops_reolink_stab` as a "v2 twin" (same 15 games via the new `--games` pin, same
+recipe, `--stabilize`) surfaced four buried facts:
+
+1. **Teacher-label drift:** per-game teacher-crop filename overlap with v2 is only **15-35%**
+   (every game) — the distill tracks/filters evolved since v2 was frozen (2026-07-01). v2's exact
+   labels cannot be re-selected from today's inputs; any "same recipe" rebuild is a data refresh.
+2. **v2's human crops are 4x-duplicated:** 6,104 human rows = 1,526 unique files, each EXACTLY 4
+   rows — the historical store took ~4 append-mode `build_human_crops` passes. hn4/ctrl trained
+   with human crops silently upweighted 4x. Part of the de-facto recipe nobody knew about.
+3. **GT-neg drift:** stab's `--use-gt` mining produced 480 negs vs v2's 480 with **zero filename
+   overlap** — the human-GT frame population has grown/changed since the hn4-era mining.
+4. **Archive corruption (REPAIRED):** five 05.10 Upper 90 segments on F: are corrupt mid-file
+   (CPU and NVDEC both die at frame ~1949; v2-era build read them fine → degradation since
+   early July). Restored from the original D: recording dir (corrupt copies kept as `*.corrupt`).
+   First attempt misattributed this to NVDEC session contention from a concurrent decoder — a
+   60-frame solo probe "passed"; the deep probe found the truth. Same-day lesson as the wind
+   sampling: shallow probes lie.
+
+**Decision — pair design:** stabilization is isolated by TWO stores built from today's inputs by
+the same deterministic pipeline, differing ONLY in `--stabilize`: `crops_reolink_stab` (built;
+05.10 patched post-repair) vs `crops_reolink_cur` (chain running). `hm_ctrl_stab` vs `hm_ctrl_cur`
+(gray3, full-40, no patience, seed 123) is the decisive comparison; hn4 anchors by recipe through
+ctrl_cur. The v2-replication attempt (row-level human de-dup/re-dup etc.) was abandoned as
+unfalsifiable archaeology.
+
+## EXP-DIST-59: diff5 verdict — ceiling matches hn4 EXACTLY, far score-ordering WORSE; encodings don't pay on clean data (2026-07-19)
+
+**hm_diff5** (5-ch signed-diff prelude, warm-started from the rescued ep8 ckpt, early-stop ep18
+best@8, v2 store) — official eval + sweep on the Spencerport G1 clip (134 GT):
+
+| SPC 134 GT (same rows) | ctrl (gray3) | diff5 | sig50 |
+|---|---|---|---|
+| CEILING far R15m | 0.965 | **0.965** | 0.913 |
+| score-argmax far | 0.261 | 0.122 | ~0.12 (local 0.235) |
+| DEPTH-CAL argmax far | 0.357 | 0.383 | — |
+| best far config (a0.3 σ8 vmax3.5) | **0.861** | 0.443 | — |
+
+The signed-diff channels PRESERVE detection (ceiling identical to the digit) but degrade far
+score-calibration — under every comparable selection row ctrl wins. **On clean (unstabilized) data
+the encoding thesis fails**; its surviving motivation is jitter-sensitivity — exactly what the
+stab/cur twin round isolates. Caveats: warm-start + patience-10 (best.pt chosen by the discredited
+val-crop proxy) vs ctrl's full-40; single seed.
+
+## EXP-DIST-58: sig50 (σ=5) REJECTED on three readings — σ=4 confirmed; laptop DirectML eval path certified (2026-07-19)
+
+**σ probe UP** (Mark's sign correction of the brief; σ-down sweep was void per EXP-DIST-50).
+`hm_sig50` = hn4 recipe at σ=5.0, v2 store, early-stop ep18 (best@8). Three independent reads:
+(1) LOCAL laptop stride-4 eval: ceiling-far **0.948** (hn4 0.965), argmax far 0.235;
+(2) OFFICIAL server eval: ceiling-far **0.913**; (3) the built-in tracker COLLAPSES (far R15m
+0.009, median 87 m) — σ=5's broader/flatter targets produce a score field track_ball cannot use.
+**σ=4 stays the operating point; σ direction is closed both ways.**
+
+**Laptop eval path certified:** hn2 re-run locally (Iris Xe DirectML, ONNX export, product
+inference path, stride 4) reproduces the server anchors TO THE DIGIT (ceiling ALL 0.955 / far
+0.948; argmax ALL 0.351), ±1 ball on band splits. Local evals are now bankable (~8.5 s/frame —
+also re-confirming the iGPU product-floor problem). Mark's phase-union trick (stride-8 phase-0 ∪
+phase-4 ≡ stride-4, valid because per-frame inference depends only on its own 3-frame history)
+halved the second model's cost.
+
 ## EXP-DIST-57: wind sway MEASURED — episodic 10-13px roll gusts, 5-60px cumulative excursions, and ~6x mask-clipping on windy games; band-alignment experiment APPROVED (2026-07-18)
 
 **Trigger:** Mark — would feat/camera-stabilization help the detection experiments? First pass

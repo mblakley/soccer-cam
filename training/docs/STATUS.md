@@ -1,6 +1,27 @@
 # Current Status
 
-*Last updated: 2026-07-18*
+*Last updated: 2026-07-19 (early AM)*
+
+## 2026-07-19 — overnight verdicts: σ=5 REJECTED, diff5 = ceiling-parity/ordering-worse, stab/cur pair design; wind A/B #1 = no-op at moderate wind
+
+- **BandStabilizer landed** (EXP-DIST-57): per-frame band wind-alignment through every consumer
+  (`--stabilize` in detect/build/mine/eval/dump), tests + full suite green, pushed.
+- **Wind A/B #1** (hn4 raw vs stab, windy Fairport seg8, 175 human GT): ceilings IDENTICAL —
+  stabilization is a no-op at ≤17 px excursion. Decisive tail test awaits Mark's gust-set labels
+  (seg7/seg11 sets built from a 1 Hz excursion scan, vision-verified active play; first seg15/16
+  attempt hit the post-whistle bench period — Mark caught it).
+- **Whole-game windy Fairport vs AutoCam** (hn2 dump replay, 82 reachable GT): OUR 0.683 R15m /
+  1.3 m median vs AutoCam viewport 0.050 / 47 m. Wind breaks AutoCam far harder than us.
+- **sig50 (σ=5): rejected** on three reads (EXP-DIST-58); σ=4 confirmed. Laptop DirectML eval
+  path certified against server anchors to the digit.
+- **diff5: ceiling ties hn4 (0.965 far), far ordering worse** (EXP-DIST-59) — encodings don't pay
+  on clean data; the stabilized twin round is their last stand.
+- **v2 twin unreproducible** (label drift; hidden 4x human upweighting in v2; gtneg drift; 05.10
+  archive corruption found + repaired from D: originals) → **stab/cur PAIR design** (EXP-DIST-60):
+  crops_reolink_stab (built, patched) vs crops_reolink_cur (building), ctrl_stab/ctrl_cur queued
+  on FORTNITE-OP (jobs 004-007) behind ph1v2. Guard v5: 2-consecutive-poll activity requirement
+  (an idle Roblox client's 4-min telemetry blips reset the resume cooldown ALL EVENING — 5 h queue
+  stall) + FIFO-by-name (mtime FIFO ran 002 before a regenerated 001).
 
 ## 2026-07-18 — CONTROL VERDICT: confound CONFIRMED (ceiling reproduced to the digit); re-runs live
 
