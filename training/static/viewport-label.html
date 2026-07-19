@@ -32,17 +32,20 @@
     <span><i class="sw" style="background:#f44"></i>GT ball</span>
     <span><i class="sw" style="background:#3df"></i>your view</span>
   </span>
+  <span class="pill" id="clock">–</span>
   <span>
     <span class="kbd">click</span> focal point
     <span class="kbd">wheel</span> zoom view
     <span class="kbd">Enter</span> save
     <span class="kbd">A</span> ours-is-right
     <span class="kbd">C</span> AutoCam-is-right
+    <span class="kbd">I</span> interpolate from last label
     <span class="kbd">U</span> unsure
-    <span class="kbd">&larr;/&rarr;</span> nav
+    <span class="kbd">&larr;/&rarr;</span> scrub
   </span>
   <span id="msg"></span>
 </header>
+<canvas id="tl" style="display:block;width:100vw;height:18px;background:#181818;cursor:pointer"></canvas>
 <div id="view"><div id="wrap"><img id="img" /><canvas id="ov"></canvas></div></div>
 <script>
 const SET = new URLSearchParams(location.search).get("set");
@@ -65,6 +68,23 @@ async function load() {
 }
 
 function cur() { return man.frames[idx]; }
+const FPS = 20.0;
+function mmss(g) { const s = g / FPS; return `${String(Math.floor(s / 60)).padStart(2, "0")}:${(s % 60).toFixed(1).padStart(4, "0")}`; }
+
+const prefetched = new Map();
+function prefetch() {
+  for (const d of [1, -1, 2, 3, 4, -2]) {
+    const j = idx + d;
+    if (j < 0 || j >= man.frames.length) continue;
+    const fi = man.frames[j].frame_idx;
+    if (!prefetched.has(fi)) {
+      const im = new Image();
+      im.src = `${API}/strip/${fi}`;
+      prefetched.set(fi, im);
+      if (prefetched.size > 60) prefetched.delete(prefetched.keys().next().value);
+    }
+  }
+}
 
 function show() {
   const f = cur();
@@ -75,10 +95,42 @@ function show() {
   document.getElementById("prog").textContent =
     `${idx + 1}/${man.frames.length} — f${f.frame_idx} — labeled ${Object.keys(labels).length}`;
   document.getElementById("kind").textContent = f.kind || "?";
+  document.getElementById("clock").textContent = mmss(f.frame_idx);
   img.onload = fit;
-  img.src = `${API}/strip/${f.frame_idx}?t=${Date.now()}`;
+  img.src = `${API}/strip/${f.frame_idx}`;
   if (img.complete && img.naturalWidth) fit();
+  prefetch();
+  drawTimeline();
 }
+
+const tl = document.getElementById("tl");
+function drawTimeline() {
+  const W = tl.clientWidth, H = 18;
+  if (tl.width !== W) tl.width = W;
+  tl.height = H;
+  const ctx = tl.getContext("2d");
+  ctx.clearRect(0, 0, W, H);
+  const n = man.frames.length;
+  for (let i = 0; i < n; i++) {
+    const f = man.frames[i];
+    const x = Math.floor(i / n * W);
+    const k = f.kind || "";
+    ctx.fillStyle = k.startsWith("near") ? "#2a2a33" : (k === "whip" ? "#5a2a2a" : "#2a3a55");
+    ctx.fillRect(x, 0, Math.max(1, W / n), H);
+    const lab = labels[f.frame_idx];
+    if (lab) {
+      ctx.fillStyle = lab.source === "interp" ? "#2c7" : (lab.action === "view" ? "#3f5" : "#886");
+      ctx.fillRect(x, H - 5, Math.max(1, W / n), 5);
+    }
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(Math.floor(idx / n * W), 0, 2, H);
+}
+tl.addEventListener("click", (e) => {
+  const r = tl.getBoundingClientRect();
+  idx = Math.max(0, Math.min(man.frames.length - 1, Math.floor((e.clientX - r.left) / r.width * man.frames.length)));
+  show();
+});
 
 function fit() {
   img.width = img.naturalWidth; img.height = img.naturalHeight;
@@ -143,13 +195,16 @@ ov.addEventListener("wheel", (e) => {
 
 async function save(row) {
   const f = cur();
+  const stay = row._stay; delete row._stay;
   row.frame_idx = f.frame_idx;
   const res = await fetch(`${API}/result`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row),
   });
   if ((await res.json()).accepted) {
     labels[f.frame_idx] = row; msg("saved");
-    if (idx < man.frames.length - 1) { idx++; show(); } else msg("done!");
+    if (!stay) {
+      if (idx < man.frames.length - 1) { idx++; show(); } else msg("done!");
+    } else drawTimeline();
   }
 }
 
@@ -169,8 +224,45 @@ document.addEventListener("keydown", (e) => {
     save({ action: "view", fx: f.ac[0], fy: f.ac[1], hfov_deg: 42.3, agree: "ac" });
   } else if (e.key === "u" || e.key === "U") {
     save({ action: "unsure", fx: null, fy: null, hfov_deg: null, agree: null });
+  } else if (e.key === "i" || e.key === "I") {
+    interpolate();
   }
 });
+
+async function interpolate() {
+  // Label the current frame from `pending`, then linearly fill every set frame
+  // between the PREVIOUS saved 'view' label and here — long punts where the
+  // ball is off-camera between two known moments.
+  if (!pending) { msg("place the end focal point first"); return; }
+  const f = cur();
+  let a = -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    const lab = labels[man.frames[i].frame_idx];
+    if (lab && lab.action === "view" && lab.fx != null) { a = i; break; }
+  }
+  if (a < 0) { msg("no earlier labeled frame to interpolate from"); return; }
+  const la = labels[man.frames[a].frame_idx];
+  const g0 = man.frames[a].frame_idx, g1 = f.frame_idx;
+  await save({ action: "view", fx: pending.fx, fy: pending.fy, hfov_deg: pending.hfov, agree: null, _stay: true });
+  let nfill = 0;
+  for (let i = a + 1; i < idx; i++) {
+    const gm = man.frames[i].frame_idx;
+    const t = (gm - g0) / (g1 - g0);
+    const row = {
+      frame_idx: gm, action: "view",
+      fx: la.fx + t * (pending.fx - la.fx),
+      fy: la.fy + t * (pending.fy - la.fy),
+      hfov_deg: (la.hfov_deg || 42) + t * (pending.hfov - (la.hfov_deg || 42)),
+      agree: null, source: "interp",
+    };
+    const res = await fetch(`${API}/result`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row),
+    });
+    if ((await res.json()).accepted) { labels[gm] = row; nfill++; }
+  }
+  msg(`interpolated ${nfill} frames (${mmss(g0)} → ${mmss(g1)})`);
+  drawTimeline();
+}
 
 if (!SET) {
   document.body.innerHTML = "<p style='padding:2em'>No set. Open as viewport-label.html?set=NAME — sets: <a href='/api/viewport-label'>/api/viewport-label</a></p>";

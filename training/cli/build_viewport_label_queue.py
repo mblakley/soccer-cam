@@ -96,12 +96,27 @@ def main() -> None:
     )
     ap.add_argument("--set-name", required=True)
     ap.add_argument("--out", default="D:/training_data/viewport_label")
-    ap.add_argument("--max-frames", type=int, default=240)
+    ap.add_argument("--max-frames", type=int, default=800)
     ap.add_argument(
-        "--stride", type=int, default=8, help="frame grid inside each segment"
+        "--stride", type=int, default=4, help="frame grid (scrub granularity)"
     )
     ap.add_argument(
-        "--scale", type=float, default=0.25, help="strip downscale vs source"
+        "--pad-s",
+        type=float,
+        default=3.0,
+        help="context seconds included around each mismatch segment",
+    )
+    ap.add_argument(
+        "--full-game",
+        action="store_true",
+        help="stride grid over the WHOLE video instead of mismatch segments "
+        "(segment kinds still annotated where they apply)",
+    )
+    ap.add_argument(
+        "--scale", type=float, default=0.22, help="strip downscale vs source"
+    )
+    ap.add_argument(
+        "--quality", type=int, default=72, help="strip JPEG quality (scrub speed)"
     )
     ap.add_argument("--speed-thr", type=float, default=40.0)
     ap.add_argument("--min-amp", type=float, default=800.0)
@@ -143,19 +158,27 @@ def main() -> None:
         div_thr=args.div_thr,
         div_min_frames=int(args.div_min_s * fps),
     )
-    if not segs:
-        raise SystemExit("no whip/divergence segments found — nothing to label")
-
-    frames: list[int] = []
-    for lo, hi, _bad, _kind in segs:
-        frames.extend(range(lo, hi + 1, args.stride))
-        if len(frames) >= args.max_frames:
-            break
-    frames = sorted(set(frames))[: args.max_frames]
+    n_cams = len(cx)
+    pad = int(args.pad_s * fps)
+    if args.full_game:
+        frames = list(range(0, n_cams, args.stride))[: args.max_frames]
+    else:
+        if not segs:
+            raise SystemExit("no whip/divergence segments found — nothing to label")
+        # contiguous stride grid over each PADDED segment (worst first) so the
+        # annotator can scrub through the failure with surrounding context
+        frames = []
+        for lo, hi, _bad, _kind in segs:
+            a = max(0, lo - pad)
+            b = min(n_cams - 1, hi + pad)
+            frames.extend(range(a - a % args.stride, b + 1, args.stride))
+            if len(set(frames)) >= args.max_frames:
+                break
+        frames = sorted(set(frames))[: args.max_frames]
     kind_by_frame: dict[int, str] = {}
     for lo, hi, _bad, kind in segs:
-        for g in range(lo, hi + 1):
-            kind_by_frame.setdefault(g, kind)
+        for g in range(max(0, lo - pad), min(n_cams - 1, hi + pad) + 1):
+            kind_by_frame.setdefault(g, kind if lo <= g <= hi else f"near-{kind}")
 
     out_dir = Path(args.out) / args.set_name
     (out_dir / "strips").mkdir(parents=True, exist_ok=True)
@@ -173,7 +196,7 @@ def main() -> None:
         cv2.imwrite(
             str(out_dir / "strips" / f"f{g:06d}.jpg"),
             small,
-            [cv2.IMWRITE_JPEG_QUALITY, 85],
+            [cv2.IMWRITE_JPEG_QUALITY, args.quality],
         )
         n_written += 1
 
