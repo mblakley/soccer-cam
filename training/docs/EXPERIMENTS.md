@@ -4,6 +4,39 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-62: the PRODUCT chain was the untapped measurement, not temporal coherence — viewport benchmark + swing metric + viewport labeling (2026-07-19)
+
+Mark: temporal coherence is THE feature of a game ball — why untapped? Investigation: it wasn't.
+The product stack (learned listwise selector v7 -> Viterbi ``rerank`` with physics transitions,
+miss state, aerial bridge, OOB pin -> Kalman RTS -> planner) already implements it; the CAMPAIGN
+was measuring the old research tracker (``track_ball``) instead. Full-chain replay on cached dumps,
+scored on Mark's bar (planned viewport vs AutoCam viewport on GT frames, capture = ball inside the
+view):
+
+| GT frames | OUR capture | AutoCam capture | AC-missed frames -> OUR capture |
+|---|---|---|---|
+| Spencerport clip (hn4 cands, 134 GT, AC-adversarial) | 0.724 (med 96 px) | 0.060 | 126 -> **0.730** |
+| WHOLE windy Fairport (hn2 cands, 206 GT) | **0.971** | 0.243 | 156 -> **0.962** |
+
+Remaining visible gaps: NEAR+MED on the hard clip (0.42, n=19) and the last ~27% of AC-missed far.
+**Swing metric** (round-trip pan whips of the planned path): whips are RARE (1-2/game); the dominant
+divergence mode is sustained aim difference vs AutoCam (42-54% of runtime) and GT sides with US
+87:6 / 101:16 during it. New tooling (committed): swing/divergence segment finder,
+``build_viewport_label_queue`` + ``viewport-label.html`` (label the EXPECTED RENDERED OUTPUT:
+focal point + view width, scrubbable padded segments, interpolation for airborne spans) — Mark's
+viewport labels become the product benchmark for all selector/planner changes.
+
+## EXP-DIST-61: ph1v2 — person co-training costs the ball channel nothing; tracker-collapse PATTERN across the early-stopped re-runs (2026-07-19)
+
+ph1v2 (out_ch=2, person sidecar, v2 store, early-stop ep23 best@13): ceiling-far **0.957**
+(hn4/ctrl 0.965, -1 ball = noise) — the person head is free. Near-band best-in-family (rank-1
+0.74, argmax-near 0.947); far ordering weak (argmax 0.104). PATTERN: all three patience-10
+re-runs (diff5, sig50, ph1v2) collapse the eval's built-in tracker while full-40 ctrl did not —
+best.pt selection on the discredited val-crop proxy favors flat score fields. **Protocol going
+forward: full-40, no patience (as the ctrl_stab/ctrl_cur pair runs).** ph1v2's real payoff is the
+person CHANNEL as a selector feature (candidate-on-person penalty) — next selector experiment,
+scored on the viewport benchmark.
+
 ## EXP-DIST-60: the v2 twin is UNREPRODUCIBLE — label drift, hidden 4x human upweighting, archive corruption; pivot to the stab/cur PAIR design (2026-07-19)
 
 Building `crops_reolink_stab` as a "v2 twin" (same 15 games via the new `--games` pin, same
@@ -30,6 +63,12 @@ the same deterministic pipeline, differing ONLY in `--stabilize`: `crops_reolink
 (gray3, full-40, no patience, seed 123) is the decisive comparison; hn4 anchors by recipe through
 ctrl_cur. The v2-replication attempt (row-level human de-dup/re-dup etc.) was abandoned as
 unfalsifiable archaeology.
+
+**Pair symmetry, measured (stab v4 `7cdb9528` 83,924 vs cur v3 `4de2df29` 83,928):** positives
+46,771/46,774 IDENTICAL (3 edge-of-crop casualties of the shift correction); human 3,913/3,914;
+GT-neg frames 480/480 = 100%; background negatives 74% shared (the stabilized label coords nudge
+the rng acceptance stream — sampling policy identical, specific patches differ; inherent to the
+treatment and the least identity-sensitive row class). The pair premise holds where it matters.
 
 ## EXP-DIST-59: diff5 verdict — ceiling matches hn4 EXACTLY, far score-ordering WORSE; encodings don't pay on clean data (2026-07-19)
 
