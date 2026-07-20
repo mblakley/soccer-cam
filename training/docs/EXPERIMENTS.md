@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-63: STABILIZATION PAIR VERDICT — ceiling-neutral, ordering leans stab (within noise); refreshed data sets a NEW best ceiling (2026-07-20)
+
+The decisive pair: hm_ctrl_cur vs hm_ctrl_stab — same seed (123), same recipe (gray3, full-40,
+no patience), same-day stores with IDENTICAL positives (EXP-DIST-60), differing ONLY in
+`--stabilize` decode. Held-out Spencerport (134 GT):
+
+| SPC | ctrl_cur (raw) | ctrl_stab (stabilized) |
+|---|---|---|
+| CEILING far R15m | **0.974** | 0.965 |
+| CEILING all / med | 0.978 / 2.2 m | 0.970 / **1.5 m** |
+| rank-1 far | 0.11 | **0.22** |
+| score-argmax far | 0.165 | **0.243** |
+| DEPTH-CAL argmax far | 0.322 | **0.339** |
+
+**Verdict: stabilized training data is ceiling-NEUTRAL (delta = 1 ball) with a consistent lean
+toward better far ordering and tighter candidate precision — every ordering metric favors stab,
+but each individually sits inside the argmax variance band (±0.078). Decision: `--stabilize`
+stays opt-in for training; not mandated.** The remaining stabilization stakes: (a) deploy-time
+gust tail (A/B #2, awaiting the seg7/seg11 gust GT), (b) the diff5 x stabilization interaction
+(diff5_stab/diff5_cur twins running) — jitter-freed diffs were the encoding's surviving hope.
+
+**Side finding: ctrl_cur's 0.974 ceiling-far is the NEW BEST** (hn4 0.965) — the data REFRESH
+alone (teacher tracks/filters evolved since v2, plus the repaired 05.10 segments) buys ~1 ball.
+The champion recipe on current data beats the frozen champion artifact. Also: ctrl_stab's
+full-40 gates-off tracker row collapsed like the patience runs — the "patience causes flat
+scores" theory (EXP-DIST-61) is WRONG; eval_tag's gates-off protocol + the research tracker
+simply can't hold a track, for any checkpoint. Selection quality is measured by the product
+chain / viewport benchmark (EXP-DIST-62), not that row.
+
 ## EXP-DIST-62: the PRODUCT chain was the untapped measurement, not temporal coherence — viewport benchmark + swing metric + viewport labeling (2026-07-19)
 
 Mark: temporal coherence is THE feature of a game ball — why untapped? Investigation: it wasn't.
