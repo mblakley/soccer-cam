@@ -107,6 +107,9 @@ Now resolved by game registry update -- all games have paths in registry.
 ### 4.4 Sonnet QA Integration (Issue 13)
 QA system exists but isn't in the pipeline. Add `action_sonnet_qa()` to orchestrator between labeling and human review. Create `training/pipeline/sonnet_reviewer.py` for Claude API vision calls.
 
+### 4.5 Game-phase (game_state) audit — ALL games (Mark 2026-07-21)
+`active_play_ranges` (warm-up/HT/pre-&post filtering, used by dumps + the viewport-label builder) is only as good as each game's `game_state`. Fairport 2026.06.06 mislabels warm-up as `first_half` from frame 0 with a zero-length `pre_game` — so its viewport set was 194 warm-up frames (manually pruned; kickoff ~1:53). Audit every game's phase boundaries (kickoff / HT / second-half start / final whistle), correct the mislabels, so all downstream active-play filtering is trustworthy. Not urgent; Fairport specifically not worth a one-off fix.
+
 ---
 
 ## Priority 5: Training Diversity
