@@ -231,7 +231,15 @@ def main() -> None:
         if args.depth_balance > 0 and depth_col is not None:
             pos = np.array([d for d in dx if d is not None])
             if len(pos):
-                edges = np.quantile(pos, np.linspace(0, 1, args.depth_bands + 1))
+                # FIXED-WIDTH bands over the depth range (NOT quantile — quantile
+                # bands are equal-count by construction, so inverse-freq is a
+                # no-op). Fixed width makes the scarce NEAR band genuinely
+                # under-counted, so it gets up-weighted. Robust upper edge (p98)
+                # so a few huge near balls don't stretch every band low.
+                lo_d, hi_d = float(pos.min()), float(np.percentile(pos, 98))
+                if hi_d <= lo_d:
+                    hi_d = lo_d + 1e-6
+                edges = np.linspace(lo_d, hi_d, args.depth_bands + 1)
                 edges[0], edges[-1] = -np.inf, np.inf
                 band = lambda d: int(np.searchsorted(edges, d, side="right") - 1)  # noqa: E731
                 counts = np.zeros(args.depth_bands)
