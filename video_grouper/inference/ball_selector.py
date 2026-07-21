@@ -47,13 +47,22 @@ FEATURE_NAMES: tuple[str, ...] = (
     "cont_p2",  # same, +2 frames
     "cont_m2",  # same, -2 frames
     "dens_5m",  # other candidates within 5 m this frame / K
+    # APPEND-ONLY past here — new features go at the END so an older selector's
+    # feature_names stay a prefix of this tuple (load_selector pads its `keep`
+    # with False), keeping shipped models loadable. Never reorder/insert.
+    "field_depth",  # CAMERA-INVARIANT ball field position from the homography:
+    # world_y / field_width, 0 = near touchline .. 1 = far. Unlike `depth`
+    # (apparent px size, which bakes in frame resolution + camera placement —
+    # a far camera makes near balls small), this is the same physical quantity
+    # on every camera (Mark 2026-07-21: "camera is not fixed"). Lets the selector
+    # learn near/far as a true, camera-adaptive concept.
 )
 
 # feature families for knockout ablations
 FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     "score": ("score", "rank_norm", "pct_frame", "pct_depth"),
     "persistence": ("persistence",),
-    "geometry": ("size_ratio", "infield", "depth"),
+    "geometry": ("size_ratio", "infield", "depth", "field_depth"),
     "window": ("cont_p1", "cont_m1", "cont_p2", "cont_m2"),
     "frame": ("n_cands", "dens_5m"),
 }
@@ -160,6 +169,9 @@ def build_features(
             dens = (dm <= 5.0).sum(axis=1) / top_k
         else:
             dens = np.zeros(k)
+        # camera-invariant field depth: world_y/field_width, 0=near .. 1=far
+        fw = float(getattr(geom, "field_width_m", 0.0)) or 1.0
+        field_depth = np.clip(world[t][:, 1] / fw, 0.0, 1.0)
         cols = [
             sc,
             rank / max(top_k - 1, 1),
@@ -175,6 +187,7 @@ def build_features(
             _cont(t, +2),
             _cont(t, -2),
             dens,
+            field_depth,  # APPEND-ONLY (matches FEATURE_NAMES order)
         ]
         out.append(np.stack(cols, axis=1).astype(np.float32))
     return out
@@ -246,20 +259,31 @@ def load_selector(path) -> SelectorNet:
     schema = str(d["schema"]) if "schema" in d else ""
     if schema != "selector_net_npz/1":
         raise ValueError(f"{path}: expected selector_net_npz/1, got {schema!r}")
-    # Feature-schema guard: build_features emits columns in FEATURE_NAMES order and
-    # `keep` selects from them, so a same-length REORDER of FEATURE_NAMES would
-    # silently feed mislabeled features into a model trained on the old order (the
-    # module docstring's "features must match exactly" failure). Newer exports
-    # embed the feature schema; assert it matches. (A feature COUNT change is
-    # already caught downstream when the boolean `keep` index length-mismatches.)
+    # Feature-schema guard (APPEND-ONLY evolution): build_features emits columns in
+    # FEATURE_NAMES order and `keep` selects from them. New features are APPENDED to
+    # FEATURE_NAMES, so an older selector's feature_names must be a PREFIX of the
+    # current tuple — then its `keep` mask is padded with False for the new trailing
+    # features (which that net never saw) and positional selection still lines up.
+    # A reorder / removal / rename (not a prefix) is a real drift -> hard error.
+    keep = d["keep"].astype(bool)
     if "feature_names" in d:
         names = tuple(str(x) for x in d["feature_names"])
-        if names != FEATURE_NAMES:
+        if names != FEATURE_NAMES[: len(names)]:
             raise ValueError(
-                f"{path}: selector was trained on a different feature schema "
-                f"({len(names)} features) than the current FEATURE_NAMES "
-                f"({len(FEATURE_NAMES)}); order/set drift -> re-export the selector"
+                f"{path}: selector feature schema ({len(names)} features) is not a "
+                f"prefix of the current FEATURE_NAMES ({len(FEATURE_NAMES)}) — "
+                f"order/set drift (not an append) -> re-export the selector"
             )
+    if len(keep) < len(FEATURE_NAMES):
+        # older net (fewer features): pad keep with False for the appended
+        # trailing features it never saw — positional selection then still lines
+        # up (validated as a prefix above when feature_names is present).
+        keep = np.concatenate([keep, np.zeros(len(FEATURE_NAMES) - len(keep), bool)])
+    elif len(keep) > len(FEATURE_NAMES):
+        raise ValueError(
+            f"{path}: keep mask ({len(keep)}) longer than FEATURE_NAMES "
+            f"({len(FEATURE_NAMES)}) — a feature was removed; re-export"
+        )
     return SelectorNet(
         w0=d["w0"].astype(np.float32),
         b0=d["b0"].astype(np.float32),
@@ -272,7 +296,7 @@ def load_selector(path) -> SelectorNet:
         none_w=d["none_w"].astype(np.float32),
         none_b=d["none_b"].astype(np.float32),
         temperature=float(d["temperature"]),
-        keep=d["keep"].astype(bool),
+        keep=keep,
     )
 
 
