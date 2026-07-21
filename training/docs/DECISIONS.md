@@ -4,6 +4,22 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-21: Benchmark GT is FROZEN and VERSIONED — evals pin to a snapshot sha, not live label files
+
+**Context:** ball_labels grow over time (the hourly `selector_label_dedupe` task folds set-labeled
+data in), and the viewport-label sets are Mark's product benchmark. Re-scoring the selector/detector
+against live files would move the denominators between runs, making "did the change help?"
+unanswerable — the same class of drift that the immutable-store decision fixed for training data.
+
+**Decision:** eval GT is snapshotted into `G:\ballresearch\benchmark\vN` (content-addressed, sha over
+sorted/normalized rows) and every selector/detector eval CITES the snapshot sha. **benchmark GT
+v1 = `3c4d4c5ef44e85cf`** (SPC held-out ball_labels 1785 rows sha 6959a83e; Iron 702 sha 9039aefa;
+Fairport 216 sha 4b51f897; viewport sets spc_viewport_worst 700 views sha d1a60bd9, fair_viewport_worst
+706 views sha f9992ada). New GT → new vN+1 snapshot, never mutate. The selector-recalibration
+before/after is measured on v1.
+
+---
+
 ## 2026-07-17: Two-box compute policy — server is the reliable/data-local queue, FORTNITE-OP harvests its own idle windows
 
 **Context:** two GPU boxes with opposite profiles — the server (GTX 1060: slow, always on,
