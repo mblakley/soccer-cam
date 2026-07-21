@@ -89,6 +89,10 @@ path = "video_grouper/version.py"
 [tool.ruff]
 target-version = "py313"
 
+# Preserved-verbatim server orchestration recipes (executable documentation of
+# how the shipped selector models were trained) — kept as-run, not linted.
+extend-exclude = ["training/docs/selector_recipes/"]
+
 [tool.ruff.lint]
 # Enable a curated set of rules — matches TTT backend config style.
 # - E4/E7/E9: pycodestyle errors (imports, statement, syntax)

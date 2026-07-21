@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-64: selector depth-balance (v8) — near recovers but TRADES far; camera-invariance matters; v8 doesn't reproduce v7 → NOT promoted (2026-07-21)
+
+**Hypothesis (from the near-autopsy, EXP near 2026-07-20):** the selector is UNDER-confident on
+near-camera balls (near gold is scarce), so up-weighting near training samples by inverse
+field-depth frequency lifts near without hurting far.
+
+**Method:** `kill_test_selector --depth-balance` (new knob) on 14 training games' v7 labels, held-out
+spc+iron. Three banding iterations, each committed — the arc is the finding:
+1. global apparent-diameter bands → **no-op** (quantile bands are equal-count by construction);
+2. per-game apparent-diameter (Mark: apparent size depends on polygon+frame-size, conflates cameras);
+3. **camera-invariant FIELD DEPTH** (Mark: camera isn't fixed — a far camera makes near balls small):
+   `world_y/field_width` from each game's homography, 0=near..1=far. Band counts confirmed near is
+   genuinely the sparse band (near 6679 vs far 21864, 3.3x) in camera-invariant space.
+
+**Result (field-depth, product chain w/ learned pnone, SPC held-out):**
+
+| SPC | learned-argmax near | product near R15m | product far R15m |
+|---|---|---|---|
+| v7 (champion) | 0.30* | 0.316 | **0.722** |
+| v8 db0 (baseline retrain) | 0.30 | 0.316 | **0.174** |
+| v8 db1.0 (field-depth) | **0.389** | **0.474** | 0.530 |
+
+Depth-balance WORKS as a lever: within the v8 pipeline it lifts near 0.316→0.474 AND rescues far
+0.174→0.530 (better pnone calibration). Iron near 0.438→0.625. **BUT vs the champion it TRADES:
+near +0.158, far −0.192 — not a free win.** And critically **my v8 BASELINE does not reproduce v7**
+(far 0.174 vs 0.722; both 14-feature nets, so not a feature mismatch) — v7's exact training recipe
+(`overnight_selector_v7.py`) is server-side-only, not in the repo, so the v8-vs-v7 comparison is
+confounded. **Decision: v7 stays champion; v8 NOT promoted.**
+
+**Deeper finding:** even v7's product NEAR is only 0.316 (raw tracker w=1.0 miss=0.9 was 0.067) —
+the near ball is a TRACKER-DYNAMICS problem (fast near ball, Viterbi miss-state coasts away; the
+autopsy's 11/19 near misses were the miss-state), not purely selector confidence. Selector
+reweighting helps but can't fully fix it. Next direction (Mark 2026-07-21): make the model
+**geometry-conditioned** — feed camera-invariant field position (polygon-derived) as an INPUT
+FEATURE, not just a balancing weight, so near/far is a learned, camera-adaptive concept.
+The `--depth-balance` knob + camera-invariant field-depth code stay as validated infrastructure.
+
+*v7 learned-argmax near from EXP-DIST-44 protocol; product numbers this entry.
+
+---
+
 ## EXP-DIST-63: STABILIZATION PAIR VERDICT — ceiling-neutral, ordering leans stab (within noise); refreshed data sets a NEW best ceiling (2026-07-20)
 
 The decisive pair: hm_ctrl_cur vs hm_ctrl_stab — same seed (123), same recipe (gray3, full-40,
