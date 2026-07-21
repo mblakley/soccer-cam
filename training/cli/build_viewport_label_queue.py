@@ -123,6 +123,13 @@ def main() -> None:
     ap.add_argument("--div-thr", type=float, default=1500.0)
     ap.add_argument("--div-min-s", type=float, default=2.0)
     ap.add_argument("--priority", type=int, default=1)
+    ap.add_argument(
+        "--no-active-play-filter",
+        action="store_true",
+        help="keep warm-up / halftime / pre- & post-game frames (default: drop "
+        "them — those are NOT broadcast content and the planner wanders wildly "
+        "with no ball, so they dominate the swing/divergence segments)",
+    )
     ap.add_argument("--no-hwaccel", action="store_true")
     args = ap.parse_args()
 
@@ -175,6 +182,31 @@ def main() -> None:
             if len(set(frames)) >= args.max_frames:
                 break
         frames = sorted(set(frames))[: args.max_frames]
+
+    # Ship non-active-play frames (Mark 2026-07-21): warm-up/HT/pre-&post-game
+    # are not broadcast content — the planner wanders with no ball there, so
+    # those frames flood the swing/divergence set. Drop any frame outside the
+    # first_half/second_half ranges from game_state. If game_state has no phases
+    # (or mislabels them, e.g. first_half from frame 0), this is a no-op and the
+    # game needs a phase-boundary fix — see the game-phase audit backlog.
+    if not args.no_active_play_filter:
+        ranges = dd.active_play_ranges(gj["segments"], gj.get("game_state"))
+        if ranges:
+            before = len(frames)
+            frames = [g for g in frames if any(lo <= g <= hi for lo, hi in ranges)]
+            print(
+                f"active-play filter: kept {len(frames)}/{before} frames "
+                f"(dropped {before - len(frames)} warm-up/HT/pre-post)",
+                flush=True,
+            )
+        else:
+            print(
+                "active-play filter: game_state has no first/second-half phases "
+                "— keeping all frames (this game needs a phase-boundary fix)",
+                flush=True,
+            )
+    if not frames:
+        raise SystemExit("no frames left after the active-play filter")
     kind_by_frame: dict[int, str] = {}
     for lo, hi, _bad, kind in segs:
         for g in range(max(0, lo - pad), min(n_cams - 1, hi + pad) + 1):
