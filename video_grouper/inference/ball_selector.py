@@ -50,19 +50,18 @@ FEATURE_NAMES: tuple[str, ...] = (
     # APPEND-ONLY past here — new features go at the END so an older selector's
     # feature_names stay a prefix of this tuple (load_selector pads its `keep`
     # with False), keeping shipped models loadable. Never reorder/insert.
-    "field_depth",  # CAMERA-INVARIANT ball field position from the homography:
-    # world_y / field_width, 0 = near touchline .. 1 = far. Unlike `depth`
-    # (apparent px size, which bakes in frame resolution + camera placement —
-    # a far camera makes near balls small), this is the same physical quantity
-    # on every camera (Mark 2026-07-21: "camera is not fixed"). Lets the selector
-    # learn near/far as a true, camera-adaptive concept.
+    # (`field_depth` = homography field position was appended here 2026-07-21 and
+    # REVERTED, EXP-DIST-65: as a raw feature it let the net learn the
+    # position-biased distillation labels and SUPPRESS near candidates — near
+    # product R15m 0.316->0.158. The append-only + keep-padding machinery in
+    # load_selector stays, ready for the next feature.)
 )
 
 # feature families for knockout ablations
 FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     "score": ("score", "rank_norm", "pct_frame", "pct_depth"),
     "persistence": ("persistence",),
-    "geometry": ("size_ratio", "infield", "depth", "field_depth"),
+    "geometry": ("size_ratio", "infield", "depth"),
     "window": ("cont_p1", "cont_m1", "cont_p2", "cont_m2"),
     "frame": ("n_cands", "dens_5m"),
 }
@@ -169,9 +168,6 @@ def build_features(
             dens = (dm <= 5.0).sum(axis=1) / top_k
         else:
             dens = np.zeros(k)
-        # camera-invariant field depth: world_y/field_width, 0=near .. 1=far
-        fw = float(getattr(geom, "field_width_m", 0.0)) or 1.0
-        field_depth = np.clip(world[t][:, 1] / fw, 0.0, 1.0)
         cols = [
             sc,
             rank / max(top_k - 1, 1),
@@ -187,7 +183,6 @@ def build_features(
             _cont(t, +2),
             _cont(t, -2),
             dens,
-            field_depth,  # APPEND-ONLY (matches FEATURE_NAMES order)
         ]
         out.append(np.stack(cols, axis=1).astype(np.float32))
     return out

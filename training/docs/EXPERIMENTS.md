@@ -4,6 +4,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-65: field_depth as a selector feature (Mark's "geometry as input") — REVERTED; it suppresses near; near is a TRACKER problem, not a selector one (2026-07-21)
+
+**Hypothesis (Mark):** condition the selector on true field position instead of correcting for
+camera geometry after the fact — add `field_depth` = `world_y/field_width` (homography, 0=near..
+1=far), the camera-invariant near/far axis (apparent-size `depth` bakes in frame resolution +
+camera placement; a far camera makes near balls small). Implemented APPEND-ONLY (feature #15 at
+the end; `load_selector` pads older nets' `keep` with False → v7 loads unchanged, product numbers
+byte-identical) so it couldn't break the champion. field_depth values verified sane (range [0,1],
+median 0.66, no NaN, ~23% at the far-touchline clip).
+
+**Result (clean A/B, 14 games + v7 labels, field_depth OFF vs ON, SPC product chain):**
+
+| SPC | near R15m | far R15m |
+|---|---|---|
+| v7 (champion) | 0.316 | 0.722 |
+| v8 field_depth OFF | 0.316 | 0.174* |
+| v8 field_depth ON | **0.158** | 0.713 |
+
+**field_depth TRADED near AWAY** (0.316→0.158) for far — the opposite of the goal. Mechanism: the
+distillation labels are position-biased (near gold is rare, the teacher `track_ball` is noisier
+near), so an explicit field-position input lets the small net LEARN that bias and suppress near
+candidates. (The far "recovery" 0.174→0.713 is confounded — the OFF baseline's 0.174 was itself
+the broken-baseline pnone collapse, EXP-DIST-64.) **REVERTED** from FEATURE_NAMES (the append-only
++ keep-padding backward-compat machinery in `load_selector` stays for future features).
+
+**The load-bearing conclusion:** this is the THIRD selector-side near attempt to fail (σ was the
+detector; depth-balance traded far; field_depth trades near). **Near is a TRACKER-DYNAMICS problem,
+not a selector one** — consistent with the near-autopsy (fast near ball → Viterbi takes the
+miss-state and the Kalman coasts away; 11/19 near misses were the miss-state over a rank-1 near
+ball). The next near lever is the tracker's near-ball miss-state cost / transition model, NOT the
+selector features. Selector reasoning (camera-invariance) was correct; the empirical answer is that
+the selector isn't where near breaks.
+
+*OFF baseline far 0.174 is the broken-baseline pnone collapse (14 of v7's 15 games); the faithful
+15-game baseline (v8base) is training to establish a clean reference.
+
 ## EXP-DIST-64: selector depth-balance (v8) — near recovers but TRADES far; camera-invariance matters; v8 doesn't reproduce v7 → NOT promoted (2026-07-21)
 
 **Hypothesis (from the near-autopsy, EXP near 2026-07-20):** the selector is UNDER-confident on
