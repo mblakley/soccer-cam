@@ -201,9 +201,16 @@ def main() -> None:
 
         # depth of the labeled ball (feature col, small=far) for depth-balancing;
         # None for 'none-visible' rows (no candidate) — those keep their weight.
+        # gx tags each sample with its GAME index so bands are computed PER-GAME:
+        # the `depth` feature is expected_ball_diameter_px, which depends on the
+        # field polygon AND frame size (Mark 2026-07-21), so a global pool
+        # conflates cameras — a tight camera's midfield ball outsizes a wide
+        # camera's near ball. Within one game the geometry is fixed, so apparent
+        # diameter orders depth correctly. Band each game separately, up-weight
+        # each game's OWN sparse near band, then pool.
         depth_col = kept.index("depth") if "depth" in kept else None
-        fx, mx, lx, wx, dx = [], [], [], [], []
-        for _d, frames, geom, lab, _p in train_sets:
+        fx, mx, lx, wx, dx, gx = [], [], [], [], [], []
+        for gi, (_d, frames, geom, lab, _p) in enumerate(train_sets):
             if not lab:
                 print(f"WARNING: {_p} contributed 0 labels")
             feats, mask = _features_packed(frames, geom, keep, _d["ef"])
@@ -219,6 +226,7 @@ def main() -> None:
                     if cand >= 0 and depth_col is not None
                     else None
                 )
+                gx.append(gi)
         if not fx:
             raise SystemExit(
                 "NO training labels at all — check the label builder's stats "
@@ -229,34 +237,36 @@ def main() -> None:
         labels = np.asarray(lx)
         weights = np.asarray(wx, np.float32)
         if args.depth_balance > 0 and depth_col is not None:
-            pos = np.array([d for d in dx if d is not None])
-            if len(pos):
-                # FIXED-WIDTH bands over the depth range (NOT quantile — quantile
-                # bands are equal-count by construction, so inverse-freq is a
-                # no-op). Fixed width makes the scarce NEAR band genuinely
-                # under-counted, so it gets up-weighted. Robust upper edge (p98)
-                # so a few huge near balls don't stretch every band low.
-                lo_d, hi_d = float(pos.min()), float(np.percentile(pos, 98))
+            near_frac = []  # per-game near-band share, for the diagnostic
+            for gi in range(len(train_sets)):
+                idxs = [k for k, g in enumerate(gx) if g == gi and dx[k] is not None]
+                if not idxs:
+                    continue
+                gd = np.array([dx[k] for k in idxs])
+                # FIXED-WIDTH bands over THIS GAME's depth range (NOT quantile —
+                # quantile is equal-count = no-op). Robust upper edge (p98) so a
+                # few huge near balls don't stretch every band low.
+                lo_d, hi_d = float(gd.min()), float(np.percentile(gd, 98))
                 if hi_d <= lo_d:
                     hi_d = lo_d + 1e-6
                 edges = np.linspace(lo_d, hi_d, args.depth_bands + 1)
                 edges[0], edges[-1] = -np.inf, np.inf
-                band = lambda d: int(np.searchsorted(edges, d, side="right") - 1)  # noqa: E731
-                counts = np.zeros(args.depth_bands)
-                for d in dx:
-                    if d is not None:
-                        counts[band(d)] += 1
-                ref = counts[counts > 0].mean()
-                for k2, d in enumerate(dx):
-                    if d is not None and counts[band(d)] > 0:
-                        weights[k2] *= float(
-                            (ref / counts[band(d)]) ** args.depth_balance
-                        )
-                print(
-                    f"depth-balance^{args.depth_balance}: band counts "
-                    f"{counts.astype(int).tolist()} (far..near), weight range "
-                    f"[{weights.min():.2f}, {weights.max():.2f}]"
+                bof = np.clip(
+                    np.searchsorted(edges, gd, side="right") - 1,
+                    0,
+                    args.depth_bands - 1,
                 )
+                counts = np.bincount(bof, minlength=args.depth_bands).astype(float)
+                ref = counts[counts > 0].mean()
+                for k, b in zip(idxs, bof, strict=False):
+                    weights[k] *= float((ref / counts[b]) ** args.depth_balance)
+                near_frac.append(counts[-1] / counts.sum())
+            print(
+                f"depth-balance^{args.depth_balance} PER-GAME: near-band share "
+                f"median {np.median(near_frac):.3f} (range "
+                f"{min(near_frac):.3f}-{max(near_frac):.3f}), weight range "
+                f"[{weights.min():.2f}, {weights.max():.2f}]"
+            )
         n_none = int((labels == feats.shape[1]).sum())
         print(f"training frames {len(feats)} (none={n_none}), F={feats.shape[2]}")
 
