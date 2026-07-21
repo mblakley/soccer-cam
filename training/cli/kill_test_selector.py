@@ -135,6 +135,19 @@ def main() -> None:
         default=None,
         help="persist the FIRST run's trained net (+feature mask) for replay_fullgame",
     )
+    ap.add_argument(
+        "--depth-balance",
+        type=float,
+        default=0.0,
+        help="inverse-frequency reweight POSITIVE samples across --depth-bands "
+        "quantile bands of the labeled ball's depth (0=off, 1=full inverse-freq, "
+        "0.5=mild). Fixes near-band selector UNDER-CONFIDENCE: near balls are "
+        "scarce in the gold, so the selector's P(ball) stays below P(none) even "
+        "when the ball is candidate #1 (near-ball stage autopsy 2026-07-20: 11 "
+        "of 19 near misses were the Viterbi taking the miss-state over a rank-1 "
+        "near ball). Up-weights the rare near band so it learns confidence there.",
+    )
+    ap.add_argument("--depth-bands", type=int, default=4)
     args = ap.parse_args()
 
     from training.cli.sweep_tracker import (
@@ -186,7 +199,10 @@ def main() -> None:
         kept = [n for n, k in zip(FEATURE_NAMES, keep, strict=True) if k]
         print(f"\n=== run: knockout={knock or 'none'} ({len(kept)} features) ===")
 
-        fx, mx, lx, wx = [], [], [], []
+        # depth of the labeled ball (feature col, small=far) for depth-balancing;
+        # None for 'none-visible' rows (no candidate) — those keep their weight.
+        depth_col = kept.index("depth") if "depth" in kept else None
+        fx, mx, lx, wx, dx = [], [], [], [], []
         for _d, frames, geom, lab, _p in train_sets:
             if not lab:
                 print(f"WARNING: {_p} contributed 0 labels")
@@ -198,6 +214,11 @@ def main() -> None:
                 mx.append(mask[i])
                 lx.append(top_k if cand < 0 else cand)
                 wx.append(w)
+                dx.append(
+                    float(feats[i][cand][depth_col])
+                    if cand >= 0 and depth_col is not None
+                    else None
+                )
         if not fx:
             raise SystemExit(
                 "NO training labels at all — check the label builder's stats "
@@ -207,6 +228,27 @@ def main() -> None:
         mask = np.stack(mx)
         labels = np.asarray(lx)
         weights = np.asarray(wx, np.float32)
+        if args.depth_balance > 0 and depth_col is not None:
+            pos = np.array([d for d in dx if d is not None])
+            if len(pos):
+                edges = np.quantile(pos, np.linspace(0, 1, args.depth_bands + 1))
+                edges[0], edges[-1] = -np.inf, np.inf
+                band = lambda d: int(np.searchsorted(edges, d, side="right") - 1)  # noqa: E731
+                counts = np.zeros(args.depth_bands)
+                for d in dx:
+                    if d is not None:
+                        counts[band(d)] += 1
+                ref = counts[counts > 0].mean()
+                for k2, d in enumerate(dx):
+                    if d is not None and counts[band(d)] > 0:
+                        weights[k2] *= float(
+                            (ref / counts[band(d)]) ** args.depth_balance
+                        )
+                print(
+                    f"depth-balance^{args.depth_balance}: band counts "
+                    f"{counts.astype(int).tolist()} (far..near), weight range "
+                    f"[{weights.min():.2f}, {weights.max():.2f}]"
+                )
         n_none = int((labels == feats.shape[1]).sum())
         print(f"training frames {len(feats)} (none={n_none}), F={feats.shape[2]}")
 
