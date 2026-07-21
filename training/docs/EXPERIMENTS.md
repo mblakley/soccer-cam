@@ -29,9 +29,12 @@ spc+iron. Three banding iterations, each committed — the arc is the finding:
 Depth-balance WORKS as a lever: within the v8 pipeline it lifts near 0.316→0.474 AND rescues far
 0.174→0.530 (better pnone calibration). Iron near 0.438→0.625. **BUT vs the champion it TRADES:
 near +0.158, far −0.192 — not a free win.** And critically **my v8 BASELINE does not reproduce v7**
-(far 0.174 vs 0.722; both 14-feature nets, so not a feature mismatch) — v7's exact training recipe
-(`overnight_selector_v7.py`) is server-side-only, not in the repo, so the v8-vs-v7 comparison is
-confounded. **Decision: v7 stays champion; v8 NOT promoted.**
+(far 0.174 vs 0.722 through the tracker; per-frame learned-argmax far is healthy 0.373, so the net
+is fine — its `pnone`/miss-state calibration is off). Cause (verified 2026-07-21 after preserving
+v7's recipe, `training/docs/selector_recipes/`): v8 trained on 14 of v7's 15 games (pittsford0507
+dump cleared) + the selector's seed/val-split→temperature→`pnone` sensitivity; NOT dump staleness
+(dumps predate the labels). **Decision: v7 stays champion; v8 NOT promoted. A faithful retrain
+needs all 15 games + fresh labels (v7 STEP 1) + reported temperature.**
 
 **Deeper finding:** even v7's product NEAR is only 0.316 (raw tracker w=1.0 miss=0.9 was 0.067) —
 the near ball is a TRACKER-DYNAMICS problem (fast near ball, Viterbi miss-state coasts away; the

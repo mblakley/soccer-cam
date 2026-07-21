@@ -17,9 +17,21 @@ committed CLIs they call (`build_selector_labels`, `kill_test_selector`, `export
 
 ## Why v8 (EXP-DIST-64) did NOT reproduce v7
 
-The v8 recalibration reused the frozen `sel_labels_*_v7.json` files directly instead of
-re-running STEP 0+1. If the `fullgame/<game>` candidate dumps were re-dumped after 2026-07-12
-(when the v7 labels were built), the labels' `ef`-index → candidate mapping no longer aligns
-with the current dump content — training on mismatched (label, candidate) pairs. A faithful
-v8 must re-run `build_selector_labels` against the CURRENT dumps (as v7 STEP 1 does), not reuse
-stale label files. Verify dump vs label freshness before any selector retrain.
+v8 reused the frozen `sel_labels_*_v7.json` files directly instead of re-running STEP 0+1.
+**Checked (2026-07-21): the dumps are NOT stale** — the `fullgame/<game>` dump `meta.json`
+mtimes are 07-04..08, *predating* the 07-12 labels, so the `ef`-index → candidate mapping is
+consistent (my first guess — a re-dump — was wrong).
+
+The actual gaps, both real:
+1. **v8 trained on 14 of v7's 15 games** — `heat__2026.05.07_vs_Pittsford_Mustangs_away_18.28`'s
+   fullgame dump was cleared (0 parts), so it was dropped. v7 trained on all 15.
+2. **The selector is seed/val-split sensitive**: `train_selector` does a random val split for
+   early-stop AND a temperature grid-search; temperature sets the softmax sharpness → the `pnone`
+   the tracker consumes as its miss-cost. A different training set (14 vs 15 games) shifts the
+   split → temperature → `pnone` calibration, and the product-chain FAR is very sensitive to
+   `pnone` (v8_db00 far collapsed to 0.174 vs v7 0.722 through the tracker, while its per-frame
+   learned-argmax far was a healthy 0.373 — i.e. the net is fine, its miss-state calibration is off).
+
+**A faithful v8/selector retrain must:** re-dump the missing pittsford0507 game, re-run
+`build_selector_labels` against the current dumps (STEP 1), train on all 15, and report the
+temperature so `pnone` calibration is comparable run-to-run.
