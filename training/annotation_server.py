@@ -21,6 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from training import field_edit_v2  # field-polygon editor mount
+
 logger = logging.getLogger(__name__)
 
 # Configurable via environment or CLI args
@@ -28,7 +30,6 @@ REVIEW_PACKETS_DIR = Path("D:/training_data/review_packets")
 LABELS_OUTPUT_DIR = Path("training_data/labels/annotations")
 
 app = FastAPI(title="Ball Tracking Annotation Server", version="0.1.0")
-from training import field_edit_v2  # field-polygon editor mount
 app.include_router(field_edit_v2.router)
 
 
