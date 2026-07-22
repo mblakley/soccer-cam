@@ -1780,7 +1780,6 @@ async def list_far_sets():
                 "set": d.name,
                 "n_frames": m.get("n_frames", len(m.get("frames", []))),
                 "labeled": len(labels),
-                "criteria": m.get("criteria"),
                 # manifest-assigned labeling priority (1 = do first); 999 = unranked.
                 # The landing page sorts by this so the annotator works top-down.
                 "priority": m.get("priority", 999),
@@ -1799,15 +1798,8 @@ async def get_far_set(set_id: str):
 
 @app.get("/api/far-label/{set_id}/strip/{frame_idx}")
 async def get_far_strip(set_id: str, frame_idx: int):
-    """Serve a pre-extracted full-frame strip at native resolution.
-
-    Prefers the LOSSLESS ``.png`` when present (JPEG's 4:2:0 chroma subsampling
-    visibly smears a 3-8 px far ball); falls back to the legacy ``.jpg``.
-    """
+    """Serve a pre-extracted far-field crop strip (native-res JPEG)."""
     d = _far_set_dir(set_id)
-    png = d / "strips" / f"f{frame_idx:06d}.png"
-    if png.exists():
-        return FileResponse(png, media_type="image/png")
     strip = d / "strips" / f"f{frame_idx:06d}.jpg"
     if not strip.exists():
         raise HTTPException(404, f"Strip not found: {frame_idx}")
@@ -1818,14 +1810,15 @@ async def get_far_strip(set_id: str, frame_idx: int):
 async def submit_far_label(set_id: str, result: dict):
     """Store one far-ball label (one row per frame).
 
-    Expected: ``{"frame_idx": int, "action": str, "x": float|null, "y": float|null,
-    "distractors": [[x, y], ...] (optional)}`` — all coords SOURCE pixels. ``action`` is one of
-    ``ball`` (visible, at x/y), ``obscured`` (occluded behind a player — x/y is the human's
-    best-guess position; tracker GT, NOT detector-positive), ``not_game_ball`` (legacy frame-level
-    distractor verdict), ``out_of_play`` / ``not_visible`` (no findable game ball), or ``none``
-    (only decoys marked so far — game ball unjudged). ``distractors`` = positions of ball-like
-    objects that are NOT the game ball (identity GT); they ride on the frame's single row alongside
-    any primary action. ``reason`` (the set's selection reason) is stored verbatim if sent.
+    Expected: {"frame_idx": int,
+    "action": "ball"|"obscured"|"not_visible"|"out_of_play"|"none",
+    "x": float|null, "y": float|null,
+    "distractors": [[x, y], ...] (optional)} — all coords SOURCE pixels.
+
+    ``obscured`` = the game ball is hidden but the annotator marks where it is
+    (selector/occlusion GT). ``distractors`` = ball-like objects that are NOT the
+    game ball (identity GT); they ride on the frame's single row alongside any
+    primary action. ``none`` = only distractors marked so far, game ball unjudged.
     """
     _load_far_manifest(set_id)  # validate set
     labels = _load_far_labels(set_id)
@@ -1850,6 +1843,105 @@ async def submit_far_label(set_id: str, result: dict):
             row["distractors"] = clean
     labels[fi] = row
     _save_far_labels(set_id, labels)
+    return {"accepted": True, "labeled": len(labels)}
+
+
+# ------------------------------------------------------------------
+# Viewport labeling API — label the EXPECTED RENDERED OUTPUT (Mark, 2026-07-19)
+# ------------------------------------------------------------------
+# Instead of labeling balls, the annotator sees the currently planned viewport
+# (+ AutoCam's aim + GT ball when known) on a full-frame strip and places the
+# focal point the broadcast SHOULD be looking at, sizing the view around it.
+# Sets are built by cli/build_viewport_label_queue.py from the worst
+# swing/divergence segments of a planned camera path. Same set-dir layout as
+# far-label: manifest.json + strips/ + labels.json.
+
+VIEWPORT_LABEL_DIR = Path("D:/training_data/viewport_label")
+
+
+def _vp_set_dir(set_id: str) -> Path:
+    d = VIEWPORT_LABEL_DIR / set_id
+    if not (d / "manifest.json").exists():
+        raise HTTPException(404, f"Viewport-label set not found: {set_id}")
+    return d
+
+
+def _load_vp_labels(set_id: str) -> dict[int, dict]:
+    p = VIEWPORT_LABEL_DIR / set_id / "labels.json"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return {int(r["frame_idx"]): r for r in json.load(f)}
+
+
+def _save_vp_labels(set_id: str, labels: dict[int, dict]) -> None:
+    p = VIEWPORT_LABEL_DIR / set_id / "labels.json"
+    with open(p, "w") as f:
+        json.dump([labels[k] for k in sorted(labels)], f, indent=2)
+
+
+@app.get("/api/viewport-label")
+async def list_viewport_sets():
+    out = []
+    if not VIEWPORT_LABEL_DIR.exists():
+        return out
+    for d in sorted(VIEWPORT_LABEL_DIR.iterdir()):
+        if not (d / "manifest.json").exists():
+            continue
+        with open(d / "manifest.json") as f:
+            m = json.load(f)
+        labels = _load_vp_labels(d.name)
+        out.append(
+            {
+                "set": d.name,
+                "n_frames": m.get("n_frames", len(m.get("frames", []))),
+                "labeled": len(labels),
+                "priority": m.get("priority", 999),
+            }
+        )
+    return out
+
+
+@app.get("/api/viewport-label/{set_id}")
+async def get_viewport_set(set_id: str):
+    with open(_vp_set_dir(set_id) / "manifest.json") as f:
+        m = json.load(f)
+    labels = _load_vp_labels(set_id)
+    return {**m, "labels": [labels[k] for k in sorted(labels)], "labeled": len(labels)}
+
+
+@app.get("/api/viewport-label/{set_id}/strip/{frame_idx}")
+async def get_viewport_strip(set_id: str, frame_idx: int):
+    d = _vp_set_dir(set_id)
+    strip = d / "strips" / f"f{frame_idx:06d}.jpg"
+    if not strip.exists():
+        raise HTTPException(404, f"Strip not found: {frame_idx}")
+    return FileResponse(strip, media_type="image/jpeg")
+
+
+@app.post("/api/viewport-label/{set_id}/result")
+async def submit_viewport_label(set_id: str, result: dict):
+    """One row per frame: {"frame_idx": int,
+    "action": "view"|"unsure"|"skip",
+    "fx": float|null, "fy": float|null,   # intended focal point, SOURCE px
+    "hfov_deg": float|null,               # intended view width
+    "agree": "ours"|"ac"|null}            # shortcut verdicts (A/C keys)
+    """
+    _vp_set_dir(set_id)
+    labels = _load_vp_labels(set_id)
+    fi = int(result["frame_idx"])
+    row = {
+        "frame_idx": fi,
+        "action": result.get("action") or "skip",
+        "fx": result.get("fx"),
+        "fy": result.get("fy"),
+        "hfov_deg": result.get("hfov_deg"),
+        "agree": result.get("agree"),
+        "source": result.get("source", "human"),
+        "submitted_at": datetime.now(UTC).isoformat(),
+    }
+    labels[fi] = row
+    _save_vp_labels(set_id, labels)
     return {"accepted": True, "labeled": len(labels)}
 
 
