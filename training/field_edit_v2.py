@@ -95,6 +95,10 @@ def games_list():
         if not gjp or not os.path.exists(gjp):
             continue
         gj = json.load(open(gjp, encoding="utf-8"))
+        # Explicitly excluded games (field_polygon_note starting "exclud", e.g.
+        # indoor/house footage that isn't a game) are dropped from the picker.
+        if str(gj.get("field_polygon_note", "")).lower().startswith("exclud"):
+            continue
         hp = bool(gj.get("field_polygon"))
         src = str(gj.get("field_polygon_source", ""))
         out.append(
