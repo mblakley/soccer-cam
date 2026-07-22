@@ -4,6 +4,36 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-22: Field-polygon store hygiene — model-seeded proposals + human confirm in the field editor; ONE repair method; geometry-validated
+
+**Context:** the EXP-DIST-66 optics sweep exposed rot in the polygon store: 4 geometrically
+INVERTED 2024 polygons (near/far swapped or stored in raw-vs-rotation-corrected space), 8
+non-10-point traces (54-pt dense `gamedata` boundaries, 12/14-pt `sonnet`), house/indoor
+recordings registered as games, and NOTHING validating point ordering (`build_field_geometry`
+is a catastrophe-gate only — a near/far flip yields a valid homography and silently inverts
+`field_depth`).
+
+**Decisions:**
+- **Canonical polygon = game.json `field_polygon`, 10 points, near=0-4 (bottom, L→R), far=5-9
+  (top, R→L), stored in the DISPLAY space** (frame after `video_rotation` correction).
+  `video_rotation` is the camera MOUNT rotation (raw upside-down Dahua = ±180), a separate
+  concern from polygon orientation; the 2024 archive's tags were inconsistent and are now fixed
+  where they surfaced.
+- **Repair method is ONE pipeline** (no per-game hacks): fix `video_rotation` so the frame
+  displays upright → re-seed with the field-outline model (`field_outline_v2`, rotation
+  auto-resolved by confidence, gate ≥6/10 confident keypoints + fore<1 ordering check) →
+  Mark confirms in the field editor (`/static/field-edit.html`, mounted 2026-07-22, deployed).
+  Model can't detect the field (blue-turf dome, off-frame touchline) → human draws from the
+  default box. Dense legacy traces → reduce to 10-pt (split by y, resample 5+5) as the proposal.
+- **Non-games are excluded, not deleted:** `camera__*` raw captures auto-hidden;
+  house/indoor recordings get `field_polygon_note: "excluded: …"` (reversible).
+- **State (2026-07-22): ALL non-excluded polygons pass the geometry check** (10-pt, near wider
+  AND lower, ordered, non-degenerate) — 39 human-confirmed via the editor. A programmatic
+  ordering validator goes into `build_field_geometry` with the geometry-conditioned detector
+  work so a future flip can never silently invert again.
+
+---
+
 ## 2026-07-21: Benchmark GT is FROZEN and VERSIONED — evals pin to a snapshot sha, not live label files
 
 **Context:** ball_labels grow over time (the hourly `selector_label_dedupe` task folds set-labeled

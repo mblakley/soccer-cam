@@ -4,6 +4,33 @@ Per-game observations about quality, orientation, and quirks. Machine-readable m
 
 ---
 
+## 2026-07-22 — polygon-store cleanup findings (vision-verified, cross-cutting)
+
+- **Inverted stored polygons (repaired + Mark-confirmed):** `flash__2024.05.01_vs_RNYFC_away`,
+  `flash__2024.05.10_vs_NY_Rush_away` (polygon never re-mapped after `combined_rotated.mp4`),
+  `heat__2024.06.04_vs_Spencerport_home` (near/far point order reversed), `heat__2024.06.27_vs_Pittsford_away`.
+  Root cause class: polygon labeled in raw vs rotation-corrected space inconsistently; `video_rotation`
+  tags in the 2024 archive were unreliable (also fixed: `heat__2024.05.19_vs_Byron_Bergen_home` was a
+  real game tagged right_side_up but stored upside-down).
+- **Dense legacy traces reduced to 10-pt:** 6× 54-pt `gamedata` outlines (several — e.g.
+  `heat__2025.07.22_vs_Fairport_away` — only traced the LEFT half of the field; Mark dragged the right
+  side out) + 2× `sonnet` 12/14-pt.
+- **Field-model domain misses (real games, polygon drawn by hand):** `flash__2026.03.21_vs_Cuyahoga_Valley_SA_home`
+  = BLUE-turf indoor dome (model trained on green grass); `flash__2025.05.10_vs_Rush_home` = patchy
+  brown field, near touchline runs off the bottom of frame.
+- **House/indoor recordings EXCLUDED (not games; `field_polygon_note` exclude, reversible):**
+  `heat__2025.07.11_vs_Honeoye_Falls_Blaze_home_FF`, `heat__2025.07.12_Niagara_Tournament`,
+  `heat__2025.07.13_Niagara_Tournament_{17.40,18.56,19.10}`, `heat__2026.05.31_vs_West_Seneca_Sc_away`,
+  `heat__2026.05.30_vs_Spencerport_gold_2_away`, `heat__2026.05.07_vs_Pittsford_Mustangs_away`,
+  `flash__2026.05.10_vs_Upper_90_FC_home_11.19` — each has a same-date sibling entry that IS the real
+  game. `heat__2025.07.12` has NO game footage at all. All `camera__*` entries are raw captures,
+  auto-hidden from the field-edit picker.
+- **AutoCam distill coverage (for the geometry-conditioned detector):** 39/47 confirmed-polygon Dahua
+  games have `*.mp4.jsonl` detections; thin outliers: `heat__2024.05.31_vs_Fairport_home` (167 lines),
+  `flash__2025.06.14_vs_Vestal_home` (1,761).
+
+---
+
 ## Flash 2013s
 
 ### flash__2024.05.01_vs_RNYFC_away

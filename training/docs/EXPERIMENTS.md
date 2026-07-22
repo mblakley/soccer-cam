@@ -4,6 +4,63 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-66: camera↔field geometry — the OPTICS are near-deterministic (r≈0.9) but per-game hyperparameters don't correlate with them; fd+db is NOT a net win pooled over 13 games (2026-07-21/22)
+
+Three linked results that close the selector geometry arc (64/65) and open the detector one.
+
+**(a) fd+db multi-game addendum to EXP-DIST-64/65 — the 2-game story didn't survive 13 games.**
+fd+db0.4 vs v7 on ALL 13 games with fullgame dumps + ball_labels GT (training-leaked for BOTH
+models equally, so the head-to-head is fair), product chain:
+
+| pooled (13 games) | NEAR | FAR |
+|---|---|---|
+| v7 (champion) | 1040/1327 = 0.784 | 800/1206 = **0.663** |
+| fd+db0.4 | 1062/1327 = **0.800** | 759/1206 = 0.629 |
+
+NEAR +0.016 / FAR −0.034 pooled = net slightly negative. The SPC/Iron held-out win was real but
+came from games with little far to lose. **v7's near/far operating point is ~Pareto-optimal:
+near/far REBALANCING is zero-sum without NEW information.** (Per-game table:
+`G:\ballresearch\selector\geo_corr.log` + eval scripts in `G:\ballresearch\selector\`.)
+
+**(b) Geometry↔hyperparameter correlation (Mark: "does best db scale with polygon size/position?")
+— NO usable law.** Per-game best depth-balance (argmax over v7/db0.2..0.5, 13 games) vs polygon
+geometry: all |r| ≤ 0.23 (height +0.23, far-width +0.23, foreshorten +0.21). best_db is scattered
+(5 games want v7, 4 want db0.3, rest split). The db0.4 *near-gain* does track field POSITION in
+frame (near_y +0.51, bottom-gap −0.51, center_y +0.48) — Mark's "closer camera → bigger near
+balls" direction — but n=13 and the far-loss offsets it. **A training knob 3 stages downstream of
+the physics is the wrong place to look for the physics.**
+
+**(c) Direct optics (the right target) — apparent ball size IS the polygon, nearly deterministically.**
+Across 63 games (every game.json with a valid 10-pt polygon), `expected_ball_diameter_px` at the
+near/mid/far touchline vs polygon shape:
+
+| relationship | r |
+|---|---|
+| near-ball px ↔ near-touchline pixel width | **+0.92** |
+| near-ball px ↔ near-line height in frame (near_y) | **+0.90** |
+| near-ball px ↔ foreground below field (bottom-gap) | **−0.90** |
+| near/far size ratio ↔ 1/foreshortening | **+0.87** |
+
+Near ball ≈ **3.5×** the far ball in every game (perspective), and the fleet splits into two
+geometry families: **Dahua** (field ~half frame width, near ball ≈9–10 px) vs **Reolink** (~full
+frame, ≈14–15 px) — a real ~1.5× cross-camera spread that no current detector input encodes
+(crops are dewarped band pixels: band-y encodes depth *within* a camera, nothing encodes it
+*across* cameras). Bonus finding: 4 stored 2024 polygons were geometrically INVERTED (near/far
+swapped or raw-vs-corrected rotation space) — triggered the polygon-store cleanup (see
+DECISIONS 2026-07-22).
+
+**Conclusion / direction:** the physics is exact and computable per game
+(`world_geometry.expected_ball_diameter_px`); the selector can't use it (64/65: rebalancing is
+zero-sum); the detector currently trains on essentially ONE geometry (`SET_POLYGONS` →
+DEFAULT_POLY_0527) so a geometry input has nothing to learn from. → **Geometry-conditioned
+detector plan** (branch `feat/geometry-conditioned-detector`): expected-size input channel,
+multi-geometry crop store (Dahua = AutoCam-distilled per the standing filter decision), gates =
+Spencerport ceiling-far no-regress + near hard no-regress + cross-camera held-out Dahua eval.
+Aerial thesis: apparent size is aerial-robust while ground-plane position is aerial-fooled — a
+size-reference channel lets the net learn "bigger than ground-expected here = airborne ball".
+
+---
+
 ## EXP-DIST-65: field_depth as a selector feature (Mark's "geometry as input") — REVERTED; it suppresses near; near is a TRACKER problem, not a selector one (2026-07-21)
 
 **Hypothesis (Mark):** condition the selector on true field position instead of correcting for

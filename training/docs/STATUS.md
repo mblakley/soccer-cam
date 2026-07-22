@@ -1,6 +1,33 @@
 # Current Status
 
-*Last updated: 2026-07-19 (early AM)*
+*Last updated: 2026-07-22*
+
+## 2026-07-22 — polygon store CLEAN + geometry-conditioned detector plan approved; Phase 0b audit numbers in
+
+- **ACTIVE EFFORT: geometry-conditioned detector** (Mark: use the camera↔field relationship in
+  training for ball size / far-near-aerial). Plan approved 07-22 (phased, gated; branch
+  `feat/geometry-conditioned-detector`, worktree `soccer-cam-geodet`). Grounding: EXP-DIST-66 —
+  optics are near-deterministic (size↔polygon r≈0.9, near≈3.5× far, Dahua vs Reolink ≈1.5×
+  cross-camera spread) but the selector can't use geometry (64/65 zero-sum); the detector trains
+  on ONE geometry today (SET_POLYGONS→0527) so the channel needs multi-geometry data.
+- **Phase 0b audit (07-22): human Dahua labels ≈ ZERO** (reolink 4,227 clicks/74 sets + ~1,613 in
+  legacy-named reolink sets; dahua 4 clicks). → Dahua training labels = **AutoCam distill** (Mark's
+  call; standing conf+in-field+corroboration filter). **39/47 confirmed-polygon Dahua games have
+  AutoCam detection jsonl** (~100–550k det-lines each) — ample. **Aerial labels: NONE exist**
+  (no kick-criteria sets ever labeled) → aerial is a thesis note this round, not a gate.
+  Full numbers: `G:\ballresearch\geodet\audit.{log,json}`.
+- **Polygon store is CLEAN (prerequisite done):** every non-excluded game passes the geometry
+  check; 39 polygons human-confirmed via the field editor (mounted at `/api/fieldv2` +
+  `/static/field-edit.html`, deployed 07-22, lint fixed after a red main). 4 inverted-2024
+  polygons + 8 malformed traces repaired via the ONE repair pipeline; house/`camera__`
+  recordings excluded (see DECISIONS 2026-07-22). Picker: 103→68 real games.
+- **FORTNITE-OP guard hardened after a crash**: a dead presence-beacon read as "idle" and let
+  training contend with live Fortnite → box crash. Guard now keys on the PHYSICAL signal
+  (game process holding the GPU via nvidia-smi → yield unconditionally); stale beacon fails
+  safe to "present" + auto-restarts; verified live against a running game.
+- Selector arc CLOSED: v7 stays champion (EXP-DIST-64/65/66 — fd+db is net-negative pooled over
+  13 games; near belongs to the tracker). Next selector lever, if any, is tracker miss-state
+  dynamics, not features.
 
 ## 2026-07-19 — overnight verdicts: σ=5 REJECTED, diff5 = ceiling-parity/ordering-worse, stab/cur pair design; wind A/B #1 = no-op at moderate wind
 
