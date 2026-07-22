@@ -87,6 +87,10 @@ def games_list():
     """All registry games that have a game.json, with polygon/verify status (for the picker)."""
     out = []
     for g in _games():
+        # Raw camera captures (e.g. "camera__2025.01.16_13.34.59") are setup /
+        # indoor / house footage, not games -- keep them out of the review picker.
+        if g["game_id"].startswith("camera__"):
+            continue
         gjp = _resolve(g["game_id"])[1]
         if not gjp or not os.path.exists(gjp):
             continue
