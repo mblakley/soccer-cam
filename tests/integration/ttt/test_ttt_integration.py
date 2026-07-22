@@ -757,9 +757,19 @@ class TestScheduleAndGames:
         assert isinstance(result, list)
 
     def test_get_roster(self, ttt_client):
-        """Get team roster."""
+        """Get team roster.
+
+        Post-PR #126 contract: player_id is the stable identity and
+        full_name is the display name; user_id is optional (None for
+        accountless youth players).
+        """
         result = ttt_client.get_roster(TEAM_ID)
         assert isinstance(result, list)
+        for entry in result:
+            assert "player_id" in entry
+            assert "full_name" in entry
+            # user_id may be absent/None; must not be assumed present.
+            assert entry.get("user_id") is None or isinstance(entry["user_id"], str)
 
     def test_auto_match_video_no_match(self, ttt_client):
         """Auto-match with time far from any game returns no match."""

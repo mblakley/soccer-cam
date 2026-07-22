@@ -606,6 +606,14 @@ class TTTApiClient:
         """Get team roster.
 
         GET {api_base_url}/api/internal/device-link/roster
+
+        Each entry's stable identity is ``player_id`` (a ``team_members`` row),
+        plus a display ``full_name``. ``user_id`` is OPTIONAL — accountless
+        youth players have ``user_id: null`` and only login-backed staff rows
+        (coaches/managers) carry one. Callers must key entries on
+        ``player_id``, falling back to ``user_id`` only when ``player_id`` is
+        absent (older/degenerate rows), and must not assume ``user_id`` is
+        present.
         """
         url = f"{self.api_base_url}/api/internal/device-link/roster"
         params = {"team_id": team_id}
