@@ -141,6 +141,13 @@ def main() -> None:
         help="wind-align every band to the game's first frame before cropping "
         "(BandStabilizer; labels corrected by the per-frame shift — EXP-DIST-57)",
     )
+    ap.add_argument(
+        "--geo-channel",
+        action="store_true",
+        help="4-plane crops: channel 3 = expected ball diameter per pixel from "
+        "the game polygon homography (gray3geo encoding, EXP-DIST-66). Hard "
+        "error on any game whose polygon fails the geometry gate.",
+    )
     args = ap.parse_args()
 
     holdout, val = set(args.holdout), set(args.val)
@@ -187,6 +194,7 @@ def main() -> None:
         target_width=args.target_width,
         hwaccel=not args.no_hwaccel,
         stabilize=args.stabilize,
+        geo_channel=args.geo_channel,
     )
     print("\nDATASET:", summary, flush=True)
 
