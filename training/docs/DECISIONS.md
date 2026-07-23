@@ -123,6 +123,21 @@ event test before any live verdict).
   checkpoint scored on each 18k instrument against its truncated history (known-truncation
   caveat stated) — no instrument debugging mid-verdict.
 
+**Referee FINAL (v3, FROZEN @ ac1f42c — hash prints in every output):** the Δ-bootstrap
+magnitude branch was MEASURED anti-conservative on a 500-split single-arm null
+(α@95≈0.10 at 7 events; α@99 still ≈0.07 — stricter percentiles insufficient) → replaced
+with an EXACT paired per-event sign-flip PERMUTATION test (α nominal by construction at any
+event count). Final validation matrix: all settled factorial pairs zero ✓; ph1v2's
+known-real effect reads pm=0.135 at SPC-134 — a quantified POWER FLOOR, not a rule error:
+**SPC-134 cannot decide anything but massive effects, which is exactly why IRON-18k/SPC-18k
+(62/37 events) are the primary detector instruments.** The un-zeroed trio reverts to
+suggestive (diff5 pm=0.093, stab pm=0.090, df3 pm=0.111 — directionally consistent, just
+above threshold at 134-window power); NO settled verdict changes. **Embargo queue
+re-ordered by consequence: ctrl_stab-vs-cur wide re-dump runs FIRST** (a zero-cost shipping
+flag hangs on it, and it would be the month's second data-side win), diff5 second (closure
+already protected by mechanism evidence). Rule set frozen until Phase 2 is read; any future
+referee change re-reads via the embargo mechanism, never live.
+
 **Referee calibration outcome (2026-07-23 PM, both paths):** sign-test-only was BLIND to the
 one known-real effect (ph1v2's long-passage magnitude damage read ev6v7 p=1.00) —
 structurally biasing Phase 2 toward pattern 4. The calibrated DUAL rule (paired event sign
