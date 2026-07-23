@@ -207,32 +207,46 @@ def main() -> None:
     print(
         "\n=== HIERARCHY WALK (rows above: Pittsford-human, viewport-v1 = PENDING/manual) ==="
     )
+    import math
+
+    def _sign_p(k: int, n: int) -> float:
+        if n == 0:
+            return 1.0
+        p = sum(math.comb(n, i) for i in range(0, min(k, n - k) + 1)) / 2**n * 2
+        return min(1.0, p)
+
     for pair in pairs:
         a, b = pair.split(":")
         print(f"\n  pair {a} vs {b}:")
         assigned = False
         for inst in HIERARCHY:
             ma, mb = scored.get((inst, a)), scored.get((inst, b))
-            if not ma or not mb:
+            pfa, pfb = frames.get((inst, a)), frames.get((inst, b))
+            if not ma or not mb or pfa is None or pfb is None:
                 print(f"    {INSTRUMENT_NAMES[inst]:<14} PENDING")
                 continue
+            # decisive-or-zero = the PRE-REGISTERED pairwise read: paired EVENT
+            # sign test on shared frames (EXP-DIST-68 protocol). The v1 composer
+            # used unpaired mutual CI-exclusion and wrongly called diff5's
+            # far-argmax gap DECISIVE (settled p=0.549) — caught by validating
+            # against the settled factorial before refereeing Phase 2.
             verdicts = []
-            for k in metrics:
-                if k in ma and k in mb:
-                    pa, la, ha, _ = ma[k]
-                    pb, lb, hb, _ = mb[k]
-                    decisive = (pa < lb or pa > hb) and (pb < la or pb > ha)
-                    verdicts.append((k, decisive, pa - pb))
-            dec = [(k, d) for k, d, _ in verdicts if d]
+            common = sorted(set(pfa) & set(pfb))
+            for mi, k in ((0, "ceil"), (1, "arg")):
+                a_only = [g for g in common if pfa[g][mi] and not pfb[g][mi]]
+                b_only = [g for g in common if pfb[g][mi] and not pfa[g][mi]]
+                ea, eb = len(_events(a_only)), len(_events(b_only))
+                p = _sign_p(ea, ea + eb)
+                decisive = p < 0.05
+                verdicts.append((k, decisive, ea, eb, p))
+            dec = [k for k, d, *_ in verdicts if d]
             line = "  ".join(
-                f"{k}:{'DECISIVE' if d else 'zero'}({delta:+.3f})"
-                for k, d, delta in verdicts
+                f"{k}:{'DECISIVE' if d else 'zero'}(ev{ea}v{eb},p={p:.2f})"
+                for k, d, ea, eb, p in verdicts
             )
             print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}")
             if dec and not assigned:
-                print(
-                    f"    >>> first decisive row: {INSTRUMENT_NAMES[inst]} ({[k for k, _ in dec]})"
-                )
+                print(f"    >>> first decisive row: {INSTRUMENT_NAMES[inst]} ({dec})")
                 assigned = True
         if not assigned:
             print(
