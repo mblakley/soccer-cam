@@ -4,6 +4,33 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-23 (c): INTERPOLATION is the headline — every historical number was measured at d=0.37–0.60 from training; generalization has NEVER been measured. Fairport gets NATIVE anchors; pre-registered expectations
+
+**The reframe (Mark):** hn4's 0.965 far-ceiling, ctrl_cur's 0.974, the ±0.078 seed band, and
+every G1 threshold were all measured on SPC — whose nearest training games sit at descriptor
+distance 0.37–0.60. That is INTERPOLATION. The product deploys onto a fresh rig every game —
+GENERALIZATION — and no number in this log has ever measured it.
+
+**Pre-registered (before the Phase 2 verdict lands):**
+1. **Fairport 06.06 is EXPECTED to come in below SPC.** When it does, that is the first honest
+   generalization-adjacent number, NOT a regression. Do not "fix" it back.
+2. **The SPC↔Fairport spread is a tracked metric** from now on (report it with every eval).
+3. **Fairport gets NATIVE anchors** — hn4 + ctrl_cur dumped/swept on Fairport 06.06
+   (`G:\ballresearch\geodet\anchors_sweep.log`) BEFORE anything gates on it. SPC's G1
+   thresholds are never transplanted to another game.
+4. Empirical status (EXP-DIST-69): within the interpolation zone the plain detector is
+   geometry-insensitive, and the cache contains ZERO generalization-zone points — Phase 2's
+   Dahua/holdout evals are the first. Phase 2's novel-geometry rows therefore read as a
+   geo-channel-specific test.
+
+**Descriptor scope note:** the descriptor covers GEOMETRY (mount/setback/field size via the
+polygon), NOT appearance — kits/turf/background familiarity is a separate, secondary leak
+axis. Corollary: the reinstated 05.30 Fairport (shared appearance with the 06.06 eval,
+d=2.14 different geometry) is Phase 2's cleanest probe isolating the geo channel from visual
+familiarity — report it separately in the verdict.
+
+---
+
 ## 2026-07-23 (b): Holdouts + leak-judgment by GEOMETRY DISTANCE, not venue names — venue ban REPLACED; small-delta reads are EVENT-level
 
 **Context (Mark):** venue is a bad proxy for geometry BOTH ways — the Fairport-away dates were

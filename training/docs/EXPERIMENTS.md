@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-69: empirical test of the geometry descriptor (13 cached dump games, zero GPU) — plain detector is geometry-INSENSITIVE within the interpolation zone; the cache has NO generalization-zone points at all (2026-07-23)
+
+**Question (Mark):** does the champion detector's per-game far-ceiling/argmax correlate with
+descriptor distance-to-nearest-training-game? Real r → stratified verdict validated + the
+descriptor becomes a training-set planning tool. Absent → Phase 2's novel-geometry rows read
+as a geo-channel-specific test only.
+
+**Result (n≥20-GT rows only; n=0 far rows initially poisoned the correlation and were cut):**
+far-ceiling r=+0.20/+0.10 (n=8), far-argmax r=−0.53/−0.62 (n=8, WRONG direction, within noise
+at this n), near ~0 (n=13). **But the decisive observation is RANGE RESTRICTION: every cached
+dump game sits at d=0.00–1.05 — the interpolation zone.** The generalization zone (d>2, where
+every customer deployment lives) has zero measured points in the entire cache.
+
+**Conclusion:** (i) within interpolation, plain-detector performance is geometry-insensitive —
+Phase 2's novel-geometry rows are a geo-channel-specific read, not a general geometry effect;
+(ii) the stratified protocol could not be validated OR refuted from cache — Phase 2's Dahua/
+holdout evals are the first-ever generalization-zone datapoints; (iii) the descriptor's
+planning value rests on the EXP-DIST-66 physics, pending those points.
+Script: `G:\ballresearch\geodet\descriptor_validation.py`.
+
+---
+
 ## EXP-DIST-68 [CORRECTED same-day]: PAIRED read of the encoding factorial — at EVENT level everything is noise (diff5 "p=0.004" was frame-inflation); nothing leans positive → ENCODINGS CLOSED on direction (2026-07-23)
 
 **CORRECTION (Mark): flips are NOT independent trials.** Misses arrive in passages (the near
