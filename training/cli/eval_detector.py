@@ -101,6 +101,14 @@ def main() -> None:
         help="peak NMS radius in band px (bigger = merge nearby peaks)",
     )
     ap.add_argument(
+        "--target-width",
+        type=int,
+        default=None,
+        help="isotropic band target width (cross-camera ball-size normalization) — "
+        "MUST match the width the checkpoint's store was built with (e.g. a "
+        "--normalize store: reolink 5120 / dahua 3900). Default None = native.",
+    )
+    ap.add_argument(
         "--no-infield-gate",
         action="store_true",
         help="disable in-field candidate gating (default: gate — the teacher was in-field "
@@ -251,7 +259,7 @@ def main() -> None:
         if warp is None:
             sh, sw = img.shape[:2]
             far_poly = _far_margin_polygon(poly, 400.0)
-            warp = _native_iso_warp(far_poly, sw, sh, None)
+            warp = _native_iso_warp(far_poly, sw, sh, args.target_width)
             mpoly = warp.points(far_poly).astype(np.int32)
             mask = np.zeros(warp.shape, np.uint8)
             cv2.fillPoly(mask, [mpoly], 255)
