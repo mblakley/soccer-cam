@@ -242,6 +242,7 @@ def main() -> None:
     band_gray: dict[int, np.ndarray] = {}
     warp = None
     mask = None
+    geo_plane = None  # gray3geo: per-game geometry plane (band px expected size)
     stab = BandStabilizer() if args.stabilize else None
     shifts: dict[int, tuple[float, float]] = {}
     for f, img in iter_frames_from_segments(
@@ -254,6 +255,10 @@ def main() -> None:
             mpoly = warp.points(far_poly).astype(np.int32)
             mask = np.zeros(warp.shape, np.uint8)
             cv2.fillPoly(mask, [mpoly], 255)
+            if _meta["encoding"] == "gray3geo":
+                from video_grouper.inference.ball_detector import band_geo_plane
+
+                geo_plane = band_geo_plane(np.asarray(poly, float), warp)
         band_gray[f] = _dewarp_mask_gray(img, warp, mask, stab)
         if stab is not None:
             shifts[f] = stab.last
@@ -262,6 +267,8 @@ def main() -> None:
             g1 = band_gray.get(f - 1, g0)
             g2 = band_gray.get(f - 2, g1)
             stack = np.stack((g2, g1, g0), 0).astype(np.float32) / 255.0
+            if geo_plane is not None:
+                stack = np.concatenate([stack, geo_plane[None]], axis=0)
             hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
             cands = []
             for hx, hy, sc in extract_peaks(
