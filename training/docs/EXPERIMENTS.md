@@ -24,6 +24,26 @@ SPC spans) can multiply eval event counts several-fold for ZERO new clicks — d
 attacking the 7-far/5-near-event starvation (EXP-DIST-70) before any new labeling. Queued
 under eval enrichment.
 
+**[ADDENDUM, same-day — the full anatomy]**
+- **SPC full pool: 1,351 ball GT (1,785 was rows incl. meta/not-visible), 119 events** —
+  10.8× the frozen window's 11. **Provenance is NOT protocol-uniform**: the pool mixes
+  NORMAL (spc_normal1, seg spans), HARD-adversarial (clip1-5, hard, hard_review), and
+  AGREEMENT-easy (agree/true_agree/dynamic_agree spans, 240 rows) sampling. → SPC-full is
+  biased as an ABSOLUTE instrument; valid for PAIRED A-vs-B reads (same frames, both arms),
+  with strata reportable by set name.
+- **IRON is the best event instrument in the fleet: 576 ball GT, 264 full-pool events**;
+  its historical evals were ALSO first-window truncated (88 GT / 20 events).
+- **Span audit of the 13 fullgame-dump games: CLEAN** (99.5–100% GT coverage) — EXP-DIST-69's
+  geometry-insensitivity numbers stand as measured.
+- **Declared instrument registry (suffix mandatory, pre-declared per result, never chosen
+  after seeing both):** SPC-134 (continuity) · SPC-18k@5473 (905 GT/37 ev) · IRON-18k@1501
+  (222 GT/62 ev) · FAIR-6k@47640 (175 GT) · Pittsford-human. Phase 2 verdict pre-declares
+  ALL of these; ~+4–5 h eval GPU accepted (labels-over-GPU exchange rate).
+- **Re-reads of 67/68/70 on the wide instruments are NOT zero-GPU** (cached dumps only
+  contain the 134-window candidates): requires 18k-window re-dumps of the gating checkpoints
+  (ctrl, diff5, safe_ctrl, safe_geo ≈ 1.5 h each). Scheduled behind the Phase 2 chain —
+  closed-stays-closed verification this week.
+
 ---
 
 ## EXP-DIST-70: RETROACTIVE verdict audit — every closed call since EXP-DIST-46 against its metric's event-bootstrap CI (18 cached SPC dumps, zero GPU) (2026-07-23)
