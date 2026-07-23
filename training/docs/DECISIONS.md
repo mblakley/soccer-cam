@@ -42,6 +42,33 @@ GENERALIZATION — and no number in this log has ever measured it.
    set is the ONLY human-GT cross-camera point in the design → prioritized.
 8. **Attenuation guard:** range restriction ATTENUATES r — "geometry-insensitive within
    d<1.05" must never drift into "geometry doesn't matter"; the null is SILENT about d>2.
+9. **[CORRECTION to #5, same-day]** "Pittsford-home d=3.32" was its distance to the nearest
+   EVAL game; its distance to the Phase 2 TRAINING set is **0.75** (RNYFC) — adding the Dahua
+   training games pulled the training set geometrically around the Dahua eval. **The current
+   design therefore has NO generalization-zone (d>2) eval point at all** (SPC ~0.4, Fairport
+   0.43, Iron ~0.8, Pittsford 0.75): Phase 2's cross-camera rows measure interpolation-grade
+   cross-FAMILY transfer, not generalization. The rescued d>2.4 games (Buffalo-away 2.77,
+   RNYFC-home 2.47) are the only genuine generalization candidates in the fleet.
+10. **Training-set INTERNAL spread (measured, not assumed):** all-21 pairwise median d=2.69
+    (p25 1.90, max 6.44); within-Reolink 1.74, within-Dahua 2.43, cross-family median 3.47
+    (min 2.26). **The channel SEES wide spread in training — the mechanism is learnable.**
+    Pre-registered accordingly: a weak geo-channel result on the Dahua eval is a
+    cross-camera-transfer failure of the CHANNEL (mechanism-specific), NOT a generalization
+    null; and a strong one is still not a generalization claim. **Allocation of the two
+    rescued d>2.4 games (eval point vs Phase 3 training diversity) is decided AFTER the
+    Phase 2 verdict — not defaulted to eval-only.**
+11. **The pre-registered magnitudes in #6 are PRIORS, not derived** — no measurement exists
+    at d>2 (EXP-DIST-69's null is silent there); they encode object-scale/resolution
+    intuition only. Semantics: results OUTSIDE the prior band are surprises requiring
+    mechanism analysis; results inside it must NOT be reported as "within expectations"
+    as if the priors were evidence. **Comparison denominator pinned: every drop is computed
+    vs the SAME checkpoint's SPC number — never vs the leaked Fairport anchors.**
+12. **safe_geo seed-2 read order (when it lands):** FIRST as a second estimate of the
+    within-arm noise band — ±0.078 came from ONE context (ctrl vs hn4, SPC argmax-far) and
+    currently gates every verdict. Confirm → recent "within noise" calls firm up. Diverge →
+    re-read the factorial + stab-lean calls against the wider band. Going forward the noise
+    band is PER-METRIC-PER-EVAL-GAME (Fairport's 216 GT ≠ SPC's 134). Seesaw-hardening is
+    the secondary read.
 
 **Descriptor scope note:** the descriptor covers GEOMETRY (mount/setback/field size via the
 polygon), NOT appearance — kits/turf/background familiarity is a separate, secondary leak
