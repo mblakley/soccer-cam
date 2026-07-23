@@ -4,6 +4,30 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-68: PAIRED per-frame read of the encoding factorial (cached SPC dumps) — diff5 is SIGNIFICANTLY worse (p=0.004), nothing leans positive → ENCODINGS CLOSED (2026-07-23)
+
+**Method (Mark's protocol):** single-seed argmax deltas inside the ±0.078 seed band prove
+nothing; instead, per-GT-frame paired argmax on the CACHED SPC dumps (134 GT, same frames,
+same GT, zero GPU): which frames flip between arms? A real effect concentrates flips one way;
+seed noise scatters them. Two-sided sign test on the flip counts.
+
+| pair | argmax A / B | flips A-only / B-only (far) | sign p |
+|---|---|---|---|
+| diff5 vs ctrl (v2 store) | 0.231 / 0.351 | 6 (5) / **22 (21)** | **0.004** |
+| df3 vs ctrl (v2 store) | 0.291 / 0.351 | 9 (8) / 17 (14) | 0.169 |
+| ctrl_stab vs ctrl_cur | 0.321 / 0.254 | 20 (19) / 11 (10) | 0.150 |
+| diff5_stab vs ctrl_stab | 0.343 / 0.321 | 8 (7) / 5 (5) | 0.581 |
+
+**Verdict:** diff5's far-ordering damage is REAL (22 far frames the control gets that diff5
+loses, p=0.004) — stronger than EXP-DIST-59's "worse within noise" phrasing. df3 leans the
+same direction unresolved; the stabilized twin round is pure noise; stab-vs-cur still leans
+stab on far without clearing noise (EXP-DIST-63's opt-in stance unchanged). **No second seed
+needed: nothing is ambiguous in a direction worth funding.** → DECISIONS: encodings CLOSED.
+Reader: `G:\ballresearch\geodet\paired_read2.py` (reusable for any dump pair — this is the
+required read protocol before concluding from small SPC deltas).
+
+---
+
 ## EXP-DIST-67: gray3geo SAFETY pair (single-rig) — the geometry channel is NOT inert: identical val recall, but on held-out SPC it acts as a NEAR-position prior (near-argmax 0.368→0.684, far 0.391→0.252). Single-rig training must never ship it (2026-07-23)
 
 **Question (Phase 1 gate of the geometry-conditioned detector plan):** does adding the

@@ -4,6 +4,25 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-23: Input ENCODINGS are CLOSED (diff3/diff5/df3 family) — stop funding them
+
+**Context:** the encoding factorial ran across EXP-DIST-51→59→63 with single-seed argmax
+deltas inside the documented ±0.078 seed band — unconcludable by construction. Mark's read
+protocol: paired per-frame flips on cached dumps first, second seed only if ambiguous.
+
+**Decision (from EXP-DIST-68's paired read):** diff5 is SIGNIFICANTLY worse than control
+(p=0.004, 22-vs-6 flips, far-dominated); df3 unresolved leaning worse; the stabilized twin
+round is noise. **No encoding variant has ever leaned positive → the diff-encoding family is
+closed.** No further encoding experiments without a NEW mechanism argument that explains why
+the diffs would help where these failed. `--stabilize` is unaffected (a robustness feature,
+opt-in per EXP-DIST-63, not an encoding). Small-delta SPC conclusions REQUIRE the paired
+per-frame read (EXP-DIST-68 protocol) from now on; the 134-GT SPC clip alone cannot resolve
+1-3 ball effects — Fairport 06.06 (216 GT, frozen in benchmark v1) is promoted to a CO-EQUAL
+held-out eval game, and the three 2026 Fairport-away games are BANNED from training sets
+(same venue = eval leak; enforced in the Phase 2 store holdouts).
+
+---
+
 ## 2026-07-22: Field-polygon store hygiene — model-seeded proposals + human confirm in the field editor; ONE repair method; geometry-validated
 
 **Context:** the EXP-DIST-66 optics sweep exposed rot in the polygon store: 4 geometrically
