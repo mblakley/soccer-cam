@@ -123,6 +123,27 @@ event test before any live verdict).
   checkpoint scored on each 18k instrument against its truncated history (known-truncation
   caveat stated) — no instrument debugging mid-verdict.
 
+**Referee calibration outcome (2026-07-23 PM, both paths):** sign-test-only was BLIND to the
+one known-real effect (ph1v2's long-passage magnitude damage read ev6v7 p=1.00) —
+structurally biasing Phase 2 toward pattern 4. The calibrated DUAL rule (paired event sign
+test for COUNT asymmetry OR paired Δ-rate bootstrap over shared events for MAGNITUDE) now
+catches ph1v2 (d=−0.127[−0.19,−0.03] DECISIVE ✓). **The stronger test also un-zeros three
+settled SPC-134 pairs** (diff5-worse d≈−0.13; df3-worse; ctrl_stab-BETTER-than-cur
+d≈+0.08 on far-arg). These directions all match the settled leans — but small-event
+percentile bootstraps can be anti-conservative, so: **REWRITE EMBARGO — no settled verdict
+(63/68) changes until the wide-instrument re-dumps confirm (diff5 first, per GPU priority);
+the Phase 2 verdict uses the dual rule from birth** (its instruments were chosen for
+exactly this power). If stab-better confirms wide, EXP-DIST-63's opt-in posture is
+re-decided on its own entry.
+
+**Tracker-track protocol port (pre-registered BEFORE the Viterbi sweep emits numbers):**
+the tracker arc INHERITS this week's protocol rather than relearning it —
+(i) viewport-capture noise band = bootstrap over MISS-EVENTS on frozen GT v1 + the
+near-scramble set (computed before any arm number is read); (ii) the three miss-cost arms
+(nearness×velocity / candidate-margin / combined) are read with the same dual decisive
+rule; (iii) `compose_verdict` gets a viewport-capture instrument type — extended, not
+hand-read; (iv) tuned on SPC, confirmed on Fairport 06.06, selector-version-coupled (v7).
+
 **Post-verdict DAY ONE (written now, per pattern class):**
 - **Patterns 1–2:** adoption work leads (full-recipe retrain of the winning arm, viewport
   gate); re-dumps fill remaining instrument gaps; Mark's clicks go to Pittsford completion.
