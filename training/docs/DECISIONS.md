@@ -2,6 +2,61 @@
 
 Append-only. Never delete entries — if a decision is reversed, add a new entry explaining why.
 
+## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
+
+*Last maintained: 2026-07-23*
+
+- **Champions:** detector hn4 (basis: far-CEILING 0.965; argmax claims need replicates), selector v7.
+- **Gates (G1, redefined 07-23):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1).
+  Argmax = directional color only. Never gate on a metric whose CI floor exceeds the effect size.
+- **Noise protocol:** event-level sign test (gap=64) + event-bootstrap 95% CI per metric per game
+  + per-metric-per-eval-game seed bands. SPC is a 7-far/5-near-EVENT instrument.
+- **Eval games:** SPC + Iron + Fairport 06.06 (co-equal; native anchors, leak-caveated) +
+  Pittsford-home 06.25 (Dahua; human GT pending). Holdout policy: geometry distance with a NAMED
+  reference set — never venue names.
+- **Encodings (diff3/diff5/df3):** CLOSED on direction (EXP-DIST-68). `--stabilize`: opt-in.
+- **Geometry channel (gray3geo):** plumbed end-to-end; single-rig = suspected position prior
+  (suggestive, EXP-DIST-67+CI addendum); Phase 2 three-arm (ctrl/geo/norm) decisive run in flight.
+- **Deployment reality:** fleet LOO-NN median 0.42 (deployment ≈ interpolation under fleet-covering
+  training); COVERAGE is the lever; uncovered axis = OPERATOR diversity.
+- **Near ball:** tracker-dynamics problem; next lever = state-dependent miss-entry cost
+  (position×velocity + candidate-margin arms), viewport-scored, selector-version-coupled.
+- **Labeling:** Mark's clicks are the SCARCEST resource — budgeted asks only (consumer + est.
+  clicks + per-click justification), confirm-not-draw seeding, disagreement sampling,
+  exchange-rate logged. Priority: Pittsford Dahua set → event-spreading tail queues →
+  near-scramble viewport labels. Aerial: DEFERRED (no consumer experiment).
+
+---
+
+## 2026-07-23 (e): LABELING BUDGET — Mark's clicks are the scarcest resource in the system (scarcer than GPU)
+
+**Protocol (Mark):**
+1. Every labeling ask states (a) the CONSUMER — the experiment/decision the labels unblock
+   (no consumer = no ask; aerial stays unlabeled until an aerial experiment exists);
+   (b) estimated clicks; (c) why THIS queue beats the alternatives per click right now.
+   Never "more labels" generically.
+2. **Confirm-not-draw is the default**: every queue is SEEDED from champion outputs (the
+   field-editor pattern — confirm or drag, never draw from scratch), and DISAGREEMENT
+   sampling (champion-vs-AutoCam or arm-vs-arm frames) beats uniform sampling — agreements
+   label themselves.
+3. **Exchange rate tracked** in `training/docs/LABELING_LOG.md`: labels/session + what each
+   batch decided; future asks ranked on that evidence.
+4. **Priority order now:** Pittsford Dahua human set FIRST (gates the only human-GT
+   cross-camera read of the Phase 2 verdict; seeded, queued before the verdict lands) →
+   event-spreading tail queues (30–50 frames × 6–8 tail games — many short passages beat
+   dense clips; ~triples eval event count per click and feeds per-game bands) →
+   near-scramble viewport labels when selector recalibration is next. Aerial: deferred.
+
+**Also (G1 redefinition, pre-verdict):** G1 primary = CEILING (per-frame basis, ~10× the
+event count of argmax flips) + VIEWPORT capture; argmax demoted to directional color.
+Rationale in EXP-DIST-70 (the retroactive audit): never gate on a metric whose CI floor
+exceeds the effect sizes under study.
+
+**Also (operator axis):** fleet LOO-NN covers THIS operator's rigging habits; the uncovered
+axis is OPERATOR diversity. 2–3 games of someone else's footage is the cheapest diversity
+acquisition and the real generalization test — a concrete acquisition target, not a
+descriptor-space zone. (Check whether the F:/Guest recordings qualify as other-operator.)
+
 ---
 
 ## 2026-07-23 (c): INTERPOLATION is the headline — every historical number was measured at d=0.37–0.60 from training; generalization has NEVER been measured. Fairport gets NATIVE anchors; pre-registered expectations
@@ -24,7 +79,9 @@ GENERALIZATION — and no number in this log has ever measured it.
    geo-channel-specific test.
 5. **ANCHOR CAVEATS (computed 07-23, before the anchors landed):** d(Fairport 06.06 →
    nearest Phase 2 training game) = **0.43** (Western_NY_Flash_away) — Fairport is
-   INTERPOLATION-zone for Phase 2, not the hoped-for ~2. And the historical champions
+   INTERPOLATION-zone for Phase 2, not the hoped-for ~2. *[The "Pittsford-home d=3.32"
+   claim later in this point is SUPERSEDED → point 9: its d to the P2 TRAINING set is
+   0.75.]* And the historical champions
    (hn4, ctrl_cur) were TRAINED ON 06.06 itself (champion cur list) — their "Fairport-native
    anchors" are SELF-LEAKED: they measure trained-on-game performance, and their SPC→Fairport
    delta is held-out-interpolation vs trained-on, NOT an interpolation→generalization gap.
@@ -150,7 +207,9 @@ opt-in per EXP-DIST-63, not an encoding). Small-delta SPC conclusions REQUIRE th
 per-frame read (EXP-DIST-68 protocol) from now on; the 134-GT SPC clip alone cannot resolve
 1-3 ball effects — Fairport 06.06 (216 GT, frozen in benchmark v1) is promoted to a CO-EQUAL
 held-out eval game, and the three 2026 Fairport-away games are BANNED from training sets
-(same venue = eval leak; enforced in the Phase 2 store holdouts).
+(same venue = eval leak; enforced in the Phase 2 store holdouts). *[Venue ban SUPERSEDED
+same-day → entry (b): geometry-distance policy; 05.28 stays banned (d=0.45), 05.30
+REINSTATED (d=2.14).]*
 
 ---
 

@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-70: RETROACTIVE verdict audit — every closed call since EXP-DIST-46 against its metric's event-bootstrap CI (18 cached SPC dumps, zero GPU) (2026-07-23)
+
+**Why (Mark):** prevents superseded argmax gaps being cited as measurements later. Full CI
+table: `audit_ci_table.py` output (far-ceil/far-arg/near-ceil/near-arg, 95% event-bootstrap,
+gap=64). SPC instrument capacity: 7-8 far events, 4-5 near events.
+
+**Verdict classification:**
+
+| verdict | deciding metric | audit basis |
+|---|---|---|
+| hn4 champion (46-era) | far-ceiling 0.965[0.85,1.00] | **stands on ceiling** |
+| 58: σ5 REJECTED | 3 reads incl. ceiling 0.913 vs 0.965 (CIs overlap) | stands on **direction across three reads**; no single read resolvable |
+| 59: diff5 ordering-worse | ceiling tie + argmax 0.122 vs 0.261 | ceiling-parity **stands**; argmax gap **never resolvable** (68-addendum event p=0.55) |
+| 61: ph1v2 "costs nothing" | ceiling 0.957 vs 0.965 | ceiling claim **stands** — BUT far-argmax 0.104[0.02,0.15] vs ctrl 0.261[0.16,0.43] is the **only CI-SEPARATED pair in the table**: v2 person-cotraining damaged far ORDERING. Flag for any future ph1 revival. |
+| 62: viewport crushes AutoCam | 0.683 vs 0.050 R15m | **stands, effect >> any band** |
+| 63: stab opt-in | all pairs overlap | "no-harm" **stands on ceiling-parity**; stab-lean was **never resolvable** |
+| 64/65: selector fd/db closed | product-chain R15m halvings | stands on **large-delta direction**; CIs not yet computed at selector layer (future) |
+| 67: gray3geo seesaw | argmax CIs overlap | **downgraded same-day** (CI addendum) to suggestive |
+| 68: encodings CLOSED | event-level flips | **stands on direction** (explicitly not significance) |
+| 51/52/53 | — | VOID by store confound (55); excluded |
+
+**Rule going forward (G1 redefinition, DECISIONS):** gate on ceiling + viewport capture;
+argmax is directional color — never gate on a metric whose CI floor exceeds the effect size
+under study.
+
+---
+
 ## EXP-DIST-69: empirical test of the geometry descriptor (13 cached dump games, zero GPU) — plain detector is geometry-INSENSITIVE within the interpolation zone; the cache has NO generalization-zone points at all (2026-07-23)
 
 **Question (Mark):** does the champion detector's per-game far-ceiling/argmax correlate with
