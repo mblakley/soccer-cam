@@ -123,6 +123,34 @@ event test before any live verdict).
   checkpoint scored on each 18k instrument against its truncated history (known-truncation
   caveat stated) — no instrument debugging mid-verdict.
 
+**POWER at the deciding instruments (measured pre-verdict; real event layouts, injected
+effects at the pre-registered magnitudes; `power_sim.py`):**
+
+| instrument | effect shape | Δ=0.05 | Δ=0.10 | Δ=0.15 | 80% threshold |
+|---|---|---|---|---|---|
+| IRON-18k (62 ev) | frame-iid (diffuse) | 0.97 | 1.00 | 1.00 | **Δ≥0.05** |
+| IRON-18k | event-block (passages) | 0.59 | 0.65 | 0.84 | **Δ≥0.15** |
+| SPC-18k (37 ev) | frame-iid | 1.00 | 1.00 | 1.00 | **Δ≥0.05** |
+| SPC-18k | event-block | 0.29 | 0.58 | 0.75 | >0.15 (not reached) |
+
+**Bound verdict language: "pattern 4" prints as "no diffuse effect ≥0.05 and no
+passage-concentrated effect ≥0.15 at 80% power (IRON-18k)" — falsifiable, not "nothing
+separates."** Structural note: a single flipped passage is undetectable BY CONSTRUCTION
+under sign-flip permutation — block effects are detected by how many events flip; Iron's
+many short events out-power SPC's few long ones per frame.
+
+**Stab re-dump action (pre-stated before it lands; outside the Phase 2 table):** if
+ctrl_stab-vs-cur confirms pm<0.05 on the wide instruments, `--stabilize` flips to DEFAULT
+for future builds and the champion recipe re-runs stabilized — the cheapest available
+champion-improvement attempt, data-side like the only lever that ever worked. If it fails,
+opt-in stands and the 134-window lean is recorded as noise.
+
+**Instrument admission price (permanent; applies to the tracker port and every future
+instrument):** every NEW instrument type gets its own split-half null calibration before
+its first live read — miss-events have different length/correlation structure than
+flip-events, and the permutation's nominal α holds only under the exchangeability it
+assumes. Today's referee is calibrated for THIS instrument class only.
+
 **Referee FINAL (v3, FROZEN @ ac1f42c — hash prints in every output):** the Δ-bootstrap
 magnitude branch was MEASURED anti-conservative on a 500-split single-arm null
 (α@95≈0.10 at 7 events; α@99 still ≈0.07 — stricter percentiles insufficient) → replaced
