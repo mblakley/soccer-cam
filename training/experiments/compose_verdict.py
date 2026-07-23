@@ -225,24 +225,49 @@ def main() -> None:
             if not ma or not mb or pfa is None or pfb is None:
                 print(f"    {INSTRUMENT_NAMES[inst]:<14} PENDING")
                 continue
-            # decisive-or-zero = the PRE-REGISTERED pairwise read: paired EVENT
-            # sign test on shared frames (EXP-DIST-68 protocol). The v1 composer
-            # used unpaired mutual CI-exclusion and wrongly called diff5's
-            # far-argmax gap DECISIVE (settled p=0.549) — caught by validating
-            # against the settled factorial before refereeing Phase 2.
+            # decisive-or-zero = the CALIBRATED pairwise read (validated on the
+            # settled factorial + the one known-real effect, 2026-07-23):
+            #  (i)  paired EVENT sign test (COUNT asymmetry; EXP-DIST-68) — v1's
+            #       unpaired CI-exclusion wrongly called diff5 DECISIVE;
+            #  (ii) paired Δ-rate bootstrap over SHARED events (MAGNITUDE
+            #       asymmetry) — the sign test alone read ph1v2-vs-ctrl (the one
+            #       CI-separated real effect, long-passage losses) as ev6v7
+            #       p=1.00: blind to magnitude, structurally biasing toward
+            #       pattern 4. Decisive if EITHER fires.
             verdicts = []
             common = sorted(set(pfa) & set(pfb))
+            ev_common = _events(common)
+            rng2 = np.random.default_rng(11)
             for mi, k in ((0, "ceil"), (1, "arg")):
                 a_only = [g for g in common if pfa[g][mi] and not pfb[g][mi]]
                 b_only = [g for g in common if pfb[g][mi] and not pfa[g][mi]]
                 ea, eb = len(_events(a_only)), len(_events(b_only))
                 p = _sign_p(ea, ea + eb)
-                decisive = p < 0.05
-                verdicts.append((k, decisive, ea, eb, p))
+
+                def _drate(evlist):
+                    fs = [f for e in evlist for f in e]
+                    return (
+                        sum(pfa[f][mi] for f in fs) - sum(pfb[f][mi] for f in fs)
+                    ) / len(fs)
+
+                boots = [
+                    _drate(
+                        [
+                            ev_common[i]
+                            for i in rng2.integers(0, len(ev_common), len(ev_common))
+                        ]
+                    )
+                    for _ in range(NBOOT)
+                ]
+                dlo, dhi = np.percentile(boots, [2.5, 97.5])
+                mag = dlo > 0 or dhi < 0
+                decisive = (p < 0.05) or mag
+                verdicts.append((k, decisive, ea, eb, p, _drate(ev_common), dlo, dhi))
             dec = [k for k, d, *_ in verdicts if d]
             line = "  ".join(
-                f"{k}:{'DECISIVE' if d else 'zero'}(ev{ea}v{eb},p={p:.2f})"
-                for k, d, ea, eb, p in verdicts
+                f"{k}:{'DECISIVE' if d else 'zero'}"
+                f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f}[{dlo:.2f},{dhi:.2f}])"
+                for k, d, ea, eb, p, dr, dlo, dhi in verdicts
             )
             print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}")
             if dec and not assigned:
