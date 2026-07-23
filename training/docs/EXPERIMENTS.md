@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-71: eval_detector's FIRST-WINDOW span trap — the hn4 "Fairport anchor" scored 4/208 GT (stale early labels, 20 m off); and SPC evals have been using 134 of 1,785 labeled rows all along (2026-07-23)
+
+**What happened:** the first Fairport anchor run returned ceiling 0.0 on 4 GT. Root cause:
+`eval_detector` spans `[min(GT), min(GT)+max_frames]` (eval_detector.py:220-223). Fairport's
+labels are whole-game folded (208 ball GT over frames 1,169–94,392; densest 6,000-frame
+window = 47,640–53,640 with 175 GT); the default kept the 4 stragglers at the front. The
+"result" was an INSTRUMENT failure — neither pre-stated anchor branch applies; anchors
+re-running with `--span-lo 47640 --span-hi 53640` (Phase 2 chain's Fairport evals fixed the
+same way).
+
+**Protocol:** the default is NOT changed (SPC's historical numbers are first-window
+instruments; changing the window breaks every anchor comparison). Instead **every eval on a
+new game states its span explicitly**, chosen as the densest GT window (`fair_span.py`).
+
+**Latent discovery — SPC has 1,785 labeled rows; the benchmark uses 134.** The frozen
+first-window instrument is kept for continuity, but a SECOND instrument (densest/multi-window
+SPC spans) can multiply eval event counts several-fold for ZERO new clicks — directly
+attacking the 7-far/5-near-event starvation (EXP-DIST-70) before any new labeling. Queued
+under eval enrichment.
+
+---
+
 ## EXP-DIST-70: RETROACTIVE verdict audit — every closed call since EXP-DIST-46 against its metric's event-bootstrap CI (18 cached SPC dumps, zero GPU) (2026-07-23)
 
 **Why (Mark):** prevents superseded argmax gaps being cited as measurements later. Full CI
