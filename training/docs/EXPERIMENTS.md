@@ -70,7 +70,19 @@ required read protocol before concluding from small SPC deltas).
 
 ---
 
-## EXP-DIST-67: gray3geo SAFETY pair (single-rig) — the geometry channel is NOT inert: identical val recall, but on held-out SPC it acts as a NEAR-position prior (near-argmax 0.368→0.684, far 0.391→0.252). Single-rig training must never ship it (2026-07-23)
+## EXP-DIST-67 [CI ADDENDUM 2026-07-23 PM]: the "seesaw" is SUGGESTIVE, not established — event-bootstrap 95% CIs OVERLAP (SPC = 7 far / 5 near events as an instrument)
+
+Event-bootstrap CIs (gap=64, B=2000; eval-sampling noise, `loo_nn_and_bootstrap.py`):
+near-argmax ctrl 0.368 CI[0.00,0.60] vs geo 0.684 CI[0.20,0.80]; far-argmax ctrl 0.391
+CI[0.07,0.46] vs geo 0.252 CI[0.12,0.36] — **all overlapping**. SPC's 134 GT collapse to just
+7 far + 5 near EVENTS; it cannot resolve effects smaller than ~±0.2–0.3 argmax. The paired
+per-frame flip DIRECTIONS still lean seesaw, so the conclusion is downgraded to: *the channel
+is consumed and plausibly acts as a position prior single-rig* — the seed-2 replicate
+(queued on FORTNITE-OP) and richer eval games decide. The "never ship single-rig gray3geo"
+guard stays (cheap, and the direction is one-sided). Protocol: every reported argmax/ceiling
+now carries its event-bootstrap CI alongside the seed band (different noise sources).
+
+## EXP-DIST-67 [original]: gray3geo SAFETY pair (single-rig) — the geometry channel is NOT inert: identical val recall, but on held-out SPC it acts as a NEAR-position prior (near-argmax 0.368→0.684, far 0.391→0.252). Single-rig training must never ship it (2026-07-23)
 
 **Question (Phase 1 gate of the geometry-conditioned detector plan):** does adding the
 expected-ball-size channel (`gray3geo`) change anything when trained on SINGLE-RIG data?

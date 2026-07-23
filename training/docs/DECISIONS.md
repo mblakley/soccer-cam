@@ -69,6 +69,32 @@ GENERALIZATION — and no number in this log has ever measured it.
     re-read the factorial + stab-lean calls against the wider band. Going forward the noise
     band is PER-METRIC-PER-EVAL-GAME (Fairport's 216 GT ≠ SPC's 134). Seesaw-hardening is
     the secondary read.
+13. **LOO-NN distribution (fleet, n=67; reference set = fleet-minus-self): median 0.42,
+    p90 0.79, max 1.09.** By the fleet's own evidence, a fresh deployment lands
+    ~interpolation-distance from a training set that COVERS the fleet — coverage, not
+    distance-hardening, is the product lever. Natural-eval tail (LOO-NN>p90): RNYFC-home
+    1.09, Buffalo-away 1.09, Chili_Vortex 1.05, 06.01 Pittsford_Mustangs 0.83, Lakefront_home
+    0.82, both Irondequoit 0.80–0.82. NB the "2.77/2.47" figures were distances vs the
+    21-game P2 TRAINING set; the same games sit at 1.09 vs the fleet. **Every quoted distance
+    MUST name its reference set.**
+14. **Family-ID confound (pre-registered):** the training spread decomposes into two camera
+    families (cross-family median 3.47 dominates). A geo win ONLY on cross-family rows is
+    consistent with the channel learning a CAMERA-FAMILY BINARY — Phase 1's degeneration one
+    level up. A continuous prior must ALSO show on within-family geometry variation: the
+    reinstated 05.30 probe is the designated test. And `--normalize` is itself two-valued
+    (per-family target_width 5120/3900) — i.e. norm ENCODES family too — so geo-vs-norm
+    alone cannot separate binary from continuous; only the within-family rows can.
+15. **Scope reframe (product-critical):** the near-term product path replaces the camera
+    family (current Reolink → next hardware tier) — a cross-family transfer at moderate
+    geometry distance is EXACTLY the deployment event on the roadmap. **Phase 2 is the dry
+    run for that migration**; its result is read as migration evidence, not as a downgraded
+    generalization claim.
+16. **Event-bootstrap CIs are part of the read protocol:** every reported argmax/ceiling
+    carries a 95% CI from resampling flip EVENTS (gap=64, B=2000) on the cached dump —
+    eval-sampling noise, per-metric-per-game, zero GPU (`loo_nn_and_bootstrap.py`). Tables
+    carry BOTH the seed band and the bootstrap CI (different noise sources). First
+    application: SPC is a 7-far/5-near-EVENT instrument and the EXP-DIST-67 seesaw CIs
+    overlap (see the 67 addendum).
 
 **Descriptor scope note:** the descriptor covers GEOMETRY (mount/setback/field size via the
 polygon), NOT appearance — kits/turf/background familiarity is a separate, secondary leak
