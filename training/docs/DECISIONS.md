@@ -29,6 +29,10 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   roadmap = selector recalibration + Viterbi dynamics, eval enrichment, operator-diversity
   acquisition, FP16 iGPU when speed resumes. Data refresh was the month's only measured
   champion improvement; idle trainers are not a reason to run detector experiments.
+- **Protocol lives in TOOLING:** the read protocol is now the project's largest artifact and
+  only pays while cheap to follow — `compose_verdict.py` emits the full instrument table +
+  hierarchy walk automatically, so compliance is the default path. **A verdict that takes
+  longer to read than to run is a protocol bug.**
 - **Labeling:** Mark's clicks are the SCARCEST resource — budgeted asks only (consumer + est.
   clicks + per-click justification), exchange-rate logged. **Measured rate: ~1,800 clicks
   decided EVERY verdict since EXP-DIST-46 while GPU runs mostly returned noise — labels
@@ -101,6 +105,12 @@ frame-level significance is the one most worth re-checking).
 **Standing instrument guard (in code, eval_detector):** any eval whose span keeps <50% of
 the game's label pool prints an instrument WARNING naming EXP-DIST-71 — the class of bug
 that let Iron run a month at 88/576 GT undetected.
+
+**Verdict COMPOSITION (pre-declared — the last free degree of freedom):** the headline is
+the tie-break hierarchy WALKED top-down with every row stated decisive-or-zero (by its
+event-CI); the FULL arm × instrument × strata table ships with every verdict, no cell
+omitted as noise. The action table binds the decision; this binds the telling. Composition
+is emitted by tooling (`compose_verdict.py`), not written by hand.
 
 **Fairport-anchor pre-statement (committed BEFORE reading the anchor sweeps, which already
 sit unread on disk):**
@@ -319,7 +329,12 @@ protocol: paired per-frame flips on cached dumps first, second seed only if ambi
 **Decision (from EXP-DIST-68's paired read):** diff5 is SIGNIFICANTLY worse than control
 (p=0.004, 22-vs-6 flips, far-dominated); df3 unresolved leaning worse; the stabilized twin
 round is noise. **No encoding variant has ever leaned positive → the diff-encoding family is
-closed.** No further encoding experiments without a NEW mechanism argument that explains why
+closed.** *[MECHANISM ADDENDUM 07-23 PM, from the strata read: diff5's flips concentrate in
+HARD strata (6-to-2 events, occlusion/ambiguity frames) — this RULES OUT the noise/jitter
+mechanism that motivated the stabilization-interaction hope. The diffs mislead under
+occlusion, which stabilization cannot fix. Arc closed at MECHANISM level, not just
+direction. Corollary: no encoding variant needs to survive the future RKNN port;
+EncodingPrelude remains infrastructure only.]* No further encoding experiments without a NEW mechanism argument that explains why
 the diffs would help where these failed. `--stabilize` is unaffected (a robustness feature,
 opt-in per EXP-DIST-63, not an encoding). Small-delta SPC conclusions REQUIRE the paired
 per-frame read (EXP-DIST-68 protocol) from now on; the 134-GT SPC clip alone cannot resolve
