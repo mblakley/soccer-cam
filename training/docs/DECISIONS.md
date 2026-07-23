@@ -22,6 +22,26 @@ GENERALIZATION — and no number in this log has ever measured it.
    geometry-insensitive, and the cache contains ZERO generalization-zone points — Phase 2's
    Dahua/holdout evals are the first. Phase 2's novel-geometry rows therefore read as a
    geo-channel-specific test.
+5. **ANCHOR CAVEATS (computed 07-23, before the anchors landed):** d(Fairport 06.06 →
+   nearest Phase 2 training game) = **0.43** (Western_NY_Flash_away) — Fairport is
+   INTERPOLATION-zone for Phase 2, not the hoped-for ~2. And the historical champions
+   (hn4, ctrl_cur) were TRAINED ON 06.06 itself (champion cur list) — their "Fairport-native
+   anchors" are SELF-LEAKED: they measure trained-on-game performance, and their SPC→Fairport
+   delta is held-out-interpolation vs trained-on, NOT an interpolation→generalization gap.
+   The anchors remain useful as difficulty context; the comparison vs Phase 2's clean-held-out
+   arms is anchor-FAVORING and must be read as such. **The first genuine generalization-zone
+   human-GT points are Pittsford-home 06.25 (d=3.32) + the distant-fleet label queues.**
+6. **Pre-registered expected magnitudes** (so results can surprise): for genuine d>2 human-GT
+   games — far-ceiling drop **5–12 pts** (0.97 → 0.85–0.92), far-argmax relative drop
+   **30–50%**, near-ceiling roughly holds (bigger object). For Fairport 06.06 (interpolation
+   + leaked anchors): anchors expected AT-or-ABOVE SPC level; Phase 2 clean arms expected
+   modestly below the anchors there.
+7. **Dahua verdict rows report DISTILL-scored and HUMAN-scored separately** — AutoCam labels
+   carry teacher disagreement (0.68-vs-0.05 windy-game error profile), so a distill-scored
+   "generalization drop" is confounded with teacher error. The Pittsford human viewport-label
+   set is the ONLY human-GT cross-camera point in the design → prioritized.
+8. **Attenuation guard:** range restriction ATTENUATES r — "geometry-insensitive within
+   d<1.05" must never drift into "geometry doesn't matter"; the null is SILENT about d>2.
 
 **Descriptor scope note:** the descriptor covers GEOMETRY (mount/setback/field size via the
 polygon), NOT appearance — kits/turf/background familiarity is a separate, secondary leak
