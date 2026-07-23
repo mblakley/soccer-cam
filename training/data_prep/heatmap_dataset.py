@@ -103,6 +103,7 @@ def build_heatmap_crops(
     record_depth: bool = False,
     hwaccel: bool = False,
     stabilize: bool = False,
+    geo_channel: bool = False,
 ) -> dict:
     """Pre-render 3-frame grayscale crops + ball-center targets to ``out_dir``.
 
@@ -134,10 +135,21 @@ def build_heatmap_crops(
     to one reference (EXP-DIST-57: wind excursions put ~21% of windy-game ball
     positions outside the static mask). Recorded in the summary → a stabilized
     store gets its own index sha and can never masquerade as a legacy store.
+
+    ``geo_channel`` (default ``False`` → byte-identical legacy path) widens each
+    crop to ``[4, crop, crop]``: channel 3 = the GEOMETRY channel, the expected
+    apparent ball diameter (band px) at every pixel from the game polygon's
+    homography (``gray3geo`` encoding; EXP-DIST-66 — apparent size IS the
+    camera↔field relationship). Encoded ``clip(round(band_px * 8), 0, 255)``
+    uint8, so the standard ``/255`` load yields ``band_px / 31.875``. A game
+    whose polygon fails the geometry gate (ordering/homography) is a HARD
+    error — a neutral fallback would silently feed the net a constant channel.
+    Recorded in the summary → a geo store gets its own index sha.
     """
     import av
     import cv2
 
+    from video_grouper.inference.ball_detector import band_geo_map_u8
     from video_grouper.inference.iso_warp import BandStabilizer
 
     out_dir = Path(out_dir)
@@ -174,6 +186,19 @@ def build_heatmap_crops(
         mask = np.zeros((bh, bw), np.uint8)
         cv2.fillPoly(mask, [mpoly], 255)
 
+        geo_map: np.ndarray | None = None
+        if geo_channel:
+            # Single-source quantization: the SAME helper the gray3geo runtime
+            # uses (band_geo_map_u8), so store and inference agree to the bit.
+            try:
+                geo_map = band_geo_map_u8(polygon, warp)
+            except ValueError as e:
+                raise SystemExit(
+                    f"geo_channel: game {gid} has no valid metric geometry "
+                    f"({e}) — fix or drop the game; a neutral fallback would "
+                    "poison the channel."
+                ) from e
+
         # Raw-segment streaming decode (EXP-DIST-21): pull ONLY each label's 3-frame
         # window from the raw per-segment clips — keyframe-seek + presentation-order
         # PTS matching (frame-exact, incl. on re-encoded clips), corruption-isolated
@@ -196,10 +221,14 @@ def build_heatmap_crops(
         def _emit(ccx, ccy, has_ball, tag):
             x0 = int(np.clip(round(ccx) - half, 0, max(0, bw - crop)))
             y0 = int(np.clip(round(ccy) - half, 0, max(0, bh - crop)))
-            stack = np.zeros((3, crop, crop), np.uint8)
+            nch = 4 if geo_map is not None else 3
+            stack = np.zeros((nch, crop, crop), np.uint8)
             for i, gr in enumerate(grays):
                 patch = gr[y0 : y0 + crop, x0 : x0 + crop]
                 stack[i, : patch.shape[0], : patch.shape[1]] = patch
+            if geo_map is not None:
+                gp = geo_map[y0 : y0 + crop, x0 : x0 + crop]
+                stack[3, : gp.shape[0], : gp.shape[1]] = gp
             if has_ball:
                 lx, ly = dbx - x0, dby - y0
                 if not (0 <= lx < crop and 0 <= ly < crop):
@@ -291,6 +320,9 @@ def build_heatmap_crops(
     if stabilize:
         # only when on — legacy stores stay byte-identical
         summary["stabilize"] = True
+    if geo_channel:
+        # only when on — legacy stores stay byte-identical
+        summary["geo_channel"] = True
     (out_dir / "index.json").write_text(
         json.dumps({"summary": summary, "items": index})
     )

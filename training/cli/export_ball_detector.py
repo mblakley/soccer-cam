@@ -32,12 +32,16 @@ def main() -> None:
     import numpy as np
     import torch
 
-    from training.models.heatmap_net import load_detector_checkpoint
+    from training.models.heatmap_net import EncodingPrelude, load_detector_checkpoint
 
     # model = prelude + net (raw frames in, logits out). The prelude's encoding
     # math is traced INTO the graph, so the ONNX input contract stays raw gray
     # frames for every encoding and the runtime needs no encoding knowledge.
+    # (gray3geo is the exception by design: its 4th channel is EXTERNAL per-game
+    # geometry, so the contract widens to 4 planes — the runtime detects this
+    # from the graph's input shape and supplies the band geo map.)
     model, meta = load_detector_checkpoint(args.ckpt, base=args.base)
+    in_ch = EncodingPrelude.IN_CHANNELS[meta["encoding"]]
 
     class _WithSigmoid(torch.nn.Module):
         def __init__(self, net: torch.nn.Module):
@@ -48,7 +52,7 @@ def main() -> None:
             return torch.sigmoid(self.net(x))
 
     wrapped = _WithSigmoid(model).eval()
-    dummy = torch.zeros(1, 3, 256, 512)
+    dummy = torch.zeros(1, in_ch, 256, 512)
     torch.onnx.export(
         wrapped,
         (dummy,),
@@ -63,7 +67,7 @@ def main() -> None:
     import onnxruntime as ort
 
     rng = np.random.default_rng(0)
-    x = rng.random((1, 3, 384, 1024), dtype=np.float32)
+    x = rng.random((1, in_ch, 384, 1024), dtype=np.float32)
     with torch.no_grad():
         ref = wrapped(torch.from_numpy(x)).numpy()
     sess = ort.InferenceSession(args.out, providers=["CPUExecutionProvider"])

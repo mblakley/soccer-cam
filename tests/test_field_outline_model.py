@@ -90,6 +90,13 @@ def test_score_loss_minimized_at_match():
 def test_full_net_forward_and_onnx_signature(tmp_path):
     pytest.importorskip("torchvision")
     ort = pytest.importorskip("onnxruntime")
+    from unittest import mock as _mock
+
+    if isinstance(ort, _mock.MagicMock):
+        # conftest stubs onnxruntime on Windows (onnxruntime-gpu DLL guard);
+        # importorskip returns the stub, and asserting ONNX I/O signatures
+        # against a MagicMock is meaningless. Runs for real on the GPU server.
+        pytest.skip("onnxruntime stubbed by conftest (Windows DLL guard)")
     from training.field_outline.model import FieldOutlineNet, export_onnx
 
     net = FieldOutlineNet("resnet18", pretrained=False).eval()

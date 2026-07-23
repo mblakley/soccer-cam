@@ -135,6 +135,43 @@ def test_default_encoding_byte_identical_to_bare_net():
 
 
 @needs_torch
+def test_encoding_prelude_gray3geo_identity_and_width():
+    """gray3geo: identity on the 4-plane input (gray frames + external geometry
+    plane pass straight to the net); contract widths = 4 in AND out."""
+    from training.models.heatmap_net import EncodingPrelude, HeatmapNet
+
+    p = EncodingPrelude("gray3geo")
+    assert p.in_channels == 4
+    assert p.out_channels == 4
+    x = torch.rand(2, 4, 32, 32)
+    assert p(x) is x  # exact identity, like gray3
+    # composes with a 4-wide net end to end
+    net = HeatmapNet(in_frames=4, in_ch_per_frame=1, base=8).eval()
+    with torch.no_grad():
+        out = net(p(x))
+    assert out.shape == (2, 1, 32, 32)
+
+
+@needs_torch
+def test_load_detector_checkpoint_gray3geo_roundtrip(tmp_path):
+    """A gray3geo checkpoint loads with the 4-channel net inferred from the
+    state dict and runs on a 4-plane input."""
+    from training.models.heatmap_net import HeatmapNet, load_detector_checkpoint
+
+    net = HeatmapNet(in_frames=4, in_ch_per_frame=1, base=8).eval()
+    ck = tmp_path / "geo.pt"
+    torch.save(
+        {"model": net.state_dict(), "encoding": "gray3geo", "base": 8, "out_ch": 1},
+        ck,
+    )
+    model, meta = load_detector_checkpoint(ck)
+    assert meta == {"encoding": "gray3geo", "base": 8, "out_ch": 1}
+    x = torch.rand(1, 4, 32, 32)
+    with torch.no_grad():
+        assert torch.equal(model(x), net(x))  # identity prelude
+
+
+@needs_torch
 def test_load_detector_checkpoint_roundtrip(tmp_path):
     from training.models.heatmap_net import HeatmapNet, load_detector_checkpoint
 

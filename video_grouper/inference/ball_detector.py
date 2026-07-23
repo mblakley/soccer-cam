@@ -141,6 +141,66 @@ def _pad8(a: np.ndarray) -> tuple[np.ndarray, int, int]:
     return a, h, w
 
 
+def model_input_channels(sess: ort.InferenceSession) -> int:
+    """Input-plane count of the exported detector (3 = gray3/diff*, 4 = gray3geo).
+
+    The channel dim is static in the export (only H/W are dynamic), so this is
+    how the runtime detects that a model wants the external GEOMETRY plane.
+    """
+    ch = sess.get_inputs()[0].shape[1]
+    return int(ch) if isinstance(ch, int) else 3
+
+
+def band_geo_map_u8(polygon: np.ndarray, warp: CropIsoWarp) -> np.ndarray:
+    """``(bh, bw)`` uint8 GEOMETRY map: expected ball diameter per band pixel.
+
+    THE single source of the gray3geo quantization — the training store
+    (``build_heatmap_crops(geo_channel=True)``) stacks this uint8 map as crop
+    channel 3, and the runtime divides it by 255 (``band_geo_plane``), so
+    training and inference see the same values to the bit.
+
+    Band ``(bx, by)`` -> source ``(bx/scale, by/scale + y_top)`` ->
+    ``expected_ball_diameter_px`` (source px) -> band px (``* scale``) ->
+    ``clip(round(px * 8), 0, 255)`` (1/8 px quantization, covers 0-31.9 band
+    px). Computed on an 8 px grid + resized (the field is smooth). ``polygon``
+    is the RAW 10-point field outline — not the margin-expanded band polygon.
+
+    Raises ``ValueError`` when the polygon fails the metric-geometry gate: a
+    gray3geo model with a neutral/backwards geometry plane is worse than no
+    model, so this must fail loudly.
+    """
+    import cv2  # noqa: PLC0415
+
+    from video_grouper.inference.world_geometry import (  # noqa: PLC0415
+        build_field_geometry,
+    )
+
+    geom = build_field_geometry(np.asarray(polygon, dtype=np.float64))
+    if not geom.valid:
+        raise ValueError(
+            "gray3geo detector requires valid metric field geometry, but the "
+            "polygon failed the ordering/homography gate"
+        )
+    bh, bw = warp.shape
+    gy, gx = np.mgrid[0 : bh + 8 : 8, 0 : bw + 8 : 8]
+    src = np.column_stack(
+        [gx.ravel() / warp.scale, gy.ravel() / warp.scale + warp.y_top]
+    )
+    d_band = (geom.expected_ball_diameter_px(src) * warp.scale).reshape(gy.shape)
+    q = np.clip(
+        np.round(cv2.resize(d_band, (bw, bh), interpolation=cv2.INTER_LINEAR) * 8.0),
+        0,
+        255,
+    )
+    return q.astype(np.uint8)
+
+
+def band_geo_plane(polygon: np.ndarray, warp: CropIsoWarp) -> np.ndarray:
+    """``(bh, bw)`` float32 geometry plane in [0, 1] for the gray3geo input stack
+    (``band_geo_map_u8 / 255`` — matches the store's uint8-then-/255 load path)."""
+    return (band_geo_map_u8(polygon, warp).astype(np.float32)) / 255.0
+
+
 def infer_band(
     sess: ort.InferenceSession,
     stack: np.ndarray,
@@ -149,7 +209,9 @@ def infer_band(
 ) -> np.ndarray:
     """Run the fully-conv detector over a wide field band in horizontal tiles;
     stitch the sigmoid heatmaps by max in the overlaps. ``stack`` is
-    ``(3, bh, bw)`` float32 in [0, 1]. Returns ``(bh, bw)``.
+    ``(C, bh, bw)`` float32 in [0, 1] — C=3 gray frames, plus the geometry
+    plane (``band_geo_plane``) as channel 3 for a gray3geo model. Returns
+    ``(bh, bw)``.
 
     Mirrors ``training/cli/eval_detector.py::infer_band`` (torch) — the export
     bakes the sigmoid into the graph, so the session output IS the heatmap.
@@ -220,6 +282,10 @@ def detect_video_candidates(
         fps = float(vs.average_rate) if vs.average_rate else 20.0
         warp: CropIsoWarp = native_iso_warp(mask_poly, src_w, src_h, target_width)
         mask = band_mask(warp, mask_poly)
+        # gray3geo contract (4-plane input): supply the per-game geometry plane.
+        geo_plane = (
+            band_geo_plane(polygon, warp) if model_input_channels(sess) == 4 else None
+        )
         grays: list[np.ndarray] = []
 
         frame_idx = 0
@@ -233,6 +299,8 @@ def detect_video_candidates(
                     grays if len(grays) == 3 else [grays[0]] * (3 - len(grays)) + grays
                 )
                 stack = np.stack(seq, 0).astype(np.float32) / 255.0
+                if geo_plane is not None:
+                    stack = np.concatenate([stack, geo_plane[None]], axis=0)
                 hm = infer_band(sess, stack, tile_w, overlap)
                 peaks = extract_peaks(hm, top_k, threshold, min_distance)
                 # aligned-band peak -> raw-band coords (+ the frame's wind shift)

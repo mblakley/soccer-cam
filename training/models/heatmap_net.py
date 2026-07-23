@@ -113,10 +113,23 @@ class EncodingPrelude(nn.Module):
         baseline while diff3 < baseline means the diffs were fine and the
         REPLACEMENT was the bug). Net input widens to 5 ch (~1.6% FLOPs); the
         external contract is STILL 3 raw frames — diffs derive in-graph.
+      - ``gray3geo``: ``(g_{t-2}, g_{t-1}, g_t, geo)`` — the 3 raw gray frames
+        plus a GEOMETRY channel: the expected apparent ball diameter (band px)
+        at every pixel, derived from the game's field polygon homography
+        (EXP-DIST-66: apparent size IS the camera↔field relationship, r≈0.9).
+        Unlike the diff encodings this channel CANNOT be derived in-graph from
+        the gray frames — it is external per-game data, so the input contract
+        widens to 4 channels (crop stores built with ``geo_channel=True``;
+        inference builds the band geo map from the game polygon). Encoded
+        uint8 as ``clip(round(band_px * 8), 0, 255)`` at store time, so after
+        the standard ``/255`` load the net sees ``band_px / 31.875``.
     """
 
-    ENCODINGS = ("gray3", "diff3", "diff5")
-    OUT_CHANNELS = {"gray3": 3, "diff3": 3, "diff5": 5}
+    ENCODINGS = ("gray3", "diff3", "diff5", "gray3geo")
+    OUT_CHANNELS = {"gray3": 3, "diff3": 3, "diff5": 5, "gray3geo": 4}
+    # External (raw) input channels the wrapped model expects — what training
+    # tensors, the ONNX dummy input, and the runtime tile stack must provide.
+    IN_CHANNELS = {"gray3": 3, "diff3": 3, "diff5": 3, "gray3geo": 4}
 
     def __init__(self, encoding: str = "gray3"):
         super().__init__()
@@ -124,10 +137,11 @@ class EncodingPrelude(nn.Module):
             raise ValueError(f"unknown encoding {encoding!r} (want {self.ENCODINGS})")
         self.encoding = encoding
         self.out_channels = self.OUT_CHANNELS[encoding]
+        self.in_channels = self.IN_CHANNELS[encoding]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.encoding == "gray3":
-            return x
+        if self.encoding in ("gray3", "gray3geo"):
+            return x  # identity: channels pass straight to the net
         g0, g1, g2 = x[:, 0:1], x[:, 1:2], x[:, 2:3]
         if self.encoding == "diff3":
             return torch.cat([g2, g1 - g0, g2 - g1], dim=1)

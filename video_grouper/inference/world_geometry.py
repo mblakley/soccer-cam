@@ -93,6 +93,33 @@ def _apply_homography(h: np.ndarray, pts: np.ndarray) -> np.ndarray:
     return hom[:, :2] / w
 
 
+def _polygon_ordering_ok(poly: np.ndarray) -> bool:
+    """True iff the 10-point polygon matches the near/far index convention.
+
+    Convention (field_detector, _touchline_world_points): points 0-4 = NEAR
+    touchline (bottom of image, left->right), 5-9 = FAR touchline (top,
+    right->left). A near/far flip still fits a perfectly valid homography, so
+    the reprojection catastrophe-gate cannot catch it — but it silently INVERTS
+    ``field_depth`` and the size prior (found the hard way: 4 flipped 2024
+    polygons, EXP-DIST-66 / DECISIONS 2026-07-22). Checks, all from perspective
+    geometry of a ground-level camera:
+
+    - near line is LOWER in the image than the far line (greater image y);
+    - near line is WIDER than the far line (foreshortening: far_w < near_w);
+    - near chain runs left->right, far chain right->left.
+    """
+    near, far = poly[0:5], poly[5:10]
+    if near[:, 1].mean() <= far[:, 1].mean():
+        return False  # near touchline above far -> flipped / raw-rotation space
+    near_w = abs(near[4, 0] - near[0, 0])
+    far_w = abs(far[0, 0] - far[4, 0])
+    if near_w <= 0 or far_w >= near_w:
+        return False  # far line wider than near -> near/far swapped
+    if near[0, 0] >= near[4, 0] or far[0, 0] <= far[4, 0]:
+        return False  # chain direction violates the index convention
+    return True
+
+
 def _touchline_world_points(length_m: float, width_m: float) -> np.ndarray:
     """World coords of the 10 boundary points (equally spaced on each touchline).
 
@@ -257,9 +284,11 @@ def build_field_geometry(
       finite ``(10, 2)`` of sufficient area — it only needs the polygon as a
       perimeter, so it works even for a human-edited polygon whose point ordering
       doesn't match the equal-spacing assumption.
-    - **Metric homography + size prior** additionally require a clean homography
-      fit (low reprojection error). If that fails, ``valid`` is False and the
-      size prior falls back to uniform, but support still works.
+    - **Metric homography + size prior** additionally require the near/far
+      point-ordering convention (``_polygon_ordering_ok`` — a flipped polygon
+      would fit a valid homography with a BACKWARDS size prior) and a clean
+      homography fit (low reprojection error). If either fails, ``valid`` is
+      False and the size prior falls back to uniform, but support still works.
 
     Args:
         polygon: ``(10, 2)`` field polygon in source pixels, or ``None``.
@@ -280,7 +309,11 @@ def build_field_geometry(
 
     h_img2world: np.ndarray | None = None
     h_world2img: np.ndarray | None = None
-    if poly_support is not None:
+    # Ordering gate BEFORE the metric fit: a near/far-flipped polygon fits a
+    # perfectly valid homography (the reprojection gate cannot see it) but its
+    # field_depth + size prior come out BACKWARDS. Support keeps working (it
+    # only needs the perimeter); the metric stage degrades to neutral.
+    if poly_support is not None and _polygon_ordering_ok(poly_support):
         world = _touchline_world_points(field_length_m, field_width_m)
         h, _ = cv2.findHomography(poly_support, world, 0)
         if h is not None:

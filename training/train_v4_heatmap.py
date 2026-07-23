@@ -380,12 +380,14 @@ def main():
     )
     ap.add_argument(
         "--input-encoding",
-        choices=("gray3", "diff3", "diff5"),
+        choices=("gray3", "diff3", "diff5", "gray3geo"),
         default="gray3",
         help="input encoding applied in front of the net (and baked into the ONNX "
         "graph at export — the external contract stays raw gray frames). gray3 = "
         "identity (legacy, byte-identical). diff3 = (g_t, g_{t-1}-g_{t-2}, "
-        "g_t-g_{t-1}) signed frame differences — see EncodingPrelude.",
+        "g_t-g_{t-1}) signed frame differences — see EncodingPrelude. gray3geo = "
+        "gray frames + a 4th GEOMETRY channel (expected ball diameter per pixel "
+        "from the field polygon); requires a geo_channel store.",
     )
     ap.add_argument(
         "--person-sidecar",
@@ -426,6 +428,7 @@ def main():
 
     far_on = args.far_weight > 0.0
     dyn_on = args.dynamic_sigma
+    geo_on = args.input_encoding == "gray3geo"
 
     out = Path(args.out)
     if args.rebuild or not (out / "index.json").exists():
@@ -439,8 +442,21 @@ def main():
             sigma=4.0 if args.sigma is None else args.sigma,
             val_game_ids=val_ids,
             record_depth=far_on or dyn_on,
+            geo_channel=geo_on,
         )
         print("dataset:", summary, flush=True)
+
+    # gray3geo <-> geo store must agree BOTH ways: a 3-ch store under gray3geo
+    # feeds the net a missing channel; a 4-ch geo store under gray3 crashes the
+    # first conv at best and silently retrains on geometry at worst.
+    store_summary = json.loads((out / "index.json").read_text()).get("summary", {})
+    store_geo = bool(store_summary.get("geo_channel"))
+    if geo_on != store_geo:
+        raise SystemExit(
+            f"--input-encoding {args.input_encoding!r} on store {out} with "
+            f"geo_channel={store_geo} — encoding and store must match "
+            "(rebuild the store with/without geo_channel, or change the encoding)."
+        )
 
     person_on = args.person_sidecar is not None
     if person_on and (dyn_on or far_on):

@@ -104,6 +104,79 @@ def test_band_coordinate_round_trip():
     assert mask.max() == 255
 
 
+_GEO_POLY = np.array(
+    [
+        [100, 1000],
+        [500, 1010],
+        [960, 1015],
+        [1420, 1010],
+        [1820, 1000],
+        [1600, 300],
+        [1280, 295],
+        [960, 290],
+        [640, 295],
+        [320, 300],
+    ],
+    float,
+)
+
+
+def test_band_geo_plane_gradient_shape_and_quantization():
+    """The gray3geo geometry plane: correct band shape, values in [0,1], apparent
+    size DECREASES toward the far touchline (band top), and every value sits on
+    the store's uint8/255 grid (bit-parity between training store and runtime)."""
+    from video_grouper.inference.ball_detector import band_geo_map_u8, band_geo_plane
+
+    far = far_margin_polygon(_GEO_POLY, 100.0)
+    warp = native_iso_warp(far, 1920, 1080, target_width=960)
+    plane = band_geo_plane(_GEO_POLY, warp)
+    assert plane.shape == warp.shape
+    assert plane.dtype == np.float32
+    assert 0.0 <= plane.min() and plane.max() <= 1.0
+    bh = warp.shape[0]
+    # perspective: near (band bottom) balls are bigger than far (band top)
+    assert plane[bh - 5, :].mean() > plane[5, :].mean() * 1.5
+    # exact uint8 quantization grid — parity with the stored crop channel
+    u8 = band_geo_map_u8(_GEO_POLY, warp)
+    np.testing.assert_array_equal(plane, u8.astype(np.float32) / 255.0)
+
+
+def test_band_geo_plane_rejects_flipped_polygon():
+    """A near/far-swapped polygon must fail LOUDLY (a backwards geometry plane
+    is worse than none) — the ordering gate propagates as ValueError."""
+    import pytest
+
+    from video_grouper.inference.ball_detector import band_geo_plane
+
+    swapped = np.concatenate([_GEO_POLY[5:10][::-1], _GEO_POLY[0:5][::-1]], axis=0)
+    far = far_margin_polygon(_GEO_POLY, 100.0)
+    warp = native_iso_warp(far, 1920, 1080, target_width=960)
+    with pytest.raises(ValueError, match="geometry"):
+        band_geo_plane(swapped, warp)
+
+
+def test_model_input_channels_reads_static_channel_dim():
+    from video_grouper.inference.ball_detector import model_input_channels
+
+    class _In:
+        name = "frames"
+
+        def __init__(self, shape):
+            self.shape = shape
+
+    class _Sess:
+        def __init__(self, shape):
+            self._in = _In(shape)
+
+        def get_inputs(self):
+            return [self._in]
+
+    assert model_input_channels(_Sess([1, 3, "h", "w"])) == 3
+    assert model_input_channels(_Sess([1, 4, "h", "w"])) == 4
+    # symbolic/absent channel dim degrades to the legacy 3
+    assert model_input_channels(_Sess([1, "c", "h", "w"])) == 3
+
+
 def test_expand_polygon_widens_boundaries_for_oob():
     """The end-line/dome margin: a behind-goal point outside the raw polygon lands
     INSIDE the expanded polygon (so the detector can see out-of-play exits)."""

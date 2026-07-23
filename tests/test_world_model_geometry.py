@@ -181,6 +181,40 @@ def test_reproj_gate_rejects_catastrophic_fit():
     assert np.allclose(sizes, DEFAULT_FALLBACK_BALL_PX)
 
 
+def test_ordering_gate_rejects_near_far_swapped_polygon():
+    # A near/far-SWAPPED polygon fits a perfectly valid homography (the reproj
+    # gate cannot see it) but its field_depth + size prior come out BACKWARDS —
+    # exactly the 4 flipped 2024 polygons of EXP-DIST-66. The ordering gate must
+    # reject the METRIC stage (valid False, uniform size prior) while support
+    # (perimeter-only) keeps working.
+    poly = _make_polygon()
+    swapped = np.concatenate([poly[5:10][::-1], poly[0:5][::-1]], axis=0)
+    geom = build_field_geometry(swapped, field_length_m=L, field_width_m=W)
+    assert not geom.valid
+    assert geom.polygon is not None  # support stage unaffected
+    sizes = geom.expected_ball_diameter_px(np.array([[2000.0, 900.0]]))
+    assert np.allclose(sizes, DEFAULT_FALLBACK_BALL_PX)
+
+
+def test_ordering_gate_rejects_raw_rotation_space_polygon():
+    # A polygon stored in the RAW (upside-down mount) coordinate space — every
+    # point rotated 180 about the frame center — is the other real-world failure
+    # (RNYFC/NY_Rush 2024: polygon labeled on the uncorrected frame). It must
+    # degrade to neutral, not silently invert the size prior.
+    poly = _make_polygon()
+    fw, fh = 4096.0, 1800.0
+    rotated = np.column_stack([fw - poly[:, 0], fh - poly[:, 1]])
+    geom = build_field_geometry(rotated, field_length_m=L, field_width_m=W)
+    assert not geom.valid
+
+
+def test_ordering_gate_keeps_clean_polygon_valid():
+    # Guard against over-tightening: the standard trapezoid (and its noisy
+    # variant, test_realistic_detector_noise_stays_valid) must still pass.
+    geom = build_field_geometry(_make_polygon(), field_length_m=L, field_width_m=W)
+    assert geom.valid
+
+
 def test_apply_homography_negative_near_zero_w_is_finite():
     # A tiny NEGATIVE denominator previously collapsed to exactly 0.0
     # (np.sign(w)*1e-12 + 1e-12) -> inf/nan, the failure the guard exists to
