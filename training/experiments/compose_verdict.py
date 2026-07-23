@@ -145,6 +145,26 @@ def main() -> None:
     dd_ = Path(args.dump_dir)
     rng = np.random.default_rng(7)
 
+    # REFEREE PIN (DECISIONS 2026-07-23): the composer's commit hash prints in
+    # every verdict output; the rule set is FROZEN until Phase 2 is read; any
+    # future referee change re-reads affected verdicts via the embargo
+    # mechanism, never the live one.
+    import subprocess
+
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except Exception:
+        sha = "unknown"
+    print(
+        f"[referee: compose_verdict @ {sha or 'unknown'} — rule set frozen until Phase 2 is read]"
+    )
+
     scored: dict[tuple[str, str], dict] = {}
     frames: dict[tuple[str, str], dict] = {}
     for inst in HIERARCHY:
@@ -225,15 +245,18 @@ def main() -> None:
             if not ma or not mb or pfa is None or pfb is None:
                 print(f"    {INSTRUMENT_NAMES[inst]:<14} PENDING")
                 continue
-            # decisive-or-zero = the CALIBRATED pairwise read (validated on the
-            # settled factorial + the one known-real effect, 2026-07-23):
-            #  (i)  paired EVENT sign test (COUNT asymmetry; EXP-DIST-68) — v1's
-            #       unpaired CI-exclusion wrongly called diff5 DECISIVE;
-            #  (ii) paired Δ-rate bootstrap over SHARED events (MAGNITUDE
-            #       asymmetry) — the sign test alone read ph1v2-vs-ctrl (the one
-            #       CI-separated real effect, long-passage losses) as ev6v7
-            #       p=1.00: blind to magnitude, structurally biasing toward
-            #       pattern 4. Decisive if EITHER fires.
+            # decisive-or-zero = the CALIBRATED pairwise read (2026-07-23,
+            # three validations: settled factorial, the one known-real effect,
+            # split-half null):
+            #  (i)  paired EVENT sign test (COUNT asymmetry; EXP-DIST-68) —
+            #       v1's unpaired CI-exclusion wrongly called diff5 DECISIVE;
+            #  (ii) paired PER-EVENT SIGN-FLIP PERMUTATION on the Δ-rate
+            #       (MAGNITUDE asymmetry) — v2's Δ-bootstrap measured
+            #       anti-conservative (split-half null: α@95≈0.10 at 7 events,
+            #       α@99 still ≈0.07); the permutation test's α is nominal BY
+            #       CONSTRUCTION at any event count. The sign test alone was
+            #       blind to ph1v2's long-passage magnitude damage.
+            # Decisive if EITHER fires at p<0.05.
             verdicts = []
             common = sorted(set(pfa) & set(pfb))
             ev_common = _events(common)
@@ -243,31 +266,29 @@ def main() -> None:
                 b_only = [g for g in common if pfb[g][mi] and not pfa[g][mi]]
                 ea, eb = len(_events(a_only)), len(_events(b_only))
                 p = _sign_p(ea, ea + eb)
-
-                def _drate(evlist):
-                    fs = [f for e in evlist for f in e]
-                    return (
-                        sum(pfa[f][mi] for f in fs) - sum(pfb[f][mi] for f in fs)
-                    ) / len(fs)
-
-                boots = [
-                    _drate(
-                        [
-                            ev_common[i]
-                            for i in rng2.integers(0, len(ev_common), len(ev_common))
-                        ]
-                    )
-                    for _ in range(NBOOT)
-                ]
-                dlo, dhi = np.percentile(boots, [2.5, 97.5])
-                mag = dlo > 0 or dhi < 0
-                decisive = (p < 0.05) or mag
-                verdicts.append((k, decisive, ea, eb, p, _drate(ev_common), dlo, dhi))
+                # per-event Δ contributions (frame-count weighted)
+                contrib = np.array(
+                    [
+                        sum(pfa[f][mi] for f in e) - sum(pfb[f][mi] for f in e)
+                        for e in ev_common
+                    ],
+                    float,
+                )
+                nfr = sum(len(e) for e in ev_common)
+                d_obs = contrib.sum() / max(nfr, 1)
+                if np.any(contrib != 0):
+                    flips = rng2.choice([-1.0, 1.0], size=(4000, len(contrib)))
+                    perm = (flips * contrib).sum(axis=1) / max(nfr, 1)
+                    p_mag = float(np.mean(np.abs(perm) >= abs(d_obs) - 1e-12))
+                else:
+                    p_mag = 1.0
+                decisive = (p < 0.05) or (p_mag < 0.05)
+                verdicts.append((k, decisive, ea, eb, p, d_obs, p_mag))
             dec = [k for k, d, *_ in verdicts if d]
             line = "  ".join(
                 f"{k}:{'DECISIVE' if d else 'zero'}"
-                f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f}[{dlo:.2f},{dhi:.2f}])"
-                for k, d, ea, eb, p, dr, dlo, dhi in verdicts
+                f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f},pm={pm:.3f})"
+                for k, d, ea, eb, p, dr, pm in verdicts
             )
             print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}")
             if dec and not assigned:
