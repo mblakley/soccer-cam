@@ -44,6 +44,16 @@ under eval enrichment.
   (ctrl, diff5, safe_ctrl, safe_geo ≈ 1.5 h each). Scheduled behind the Phase 2 chain —
   closed-stays-closed verification this week.
 
+**[FAIRPORT ANCHOR RESOLUTION, 07-23 12:40 — pre-stated branch 1 fires]** Span-fixed
+anchors on FAIR-6k@47640 (175 GT): hn4 ceiling 0.983 / argmax 0.726; ctrl_cur 0.971/0.663 —
+**at-or-above SPC level → the self-leak behaves as modeled → proceed unchanged.** The
+MAGNITUDE of the gap vs SPC-134 (argmax 0.73 vs 0.34) is NOT interpretable as difficulty:
+it mixes self-leak inflation with strata composition (SPC-134 is HARD-dominated — 102/134
+rows are hard-sampled — while the FAIR-6k window is span/normal-sampled). Anchors remain
+context only; Phase 2 drops are computed vs each checkpoint's own SPC number per the
+pinned denominator rule. (Curiosity flagged: hn4's DEPTH-CAL argmax collapses on Fairport
+[NEAR 0.0] — depth calibration is game-specific; raw argmax is the diagnostic.)
+
 ---
 
 ## EXP-DIST-70: RETROACTIVE verdict audit — every closed call since EXP-DIST-46 against its metric's event-bootstrap CI (18 cached SPC dumps, zero GPU) (2026-07-23)
