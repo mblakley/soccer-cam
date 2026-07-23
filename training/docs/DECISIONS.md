@@ -29,6 +29,11 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   roadmap = selector recalibration + Viterbi dynamics, eval enrichment, operator-diversity
   acquisition, FP16 iGPU when speed resumes. Data refresh was the month's only measured
   champion improvement; idle trainers are not a reason to run detector experiments.
+- **SPC-134 is a STRESS instrument, not a thermometer:** 102/134 rows are HARD-adversarial —
+  its absolute levels were never product levels. This retroactively explains the
+  dire-looking argmax history and the viewport/detector metric divergence. Every historical
+  absolute number inherits this caveat; product levels come from viewport capture and
+  normal-strata rows.
 - **Protocol lives in TOOLING:** the read protocol is now the project's largest artifact and
   only pays while cheap to follow — `compose_verdict.py` emits the full instrument table +
   hierarchy walk automatically, so compliance is the default path. **A verdict that takes
@@ -138,6 +143,23 @@ passage-concentrated effect ≥0.15 at 80% power (IRON-18k)" — falsifiable, no
 separates."** Structural note: a single flipped passage is undetectable BY CONSTRUCTION
 under sign-flip permutation — block effects are detected by how many events flip; Iron's
 many short events out-power SPC's few long ones per frame.
+
+**Interpretive fork on pattern 4 (reading note — referee stays FROZEN):** pattern 4 WITH
+directional sub-threshold leans CONCENTRATED IN HARD STRATA is the expected signature of a
+real passage-shaped effect below the power floor (diff5 — the only characterized effect —
+was exactly this shape, and block power needs Δ≥0.15). **That variant routes day-one to
+EVAL ENRICHMENT first** (tail queues + the Iron full pool — more events is what raises
+block power) before any arc-close. FLAT pattern 4 (no directional strata concentration)
+routes to arc-close as written.
+
+**DEPTH-CAL promoted from curiosity to work item:** depth calibration is per-game and fails
+SILENTLY cross-game (hn4 NEAR 0.0 on Fairport). Audit result: no settled verdict decided on
+a DEPTH-CAL column (they were supplementary rows; EXP-DIST-24 called depth-cal rescoring "a
+wash"; 59/63 decided on raw score-argmax) — the hazard is FORWARD-facing: any cross-game
+DEPTH-CAL comparison is invalid. **Parked as the first post-verdict roadmap candidate under
+EITHER pattern:** a geometry-derived depth prior from the descriptor/optics model
+(EXP-DIST-66, r≈0.9) that transfers by construction — data-side, validated mechanism, sits
+on this week's infrastructure.
 
 **Stab re-dump action (pre-stated before it lands; outside the Phase 2 table):** if
 ctrl_stab-vs-cur confirms pm<0.05 on the wide instruments, `--stabilize` flips to DEFAULT
