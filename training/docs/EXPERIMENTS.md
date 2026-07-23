@@ -4,6 +4,52 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-67: gray3geo SAFETY pair (single-rig) — the geometry channel is NOT inert: identical val recall, but on held-out SPC it acts as a NEAR-position prior (near-argmax 0.368→0.684, far 0.391→0.252). Single-rig training must never ship it (2026-07-23)
+
+**Question (Phase 1 gate of the geometry-conditioned detector plan):** does adding the
+expected-ball-size channel (`gray3geo`) change anything when trained on SINGLE-RIG data?
+Prediction: no — within one camera, band-y already encodes depth, so the channel is ~redundant.
+
+**Method:** TWIN 5-game Reolink subset stores (`geodet/crops_safe_{ctrl,geo}` — identical
+`build_distill_dataset` invocation ± `--geo-channel`; deterministic label selection gave
+byte-equal sample counts, 16,173/9,513 pos), twin hn4-recipe trains (base 24, 40 ep) on the
+1060, paired SPC held-out eval (134 GT, 1,501 frames, eval_tag recipe). No human crops / no
+mined negatives in either cell (twins stay twins), so ABSOLUTE numbers are subset-scale —
+only the pairing is meaningful.
+
+**Result:**
+
+| SPC (paired) | ctrl | geo | Δ |
+|---|---|---|---|
+| best_val_recall (health only) | 0.388 | 0.388 | 0 — **looks inert at train time** |
+| candidate ceiling ALL | 0.978 | 0.978 | 0 |
+| ceiling NEAR / FAR | 1.0 / 0.974 | 0.947 / 0.983 | −1 near ball / +0.009 |
+| score-argmax ALL | 0.388 | 0.313 | −0.075 |
+| **score-argmax NEAR** | 0.368 | **0.684** | **+0.316** |
+| **score-argmax FAR** | 0.391 | **0.252** | **−0.139** |
+| a3 vmax30 +kal ALL | 0.470 | 0.291 | −0.179 |
+
+**Conclusion — the channel is CONSUMED, and single-rig it learns the WRONG thing.** The
+detection SET is preserved (ceilings ~equal) but the score ORDERING shifts hard toward near:
+the same near↔far seesaw signature as the selector's field_depth (EXP-DIST-64/65). Mechanism:
+with one camera geometry, the channel is ~identical in every game — it degenerates into an
+absolute POSITION feature (a y-coordinate proxy), so the net learns the label-density position
+bias instead of a size-consistency invariant. This is exactly the failure mode predicted for
+single-rig training, now measured. Two load-bearing consequences:
+1. **gray3geo must NEVER be trained single-rig** (guard thought: the trainer could warn when a
+   geo store spans one camera family).
+2. Phase 1's actual question — "is the channel plumbed correctly and does the net use it?" —
+   is answered YES emphatically. Whether MULTI-geometry data turns it from a position prior
+   into a camera-invariant size reference is precisely Phase 2's decisive experiment; this
+   result neither validates nor kills that thesis. (Promotion bar stays the product VIEWPORT
+   vs AutoCam, not these tracker diagnostics.)
+
+Artifacts: `G:\ballresearch\geodet\{gate_sweep.log, dump_{ctrl,geo}.log, runs/safe_{ctrl,geo}}`;
+chain scripts alongside. Val-recall identity (0.388=0.388) vs SPC divergence is also a fresh
+data point for EXP-DIST-54's "val-crop recall is a health signal only" rule.
+
+---
+
 ## EXP-DIST-66: camera↔field geometry — the OPTICS are near-deterministic (r≈0.9) but per-game hyperparameters don't correlate with them; fd+db is NOT a net win pooled over 13 games (2026-07-21/22)
 
 Three linked results that close the selector geometry arc (64/65) and open the detector one.
