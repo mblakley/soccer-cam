@@ -72,6 +72,31 @@ By the measured exchange rate (~1,800 clicks decided everything since 46), ~100 
 an otherwise-ready CPU experiment is the best available spend. Scoring: v1 (comparability) +
 the new near-scramble labels (target metric); both reported.
 
+**TIE-BREAK HIERARCHY (appended before any number landed — mixed/partial outcomes are the
+MODAL real result, and the table must be total or ambiguity reopens post-hoc argument
+exactly where it is most tempting):**
+1. Pittsford HUMAN rows (viewport capture)
+2. primary-family VIEWPORT capture (SPC + Fairport, frozen v1)
+3. ceilings (event-CI'd)
+4. distill-scored rows (context only)
+**Anything inside its event-CI counts as ZERO evidence — not a lean.** A mixed outcome
+resolves by walking the hierarchy top-down; the FIRST decisive (outside-CI) row assigns the
+pattern; if NO row is decisive, the outcome IS pattern 4 (nothing separates) by definition.
+
+**Fairport-anchor pre-statement (committed BEFORE reading the anchor sweeps, which already
+sit unread on disk):**
+- Anchors at-or-above SPC level → the self-leak behaves as modeled → proceed unchanged.
+- Anchors MATERIALLY BELOW SPC on a trained-on game → Fairport is intrinsically HARDER
+  (difficulty confound, not generalization): record it, and Phase 2's Fairport rows map into
+  the action table RELATIVE to the anchor (difficulty-normalized), never absolute.
+
+**Metric → viewer:** viewport capture is the fraction of play the virtual camera actually
+FRAMES — ~0.77 far / ~0.42 near-scramble is the felt product today. A viewer never sees a
+third-decimal ceiling delta; they see the camera miss the play. This is the standing
+justification for the arc-close condition and the sanity check on every future funding call:
+if a proposed experiment cannot plausibly move viewport capture, it does not run on scarce
+resources.
+
 **Detector-arc close condition (also in CURRENT STATE):** if Phase 2 resolves
 negative/unseparated (patterns 3–6), the DETECTOR ARC CLOSES. Roadmap becomes: selector
 recalibration + Viterbi dynamics; eval enrichment (tail queues, per-game bands);
