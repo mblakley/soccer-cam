@@ -21,6 +21,14 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   training); COVERAGE is the lever; uncovered axis = OPERATOR diversity.
 - **Near ball:** tracker-dynamics problem; next lever = state-dependent miss-entry cost
   (position×velocity + candidate-margin arms), viewport-scored, selector-version-coupled.
+  Near-scramble label batch (~100 clicks, mined from cached dumps) pulled FORWARD — gates
+  the sweep's target metric (decision (g)).
+- **Phase 2 verdict is PRE-BOUND to the action table in (g)** — six outcome patterns, each
+  with its decided next step; primary-family regression disqualifies an arm outright.
+- **Post-verdict decision point:** Phase 2 negative/unseparated ⇒ DETECTOR ARC CLOSES —
+  roadmap = selector recalibration + Viterbi dynamics, eval enrichment, operator-diversity
+  acquisition, FP16 iGPU when speed resumes. Data refresh was the month's only measured
+  champion improvement; idle trainers are not a reason to run detector experiments.
 - **Labeling:** Mark's clicks are the SCARCEST resource — budgeted asks only (consumer + est.
   clicks + per-click justification), exchange-rate logged. **Measured rate: ~1,800 clicks
   decided EVERY verdict since EXP-DIST-46 while GPU runs mostly returned noise — labels
@@ -34,6 +42,42 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
   person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
   CI-separated harm on record).
+
+---
+
+## 2026-07-23 (g): PRE-COMMITTED Phase 2 ACTION TABLE (written before any number exists) + Viterbi benchmark decision + detector-arc close condition
+
+**The table binds: outcomes argue for themselves after the fact, so the next step is decided
+NOW.** Read basis: ceiling + viewport (G1), event-CIs, geo-vs-NORM as the mechanism
+comparison, 05.30 = within-family probe, Pittsford human rows = cross-camera arbiter.
+Cross-cutting rule: any arm that regresses SPC/Fairport (primary-family) ceiling/viewport
+vs ctrl is DISQUALIFIED regardless of Dahua gains.
+
+| # | outcome pattern | decided next step |
+|---|---|---|
+| 1 | norm ≈ geo, both beat ctrl cross-family | **Ship fixed per-camera `target_width`** (simplest mechanism); **CLOSE the channel** — extra input buys nothing over rescale |
+| 2 | geo > norm cross-family AND on the 05.30 within-family probe | Channel encodes continuous geometry → **adoption path**: full-recipe retrain (human crops + mined negs) + viewport gate; rectification stays deferred |
+| 3 | geo > norm on cross-family rows ONLY (within-family flat) | **Family-ID binary confirmed — NOT adoption.** Treat as norm-equivalent → ship target_width; family-ID follow-up only if a cheaper mechanism question matters |
+| 4 | nothing separates (all arms ≈ equal transfer) | **Geometry arc CLOSES like encodings** (direction + zero benefit); GPU → tracker/selector track |
+| 5 | ALL arms collapse on Dahua (incl. ceiling) | **Data/label problem, not architecture** — distill-quality audit first; only Pittsford HUMAN rows may support any claim; no adoption decisions from distill-scored rows |
+| 6 | ctrl ≥ geo/norm (mechanisms hurt) | **Hard close** of geometry conditioning; interference recorded; tracker/selector track |
+
+**Viterbi/benchmark collision — DECIDED: pull the near-scramble batch forward (~100 clicks).**
+Rationale: the miss-cost experiment targets near-scramble events specifically; GT v1's
+viewport sets were sampled on general swing/divergence and under-sample exactly that failure
+mode — tuning k against v1 alone invites tuning-to-noise on the target phenomenon. The
+near-scramble frames are minable from CACHED dumps (frames where v7 enters miss-state with a
+rank-1 near candidate present — the autopsy criterion), so the queue is CPU-cheap and seeded.
+By the measured exchange rate (~1,800 clicks decided everything since 46), ~100 clicks gating
+an otherwise-ready CPU experiment is the best available spend. Scoring: v1 (comparability) +
+the new near-scramble labels (target metric); both reported.
+
+**Detector-arc close condition (also in CURRENT STATE):** if Phase 2 resolves
+negative/unseparated (patterns 3–6), the DETECTOR ARC CLOSES. Roadmap becomes: selector
+recalibration + Viterbi dynamics; eval enrichment (tail queues, per-game bands);
+operator-diversity acquisition; FP16 iGPU work when speed resumes. **The one measured
+champion improvement all month was data refresh, not architecture — idle trainers are not a
+reason to run detector experiments.**
 
 ---
 
