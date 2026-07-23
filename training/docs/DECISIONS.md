@@ -22,9 +22,39 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 - **Near ball:** tracker-dynamics problem; next lever = state-dependent miss-entry cost
   (position×velocity + candidate-margin arms), viewport-scored, selector-version-coupled.
 - **Labeling:** Mark's clicks are the SCARCEST resource — budgeted asks only (consumer + est.
-  clicks + per-click justification), confirm-not-draw seeding, disagreement sampling,
-  exchange-rate logged. Priority: Pittsford Dahua set → event-spreading tail queues →
+  clicks + per-click justification), exchange-rate logged. **Measured rate: ~1,800 clicks
+  decided EVERY verdict since EXP-DIST-46 while GPU runs mostly returned noise — labels
+  outrank GPU as the marginal spend until LABELING_LOG says otherwise.** Seeding rules:
+  confirm-not-draw for TRAINING labels; **union-seed + provenance-blind + unseeded cold
+  audit for EVAL GT** (champion-only seeding would bake the champion's failure modes into
+  the GT that judges it). Priority: Pittsford Dahua set → event-spreading tail queues →
   near-scramble viewport labels. Aerial: DEFERRED (no consumer experiment).
+- **Person channel (next attempt):** FROZEN-BACKBONE head on hn4 (sidecar labels; head ±
+  last decoder stage unfrozen) — ball channel byte-identical by construction, no re-gate,
+  one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
+  person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
+  CI-separated harm on record).
+
+---
+
+## 2026-07-23 (f): EVAL-GT seeding rule + frozen-backbone person head
+
+**Eval-GT mechanics (Mark):** eval GT is NOT training data — champion-only seeding inherits
+the champion's failure modes into the GT that judges it (circular on exactly the
+cross-camera question). Rule: **confirm-not-draw for training labels; UNION seeding
+(champion + AutoCam + competing arms when dumped) with provenance HIDDEN + disagreements as
+first-class queue items + an UNSEEDED cold sample (~40–60 frames) measuring seed-miss rate
+as a correction term — for all EVAL GT.** Applied to the Pittsford set (champion+AutoCam
+divergence now; arm-union extension before labeling if timing allows; 60-frame cold audit).
+
+**Person channel:** next attempt = FROZEN-BACKBONE person head on hn4 (sidecar labels, only
+the head ± last decoder stage unfrozen). Ball channel byte-identical by construction → no
+re-gate, one shipped model, no iGPU cost increase. Joint co-training (λ-sweep) demoted to
+fallback — EXP-DIST-70 showed ph1v2's far-ordering damage is the only CI-separated harm in
+the audit, so co-training carries measured risk.
+
+**Exchange rate promoted to CURRENT STATE:** ~1,800 clicks decided every verdict since 46;
+GPU cycles mostly returned noise over the same span; labels outrank GPU as marginal spend.
 
 ---
 
