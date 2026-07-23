@@ -107,10 +107,27 @@ the game's label pool prints an instrument WARNING naming EXP-DIST-71 — the cl
 that let Iron run a month at 88/576 GT undetected.
 
 **Verdict COMPOSITION (pre-declared — the last free degree of freedom):** the headline is
-the tie-break hierarchy WALKED top-down with every row stated decisive-or-zero (by its
-event-CI); the FULL arm × instrument × strata table ships with every verdict, no cell
-omitted as noise. The action table binds the decision; this binds the telling. Composition
-is emitted by tooling (`compose_verdict.py`), not written by hand.
+the tie-break hierarchy WALKED top-down with every row stated decisive-or-zero (paired
+EVENT sign test on shared frames, p<0.05); the FULL arm × instrument × strata table ships
+with every verdict, no cell omitted as noise. The action table binds the decision; this
+binds the telling. Composition is emitted by tooling (`compose_verdict.py` — VALIDATED
+2026-07-23 against the settled factorial: reproduces EXP-DIST-63/68 exactly; the validation
+caught v1's unpaired CI-exclusion rule wrongly calling diff5 DECISIVE, fixed to the paired
+event test before any live verdict).
+
+**Escape hatches closed:**
+- **(a)** Pittsford-human PENDING at read time → the verdict is READABLE but the action
+  table does NOT fire until row 1 exists or is explicitly waived — otherwise the
+  hierarchy's top row was decoration.
+- **(b)** New instruments are sanity-checked BEFORE any arm row is read: the champion
+  checkpoint scored on each 18k instrument against its truncated history (known-truncation
+  caveat stated) — no instrument debugging mid-verdict.
+
+**Post-verdict DAY ONE (written now, per pattern class):**
+- **Patterns 1–2:** adoption work leads (full-recipe retrain of the winning arm, viewport
+  gate); re-dumps fill remaining instrument gaps; Mark's clicks go to Pittsford completion.
+- **Patterns 3–6:** the detector arc closes; Viterbi/selector track leads; re-dumps run as
+  cleanup (diff5 first); Mark's clicks go to the near-scramble batch.
 
 **Fairport-anchor pre-statement (committed BEFORE reading the anchor sweeps, which already
 sit unread on disk):**
