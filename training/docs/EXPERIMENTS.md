@@ -4,7 +4,27 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-DIST-68: PAIRED per-frame read of the encoding factorial (cached SPC dumps) — diff5 is SIGNIFICANTLY worse (p=0.004), nothing leans positive → ENCODINGS CLOSED (2026-07-23)
+## EXP-DIST-68 [CORRECTED same-day]: PAIRED read of the encoding factorial — at EVENT level everything is noise (diff5 "p=0.004" was frame-inflation); nothing leans positive → ENCODINGS CLOSED on direction (2026-07-23)
+
+**CORRECTION (Mark): flips are NOT independent trials.** Misses arrive in passages (the near
+autopsy: 11 misses = one 3.6 s sequence), so the frame-level sign test inflates n. Clustering
+same-direction flips within 64 source-frames into EVENTS (32/128 as sensitivity):
+
+| pair | frame-level p | events A / B (gap 64) | EVENT p (32 / 64 / 128) |
+|---|---|---|---|
+| diff5 vs ctrl | 0.004 (inflated) | 4 / 7 | 0.096 / **0.549** / 0.508 |
+| df3 vs ctrl | 0.169 | 6 / 9 | 0.167 / 0.607 / 1.000 |
+| ctrl_stab vs ctrl_cur | 0.150 | 7 / 5 | 0.332 / 0.774 / 0.754 |
+| diff5_stab vs ctrl_stab | 0.581 | 4 / 4 | 1.000 / 1.000 / 1.000 |
+
+diff5's "22 flips" were ~7 passages. **Nothing is significant at event level in either
+direction; direction remains uniformly not-positive for encodings** → the CLOSED decision
+stands on direction + zero evidence of benefit, not on a significance claim. **Protocol from
+now on: EVENT-level sign test (gap=64 primary) is the mandatory read for small-delta
+comparisons**; frame-level p is recorded only as the inflated diagnostic. Original
+frame-level text below retained for the record.
+
+## EXP-DIST-68 [original, superseded]: PAIRED per-frame read of the encoding factorial (cached SPC dumps) — diff5 is SIGNIFICANTLY worse (p=0.004), nothing leans positive → ENCODINGS CLOSED (2026-07-23)
 
 **Method (Mark's protocol):** single-seed argmax deltas inside the ±0.078 seed band prove
 nothing; instead, per-GT-frame paired argmax on the CACHED SPC dumps (134 GT, same frames,

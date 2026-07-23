@@ -4,6 +4,37 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-23 (b): Holdouts + leak-judgment by GEOMETRY DISTANCE, not venue names — venue ban REPLACED; small-delta reads are EVENT-level
+
+**Context (Mark):** venue is a bad proxy for geometry BOTH ways — the Fairport-away dates were
+re-rigged tournament setups (same venue ≠ same geometry), and a different venue can match eval
+geometry closely. Every non-excluded game has a confirmed 10-pt polygon and the optics are
+near-deterministic from it (EXP-DIST-66), so judge the polygons, not the names.
+
+**Descriptor + threshold (recorded; `G:\ballresearch\geodet\geom_descriptors.json`):**
+per-game `[predicted near-ball px, predicted far-ball px, polygon area fraction, far-line
+y fraction]`, z-scored over the 67-game fleet, Euclidean distance. All-pairs distances:
+p10=0.96, p25=1.73, median=2.55. **CLOSE = d<p10 (leak-grade), close = d<p25 (flag).**
+
+**Applications (2026-07-23 audit, replaces the same-day venue ban):**
+- Fairport 05.28 vs eval 06.06: d=0.45 CLOSE → **stays banned, now with evidence**.
+- Fairport 05.30 vs 06.06: d=2.14 DISTANT (re-rigged tripod, the audit confirms it) →
+  **REINSTATED into Phase 2 training** (store = 21 games, holdout 5).
+- Historical honesty: SPC's nearest training games are Cuyahoga d=0.37, Lakefront_home 0.52,
+  Cleveland/Upper90 0.60 → **historical SPC evals measured mostly INTERPOLATION**; Iron's
+  nearest is 06.04 Irondequoit d=0.82 (same venue, genuinely close).
+- **Phase 2 verdict protocol: STRATIFY, don't ban** — report each eval split by geometry
+  distance to the nearest training game; the geo channel's thesis is generalization, so the
+  verdict reads from the novel-geometry rows.
+- Future holdout choices use geometry distance; venue names are narrative only.
+
+**Also (EXP-DIST-68 correction):** small-delta comparisons REQUIRE the EVENT-level paired
+read (same-direction flips clustered within 64 frames; sign test on events). The frame-level
+test inflates n — diff5's p=0.004 collapsed to p=0.55 at event level. Encodings remain closed
+on direction (nothing ever leaned positive), not on a significance claim.
+
+---
+
 ## 2026-07-23: Input ENCODINGS are CLOSED (diff3/diff5/df3 family) — stop funding them
 
 **Context:** the encoding factorial ran across EXP-DIST-51→59→63 with single-seed argmax
