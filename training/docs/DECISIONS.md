@@ -74,14 +74,33 @@ the new near-scramble labels (target metric); both reported.
 
 **TIE-BREAK HIERARCHY (appended before any number landed — mixed/partial outcomes are the
 MODAL real result, and the table must be total or ambiguity reopens post-hoc argument
-exactly where it is most tempting):**
+exactly where it is most tempting) [AMENDED same-day, still pre-verdict: the original
+ordering predated the EXP-DIST-71 instrument audit — Iron-18k (264-event pool, uniform
+protocol, non-SPC game) is promoted to the primary detector-metric instrument]:**
 1. Pittsford HUMAN rows (viewport capture)
 2. primary-family VIEWPORT capture (SPC + Fairport, frozen v1)
-3. ceilings (event-CI'd)
-4. distill-scored rows (context only)
+3. **IRON-18k ceilings/argmax** (the primary detector-metric instrument)
+4. SPC-family detector rows (SPC-18k, then SPC-134/FAIR-6k)
+5. distill-scored rows (context only)
 **Anything inside its event-CI counts as ZERO evidence — not a lean.** A mixed outcome
 resolves by walking the hierarchy top-down; the FIRST decisive (outside-CI) row assigns the
 pattern; if NO row is decisive, the outcome IS pattern 4 (nothing separates) by definition.
+
+**Strata rule (SPC-full upgraded from paired-only to difficulty-resolved):** paired reads on
+SPC-wide instruments report per-stratum columns by set provenance — NORMAL (normal/seg
+spans), HARD (clip*/hard/diverge/uncertain), AGREEMENT (*agree* spans). Interpretation is
+pre-bound: **geo separating only on AGREEMENT strata = near-zero product value; separation
+CONCENTRATED in HARD strata = the shippable signal.** Same cached-dump machinery
+(provenance joined from ball_labels set names).
+
+**GPU priority (explicit):** Phase 2 trains + four-span evals OUTRANK the closed-verdict
+re-dumps — a verified-closed delay costs nothing; a verdict slip costs the pre-registered
+momentum. If the re-dumps slip, **diff5 runs first** (the only verdict that ever showed
+frame-level significance is the one most worth re-checking).
+
+**Standing instrument guard (in code, eval_detector):** any eval whose span keeps <50% of
+the game's label pool prints an instrument WARNING naming EXP-DIST-71 — the class of bug
+that let Iron run a month at 88/576 GT undetected.
 
 **Fairport-anchor pre-statement (committed BEFORE reading the anchor sweeps, which already
 sit unread on disk):**

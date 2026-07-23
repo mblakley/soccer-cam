@@ -217,10 +217,22 @@ def main() -> None:
         video = str(cands[0])
 
     # eval span = around the GT (contiguous, capped) so the tracker has continuity
+    total_gt = len(balls)
     lo, hi = min(balls), max(balls)
     if hi - lo > args.max_frames:
         hi = lo + args.max_frames
         balls = {f: xy for f, xy in balls.items() if lo <= f <= hi}
+    # INSTRUMENT GUARD (EXP-DIST-71): a span that keeps a small fraction of the
+    # game's label pool is a broken instrument, not a smaller one — Iron ran a
+    # month at 88/576 GT and Fairport anchored on 4/208 before this existed.
+    if len(balls) < 0.5 * total_gt:
+        print(
+            f"WARNING [instrument]: eval span keeps {len(balls)}/{total_gt} GT "
+            f"({len(balls) / total_gt:.0%}) of this game's label pool — state an "
+            "explicit --span-lo/--span-hi (densest window) or justify the subset. "
+            "See EXP-DIST-71.",
+            flush=True,
+        )
     eval_frames = list(range(lo - 2 if lo >= 2 else 0, hi + 1, args.stride))
     print(
         f"{gj['game_id']}: {len(balls)} GT balls in span {lo}..{hi}, "
