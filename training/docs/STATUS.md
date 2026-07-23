@@ -10,6 +10,9 @@
   optics are near-deterministic (size↔polygon r≈0.9, near≈3.5× far, Dahua vs Reolink ≈1.5×
   cross-camera spread) but the selector can't use geometry (64/65 zero-sum); the detector trains
   on ONE geometry today (SET_POLYGONS→0527) so the channel needs multi-geometry data.
+  **Promotion gate = product VIEWPORT vs AutoCam** (frozen GT v1 viewport sets, match-or-beat +
+  no swing regression; same comparison on the held-out Dahua game) — detector recall numbers are
+  diagnostics only (Mark 07-22).
 - **Phase 0b audit (07-22): human Dahua labels ≈ ZERO** (reolink 4,227 clicks/74 sets + ~1,613 in
   legacy-named reolink sets; dahua 4 clicks). → Dahua training labels = **AutoCam distill** (Mark's
   call; standing conf+in-field+corroboration filter). **39/47 confirmed-polygon Dahua games have

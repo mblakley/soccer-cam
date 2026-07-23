@@ -54,8 +54,11 @@ DECISIONS 2026-07-22).
 zero-sum); the detector currently trains on essentially ONE geometry (`SET_POLYGONS` →
 DEFAULT_POLY_0527) so a geometry input has nothing to learn from. → **Geometry-conditioned
 detector plan** (branch `feat/geometry-conditioned-detector`): expected-size input channel,
-multi-geometry crop store (Dahua = AutoCam-distilled per the standing filter decision), gates =
-Spencerport ceiling-far no-regress + near hard no-regress + cross-camera held-out Dahua eval.
+multi-geometry crop store (Dahua = AutoCam-distilled per the standing filter decision).
+**Promotion gate = the PRODUCT VIEWPORT vs AutoCam on frozen benchmark GT v1 (match-or-beat, no
+swing regression) + the same viewport comparison on a held-out Dahua game** — detector metrics
+(Spencerport ceiling-far, near no-regress) are intermediate diagnostics only (Mark, 2026-07-22;
+the EXP-DIST-62 lesson).
 Aerial thesis: apparent size is aerial-robust while ground-plane position is aerial-fooled — a
 size-reference channel lets the net learn "bigger than ground-expected here = airborne ball".
 
