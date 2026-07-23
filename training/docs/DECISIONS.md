@@ -151,6 +151,16 @@ was exactly this shape, and block power needs Δ≥0.15). **That variant routes 
 EVAL ENRICHMENT first** (tail queues + the Iron full pool — more events is what raises
 block power) before any arc-close. FLAT pattern 4 (no directional strata concentration)
 routes to arc-close as written.
+- **Concentration BAR (pre-stated before any number):** HARD-strata flip events **≥3:1 in
+  the same direction on BOTH wide instruments**, AND the joint binomial null probability of
+  the observed asymmetry at the realized event counts **<0.05** (self-checking at any n —
+  "some lean somewhere" is otherwise guaranteed by noise). Below the bar = FLAT pattern 4.
+- **Enrichment EXIT CONDITION (bounded, not a loop):** enrichment runs until block-effect
+  power at Δ=0.10 reaches ≥80% — measured requirement: **~80 Iron-like events**
+  (`power_scale.py`: 62→0.69, 80→0.84, 100→0.91). **The Iron FULL pool (264 events, labels
+  already exist) overshoots this at ZERO clicks** — the enrichment route is a wider Iron
+  span on the re-read dumps (GPU only); the tail queues serve per-game bands and geometry
+  spread, not power. Then ONE re-read, and the pattern is FINAL.
 
 **DEPTH-CAL promoted from curiosity to work item:** depth calibration is per-game and fails
 SILENTLY cross-game (hn4 NEAR 0.0 on Fairport). Audit result: no settled verdict decided on
