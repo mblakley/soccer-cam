@@ -80,6 +80,23 @@ measured @IRON-18k and is now VOID; re-measure @SPC-FULL before any pattern-4
 "powered null" claim. (3) Iron remains the designated instrument for the future
 lighting-robustness track (tone-normalization / golden-hour data work).
 
+**Same-day addendum — SPC-FULL WITHDRAWN, primary = SPC-18k:** the three spcfull
+dumps scored EXACTLY the SPC-134 window: eval_detector's `--max-frames` (default
+6000) silently re-truncated the explicit 0..1e9 span back to the first window —
+the EXP-DIST-71 trap has a second jaw, one layer down. The coverage guard printed
+its 10%-coverage WARNING and no chain read it: a guard that warns instead of
+failing is not a guard (eval_detector now HARD-ERRORS when an explicit span would
+be truncated; raise --max-frames to cover the span). A true SPC-FULL costs ~5x an
+18k eval (~3.5 h/arm on the 1060) and is NOT funded for this verdict: the geo
+pair already has a DECISIVE row (FAIR-6k argmax, geo 0.040 vs ctrl 0.253,
+p=0.01/pm=0.004 — cross-venue ranking collapse with ceiling intact, exactly
+EXP-DIST-67's pre-registered single-rig-prior failure mode, now shown
+multi-rig-trained on an unseen rig), so primary-instrument power for a null is
+moot for that pair. If the norm pair lands all-zero, re-measure power @SPC-18k
+via power_sim on the Phase 2 dumps (analysis-only, no GPU) before composing any
+pattern-4 language. The three invalid spcfull pkls are deleted; the 134-row
+numbers they produced live on legitimately as SPC-134.
+
 ---
 
 ## 2026-07-23 (h): Pittsford-human row COMPOSITION (56% stoppage frames) + stoppage-HOLD planner lever — pre-stated BEFORE the Phase 2 verdict

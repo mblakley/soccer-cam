@@ -32,15 +32,18 @@ import numpy as np
 GAP = 64
 NBOOT = 2000
 FAR_PX = 8.0
-# hierarchy order (DECISIONS 07-23, amended 07-24: SPC-FULL replaces IRON-18k
-# as primary; Iron = stress context, never decisive): detector-metric
-# instruments only — human/viewport rows sit above and are appended by caller.
-HIERARCHY = ["spcfull", "spc18k", "spc", "fair"]
+# hierarchy order (DECISIONS 07-23, amended 07-24 (i)+(i-addendum)): Iron
+# demoted to stress context (golden hour, never decisive); SPC-18k is primary.
+# SPC-FULL was attempted and WITHDRAWN the same day — a full-pool single-span
+# eval costs ~5x an 18k window and the first attempt silently scored only the
+# SPC-134 window (max-frames truncation; eval_detector now hard-errors there).
+# Detector-metric instruments only — human/viewport rows sit above and are
+# appended by the caller.
+HIERARCHY = ["spc18k", "spc", "fair"]
 STRESS = ["iron18k"]  # printed with full stats, excluded from the decisive walk
 INSTRUMENT_NAMES = {
     "spc": "SPC-134",
     "spc18k": "SPC-18k@5473",
-    "spcfull": "SPC-FULL",
     "iron18k": "IRON-18k@1501*",
     "fair": "FAIR-6k@47640",
 }
@@ -209,7 +212,7 @@ def main() -> None:
     strata = _load_strata(SPC_DIR)
     if strata:
         print("\n=== SPC STRATA (hit-rate by NORMAL/HARD/AGREE, argmax) ===")
-        for inst in ("spcfull", "spc", "spc18k"):
+        for inst in ("spc", "spc18k"):
             for arm in args.arms:
                 pf = frames.get((inst, arm))
                 if not pf:

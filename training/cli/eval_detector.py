@@ -220,6 +220,16 @@ def main() -> None:
     total_gt = len(balls)
     lo, hi = min(balls), max(balls)
     if hi - lo > args.max_frames:
+        # An EXPLICIT span states operator intent — silently re-truncating it to
+        # the first max_frames re-creates the first-window trap one layer down
+        # (the "SPC-FULL" 0..1e9 dumps scored exactly the SPC-134 window; the
+        # coverage guard only warned, and chains don't read warnings).
+        if args.span_lo is not None or args.span_hi is not None:
+            raise SystemExit(
+                f"--span-lo/--span-hi selects GT spanning {hi - lo} frames but "
+                f"--max-frames is {args.max_frames}; raise --max-frames to cover "
+                "the requested span (refusing to silently truncate an explicit span)"
+            )
         hi = lo + args.max_frames
         balls = {f: xy for f, xy in balls.items() if lo <= f <= hi}
     # INSTRUMENT GUARD (EXP-DIST-71): a span that keeps a small fraction of the
