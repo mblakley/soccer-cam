@@ -63,6 +63,26 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (r): Verdict-eve hygiene — clock provenance annotation + the asymmetric viewport-tier read (Mark, two directives)
+
+**1. Clock provenance:** the fleet ran ~2.2 h slow all day; the laptop was
+NTP-corrected at ~16:20 true; the server stays UNSYNCED until tonight's pkls are
+banked (a mid-pipeline clock jump is how a checkpoint-skip or staleness check
+misfires). The composed verdict header carries one line stating the offset and
+which box produced which artifact. Ordering-provenance (pre-statements before
+numbers) is proven by git history, not wall clocks — nothing is contaminated.
+
+**2. Asymmetric viewport-tier read, pre-stated:** the geo/norm Pittsford dumps
+were produced with the BROKEN RULER (the same contamination that took FAIR argmax
+0.25 → 0.02). Therefore: **weak geo/norm viewport rows = CONFIRMATORY, saying
+nothing new; parity-with-ctrl despite the broken ruler = SURPRISING** — the
+tracker's temporal machinery absorbing size-conditioning damage, a (k).2-flavored
+measurement about what the pipeline consumes, worth its own entry. This sentence
+exists so the top-tier read neither over- nor under-weights rows carrying a known
+upstream defect.
+
+---
+
 ## 2026-07-24 (q): FAIRPROBE branches pre-stated BEFORE the probe lands + the operator-diversity reading (Mark)
 
 **Branches for cands_fairprobe_mg_geo (geo, FAIR band, geo-scale 2.54):**
