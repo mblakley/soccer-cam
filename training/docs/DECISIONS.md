@@ -54,6 +54,34 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (i): IRON-18k demoted to GOLDEN-HOUR STRESS row; SPC-FULL (1,351 GT / 119 ev) becomes the primary detector instrument — amended MID-VERDICT by Mark, grounded in pre-existing evidence
+
+**The change:** Mark (07-24, before the composed read): "Pick a different holdout than
+Irondequoit — that game is always going to be bad, because of the golden hour issue…
+that golden hour footage is giving us a lot of false negatives." HIERARCHY becomes
+spcfull > spc18k > spc > fair; iron18k stays in the table as a stress row (full stats,
+never decisive) — same treatment as SPC-134's stress status. SPC-FULL = the whole
+frozen SPC label pool (1,351 GT / 119 events, 3.2x SPC-18k's events), explicit full
+span, zero new clicks.
+
+**Why this is NOT outcome shopping, stated plainly:** the demotion lands hours after
+IRON-18k read geo-negative, which is exactly the situation pre-registration exists to
+prevent — so the grounds must be independent of the result, and they are: GAMES.md
+(2026-07-12) and EXP-DIST-43/45 had already established Iron 06.15 as "the only pure
+lighting case" — ~18:28 mid-June kickoff, low sun backlighting the far half, the ball
+frequently NOT EVEN A CANDIDATE, detector ceiling ~0.35. An instrument whose far
+misses are dominated by glare-impossible balls measures lighting robustness, not the
+ranking quality Phase 2 tests; making it primary on event count alone (07-23) ignored
+our own documented finding. Transparency safeguards: (1) both walks reported — under
+the old hierarchy Iron's row read ZERO (not decisive either way), so the walk
+continued to the same downstream rows; the amendment is strictly additive, it does
+not flip any decisive row that existed. (2) The power table's block-power row was
+measured @IRON-18k and is now VOID; re-measure @SPC-FULL before any pattern-4
+"powered null" claim. (3) Iron remains the designated instrument for the future
+lighting-robustness track (tone-normalization / golden-hour data work).
+
+---
+
 ## 2026-07-23 (h): Pittsford-human row COMPOSITION (56% stoppage frames) + stoppage-HOLD planner lever — pre-stated BEFORE the Phase 2 verdict
 
 Mark labeled all 560 Pittsford views the evening they were built and reported the dominant

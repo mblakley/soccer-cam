@@ -9,10 +9,15 @@ Usage (server):
     python -m training.experiments.compose_verdict \
         --dump-dir G:/ballresearch/geodet --arms mg_ctrl mg_geo mg_norm
 
-Dump naming: cands_<instrument>_<arm>.pkl. Instrument registry (EXP-DIST-71):
-spc = SPC-134 (continuity) | spc18k = SPC-18k@5473 | iron18k = IRON-18k@1501 |
-fair = FAIR-6k@47640. Pittsford-human + viewport rows are appended manually
-when available (printed as PENDING otherwise).
+Dump naming: cands_<instrument>_<arm>.pkl. Instrument registry (EXP-DIST-71,
+amended 07-24): spc = SPC-134 (continuity) | spc18k = SPC-18k@5473 |
+spcfull = SPC-FULL (whole 1,351-GT pool) | fair = FAIR-6k@47640 |
+iron18k = IRON-18k@1501, GOLDEN-HOUR STRESS row only — Iron 06.15 is the
+documented pure-lighting game (EXP-DIST-43/45: low-sun backlight, ball often
+not a candidate at all), so its far events measure glare robustness, not
+ranking quality; demoted from primary by Mark 2026-07-24 before the composed
+read. Pittsford-human + viewport rows are appended manually when available
+(printed as PENDING otherwise).
 """
 
 from __future__ import annotations
@@ -27,13 +32,16 @@ import numpy as np
 GAP = 64
 NBOOT = 2000
 FAR_PX = 8.0
-# hierarchy order (DECISIONS 07-23 amended): detector-metric instruments only —
-# the human/viewport rows sit above these and are appended by the caller.
-HIERARCHY = ["iron18k", "spc18k", "spc", "fair"]
+# hierarchy order (DECISIONS 07-23, amended 07-24: SPC-FULL replaces IRON-18k
+# as primary; Iron = stress context, never decisive): detector-metric
+# instruments only — human/viewport rows sit above and are appended by caller.
+HIERARCHY = ["spcfull", "spc18k", "spc", "fair"]
+STRESS = ["iron18k"]  # printed with full stats, excluded from the decisive walk
 INSTRUMENT_NAMES = {
     "spc": "SPC-134",
     "spc18k": "SPC-18k@5473",
-    "iron18k": "IRON-18k@1501",
+    "spcfull": "SPC-FULL",
+    "iron18k": "IRON-18k@1501*",
     "fair": "FAIR-6k@47640",
 }
 SPC_DIR = Path(r"F:\Heat_2012s\2026.05.31 - vs Spencerport gold 2 (away)")
@@ -167,7 +175,7 @@ def main() -> None:
 
     scored: dict[tuple[str, str], dict] = {}
     frames: dict[tuple[str, str], dict] = {}
-    for inst in HIERARCHY:
+    for inst in HIERARCHY + STRESS:
         for arm in args.arms:
             p = dd_ / f"cands_{inst}_{arm}.pkl"
             if not p.exists():
@@ -178,8 +186,9 @@ def main() -> None:
                 frames[(inst, arm)] = pf
 
     print("=== FULL TABLE (arm x instrument; point [95% event-CI] (events)) ===")
+    print("    (* = golden-hour stress row, excluded from the decisive walk)")
     metrics = ("far-ceil", "far-arg", "near-ceil", "near-arg")
-    for inst in HIERARCHY:
+    for inst in HIERARCHY + STRESS:
         rows = [(a, scored.get((inst, a))) for a in args.arms]
         if not any(m for _, m in rows):
             print(f"\n  {INSTRUMENT_NAMES[inst]}: PENDING (no dumps)")
@@ -200,7 +209,7 @@ def main() -> None:
     strata = _load_strata(SPC_DIR)
     if strata:
         print("\n=== SPC STRATA (hit-rate by NORMAL/HARD/AGREE, argmax) ===")
-        for inst in ("spc", "spc18k"):
+        for inst in ("spcfull", "spc", "spc18k"):
             for arm in args.arms:
                 pf = frames.get((inst, arm))
                 if not pf:
@@ -239,7 +248,8 @@ def main() -> None:
         a, b = pair.split(":")
         print(f"\n  pair {a} vs {b}:")
         assigned = False
-        for inst in HIERARCHY:
+        for inst in HIERARCHY + STRESS:
+            is_stress = inst in STRESS
             ma, mb = scored.get((inst, a)), scored.get((inst, b))
             pfa, pfb = frames.get((inst, a)), frames.get((inst, b))
             if not ma or not mb or pfa is None or pfb is None:
@@ -290,8 +300,9 @@ def main() -> None:
                 f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f},pm={pm:.3f})"
                 for k, d, ea, eb, p, dr, pm in verdicts
             )
-            print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}")
-            if dec and not assigned:
+            tag = "  [stress context — cannot decide]" if is_stress else ""
+            print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}{tag}")
+            if dec and not assigned and not is_stress:
                 print(f"    >>> first decisive row: {INSTRUMENT_NAMES[inst]} ({dec})")
                 assigned = True
         if not assigned:
