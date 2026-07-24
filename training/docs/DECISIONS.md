@@ -63,6 +63,36 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (o): Attribution closed — CAMERA YAW through the cylindrical pano; the world model is an EXACT trace interpolator, so all projection error is INTERIOR; #19 self-check must be spatial, not scalar
+
+**Mark's rig knowledge decides (b):** the FAIR camera is not straight-on — slightly
+turned RIGHT. Evidence assembled: (1) my small-field claim is WITHDRAWN — FAIR's
+GT spans one narrow x-band (3583–5137, a single passage), so it cannot
+discriminate; the 60 m arithmetic assumed a symmetric perspective that a yawed
+cylindrical projection does not provide. (2) SPC — the "sane" instrument — shows
+the expectation field is spatially rough even there: ratio LEFT 0.66 / CENTER
+1.34 / RIGHT 0.73. (3) The world model reproduces the traced polygon with ZERO
+residual at every knot (exact interpolation, not a fit) — so misfit CANNOT show
+up at the trace; it all lives between the near/far lines, exactly where balls
+are. A yawed camera bends the interior depth progression; the trace has no way
+to encode it.
+
+**Consequences:**
+- **Expected size is only locally trustworthy near where it was measured.**
+  Tonight's gates remain valid AS MEASURED: each instrument's ratio was taken in
+  its own GT band, which is where its eval lives (FAIR band = 2.54; SPC band =
+  0.78). No fleet-wide constant exists to correct with.
+- **#19's self-check must be SPATIAL, not one scalar:** a low-order scale field
+  (e.g., linear-in-x per depth band) fit from confident track detections. One
+  scalar would fix FAIR's band and break another region.
+- **No geometry code change tonight** — attributed ≠ fixed; the durable fix
+  (yaw-aware or dewarped-space geometry) is a designed change, post-verdict.
+- The (m).4 corrected re-dump becomes: geo plane scaled by the MEASURED BAND
+  ratio (2.54 in FAIR's GT band) — now an attributed correction (projection
+  error measured in the exact region the instrument reads), branches unchanged.
+
+---
+
 ## 2026-07-24 (n): Ratio is a DISCREPANCY ALARM, not a polygon gate — attribution protocol + results (Mark, five corrections to (m))
 
 **Corrections to (m):** (1) polygon re-fit and FAIR re-dump STOPPED — the trace is
