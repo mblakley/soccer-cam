@@ -179,13 +179,22 @@ def snap_teacher_to_candidates(
 
 def load_fullgame_candidates(fullgame_dir: Path) -> tuple[list[int], dict, dict]:
     """Load a `dump_game_candidates` artifact -> (ef, cands, meta). Candidate rows are
-    padded to the 4-tuple shape the snapper expects (size_px unknown -> None)."""
+    padded to the 4-tuple shape the snapper expects (size_px unknown -> None).
+
+    Handles BOTH row formats: legacy 3-tuples ``(x, y, score)`` and current
+    4-tuples ``(x, y, score, size_px)`` — newer dumps carry the observed blob
+    diameter (candidates/2 schema). The 3-only unpack silently skipped
+    heat__2026.05.07 in every multi-game eval and aborted the Pittsford
+    camera-path plan (2026-07-23) before this fix.
+    """
     meta = json.loads((fullgame_dir / "meta.json").read_text(encoding="utf-8"))
     cands: dict[int, list[tuple]] = {}
     for p in sorted(fullgame_dir.glob("part_*.pkl")):
         with open(p, "rb") as fh:
             for g, rows in pickle.load(fh).items():
-                cands[int(g)] = [(x, y, s, None) for (x, y, s) in rows]
+                cands[int(g)] = [
+                    (r[0], r[1], r[2], r[3] if len(r) > 3 else None) for r in rows
+                ]
     return sorted(cands), cands, meta
 
 
