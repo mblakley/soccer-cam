@@ -63,6 +63,36 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (p): REFRAME — the headline is SPC's ±35% symmetric bow: the interior expectation model is structurally wavy on EVERY game; yaw is the AMPLIFIER, not the root cause (Mark, four directives)
+
+**1. (o) reframed.** SPC — a straight-on rig — carries ratio LEFT 0.66 / CENTER
+1.34 / RIGHT 0.73: a ±35% bow on the best-behaved instrument we have. The interior
+expectation model (sparse trace, exactly interpolated through a curved projection)
+is structurally wavy EVERYWHERE; FAIR's yaw only amplified it to 2.5x in one band.
+A yaw-only fix leaves ±35% on every game.
+
+**2. The durable #19/geometry fix (designed post-verdict change):** expected size
+from RAY GEOMETRY (camera pose + lens model → elevation → distance per pixel),
+with the polygon as a SCALE ANCHOR only — never trace-interior interpolation. The
+spatial self-check field absorbs residuals; it must not be asked to absorb the
+model.
+
+**3. Unified-mechanism test (tonight, cached dumps, zero GPU):** correlate
+geo-vs-ctrl per-position deltas on SPC against the measured ratio field. If the
+channel's gains sit where the ruler is most wrong, the learned channel was a
+LEARNED CORRECTION to a broken analytic expectation — one mechanism unifying
+EXP-67's "position prior," the SPC +0.30, and the FAIR collapse — and fixing the
+ruler may recover part of the gain with no channel at all. Result goes in the
+composed verdict.
+
+**4. Scope labels:** the band-corrected FAIR re-dump is a MECHANISM PROBE (one
+band, one game), never a deployable config. The composed verdict presents the
+mechanism story as its four-version sequence — memorization → size-endorsement →
+ruler error → structurally-wavy expectation model amplified by yaw — with this
+entry marked CURRENT.
+
+---
+
 ## 2026-07-24 (o): Attribution closed — CAMERA YAW through the cylindrical pano; the world model is an EXACT trace interpolator, so all projection error is INTERIOR; #19 self-check must be spatial, not scalar
 
 **Mark's rig knowledge decides (b):** the FAIR camera is not straight-on — slightly
