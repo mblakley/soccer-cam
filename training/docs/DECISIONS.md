@@ -63,6 +63,35 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (q): FAIRPROBE branches pre-stated BEFORE the probe lands + the operator-diversity reading (Mark)
+
+**Branches for cands_fairprobe_mg_geo (geo, FAIR band, geo-scale 2.54):**
+- **(a) geo ≈ ctrl on corrected-ruler FAIR** → the SPC gain is genuinely
+  venue-local (position-prior residue survives ruler correction). Channel arc
+  CLOSES; ray-geometry fix still funded for eval integrity, #19, and the
+  DEPTH-CAL replacement — but not sold as recovering the +0.30.
+- **(b) geo decisively WORSE still** → residual transfer failure beyond both the
+  ruler and mechanism stories; veto stands, and a FIFTH mechanism version is owed.
+- **(c) geo ≥ ctrl with gains in HARD-type frames** → SIZE CONDITIONING IS REAL
+  AND RULER-GATED. The Phase 2 story inverts: the channel was never the problem,
+  the analytic expectation under it was. Adoption REOPENS, strictly gated on the
+  ray-geometry fix + the ratio audit as per-game acceptance — and the (j) veto
+  lifts for this arm via the pre-stated EXP-71 instrument-failure path.
+
+**Scope caveat (carried from (p)):** branch (c) on a one-band probe is DIRECTION,
+not certification — certification is the ray-geometry fix evaluated fleet-wide,
+with FAIR-scale-error as the adversarial fixture.
+
+**Operator-diversity reading (goes in the verdict regardless of branch):**
+"venue-local gain" is not fatal for THIS operator. The fleet self-covers (LOO-NN
+median 0.42), so a channel that helps on covered geometry plus a ruler that
+transfers by construction may be shippable for our deployments even if it never
+generalizes to a new operator — that boundary is the operator-diversity axis
+already on the roadmap, and tonight's numbers are read against it, not against an
+abstract generalization bar.
+
+---
+
 ## 2026-07-24 (p): REFRAME — the headline is SPC's ±35% symmetric bow: the interior expectation model is structurally wavy on EVERY game; yaw is the AMPLIFIER, not the root cause (Mark, four directives)
 
 **1. (o) reframed.** SPC — a straight-on rig — carries ratio LEFT 0.66 / CENTER
