@@ -63,6 +63,53 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (m): The ruler was broken — FAIR is a 2.54x GEOMETRY-SCALE error on a CORRECT polygon trace; FAIR-badpoly frozen as the #19 certification fixture; #19 respecced as a TRIPLE; branches pre-stated (Mark, five directives + trace verification)
+
+**The finding under (l):** observed/expected true-ball size on the eval games:
+FAIR **2.54** (IQR 1.94–2.72), SPC 0.78, Iron 1.07. Both size-conditioned arms were
+handed a ruler 2.5x off at eval — the true ball reads "too big" and is suppressed;
+wrong-sized junk reads "right." That is why the persistence filter could not rescue
+them (it removed the furniture; everything correctly-sized was still suppressed) and
+why unconditioned mg_ctrl alone survived. **Mark re-verified the 06.06 polygon TRACE
+is correct** — so the error is STRUCTURAL (the geometry model's scale assumption for
+this field), not a drawing error: visual confirmation is proven insufficient, and no
+re-trace can fix it.
+
+**1. FAIR-badpoly frozen** (G:\ballresearch\geodet\fixtures\fair_badpoly: the three
+arm dumps + README): a real 2.5x ruler error is irreplaceable as a test input — the
+standing certification fixture for every size-conditioned lever.
+
+**2. Fleet-wide size-ratio audit (CPU, tonight):** observed/expected per game from
+size-carrying candidate dumps (AutoCam jsonl carries NO size — coverage limited to
+cached dumps tonight; decode-based completion queued). Consumers: (a) quantifies the
+training stores' ruler noise — the geo/norm checkpoints trained on UNAUDITED
+polygons, caveat recorded; (b) gates Pittsford + every size-conditioned viewport row
+before it is read; (c) becomes the metric acceptance gate in build_field_geometry.
+**Every size-conditioned number is reported alongside its instrument's ratio**
+(SPC=0.78: the +0.30 was measured under a 22% ruler error).
+
+**3. #19 respecced as a TRIPLE:** geometry-derived size prior + static-persistence
+filter + **online scale self-check** (one scalar fit from observed-vs-predicted
+sizes on confident track detections). Analytic priors inherit polygon/geometry error
+1:1 — the self-check converts a catastrophic failure into a startup transient.
+Certified on FAIR-badpoly.
+
+**4. FAIR corrected re-dump branches, pre-stated before running** (offline
+self-check form: geo re-dumped with --geo-scale 2.54; norm re-dumped at
+target-width 5120/2.54 ≈ 2016):
+- (a) corrected ≈ ctrl → pure ruler artifact; the (j) veto LIFTS for that arm;
+  EXP-71-family tag on the row.
+- (b) corrected still worse than ctrl → residual transfer failure; veto STANDS.
+- (c) corrected BETTER than ctrl → size conditioning is real and polygon-gated;
+  the fleet ratio audit becomes the adoption gate. Branch (c) is live given SPC's
+  +0.30 under a 22% error.
+
+**5. The composed verdict presents the mechanism story as its SEQUENCE**
+(memorization hypothesis → size-endorsement → ruler error), and all
+size-conditioned viewport rows are ratio-gated before being read.
+
+---
+
 ## 2026-07-24 (l): FAIR autopsy corrections — size-ENDORSEMENT is the shared mechanism; #19 respecced as a PAIR; hn4's FAIR anchor re-attributed; (j)/(k) composition pre-stated; FAIR annotated not demoted (Mark, five directives)
 
 **1. Record corrected — the norm collapse kills the analytic-vs-learned framing.**

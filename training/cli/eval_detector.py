@@ -160,6 +160,14 @@ def main() -> None:
         help="also pickle raw candidates (+observed size) + GT here for cli/sweep_tracker",
     )
     ap.add_argument(
+        "--geo-scale",
+        type=float,
+        default=1.0,
+        help="multiply the gray3geo expected-size plane — offline form of the #19 "
+        "scale self-check, for certifying size-conditioned arms against a game "
+        "whose polygon ruler is off (FAIR-badpoly = 2.54; DECISIONS 07-24 (m))",
+    )
+    ap.add_argument(
         "--stabilize",
         action="store_true",
         help="wind-align bands to the first decoded frame before inference; OUR "
@@ -289,6 +297,8 @@ def main() -> None:
                 from video_grouper.inference.ball_detector import band_geo_plane
 
                 geo_plane = band_geo_plane(np.asarray(poly, float), warp)
+                if args.geo_scale != 1.0:
+                    geo_plane = np.clip(geo_plane * args.geo_scale, 0.0, 1.0)
         band_gray[f] = _dewarp_mask_gray(img, warp, mask, stab)
         if stab is not None:
             shifts[f] = stab.last
