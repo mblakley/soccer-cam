@@ -168,6 +168,13 @@ def main() -> None:
     mpoly = warp.points(far_poly).astype(np.int32)
     mask = np.zeros((bh, bw), np.uint8)
     cv2.fillPoly(mask, [mpoly], 255)
+    geo_plane = None  # gray3geo: per-game geometry plane (band px expected size)
+    if _meta["encoding"] == "gray3geo":
+        from video_grouper.inference.ball_detector import (
+            band_geo_plane,  # noqa: PLC0415
+        )
+
+        geo_plane = band_geo_plane(np.asarray(gj["field_polygon"], float), warp)
 
     for start, end, frames_want in spans:
         part = out / f"part_{start:07d}_{end:07d}.pkl"
@@ -190,6 +197,8 @@ def main() -> None:
                 seq = [s for s in seq if s is not None]
                 grays = seq if len(seq) == 3 else [seq[0]] * (3 - len(seq)) + seq
                 stack = np.stack(grays, 0).astype(np.float32) / 255.0
+                if geo_plane is not None:
+                    stack = np.concatenate([stack, geo_plane[None]], axis=0)
                 hm = infer_band(model, dev, stack, args.tile_w, args.overlap)
                 peaks = extract_peaks(
                     hm,
