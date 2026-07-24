@@ -194,7 +194,18 @@ def main() -> None:
     n_cams = len(cx)
     pad = int(args.pad_s * fps)
     if args.full_game:
-        frames = list(range(g0, n_cams, args.stride))[: args.max_frames]
+        # spread max_frames EVENLY over the (active-play) span — a head-truncated
+        # stride grid lands entirely in pre-game warmup and the active-play
+        # filter below then deletes every frame
+        grid = list(range(g0, n_cams, args.stride))
+        if not args.no_active_play_filter:
+            ranges = dd.active_play_ranges(gj["segments"], gj.get("game_state"))
+            if ranges:
+                grid = [g for g in grid if any(lo <= g <= hi for lo, hi in ranges)]
+        if len(grid) > args.max_frames:
+            idx = np.linspace(0, len(grid) - 1, args.max_frames).round().astype(int)
+            grid = [grid[i] for i in sorted(set(idx.tolist()))]
+        frames = grid
     else:
         if not segs:
             raise SystemExit("no whip/divergence segments found — nothing to label")
