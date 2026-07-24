@@ -250,7 +250,12 @@ def main() -> None:
     for pair in pairs:
         a, b = pair.split(":")
         print(f"\n  pair {a} vs {b}:")
-        assigned = False
+        # DECISIONS 07-24 (j): the walk does NOT stop at the first decisive row —
+        # a decisive REGRESSION on any primary-family instrument disqualifies the
+        # arm regardless of decisive gains elsewhere (transfer failure outranks
+        # in-distribution gain). Wins only crown when no regression exists.
+        wins: list[tuple[str, str, float]] = []
+        regs: list[tuple[str, str, float]] = []
         for inst in HIERARCHY + STRESS:
             is_stress = inst in STRESS
             ma, mb = scored.get((inst, a)), scored.get((inst, b))
@@ -297,7 +302,6 @@ def main() -> None:
                     p_mag = 1.0
                 decisive = (p < 0.05) or (p_mag < 0.05)
                 verdicts.append((k, decisive, ea, eb, p, d_obs, p_mag))
-            dec = [k for k, d, *_ in verdicts if d]
             line = "  ".join(
                 f"{k}:{'DECISIVE' if d else 'zero'}"
                 f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f},pm={pm:.3f})"
@@ -305,10 +309,25 @@ def main() -> None:
             )
             tag = "  [stress context — cannot decide]" if is_stress else ""
             print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}{tag}")
-            if dec and not assigned and not is_stress:
-                print(f"    >>> first decisive row: {INSTRUMENT_NAMES[inst]} ({dec})")
-                assigned = True
-        if not assigned:
+            if not is_stress:
+                for k, d, _ea, _eb, _p, dr, _pm in verdicts:
+                    if d:
+                        (regs if dr < 0 else wins).append(
+                            (INSTRUMENT_NAMES[inst], k, dr)
+                        )
+        if regs:
+            rows = "; ".join(f"{nm} {k} d={dr:+.3f}" for nm, k, dr in regs)
+            print(
+                f"    >>> DISQUALIFIER: decisive primary-family regression ({rows}) "
+                f"— transfer failure outranks in-distribution gain; {a} cannot be "
+                "promoted regardless of decisive gains elsewhere (DECISIONS 07-24 (j))"
+            )
+        elif wins:
+            nm, k, dr = wins[0]
+            print(
+                f"    >>> decisive win, no regression anywhere: {nm} ({k}, d={dr:+.3f}) decides for {a}"
+            )
+        else:
             print(
                 "    >>> no decisive detector row: pattern 4 (nothing separates) unless a human/viewport row decides"
             )

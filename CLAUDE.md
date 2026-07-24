@@ -30,6 +30,12 @@ Soccer-cam (video-grouper) is an automated pipeline for downloading, processing,
    - **Any state**: pipeline_attempts climbing? (indicates retry loop — fix root cause, don't just reset)
    - If a game's state doesn't match its data, demote it to the correct stage.
 
+8. **In automated chains, warnings don't exist.** Every guard must hard-fail (non-zero exit,
+   refuse to proceed) — a warning printed into a log no chain reads is not a guard. If a tool
+   detects that its inputs violate the operator's stated intent, it stops; it does not warn
+   and continue. (Added 2026-07-24 after the first-window trap bit a third time, the second
+   time sailing past an existing soft warning.)
+
 ## Game Naming Convention
 
 All games use this format everywhere — tiles, labels, shards, manifests, configs:

@@ -54,6 +54,42 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (j): Directional-conflict disqualifier + transfer findings + guard rule + stoppage-HOLD elevated (Mark, four directives BEFORE the composed verdict)
+
+**1. (g) amendment — decisive regression VETOES decisive gain.** A DECISIVE
+regression on any primary-family instrument row disqualifies the arm regardless of
+decisive gains elsewhere — transfer failure outranks in-distribution gain. Without
+this, the mechanical first-decisive-row walk would crown geo on SPC's +0.30 before
+ever reaching FAIR's collapse. compose_verdict now scans ALL non-stress rows:
+regressions veto, wins crown only when no regression exists.
+
+**2. Transfer findings (recorded for the verdict + the roadmap):**
+- **Geometry DISTANCE does not predict geo-CHANNEL transfer.** The FAIR-6k argmax
+  collapse (0.253 → 0.040) happened at d=0.43 — inside the interpolation zone
+  (fleet LOO-NN median 0.42). The learned channel memorizes finer structure than
+  the 10-pt descriptor captures; distance-stratified rows are UNINFORMATIVE for
+  channel-transfer questions.
+- **Paired implication for #19 (geometry-derived depth prior):** SPC's +0.30
+  proves the geometry signal is real and worth capturing; FAIR's −0.21 proves the
+  capture must be ANALYTIC (computed from the polygon at inference, transfers by
+  construction) not LEARNED (a free channel the net can memorize per-rig).
+  mg_norm's table — analytic scale normalization — is the confirmation read of
+  this principle.
+
+**3. Standing rule — in automated chains, WARNINGS DON'T EXIST.** Every guard
+hard-fails or it isn't a guard. This is the third bite of the first-window trap
+and the second past an existing soft guard (the 10%-coverage WARNING printed into
+a log no chain reads). eval_detector now refuses to truncate an explicit span;
+SPC-134's coverage warning on default runs is pre-declared continuity behavior,
+not a violation. Also added to CLAUDE.md Task Execution Rules.
+
+**4. Stoppage-HOLD is day-one item #1 under EVERY pattern** (amends (g)'s day-one
+plans): 56% of divergence frames are stoppage sweep, it is planner-side and
+CPU-only, and it was quantified by one evening of labels. Likely the largest
+single viewport-capture gain available — and viewport capture is the product.
+
+---
+
 ## 2026-07-24 (i): IRON-18k demoted to GOLDEN-HOUR STRESS row; SPC-FULL (1,351 GT / 119 ev) becomes the primary detector instrument — amended MID-VERDICT by Mark, grounded in pre-existing evidence
 
 **The change:** Mark (07-24, before the composed read): "Pick a different holdout than
