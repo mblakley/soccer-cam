@@ -63,6 +63,37 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (n): Ratio is a DISCREPANCY ALARM, not a polygon gate — attribution protocol + results (Mark, five corrections to (m))
+
+**Corrections to (m):** (1) polygon re-fit and FAIR re-dump STOPPED — the trace is
+human-confirmed correct, so a ratio≈1 polygon acceptance gate would REJECT correct
+traces and drive the editor loop to absorb a model bug into the ground-truth store.
+The ratio is an alarm until attributed. (2) Fixture renamed **FAIR-scale-error**
+(was FAIR-badpoly) — still the #19 certification input (the prior must survive a
+2.5x ruler error regardless of origin), but the name must not assert the polygon
+was wrong. (3) The corrected re-dump happens only after something actually CHANGES
+(code fix or field-size parameter); the (j) veto re-read waits for it; the (m).4
+branches still apply, gated on attribution.
+
+**Attribution results (three cheap tests, in order):**
+- **(a) units/warp bug: CLEAN.** All three eval games: warp.scale=1.000, local
+  scale at the GT median = 1.000 (7680x2160 native panos, no resample). The
+  expectation path has no band/source confusion — and therefore the TRAINING geo
+  planes carry no shared code bug.
+- **(c) measurement bloom: CLEAN.** Eyeball crops with a 10-px ruler: FAIR's GT
+  ball at y=460 is ~12 source px exactly as blob_diameter reports (players
+  near-scale); SPC's at similar expected size is ~5 px. The observation is honest.
+- **(b) field/geometry assumption: THE LIVE HYPOTHESIS.** FAIR's imagery at
+  "far" polygon positions is near/mid-scale — consistent with the real field being
+  much shorter than the homography's assumed dimensions (or an equivalent
+  geometry-parameter error). Mark to confirm from memory whether 06.06 was a
+  full-size pitch; goal-width-in-px cross-check available. If confirmed: per-game
+  field size becomes a game.json parameter, settable in the editor, and the fleet
+  ratio audit becomes the attribution instrument (clusters by venue = field-size;
+  residual outliers = trace errors).
+
+---
+
 ## 2026-07-24 (m): The ruler was broken — FAIR is a 2.54x GEOMETRY-SCALE error on a CORRECT polygon trace; FAIR-badpoly frozen as the #19 certification fixture; #19 respecced as a TRIPLE; branches pre-stated (Mark, five directives + trace verification)
 
 **The finding under (l):** observed/expected true-ball size on the eval games:
