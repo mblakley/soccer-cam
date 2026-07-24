@@ -54,6 +54,34 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-23 (h): Pittsford-human row COMPOSITION (56% stoppage frames) + stoppage-HOLD planner lever — pre-stated BEFORE the Phase 2 verdict
+
+Mark labeled all 560 Pittsford views the evening they were built and reported the dominant
+failure: **frames where neither viewport was right were mostly STOPPAGES** (throw-ins, goal
+kicks, substitutions). The labels confirm and sharpen this — of the 7 divergence segments,
+4 (282/500 frames, 56%) have near-static GT (focal swing ≤400 px) while the champion swept
+1,100–2,200 px; in segs 0 and 5 GT moved <80 px while our camera swept 1,200–1,900 px (seg 5:
+AutoCam wandered too, 1,410 px). In ALL 7 segments the champion's swing exceeds GT swing.
+
+**Consequence 1 — instrument caveat (pre-stated now, before any eval pkl lands):** the
+Pittsford-human row is a FAILURE-MODE instrument dominated by planner demeanor during
+stoppages, which is SHARED ACROSS the three detector arms. Expect it to under-discriminate
+mg_ctrl/mg_geo/mg_norm; an arm tie on this row is composition, not evidence that the
+geometry channel does nothing. The row still ranks what it was built to rank — product
+viewport vs AutoCam on the held-out Dahua game — and its hierarchy-#1 position stands for
+that purpose.
+
+**Consequence 2 — product lever (Mark's proposal, adopted as the first post-verdict PRODUCT
+candidate on either verdict pattern):** *hold the camera where the ball was when play
+stopped.* Planner/tracker enters a HOLD state on ball-track loss/stop (last confident ball
+position, no candidate-chasing; resume on confident reacquisition) — folds into the
+state-dependent Viterbi miss-cost work (the miss-state IS the stoppage state). Zero new
+labels needed: the 560 Pittsford views + frozen viewport sets already score it — segs 0/1/5
+(~226 frames) are the direct headroom estimate. This lever is ARM-INDEPENDENT and does not
+touch the Phase 2 detector question.
+
+---
+
 ## 2026-07-23 (g): PRE-COMMITTED Phase 2 ACTION TABLE (written before any number exists) + Viterbi benchmark decision + detector-arc close condition
 
 **The table binds: outcomes argue for themselves after the fact, so the next step is decided
