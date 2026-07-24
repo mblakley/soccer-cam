@@ -324,8 +324,11 @@ def main() -> None:
             )
         elif wins:
             nm, k, dr = wins[0]
+            # DECISIONS 07-24 (k): detector rows may VETO, never PROMOTE — a
+            # clean decisive win is favorable input, not adoption.
             print(
-                f"    >>> decisive win, no regression anywhere: {nm} ({k}, d={dr:+.3f}) decides for {a}"
+                f"    >>> detector rows favor {a} ({nm} {k}, d={dr:+.3f}) — NOT "
+                "sufficient for adoption; viewport/human rows must confirm (DECISIONS 07-24 (k))"
             )
         else:
             print(

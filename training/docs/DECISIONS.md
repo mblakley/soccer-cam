@@ -7,6 +7,15 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 *Last maintained: 2026-07-23*
 
 - **Champions:** detector hn4 (basis: far-CEILING 0.965; argmax claims need replicates), selector v7.
+- **VIEWPORT MATCH IS THE OBJECTIVE (07-24 (k)).** Detector confidence/argmax are upstream
+  proxies — the tracker/planner post-process scores, so a model with worse detector numbers
+  can produce better viewports, and that model WINS. Detector rows may VETO (a decisive
+  regression poisons the tracker's input) but may never PROMOTE on their own — adoption
+  requires the viewport rows. On a decisive detector-vs-viewport conflict, viewport wins and
+  the conflict gets an EXPERIMENTS entry. Every lever states at proposal time how it
+  plausibly moves VIEWPORT capture — "improves argmax" is not a consumer. Labeling economy:
+  viewport-capture coverage outranks detector-instrument enrichment. Detector rows remain
+  DIAGNOSTIC (ceiling-vs-argmax-vs-tracker stage attribution), not adoption objectives.
 - **Gates (G1, redefined 07-23):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1).
   Argmax = directional color only. Never gate on a metric whose CI floor exceeds the effect size.
 - **Noise protocol:** event-level sign test (gap=64) + event-bootstrap 95% CI per metric per game
@@ -51,6 +60,37 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
   person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
   CI-separated harm on record).
+
+---
+
+## 2026-07-24 (k): VIEWPORT MATCH IS THE OBJECTIVE — standing principle, pre-stated before the composed verdict (Mark)
+
+Detector confidence/argmax are upstream proxies — the tracker and planner post-process
+scores, so a model with worse detector numbers can produce better viewports, and that
+model WINS. Operational consequences, pre-stated:
+
+1. **Detector rows may VETO, never PROMOTE.** A decisive regression (tonight's FAIR
+   collapse) poisons the tracker's input and disqualifies; but adoption of any arm/lever
+   requires the viewport rows, not just clean detector rows. compose_verdict's language
+   amended to match: a decisive detector win with no regression reads "detector rows
+   favor X — NOT sufficient for adoption."
+2. **On a decisive detector-vs-viewport CONFLICT (worse argmax, better viewport capture),
+   the viewport rows win** and the conflict gets an EXPERIMENTS entry — that is a
+   measurement about what the pipeline actually consumes, not noise.
+3. **Every future lever states at proposal time how it plausibly moves VIEWPORT capture**
+   (the (j) funding rule, tightened): "improves argmax" is not a consumer. This is why
+   stoppage-HOLD is day-one #1 — it attacks the labeled viewport failure directly and
+   detector metrics can't even see it.
+4. **Labeling economy: viewport-capture eval coverage** (more games, tracker-port noise
+   bands, viewport label sets) **outranks detector-instrument enrichment** — invest
+   clicks where the objective is measured.
+
+Caveat so the principle doesn't overcorrect: detector rows aren't worthless — they're
+DIAGNOSTIC (when a viewport fails, ceiling-vs-argmax-vs-tracker attribution tells you
+which stage broke, exactly like the near-autopsy did). Instruments for debugging, not
+objectives for adoption. Tonight's composed verdict already conforms — the geo veto
+stands either way and the top rows were always viewport — but writing this now means
+the next close call inherits the priority instead of relitigating it.
 
 ---
 
