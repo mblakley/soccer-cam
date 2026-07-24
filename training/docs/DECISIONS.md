@@ -63,6 +63,31 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (s): FACTORIZATION SUPPORTED — one shared bow curve x per-game scalar (+ yaw phase); frame-weighted contamination; the one-bug-class appendix (Mark, three directives)
+
+**1. Factorization test (run before composing, cached data):** normalizing each
+game's ratio field by its median and overlaying: shape correlation 0.776 over
+shared x-bins; bins 1/3/5 align at 0.83/0.82, 1.92/1.83, 0.90/0.85. The residual
+is the PEAK POSITION (SPC's bow peaks one bin right of Pittsford's) — exactly what
+per-game yaw does to a shared projection bow; FAIR's single band sits ON the bow
+peak, explaining part of its 2.54. **Interim fix: one shared bow curve + one
+per-game scalar (+ optional yaw phase), deployable in days; per-game scalars =
+the fleet-audit deliverable; ray-geometry remains the durable fix that DERIVES
+the curve instead of fitting it.**
+
+**2. Frame-weighted contamination (addendum to (r).2):** Pittsford's worst third
+is frame-CENTER (rel 1.83 at the bow peak, absolute ~2.8) — where play
+concentrates. Weak size-conditioned viewport rows are even MORE expected than the
+median 1.74 implies.
+
+**3. The verdict's mechanism appendix frames ONE BUG CLASS, five anomalies** —
+FAIR collapse, Pittsford bow, SPC ±35%, the DEPTH-CAL cross-game collapse, and
+EXP-66's residuals — one fix path (interim curve+scalar → ray-geometry), with a
+3-game certification set including a Dahua row (SPC, FAIR-scale-error, Pittsford).
+A measured bug class, not a fifth story.
+
+---
+
 ## 2026-07-24 (r): Verdict-eve hygiene — clock provenance annotation + the asymmetric viewport-tier read (Mark, two directives)
 
 **1. Clock provenance:** the fleet ran ~2.2 h slow all day; the laptop was
