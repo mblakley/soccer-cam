@@ -86,13 +86,35 @@ def find_segments(
     return sorted(out, key=lambda s: -s[2])
 
 
+def load_cams(path: str) -> tuple[list[tuple[float, float, float]], int]:
+    """--cams accepts either the legacy pickle {'cams': [...]} (frame-0 aligned)
+    or a camera_path/1 JSON artifact from plan_camera_path (g_start aligned).
+
+    For the artifact, indices stay global-source-frame: the head [0, g_start)
+    is padded with the first planned cam (constant -> zero velocity -> no fake
+    whip segments), and the returned g_start lets the caller drop AutoCam
+    viewport rows the planner never covered (no AC data -> no fake divergence
+    segments in the pad).
+    """
+    raw = Path(path).read_bytes()
+    if raw[:1] != b"{":
+        return pickle.loads(raw)["cams"], 0
+    art = json.loads(raw)
+    if art.get("schema") != "camera_path/1":
+        raise SystemExit(f"--cams JSON is not a camera_path/1 artifact: {path}")
+    g0 = int(art["g_start"])
+    frames = [tuple(f) for f in art["frames"]]
+    return [frames[0]] * g0 + frames, g0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game-dir", required=True)
     ap.add_argument(
         "--cams",
         required=True,
-        help="pkl with {'cams': [(cx,cy,hfov), ...]} per source frame",
+        help="pkl with {'cams': [(cx,cy,hfov), ...]} per source frame, "
+        "or a camera_path/1 JSON artifact from plan_camera_path",
     )
     ap.add_argument("--set-name", required=True)
     ap.add_argument("--out", default="D:/training_data/viewport_label")
@@ -153,7 +175,11 @@ def main() -> None:
         if (gd / "autocam_viewport.jsonl").exists()
         else {}
     )
-    cams = pickle.loads(Path(args.cams).read_bytes())["cams"]
+    cams, g0 = load_cams(args.cams)
+    if g0:
+        # camera_path/1 artifact: the planner never covered [0, g_start) —
+        # keep AC divergence sampling out of the padded head
+        vps = {g: v for g, v in vps.items() if g >= g0}
     cx = np.array([c[0] for c in cams])
     fps = 20.0
 
@@ -168,7 +194,7 @@ def main() -> None:
     n_cams = len(cx)
     pad = int(args.pad_s * fps)
     if args.full_game:
-        frames = list(range(0, n_cams, args.stride))[: args.max_frames]
+        frames = list(range(g0, n_cams, args.stride))[: args.max_frames]
     else:
         if not segs:
             raise SystemExit("no whip/divergence segments found — nothing to label")
