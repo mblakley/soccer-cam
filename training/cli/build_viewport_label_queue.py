@@ -241,10 +241,20 @@ def main() -> None:
     out_dir = Path(args.out) / args.set_name
     (out_dir / "strips").mkdir(parents=True, exist_ok=True)
 
-    with av.open(str(gd / "combined.mp4")) as probe:
+    # dims from the combined video if present, else the first raw segment clip
+    # (stream-copy concat — bit-identical); frames always decode from the raw
+    # segment clips either way
+    probe_path = gd / "combined.mp4"
+    if not probe_path.exists():
+        probe_path = next(
+            c
+            for s in sorted(gj["segments"], key=lambda z: int(z["global_offset"]))
+            if (c := gd / f"{s['seg']}.mp4").exists()
+        )
+    with av.open(str(probe_path)) as probe:
         vs = probe.streams.video[0]
         sw, sh = vs.codec_context.width, vs.codec_context.height
-    vrot = resolve_video_rotation(str(gd / "combined.mp4"), gj.get("video_rotation"))
+    vrot = resolve_video_rotation(str(probe_path), gj.get("video_rotation"))
 
     n_written = 0
     for g, img in iter_frames_from_segments(
