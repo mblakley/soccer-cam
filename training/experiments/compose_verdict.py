@@ -45,7 +45,10 @@ INSTRUMENT_NAMES = {
     "spc": "SPC-134",
     "spc18k": "SPC-18k@5473",
     "iron18k": "IRON-18k@1501*",
-    "fair": "FAIR-6k@47640",
+    # ^ = static-distractor robustness row (07-24 (l)): FULL decisive standing —
+    # annotated, not demoted; it caught a real product failure (the (1637,470)
+    # furniture object) and certifies the #19 size-prior + persistence pair.
+    "fair": "FAIR-6k@47640^",
 }
 SPC_DIR = Path(r"F:\Heat_2012s\2026.05.31 - vs Spencerport gold 2 (away)")
 
@@ -190,6 +193,9 @@ def main() -> None:
 
     print("=== FULL TABLE (arm x instrument; point [95% event-CI] (events)) ===")
     print("    (* = golden-hour stress row, excluded from the decisive walk)")
+    print(
+        "    (^ = static-distractor robustness row — decisive; #19-pair certification row)"
+    )
     metrics = ("far-ceil", "far-arg", "near-ceil", "near-arg")
     for inst in HIERARCHY + STRESS:
         rows = [(a, scored.get((inst, a))) for a in args.arms]

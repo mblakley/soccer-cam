@@ -63,6 +63,47 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-24 (l): FAIR autopsy corrections — size-ENDORSEMENT is the shared mechanism; #19 respecced as a PAIR; hn4's FAIR anchor re-attributed; (j)/(k) composition pre-stated; FAIR annotated not demoted (Mark, five directives)
+
+**1. Record corrected — the norm collapse kills the analytic-vs-learned framing.**
+(j).2 attributed geo's FAIR collapse to LEARNED-prior memorization and framed #19's
+analytic prior as the fix. mg_norm — fully analytic scale normalization — collapsed
+identically (0.040), so the mechanism is SIZE-ENDORSEMENT, shared by both: any
+conditioning that strengthens "correct-sized blob" promotes ball-sized static
+furniture (the (1637,470) object: rank-0 in every arm's top-24, 400/400 frames;
+35/40 of geo's flips land on it, x-spread 7 px). **#19 ships only as a PAIR:
+geometry-derived size prior + static-persistence filter, certified on the FAIR
+window — the row that killed geo and norm.** Third instance of the
+size-is-not-a-discriminator lesson (ball/head, ball/furniture); temporal context is
+the discriminator each time.
+
+**2. Static-persistence filter funded NOW** — CPU, model-free, dump-level:
+near-zero positional variance across frames = furniture, down-weight it in
+candidate lists. Validated same-day by re-running the FAIR paired read on all three
+arms' cached candidates with the filter applied. It helps ctrl too (the object is
+rank-0 in ctrl's top-24) and generalizes to every venue's furniture where
+per-venue hard negatives never will.
+
+**3. hn4's FAIR anchor re-attributed:** hn4 trained on 06.06 — its 0.726 memorized
+THAT EXACT OBJECT as background. Object-level self-leak, unavailable to any
+deployed model on an unseen venue. **0.253 (mg_ctrl) is the honest cross-venue
+baseline on a furniture venue.** The mg arms must not be read as a regression
+against a fake reference.
+
+**4. (j)/(k) composition, pre-stated before the viewport rows land:** (j)'s veto
+blocks promotion WITHIN the detector tier; viewport/human rows sit above and decide
+finally in either direction. If tonight's viewport rows exonerate a vetoed arm,
+that is the pre-stated (k).2 outcome — divergence entry, viewport wins — not a
+surprise.
+
+**5. FAIR argmax: ANNOTATE, don't demote.** It is now understood as the
+static-distractor robustness row (as Iron is glare). It caught a real product
+failure and is the certification row for the #19 pair. Demoting instruments that
+deliver unwelcome results is the anti-pattern; this one delivered exactly what it
+should have. (Composer: FAIR keeps full decisive standing, gains the annotation.)
+
+---
+
 ## 2026-07-24 (k): VIEWPORT MATCH IS THE OBJECTIVE — standing principle, pre-stated before the composed verdict (Mark)
 
 Detector confidence/argmax are upstream proxies — the tracker and planner post-process
