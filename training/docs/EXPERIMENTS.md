@@ -4,6 +4,87 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-01: W1 operator scoreboard + oracle ladder — PRE-REGISTRATION (2026-07-25, written BEFORE any numbers)
+
+**Arc:** Virtual Operator (kickoff brief 07-24; plan approved; DECISIONS (k) governs). W1 has
+three jobs, all on banked/cached data: (1) the goal as numbers per range band, (2) the
+input-vs-interpretation headroom split, (3) lookahead pricing. No other workstream builds until
+the W1 table exists. This entry pre-registers every definition and read; NO live numbers here.
+
+**Arms & instruments (all banked; inventoried on the server 07-25):**
+- Human GT sets (`D:/training_data/viewport_label/`): `pittsford_dahua_gt` (div-sampled +
+  ext-div; `labels.json` rows with `action=="view"`, focal `fx`; `manifest.json` `kind` marks
+  `ext-div`), `pittsford_cold_audit` (cold audit, reported separately, never pooled),
+  `spc_viewport_worst` + `fair_viewport_worst` (frozen viewport v1, primary family).
+- Champion campaths: `G:/ballresearch/selector/campath/<gid>.json` (13+ games) and the
+  EXP-72 bundle `G:/ballresearch/geodet/campath_pittsford.pkl` (+ `campath_pit_mg_*.pkl`).
+- AutoCam reference arm: per-game `autocam_viewport.jsonl` via `distill_dataset.load_viewport`
+  + `seg_offsets` — scored against the SAME GT views in every cell (Mark 07-24: match/beat is
+  defined empirically off AutoCam's measured cells).
+- Candidate dumps for the oracle ladder: `G:/ballresearch/selector/fullgame*/` incl.
+  `fullgame_dahua/dahua_pittsford0625`; ball GT from the benchmark v1 label sets.
+
+**Metric definitions (provenance: the EXP-72 session scorer `G:/ballresearch/geodet/_vp_score.py`,
+now promoted to committed code):**
+- `capture@600` / `capture@300`: fraction of labeled views with |campath_cx − fx| ≤ R (x-axis,
+  matching the EXP-72 definition exactly). Secondary diagnostic: Euclidean |Δc| if fy exists.
+- `|Δcx|`: median and p90 of |campath_cx − fx| over labeled views.
+- `pan-velocity profile`: per-frame |Δcx/Δt| of an arm's campath over each CONTIGUOUS labeled
+  segment, summarized median/p90, compared against the GT-label-derived velocity (consecutive
+  labeled frames within a segment, stride-normalized). Only computable on contiguous segments —
+  stated per instrument.
+- `reversal rate`: pan-velocity sign flips with |v| above the 95th percentile of the GT-derived
+  velocity distribution (threshold from GT only, fixed before arm reads), per labeled minute.
+- `hold fidelity`: on segments where GT focal swing ≤ 400 px (the (h) stoppage definition):
+  the arm's max swing, reported as median ratio to GT swing.
+- Range bands by expected ball size at the GT focal point through the game polygon
+  (`FieldGeometry.expected_ball_diameter_px`): **far < 8 px** (existing convention,
+  `replay_fullgame --far-px` default) **; mid 8–15 px; near > 15 px** (15 = log-midpoint of the
+  documented ≈3.5× near/far size span, EXP-DIST-66). Banding tolerates the known interior
+  ruler waviness (±35%); bands are coarse bins, not measurements — the #19 fix will not
+  re-band this instrument retroactively.
+- Events: gap=64 frame clustering (noise protocol). Framing-events ≠ flip-events: each framing
+  metric's event unit is the contiguous labeled segment.
+
+**Match/beat (pre-registered, per band × metric):** "MATCH AutoCam" = the paired champion-vs-
+AutoCam delta on shared events lies within that cell's split-half null band. "BEAT AutoCam" =
+decisive under the dual rule (paired event sign test + referee v3 @ ac1f42c) with the champion
+on the winning side. AutoCam rows appear in every cell of the table.
+
+**Split-half null calibration (instrument admission, DECISIONS (g)):** for each NEW metric type
+× instrument: 300 random event-level half-splits of the SAME arm's views; the null band is the
+central 95% of half-vs-half deltas. Run and log BEFORE any live cross-arm read of that metric.
+capture@600 / |Δcx| on PIT-GT are NOT new (EXP-72 read them); the framing metrics
+(velocity/reversal/hold) and every metric on viewport-v1 ARE new.
+
+**Correctness fixture (hard-fail gate, CLAUDE.md rule 8):** the committed scorer must reproduce
+the EXP-72 cells from the same inputs before any new read: champion ALL 0.542 / 450 px,
+AutoCam ALL 0.759 / 207 px (and the original-500 / ext-div splits). Tolerance ±0.001 / ±1 px.
+Known count drift (640 vs 650 vs 500+150) is resolved by whatever the banked labels actually
+contain; the fixture records the true n.
+
+**Oracle ladder (CPU replay on cached dumps; games = those with dump ∧ ball GT, inventory
+recorded at run time):**
+- Run A: cached dump → current champion chain (select → track → plan) = baseline.
+- Run B: GT ball positions injected as the only candidates (validate_tracker `--gt-override`
+  pattern) → same tracker/planner. **B−A = ceiling for ALL input work (§3b pricing).**
+- Run C: B + GT stoppage flags driving an oracle freeze-pan overlay (PIT divergence segments
+  only — the only in-play stoppage GT). **C−B prices play-state awareness.**
+- Run D (lookahead pricing): causal planner vs two hindsight oracles on identical inputs —
+  (i) perfect-lead-Δ (planner consumes trajectory at t+Δ), (ii) zero-phase smoothing of the
+  planned path; Δ ∈ {0.5, 1, 2, 3} s; per band; on A-inputs and B-inputs. **D−A per band =
+  the lookahead build's price; no headroom in a band ⇒ no W4 lookahead build for that band.**
+  (Prior art: EXP-DIST-40's v1 died on an untrustworthy interpolation TARGET + an unstudied
+  window + a pre-referee instrument; these oracles re-decide FRAMING only and sweep the window.)
+- Human GT = total ceiling; **GT−B = interpretation-only headroom.**
+- Pre-registered reads: B−A, C−B, D−A, GT−B per band per metric, event-level, dual rule for
+  any promotion-relevant claim; "no effect" claims state their power floor.
+
+**Sequencing guards:** the table lands on the CURRENT champion (hn4 + v7). Task #21
+(Dahua-refresh) may train but may NOT promote before this table + nulls are banked
+(no-straddle, Mark 07-24). Placement per FLEET.md: CPU-heavy runs on the 4070 after staging;
+server owns the chain and holds canonical data.
+
 ## EXP-DIST-72: PHASE 2 COMPOSED VERDICT — three-arm multi-geometry decisive experiment (2026-07-24)
 
 **CLOCK PROVENANCE ((r).1):** the fleet ran ~2.2 h slow through 07-24; the laptop was
