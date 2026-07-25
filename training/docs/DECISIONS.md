@@ -4,7 +4,11 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
 
-*Last maintained: 2026-07-24, post-verdict (EXP-DIST-72). Tomorrow starts HERE, not from (h)–(s).*
+*Last maintained: 2026-07-25, Virtual Operator arc ((t) goal re-anchor). Tomorrow starts HERE, not from (h)–(t).*
+
+- **GOAL RE-ANCHOR ((t), 07-25): Reolink = primary optimization family; Dahua = supplemental
+  robustness row; far-Dahua possibly pixel-limited (4096×1800 vs 7680×2160 — ceiling check
+  pre-registered in (t).4). W4's target = Reolink far (capture parity, 2× median gap).**
 
 - **PHASE 2 VERDICT (EXP-DIST-72): champions UNCHANGED (hn4 + v7); DETECTOR ARC CLOSED.**
   mg_geo/mg_norm vetoed at the detector tier (FAIR decisive regressions, (j)) and not
@@ -76,6 +80,41 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
   person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
   CI-separated harm on record).
+
+---
+
+## 2026-07-25 (t): GOAL RE-ANCHORED — Reolink is the primary optimization family; Dahua is SUPPLEMENTAL; far-Dahua may be pixel-limited (Mark)
+
+**Directive (Mark, 2026-07-25):** "far dahua might never be better than autocam — we might
+just not have enough pixels. Reolink has more resolution, and is the default — we should
+optimize for the reolink resolution, and use dahua as supplemental."
+
+**Measured basis:** Dahua source = 4096×1800 vs Reolink 7680×2160 (verified in game.json
+segments): a far ball carries ~half the pixels on Dahua, on top of the documented ≈1.5×
+cross-camera size spread (EXP-DIST-66). The far<8px band on Reolink maps to ~4px-class on
+Dahua — at or below reliable detectability. AutoCam's far-Dahua edge (EXP-OP-03: DECISIVE,
+0.965 vs 0.481) may sit near the practical ceiling for that sensor.
+
+**Binding consequences:**
+1. **Goal cells re-headlined:** "match near/mid, beat far" is read on the REOLINK family.
+   The W4 target cell = Reolink far — where capture is already at parity (spc: 0.441 vs
+   AC-fresh 0.443) but AC's median is ~2× tighter (752 vs 1625 px): a real, winnable
+   discipline gap, with measured input headroom B−A ≈ +0.18 far (EXP-OP-05/Run B, spc).
+2. **Dahua/PIT demoted from headline target to SUPPLEMENTAL cross-camera robustness row** —
+   retained in every table (it is the powered, both-ways-adversarial instrument and the
+   cross-camera transfer read), but a far-Dahua loss no longer blocks a W4 promotion;
+   far-Dahua non-COLLAPSE (pre-registered floor) replaces "beat" there.
+3. **Task #21 (Dahua-refresh) unchanged in gate, re-purposed in framing:** it serves
+   cross-camera robustness/coverage, not the headline. Priority may drop behind W2/W3 GPU
+   needs; promotion still requires primary-family viewport non-regression.
+4. **Pixel-ceiling hypothesis gets a cheap check before being treated as fact** (rule 7 /
+   check-don't-assume): candidate-PRESENT rate (detector ceiling row) for far balls on the
+   Dahua dumps vs Reolink dumps at matched bands — if the far ball is frequently not even a
+   candidate on Dahua but is on Reolink, the ceiling story is confirmed; if it IS a candidate
+   and we still miss, it's still discipline. Zero GPU (cached dumps); slot into the W1
+   composition read.
+5. Extends, does not replace, the standing data policy (train Reolink-primary, Dahua =
+   down-weighted minority — 2026-06 decision) from training data to GOAL DEFINITION.
 
 ---
 
